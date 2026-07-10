@@ -248,8 +248,6 @@ function hasDefaultModelProvider(providerId: string): providerId is keyof typeof
 	return providerId in defaultModelPerProvider;
 }
 
-const BEDROCK_PROVIDER_ID = "amazon-bedrock";
-
 const BUILT_IN_MODEL_PROVIDERS = new Set<string>(getProviders());
 
 export function isApiKeyLoginProvider(
@@ -4873,8 +4871,6 @@ export class InteractiveMode {
 	private async startProviderLogin(providerOption: AuthSelectorProvider): Promise<void> {
 		if (providerOption.authType === "oauth") {
 			await this.showLoginDialog(providerOption.id, providerOption.name);
-		} else if (providerOption.id === BEDROCK_PROVIDER_ID) {
-			this.showBedrockSetupDialog(providerOption.id, providerOption.name);
 		} else {
 			await this.showApiKeyLoginDialog(providerOption.id, providerOption.name);
 		}
@@ -5082,34 +5078,6 @@ export class InteractiveMode {
 		}
 	}
 
-	private showBedrockSetupDialog(providerId: string, providerName: string): void {
-		const restoreEditor = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.ui.setFocus(this.editor);
-			this.ui.requestRender();
-		};
-
-		const dialog = new LoginDialogComponent(
-			this.ui,
-			providerId,
-			() => restoreEditor(),
-			providerName,
-			"Amazon Bedrock setup",
-		);
-		dialog.showInfo([
-			theme.fg("text", "Amazon Bedrock uses AWS credentials instead of a single API key."),
-			theme.fg("text", "Configure an AWS profile, IAM keys, bearer token, or role-based credentials."),
-			theme.fg("muted", "See:"),
-			theme.fg("accent", `  ${path.join(getDocsPath(), "providers.md")}`),
-		]);
-
-		this.editorContainer.clear();
-		this.editorContainer.addChild(dialog);
-		this.ui.setFocus(dialog);
-		this.ui.requestRender();
-	}
-
 	private async showApiKeyLoginDialog(providerId: string, providerName: string): Promise<void> {
 		const previousModel = this.session.model;
 
@@ -5121,6 +5089,14 @@ export class InteractiveMode {
 			},
 			providerName,
 		);
+
+		if (providerId === "amazon-bedrock") {
+			dialog.showDetails([
+				theme.fg("text", "You can also use an AWS profile, IAM keys, or role-based credentials."),
+				theme.fg("muted", "See:"),
+				theme.fg("accent", `  ${path.join(getDocsPath(), "providers.md")}`),
+			]);
+		}
 
 		this.editorContainer.clear();
 		this.editorContainer.addChild(dialog);

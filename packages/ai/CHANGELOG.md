@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Amazon Bedrock requests to use the generic `apiKey` stream option as a Bedrock bearer token.
+
 ## [0.80.6] - 2026-07-09
 
 ### Added
