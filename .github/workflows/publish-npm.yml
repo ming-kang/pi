@@ -1,0 +1,115 @@
+name: Publish npm
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish (for example, 0.81.1-2)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-npm
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Verify and publish @astralyn/pi
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install OIDC-capable npm
+        run: npm install --global npm@11.15.0
+
+      - name: Verify release request
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Release workflow must run from main (got $GITHUB_REF)." >&2
+            exit 1
+          fi
+
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const version = process.env.RELEASE_VERSION;
+          if (!version || !/^\d+\.\d+\.\d+-\d+$/.test(version)) {
+            throw new Error(`Expected a numeric prerelease version such as 0.81.1-2, got ${version ?? "nothing"}.`);
+          }
+
+          const codingAgent = JSON.parse(readFileSync("packages/coding-agent/package.json", "utf8"));
+          const server = JSON.parse(readFileSync("packages/server/package.json", "utf8"));
+          const changelog = readFileSync("packages/coding-agent/CHANGELOG.md", "utf8");
+
+          if (codingAgent.name !== "@astralyn/pi") {
+            throw new Error(`Expected packages/coding-agent to be @astralyn/pi, got ${codingAgent.name}.`);
+          }
+          if (codingAgent.version !== version) {
+            throw new Error(`Release input ${version} does not match package version ${codingAgent.version}.`);
+          }
+          if (server.dependencies?.["@astralyn/pi"] !== version) {
+            throw new Error("packages/server must depend on the exact release version.");
+          }
+          if (!changelog.includes(`## [${version}] - `)) {
+            throw new Error(`CHANGELOG.md has no release heading for ${version}.`);
+          }
+          NODE
+
+          if npm view "@astralyn/pi@$RELEASE_VERSION" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "@astralyn/pi@$RELEASE_VERSION already exists on npm." >&2
+            exit 1
+          fi
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
+          sudo ln -s "$(which fdfind)" /usr/local/bin/fd
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build
+        run: npm run build:offline
+
+      - name: Check
+        run: npm run check
+
+      - name: Verify generated files
+        run: git diff --exit-code
+
+      - name: Test
+        run: npm test
+
+      - name: Publish
+        working-directory: packages/coding-agent
+        run: npm publish --access public --provenance --registry=https://registry.npmjs.org
+
+      - name: Verify registry
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          for attempt in $(seq 1 12); do
+            published="$(npm view "@astralyn/pi@$RELEASE_VERSION" version --registry=https://registry.npmjs.org 2>/dev/null || true)"
+            if [ "$published" = "$RELEASE_VERSION" ]; then
+              echo "Verified @astralyn/pi@$RELEASE_VERSION on npm."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Published version was not visible on npm after two minutes." >&2
+          exit 1

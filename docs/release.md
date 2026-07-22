@@ -34,15 +34,18 @@ Pi's current changelog parser compares only the upstream `X.Y.Z` portion. It doe
 
 ## Verify
 
-Run the release checks explicitly:
+Windows is not the release test environment for this Fork. The full test suite depends on Linux path, symlink, and filesystem behavior, so release verification runs in GitHub Actions on `ubuntu-latest`.
+
+The `CI` workflow runs automatically after pushing `main` and must pass Build, Check, and Test. The publish workflow repeats those checks before uploading the package, so local full-suite execution is not required.
+
+Local package review remains optional and non-authoritative:
 
 ```bash
-npm run check
-npm run build:offline
-./test.sh
+cd packages/coding-agent
+npm pack --dry-run
 ```
 
-Run any focused tests relevant to the release and exercise affected interactive behavior in a real TTY. Lifecycle extensions should also be checked through `/reload` and `/tree` where applicable.
+Interactive behavior is maintained through the normal development process and prior extension verification; it is not a release blocker for the already-verified built-in extensions.
 
 ## Review the package
 
@@ -58,30 +61,44 @@ For stronger pre-publish verification, create a real tarball and install it from
 
 ## Publish and tag
 
-1. Commit the verified release files with explicit path staging, push `main`, and wait for CI.
-2. Confirm npm access with `npm whoami`.
-3. From `packages/coding-agent`, publish the public package:
+Publishing uses npm Trusted Publishing through GitHub Actions OIDC. Configure the package once on npm under its Trusted Publisher settings:
 
-```bash
-npm publish --access public
+```text
+Publisher: GitHub Actions
+Organization or user: ming-kang
+Repository: pi
+Workflow filename: publish-npm.yml
+Environment name: (blank)
+Allowed action: Allow npm publish
 ```
 
-4. Verify the registry and an installation outside the repository:
+Do not enable `npm stage publish`; this Fork publishes directly to the public `latest` tag.
+
+After the release commit is pushed and the `CI` workflow passes, trigger the publish workflow from a local authenticated GitHub CLI session:
 
 ```bash
-npm view @astralyn/pi version
-npm install -g @astralyn/pi
-pi --version
-pi --list-models
+gh workflow run publish-npm.yml \
+  --repo ming-kang/pi \
+  --ref main \
+  -f version=0.81.1-2
+
+gh run list \
+  --repo ming-kang/pi \
+  --workflow publish-npm.yml \
+  --limit 1
+
+gh run watch <run-id> --repo ming-kang/pi --exit-status
 ```
 
-The repository `.npmrc` sets `min-release-age=2`; running the installation smoke test outside the repository avoids that local age gate immediately after publishing.
+The workflow validates the requested version, runs Ubuntu Build/Check/Test, publishes only `@astralyn/pi` with provenance, and verifies that npm exposes the version. A push to `main` does **not** publish automatically.
 
-5. After the publish succeeds, tag the release commit and push the tag:
+After the workflow succeeds, verify the registry and perform the global-install/self-update smoke test from a separate shell or after restarting Pi. Do not replace the package that is currently running the release session.
+
+Finally, tag the exact release commit:
 
 ```bash
 git tag v<full-version>
 git push origin v<full-version>
 ```
 
-Do not publish other workspace packages or restore the upstream release/publish workflow for this process.
+Do not publish other workspace packages or restore the upstream multi-package release workflow.

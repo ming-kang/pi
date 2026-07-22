@@ -49,7 +49,7 @@ Do not run `npm run build`, `npm test`, or the complete test suite unless explic
 node node_modules/vitest/dist/cli.js --run test/specific.test.ts
 ```
 
-When a test file changes, run that test and iterate until it passes. Release verification may run `build:offline` and `./test.sh` explicitly.
+When a test file changes, run that test and iterate until it passes. Release verification runs in the Ubuntu CI and `publish-npm.yml` workflows; do not treat the Windows local full suite as a release gate.
 
 For interactive verification, use a real TTY. Check the affected pending, success, error, collapsed, and expanded states, plus `/reload` and `/tree` for lifecycle extensions.
 
