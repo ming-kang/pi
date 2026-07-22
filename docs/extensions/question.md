@@ -32,14 +32,21 @@ Only `content` reaches the model. Successful results are numbered, clearly ident
 
 The transcript uses a private `renderCall` / `renderResult` only to replace raw question JSON and model-oriented result text with concise user summaries. Pi retains its native tool shell, pending/error state, and collapsed/expanded behavior.
 
-## Design notes
+## Limits
+
+- Questions, labels, descriptions, and previews have input-length limits so the dialog stays usable.
+- Notes and custom answers are capped at 4,000 characters.
+- Model-facing output is capped at 12,000 characters; if truncated, the result instructs the model to ask a focused follow-up question.
+- Only available in TUI mode. RPC, JSON, and print calls return a structured `no_ui` error.
+
+## Implementation notes
 
 - Uses Pi's native `ctx.ui.custom()` lifecycle; no state is shared with another extension.
 - The render cache is keyed by terminal width **and height**, because preview height depends on available rows and Pi resize only requests a render.
 - `validateQuestions` enforces uniqueness, reserved-label rejection, and text budgets beyond what the JSON schema can express.
 - Dialog navigation follows Pi's injected select/input keybindings where applicable; custom actions such as Space-to-toggle remain explicit in the footer.
 
-## Files
+**Files:**
 
 - `constants.ts` — tool identity and model-facing prompt copy
 - `index.ts` — tool registration and execution

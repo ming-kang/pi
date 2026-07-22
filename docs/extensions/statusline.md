@@ -85,29 +85,26 @@ When the terminal is too narrow for the full layout:
   cluster, filling the gap with spaces so wide terminals stay balanced.
 
 Pi does not expose auto-compaction state to extension footer factories, so the
-native `(auto)` marker is intentionally not reproduced. Depending on private Pi
-state solely for that marker would make the extension unnecessarily fragile.
+native `(auto)` marker is intentionally not reproduced.
 
-## Performance notes
+## Migration
+
+The previous `/statusline` command and `~/.pi/agent/pi-config/statusline.json`
+configuration are no longer used. An existing config file is left untouched and
+may be removed manually.
+
+## Limits
+
+- Auto-enables only in TUI mode on `session_start`; RPC and print modes show the upstream footer.
+- The native `(auto)` compaction marker is not reproduced because Pi does not expose that state to extensions.
+
+## Implementation notes
 
 Footer paint is hot (every TUI render). The extension caches:
 
-- **Branch path** by current leaf id — avoids rebuilding `getBranch()` (leaf→root
-  walk + reverse) when the leaf has not moved.
-- **Branch stats** (thinking level + cumulative usage) by branch length, leaf
-  entry identity, and a leaf usage fingerprint — so streaming token updates on
-  the same assistant entry still recompute, while unchanged paints reuse the
-  last walk.
+- **Branch path** by current leaf id.
+- **Branch stats** (thinking level + cumulative usage) by branch length, leaf entry identity, and a leaf usage fingerprint.
 
 Both caches clear on footer `invalidate()`.
 
-## Migration from the configurable version
-
-The previous `/statusline` command and
-`~/.pi/agent/pi-config/statusline.json` configuration are no longer used. An
-existing config file is left untouched and may be removed manually.
-
-## Files
-
-- `index.ts` — footer lifecycle, formatting, usage aggregation, and responsive
-  two-line left/right layout
+**Files:** `index.ts` — footer lifecycle, formatting, usage aggregation, and responsive two-line left/right layout.

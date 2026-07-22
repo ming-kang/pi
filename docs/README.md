@@ -1,20 +1,30 @@
 # Fork documentation
 
-This directory contains documentation owned by this Pi distribution.
+This directory contains documentation owned by this Pi distribution. The upstream coding-agent usage and API documentation remains under [`packages/coding-agent/docs/`](../packages/coding-agent/docs/) — do not duplicate that content here.
 
-The upstream coding-agent usage and API documentation remains under [`packages/coding-agent/docs/`](../packages/coding-agent/docs/). Do not duplicate that documentation here.
+## Start here
 
-## Architecture and behavior
+- [Repository overview](../README.md) — bundled extensions, themes, and distribution details.
+- [Quickstart](../packages/coding-agent/docs/quickstart.md) — install, authenticate, and run a first session.
+- [Full usage and API docs](../packages/coding-agent/docs/index.md) — interactive mode, settings, extensions, SDK, and platform notes.
+
+## Architecture and design
 
 - [Architecture and maintenance boundaries](architecture.md)
 - [Native tool presentation](tool-presentation.md)
-- [Bundled extensions](extensions/README.md)
 - [Bundled themes](themes.md)
 
-## Process
+## Extensions
+
+- [Overview](extensions/README.md)
+- [deepwiki](extensions/deepwiki.md)
+- [question](extensions/question.md)
+- [rewind](extensions/rewind.md)
+- [router](extensions/router.md)
+- [statusline](extensions/statusline.md)
+- [todo](extensions/todo.md)
+
+## Maintainer
 
 - [OIDC npm release checklist](release.md)
-
-## History
-
-Git history and `packages/coding-agent/CHANGELOG.md` record normal changes. A `history/` directory should only be added when a superseded design or research document remains useful after it is no longer current.
+- [Repository contract](../AGENTS.md)

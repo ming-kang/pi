@@ -10,7 +10,9 @@ It is intentionally not a general MCP bridge. The extension exposes one dedicate
 | `contents` | Read the generated wiki — one page via `page` (recommended), or everything when `page` is omitted (truncated past ~120k chars). |
 | `question` | Ask a focused question about a repository. |
 
-## Tool Parameters
+## Usage
+
+### Parameters
 
 - `action`: `structure`, `contents`, or `question`
 - `repoName`: one `owner/repo` string for `structure` and `contents`; for `question`, one repo as a string, or 2–10 repos as an array (comma-separated string also accepted)
@@ -19,11 +21,7 @@ It is intentionally not a general MCP bridge. The extension exposes one dedicate
 
 `repoName` is normalized before validation (`owner/repo`, GitHub/DeepWiki URLs, JSON-array strings for multi-repo mistakes). `pageName`/`pageTitle` are accepted as `page` aliases. If `action` is omitted, defaults to `question` when a question is present, `contents` when `page` is present, else `structure`. Repositories not indexed on DeepWiki return repository-not-found errors — run `structure` first to detect that.
 
-## How it works
-
-DeepWiki's public MCP endpoint exposes exactly three operations: list a wiki's page titles, return the whole generated wiki as one document, and answer a question. There is no per-page fetch upstream — `page` is implemented by this extension: it fetches the full wiki (or reuses the 10-minute cache) and slices out the requested page locally. The first `contents` call for a repo pays the network cost; subsequent page reads within the cache window are instant and free.
-
-## Usage Strategy
+### Strategy
 
 Recommended flow for studying a repo:
 
@@ -48,12 +46,17 @@ Avoid DeepWiki when the authoritative source is local or time-sensitive:
 - Latest releases, pricing, security advisories, schedules, or facts that need current primary-source verification.
 - Package names without a known GitHub repo; resolve the repo first instead of guessing.
 
-## Notes
+## Limits
 
-- DeepWiki currently exposes this data through its public MCP HTTP endpoint; this extension calls only the three DeepWiki operations above.
-- DeepWiki may return generated explanations with source-file citations and "related pages" links. The TUI uses a local renderer (`render.ts`) for a one-line collapsed summary and Markdown when expanded; Pi's default fallback would dump the full (often large) `content` text.
-- `contents` responses are truncated at a ~120k-character budget on `# Page:` boundaries (whole pages kept in order; at least the first page survives, cut mid-page if it alone exceeds the budget). A trailing notice reports shown/total pages, the full length, up to 20 omitted page titles, and points at `page` reads and `action: "question"` for the rest. Details carry `shownPages` / `truncatedChars` when this happens; `outputLength` always reflects the full untruncated response. Single-page reads set `requestedPage` / `pageIndex` instead and share the same budget.
 - A repository may not be indexed. DeepWiki can return that as normal text, so the extension treats repository-not-found messages as tool errors.
-- Successful responses are cached in-process for 10 minutes, keyed by action, repo, and question. Failed, aborted, and timed-out requests are not cached. The cache stores the full response; `contents` truncation is recomputed per call, so cached and fresh calls return identical text.
+- `contents` responses are truncated at a ~120k-character budget on `# Page:` boundaries (whole pages kept in order; at least the first page survives, cut mid-page if it alone exceeds the budget). A trailing notice reports shown/total pages, the full length, up to 20 omitted page titles, and points at `page` reads and `action: "question"` for the rest. Details carry `shownPages` / `truncatedChars` when this happens; `outputLength` always reflects the full untruncated response. Single-page reads set `requestedPage` / `pageIndex` instead and share the same budget.
 - Network requests time out after 45 seconds and surface as Pi tool errors.
 - Use local Pi tools (`read`, `grep`, `find`, `ls`) for workspace state. DeepWiki answers describe repository snapshots indexed by DeepWiki, not local uncommitted files.
+
+## Implementation notes
+
+DeepWiki's public MCP endpoint exposes exactly three operations: list a wiki's page titles, return the whole generated wiki as one document, and answer a question. There is no per-page fetch upstream — `page` is implemented by this extension: it fetches the full wiki (or reuses the 10-minute cache) and slices out the requested page locally. The first `contents` call for a repo pays the network cost; subsequent page reads within the cache window are instant and free.
+
+DeepWiki may return generated explanations with source-file citations and "related pages" links. The TUI uses a local renderer (`render.ts`) for a one-line collapsed summary and Markdown when expanded; Pi's default fallback would dump the full (often large) `content` text.
+
+Successful responses are cached in-process for 10 minutes, keyed by action, repo, and question. Failed, aborted, and timed-out requests are not cached. The cache stores the full response; `contents` truncation is recomputed per call, so cached and fresh calls return identical text.

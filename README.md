@@ -43,12 +43,12 @@ Releases are verified on Ubuntu and published through a manually triggered GitHu
 
 | Extension | Purpose |
 |---|---|
-| `deepwiki` | Query generated DeepWiki documentation for public GitHub repositories. |
-| `question` | Ask structured multiple-choice questions through a TUI dialog. |
-| `todo` | Maintain a conversation-backed task list with `/todos` and a live overlay. |
-| `rewind` | Checkpoint Pi `edit`/`write` changes and restore them through `/tree`. |
-| `router` | Configure Codex-style API relays through `/router`. |
-| `statusline` | Display a compact two-line model, context, path, Git, and usage footer. |
+| [`deepwiki`](docs/extensions/deepwiki.md) | Query generated DeepWiki documentation for public GitHub repositories. |
+| [`question`](docs/extensions/question.md) | Ask structured multiple-choice questions through a TUI dialog. |
+| [`todo`](docs/extensions/todo.md) | Maintain a conversation-backed task list with `/todos` and a live overlay. |
+| [`rewind`](docs/extensions/rewind.md) | Checkpoint Pi `edit`/`write` changes and restore them through `/tree`. |
+| [`router`](docs/extensions/router.md) | Configure Codex-style API relays through `/router`. |
+| [`statusline`](docs/extensions/statusline.md) | Display a compact two-line model, context, path, Git, and usage footer. |
 
 ## Bundled themes
 
@@ -74,6 +74,7 @@ The complete upstream coding-agent usage and API documentation remains under [`p
 - [Bundled extensions](docs/extensions/README.md)
 - [Bundled themes](docs/themes.md)
 - [Release checklist](docs/release.md)
+- [Quickstart](packages/coding-agent/docs/quickstart.md)
 - [Coding-agent usage documentation](packages/coding-agent/docs/index.md)
 
 ## Development
