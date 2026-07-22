@@ -1,10 +1,10 @@
 {
 	"name": "@astralyn/pi-install",
-	"version": "0.81.1-1",
+	"version": "0.81.1-2",
 	"private": true,
 	"description": "Lockfile root used by the Pi installer and updater.",
 	"dependencies": {
-		"@astralyn/pi": "0.81.1-1"
+		"@astralyn/pi": "0.81.1-2"
 	},
 	"overrides": {
 		"rimraf": "6.1.2",

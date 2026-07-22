@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.81.1-2] - 2026-07-23
+
+### Changed
+
+- Refined bash tool-call presentation: long safe multi-command chains collapse to a concise command summary, while expanded calls retain the complete command.
+
 ## [0.81.1-1] - 2026-07-22
 
 ### Added
