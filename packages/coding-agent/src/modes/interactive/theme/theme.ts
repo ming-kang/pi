@@ -435,17 +435,17 @@ export class Theme {
 // Theme Loading
 // ============================================================================
 
+const BUILTIN_THEME_NAMES = ["dark", "light", "ice-cream-dark", "ice-cream-light"] as const;
 let BUILTIN_THEMES: Record<string, ThemeJson> | undefined;
 
 function getBuiltinThemes(): Record<string, ThemeJson> {
 	if (!BUILTIN_THEMES) {
 		const themesDir = getThemesDir();
-		const darkPath = path.join(themesDir, "dark.json");
-		const lightPath = path.join(themesDir, "light.json");
-		BUILTIN_THEMES = {
-			dark: JSON.parse(fs.readFileSync(darkPath, "utf-8")) as ThemeJson,
-			light: JSON.parse(fs.readFileSync(lightPath, "utf-8")) as ThemeJson,
-		};
+		BUILTIN_THEMES = {};
+		for (const name of BUILTIN_THEME_NAMES) {
+			const themePath = path.join(themesDir, `${name}.json`);
+			BUILTIN_THEMES[name] = JSON.parse(fs.readFileSync(themePath, "utf-8")) as ThemeJson;
+		}
 	}
 	return BUILTIN_THEMES;
 }
@@ -887,7 +887,7 @@ function startThemeWatcher(): void {
 	stopThemeWatcher();
 
 	// Only watch if it's a custom theme (not built-in)
-	if (!currentThemeName || currentThemeName === "dark" || currentThemeName === "light") {
+	if (!currentThemeName || currentThemeName in getBuiltinThemes()) {
 		return;
 	}
 

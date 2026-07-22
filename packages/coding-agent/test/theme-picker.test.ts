@@ -2,9 +2,11 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getThemesDir } from "../src/config.ts";
 import {
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
+	getThemeByName,
 	setRegisteredThemes,
 } from "../src/modes/interactive/theme/theme.ts";
 
@@ -29,6 +31,17 @@ describe("theme picker", () => {
 		setRegisteredThemes([]);
 		rmSync(tempRoot, { recursive: true, force: true });
 		vi.unstubAllEnvs();
+	});
+
+	it("includes the bundled ice-cream themes", () => {
+		for (const name of ["ice-cream-dark", "ice-cream-light"]) {
+			expect(getAvailableThemes()).toContain(name);
+			expect(getAvailableThemesWithPaths()).toContainEqual({
+				name,
+				path: join(getThemesDir(), `${name}.json`),
+			});
+			expect(getThemeByName(name)?.name).toBe(name);
+		}
 	});
 
 	it("uses custom theme content names instead of file names", () => {
