@@ -51,7 +51,7 @@ describe("ToolExecutionComponent parity", () => {
 			createFakeTui(),
 			process.cwd(),
 		);
-		expect(stripAnsi(component.render(120).join("\n"))).toContain("custom call");
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("● custom call");
 
 		component.updateResult(
 			{
@@ -63,8 +63,8 @@ describe("ToolExecutionComponent parity", () => {
 		);
 
 		const rendered = stripAnsi(component.render(120).join("\n"));
-		expect(rendered).toContain("custom call");
-		expect(rendered).toContain("custom result");
+		expect(rendered).toContain("● custom call");
+		expect(rendered).toContain("│ custom result");
 	});
 
 	test("self-rendered empty tool rows take no layout space", () => {
@@ -185,8 +185,8 @@ describe("ToolExecutionComponent parity", () => {
 
 		const rendered = stripAnsi(component.render(200).join("\n"));
 		expect(rendered.match(/Full output:/g)?.length ?? 0).toBe(1);
-		expect(rendered).toMatch(/line-4000[^\n]*\n[^\S\n]*\n \[Full output:/);
-		expect(rendered).not.toMatch(/line-4000[^\n]*\n[^\S\n]*\n[^\S\n]*\n \[Full output:/);
+		expect(rendered).toMatch(/line-4000[^\n]*\n[^\S\n]*\n[^\S\n]*\[Full output:/);
+		expect(rendered).not.toMatch(/line-4000[^\n]*\n[^\S\n]*\n[^\S\n]*\n[^\S\n]*\[Full output:/);
 		expect(rendered).toContain("Truncated: showing 2000 of 4000 lines");
 		expect(rendered).not.toContain("[Showing lines 2001-4000 of 4000. Full output:");
 	});
@@ -360,8 +360,51 @@ describe("ToolExecutionComponent parity", () => {
 		);
 		component.updateResult({ content: [{ type: "text", text: "done" }], details: {}, isError: false }, false);
 		const rendered = stripAnsi(component.render(120).join("\n"));
-		expect(rendered).toContain("custom_tool");
-		expect(rendered).toContain("done");
+		expect(rendered).toContain('● custom_tool(foo="bar")');
+		expect(rendered).toContain("│ done");
+	});
+
+	test("collapses generic result output until expanded", () => {
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-generic-collapse",
+			{},
+			{},
+			createBaseToolDefinition(),
+			createFakeTui(),
+			process.cwd(),
+		);
+		const output = Array.from({ length: 15 }, (_, index) => `line ${index + 1}`).join("\n");
+		component.updateResult({ content: [{ type: "text", text: output }], details: {}, isError: false }, false);
+
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).not.toContain("line 5");
+		expect(collapsed).toContain("line 6");
+		expect(collapsed).toContain("line 15");
+		expect(collapsed).toContain("5 earlier lines");
+
+		component.setExpanded(true);
+		const expanded = stripAnsi(component.render(120).join("\n"));
+		expect(expanded).toContain("line 1");
+		expect(expanded).toContain("line 15");
+		expect(expanded).not.toContain("earlier lines");
+	});
+
+	test("applies native tool chrome to historical tools without a current definition", () => {
+		const component = new ToolExecutionComponent(
+			"historical_tool",
+			"tool-historical",
+			{ query: "docs" },
+			{},
+			undefined,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult({ content: [{ type: "text", text: "not available" }], isError: true }, false);
+
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain('● historical_tool(query="docs")');
+		expect(rendered).toContain("● not available");
 	});
 
 	test("trims trailing blank display lines from write previews", () => {
