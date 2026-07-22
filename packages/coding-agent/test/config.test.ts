@@ -51,8 +51,8 @@ afterEach(() => {
 function createNpmPrefixInstall(template = "pi-prefix-"): { prefix: string; packageDir: string } {
 	const prefix = mkdtempSync(join(tmpdir(), template));
 	const root = join(prefix, "lib", "node_modules");
-	const scopeDir = join(root, "@earendil-works");
-	const packageDir = join(scopeDir, "pi-coding-agent");
+	const scopeDir = join(root, "@astralyn");
+	const packageDir = join(scopeDir, "pi");
 	mkdirSync(packageDir, { recursive: true });
 	tempDir = prefix;
 	process.env.PI_PACKAGE_DIR = packageDir;
@@ -64,7 +64,7 @@ function createPnpmGlobalInstall(): { root: string; packageDir: string } {
 	const temp = mkdtempSync(join(tmpdir(), "pi-pnpm-"));
 	const binDir = join(temp, "bin");
 	const root = join(temp, "pnpm", "global", "5", "node_modules");
-	const packageDir = join(root, "@mariozechner", "pi-coding-agent");
+	const packageDir = join(root, "@astralyn", "pi");
 	mkdirSync(packageDir, { recursive: true });
 	mkdirSync(binDir, { recursive: true });
 	writeFileSync(join(binDir, process.platform === "win32" ? "pnpm.cmd" : "pnpm"), createFakePnpmScript(root));
@@ -72,18 +72,7 @@ function createPnpmGlobalInstall(): { root: string; packageDir: string } {
 	tempDir = temp;
 	process.env.PATH = `${binDir}${delimiter}${originalPath ?? ""}`;
 	process.env.PI_PACKAGE_DIR = packageDir;
-	setExecPath(
-		join(
-			root,
-			".pnpm",
-			"@mariozechner+pi-coding-agent@0.0.0",
-			"node_modules",
-			"@mariozechner",
-			"pi-coding-agent",
-			"dist",
-			"cli.js",
-		),
-	);
+	setExecPath(join(root, ".pnpm", "@astralyn+pi@0.81.1-1", "node_modules", "@astralyn", "pi", "dist", "cli.js"));
 	return { root, packageDir };
 }
 
@@ -91,7 +80,7 @@ function createYarnGlobalInstall(): { globalDir: string; packageDir: string } {
 	const temp = mkdtempSync(join(tmpdir(), "pi-yarn-"));
 	const binDir = join(temp, "bin");
 	const globalDir = join(temp, "yarn", "global");
-	const packageDir = join(globalDir, "node_modules", "@mariozechner", "pi-coding-agent");
+	const packageDir = join(globalDir, "node_modules", "@astralyn", "pi");
 	mkdirSync(packageDir, { recursive: true });
 	mkdirSync(binDir, { recursive: true });
 	writeFileSync(join(binDir, process.platform === "win32" ? "yarn.cmd" : "yarn"), createFakeYarnScript(globalDir));
@@ -99,7 +88,7 @@ function createYarnGlobalInstall(): { globalDir: string; packageDir: string } {
 	tempDir = temp;
 	process.env.PATH = `${binDir}${delimiter}${originalPath ?? ""}`;
 	process.env.PI_PACKAGE_DIR = packageDir;
-	setExecPath(join(globalDir, ".yarn", "@mariozechner", "pi-coding-agent", "dist", "cli.js"));
+	setExecPath(join(globalDir, ".yarn", "@astralyn", "pi", "dist", "cli.js"));
 	return { globalDir, packageDir };
 }
 
@@ -108,8 +97,8 @@ function createBunGlobalInstall(): { packageDir: string } {
 	const prefix = join(temp, ".bun");
 	const bunBin = join(prefix, "bin");
 	const root = join(prefix, "install", "global", "node_modules");
-	const scopeDir = join(root, "@earendil-works");
-	const packageDir = join(scopeDir, "pi-coding-agent");
+	const scopeDir = join(root, "@astralyn");
+	const packageDir = join(scopeDir, "pi");
 	mkdirSync(packageDir, { recursive: true });
 	mkdirSync(bunBin, { recursive: true });
 	writeFileSync(join(bunBin, process.platform === "win32" ? "bun.cmd" : "bun"), createFakeBunScript(bunBin));
@@ -152,8 +141,8 @@ describe("detectInstallMethod", () => {
 		);
 
 		expect(detectInstallMethod()).toBe("pnpm");
-		expect(getUpdateInstruction("@earendil-works/pi-coding-agent")).toBe(
-			"Run: pnpm install -g --ignore-scripts --config.minimumReleaseAge=0 @earendil-works/pi-coding-agent",
+		expect(getUpdateInstruction("@astralyn/pi")).toBe(
+			"Run: pnpm install -g --ignore-scripts --config.minimumReleaseAge=0 @astralyn/pi",
 		);
 	});
 
@@ -161,53 +150,37 @@ describe("detectInstallMethod", () => {
 		setExecPath("/usr/local/bin/node");
 
 		expect(detectInstallMethod()).toBe("unknown");
-		expect(getSelfUpdateCommand("@earendil-works/pi-coding-agent")).toBeUndefined();
-		expect(getUpdateInstruction("@earendil-works/pi-coding-agent")).toBe(
-			"Update @earendil-works/pi-coding-agent using the package manager, wrapper, or source checkout that provides this installation.",
+		expect(getSelfUpdateCommand("@astralyn/pi")).toBeUndefined();
+		expect(getUpdateInstruction("@astralyn/pi")).toBe(
+			"Update @astralyn/pi using the package manager, wrapper, or source checkout that provides this installation.",
 		);
 	});
 
 	test("self-updates npm installs from custom prefixes", () => {
 		const { prefix } = createNpmPrefixInstall();
 
-		const command = getSelfUpdateCommand("@earendil-works/pi-coding-agent");
+		const command = getSelfUpdateCommand("@astralyn/pi");
 
 		expect(detectInstallMethod()).toBe("npm");
 		expect(command).toEqual({
 			command: "npm",
-			args: [
-				"--prefix",
-				prefix,
-				"install",
-				"-g",
-				"--ignore-scripts",
-				"--min-release-age=0",
-				"@earendil-works/pi-coding-agent",
-			],
-			display: `npm --prefix ${prefix} install -g --ignore-scripts --min-release-age=0 @earendil-works/pi-coding-agent`,
+			args: ["--prefix", prefix, "install", "-g", "--ignore-scripts", "--min-release-age=0", "@astralyn/pi"],
+			display: `npm --prefix ${prefix} install -g --ignore-scripts --min-release-age=0 @astralyn/pi`,
 		});
 	});
 
 	test("self-updates exact npm versions without uninstalling the current package", () => {
 		const { prefix } = createNpmPrefixInstall();
 
-		const command = getSelfUpdateCommand("@earendil-works/pi-coding-agent", undefined, {
-			packageName: "@earendil-works/pi-coding-agent",
-			installSpec: "@earendil-works/pi-coding-agent@1.2.3",
+		const command = getSelfUpdateCommand("@astralyn/pi", undefined, {
+			packageName: "@astralyn/pi",
+			installSpec: "@astralyn/pi@1.2.3",
 		});
 
 		expect(command).toEqual({
 			command: "npm",
-			args: [
-				"--prefix",
-				prefix,
-				"install",
-				"-g",
-				"--ignore-scripts",
-				"--min-release-age=0",
-				"@earendil-works/pi-coding-agent@1.2.3",
-			],
-			display: `npm --prefix ${prefix} install -g --ignore-scripts --min-release-age=0 @earendil-works/pi-coding-agent@1.2.3`,
+			args: ["--prefix", prefix, "install", "-g", "--ignore-scripts", "--min-release-age=0", "@astralyn/pi@1.2.3"],
+			display: `npm --prefix ${prefix} install -g --ignore-scripts --min-release-age=0 @astralyn/pi@1.2.3`,
 		});
 	});
 
@@ -238,27 +211,19 @@ describe("detectInstallMethod", () => {
 	test("self-update respects configured npmCommand", () => {
 		const { prefix } = createNpmPrefixInstall();
 
-		const command = getSelfUpdateCommand("@earendil-works/pi-coding-agent", ["npm", "--prefix", prefix]);
+		const command = getSelfUpdateCommand("@astralyn/pi", ["npm", "--prefix", prefix]);
 
 		expect(command).toEqual({
 			command: "npm",
-			args: [
-				"--prefix",
-				prefix,
-				"install",
-				"-g",
-				"--ignore-scripts",
-				"--min-release-age=0",
-				"@earendil-works/pi-coding-agent",
-			],
-			display: `npm --prefix ${prefix} install -g --ignore-scripts --min-release-age=0 @earendil-works/pi-coding-agent`,
+			args: ["--prefix", prefix, "install", "-g", "--ignore-scripts", "--min-release-age=0", "@astralyn/pi"],
+			display: `npm --prefix ${prefix} install -g --ignore-scripts --min-release-age=0 @astralyn/pi`,
 		});
 	});
 
 	test("self-update treats empty npmCommand as unset", () => {
 		const { prefix } = createNpmPrefixInstall();
 
-		const command = getSelfUpdateCommand("@earendil-works/pi-coding-agent", []);
+		const command = getSelfUpdateCommand("@astralyn/pi", []);
 
 		expect(command?.args).toEqual([
 			"--prefix",
@@ -267,41 +232,41 @@ describe("detectInstallMethod", () => {
 			"-g",
 			"--ignore-scripts",
 			"--min-release-age=0",
-			"@earendil-works/pi-coding-agent",
+			"@astralyn/pi",
 		]);
 	});
 
 	test("quotes npm self-update display paths", () => {
 		const { prefix } = createNpmPrefixInstall("pi prefix ");
 
-		const command = getSelfUpdateCommand("@earendil-works/pi-coding-agent");
+		const command = getSelfUpdateCommand("@astralyn/pi");
 
 		expect(command?.display).toBe(
-			`npm --prefix "${prefix}" install -g --ignore-scripts --min-release-age=0 @earendil-works/pi-coding-agent`,
+			`npm --prefix "${prefix}" install -g --ignore-scripts --min-release-age=0 @astralyn/pi`,
 		);
 	});
 
 	test("does not infer Windows npm custom prefixes from package paths", () => {
-		const packageDir = "C:\\Users\\Admin\\npm prefix\\node_modules\\@earendil-works\\pi-coding-agent";
+		const packageDir = "C:\\Users\\Admin\\npm prefix\\node_modules\\@astralyn\\pi";
 		process.env.PI_PACKAGE_DIR = packageDir;
 		setExecPath(`${packageDir}\\dist\\cli.js`);
 
 		expect(detectInstallMethod()).toBe("npm");
-		expect(getUpdateInstruction("@earendil-works/pi-coding-agent")).toBe(
-			"Run: npm install -g --ignore-scripts --min-release-age=0 @earendil-works/pi-coding-agent",
+		expect(getUpdateInstruction("@astralyn/pi")).toBe(
+			"Run: npm install -g --ignore-scripts --min-release-age=0 @astralyn/pi",
 		);
 	});
 
 	test("self-updates bun global installs from bun pm bin", () => {
 		createBunGlobalInstall();
 
-		const command = getSelfUpdateCommand("@earendil-works/pi-coding-agent");
+		const command = getSelfUpdateCommand("@astralyn/pi");
 
 		expect(detectInstallMethod()).toBe("bun");
 		expect(command).toEqual({
 			command: "bun",
-			args: ["install", "-g", "--ignore-scripts", "--minimum-release-age=0", "@earendil-works/pi-coding-agent"],
-			display: "bun install -g --ignore-scripts --minimum-release-age=0 @earendil-works/pi-coding-agent",
+			args: ["install", "-g", "--ignore-scripts", "--minimum-release-age=0", "@astralyn/pi"],
+			display: "bun install -g --ignore-scripts --minimum-release-age=0 @astralyn/pi",
 		});
 	});
 
@@ -335,8 +300,8 @@ describe("detectInstallMethod", () => {
 		const temp = mkdtempSync(join(tmpdir(), "pi-pnpm11-"));
 		const binDir = join(temp, "bin");
 		const root = join(temp, "Library", "pnpm", "global", "v11");
-		const packageName = "@earendil-works/pi-coding-agent";
-		const globalPackageDir = join(root, "11e9a", "node_modules", "@earendil-works", "pi-coding-agent");
+		const packageName = "@astralyn/pi";
+		const globalPackageDir = join(root, "11e9a", "node_modules", "@astralyn", "pi");
 		const storePackageDir = join(
 			temp,
 			"Library",
@@ -344,13 +309,13 @@ describe("detectInstallMethod", () => {
 			"store",
 			"v11",
 			"links",
-			"@earendil-works",
-			"pi-coding-agent",
-			"0.75.0",
+			"@astralyn",
+			"pi",
+			"0.81.1-1",
 			"hash",
 			"node_modules",
-			"@earendil-works",
-			"pi-coding-agent",
+			"@astralyn",
+			"pi",
 		);
 		mkdirSync(globalPackageDir, { recursive: true });
 		mkdirSync(storePackageDir, { recursive: true });
@@ -429,9 +394,7 @@ describe("detectInstallMethod", () => {
 		const { packageDir } = createNpmPrefixInstall();
 		chmodSync(packageDir, 0o500);
 
-		expect(getSelfUpdateCommand("@earendil-works/pi-coding-agent")).toBeUndefined();
-		expect(getSelfUpdateUnavailableInstruction("@earendil-works/pi-coding-agent")).toContain(
-			"the install path is not writable",
-		);
+		expect(getSelfUpdateCommand("@astralyn/pi")).toBeUndefined();
+		expect(getSelfUpdateUnavailableInstruction("@astralyn/pi")).toContain("the install path is not writable");
 	});
 });

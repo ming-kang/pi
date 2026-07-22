@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- Bundled the `deepwiki`, `question`, `todo`, `rewind`, `router`, and `statusline` extensions as hidden built-ins.
+- Bundled the `ice-cream-dark` and `ice-cream-light` themes.
+
+### Changed
+
+- Unified native tool transcript presentation around `●` calls and `│` results, with bounded generic output in collapsed view.
+- Published the coding-agent distribution as `@astralyn/pi` with numeric prerelease versions such as `0.81.1-1`.
+- Switched version checks and self-update metadata to the npm registry for `@astralyn/pi`.
+- Removed install/update telemetry requests to `pi.dev`; the legacy `enableInstallTelemetry` setting now controls only optional provider attribution headers.
+
 ## [0.81.1] - 2026-07-21
 
 ### New Features

@@ -23,9 +23,9 @@ import {
 	type Theme,
 } from "../modes/interactive/theme/theme.ts";
 
-const OFFICIAL_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
-const OFFICIAL_APP_NAME = "pi";
-const OFFICIAL_CONFIG_DIR_NAME = ".pi";
+const DISTRIBUTION_PACKAGE_NAME = "@astralyn/pi";
+const DISTRIBUTION_APP_NAME = "pi";
+const DISTRIBUTION_CONFIG_DIR_NAME = ".pi";
 
 interface DistributionMetadata {
 	packageName: string;
@@ -33,11 +33,11 @@ interface DistributionMetadata {
 	configDirName: string;
 }
 
-function isOfficialDistribution({ packageName, appName, configDirName }: DistributionMetadata): boolean {
+function isPrimaryDistribution({ packageName, appName, configDirName }: DistributionMetadata): boolean {
 	return (
-		packageName === OFFICIAL_PACKAGE_NAME &&
-		appName === OFFICIAL_APP_NAME &&
-		configDirName === OFFICIAL_CONFIG_DIR_NAME
+		packageName === DISTRIBUTION_PACKAGE_NAME &&
+		appName === DISTRIBUTION_APP_NAME &&
+		configDirName === DISTRIBUTION_CONFIG_DIR_NAME
 	);
 }
 
@@ -107,14 +107,14 @@ async function clearStartupTui(ui: TUI): Promise<void> {
 
 /**
  * First-time setup runs when all of these hold:
- * - this is the official Pi distribution (not a fork/rebrand)
+ * - this is the primary @astralyn/pi distribution
  * - experimental features are enabled (PI_EXPERIMENTAL=1)
  * - the default agent directory is used (no custom agent dir override)
  * - setup was not completed before (settings.json does not exist)
  */
 export function shouldRunFirstTimeSetup(settingsPath: string = getSettingsPath()): boolean {
 	if (
-		!isOfficialDistribution({
+		!isPrimaryDistribution({
 			packageName: PACKAGE_NAME,
 			appName: APP_NAME,
 			configDirName: CONFIG_DIR_NAME,

@@ -1,6 +1,6 @@
 {
-	"name": "@earendil-works/pi-coding-agent",
-	"version": "0.81.1",
+	"name": "@astralyn/pi",
+	"version": "0.81.1-1",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"type": "module",
 	"piConfig": {
@@ -87,12 +87,11 @@
 		"tui",
 		"agent"
 	],
-	"author": "Mario Zechner",
+	"author": "Astralyn",
 	"license": "MIT",
-	"repository": {
-		"type": "git",
-		"url": "git+https://github.com/earendil-works/pi.git",
-		"directory": "packages/coding-agent"
+	"publishConfig": {
+		"access": "public",
+		"tag": "latest"
 	},
 	"engines": {
 		"node": ">=22.19.0"

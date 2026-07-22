@@ -18,7 +18,7 @@ Themes are JSON files that define colors for the TUI.
 
 Pi loads themes from:
 
-- Built-in: `dark`, `light`
+- Built-in: `dark`, `light`, `ice-cream-dark`, `ice-cream-light`
 - Global: `~/.pi/agent/themes/*.json`
 - Project: `.pi/themes/*.json` (only after the project is trusted)
 - Packages: `themes/` directories or `pi.themes` entries in `package.json`
@@ -295,3 +295,7 @@ echo $COLORTERM  # Should output "truecolor" or "24bit"
 See the built-in themes:
 - [dark.json](../src/modes/interactive/theme/dark.json)
 - [light.json](../src/modes/interactive/theme/light.json)
+- [ice-cream-dark.json](../src/modes/interactive/theme/ice-cream-dark.json)
+- [ice-cream-light.json](../src/modes/interactive/theme/ice-cream-light.json)
+
+The ice-cream palette and Fork-specific design notes are documented in the repository root `docs/themes.md`.

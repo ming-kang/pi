@@ -3,7 +3,7 @@
  *
  * engine.ts and gc.ts must stay loadable under plain node (for offline
  * selftests), so they cannot statically import paths.ts (which imports
- * getAgentDir from @earendil-works/pi-coding-agent — unresolvable outside Pi).
+ * getAgentDir from @astralyn/pi — unresolvable outside Pi).
  * Instead they read the roots from here, and the integration layer (index.ts)
  * calls configureStorage() with the real paths at startup. Selftests call it with
  * temp directories.

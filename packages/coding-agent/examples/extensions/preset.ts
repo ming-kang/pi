@@ -40,9 +40,9 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ExtensionAPI, ExtensionContext } from "@astralyn/pi";
+import { CONFIG_DIR_NAME, DynamicBorder, getAgentDir } from "@astralyn/pi";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CONFIG_DIR_NAME, DynamicBorder, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Container, Key, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 
 // Preset configuration

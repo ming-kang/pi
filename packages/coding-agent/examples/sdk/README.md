@@ -39,7 +39,7 @@ import {
   ModelRuntime,
   SessionManager,
   SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+} from "@astralyn/pi";
 
 const modelRuntime = await ModelRuntime.create();
 

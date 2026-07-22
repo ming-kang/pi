@@ -6,7 +6,7 @@ import type {
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcResponse,
-} from "@earendil-works/pi-coding-agent";
+} from "@astralyn/pi";
 import { radiusPresence } from "./radius.ts";
 import { createRpcProcessInstance, type RpcProcessInstance } from "./rpc-process.ts";
 import { getInstance, loadInstances, removeInstance, saveInstances, upsertInstance } from "./storage.ts";

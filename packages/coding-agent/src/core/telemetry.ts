@@ -5,7 +5,7 @@ function isTruthyEnvFlag(value: string | undefined): boolean {
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
 
-export function isInstallTelemetryEnabled(
+export function isProviderAttributionEnabled(
 	settingsManager: SettingsManager,
 	telemetryEnv: string | undefined = process.env.PI_TELEMETRY,
 ): boolean {

@@ -5,7 +5,7 @@
  * Multiple questions: tab bar navigation between questions
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@astralyn/pi";
 import {
 	Editor,
 	type EditorTheme,
