@@ -44,7 +44,7 @@ rebuilt from them on `session_start`.
 
 ## Storage & cleanup
 
-- **Layout:** `~/.pi/agent/pi-config/rewind/`
+- **Layout:** `~/.pi/agent/rewind/`
   - `config.json` — `{ enabled, retentionDays, maxSnapshots }`
   - `backups/<sessionId>/<sha256(relpath)[:16]>@v<n>` — backup blobs (flat, hashed
     names keep paths short on Windows; mode preserved)
@@ -52,8 +52,9 @@ rebuilt from them on `session_start`.
   `retentionDays` (default **30**, set in `/rewind`) are reclaimed, plus an
   **orphan sweep** of directories whose session id has no session JSONL (crashed
   sessions). The GC is time-boxed and deletion-capped so it never slows startup.
-- The old shadow-git storage at `~/.pi/agent/pi-config/checkpoints/` is **not**
-  used or touched by this engine; remove it manually if you want the space back.
+- The former `pi-config` storage layout is **not** read or migrated by this
+  engine. Remove any old `~/.pi/agent/pi-config/` data manually if it is no
+  longer needed.
 
 ## Design notes
 

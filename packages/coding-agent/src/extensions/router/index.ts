@@ -1,7 +1,7 @@
 /**
  * router — Codex-style API relays for Pi.
  *
- * Manages ~/.pi/agent/pi-config/router.json. Each relay is registered with
+ * Manages ~/.pi/agent/router.json. Each relay is registered with
  * pi.registerProvider (legacy config form + streamSimple), following Pi's
  * custom-provider docs: streamSimple wraps openAIResponsesApi from
  * @earendil-works/pi-ai/compat and reshapes the payload for Codex-style relays.

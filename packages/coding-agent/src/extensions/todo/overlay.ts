@@ -6,7 +6,7 @@ import type { TodoState, TodoStatus } from "./schema.ts";
 import { getTodoState } from "./state.ts";
 import { hasVisibleOverlayItems, renderOverlayLines } from "./view.ts";
 
-const WIDGET_KEY = "pi-config-todos";
+const WIDGET_KEY = "todos";
 const RECENT_COMPLETION_MS = 30_000;
 
 export class TodoOverlay {

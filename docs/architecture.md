@@ -60,14 +60,14 @@ No `src/fork/`, shared extension framework, feature registry, or cross-extension
 
 The command remains `pi`, and existing Pi settings and sessions remain under `~/.pi/agent`.
 
-The migrated extensions preserve their previous data locations where losing or migrating data would be harmful:
+Built-in extensions store their data alongside Pi's other first-class agent data:
 
 ```text
-~/.pi/agent/pi-config/router.json
-~/.pi/agent/pi-config/rewind/
+~/.pi/agent/router.json
+~/.pi/agent/rewind/
 ```
 
-These paths are implementation compatibility details, not a separate package dependency.
+These paths are implementation details, not a separate package dependency. The archived `pi-config` layout is not read or migrated.
 
 ## Themes
 

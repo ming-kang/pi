@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { getAgentDir } from "../../config.ts";
 
 function rewindDirectory(): string {
-	return join(getAgentDir(), "pi-config", "rewind");
+	return join(getAgentDir(), "rewind");
 }
 
 export function rewindConfigPath(): string {

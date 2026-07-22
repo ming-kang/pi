@@ -2,7 +2,7 @@
 
 `/router` connects Pi to OpenAI-compatible API relays — self-hosted gateways such as sub2api, CPA, or codex2api, and any similar proxy — using a **Codex-shaped** Responses client.
 
-Configuration lives at `~/.pi/agent/pi-config/router.json`.
+Configuration lives at `~/.pi/agent/router.json`.
 
 Providers are registered at extension load via `pi.registerProvider` (config form + `streamSimple`). They do **not** go through `models.json`. This follows Pi's documented custom-provider path ([providers.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/providers.md), [custom-provider.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/custom-provider.md)): the stream wraps the built-in `openAIResponsesApi()` from `@earendil-works/pi-ai/compat` (same approach as the GitLab Duo example), then reshapes the request for Codex-style relays.
 

@@ -1,5 +1,5 @@
 /**
- * Persistence for ~/.pi/agent/pi-config/router.json
+ * Persistence for ~/.pi/agent/router.json
  */
 
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
@@ -10,7 +10,7 @@ import { CONFIG_VERSION, isValidRelayId } from "./constants.ts";
 import type { RelayConfig, RelayModelConfig, RouterFile, ThinkingLevelMap } from "./types.ts";
 
 export function getRouterConfigPath(): string {
-	return join(getAgentDir(), "pi-config", "router.json");
+	return join(getAgentDir(), "router.json");
 }
 
 export function emptyRouterFile(): RouterFile {

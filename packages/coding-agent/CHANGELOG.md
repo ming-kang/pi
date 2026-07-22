@@ -13,6 +13,7 @@
 - Published the coding-agent distribution as `@astralyn/pi` with numeric prerelease versions such as `0.81.1-1`.
 - Switched version checks and self-update metadata to the npm registry for `@astralyn/pi`.
 - Removed install/update telemetry requests to `pi.dev`; the legacy `enableInstallTelemetry` setting now controls only optional provider attribution headers.
+- Moved built-in `router` and `rewind` data to `~/.pi/agent/router.json` and `~/.pi/agent/rewind/`; the archived `pi-config` paths are no longer used.
 
 ## [0.81.1] - 2026-07-21
 
