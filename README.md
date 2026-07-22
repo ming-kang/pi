@@ -71,6 +71,7 @@ The complete upstream coding-agent usage and API documentation remains under [`p
 - [Native tool presentation](docs/tool-presentation.md)
 - [Bundled extensions](docs/extensions/README.md)
 - [Bundled themes](docs/themes.md)
+- [Release checklist](docs/release.md)
 - [Coding-agent usage documentation](packages/coding-agent/docs/index.md)
 
 ## Development

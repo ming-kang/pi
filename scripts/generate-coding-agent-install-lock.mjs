@@ -295,6 +295,9 @@ function validateGeneratedFiles(installerPackageJson, installLock, internalNames
 		if (entry.dev || entry.devOptional || entry.extraneous) {
 			errors.push(`${lockPath || "root"} contains dev/extraneous metadata`);
 		}
+		if (packageName && internalPackageNames.has(packageName) && entry.version !== installerPackageJson.version) {
+			errors.push(`${lockPath} internal package version ${entry.version} does not match ${installerPackageJson.version}`);
+		}
 
 		if (entry.hasInstallScript) {
 			if (!packageName || !entry.version) {

@@ -8,6 +8,7 @@ This is a private personal distribution of Pi based on `earendil-works/pi`. The 
 - Personal implementation changes belong in `packages/coding-agent/**` unless a real dependency or build requirement makes another package unavoidable.
 - `packages/ai`, `packages/agent`, `packages/tui`, `packages/server`, and `packages/storage` follow upstream by default.
 - The published user-facing package is `@astralyn/pi`; the command remains `pi`.
+- Keep upstream `scripts/` by default even when a removed Fork workflow no longer invokes them; remove only scripts tied to an intentionally unsupported release or governance flow. Fork-owned scripts must be wired through the root `package.json` or a documented process.
 - Do not add a Fork framework, feature registry, configuration layer, or extra package for personal behavior.
 
 ## Architecture boundaries
@@ -73,7 +74,8 @@ Expected merge hotspots are the native tool presentation, `core/tools`, `core/ke
 - Root `docs/` contains Fork-owned architecture, historical rationale, extension, and theme documentation.
 - `packages/coding-agent/docs/` remains primarily upstream usage/API documentation.
 - `packages/coding-agent/CHANGELOG.md` is the runtime and release changelog; keep Fork entries under `[Unreleased]`.
-- Do not add contribution, security, governance, issue-triage, or release-policy documents unless the owner explicitly asks for them.
+- `docs/release.md` is the manual single-package release checklist.
+- Do not add contribution, security, governance, issue-triage, or other policy documents unless the owner explicitly asks for them.
 
 ## npm distribution
 
@@ -87,7 +89,7 @@ Use a numeric npm prerelease suffix that tracks the upstream version:
 0.82.0-1
 ```
 
-Before publishing, run the requested release checks, build the coding-agent package, inspect `npm pack --dry-run`, and publish the package with public access. Do not use the upstream multi-package release or publish workflow for this repository.
+Follow the release checklist in `docs/release.md` when publishing. Do not use the upstream multi-package release or publish workflow for this repository.
 
 ## No external tracker
 
