@@ -13,7 +13,7 @@ The upstream coding-agent usage and API documentation remains under [`packages/c
 
 ## Process
 
-- [Release checklist](release.md)
+- [OIDC npm release checklist](release.md)
 
 ## History
 

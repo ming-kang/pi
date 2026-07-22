@@ -38,13 +38,6 @@ Windows is not the release test environment for this Fork. The full test suite d
 
 The `CI` workflow runs automatically after pushing `main` and must pass Build, Check, and Test. The publish workflow repeats those checks before uploading the package, so local full-suite execution is not required.
 
-Local package review remains optional and non-authoritative:
-
-```bash
-cd packages/coding-agent
-npm pack --dry-run
-```
-
 Interactive behavior is maintained through the normal development process and prior extension verification; it is not a release blocker for the already-verified built-in extensions.
 
 ## Review the package
@@ -77,10 +70,7 @@ Do not enable `npm stage publish`; this Fork publishes directly to the public `l
 After the release commit is pushed and the `CI` workflow passes, trigger the publish workflow from a local authenticated GitHub CLI session:
 
 ```bash
-gh workflow run publish-npm.yml \
-  --repo ming-kang/pi \
-  --ref main \
-  -f version=0.81.1-2
+gh workflow run publish-npm.yml --repo ming-kang/pi --ref main -f version=0.81.1-2
 
 gh run list \
   --repo ming-kang/pi \

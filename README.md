@@ -31,11 +31,13 @@ npm install -g @astralyn/pi
 
 The executable remains `pi`. The package keeps Pi's existing configuration and session locations under `~/.pi/agent`.
 
-Until the first npm release, run the checkout directly:
+For source development without replacing the globally installed package, run the checkout directly:
 
 ```bash
 ./pi-test.sh --no-env
 ```
+
+Releases are verified on Ubuntu and published through a manually triggered GitHub Actions workflow using npm Trusted Publishing (OIDC). See the [release checklist](docs/release.md).
 
 ## Bundled extensions
 

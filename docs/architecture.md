@@ -119,4 +119,6 @@ Fork releases use the upstream version plus a numeric npm prerelease revision:
 0.82.0-1
 ```
 
-The npm registry entry for `@astralyn/pi` is the only update source. No custom update service, telemetry service, multi-package publish process, or community release workflow is maintained.
+The npm registry entry for `@astralyn/pi` is the only update source. Releases are verified on Ubuntu and published by manually dispatching `.github/workflows/publish-npm.yml`; npm authenticates that exact workflow through Trusted Publishing (OIDC), so no long-lived npm token is stored in GitHub. Ordinary pushes to `main` run CI but never publish.
+
+No custom update service, telemetry service, multi-package publish process, or community release workflow is maintained.
