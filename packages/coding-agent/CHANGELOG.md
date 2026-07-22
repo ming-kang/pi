@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.81.1-1] - 2026-07-22
+
 ### Added
 
 - Bundled the `deepwiki`, `question`, `todo`, `rewind`, `router`, and `statusline` extensions as hidden built-ins.
