@@ -1,13 +1,15 @@
 import { join, resolve } from "node:path";
-import { Text, type TUI } from "@earendil-works/pi-tui";
+import { Text, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { beforeAll, describe, expect, test } from "vitest";
 import { getReadmePath } from "../src/config.ts";
 import type { ToolDefinition } from "../src/core/extensions/types.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
+import { createFindToolDefinition } from "../src/core/tools/find.ts";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
+import { ToolGroupComponent } from "../src/modes/interactive/components/tool-group.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
@@ -117,6 +119,27 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain("edit");
 		expect(rendered).toContain("README.md");
 		expect(rendered).not.toContain(":1");
+	});
+
+	test("assigns explore tool group to read and find tools", () => {
+		expect(createReadToolDefinition(process.cwd()).toolGroup).toBe("explore");
+		expect(createFindToolDefinition(process.cwd()).toolGroup).toBe("explore");
+	});
+
+	test("keeps self-rendered tools out of native tool groups", () => {
+		const definition = createReadToolDefinition(process.cwd());
+		definition.renderShell = "self";
+		const component = new ToolExecutionComponent(
+			"read",
+			"tool-self-rendered-read",
+			{ path: "README.md" },
+			{},
+			definition,
+			createFakeTui(),
+			process.cwd(),
+		);
+
+		expect(component.toolGroup).toBeUndefined();
 	});
 
 	test("preserves legacy file_path rendering compatibility for built-in tools", () => {
@@ -553,6 +576,56 @@ describe("ToolExecutionComponent parity", () => {
 			expect(expanded).toContain(scenario.hidden);
 		});
 	}
+
+	test("renders collapsed tool groups as one card with the hint on the last summary", () => {
+		const readDefinition = createReadToolDefinition(process.cwd());
+		const skillRead = new ToolExecutionComponent(
+			"read",
+			"tool-group-skill",
+			{ path: join(process.cwd(), "attio", "SKILL.md") },
+			{},
+			readDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		const rangedRead = new ToolExecutionComponent(
+			"read",
+			"tool-group-ranged-read",
+			{ path: "packages/ai/CHANGELOG.md", offset: 1, limit: 90 },
+			{},
+			readDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		const group = new ToolGroupComponent("explore");
+		group.addTool(skillRead);
+		group.addTool(rangedRead);
+
+		const rendered = stripAnsi(group.render(120).join("\n"));
+		const renderedLines = rendered.split("\n");
+		expect(rendered).not.toContain("Explore");
+		expect(rendered).toContain("[skill] attio");
+		expect(rendered).toContain("read packages/ai/CHANGELOG.md:1-90");
+		expect(rendered.match(/to expand/g)?.length ?? 0).toBe(1);
+		expect(renderedLines[0]).toBe("");
+		expect(renderedLines.some((line) => line.startsWith("● [skill] attio") && !line.includes("to expand"))).toBe(
+			true,
+		);
+		expect(
+			renderedLines.some(
+				(line) => line.startsWith("● read packages/ai/CHANGELOG.md:1-90") && line.includes("to expand"),
+			),
+		).toBe(true);
+
+		const narrowLines = group.render(40);
+		expect(narrowLines.some((line) => stripAnsi(line).includes("to expand"))).toBe(true);
+		expect(narrowLines.every((line) => visibleWidth(line) <= 40)).toBe(true);
+
+		group.setExpanded(true);
+		const expanded = stripAnsi(group.render(120).join("\n"));
+		expect(expanded).not.toContain("Explore");
+		expect(expanded).not.toContain("to expand");
+	});
 
 	for (const scenario of [
 		{ title: "SKILL.md", path: join(process.cwd(), "attio", "SKILL.md"), compact: "[skill] attio:120-329" },

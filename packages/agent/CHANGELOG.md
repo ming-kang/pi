@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added optional `toolGroup` metadata on `AgentTool` for UI grouping.
+
 ## [0.81.1] - 2026-07-21
 
 ### Added

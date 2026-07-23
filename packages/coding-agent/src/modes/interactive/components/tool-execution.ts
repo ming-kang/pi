@@ -113,6 +113,7 @@ export class ToolExecutionComponent extends Container {
 	private isPartial = true;
 	private toolDefinition?: ToolDefinition<any, any>;
 	private builtInToolDefinition?: ToolDefinition<any, any>;
+	readonly toolGroup: string | undefined;
 	private ui: TUI;
 	private cwd: string;
 	private executionStarted = false;
@@ -140,6 +141,10 @@ export class ToolExecutionComponent extends Container {
 		this.args = args;
 		this.toolDefinition = toolDefinition;
 		this.builtInToolDefinition = createAllToolDefinitions(cwd)[toolName as ToolName];
+		this.toolGroup =
+			this.getRenderShell() === "self"
+				? undefined
+				: (this.toolDefinition?.toolGroup ?? this.builtInToolDefinition?.toolGroup);
 		this.showImages = options.showImages ?? true;
 		this.imageWidthCells = options.imageWidthCells ?? 60;
 		this.ui = ui;
@@ -184,7 +189,7 @@ export class ToolExecutionComponent extends Container {
 		return this.toolDefinition.renderShell ?? this.builtInToolDefinition.renderShell ?? "default";
 	}
 
-	private getRenderContext(lastComponent: Component | undefined): ToolRenderContext {
+	private getRenderContext(lastComponent: Component | undefined, toolGroupSummary = false): ToolRenderContext {
 		return {
 			args: this.args,
 			toolCallId: this.toolCallId,
@@ -201,6 +206,7 @@ export class ToolExecutionComponent extends Container {
 			expanded: this.expanded,
 			showImages: this.showImages,
 			isError: this.result?.isError ?? false,
+			toolGroupSummary,
 		};
 	}
 
@@ -299,6 +305,21 @@ export class ToolExecutionComponent extends Container {
 	override invalidate(): void {
 		super.invalidate();
 		this.updateDisplay();
+	}
+
+	renderCallSummary(width: number): string[] {
+		const callRenderer = this.getCallRenderer();
+		let component: Component;
+		if (!callRenderer) {
+			component = this.createCallFallback();
+		} else {
+			try {
+				component = callRenderer(this.args, theme, this.getRenderContext(undefined, true));
+			} catch {
+				component = this.createCallFallback();
+			}
+		}
+		return this.wrapCall(component).render(width);
 	}
 
 	override render(width: number): string[] {

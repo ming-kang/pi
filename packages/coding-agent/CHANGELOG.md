@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added collapsed tool grouping for consecutive `read`/`find` tool calls.
+
 ## [0.81.1-2] - 2026-07-23
 
 ### Changed

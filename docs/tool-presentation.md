@@ -37,6 +37,8 @@ It owns:
 
 Built-in renderers remain responsible for semantic content such as file paths, syntax highlighting, search results, Diff previews, and command output. The outer shell is native so built-in tools, bundled extensions, and compatible third-party tools share the same presentation.
 
+Consecutive tools may opt into a shared collapsed group through `toolGroup`. Built-in `read` and `find` calls use the `explore` group: their call rows render as one compact run with a single leading gap, while `Ctrl+O` restores each tool's complete call and result.
+
 ## Renderer inheritance
 
 | Tool definition | Behavior |
