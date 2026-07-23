@@ -7,6 +7,7 @@
 ### Changed
 
 - Refined bash tool-call presentation: long safe multi-command chains collapse to a concise command summary, while expanded calls retain the complete command.
+- Added Fork repository metadata to the published package for npm provenance validation.
 
 ## [0.81.1-1] - 2026-07-22
 

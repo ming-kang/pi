@@ -89,6 +89,11 @@
 	],
 	"author": "Astralyn",
 	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/ming-kang/pi",
+		"directory": "packages/coding-agent"
+	},
 	"publishConfig": {
 		"access": "public",
 		"tag": "latest"
