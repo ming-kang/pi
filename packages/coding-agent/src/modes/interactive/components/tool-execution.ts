@@ -211,13 +211,12 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private wrapCall(component: Component): Component {
-		const color = this.isPartial ? "warning" : "success";
+		const color = this.isPartial ? "warning" : this.result?.isError ? "error" : "success";
 		return new ToolChromeComponent(component, `${theme.fg(color, "●")} `);
 	}
 
 	private wrapResult(component: Component): Component {
-		const prefix = this.result?.isError ? `${theme.fg("error", "●")} ` : theme.fg("dim", "│ ");
-		return new ToolChromeComponent(component, prefix, true);
+		return new ToolChromeComponent(component, theme.fg("dim", "│ "), true);
 	}
 
 	private createResultFallback(): Component | undefined {

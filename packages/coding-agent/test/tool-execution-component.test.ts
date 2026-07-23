@@ -402,9 +402,14 @@ describe("ToolExecutionComponent parity", () => {
 		);
 		component.updateResult({ content: [{ type: "text", text: "not available" }], isError: true }, false);
 
-		const rendered = stripAnsi(component.render(120).join("\n"));
+		const renderedLines = component.render(120);
+		const rendered = stripAnsi(renderedLines.join("\n"));
 		expect(rendered).toContain('● historical_tool(query="docs")');
-		expect(rendered).toContain("● not available");
+		expect(rendered).toContain("│ not available");
+		expect(rendered.match(/●/g)).toHaveLength(1);
+		expect(renderedLines.find((line) => stripAnsi(line).includes("historical_tool"))).toContain(
+			theme.fg("error", "●"),
+		);
 	});
 
 	test("trims trailing blank display lines from write previews", () => {

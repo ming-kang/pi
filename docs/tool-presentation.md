@@ -14,8 +14,8 @@ States use the same shell:
 ```text
 ● ToolName(args)       completed call
 ● ToolName Working...  pending call
-│ result               successful output
-● error                failed output
+● ToolName(args)       failed call (error color)
+│ result               successful or failed output
 ```
 
 ## Implementation boundary
@@ -57,7 +57,7 @@ When no semantic renderer is available:
 - output is collapsed to the most recent ten visual lines;
 - `Ctrl+O` expands the complete output;
 - historical tools that are no longer registered still receive the same shell;
-- error output uses the error bullet instead of the result bar.
+- failed calls use the error-colored bullet while result details keep the result bar.
 
 The fallback does not change tool schemas, execution logic, or result protocols.
 
