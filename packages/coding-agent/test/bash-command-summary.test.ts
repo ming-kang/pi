@@ -22,6 +22,15 @@ describe("summarizeBashCommand", () => {
 		).toEqual(["git", "find", "gh"]);
 	});
 
+	test("summarizes arbitrary simple command names", () => {
+		expect(summarizeBashCommand("pwd && node scripts/release.js && custom-tool --flag && git status")).toEqual([
+			"pwd",
+			"node",
+			"custom-tool",
+			"git",
+		]);
+	});
+
 	test("normalizes absolute executable paths and Windows suffixes", () => {
 		expect(summarizeBashCommand("/usr/bin/git.exe status && git.exe log -1")).toEqual(["git"]);
 	});
@@ -38,9 +47,9 @@ describe("summarizeBashCommand", () => {
 		expect(summarizeBashCommand("git status && gh run list &&")).toBeUndefined();
 	});
 
-	test("returns undefined when a command is not in the safe summary set", () => {
+	test("returns undefined for executable paths outside the current directory", () => {
 		expect(summarizeBashCommand("git status && ./scripts/release.sh")).toBeUndefined();
-		expect(summarizeBashCommand("node scripts/release.js && git status")).toBeUndefined();
+		expect(summarizeBashCommand("git status && ../scripts/release.sh")).toBeUndefined();
 	});
 
 	test("returns undefined for unsupported shell syntax", () => {

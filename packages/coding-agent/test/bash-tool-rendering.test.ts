@@ -48,9 +48,20 @@ describe("bash tool call rendering", () => {
 		expect(rendered).not.toContain("git ×");
 	});
 
-	test("keeps unknown long commands as a truncated raw preview", () => {
+	test("summarizes safe pwd and node version chains", () => {
 		const component = createRenderer(
-			"node scripts/release.js --channel nightly --repository ming-kang/pi --version 0.81.1-2 && git status --short",
+			"pwd && git branch --show-current && git status --short && git log -1 --oneline && git tag --points-at HEAD && git remote -v && npm --version && node --version && npm view @astralyn/pi@0.81.1-2 version && git status --short",
+			120,
+		);
+		component.setArgsComplete();
+
+		const rendered = renderCall(component, 100);
+		expect(rendered).toContain("● $ pwd, git, npm, node … (timeout 120s)");
+	});
+
+	test("keeps complex long commands as a truncated raw preview", () => {
+		const component = createRenderer(
+			"node scripts/release.js --channel nightly --repository ming-kang/pi --version 0.81.1-2 && git status --short && echo $(git rev-parse HEAD)",
 		);
 		component.setArgsComplete();
 

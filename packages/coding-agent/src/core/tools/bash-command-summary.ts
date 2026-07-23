@@ -1,40 +1,3 @@
-const SUMMARIZABLE_COMMANDS = new Set([
-	"cd",
-	"ls",
-	"find",
-	"fd",
-	"rg",
-	"grep",
-	"git",
-	"gh",
-	"npm",
-	"pnpm",
-	"yarn",
-	"bun",
-	"cat",
-	"head",
-	"tail",
-	"sed",
-	"awk",
-	"jq",
-	"sort",
-	"uniq",
-	"wc",
-	"mkdir",
-	"cp",
-	"mv",
-	"rm",
-	"touch",
-	"curl",
-	"wget",
-	"make",
-	"cmake",
-	"cargo",
-	"go",
-	"docker",
-	"kubectl",
-]);
-
 const SHELL_KEYWORDS = new Set([
 	"case",
 	"do",
@@ -235,7 +198,7 @@ function normalizeCommandName(token: string): string | undefined {
 	}
 
 	const normalized = token.toLowerCase().replace(/\.exe$/, "");
-	return SUMMARIZABLE_COMMANDS.has(normalized) ? normalized : undefined;
+	return /^[a-z0-9][a-z0-9._+@-]*$/i.test(normalized) ? normalized : undefined;
 }
 
 function extractSimpleCommandName(segment: string): string | undefined {
@@ -252,9 +215,9 @@ function extractSimpleCommandName(segment: string): string | undefined {
 }
 
 /**
- * Return unique, ordered command names when a command is a safe multi-command
- * chain suitable for a compact display summary. Returns undefined when the
- * command contains unsupported shell syntax or an unrecognized command.
+ * Return unique, ordered command names when a command is a syntactically simple
+ * multi-command chain suitable for a compact display summary. Returns undefined
+ * when the command contains unsupported shell syntax or an invalid command name.
  */
 export function summarizeBashCommand(command: string): string[] | undefined {
 	const segments = splitTopLevelCommands(command);
