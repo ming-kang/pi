@@ -1,6 +1,8 @@
 # Bundled extensions
 
-These extensions are maintained as self-contained TypeScript modules under `packages/coding-agent/src/extensions/` and registered as hidden built-in extensions.
+These are extensions shipped by the Fork. For the public API used to write external extensions, see the coding-agent [Extension API documentation](../../packages/coding-agent/docs/extensions.md).
+
+The bundled extensions are maintained as self-contained TypeScript modules under `packages/coding-agent/src/extensions/` and registered as hidden built-in extensions.
 
 | Extension | Tool or command | Documentation |
 |---|---|---|

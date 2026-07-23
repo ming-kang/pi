@@ -1,6 +1,8 @@
-# Bundled themes
+# Bundled theme design
 
-This Fork bundles two Pi themes using the native theme schema and loader:
+This document describes the themes shipped by the Fork. For theme discovery, JSON format, and custom theme authoring, see the coding-agent [Theme API documentation](../packages/coding-agent/docs/themes.md).
+
+The Fork bundles two Pi themes using the native theme schema and loader:
 
 | Theme | Use |
 |---|---|

@@ -70,12 +70,13 @@ Fork-specific architecture and behavior are documented in [`docs/`](docs/README.
 The complete upstream coding-agent usage and API documentation remains under [`packages/coding-agent/docs/`](packages/coding-agent/docs/).
 
 - [Fork architecture](docs/architecture.md)
+- [Fork maintenance and upstream synchronization](docs/maintenance.md)
 - [Native tool presentation](docs/tool-presentation.md)
 - [Bundled extensions](docs/extensions/README.md)
-- [Bundled themes](docs/themes.md)
+- [Bundled theme design](docs/themes.md)
 - [Release checklist](docs/release.md)
 - [Quickstart](packages/coding-agent/docs/quickstart.md)
-- [Coding-agent usage documentation](packages/coding-agent/docs/index.md)
+- [User and API documentation](packages/coding-agent/docs/index.md)
 
 ## Development
 
@@ -101,14 +102,9 @@ Builds, full tests, and npm publishing are release operations rather than the no
 
 ## Upstream synchronization
 
-This repository follows the upstream Pi repository through the `upstream` remote:
+This repository follows the upstream Pi repository through the `upstream` remote. Synchronization happens on a temporary integration branch so upstream security fixes and features can be reviewed against Fork-owned behavior before reaching `main`.
 
-```bash
-git fetch upstream
-git merge upstream/main
-```
-
-The root README, `AGENTS.md`, `docs/`, and the personal extensions are Fork-owned. The remaining monorepo is primarily upstream-owned and should be changed only when the Fork requires it.
+The root README, `AGENTS.md`, `docs/`, and the personal extensions are Fork-owned. The remaining monorepo is primarily upstream-owned and should be changed only when the Fork requires it. See the [Fork maintenance guide](docs/maintenance.md) for the ownership map, merge workflow, Server compatibility seam, and conflict policy.
 
 ## License
 

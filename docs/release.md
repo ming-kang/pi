@@ -1,6 +1,6 @@
 # Release checklist
 
-This Fork publishes one npm package, `@astralyn/pi`. It does not use the upstream multi-package release flow.
+This Fork publishes one npm package, `@astralyn/pi`. It does not use the upstream multi-package release flow. Routine upstream synchronization and conflict handling are documented separately in the [Fork maintenance guide](maintenance.md).
 
 ## Scope and versioning
 

@@ -29,7 +29,13 @@ packages/
 
 Personal implementation changes belong in `packages/coding-agent/**`. The AI, agent-core, TUI, server, and storage packages follow upstream unless a concrete coding-agent requirement forces a small compatible change.
 
-Only `@astralyn/pi` is published. It continues to depend on the upstream `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, and `@earendil-works/pi-tui` packages.
+The current exceptions are narrow compatibility seams rather than ownership of another workspace:
+
+- `packages/agent` exposes optional `toolGroup` metadata used by coding-agent presentation;
+- `packages/server` imports the renamed `@astralyn/pi` package and resolves its RPC entry;
+- `packages/server/package.json` pins the exact current `@astralyn/pi` version so the retained workspace continues to compile.
+
+Only `@astralyn/pi` is published. It continues to depend on the upstream `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, and `@earendil-works/pi-tui` packages. The Server workspace retains its upstream package identity and is not part of the Fork distribution.
 
 ## Core and extension boundary
 
@@ -81,12 +87,7 @@ They are loaded by the same native theme path as `dark` and `light`, and are cop
 
 ## Upstream synchronization
 
-The upstream repository remains configured as `upstream`:
-
-```bash
-git fetch upstream
-git merge upstream/main
-```
+The upstream repository remains configured as `upstream`. Synchronization is performed on a temporary integration branch and merged into `main` only after conflict review and verification. See the [Fork maintenance guide](maintenance.md) for the complete workflow and conflict policy.
 
 Fork-owned files include:
 
@@ -121,4 +122,4 @@ Fork releases use the upstream version plus a numeric npm prerelease revision:
 
 The npm registry entry for `@astralyn/pi` is the only update source. Releases are verified on Ubuntu and published by manually dispatching `.github/workflows/publish-npm.yml`; npm authenticates that exact workflow through Trusted Publishing (OIDC), so no long-lived npm token is stored in GitHub. Ordinary pushes to `main` run CI but never publish.
 
-No custom update service, telemetry service, multi-package publish process, or community release workflow is maintained.
+No custom update service, telemetry service, multi-package publish process, or community release workflow is maintained. Publishing steps are documented in the separate [release checklist](release.md).
