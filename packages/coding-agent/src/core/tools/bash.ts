@@ -16,7 +16,6 @@ import {
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
-import { summarizeBashCommand } from "./bash-command-summary.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { getTextOutput, invalidArgText, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -174,10 +173,10 @@ export interface BashToolOptions {
 
 const BASH_PREVIEW_LINES = 5;
 const BASH_UPDATE_THROTTLE_MS = 100;
+const BASH_PROGRESS_THRESHOLD_MS = 2000;
 
 type BashRenderState = {
 	startedAt: number | undefined;
-	endedAt: number | undefined;
 	interval: NodeJS.Timeout | undefined;
 };
 
@@ -190,29 +189,20 @@ type BashCachedRenderState = {
 class BashCallRenderComponent implements Component {
 	private command: string | null = "";
 	private timeout: number | undefined;
-	private argsComplete = false;
 	private expanded = false;
-	private summary: string[] | undefined;
 	private cachedWidth: number | undefined;
 	private cachedLines: string[] | undefined;
 
-	update(args: { command?: string; timeout?: number } | undefined, argsComplete: boolean, expanded: boolean): void {
+	update(args: { command?: string; timeout?: number } | undefined, expanded: boolean): void {
 		const command = str(args?.command);
 		const timeout = args?.timeout as number | undefined;
-		if (
-			this.command === command &&
-			this.timeout === timeout &&
-			this.argsComplete === argsComplete &&
-			this.expanded === expanded
-		) {
+		if (this.command === command && this.timeout === timeout && this.expanded === expanded) {
 			return;
 		}
 
 		this.command = command;
 		this.timeout = timeout;
-		this.argsComplete = argsComplete;
 		this.expanded = expanded;
-		this.summary = argsComplete && command ? summarizeBashCommand(command) : undefined;
 		this.invalidate();
 	}
 
@@ -233,7 +223,6 @@ class BashCallRenderComponent implements Component {
 		const fullCall = formatFullBashCall(this.command, this.timeout);
 		const fullLines = new Text(fullCall, 0, 0).render(width);
 		if (this.expanded || fullLines.length <= 1) return fullLines;
-		if (this.summary) return [formatBashSummary(this.summary, this.timeout, width)];
 		return [formatTruncatedBashCall(this.command, this.timeout, width)];
 	}
 }
@@ -277,25 +266,6 @@ function fitCollapsedBashCall(body: string, timeout: number | undefined, width: 
 	return truncateToWidth(prompt + fittedBody + ellipsis + timeoutSuffix, width, "...");
 }
 
-function formatBashSummary(commands: string[], timeout: number | undefined, width: number): string {
-	const separator = theme.fg("muted", ", ");
-	const prompt = formatBashPrompt();
-	const timeoutSuffix = formatBashTimeout(timeout);
-	const ellipsis = theme.fg("muted", " …");
-	const namesWidth = Math.max(0, width - visibleWidth(prompt) - visibleWidth(ellipsis) - visibleWidth(timeoutSuffix));
-	let names = "";
-	for (const command of commands) {
-		const styledCommand = theme.fg("toolOutput", command);
-		const candidate = names ? `${names}${separator}${styledCommand}` : styledCommand;
-		if (visibleWidth(candidate) > namesWidth) break;
-		names = candidate;
-	}
-	if (!names) {
-		return truncateToWidth(prompt + theme.fg("muted", "…") + timeoutSuffix, width, "...");
-	}
-	return truncateToWidth(prompt + names + ellipsis + timeoutSuffix, width, "...");
-}
-
 function formatTruncatedBashCall(command: string | null, timeout: number | undefined, width: number): string {
 	if (command === null) return truncateToWidth(formatFullBashCall(command, timeout), width, "...");
 	if (!command) return formatFullBashCall(command, timeout);
@@ -316,7 +286,6 @@ function rebuildBashResultRenderComponent(
 	options: ToolRenderResultOptions,
 	showImages: boolean,
 	startedAt: number | undefined,
-	endedAt: number | undefined,
 ): void {
 	const state = component.state;
 	component.clear();
@@ -382,10 +351,11 @@ function rebuildBashResultRenderComponent(
 		component.addChild(new Text(`\n${theme.fg("warning", `[${warnings.join(". ")}]`)}`, 0, 0));
 	}
 
-	if (startedAt !== undefined) {
-		const label = options.isPartial ? "Elapsed" : "Took";
-		const endTime = endedAt ?? Date.now();
-		component.addChild(new Text(`\n${theme.fg("muted", `${label} ${formatDuration(endTime - startedAt)}`)}`, 0, 0));
+	if (options.isPartial && startedAt !== undefined) {
+		const elapsedMs = Date.now() - startedAt;
+		if (elapsedMs >= BASH_PROGRESS_THRESHOLD_MS) {
+			component.addChild(new Text(`\n${theme.fg("muted", `Running… (${formatDuration(elapsedMs)})`)}`, 0, 0));
+		}
 	}
 }
 
@@ -532,11 +502,10 @@ export function createBashToolDefinition(
 			const state = context.state;
 			if (context.executionStarted && state.startedAt === undefined) {
 				state.startedAt = Date.now();
-				state.endedAt = undefined;
 			}
 			const component =
 				(context.lastComponent as BashCallRenderComponent | undefined) ?? new BashCallRenderComponent();
-			component.update(args, context.argsComplete, context.expanded);
+			component.update(args, context.expanded);
 			return component;
 		},
 		renderResult(result, options, _theme, context) {
@@ -545,7 +514,6 @@ export function createBashToolDefinition(
 				state.interval = setInterval(() => context.invalidate(), 1000);
 			}
 			if (!options.isPartial || context.isError) {
-				state.endedAt ??= Date.now();
 				if (state.interval) {
 					clearInterval(state.interval);
 					state.interval = undefined;
@@ -553,14 +521,7 @@ export function createBashToolDefinition(
 			}
 			const component =
 				(context.lastComponent as BashResultRenderComponent | undefined) ?? new BashResultRenderComponent();
-			rebuildBashResultRenderComponent(
-				component,
-				result as any,
-				options,
-				context.showImages,
-				state.startedAt,
-				state.endedAt,
-			);
+			rebuildBashResultRenderComponent(component, result as any, options, context.showImages, state.startedAt);
 			component.invalidate();
 			return component;
 		},

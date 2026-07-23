@@ -1,5 +1,5 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { beforeAll, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
@@ -37,26 +37,28 @@ describe("bash tool call rendering", () => {
 		expect(renderCall(component, 120)).toContain("● $ git status --short");
 	});
 
-	test("summarizes long safe multi-command calls without counting repeats", () => {
-		const component = createRenderer(
-			"cd ../Pi && git add -- README.md docs/README.md docs/architecture.md && git diff --cached --check && git commit -m 'docs: release process' && git push origin main",
-		);
+	test("keeps long multi-command calls as a faithful raw preview", () => {
+		const command =
+			"cd ../Pi && git add -- README.md docs/README.md docs/architecture.md && git diff --cached --check && git commit -m 'docs: release process' && git push origin main";
+		const component = createRenderer(command);
 		component.setArgsComplete();
 
 		const rendered = renderCall(component, 80);
-		expect(rendered).toContain("● $ cd, git …");
-		expect(rendered).not.toContain("git ×");
+		expect(rendered).toContain("● $ cd ../Pi && git add -- README.md");
+		expect(rendered).not.toContain("cd, git …");
 	});
 
-	test("summarizes safe pwd and node version chains", () => {
+	test("preserves raw command chains and timeout metadata", () => {
 		const component = createRenderer(
-			"pwd && git branch --show-current && git status --short && git log -1 --oneline && git tag --points-at HEAD && git remote -v && npm --version && node --version && npm view @astralyn/pi@0.81.1-2 version && git status --short",
+			"pwd && git branch --show-current && git status --short && git log -1 --oneline && git tag --points-at HEAD && git remote -v && npm --version && node --version",
 			120,
 		);
 		component.setArgsComplete();
 
 		const rendered = renderCall(component, 100);
-		expect(rendered).toContain("● $ pwd, git, npm, node … (timeout 120s)");
+		expect(rendered).toContain("● $ pwd && git branch --show-current");
+		expect(rendered).toContain("(timeout 120s)");
+		expect(rendered).not.toContain("pwd, git");
 	});
 
 	test("keeps complex long commands as a truncated raw preview", () => {
@@ -89,7 +91,7 @@ describe("bash tool call rendering", () => {
 		expect(rendered).not.toContain("cd, git …");
 	});
 
-	test("keeps timeout metadata visible in summarized calls", () => {
+	test("keeps timeout metadata visible in raw previews", () => {
 		const component = createRenderer(
 			"find packages/coding-agent/src -type f -name '*.ts' && gh run list --workflow publish-npm.yml --limit 20 && git status --short",
 			180,
@@ -97,18 +99,18 @@ describe("bash tool call rendering", () => {
 		component.setArgsComplete();
 
 		const rendered = renderCall(component, 100);
-		expect(rendered).toContain("$ find, gh, git …");
+		expect(rendered).toContain("$ find packages/coding-agent/src");
 		expect(rendered).toContain("(timeout 180s)");
 	});
 
-	test("recomputes the call layout when the terminal width changes", () => {
+	test("recomputes the raw call layout when the terminal width changes", () => {
 		const command =
 			"find packages/coding-agent/src -type f && gh run list --workflow publish-npm.yml && git status --short";
 		const component = createRenderer(command);
 		component.setArgsComplete();
 
 		expect(renderCall(component, 300)).toContain(command);
-		expect(renderCall(component, 60)).toContain("$ find, gh, git …");
+		expect(renderCall(component, 60)).toContain("$ find packages/coding-agent/src");
 	});
 
 	test("never renders lines wider than the available terminal width", () => {
@@ -125,6 +127,26 @@ describe("bash tool call rendering", () => {
 		}
 	});
 
+	test("delays running duration until the two-second threshold", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+		const component = createRenderer("npm run check");
+		component.markExecutionStarted();
+		component.updateResult({ content: [], isError: false }, true);
+
+		expect(renderCall(component, 120)).not.toContain("Running");
+		vi.advanceTimersByTime(1999);
+		expect(renderCall(component, 120)).not.toContain("Running");
+		vi.advanceTimersByTime(1);
+		expect(renderCall(component, 120)).toContain("Running… (2.0s)");
+
+		component.updateResult({ content: [{ type: "text", text: "(no output)" }], isError: false }, false);
+		const completed = renderCall(component, 120);
+		expect(completed).toContain("(no output)");
+		expect(completed).not.toContain("Running");
+		expect(completed).not.toContain("Took");
+	});
+
 	test("preserves empty and invalid argument fallbacks", () => {
 		const empty = createRenderer("");
 		empty.setArgsComplete();
@@ -133,5 +155,9 @@ describe("bash tool call rendering", () => {
 		const invalid = createRenderer(42);
 		invalid.setArgsComplete();
 		expect(renderCall(invalid, 80)).toContain("$ [invalid arg]");
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
 	});
 });

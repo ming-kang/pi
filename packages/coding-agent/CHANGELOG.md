@@ -6,6 +6,10 @@
 
 - Added collapsed tool grouping for consecutive `read`/`find` tool calls.
 
+### Changed
+
+- Bash call previews now preserve the raw command instead of summarizing command names; running duration appears after two seconds and is omitted after completion.
+
 ## [0.81.1-2] - 2026-07-23
 
 ### Changed

@@ -68,6 +68,8 @@ The fallback does not change tool schemas, execution logic, or result protocols.
 The native path continues to preserve:
 
 - `read`, `bash`, `grep`, `find`, `ls`, `write`, and `edit` semantics;
+- faithful width-aware raw command previews for Bash;
+- running Bash duration after the two-second progress threshold, without a permanent completion timer;
 - Diff previews and first-change-line metadata for `edit`;
 - syntax highlighting;
 - image output and Kitty conversion;
