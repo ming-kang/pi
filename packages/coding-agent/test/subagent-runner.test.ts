@@ -4,9 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import type { ParentModelContext } from "../src/extensions/subagent/resolve.ts";
-import { ConcurrencyGate, runSubagentInvocation } from "../src/extensions/subagent/runner.ts";
+import { ConcurrencyGate, runSubagentInvocation, statusSummary } from "../src/extensions/subagent/runner.ts";
 import type { SubagentParams } from "../src/extensions/subagent/schema.ts";
-import type { AgentDefinition } from "../src/extensions/subagent/types.ts";
+import type { AgentDefinition, SubagentDetails } from "../src/extensions/subagent/types.ts";
 
 const agent: AgentDefinition = {
 	name: "worker",
@@ -193,6 +193,43 @@ describe("subagent SDK runner", () => {
 		);
 		const empty: SubagentParams = { agent: null, description: null, prompt: null, tasks: null, chain: null };
 		await expect(runSubagentInvocation({ ...base, params: empty })).rejects.toThrow("none was provided");
+	});
+
+	it("uses Initializing… only after a single run begins starting", () => {
+		const details: SubagentDetails = {
+			mode: "single",
+			status: "running",
+			startedAt: 0,
+			usage: { turns: 0, toolUses: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 },
+			runs: [
+				{
+					id: "subagent-1",
+					agent: "worker",
+					agentSource: "builtin",
+					description: "Initialize worker",
+					prompt: "Start the task.",
+					cwd: process.cwd(),
+					model: "test/model",
+					thinking: "medium",
+					status: "running",
+					activities: [],
+					liveText: "",
+					finalOutput: "",
+					usage: {
+						turns: 0,
+						toolUses: 0,
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: 0,
+					},
+				},
+			],
+		};
+		expect(statusSummary(details)).toBe("Initializing…");
+		expect(statusSummary({ ...details, runs: [{ ...details.runs[0]!, status: "queued" }] })).toBe("queued");
 	});
 
 	it("does not start queued work after the parent signal aborts", async () => {

@@ -10,6 +10,7 @@
 ### Changed
 
 - Subagent delegation now exposes the trusted session agent catalog to the model, provides clearer task briefings and empty-result guidance, and strengthens the built-in general and explorer worker prompts.
+- Collapsed Subagent views now summarize activity by tool purpose and show live per-run tool and token progress for parallel work.
 - Bash call previews now preserve the raw command instead of summarizing command names; running duration appears after two seconds and is omitted after completion.
 
 ### Fixed

@@ -11,6 +11,16 @@ const RUN_LINE_EXCERPT_LIMIT = 64;
 const LIVE_TAIL_LIMIT = 100;
 const COLLAPSED_RUN_LIMIT = 4;
 
+const ACTIVITY_GROUPS = [
+	{ toolName: "read", verb: "read", singular: "file", plural: "files" },
+	{ toolName: "grep", verb: "searched", singular: "pattern", plural: "patterns" },
+	{ toolName: "find", verb: "searched", singular: "path pattern", plural: "path patterns" },
+	{ toolName: "ls", verb: "listed", singular: "directory", plural: "directories" },
+	{ toolName: "bash", verb: "ran", singular: "command", plural: "commands" },
+	{ toolName: "edit", verb: "edited", singular: "file", plural: "files" },
+	{ toolName: "write", verb: "wrote", singular: "file", plural: "files" },
+] as const;
+
 function singleAgentName(args: { agent?: string | null }): string {
 	return args.agent ?? "general";
 }
@@ -80,6 +90,12 @@ function runTitle(run: SubagentRunDetails, theme: Theme, mode: SubagentDetails["
 	return `${statusMarker(run.status, theme)} ${step}${theme.fg("accent", run.agent)}${theme.fg("dim", ` · ${truncate(run.description, 48)}`)}`;
 }
 
+function runProgressText(run: SubagentRunDetails): string {
+	const items = [`${run.usage.toolUses} tool use${run.usage.toolUses === 1 ? "" : "s"}`];
+	if (run.usage.totalTokens) items.push(`${formatTokens(run.usage.totalTokens)} tokens`);
+	return items.join(" · ");
+}
+
 function runLine(run: SubagentRunDetails, theme: Theme, mode: SubagentDetails["mode"]): string {
 	let line = runTitle(run, theme, mode);
 	const detail =
@@ -89,6 +105,7 @@ function runLine(run: SubagentRunDetails, theme: Theme, mode: SubagentDetails["m
 				? run.error && excerpt(run.error, RUN_LINE_EXCERPT_LIMIT)
 				: run.finalOutput && excerpt(run.finalOutput, RUN_LINE_EXCERPT_LIMIT);
 	if (detail) line += theme.fg(run.status === "failed" ? "error" : "dim", ` — ${detail}`);
+	if (run.status === "running") line += theme.fg("dim", ` · ${runProgressText(run)}`);
 	const settled = run.status !== "running" && run.status !== "queued";
 	if (settled && run.startedAt !== undefined && run.endedAt !== undefined) {
 		line += theme.fg("dim", ` · ${formatDuration(Math.max(0, (run.endedAt - run.startedAt) / 1000))}`);
@@ -108,10 +125,12 @@ function selectCollapsedRuns(runs: SubagentRunDetails[], isPartial: boolean): Su
 
 function singleCollapsedLines(details: SubagentDetails, theme: Theme): string[] {
 	const run = details.runs[0];
-	if (!run) return [theme.fg("muted", "starting")];
+	if (!run) return [theme.fg("muted", "Initializing…")];
 	if (run.status === "running" || run.status === "queued") {
+		const isInitializing =
+			run.status === "running" && run.usage.turns === 0 && run.usage.toolUses === 0 && run.liveText.length === 0;
 		const lines = [
-			`${statusMarker(run.status, theme)} ${theme.fg("dim", run.currentActivity ?? (run.status === "queued" ? "queued" : "Thinking…"))}`,
+			`${statusMarker(run.status, theme)} ${theme.fg("dim", run.currentActivity ?? (run.status === "queued" ? "queued" : isInitializing ? "Initializing…" : "Thinking…"))}`,
 		];
 		const tail = liveTail(run);
 		if (tail) lines.push(theme.fg("dim", tail));
@@ -122,10 +141,38 @@ function singleCollapsedLines(details: SubagentDetails, theme: Theme): string[] 
 	return [theme.fg("muted", run.status)];
 }
 
-function usageText(details: SubagentDetails): string {
+function activitySummaryText(details: SubagentDetails): string {
+	const toolCounts = new Map<string, number>();
+	let activityCount = 0;
+	for (const run of details.runs) {
+		for (const activity of run.activities) {
+			activityCount++;
+			toolCounts.set(activity.toolName, (toolCounts.get(activity.toolName) ?? 0) + 1);
+		}
+	}
+	const items: string[] = [];
+	let groupedCount = 0;
+	for (const group of ACTIVITY_GROUPS) {
+		const count = toolCounts.get(group.toolName) ?? 0;
+		if (count === 0) continue;
+		groupedCount += count;
+		items.push(`${group.verb} ${count} ${count === 1 ? group.singular : group.plural}`);
+	}
+	const otherCount = activityCount - groupedCount;
+	if (otherCount > 0) items.push(`used ${otherCount} other tool${otherCount === 1 ? "" : "s"}`);
+	if (items.length === 0) return "";
+	const earlierCount = Math.max(0, details.usage.toolUses - activityCount);
+	if (earlierCount > 0) items.push(`${earlierCount} earlier tool use${earlierCount === 1 ? "" : "s"}`);
+	return `${items[0]![0]!.toUpperCase()}${items[0]!.slice(1)}${items
+		.slice(1)
+		.map((item) => ` · ${item}`)
+		.join("")}`;
+}
+
+function usageText(details: SubagentDetails, includeToolUses = true): string {
 	const usage = details.usage;
 	const items: string[] = [];
-	if (usage.toolUses) items.push(`${usage.toolUses} tool use${usage.toolUses === 1 ? "" : "s"}`);
+	if (includeToolUses && usage.toolUses) items.push(`${usage.toolUses} tool use${usage.toolUses === 1 ? "" : "s"}`);
 	if (usage.turns) items.push(`${usage.turns} turn${usage.turns === 1 ? "" : "s"}`);
 	if (usage.output) items.push(`↓${formatTokens(usage.output)}`);
 	if (usage.cost) items.push(`$${usage.cost.toFixed(3)}`);
@@ -161,7 +208,8 @@ function renderRunDetails(
 			: undefined;
 	if (!single) {
 		let title = runTitle(run, theme, mode);
-		if (duration) title += theme.fg("dim", ` · ${duration}`);
+		if (run.status === "running") title += theme.fg("dim", ` · ${runProgressText(run)}`);
+		else if (duration) title += theme.fg("dim", ` · ${duration}`);
 		container.addChild(new Text(title, 0, 0));
 	}
 	container.addChild(new Text(theme.fg("muted", "Task"), 0, 0));
@@ -250,7 +298,9 @@ export function renderSubagentResult(
 			const hidden = details.runs.length - shown.length;
 			if (hidden > 0) lines.push(theme.fg("muted", `+${hidden} more`));
 		}
-		const usage = usageText(details);
+		const activitySummary = activitySummaryText(details);
+		if (activitySummary) lines.push(theme.fg("dim", activitySummary));
+		const usage = usageText(details, !activitySummary);
 		if (usage) lines.push(theme.fg("dim", usage));
 		if (!options.isPartial) lines.push(theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`));
 		return new Text(lines.join("\n"), 0, 0);

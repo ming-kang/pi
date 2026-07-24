@@ -92,6 +92,65 @@ describe("subagent rendering", () => {
 		expect(output).toContain("to expand");
 	});
 
+	it("groups collapsed activity by tool purpose instead of a bare tool-use count", () => {
+		const output = collapsed(
+			details({
+				usage: {
+					turns: 2,
+					toolUses: 7,
+					input: 20,
+					output: 100,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 120,
+					cost: 0,
+				},
+				runs: [
+					run({
+						activities: [
+							{ id: "read-1", toolName: "read", summary: "read a.ts", status: "succeeded", startedAt: 0 },
+							{ id: "read-2", toolName: "read", summary: "read b.ts", status: "succeeded", startedAt: 0 },
+							{ id: "grep-1", toolName: "grep", summary: "search one", status: "succeeded", startedAt: 0 },
+							{ id: "grep-2", toolName: "grep", summary: "search two", status: "succeeded", startedAt: 0 },
+							{ id: "bash-1", toolName: "bash", summary: "run check", status: "succeeded", startedAt: 0 },
+							{ id: "bash-2", toolName: "bash", summary: "run test", status: "succeeded", startedAt: 0 },
+						],
+					}),
+				],
+			}),
+		);
+		expect(output).toContain("Read 2 files · searched 2 patterns · ran 2 commands · 1 earlier tool use");
+		expect(output).not.toContain("7 tool uses");
+	});
+
+	it("uses accurate singular and plural labels for path operations", () => {
+		const output = collapsed(
+			details({
+				usage: {
+					turns: 2,
+					toolUses: 4,
+					input: 20,
+					output: 100,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 120,
+					cost: 0,
+				},
+				runs: [
+					run({
+						activities: [
+							{ id: "find-1", toolName: "find", summary: "find one", status: "succeeded", startedAt: 0 },
+							{ id: "find-2", toolName: "find", summary: "find two", status: "succeeded", startedAt: 0 },
+							{ id: "ls-1", toolName: "ls", summary: "list one", status: "succeeded", startedAt: 0 },
+							{ id: "ls-2", toolName: "ls", summary: "list two", status: "succeeded", startedAt: 0 },
+						],
+					}),
+				],
+			}),
+		);
+		expect(output).toContain("Searched 2 path patterns · listed 2 directories");
+	});
+
 	it("collapses a completed single run to a clean response excerpt", () => {
 		const output = collapsed(
 			details({
@@ -126,6 +185,61 @@ describe("subagent rendering", () => {
 		expect(output).toContain("Run ls -d */");
 		expect(output).toContain("The workspace has five extensions");
 		expect(output).not.toContain("to expand");
+	});
+
+	it("shows per-run live tool and token metrics for parallel work", () => {
+		const runningDetails = details({
+			status: "running",
+			endedAt: undefined,
+			runs: [
+				run({
+					status: "running",
+					currentActivity: "Inspecting the renderer",
+					finalOutput: "",
+					usage: {
+						turns: 1,
+						toolUses: 3,
+						input: 800,
+						output: 400,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 1_250,
+						cost: 0,
+					},
+				}),
+				run({
+					id: "subagent-2",
+					agent: "reviewer",
+					description: "Review the renderer",
+					status: "running",
+					currentActivity: "Initializing review",
+					finalOutput: "",
+					usage: {
+						turns: 0,
+						toolUses: 0,
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: 0,
+					},
+				}),
+			],
+		});
+		const output = collapsed(runningDetails, true);
+		expect(output).toContain("3 tool uses · 1.3k tokens");
+		expect(output).toContain("reviewer · Review the renderer");
+		expect(output).toContain("0 tool uses");
+		expect(output).not.toContain("0 tokens");
+
+		const component = renderSubagentResult(
+			{ content: [{ type: "text", text: "in progress" }], details: runningDetails },
+			{ expanded: true, isPartial: true },
+			theme,
+			false,
+		);
+		expect(component.render(120).join("\n")).toContain("3 tool uses · 1.3k tokens");
 	});
 
 	it("keeps running tasks visible in a partial parallel batch", () => {
@@ -180,6 +294,46 @@ describe("subagent rendering", () => {
 		expect(output).not.toContain("───");
 		expect(output).toContain("结果如下。");
 		expect(output).toContain("总结：完成。");
+	});
+
+	it("uses Initializing… only after a single worker begins starting", () => {
+		const queuedOutput = collapsed(
+			details({
+				mode: "single",
+				status: "running",
+				endedAt: undefined,
+				runs: [run({ status: "queued", finalOutput: "" })],
+			}),
+			true,
+		);
+		const startingOutput = collapsed(
+			details({
+				mode: "single",
+				status: "running",
+				endedAt: undefined,
+				runs: [
+					run({
+						status: "running",
+						liveText: "",
+						finalOutput: "",
+						usage: {
+							turns: 0,
+							toolUses: 0,
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: 0,
+						},
+					}),
+				],
+			}),
+			true,
+		);
+		expect(queuedOutput).toContain("queued");
+		expect(queuedOutput).not.toContain("Initializing…");
+		expect(startingOutput).toContain("Initializing…");
 	});
 
 	it("labels idle gaps between activities like the streaming state", () => {

@@ -237,7 +237,14 @@ function statusText(details: SubagentDetails): string {
 	const aborted = details.runs.filter((run) => run.status === "aborted").length;
 	if (details.mode === "single") {
 		const run = details.runs[0];
-		return run?.currentActivity ?? run?.status ?? "starting";
+		if (run?.currentActivity) return run.currentActivity;
+		if (
+			!run ||
+			(run.status === "running" && run.usage.turns === 0 && run.usage.toolUses === 0 && run.liveText.length === 0)
+		) {
+			return "Initializing…";
+		}
+		return run.status === "running" ? "Thinking…" : run.status;
 	}
 	if (details.mode === "chain") {
 		const current = details.runs.find((run) => run.status === "running" || run.status === "queued");
