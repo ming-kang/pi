@@ -33,6 +33,9 @@ describe("subagent extension registration", () => {
 		expect(tools[0]).toMatchObject({ name: "subagent", label: "Subagent" });
 		expect(tools[0]?.executionMode).toBeUndefined();
 		expect(tools[0]?.prepareArguments).toBeUndefined();
+		// Providers reject tool schemas whose top level is not `type: "object"`,
+		// e.g. a union; keep the parameter schema a plain object.
+		expect((tools[0]?.parameters as unknown as { type?: string }).type).toBe("object");
 		expect(commands).toContainEqual({
 			name: "agents",
 			description: "Configure Subagent profiles, models, and thinking levels",
