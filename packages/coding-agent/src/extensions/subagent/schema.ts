@@ -1,69 +1,68 @@
 import { StringEnum } from "@earendil-works/pi-ai";
-import { type Static, Type } from "typebox";
+import { type Static, type TSchema, Type } from "typebox";
 import { MAX_TASKS, THINKING_LEVELS } from "./constants.ts";
 
 const ThinkingSchema = StringEnum(THINKING_LEVELS, {
 	description: "Thinking level for this subagent run",
 });
 
+// Strict constrained-sampling providers treat every property as required
+// and reject bare unions at the top level, so the schema is a flat
+// `type: "object"` whose optional fields are also nullable: callers omit
+// a field when the grammar allows it and send null when it does not.
+// The exactly-one-mode rule is enforced at runtime in `invocationMode`.
+function nullable<T extends TSchema>(schema: T, description: string) {
+	return Type.Optional(Type.Union([schema, Type.Null()], { description }));
+}
+
 export const TaskSchema = Type.Object(
 	{
-		agent: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
-		description: Type.String({ minLength: 1, maxLength: 80 }),
-		prompt: Type.String({ minLength: 1, maxLength: 20_000 }),
-		cwd: Type.Optional(Type.String({ minLength: 1, maxLength: 4_096 })),
-		model: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
-		thinking: Type.Optional(ThinkingSchema),
+		agent: nullable(Type.String({ minLength: 1, maxLength: 80 }), "Agent profile name; null or omit for general"),
+		description: Type.String({ minLength: 1, maxLength: 80, description: "Short UI label" }),
+		prompt: Type.String({ minLength: 1, maxLength: 20_000, description: "Self-contained worker briefing" }),
+		cwd: nullable(
+			Type.String({ minLength: 1, maxLength: 4_096 }),
+			"Relative directory inside the parent working directory; null or omit to inherit it",
+		),
+		model: nullable(
+			Type.String({ minLength: 1, maxLength: 200 }),
+			"Temporary provider/model override; null or omit to inherit",
+		),
+		thinking: nullable(ThinkingSchema, "Thinking level override; null or omit to inherit"),
 	},
 	{ additionalProperties: false },
 );
 
-// Providers commonly require tool parameter schemas to be a top-level
-// `type: "object"`, so the three invocation modes are optional fields with
-// the exactly-one-mode rule enforced at runtime in `invocationMode`.
 export const SubagentParamsSchema = Type.Object(
 	{
-		agent: Type.Optional(
-			Type.String({
-				minLength: 1,
-				maxLength: 80,
-				description: "Agent profile name for single mode; defaults to general",
-			}),
+		agent: nullable(
+			Type.String({ minLength: 1, maxLength: 80 }),
+			"Agent profile name for single mode; null or omit otherwise (defaults to general)",
 		),
-		description: Type.Optional(
-			Type.String({ minLength: 1, maxLength: 80, description: "Short UI label; required for single mode" }),
+		description: nullable(
+			Type.String({ minLength: 1, maxLength: 80 }),
+			"Short UI label; required for single mode, null or omit otherwise",
 		),
-		prompt: Type.Optional(
-			Type.String({
-				minLength: 1,
-				maxLength: 20_000,
-				description: "Self-contained worker briefing; providing it selects single mode",
-			}),
+		prompt: nullable(
+			Type.String({ minLength: 1, maxLength: 20_000 }),
+			"Self-contained worker briefing; providing it selects single mode — null or omit when using tasks or chain",
 		),
-		cwd: Type.Optional(
-			Type.String({
-				minLength: 1,
-				maxLength: 4_096,
-				description: "Relative directory inside the parent working directory (single mode)",
-			}),
+		cwd: nullable(
+			Type.String({ minLength: 1, maxLength: 4_096 }),
+			"Relative directory inside the parent working directory (single mode); null or omit otherwise",
 		),
-		model: Type.Optional(
-			Type.String({ minLength: 1, maxLength: 200, description: "Temporary provider/model override (single mode)" }),
+		model: nullable(
+			Type.String({ minLength: 1, maxLength: 200 }),
+			"Temporary provider/model override (single mode); null or omit otherwise",
 		),
-		thinking: Type.Optional(ThinkingSchema),
-		tasks: Type.Optional(
-			Type.Array(TaskSchema, {
-				minItems: 1,
-				maxItems: MAX_TASKS,
-				description: "Independent tasks run concurrently; providing it selects parallel mode",
-			}),
+		thinking: nullable(ThinkingSchema, "Thinking level override (single mode); null or omit otherwise"),
+		tasks: nullable(
+			Type.Array(TaskSchema, { minItems: 1, maxItems: MAX_TASKS }),
+			"Independent tasks run concurrently; providing it selects parallel mode — null or omit when using prompt or chain",
 		),
-		chain: Type.Optional(
-			Type.Array(TaskSchema, {
-				minItems: 1,
-				maxItems: MAX_TASKS,
-				description: "Sequential tasks; {previous} in a later prompt is replaced by the prior result",
-			}),
+		chain: nullable(
+			Type.Array(TaskSchema, { minItems: 1, maxItems: MAX_TASKS }),
+			"Sequential tasks where {previous} in a later prompt is replaced by the prior result; providing it selects chain mode — null or omit otherwise",
 		),
 	},
 	{ additionalProperties: false },

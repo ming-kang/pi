@@ -74,6 +74,16 @@ describe("subagent rendering", () => {
 		expect(component.render(120).join("\n")).toContain("parallel · 2 tasks");
 	});
 
+	it("flags a call that provides multiple modes instead of guessing one", () => {
+		const component = renderSubagentCall(
+			{ prompt: "unused", tasks: [{ description: "task", prompt: "p" }], chain: null },
+			theme,
+		);
+		const output = component.render(120).join("\n");
+		expect(output).toContain("invalid · prompt + tasks");
+		expect(output).not.toContain("parallel");
+	});
+
 	it("renders collapsed progress, usage, and the configured expansion hint", () => {
 		const output = collapsed(details());
 		expect(output).toContain("1/1 complete");

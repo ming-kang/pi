@@ -136,7 +136,7 @@ export async function resolveSubagentTask(
 		agent,
 		description: task.description,
 		prompt: task.prompt,
-		cwd: resolveTaskCwd(parentCwd, task.cwd),
+		cwd: resolveTaskCwd(parentCwd, task.cwd ?? undefined),
 		model: resolvedModel.model,
 		thinking: resolvedThinking.thinking,
 		modelSource: resolvedModel.source,

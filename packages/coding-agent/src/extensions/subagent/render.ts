@@ -11,7 +11,7 @@ const RUN_LINE_EXCERPT_LIMIT = 64;
 const LIVE_TAIL_LIMIT = 100;
 const COLLAPSED_RUN_LIMIT = 4;
 
-function singleAgentName(args: { agent?: string }): string {
+function singleAgentName(args: { agent?: string | null }): string {
 	return args.agent ?? "general";
 }
 
@@ -76,6 +76,10 @@ function runLine(run: SubagentRunDetails, theme: Theme, mode: SubagentDetails["m
 				? run.error && excerpt(run.error, RUN_LINE_EXCERPT_LIMIT)
 				: run.finalOutput && excerpt(run.finalOutput, RUN_LINE_EXCERPT_LIMIT);
 	if (detail) line += theme.fg(run.status === "failed" ? "error" : "dim", ` — ${detail}`);
+	const settled = run.status !== "running" && run.status !== "queued";
+	if (settled && run.startedAt && run.endedAt) {
+		line += theme.fg("dim", ` · ${formatDuration(Math.max(0, (run.endedAt - run.startedAt) / 1000))}`);
+	}
 	return line;
 }
 
@@ -177,20 +181,20 @@ function renderRunDetails(run: SubagentRunDetails, theme: Theme, mode: SubagentD
 	return container;
 }
 
+// The call header stays a single line: run rows in the result area take
+// over within the first update and carry richer per-task state, so a
+// task list here would render everything twice.
 export function renderSubagentCall(args: SubagentParams, theme: Theme): Component {
 	let text = theme.fg("toolTitle", theme.bold("Subagent "));
-	if (args.tasks) {
+	const modes = [args.prompt != null && "prompt", args.tasks != null && "tasks", args.chain != null && "chain"].filter(
+		(mode): mode is string => Boolean(mode),
+	);
+	if (modes.length > 1) {
+		text += theme.fg("error", `invalid · ${modes.join(" + ")}`);
+	} else if (args.tasks) {
 		text += theme.fg("accent", `parallel · ${args.tasks.length} tasks`);
-		for (const task of args.tasks.slice(0, 3)) {
-			text += `\n${theme.fg("muted", "  ")}${theme.fg("accent", task.agent ?? "general")}${theme.fg("dim", ` · ${truncate(task.description, 72)}`)}`;
-		}
-		if (args.tasks.length > 3) text += `\n${theme.fg("muted", `  +${args.tasks.length - 3} more`)}`;
 	} else if (args.chain) {
 		text += theme.fg("accent", `chain · ${args.chain.length} steps`);
-		for (const [index, task] of args.chain.slice(0, 3).entries()) {
-			text += `\n${theme.fg("muted", `  ${index + 1}. `)}${theme.fg("accent", task.agent ?? "general")}${theme.fg("dim", ` · ${truncate(task.description, 72)}`)}`;
-		}
-		if (args.chain.length > 3) text += `\n${theme.fg("muted", `  +${args.chain.length - 3} more`)}`;
 	} else {
 		text += theme.fg("accent", singleAgentName(args));
 		if (args.description) text += theme.fg("dim", ` · ${truncate(args.description, 72)}`);

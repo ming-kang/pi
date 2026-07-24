@@ -348,20 +348,25 @@ function resultContent(details: SubagentDetails): string {
 }
 
 function invocationMode(params: SubagentParams): { mode: SubagentDetails["mode"]; tasks: SubagentTask[] } {
-	const hasSingle = params.prompt !== undefined;
-	const hasParallel = params.tasks !== undefined;
-	const hasChain = params.chain !== undefined;
-	if (Number(hasSingle) + Number(hasParallel) + Number(hasChain) !== 1) {
-		throw new Error("Provide exactly one subagent mode: prompt, tasks, or chain.");
+	const provided: string[] = [];
+	if (params.prompt != null) provided.push("prompt");
+	if (params.tasks != null) provided.push("tasks");
+	if (params.chain != null) provided.push("chain");
+	if (provided.length !== 1) {
+		throw new Error(
+			provided.length === 0
+				? "Provide exactly one subagent mode: prompt (single), tasks (parallel), or chain (sequential); none was provided."
+				: `Provide exactly one subagent mode: received ${provided.join(", ")}. Keep one and set the unused mode fields to null or omit them.`,
+		);
 	}
-	if (params.tasks !== undefined) {
+	if (params.tasks != null) {
 		return { mode: "parallel", tasks: params.tasks };
 	}
-	if (params.chain !== undefined) {
+	if (params.chain != null) {
 		return { mode: "chain", tasks: params.chain };
 	}
-	if (params.prompt === undefined) {
-		throw new Error("Provide exactly one subagent mode: prompt, tasks, or chain.");
+	if (params.prompt == null) {
+		throw new Error("Provide exactly one subagent mode: prompt (single), tasks (parallel), or chain (sequential).");
 	}
 	if (!params.description) throw new Error("description is required for single mode.");
 	return {

@@ -88,6 +88,59 @@ describe("subagent SDK runner", () => {
 		expect(result.details.runs.map((run) => run.status)).toEqual(["completed", "completed"]);
 	});
 
+	it("accepts null mode fields from strict providers that send every property", async () => {
+		const { modelRuntime, model } = await setup(["chain result"]);
+		const params: SubagentParams = {
+			agent: null,
+			description: null,
+			prompt: null,
+			cwd: null,
+			model: null,
+			thinking: null,
+			tasks: null,
+			chain: [
+				{ agent: "worker", description: "Only step", prompt: "Do it.", cwd: null, model: null, thinking: null },
+			],
+		};
+		const result = await runSubagentInvocation({
+			params,
+			parentCwd: process.cwd(),
+			agents: [agent],
+			parent: createParentContext(model),
+			modelRuntime,
+			agentDir: process.cwd(),
+			configAgentDir: process.cwd(),
+			gate: new ConcurrencyGate(1),
+		});
+		expect(result.isError).toBe(false);
+		expect(result.details.status).toBe("completed");
+		expect(result.content).toBe("chain result");
+	});
+
+	it("names the received modes when the call is ambiguous", async () => {
+		const { modelRuntime, model } = await setup([]);
+		const base = {
+			parentCwd: process.cwd(),
+			agents: [agent],
+			parent: createParentContext(model),
+			modelRuntime,
+			agentDir: process.cwd(),
+			configAgentDir: process.cwd(),
+			gate: new ConcurrencyGate(1),
+		};
+		const ambiguous: SubagentParams = {
+			description: "Everything at once",
+			prompt: "unused",
+			tasks: [{ description: "task", prompt: "p" }],
+			chain: [{ description: "step", prompt: "p" }],
+		};
+		await expect(runSubagentInvocation({ ...base, params: ambiguous })).rejects.toThrow(
+			"received prompt, tasks, chain",
+		);
+		const empty: SubagentParams = { agent: null, description: null, prompt: null, tasks: null, chain: null };
+		await expect(runSubagentInvocation({ ...base, params: empty })).rejects.toThrow("none was provided");
+	});
+
 	it("does not start queued work after the parent signal aborts", async () => {
 		const gate = new ConcurrencyGate(1);
 		const release = await gate.acquire();
