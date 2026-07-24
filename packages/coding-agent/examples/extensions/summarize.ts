@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@astralyn/pi";
 import { DynamicBorder, getMarkdownTheme } from "@astralyn/pi";
+import { uuidv7 } from "@earendil-works/pi-ai";
 import { complete, getModel } from "@earendil-works/pi-ai/compat";
 import { Container, Markdown, matchesKey, Text } from "@earendil-works/pi-tui";
 
@@ -193,6 +194,8 @@ export default function (pi: ExtensionAPI) {
 					headers: auth.headers,
 					env: auth.env,
 					reasoningEffort: "high",
+					cacheRetention: "none",
+					sessionId: uuidv7(),
 				},
 			);
 

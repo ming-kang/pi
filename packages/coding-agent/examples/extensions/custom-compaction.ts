@@ -15,6 +15,7 @@
 
 import type { ExtensionAPI } from "@astralyn/pi";
 import { convertToLlm, serializeConversation } from "@astralyn/pi";
+import { uuidv7 } from "@earendil-works/pi-ai";
 import { complete } from "@earendil-works/pi-ai/compat";
 
 export default function (pi: ExtensionAPI) {
@@ -96,6 +97,8 @@ ${conversationText}
 					env: auth.env,
 					maxTokens: 8192,
 					signal,
+					cacheRetention: "none",
+					sessionId: uuidv7(),
 				},
 			);
 
