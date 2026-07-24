@@ -95,12 +95,8 @@ describe("subagent SDK runner", () => {
 			description: null,
 			prompt: null,
 			cwd: null,
-			model: null,
-			thinking: null,
 			tasks: null,
-			chain: [
-				{ agent: "worker", description: "Only step", prompt: "Do it.", cwd: null, model: null, thinking: null },
-			],
+			chain: [{ agent: "worker", description: "Only step", prompt: "Do it.", cwd: null }],
 		};
 		const result = await runSubagentInvocation({
 			params,

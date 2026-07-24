@@ -377,8 +377,6 @@ function invocationMode(params: SubagentParams): { mode: SubagentDetails["mode"]
 				description: params.description,
 				prompt: params.prompt,
 				cwd: params.cwd,
-				model: params.model,
-				thinking: params.thinking,
 			},
 		],
 	};

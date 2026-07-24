@@ -69,49 +69,24 @@ function findAvailableModel(spec: string, parent: ParentModelContext): Model<Api
 	return model;
 }
 
+// Exactly two layers: a /agents override wins, otherwise the subagent
+// inherits the parent session. Callers and agent files cannot pick models.
 function resolveModel(
-	task: SubagentTask,
-	agent: AgentDefinition,
 	override: SubagentProfileOverride | undefined,
 	parent: ParentModelContext,
 ): { model: Model<Api>; source: ResolvedSubagentTask["modelSource"] } {
-	if (task.model) return { model: findAvailableModel(task.model, parent), source: "call" };
-	if (override?.model === "inherit") {
-		if (!parent.model) throw new Error("The parent session has no active model to inherit.");
-		return { model: parent.model, source: "profile" };
-	}
-	if (typeof override?.model === "string")
-		return { model: findAvailableModel(override.model, parent), source: "profile" };
-	if (agent.model) return { model: findAvailableModel(agent.model, parent), source: "agent" };
+	if (override?.model) return { model: findAvailableModel(override.model, parent), source: "profile" };
 	if (!parent.model) throw new Error("The parent session has no active model.");
 	return { model: parent.model, source: "parent" };
 }
 
 function resolveThinking(
-	task: SubagentTask,
-	agent: AgentDefinition,
 	override: SubagentProfileOverride | undefined,
 	parent: ParentModelContext,
 	model: Model<Api>,
 ): { thinking: ThinkingLevel; source: ResolvedSubagentTask["thinkingSource"] } {
-	let requested: ThinkingLevel;
-	let source: ResolvedSubagentTask["thinkingSource"];
-	if (task.thinking) {
-		requested = task.thinking;
-		source = "call";
-	} else if (override?.thinking === "inherit") {
-		requested = parent.thinking;
-		source = "profile";
-	} else if (override?.thinking) {
-		requested = override.thinking;
-		source = "profile";
-	} else if (agent.thinking) {
-		requested = agent.thinking;
-		source = "agent";
-	} else {
-		requested = parent.thinking;
-		source = "parent";
-	}
+	const requested = override?.thinking ?? parent.thinking;
+	const source: ResolvedSubagentTask["thinkingSource"] = override?.thinking ? "profile" : "parent";
 	return { thinking: clampThinkingLevel(model, requested) as ThinkingLevel, source };
 }
 
@@ -130,8 +105,8 @@ export async function resolveSubagentTask(
 	}
 	const config = await loadSubagentConfig(configAgentDir);
 	const override = config.profiles[agent.name];
-	const resolvedModel = resolveModel(task, agent, override, parent);
-	const resolvedThinking = resolveThinking(task, agent, override, parent, resolvedModel.model);
+	const resolvedModel = resolveModel(override, parent);
+	const resolvedThinking = resolveThinking(override, parent, resolvedModel.model);
 	return {
 		agent,
 		description: task.description,

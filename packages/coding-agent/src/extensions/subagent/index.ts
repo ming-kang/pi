@@ -16,23 +16,36 @@ import type { ParentModelContext } from "./resolve.ts";
 import { ConcurrencyGate, runSubagentInvocation, statusSummary } from "./runner.ts";
 import { SubagentParamsSchema } from "./schema.ts";
 import { loadSubagentConfig, resetProfileOverrides, updateProfileOverride } from "./settings.ts";
-import type { AgentDefinition, SubagentDetails } from "./types.ts";
+import type { AgentDefinition, SubagentDetails, SubagentProfileOverride } from "./types.ts";
 
 function modelName(model: { provider: string; id: string; name?: string }): string {
 	return `${model.provider}/${model.id}${model.name && model.name !== model.id ? ` — ${model.name}` : ""}`;
 }
 
-function describeProfile(
-	agent: AgentDefinition,
-	override: Awaited<ReturnType<typeof loadSubagentConfig>>["profiles"][string] | undefined,
-): string {
-	const model = override?.model ?? agent.model ?? "parent";
-	const thinking = override?.thinking ?? agent.thinking ?? "parent";
+function formatParentModel(model: { provider: string; id: string } | undefined): string {
+	return model ? `${model.provider}/${model.id}` : "none";
+}
+
+// Settings resolve in two layers: a saved override wins, otherwise the
+// profile inherits the parent session. Inherited rows show the value
+// currently in effect so the menu doubles as a status view.
+function effectiveSettings(
+	override: SubagentProfileOverride | undefined,
+	ctx: ExtensionCommandContext,
+	parentThinking: string,
+): { model: string; thinking: string } {
+	return {
+		model: override?.model ?? `inherit (${formatParentModel(ctx.model)})`,
+		thinking: override?.thinking ?? `inherit (${parentThinking})`,
+	};
+}
+
+function describeProfile(agent: AgentDefinition, effective: { model: string; thinking: string }): string {
 	return [
 		`${agent.name} (${agent.source})`,
 		agent.description,
-		`model: ${model}`,
-		`thinking: ${thinking}`,
+		`model: ${effective.model}`,
+		`thinking: ${effective.thinking}`,
 		`tools: ${agent.tools.join(", ")}`,
 		`source: ${agent.filePath}`,
 	].join("\n");
@@ -61,96 +74,94 @@ async function syncParentProviders(
 	for (const id of nextIds) syncedIds.add(id);
 }
 
-async function configureProfile(ctx: ExtensionCommandContext, agent: AgentDefinition): Promise<void> {
+async function configureProfile(
+	ctx: ExtensionCommandContext,
+	agent: AgentDefinition,
+	parentThinking: string,
+): Promise<void> {
 	const agentDir = getAgentDir();
-	const config = await loadSubagentConfig(agentDir);
-	const override = config.profiles[agent.name];
-	const settings = await ctx.ui.select(`Configure ${agent.name}`, ["Model", "Thinking", "Back"]);
-	if (settings === "Model") {
-		const choices = [
-			"inherit — use parent session model",
-			"agent default — clear saved override",
-			...ctx.modelRegistry.getAvailable().map((model) => modelName(model)),
-		];
-		const selected = await ctx.ui.select(`Model for ${agent.name}`, choices);
-		if (!selected) return;
-		if (selected.startsWith("inherit")) await updateProfileOverride(agent.name, { model: "inherit" }, agentDir);
-		else if (selected.startsWith("agent default"))
-			await updateProfileOverride(agent.name, { model: undefined }, agentDir);
-		else {
-			const model = ctx.modelRegistry.getAvailable().find((candidate) => modelName(candidate) === selected);
-			if (!model) return;
-			await updateProfileOverride(agent.name, { model: `${model.provider}/${model.id}` }, agentDir);
+	while (true) {
+		const config = await loadSubagentConfig(agentDir);
+		const effective = effectiveSettings(config.profiles[agent.name], ctx, parentThinking);
+		const action = await ctx.ui.select(`${agent.name} — ${agent.description}`, [
+			`Model: ${effective.model}`,
+			`Thinking: ${effective.thinking}`,
+			"Details",
+			"Back",
+		]);
+		if (!action || action === "Back") return;
+		if (action.startsWith("Model:")) {
+			const inherit = `inherit — follow the parent session (${formatParentModel(ctx.model)})`;
+			const selected = await ctx.ui.select(`Model for ${agent.name}`, [
+				inherit,
+				...ctx.modelRegistry.getAvailable().map((model) => modelName(model)),
+			]);
+			if (!selected) continue;
+			if (selected === inherit) {
+				await updateProfileOverride(agent.name, { model: undefined }, agentDir);
+			} else {
+				const model = ctx.modelRegistry.getAvailable().find((candidate) => modelName(candidate) === selected);
+				if (!model) continue;
+				await updateProfileOverride(agent.name, { model: `${model.provider}/${model.id}` }, agentDir);
+			}
+			continue;
 		}
-		ctx.ui.notify(`Saved model override for ${agent.name}.`, "info");
-		return;
+		if (action.startsWith("Thinking:")) {
+			const inherit = `inherit — follow the parent session (${parentThinking})`;
+			const selected = await ctx.ui.select(`Thinking for ${agent.name}`, [inherit, ...THINKING_LEVELS]);
+			if (!selected) continue;
+			if (selected === inherit) await updateProfileOverride(agent.name, { thinking: undefined }, agentDir);
+			else await updateProfileOverride(agent.name, { thinking: selected as ThinkingLevel }, agentDir);
+			continue;
+		}
+		ctx.ui.notify(describeProfile(agent, effective), "info");
 	}
-	if (settings === "Thinking") {
-		const choices = [
-			"inherit — use parent session thinking",
-			"agent default — clear saved override",
-			...THINKING_LEVELS,
-		];
-		const selected = await ctx.ui.select(`Thinking for ${agent.name}`, choices);
-		if (!selected) return;
-		if (selected.startsWith("inherit")) await updateProfileOverride(agent.name, { thinking: "inherit" }, agentDir);
-		else if (selected.startsWith("agent default"))
-			await updateProfileOverride(agent.name, { thinking: undefined }, agentDir);
-		else await updateProfileOverride(agent.name, { thinking: selected as ThinkingLevel }, agentDir);
-		ctx.ui.notify(`Saved thinking override for ${agent.name}.`, "info");
-		return;
-	}
-	if (override) ctx.ui.notify(describeProfile(agent, override), "info");
 }
 
-async function showAgentsCommand(ctx: ExtensionCommandContext): Promise<void> {
+async function showAgentsCommand(ctx: ExtensionCommandContext, parentThinking: string): Promise<void> {
 	if (!ctx.hasUI) {
 		ctx.ui.notify("/agents requires an interactive UI.", "warning");
 		return;
 	}
 	const agentDir = getAgentDir();
-	const discovery = discoverAgents(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
+	const reset = "Reset all overrides";
+	const done = "Done";
 	while (true) {
-		const action = await ctx.ui.select("Subagent profiles", [
-			"Configure profile model / thinking…",
-			"Inspect profile definitions…",
-			"Reset saved profile overrides…",
-			"Done",
+		const discovery = discoverAgents(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
+		const config = await loadSubagentConfig(agentDir);
+		const rows = discovery.agents.map((agent) => {
+			const effective = effectiveSettings(config.profiles[agent.name], ctx, parentThinking);
+			return `${agent.name} — model: ${effective.model} · thinking: ${effective.thinking}`;
+		});
+		const issueCount = discovery.diagnostics.length;
+		const issues = issueCount ? [`Show ${issueCount} agent file issue${issueCount === 1 ? "" : "s"}`] : [];
+		const action = await ctx.ui.select("Subagent profiles — select one to configure", [
+			...rows,
+			...issues,
+			reset,
+			done,
 		]);
-		if (!action || action === "Done") return;
-		if (action.startsWith("Configure")) {
-			const selected = await ctx.ui.select(
-				"Choose a subagent profile",
-				discovery.agents.map((agent) => `${agent.name} — ${agent.description}`),
+		if (!action || action === done) return;
+		if (action === reset) {
+			const confirmed = await ctx.ui.confirm(
+				"Reset profile overrides?",
+				"Clear every saved Subagent model and thinking override?",
 			);
-			if (!selected) continue;
-			const agent = discovery.agents.find((candidate) => selected.startsWith(`${candidate.name} — `));
-			if (agent) await configureProfile(ctx, agent);
+			if (confirmed) {
+				await resetProfileOverrides(agentDir);
+				ctx.ui.notify("All profiles now inherit the parent session.", "info");
+			}
 			continue;
 		}
-		if (action.startsWith("Inspect")) {
-			const selected = await ctx.ui.select(
-				"Inspect subagent profile",
-				discovery.agents.map((agent) => `${agent.name} — ${agent.description}`),
+		if (issues.length > 0 && action === issues[0]) {
+			ctx.ui.notify(
+				discovery.diagnostics.map((diagnostic) => `${diagnostic.path}: ${diagnostic.message}`).join("\n"),
+				"warning",
 			);
-			if (!selected) continue;
-			const agent = discovery.agents.find((candidate) => selected.startsWith(`${candidate.name} — `));
-			if (!agent) continue;
-			const config = await loadSubagentConfig(agentDir);
-			const diagnostics = discovery.diagnostics
-				.filter((diagnostic) => diagnostic.path === agent.filePath)
-				.map((diagnostic) => `\nDiagnostic: ${diagnostic.message}`)
-				.join("");
-			ctx.ui.notify(`${describeProfile(agent, config.profiles[agent.name])}${diagnostics}`, "info");
 			continue;
 		}
-		const confirmed = await ctx.ui.confirm(
-			"Reset profile overrides?",
-			"Clear every saved Subagent model and thinking override?",
-		);
-		if (!confirmed) continue;
-		await resetProfileOverrides(agentDir);
-		ctx.ui.notify("Cleared saved Subagent profile overrides.", "info");
+		const agent = discovery.agents.find((candidate) => action.startsWith(`${candidate.name} — `));
+		if (agent) await configureProfile(ctx, agent, parentThinking);
 	}
 }
 
@@ -227,7 +238,7 @@ export default function subagent(pi: ExtensionAPI): void {
 
 	pi.registerCommand(SUBAGENT_COMMAND_NAME, {
 		description: "Configure Subagent profiles, models, and thinking levels",
-		handler: async (_args, ctx) => showAgentsCommand(ctx),
+		handler: async (_args, ctx) => showAgentsCommand(ctx, pi.getThinkingLevel()),
 	});
 
 	pi.on("tool_result", async (event) => {

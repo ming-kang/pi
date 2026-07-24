@@ -10,8 +10,6 @@ export interface AgentDefinition {
 	name: string;
 	description: string;
 	tools: string[];
-	model?: string;
-	thinking?: ThinkingLevel;
 	systemPrompt: string;
 	source: AgentSource;
 	filePath: string;
@@ -32,8 +30,8 @@ export interface AgentDiscoveryResult {
 }
 
 export interface SubagentProfileOverride {
-	model?: string | "inherit";
-	thinking?: ThinkingLevel | "inherit";
+	model?: string;
+	thinking?: ThinkingLevel;
 }
 
 export interface SubagentConfigFile {
@@ -48,8 +46,8 @@ export interface ResolvedSubagentTask {
 	cwd: string;
 	model: Model<Api>;
 	thinking: ThinkingLevel;
-	modelSource: "call" | "profile" | "agent" | "parent";
-	thinkingSource: "call" | "profile" | "agent" | "parent";
+	modelSource: "profile" | "parent";
+	thinkingSource: "profile" | "parent";
 }
 
 export interface ToolActivity {

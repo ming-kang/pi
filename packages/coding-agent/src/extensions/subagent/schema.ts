@@ -1,10 +1,5 @@
-import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, type TSchema, Type } from "typebox";
-import { MAX_TASKS, THINKING_LEVELS } from "./constants.ts";
-
-const ThinkingSchema = StringEnum(THINKING_LEVELS, {
-	description: "Thinking level for this subagent run",
-});
+import { MAX_TASKS } from "./constants.ts";
 
 // Strict constrained-sampling providers treat every property as required
 // and reject bare unions at the top level, so the schema is a flat
@@ -24,11 +19,6 @@ export const TaskSchema = Type.Object(
 			Type.String({ minLength: 1, maxLength: 4_096 }),
 			"Relative directory inside the parent working directory; null or omit to inherit it",
 		),
-		model: nullable(
-			Type.String({ minLength: 1, maxLength: 200 }),
-			"Temporary provider/model override; null or omit to inherit",
-		),
-		thinking: nullable(ThinkingSchema, "Thinking level override; null or omit to inherit"),
 	},
 	{ additionalProperties: false },
 );
@@ -51,11 +41,6 @@ export const SubagentParamsSchema = Type.Object(
 			Type.String({ minLength: 1, maxLength: 4_096 }),
 			"Relative directory inside the parent working directory (single mode); null or omit otherwise",
 		),
-		model: nullable(
-			Type.String({ minLength: 1, maxLength: 200 }),
-			"Temporary provider/model override (single mode); null or omit otherwise",
-		),
-		thinking: nullable(ThinkingSchema, "Thinking level override (single mode); null or omit otherwise"),
 		tasks: nullable(
 			Type.Array(TaskSchema, { minItems: 1, maxItems: MAX_TASKS }),
 			"Independent tasks run concurrently; providing it selects parallel mode — null or omit when using prompt or chain",

@@ -72,11 +72,12 @@ describe("subagent configuration", () => {
 		);
 
 		const trusted = discoverAgents(root, { projectTrusted: true, agentDir });
-		expect(trusted.agents.find((agent) => agent.name === "reviewer")).toMatchObject({
-			description: "Project reviewer",
-			source: "project",
-			model: "test/sonnet",
-		});
+		const reviewer = trusted.agents.find((agent) => agent.name === "reviewer");
+		expect(reviewer).toMatchObject({ description: "Project reviewer", source: "project" });
+		// Frontmatter model/thinking are ignored: agent files travel across
+		// machines, so pinned models rarely exist in the reader's environment.
+		expect(reviewer).not.toHaveProperty("model");
+		expect(reviewer).not.toHaveProperty("thinking");
 		expect(trusted.agents.some((agent) => agent.name === "general")).toBe(true);
 		expect(trusted.projectAgentsTrusted).toBe(true);
 
@@ -109,36 +110,47 @@ describe("subagent configuration", () => {
 		expect(config).toEqual({ version: 1, profiles: { reviewer: { model: "test/sonnet", thinking: "high" } } });
 	});
 
-	it("resolves model and thinking precedence and keeps the parent session unchanged", async () => {
+	it("resolves overrides above parent inheritance and keeps the parent session unchanged", async () => {
 		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-resolution-"));
 		temporaryDirectories.push(root);
 		await updateProfileOverride("reviewer", { model: "test/sonnet", thinking: "high" }, root);
-		const agents = discoverAgents(root, { projectTrusted: false, agentDir: root }).agents;
-		const reviewer = agents.find((agent) => agent.name === "reviewer");
-		if (reviewer) reviewer.model = undefined;
 		const task: SubagentTask = { agent: "reviewer", description: "Review", prompt: "Review this" };
-		const resolved = await resolveSubagentTask(
-			task,
-			root,
-			[
-				{
-					name: "reviewer",
-					description: "Reviewer",
-					tools: ["read"],
-					systemPrompt: "Review",
-					source: "user",
-					filePath: "reviewer.md",
-					backend: "sdk",
-				},
-			],
-			parentContext(),
-			root,
-		);
+		const reviewer = {
+			name: "reviewer",
+			description: "Reviewer",
+			tools: ["read"],
+			systemPrompt: "Review",
+			source: "user" as const,
+			filePath: "reviewer.md",
+			backend: "sdk" as const,
+		};
+		const resolved = await resolveSubagentTask(task, root, [reviewer], parentContext(), root);
 		expect(resolved.model).toBe(sonnet);
 		expect(resolved.thinking).toBe("high");
 		expect(resolved.modelSource).toBe("profile");
 		expect(resolved.thinkingSource).toBe("profile");
 		expect(parentContext().thinking).toBe("medium");
+
+		await updateProfileOverride("reviewer", { model: undefined, thinking: undefined }, root);
+		const inherited = await resolveSubagentTask(task, root, [reviewer], parentContext(), root);
+		expect(inherited.model).toBe(parentModel);
+		expect(inherited.thinking).toBe("medium");
+		expect(inherited.modelSource).toBe("parent");
+		expect(inherited.thinkingSource).toBe("parent");
+	});
+
+	it("updates override fields independently and drops legacy inherit entries", async () => {
+		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-partial-"));
+		temporaryDirectories.push(root);
+		await updateProfileOverride("reviewer", { thinking: "high" }, root);
+		await updateProfileOverride("reviewer", { model: "test/sonnet" }, root);
+		const config = parseSubagentConfig(readFileSync(join(root, "subagent.json"), "utf8"));
+		expect(config.profiles.reviewer).toEqual({ model: "test/sonnet", thinking: "high" });
+
+		const legacy = parseSubagentConfig(
+			JSON.stringify({ version: 1, profiles: { reviewer: { model: "inherit", thinking: "inherit" } } }),
+		);
+		expect(legacy.profiles.reviewer).toEqual({});
 	});
 
 	it("rejects absolute and escaping subagent cwd values", () => {

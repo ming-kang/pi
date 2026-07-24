@@ -1,14 +1,12 @@
 import { type Dirent, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { CONFIG_DIR_NAME, getAgentDir } from "../../config.ts";
 import { parseFrontmatter } from "../../utils/frontmatter.ts";
-import { BUILTIN_TOOL_NAMES, DEFAULT_AGENT_TOOLS, EXPLORER_TOOLS, THINKING_LEVELS } from "./constants.ts";
+import { BUILTIN_TOOL_NAMES, DEFAULT_AGENT_TOOLS, EXPLORER_TOOLS } from "./constants.ts";
 import type { AgentDefinition, AgentDiagnostic, AgentDiscoveryResult, AgentSource } from "./types.ts";
 
 const AGENT_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,79}$/u;
 const BUILTIN_TOOL_SET = new Set<string>(BUILTIN_TOOL_NAMES);
-const THINKING_LEVEL_SET = new Set<string>(THINKING_LEVELS);
 
 const BUILTIN_AGENTS: AgentDefinition[] = [
 	{
@@ -28,7 +26,6 @@ const BUILTIN_AGENTS: AgentDefinition[] = [
 		name: "explorer",
 		description: "Read-only codebase exploration agent",
 		tools: [...EXPLORER_TOOLS],
-		thinking: "low",
 		systemPrompt: [
 			"Explore the delegated question without modifying files.",
 			"Use read and search tools to gather exact evidence.",
@@ -76,13 +73,10 @@ function parseTools(raw: string | undefined, filePath: string): string[] {
 	return tools;
 }
 
-function parseThinking(raw: string | undefined, filePath: string): ThinkingLevel | undefined {
-	if (!raw?.trim()) return undefined;
-	const value = raw.trim();
-	if (!THINKING_LEVEL_SET.has(value)) throw new Error(`Invalid thinking level "${value}" in ${filePath}.`);
-	return value as ThinkingLevel;
-}
-
+// Frontmatter model/thinking keys are intentionally ignored: agent files
+// travel across machines (project repos), so a pinned model rarely exists
+// in the reader's environment. Model and thinking come from /agents
+// overrides or default to the parent session.
 function parseAgentFile(filePath: string, source: Exclude<AgentSource, "builtin">): AgentDefinition {
 	const content = readFileSync(filePath, "utf8");
 	const { frontmatter, body } = parseFrontmatter<Record<string, string>>(content);
@@ -100,8 +94,6 @@ function parseAgentFile(filePath: string, source: Exclude<AgentSource, "builtin"
 		name,
 		description,
 		tools: parseTools(frontmatter.tools, filePath),
-		model: frontmatter.model?.trim() || undefined,
-		thinking: parseThinking(frontmatter.thinking, filePath),
 		systemPrompt: body.trim(),
 		source,
 		filePath,

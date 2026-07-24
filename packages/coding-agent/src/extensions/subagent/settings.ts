@@ -5,26 +5,26 @@ import { withFileMutationQueue } from "../../core/tools/file-mutation-queue.ts";
 import { SUBAGENT_CONFIG_FILE, SUBAGENT_CONFIG_VERSION, THINKING_LEVELS } from "./constants.ts";
 import type { SubagentConfigFile, SubagentProfileOverride } from "./types.ts";
 
-const INHERIT = "inherit";
-
 function isThinkingLevel(value: unknown): boolean {
 	return typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value);
 }
 
+// Overrides hold concrete values only; absence means "inherit the parent
+// session". Legacy "inherit" entries from earlier versions are dropped.
 function normalizeOverride(value: unknown, profile: string): SubagentProfileOverride {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		throw new Error(`Profile override for "${profile}" must be an object.`);
 	}
 	const input = value as Record<string, unknown>;
 	const output: SubagentProfileOverride = {};
-	if (input.model !== undefined) {
-		if (input.model !== INHERIT && (typeof input.model !== "string" || input.model.trim().length === 0)) {
-			throw new Error(`Profile "${profile}" model override must be a model id or "inherit".`);
+	if (input.model !== undefined && input.model !== "inherit") {
+		if (typeof input.model !== "string" || input.model.trim().length === 0) {
+			throw new Error(`Profile "${profile}" model override must be a model id.`);
 		}
-		output.model = input.model === INHERIT ? INHERIT : (input.model as string).trim();
+		output.model = input.model.trim();
 	}
-	if (input.thinking !== undefined) {
-		if (input.thinking !== INHERIT && !isThinkingLevel(input.thinking)) {
+	if (input.thinking !== undefined && input.thinking !== "inherit") {
+		if (!isThinkingLevel(input.thinking)) {
 			throw new Error(`Profile "${profile}" thinking override is invalid.`);
 		}
 		output.thinking = input.thinking as SubagentProfileOverride["thinking"];
@@ -105,6 +105,8 @@ export async function saveSubagentConfig(config: SubagentConfigFile, agentDir = 
 	});
 }
 
+// Only keys present in the patch change; a key set to undefined clears
+// that override (back to inheriting the parent session).
 export async function updateProfileOverride(
 	profile: string,
 	patch: Partial<SubagentProfileOverride>,
@@ -113,10 +115,14 @@ export async function updateProfileOverride(
 	const config = await loadSubagentConfig(agentDir);
 	const current = config.profiles[profile] ?? {};
 	const next: SubagentProfileOverride = { ...current };
-	if (patch.model === undefined) delete next.model;
-	else next.model = patch.model;
-	if (patch.thinking === undefined) delete next.thinking;
-	else next.thinking = patch.thinking;
+	if ("model" in patch) {
+		if (patch.model === undefined) delete next.model;
+		else next.model = patch.model;
+	}
+	if ("thinking" in patch) {
+		if (patch.thinking === undefined) delete next.thinking;
+		else next.thinking = patch.thinking;
+	}
 	if (Object.keys(next).length === 0) delete config.profiles[profile];
 	else config.profiles[profile] = next;
 	await saveSubagentConfig(config, agentDir);

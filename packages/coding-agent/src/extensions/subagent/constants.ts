@@ -10,7 +10,9 @@ export const MAX_TASKS = 8;
 export const MAX_CONCURRENCY = 3;
 
 export const BUILTIN_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
-export const DEFAULT_AGENT_TOOLS = [...BUILTIN_TOOL_NAMES];
+// Matches the parent session's default toolset; bash covers search needs.
+export const DEFAULT_AGENT_TOOLS = ["read", "bash", "edit", "write"] as const;
+// Read-only agents get the standalone search tools instead of bash.
 export const EXPLORER_TOOLS = ["read", "grep", "find", "ls"] as const;
 
 export const THINKING_LEVELS = [
