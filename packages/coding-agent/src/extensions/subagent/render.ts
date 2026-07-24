@@ -7,7 +7,7 @@ import { statusSummary } from "./runner.ts";
 import type { SubagentParams } from "./schema.ts";
 import type { SubagentDetails, SubagentRunDetails } from "./types.ts";
 
-function singleAgentName(args: SubagentParams): string {
+function singleAgentName(args: { agent?: string }): string {
 	return args.agent ?? "general";
 }
 
@@ -107,13 +107,13 @@ function renderRunDetails(run: SubagentRunDetails, theme: Theme): Component {
 
 export function renderSubagentCall(args: SubagentParams, theme: Theme): Component {
 	let text = theme.fg("toolTitle", theme.bold("Subagent "));
-	if (args.tasks) {
+	if ("tasks" in args) {
 		text += theme.fg("accent", `parallel · ${args.tasks.length} tasks`);
 		for (const task of args.tasks.slice(0, 3)) {
 			text += `\n${theme.fg("muted", "  ")}${theme.fg("accent", task.agent ?? "general")}${theme.fg("dim", ` · ${truncate(task.description, 72)}`)}`;
 		}
 		if (args.tasks.length > 3) text += `\n${theme.fg("muted", `  +${args.tasks.length - 3} more`)}`;
-	} else if (args.chain) {
+	} else if ("chain" in args) {
 		text += theme.fg("accent", `chain · ${args.chain.length} steps`);
 		for (const [index, task] of args.chain.slice(0, 3).entries()) {
 			text += `\n${theme.fg("muted", `  ${index + 1}. `)}${theme.fg("accent", task.agent ?? "general")}${theme.fg("dim", ` · ${truncate(task.description, 72)}`)}`;
