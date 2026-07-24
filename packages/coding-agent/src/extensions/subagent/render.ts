@@ -67,7 +67,7 @@ function runTitle(run: SubagentRunDetails, theme: Theme, mode: SubagentDetails["
 	return `${statusMarker(run.status, theme)} ${step}${theme.fg("accent", run.agent)}${theme.fg("dim", ` · ${truncate(run.description, 48)}`)}`;
 }
 
-export function runLine(run: SubagentRunDetails, theme: Theme, mode: SubagentDetails["mode"], now?: number): string {
+function runLine(run: SubagentRunDetails, theme: Theme, mode: SubagentDetails["mode"]): string {
 	let line = runTitle(run, theme, mode);
 	const detail =
 		run.status === "running"
@@ -79,8 +79,6 @@ export function runLine(run: SubagentRunDetails, theme: Theme, mode: SubagentDet
 	const settled = run.status !== "running" && run.status !== "queued";
 	if (settled && run.startedAt && run.endedAt) {
 		line += theme.fg("dim", ` · ${formatDuration(Math.max(0, (run.endedAt - run.startedAt) / 1000))}`);
-	} else if (run.status === "running" && now !== undefined && run.startedAt) {
-		line += theme.fg("dim", ` · ${formatDuration(Math.max(0, (now - run.startedAt) / 1000))}`);
 	}
 	return line;
 }

@@ -17,7 +17,6 @@ import { ConcurrencyGate, runSubagentInvocation, statusSummary } from "./runner.
 import { SubagentParamsSchema } from "./schema.ts";
 import { loadSubagentConfig, resetProfileOverrides, updateProfileOverride } from "./settings.ts";
 import type { AgentDefinition, SubagentDetails } from "./types.ts";
-import { SubagentWidget } from "./widget.ts";
 
 function modelName(model: { provider: string; id: string; name?: string }): string {
 	return `${model.provider}/${model.id}${model.name && model.name !== model.id ? ` — ${model.name}` : ""}`;
@@ -159,7 +158,6 @@ export default function subagent(pi: ExtensionAPI): void {
 	const gate = new ConcurrencyGate();
 	const activeAborters = new Set<() => Promise<void>>();
 	const syncedProviderIds = new Set<string>();
-	const widget = new SubagentWidget();
 	let modelRuntimePromise: Promise<ModelRuntime> | undefined;
 
 	const getModelRuntime = async (ctx: ExtensionContext): Promise<ModelRuntime> => {
@@ -187,7 +185,7 @@ export default function subagent(pi: ExtensionAPI): void {
 			"Use one single prompt, a tasks array for independent parallel work, or a chain array for sequential work.",
 		],
 		parameters: SubagentParamsSchema,
-		async execute(toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<SubagentDetails>> {
+		async execute(_toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<SubagentDetails>> {
 			const discovery = discoverAgents(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir: getAgentDir() });
 			const runtime = await getModelRuntime(ctx);
 			const parent: ParentModelContext = {
@@ -195,34 +193,29 @@ export default function subagent(pi: ExtensionAPI): void {
 				thinking: pi.getThinkingLevel(),
 				modelRegistry: ctx.modelRegistry,
 			};
-			try {
-				const execution = await runSubagentInvocation({
-					params,
-					parentCwd: ctx.cwd,
-					agents: discovery.agents,
-					parent,
-					modelRuntime: runtime,
-					agentDir: getAgentDir(),
-					configAgentDir: getAgentDir(),
-					signal,
-					gate,
-					onUpdate: (details) => {
-						if (ctx.hasUI) widget.update(ctx.ui, toolCallId, details);
-						onUpdate?.({ content: [{ type: "text", text: statusSummary(details) }], details });
-					},
-					registerAbort: (abort) => {
-						activeAborters.add(abort);
-						return () => activeAborters.delete(abort);
-					},
-				});
-				return {
-					content: [{ type: "text", text: execution.content }],
-					details: execution.details,
-					usage: execution.usage,
-				};
-			} finally {
-				widget.finish(toolCallId);
-			}
+			const execution = await runSubagentInvocation({
+				params,
+				parentCwd: ctx.cwd,
+				agents: discovery.agents,
+				parent,
+				modelRuntime: runtime,
+				agentDir: getAgentDir(),
+				configAgentDir: getAgentDir(),
+				signal,
+				gate,
+				onUpdate: (details) => {
+					onUpdate?.({ content: [{ type: "text", text: statusSummary(details) }], details });
+				},
+				registerAbort: (abort) => {
+					activeAborters.add(abort);
+					return () => activeAborters.delete(abort);
+				},
+			});
+			return {
+				content: [{ type: "text", text: execution.content }],
+				details: execution.details,
+				usage: execution.usage,
+			};
 		},
 		renderCall(args, theme) {
 			return renderSubagentCall(args, theme);
@@ -244,7 +237,6 @@ export default function subagent(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", async () => {
-		widget.dispose();
 		await Promise.allSettled([...activeAborters].map((abort) => abort()));
 		activeAborters.clear();
 	});
