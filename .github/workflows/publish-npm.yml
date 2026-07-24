@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version to publish (for example, 0.81.1-2)
+        description: Version to publish (for example, 0.82.0)
         required: true
         type: string
 
@@ -47,8 +47,8 @@ jobs:
           import { readFileSync } from "node:fs";
 
           const version = process.env.RELEASE_VERSION;
-          if (!version || !/^\d+\.\d+\.\d+-\d+$/.test(version)) {
-            throw new Error(`Expected a numeric prerelease version such as 0.81.1-2, got ${version ?? "nothing"}.`);
+          if (!version || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
+            throw new Error(`Expected a stable numeric version such as 0.82.0, got ${version ?? "nothing"}.`);
           }
 
           const codingAgent = JSON.parse(readFileSync("packages/coding-agent/package.json", "utf8"));
@@ -64,8 +64,10 @@ jobs:
           if (server.dependencies?.["@astralyn/pi"] !== version) {
             throw new Error("packages/server must depend on the exact release version.");
           }
-          if (!changelog.includes(`## [${version}] - `)) {
-            throw new Error(`CHANGELOG.md has no release heading for ${version}.`);
+          const releaseHeading = `## [${version}] - `;
+          const headingCount = changelog.split("\n").filter((line) => line.startsWith(releaseHeading)).length;
+          if (headingCount !== 1) {
+            throw new Error(`Expected exactly one CHANGELOG.md release heading for ${version}, found ${headingCount}.`);
           }
           NODE
 

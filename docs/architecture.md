@@ -112,13 +112,14 @@ Resolve those conflicts directly. Do not introduce a patch framework or duplicat
 
 ## Release model
 
-Fork releases use the upstream version plus a numeric npm prerelease revision:
+Fork releases track the upstream `major.minor` line and use the patch number for this distribution's own release sequence. A newly tracked minor starts at patch `0`; later releases on that line increment the patch independently of upstream patch releases:
 
 ```text
-0.81.1-1
-0.81.1-2
-0.82.0-1
+upstream 0.82.x -> Fork 0.82.0, 0.82.1, 0.82.2, ...
+upstream 0.83.x -> Fork 0.83.0, 0.83.1, 0.83.2, ...
 ```
+
+Fork Git tags use `pi-v<full-version>` so they do not collide with fetched upstream `v<version>` tags.
 
 The npm registry entry for `@astralyn/pi` is the only update source. Releases are verified on Ubuntu and published by manually dispatching `.github/workflows/publish-npm.yml`; npm authenticates that exact workflow through Trusted Publishing (OIDC), so no long-lived npm token is stored in GitHub. Ordinary pushes to `main` run CI but never publish.
 

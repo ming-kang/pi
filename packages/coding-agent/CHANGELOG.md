@@ -2,20 +2,6 @@
 
 ## [Unreleased]
 
-### Added
-
-- Added collapsed tool grouping for consecutive `read`/`find` tool calls.
-
-### Changed
-
-- Subagent delegation now exposes the trusted session agent catalog to the model, provides clearer task briefings and empty-result guidance, and strengthens the built-in general and explorer worker prompts.
-- Collapsed Subagent views now summarize activity by tool purpose and show live per-run tool and token progress for parallel work.
-- Bash call previews now preserve the raw command instead of summarizing command names; running duration appears after two seconds and is omitted after completion.
-
-### Fixed
-
-- Fixed compaction and branch summaries for providers whose authentication resolves entirely to request headers ([#5871](https://github.com/earendil-works/pi/issues/5871))
-
 ## [0.82.0] - 2026-07-24
 
 ### New Features
@@ -26,6 +12,7 @@
 
 ### Added
 
+- Added collapsed tool grouping for consecutive `read`/`find` tool calls.
 - Added inherited `Tool.constrainedSampling` with strict JSON Schema (`prefer`/`require`) and OpenAI Lark/regex grammar variants across OpenAI, Anthropic, Amazon Bedrock, Google Gemini, and Mistral. See [Constrained Sampling for Tools](../ai/README.md#constrained-sampling-for-tools).
 - Added inherited `supportsGrammarTools` and `supportsStrictTools` compatibility flags, expanded `supportsStrictMode` coverage, and generated model capability metadata to gate constrained sampling.
 - Added inherited Kimi Code subscription OAuth login for the Kimi For Coding provider, including device authorization and automatic token refresh ([#6935](https://github.com/earendil-works/pi/pull/6935) by [@zaycruz](https://github.com/zaycruz)).
@@ -35,10 +22,15 @@
 
 ### Changed
 
+- Changed Fork versioning to follow upstream minor lines with Fork-owned patch releases and `pi-v<version>` Git tags.
+- Subagent delegation now exposes the trusted session agent catalog to the model, provides clearer task briefings and empty-result guidance, and strengthens the built-in general and explorer worker prompts.
+- Collapsed Subagent views now summarize activity by tool purpose and show live per-run tool and token progress for parallel work.
+- Bash call previews now preserve the raw command instead of summarizing command names; running duration appears after two seconds and is omitted after completion.
 - Changed inherited generated model catalogs to expose only provider-verified reasoning effort levels from models.dev ([#6928](https://github.com/earendil-works/pi/pull/6928) by [@davidbrai](https://github.com/davidbrai)).
 
 ### Fixed
 
+- Fixed compaction and branch summaries for providers whose authentication resolves entirely to request headers ([#5871](https://github.com/earendil-works/pi/issues/5871)).
 - Fixed inherited DNS lookup failures such as `getaddrinfo`, `ENOTFOUND`, and `EAI_AGAIN` to trigger automatic assistant retries ([#6946](https://github.com/earendil-works/pi/pull/6946) by [@christianklotz](https://github.com/christianklotz)).
 - Fixed inherited OpenRouter Anthropic cache breakpoints to advance through tool results and enabled cache control for `~anthropic/*-latest` aliases ([#6941](https://github.com/earendil-works/pi/pull/6941) by [@mteam88](https://github.com/mteam88)).
 - Fixed inherited OpenAI Codex WebSocket sessions to retry once without a missing previous-response continuation after `previous_response_not_found` errors ([#6955](https://github.com/earendil-works/pi/pull/6955) by [@davidbrai](https://github.com/davidbrai)).
@@ -52,7 +44,6 @@
 - Fixed fresh installs from preferring bundled model catalogs over newer remote catalogs because package file mtimes were newer ([#7016](https://github.com/earendil-works/pi/pull/7016) by [@davidbrai](https://github.com/davidbrai)).
 - Fixed inherited editor scroll indicators overflowing narrow terminals ([#7015](https://github.com/earendil-works/pi/pull/7015) by [@christianklotz](https://github.com/christianklotz)).
 - Fixed llama.cpp models to use the loaded context window as their output token limit instead of capping it at 16K ([#7034](https://github.com/earendil-works/pi/pull/7034) by [@christianklotz](https://github.com/christianklotz)).
-- Fixed release source archives to include the generated provider model data used to build standalone binaries.
 - Updated the packaged `protobufjs` dependency to 7.6.5 to address GHSA-j3f2-48v5-ccww ([#7005](https://github.com/earendil-works/pi/issues/7005)).
 - Fixed `/copy` on Wayland to fall back to X11 or OSC 52 when `wl-copy` fails ([#7009](https://github.com/earendil-works/pi/pull/7009) by [@rkfshakti](https://github.com/rkfshakti)).
 - Fixed `/model` to reload updated `models.json` configuration when opening the model picker ([#6999](https://github.com/earendil-works/pi/issues/6999)).

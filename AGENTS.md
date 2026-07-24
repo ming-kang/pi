@@ -81,13 +81,14 @@ Expected merge hotspots are the native tool presentation, `core/tools`, `core/ke
 
 Only `@astralyn/pi` is published. Other workspace packages retain their upstream package names and are not part of the Fork distribution.
 
-Use a numeric npm prerelease suffix that tracks the upstream version:
+Fork versions track the upstream `major.minor` line, while the patch number is owned by this distribution:
 
 ```text
-0.81.1-1
-0.81.1-2
-0.82.0-1
+upstream 0.82.x -> Fork 0.82.0, 0.82.1, 0.82.2, ...
+upstream 0.83.x -> Fork 0.83.0, 0.83.1, 0.83.2, ...
 ```
+
+Start at patch `0` when moving to a new upstream minor, then increment the Fork patch for every later release on that line regardless of the upstream patch number. Tag Fork releases as `pi-v<full-version>` so fetched upstream `v<version>` tags remain distinct.
 
 Follow the release checklist in `docs/release.md` when publishing. Do not use the upstream multi-package release or publish workflow for this repository.
 
