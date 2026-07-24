@@ -1,5 +1,7 @@
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../../config.ts";
 import type {
 	AgentToolResult,
@@ -11,16 +13,13 @@ import type { ModelRegistry } from "../../core/model-registry.ts";
 import { ModelRuntime } from "../../core/model-runtime.ts";
 import { discoverAgents } from "./agents.ts";
 import { SUBAGENT_COMMAND_NAME, SUBAGENT_TOOL_LABEL, SUBAGENT_TOOL_NAME, THINKING_LEVELS } from "./constants.ts";
+import { type PickerItem, SearchPickerComponent } from "./picker.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
 import type { ParentModelContext } from "./resolve.ts";
 import { ConcurrencyGate, runSubagentInvocation, statusSummary } from "./runner.ts";
 import { SubagentParamsSchema } from "./schema.ts";
 import { loadSubagentConfig, resetProfileOverrides, updateProfileOverride } from "./settings.ts";
 import type { AgentDefinition, SubagentDetails, SubagentProfileOverride } from "./types.ts";
-
-function modelName(model: { provider: string; id: string; name?: string }): string {
-	return `${model.provider}/${model.id}${model.name && model.name !== model.id ? ` — ${model.name}` : ""}`;
-}
 
 function formatParentModel(model: { provider: string; id: string } | undefined): string {
 	return model ? `${model.provider}/${model.id}` : "none";
@@ -40,15 +39,93 @@ function effectiveSettings(
 	};
 }
 
-function describeProfile(agent: AgentDefinition, effective: { model: string; thinking: string }): string {
-	return [
-		`${agent.name} (${agent.source})`,
-		agent.description,
-		`model: ${effective.model}`,
-		`thinking: ${effective.thinking}`,
-		`tools: ${agent.tools.join(", ")}`,
-		`source: ${agent.filePath}`,
-	].join("\n");
+// The thinking picker lists what the effective model actually supports;
+// if the saved override names a model that is unavailable right now,
+// every level shows and the runtime clamp decides.
+function effectiveModelFor(
+	ctx: ExtensionCommandContext,
+	override: SubagentProfileOverride | undefined,
+): Model<Api> | undefined {
+	if (override?.model) {
+		const separator = override.model.indexOf("/");
+		if (separator <= 0) return undefined;
+		return ctx.modelRegistry.find(override.model.slice(0, separator), override.model.slice(separator + 1));
+	}
+	return ctx.model;
+}
+
+async function pickModel(
+	ctx: ExtensionCommandContext,
+	profileName: string,
+	override: SubagentProfileOverride | undefined,
+): Promise<void> {
+	const items: PickerItem<string | null>[] = [
+		{
+			value: null,
+			label: "inherit",
+			detail: `Follow the parent session (${formatParentModel(ctx.model)})`,
+			current: !override?.model,
+		},
+		...ctx.modelRegistry.getAvailable().map((model) => ({
+			value: `${model.provider}/${model.id}`,
+			label: `${model.provider}/${model.id}`,
+			detail: model.name && model.name !== model.id ? model.name : undefined,
+			current: override?.model === `${model.provider}/${model.id}`,
+		})),
+	];
+	const selected = await ctx.ui.custom<string | null | undefined>(
+		(_tui, theme, _keybindings, done) => new SearchPickerComponent(theme, `Model for ${profileName}`, items, done),
+	);
+	if (selected === undefined) return;
+	await updateProfileOverride(profileName, { model: selected ?? undefined }, getAgentDir());
+}
+
+async function pickThinking(
+	ctx: ExtensionCommandContext,
+	profileName: string,
+	override: SubagentProfileOverride | undefined,
+	parentThinking: string,
+): Promise<void> {
+	const model = effectiveModelFor(ctx, override);
+	const levels = model ? (getSupportedThinkingLevels(model) as ThinkingLevel[]) : [...THINKING_LEVELS];
+	const items: PickerItem<ThinkingLevel | null>[] = [
+		{
+			value: null,
+			label: "inherit",
+			detail: `Follow the parent session (${parentThinking})`,
+			current: !override?.thinking,
+		},
+		...levels.map((level) => ({ value: level, label: level, current: override?.thinking === level })),
+	];
+	const selected = await ctx.ui.custom<ThinkingLevel | null | undefined>(
+		(_tui, theme, _keybindings, done) => new SearchPickerComponent(theme, `Thinking for ${profileName}`, items, done),
+	);
+	if (selected === undefined) return;
+	await updateProfileOverride(profileName, { thinking: selected ?? undefined }, getAgentDir());
+}
+
+async function configureProfile(
+	ctx: ExtensionCommandContext,
+	agent: AgentDefinition,
+	parentThinking: string,
+): Promise<void> {
+	const agentDir = getAgentDir();
+	while (true) {
+		const config = await loadSubagentConfig(agentDir);
+		const override = config.profiles[agent.name];
+		const effective = effectiveSettings(override, ctx, parentThinking);
+		const action = await ctx.ui.select(`${agent.name} — ${agent.description}`, [
+			`Model: ${effective.model}`,
+			`Thinking: ${effective.thinking}`,
+			"Back",
+		]);
+		if (!action || action === "Back") return;
+		if (action.startsWith("Model:")) {
+			await pickModel(ctx, agent.name, override);
+			continue;
+		}
+		await pickThinking(ctx, agent.name, override, parentThinking);
+	}
 }
 
 async function syncParentProviders(
@@ -72,50 +149,6 @@ async function syncParentProviders(
 	}
 	syncedIds.clear();
 	for (const id of nextIds) syncedIds.add(id);
-}
-
-async function configureProfile(
-	ctx: ExtensionCommandContext,
-	agent: AgentDefinition,
-	parentThinking: string,
-): Promise<void> {
-	const agentDir = getAgentDir();
-	while (true) {
-		const config = await loadSubagentConfig(agentDir);
-		const effective = effectiveSettings(config.profiles[agent.name], ctx, parentThinking);
-		const action = await ctx.ui.select(`${agent.name} — ${agent.description}`, [
-			`Model: ${effective.model}`,
-			`Thinking: ${effective.thinking}`,
-			"Details",
-			"Back",
-		]);
-		if (!action || action === "Back") return;
-		if (action.startsWith("Model:")) {
-			const inherit = `inherit — follow the parent session (${formatParentModel(ctx.model)})`;
-			const selected = await ctx.ui.select(`Model for ${agent.name}`, [
-				inherit,
-				...ctx.modelRegistry.getAvailable().map((model) => modelName(model)),
-			]);
-			if (!selected) continue;
-			if (selected === inherit) {
-				await updateProfileOverride(agent.name, { model: undefined }, agentDir);
-			} else {
-				const model = ctx.modelRegistry.getAvailable().find((candidate) => modelName(candidate) === selected);
-				if (!model) continue;
-				await updateProfileOverride(agent.name, { model: `${model.provider}/${model.id}` }, agentDir);
-			}
-			continue;
-		}
-		if (action.startsWith("Thinking:")) {
-			const inherit = `inherit — follow the parent session (${parentThinking})`;
-			const selected = await ctx.ui.select(`Thinking for ${agent.name}`, [inherit, ...THINKING_LEVELS]);
-			if (!selected) continue;
-			if (selected === inherit) await updateProfileOverride(agent.name, { thinking: undefined }, agentDir);
-			else await updateProfileOverride(agent.name, { thinking: selected as ThinkingLevel }, agentDir);
-			continue;
-		}
-		ctx.ui.notify(describeProfile(agent, effective), "info");
-	}
 }
 
 async function showAgentsCommand(ctx: ExtensionCommandContext, parentThinking: string): Promise<void> {
