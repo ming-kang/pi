@@ -12,9 +12,20 @@ function nullable<T extends TSchema>(schema: T, description: string) {
 
 export const TaskSchema = Type.Object(
 	{
-		agent: nullable(Type.String({ minLength: 1, maxLength: 80 }), "Agent profile name; null or omit for general"),
-		description: Type.String({ minLength: 1, maxLength: 80, description: "Short UI label" }),
-		prompt: Type.String({ minLength: 1, maxLength: 20_000, description: "Self-contained worker briefing" }),
+		agent: nullable(
+			Type.String({ minLength: 1, maxLength: 80 }),
+			"Agent profile from the list in the tool description; null or omit for general",
+		),
+		description: Type.String({
+			minLength: 1,
+			maxLength: 80,
+			description: "Concise 3-8 word UI label",
+		}),
+		prompt: Type.String({
+			minLength: 1,
+			maxLength: 20_000,
+			description: "Complete self-contained briefing; the worker cannot see the parent conversation",
+		}),
 		cwd: nullable(
 			Type.String({ minLength: 1, maxLength: 4_096 }),
 			"Relative directory inside the parent working directory; null or omit to inherit it",
@@ -27,15 +38,15 @@ export const SubagentParamsSchema = Type.Object(
 	{
 		agent: nullable(
 			Type.String({ minLength: 1, maxLength: 80 }),
-			"Agent profile name for single mode; null or omit otherwise (defaults to general)",
+			"Agent profile from the list in the tool description (single mode); null or omit otherwise (defaults to general)",
 		),
 		description: nullable(
 			Type.String({ minLength: 1, maxLength: 80 }),
-			"Short UI label; required for single mode, null or omit otherwise",
+			"Concise 3-8 word UI label; required for single mode, null or omit otherwise",
 		),
 		prompt: nullable(
 			Type.String({ minLength: 1, maxLength: 20_000 }),
-			"Self-contained worker briefing; providing it selects single mode — null or omit when using tasks or chain",
+			"Complete self-contained briefing; providing it selects single mode — null or omit when using tasks or chain",
 		),
 		cwd: nullable(
 			Type.String({ minLength: 1, maxLength: 4_096 }),

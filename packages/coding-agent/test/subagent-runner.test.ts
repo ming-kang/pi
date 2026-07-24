@@ -1,7 +1,8 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
+import { SettingsManager } from "../src/core/settings-manager.ts";
 import type { ParentModelContext } from "../src/extensions/subagent/resolve.ts";
 import { ConcurrencyGate, runSubagentInvocation } from "../src/extensions/subagent/runner.ts";
 import type { SubagentParams } from "../src/extensions/subagent/schema.ts";
@@ -30,6 +31,10 @@ function createParentContext(model: Model<Api>): ParentModelContext {
 }
 
 describe("subagent SDK runner", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
 	async function setup(responses: string[]) {
 		const faux = fauxProvider({ provider: `subagent-runner-${Date.now()}-${Math.random()}` });
 		faux.setResponses(responses.map((response) => fauxAssistantMessage(response)));
@@ -54,6 +59,7 @@ describe("subagent SDK runner", () => {
 			modelRuntime,
 			agentDir: process.cwd(),
 			configAgentDir: process.cwd(),
+			projectTrusted: false,
 			gate: new ConcurrencyGate(1),
 			onUpdate: (details) => updates.push(details.status),
 		});
@@ -63,6 +69,55 @@ describe("subagent SDK runner", () => {
 		expect(result.details.runs[0]?.usage.totalTokens).toBeGreaterThan(0);
 		expect(updates).toContain("running");
 		expect(updates.at(-1)).toBe("completed");
+	});
+
+	it("builds a self-contained worker system prompt with completion and relay guidance", async () => {
+		const settingsCreate = vi.spyOn(SettingsManager, "create");
+		let systemPrompt: string | undefined;
+		const faux = fauxProvider({ provider: `subagent-prompt-${Date.now()}-${Math.random()}` });
+		faux.setResponses([
+			(context) => {
+				systemPrompt = context.systemPrompt;
+				return fauxAssistantMessage("prompt checked");
+			},
+		]);
+		const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+		modelRuntime.registerNativeProvider(faux.provider);
+		const model = faux.getModel() as Model<Api>;
+		await runSubagentInvocation({
+			params: { agent: "worker", description: "Inspect worker prompt", prompt: "Check the prompt." },
+			parentCwd: process.cwd(),
+			agents: [agent],
+			parent: createParentContext(model),
+			modelRuntime,
+			agentDir: process.cwd(),
+			configAgentDir: process.cwd(),
+			projectTrusted: false,
+			gate: new ConcurrencyGate(1),
+		});
+
+		expect(settingsCreate).toHaveBeenCalledWith(process.cwd(), process.cwd(), { projectTrusted: false });
+		expect(systemPrompt).toContain("do not gold-plate it, but do not leave it half-done");
+		expect(systemPrompt).toContain("use absolute paths");
+		expect(systemPrompt).toContain("The caller will relay it to the user");
+		expect(systemPrompt).toContain(agent.systemPrompt);
+	});
+
+	it("returns an explicit marker when a completed subagent has no output", async () => {
+		const { modelRuntime, model } = await setup([""]);
+		const result = await runSubagentInvocation({
+			params: { agent: "worker", description: "Run empty worker", prompt: "Return nothing." },
+			parentCwd: process.cwd(),
+			agents: [agent],
+			parent: createParentContext(model),
+			modelRuntime,
+			agentDir: process.cwd(),
+			configAgentDir: process.cwd(),
+			projectTrusted: false,
+			gate: new ConcurrencyGate(1),
+		});
+		expect(result.isError).toBe(false);
+		expect(result.content).toBe("(Subagent completed but returned no output.)");
 	});
 
 	it("executes chain steps sequentially and passes bounded previous output", async () => {
@@ -81,6 +136,7 @@ describe("subagent SDK runner", () => {
 			modelRuntime,
 			agentDir: process.cwd(),
 			configAgentDir: process.cwd(),
+			projectTrusted: false,
 			gate: new ConcurrencyGate(1),
 		});
 		expect(result.details.status).toBe("completed");
@@ -106,6 +162,7 @@ describe("subagent SDK runner", () => {
 			modelRuntime,
 			agentDir: process.cwd(),
 			configAgentDir: process.cwd(),
+			projectTrusted: false,
 			gate: new ConcurrencyGate(1),
 		});
 		expect(result.isError).toBe(false);
@@ -122,6 +179,7 @@ describe("subagent SDK runner", () => {
 			modelRuntime,
 			agentDir: process.cwd(),
 			configAgentDir: process.cwd(),
+			projectTrusted: false,
 			gate: new ConcurrencyGate(1),
 		};
 		const ambiguous: SubagentParams = {

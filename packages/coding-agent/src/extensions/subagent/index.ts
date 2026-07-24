@@ -11,7 +11,7 @@ import type {
 } from "../../core/extensions/types.ts";
 import type { ModelRegistry } from "../../core/model-registry.ts";
 import { ModelRuntime } from "../../core/model-runtime.ts";
-import { discoverAgents } from "./agents.ts";
+import { discoverAgents, subagentToolDescription } from "./agents.ts";
 import { SUBAGENT_COMMAND_NAME, SUBAGENT_TOOL_LABEL, SUBAGENT_TOOL_NAME, THINKING_LEVELS } from "./constants.ts";
 import { type PickerItem, SearchPickerComponent } from "./picker.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
@@ -19,7 +19,7 @@ import type { ParentModelContext } from "./resolve.ts";
 import { ConcurrencyGate, runSubagentInvocation, statusSummary } from "./runner.ts";
 import { SubagentParamsSchema } from "./schema.ts";
 import { loadSubagentConfig, resetProfileOverrides, updateProfileOverride } from "./settings.ts";
-import type { AgentDefinition, SubagentDetails, SubagentProfileOverride } from "./types.ts";
+import type { AgentDefinition, AgentDiscoveryResult, SubagentDetails, SubagentProfileOverride } from "./types.ts";
 
 function formatParentModel(model: { provider: string; id: string } | undefined): string {
 	return model ? `${model.provider}/${model.id}` : "none";
@@ -217,56 +217,66 @@ export default function subagent(pi: ExtensionAPI): void {
 		return runtime;
 	};
 
-	pi.registerTool<typeof SubagentParamsSchema, SubagentDetails>({
-		name: SUBAGENT_TOOL_NAME,
-		label: SUBAGENT_TOOL_LABEL,
-		description:
-			"Delegate a bounded task to an isolated subagent. Use one of: single prompt, parallel tasks, or sequential chain.",
-		promptSnippet: "Delegate focused research, review, or implementation tasks to isolated subagents",
-		promptGuidelines: [
-			"Use subagent for a focused delegated task when isolated context or parallel investigation will improve the result.",
-			"Give every subagent task a concise description and a complete self-contained prompt; subagents cannot see this conversation.",
-			"Use one single prompt, a tasks array for independent parallel work, or a chain array for sequential work.",
-		],
-		parameters: SubagentParamsSchema,
-		async execute(_toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<SubagentDetails>> {
-			const discovery = discoverAgents(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir: getAgentDir() });
-			const runtime = await getModelRuntime(ctx);
-			const parent: ParentModelContext = {
-				model: ctx.model,
-				thinking: pi.getThinkingLevel(),
-				modelRegistry: ctx.modelRegistry,
-			};
-			const execution = await runSubagentInvocation({
-				params,
-				parentCwd: ctx.cwd,
-				agents: discovery.agents,
-				parent,
-				modelRuntime: runtime,
-				agentDir: getAgentDir(),
-				configAgentDir: getAgentDir(),
-				signal,
-				gate,
-				onUpdate: (details) => {
-					onUpdate?.({ content: [{ type: "text", text: statusSummary(details) }], details });
-				},
-				registerAbort: (abort) => {
-					activeAborters.add(abort);
-					return () => activeAborters.delete(abort);
-				},
-			});
-			return {
-				content: [{ type: "text", text: execution.content }],
-				details: execution.details,
-				usage: execution.usage,
-			};
-		},
-		renderCall(args, theme) {
-			return renderSubagentCall(args, theme);
-		},
-		renderResult(result, options, theme, context) {
-			return renderSubagentResult(result, options, theme, context.isError);
-		},
+	const registerSubagentTool = (discovery: AgentDiscoveryResult): void => {
+		pi.registerTool<typeof SubagentParamsSchema, SubagentDetails>({
+			name: SUBAGENT_TOOL_NAME,
+			label: SUBAGENT_TOOL_LABEL,
+			description: subagentToolDescription(discovery),
+			promptSnippet: "Delegate focused research, review, or implementation tasks to isolated subagents",
+			promptGuidelines: [
+				"Use subagent when a bounded task benefits from isolated context, parallel investigation, or a sequential specialist handoff; choose a profile and write its briefing using the tool description.",
+			],
+			parameters: SubagentParamsSchema,
+			async execute(_toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<SubagentDetails>> {
+				const discovery = discoverAgents(ctx.cwd, {
+					projectTrusted: ctx.isProjectTrusted(),
+					agentDir: getAgentDir(),
+				});
+				const runtime = await getModelRuntime(ctx);
+				const parent: ParentModelContext = {
+					model: ctx.model,
+					thinking: pi.getThinkingLevel(),
+					modelRegistry: ctx.modelRegistry,
+				};
+				const execution = await runSubagentInvocation({
+					params,
+					parentCwd: ctx.cwd,
+					agents: discovery.agents,
+					parent,
+					modelRuntime: runtime,
+					agentDir: getAgentDir(),
+					configAgentDir: getAgentDir(),
+					projectTrusted: ctx.isProjectTrusted(),
+					signal,
+					gate,
+					onUpdate: (details) => {
+						onUpdate?.({ content: [{ type: "text", text: statusSummary(details) }], details });
+					},
+					registerAbort: (abort) => {
+						activeAborters.add(abort);
+						return () => activeAborters.delete(abort);
+					},
+				});
+				return {
+					content: [{ type: "text", text: execution.content }],
+					details: execution.details,
+					usage: execution.usage,
+				};
+			},
+			renderCall(args, theme) {
+				return renderSubagentCall(args, theme);
+			},
+			renderResult(result, options, theme, context) {
+				return renderSubagentResult(result, options, theme, context.isError);
+			},
+		});
+	};
+
+	registerSubagentTool(discoverAgents(process.cwd(), { projectTrusted: false, agentDir: getAgentDir() }));
+	pi.on("session_start", (_event, ctx) => {
+		registerSubagentTool(
+			discoverAgents(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir: getAgentDir() }),
+		);
 	});
 
 	pi.registerCommand(SUBAGENT_COMMAND_NAME, {

@@ -23,6 +23,8 @@ import type {
 	SubagentUsage,
 } from "./types.ts";
 
+const EMPTY_OUTPUT = "(Subagent completed but returned no output.)";
+
 interface Waiter {
 	resolve: (release: () => void) => void;
 	reject: (error: Error) => void;
@@ -84,6 +86,7 @@ export interface SubagentInvocationOptions {
 	modelRuntime: ModelRuntime;
 	agentDir: string;
 	configAgentDir: string;
+	projectTrusted: boolean;
 	signal?: AbortSignal;
 	gate: ConcurrencyGate;
 	onUpdate?: (details: SubagentDetails) => void;
@@ -303,6 +306,7 @@ async function runWithGate(
 			run,
 			modelRuntime: options.modelRuntime,
 			agentDir: options.agentDir,
+			projectTrusted: options.projectTrusted,
 			signal: options.signal,
 			onProgress,
 			registerAbort: options.registerAbort,
@@ -328,7 +332,7 @@ function resultContent(details: SubagentDetails): string {
 				SINGLE_OUTPUT_LIMIT,
 			);
 		}
-		return run.finalOutput || "(no output)";
+		return run.finalOutput || EMPTY_OUTPUT;
 	}
 	if (details.mode === "chain") {
 		const failed = details.runs.find((run) => run.status === "failed" || run.status === "aborted");
@@ -338,10 +342,10 @@ function resultContent(details: SubagentDetails): string {
 				ERROR_TEXT_LIMIT,
 			);
 		const last = details.runs[details.runs.length - 1];
-		return last?.finalOutput || "(no output)";
+		return last?.finalOutput || EMPTY_OUTPUT;
 	}
 	const sections = details.runs.map((run) => {
-		const output = run.finalOutput || run.error || "(no output)";
+		const output = run.finalOutput || run.error || EMPTY_OUTPUT;
 		return `### ${run.agent} · ${run.status}\n\n${boundText(output, PARALLEL_TASK_OUTPUT_LIMIT)}`;
 	});
 	return boundText(`Parallel results\n\n${sections.join("\n\n---\n\n")}`, PARALLEL_OUTPUT_LIMIT);

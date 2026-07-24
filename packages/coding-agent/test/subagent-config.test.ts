@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import { discoverAgents } from "../src/extensions/subagent/agents.ts";
+import { discoverAgents, subagentToolDescription } from "../src/extensions/subagent/agents.ts";
 import { resolveSubagentTask, resolveTaskCwd } from "../src/extensions/subagent/resolve.ts";
 import type { SubagentTask } from "../src/extensions/subagent/schema.ts";
 import { parseSubagentConfig, updateProfileOverride } from "../src/extensions/subagent/settings.ts";
@@ -80,6 +80,15 @@ describe("subagent configuration", () => {
 		expect(reviewer).not.toHaveProperty("thinking");
 		expect(trusted.agents.some((agent) => agent.name === "general")).toBe(true);
 		expect(trusted.projectAgentsTrusted).toBe(true);
+		const general = trusted.agents.find((agent) => agent.name === "general");
+		const explorer = trusted.agents.find((agent) => agent.name === "explorer");
+		expect(general?.systemPrompt).toContain("never create documentation files unless the task explicitly asks");
+		expect(explorer?.description).toContain('"quick" for a targeted lookup');
+		expect(explorer?.systemPrompt).toContain("batching independent searches and reads");
+		const trustedToolDescription = subagentToolDescription(trusted);
+		expect(trustedToolDescription).toContain("- reviewer: Project reviewer (Tools: read)");
+		expect(trustedToolDescription).toContain("When not to delegate:");
+		expect(trustedToolDescription).toContain("Never delegate understanding");
 
 		const untrusted = discoverAgents(root, { projectTrusted: false, agentDir });
 		expect(untrusted.agents.find((agent) => agent.name === "reviewer")).toMatchObject({
@@ -87,6 +96,9 @@ describe("subagent configuration", () => {
 			source: "user",
 		});
 		expect(untrusted.projectAgentsTrusted).toBe(false);
+		const untrustedToolDescription = subagentToolDescription(untrusted);
+		expect(untrustedToolDescription).toContain("- reviewer: User reviewer (Tools: read, grep)");
+		expect(untrustedToolDescription).not.toContain("Project reviewer");
 	});
 
 	it("reports invalid agent definitions without hiding valid agents", () => {
@@ -100,6 +112,23 @@ describe("subagent configuration", () => {
 		expect(result.agents.some((agent) => agent.name === "valid")).toBe(true);
 		expect(result.diagnostics).toHaveLength(1);
 		expect(result.diagnostics[0]?.path).toContain("invalid.md");
+	});
+
+	it("bounds agent metadata before placing it in the model-facing tool description", () => {
+		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-description-"));
+		temporaryDirectories.push(root);
+		const agentDir = join(root, "agent");
+		for (let index = 0; index < 50; index++) {
+			writeAgent(
+				join(agentDir, "agents"),
+				`worker-${index}.md`,
+				`---\nname: worker-${index}\ndescription: ${"细节 ".repeat(200)}\ntools: read\n---\nPrompt`,
+			);
+		}
+
+		const description = subagentToolDescription(discoverAgents(root, { projectTrusted: false, agentDir }));
+		expect(Buffer.byteLength(description, "utf8")).toBeLessThan(10 * 1024);
+		expect(description).toContain("additional profiles omitted from this bounded description");
 	});
 
 	it("persists profile model and thinking overrides atomically", async () => {

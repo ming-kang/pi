@@ -23,6 +23,7 @@ export interface SdkRunnerOptions {
 	run: SubagentRunDetails;
 	modelRuntime: ModelRuntime;
 	agentDir: string;
+	projectTrusted: boolean;
 	signal?: AbortSignal;
 	onProgress?: () => void;
 	registerAbort?: (abort: () => Promise<void>) => () => void;
@@ -31,12 +32,14 @@ export interface SdkRunnerOptions {
 function workerSystemPrompt(base: string | undefined, task: ResolvedSubagentTask): string {
 	return [
 		base,
-		`You are Pi subagent "${task.agent.name}", working on one delegated task.`,
-		"You cannot see the parent conversation; rely on the task briefing.",
-		"Stay inside the assigned working directory and task scope.",
-		"Do not ask the end user questions. If blocked, report the exact blocker.",
+		`You are Pi subagent "${task.agent.name}", working independently on one delegated task.`,
+		"You cannot see the parent conversation; rely entirely on the task briefing and repository context available in your working directory.",
+		"Complete the task fully—do not gold-plate it, but do not leave it half-done.",
+		"Stay inside the assigned working directory and delegated scope.",
+		"Do not ask the end user questions. If blocked, report the exact blocker and what would resolve it.",
 		"Do not spawn subagents or invoke tools outside the configured tool list.",
-		"Return a concise report with findings or changes, exact paths, verification, and unresolved risks.",
+		"When referencing files in the final report, use absolute paths so the caller can locate them unambiguously.",
+		"End with a concise report covering findings or changes, verification performed, blockers, and unresolved risks. The caller will relay it to the user, so include only the essentials.",
 		task.agent.systemPrompt,
 	]
 		.filter((part): part is string => Boolean(part?.trim()))
@@ -73,7 +76,7 @@ function cancelThrottled(onProgress: () => void): void {
 }
 
 export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRunDetails> {
-	const { task, run, modelRuntime, agentDir, signal, onProgress } = options;
+	const { task, run, modelRuntime, agentDir, projectTrusted, signal, onProgress } = options;
 	const emitTextProgress = emitThrottled(onProgress);
 	let unsubscribe: (() => void) | undefined;
 	let unregisterAbort: (() => void) | undefined;
@@ -95,7 +98,7 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 		run.status = "running";
 		run.startedAt = Date.now();
 		onProgress?.();
-		const settingsManager = SettingsManager.create(task.cwd, agentDir);
+		const settingsManager = SettingsManager.create(task.cwd, agentDir, { projectTrusted });
 		const resourceLoader = new DefaultResourceLoader({
 			cwd: task.cwd,
 			agentDir,
