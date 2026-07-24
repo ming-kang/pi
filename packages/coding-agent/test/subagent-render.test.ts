@@ -163,4 +163,72 @@ describe("subagent rendering", () => {
 		expect(output).toContain("2. reviewer");
 		expect(output).toContain("— boom");
 	});
+
+	it("drops markdown tables and rules from collapsed excerpts", () => {
+		const output = collapsed(
+			details({
+				mode: "single",
+				runs: [
+					run({
+						finalOutput:
+							"结果如下。\n\n| 类型 | 名称 |\n|------|------|\n| 📁 | .git |\n\n────────\n\n总结：完成。",
+					}),
+				],
+			}),
+		);
+		expect(output).not.toContain("|");
+		expect(output).not.toContain("───");
+		expect(output).toContain("结果如下。");
+		expect(output).toContain("总结：完成。");
+	});
+
+	it("labels idle gaps between activities like the streaming state", () => {
+		const output = collapsed(
+			details({
+				mode: "single",
+				status: "running",
+				endedAt: undefined,
+				runs: [run({ status: "running", currentActivity: undefined, liveText: "", finalOutput: "" })],
+			}),
+			true,
+		);
+		expect(output).toContain("Thinking…");
+		expect(output).not.toMatch(/\bthinking\b/u);
+	});
+
+	it("expands a single run without repeating the call header or usage", () => {
+		const component = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "done" }],
+				details: details({
+					mode: "single",
+					runs: [
+						run({
+							startedAt: 0,
+							endedAt: 4_000,
+							activities: [
+								{
+									id: "call-1",
+									toolName: "bash",
+									summary: "Run ls -la",
+									status: "succeeded",
+									startedAt: 0,
+									endedAt: 100,
+									resultSummary: "total 383 drwxr-xr-x\n[Output truncated: 1121 bytes omitted.]",
+								},
+							],
+						}),
+					],
+				}),
+			},
+			{ expanded: true, isPartial: false },
+			theme,
+			false,
+		);
+		const output = component.render(120).join("\n");
+		expect(output).not.toContain("explorer · Map the code");
+		expect(output).not.toContain("[Output truncated");
+		expect(output.match(/tool use/gu)).toHaveLength(1);
+		expect(output).toContain("4.0s");
+	});
 });

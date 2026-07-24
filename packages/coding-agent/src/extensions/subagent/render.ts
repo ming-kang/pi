@@ -31,11 +31,24 @@ function stripInlineMarkdown(text: string): string {
 		.replace(/^#{1,6}\s+/gmu, "");
 }
 
+// Markdown tables and horizontal rules turn into symbol soup when
+// flattened onto one line; drop those lines before inline stripping.
+function stripBlockMarkdown(text: string): string {
+	return text
+		.split("\n")
+		.filter((line) => {
+			const trimmed = line.trim();
+			if (trimmed.startsWith("|")) return false;
+			return !(trimmed.length >= 3 && /^[-—─═=*_|:\s]+$/u.test(trimmed));
+		})
+		.join("\n");
+}
+
 function excerpt(text: string, limit: number): string {
 	// finalOutput/liveText carry model-facing truncation notices from
 	// boundText/tailText; in the transcript an ellipsis is enough.
 	const cleaned = text.replace(/\[(?:Output truncated(?:: \d+ bytes omitted\.)?|Earlier output omitted\.)\]/gu, "…");
-	return truncate(stripInlineMarkdown(cleaned).replace(/\s+/gu, " ").trim(), limit);
+	return truncate(stripInlineMarkdown(stripBlockMarkdown(cleaned)).replace(/\s+/gu, " ").trim(), limit);
 }
 
 function liveTail(run: SubagentRunDetails): string | undefined {
@@ -77,7 +90,7 @@ function runLine(run: SubagentRunDetails, theme: Theme, mode: SubagentDetails["m
 				: run.finalOutput && excerpt(run.finalOutput, RUN_LINE_EXCERPT_LIMIT);
 	if (detail) line += theme.fg(run.status === "failed" ? "error" : "dim", ` — ${detail}`);
 	const settled = run.status !== "running" && run.status !== "queued";
-	if (settled && run.startedAt && run.endedAt) {
+	if (settled && run.startedAt !== undefined && run.endedAt !== undefined) {
 		line += theme.fg("dim", ` · ${formatDuration(Math.max(0, (run.endedAt - run.startedAt) / 1000))}`);
 	}
 	return line;
@@ -98,7 +111,7 @@ function singleCollapsedLines(details: SubagentDetails, theme: Theme): string[] 
 	if (!run) return [theme.fg("muted", "starting")];
 	if (run.status === "running" || run.status === "queued") {
 		const lines = [
-			`${statusMarker(run.status, theme)} ${theme.fg("dim", run.currentActivity ?? (run.status === "queued" ? "queued" : "thinking"))}`,
+			`${statusMarker(run.status, theme)} ${theme.fg("dim", run.currentActivity ?? (run.status === "queued" ? "queued" : "Thinking…"))}`,
 		];
 		const tail = liveTail(run);
 		if (tail) lines.push(theme.fg("dim", tail));
@@ -132,13 +145,25 @@ function formatDuration(seconds: number): string {
 	return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
 }
 
-function renderRunDetails(run: SubagentRunDetails, theme: Theme, mode: SubagentDetails["mode"]): Component {
+// A single run's title and usage would duplicate the call header and
+// the call-level usage line, so `single` drops both and folds the
+// duration into the metadata line instead.
+function renderRunDetails(
+	run: SubagentRunDetails,
+	theme: Theme,
+	mode: SubagentDetails["mode"],
+	single: boolean,
+): Component {
 	const container = new Container();
-	let title = runTitle(run, theme, mode);
-	if (run.startedAt && run.endedAt) {
-		title += theme.fg("dim", ` · ${formatDuration(Math.max(0, (run.endedAt - run.startedAt) / 1000))}`);
+	const duration =
+		run.startedAt !== undefined && run.endedAt !== undefined
+			? formatDuration(Math.max(0, (run.endedAt - run.startedAt) / 1000))
+			: undefined;
+	if (!single) {
+		let title = runTitle(run, theme, mode);
+		if (duration) title += theme.fg("dim", ` · ${duration}`);
+		container.addChild(new Text(title, 0, 0));
 	}
-	container.addChild(new Text(title, 0, 0));
 	container.addChild(new Text(theme.fg("muted", "Task"), 0, 0));
 	container.addChild(new Text(theme.fg("dim", run.prompt), 0, 0));
 	if (run.activities.length > 0) {
@@ -151,8 +176,8 @@ function renderRunDetails(run: SubagentRunDetails, theme: Theme, mode: SubagentD
 					: activity.status === "failed"
 						? theme.fg("error", "×")
 						: theme.fg("accent", "●");
-			let text = `${marker} ${theme.fg("toolOutput", activity.summary)}`;
-			if (activity.resultSummary) text += ` ${theme.fg("dim", `· ${activity.resultSummary}`)}`;
+			let text = `${marker} ${theme.fg("toolOutput", excerpt(activity.summary, 96))}`;
+			if (activity.resultSummary) text += ` ${theme.fg("dim", `· ${excerpt(activity.resultSummary, 64)}`)}`;
 			container.addChild(new Text(text, 0, 0));
 		}
 	}
@@ -167,10 +192,11 @@ function renderRunDetails(run: SubagentRunDetails, theme: Theme, mode: SubagentD
 	}
 	const metadata = [
 		`${run.model} · ${run.thinking}`,
-		run.usage.toolUses ? `${run.usage.toolUses} tool uses` : undefined,
-		run.usage.turns ? `${run.usage.turns} turns` : undefined,
+		run.usage.toolUses ? `${run.usage.toolUses} tool use${run.usage.toolUses === 1 ? "" : "s"}` : undefined,
+		run.usage.turns ? `${run.usage.turns} turn${run.usage.turns === 1 ? "" : "s"}` : undefined,
 		run.usage.output ? `↓${formatTokens(run.usage.output)}` : undefined,
 		run.usage.cost ? `$${run.usage.cost.toFixed(3)}` : undefined,
+		single ? duration : undefined,
 	]
 		.filter((item): item is string => Boolean(item))
 		.join(" · ");
@@ -236,12 +262,14 @@ export function renderSubagentResult(
 	}
 	details.runs.forEach((run, index) => {
 		if (!single || index > 0) container.addChild(new Spacer(1));
-		container.addChild(renderRunDetails(run, theme, details.mode));
+		container.addChild(renderRunDetails(run, theme, details.mode, single));
 	});
-	const usage = usageText(details);
-	if (usage) {
-		container.addChild(new Spacer(1));
-		container.addChild(new Text(theme.fg("dim", usage), 0, 0));
+	if (!single) {
+		const usage = usageText(details);
+		if (usage) {
+			container.addChild(new Spacer(1));
+			container.addChild(new Text(theme.fg("dim", usage), 0, 0));
+		}
 	}
 	return container;
 }
