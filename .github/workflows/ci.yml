@@ -38,5 +38,8 @@ jobs:
       - name: Check
         run: npm run check
 
+      - name: Verify generated and formatted files
+        run: git diff --exit-code
+
       - name: Test
         run: npm test

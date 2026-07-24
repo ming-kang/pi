@@ -92,7 +92,13 @@ Run the source CLI:
 ./pi-test.sh
 ```
 
-Run formatting, linting, import, lockfile, type, and browser checks:
+Format the repository:
+
+```bash
+npm run format
+```
+
+Run read-only linting, import, lockfile, type, and browser checks:
 
 ```bash
 npm run check

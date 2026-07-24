@@ -8,8 +8,15 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-# Run the check script (formatting, linting, and type checking)
-echo "Running formatting, linting, and type checking..."
+# Format first, then run the read-only checks.
+echo "Running formatting..."
+npm run format
+if [ $? -ne 0 ]; then
+  echo "❌ Formatting failed."
+  exit 1
+fi
+
+echo "Running linting, import, lockfile, type, and browser checks..."
 npm run check
 if [ $? -ne 0 ]; then
   echo "❌ Checks failed. Please fix the errors before committing."
