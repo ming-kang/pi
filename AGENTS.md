@@ -59,11 +59,11 @@ For interactive verification, use a real TTY. Check the affected pending, succes
 - Stage explicit paths and inspect `git status` before committing.
 - Do not commit unless the owner requests a checkpoint or release commit.
 - Use concise Conventional Commit messages with `feat`, `fix`, or `docs` types.
-- Keep upstream as the `upstream` remote:
+- Keep upstream as the `upstream` remote and synchronize against upstream release tags, never the upstream `main` head:
 
 ```bash
-git fetch upstream
-git merge upstream/main
+git fetch upstream --tags
+git merge v<version>
 ```
 
 Expected merge hotspots are the native tool presentation, `core/tools`, `core/keybindings.ts`, `extensions/index.ts`, and the Fork package metadata.

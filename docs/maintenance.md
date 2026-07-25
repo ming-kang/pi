@@ -39,13 +39,21 @@ packages/server/package.json
 
 ## Synchronization workflow
 
+Synchronize against upstream release tags, never the upstream `main` head. Between releases, upstream `main` carries unreleased work for the next minor, so merging it would pull `0.(Y+1)` changes into a Fork version still numbered `0.Y.x`. Tags keep the two version lines aligned:
+
+- A new upstream patch tag on the tracked minor (for example `v0.82.1`) can be absorbed at any time; its changes ship in the next Fork patch release.
+- A new upstream minor tag (for example `v0.83.0`) starts the next Fork line; merging it moves the Fork to `0.83.0`.
+
+Most upstream releases are tagged on upstream `main`, but off-`main` hotfixes have occurred (`v0.74.2` was cut directly from `v0.74.1`), so check the tracked line for new tags after fetching. Merging the tag handles both cases identically.
+
 Start from a clean `main`, refresh remote references, and create an integration branch:
 
 ```bash
 git status --short
 git fetch upstream --tags
+git tag --list 'v<upstream-minor>.*'
 git switch -c sync/upstream-<version> main
-git merge upstream/main
+git merge v<version>
 ```
 
 If the merge should not continue, use `git merge --abort`. Do not repair a failed integration with destructive resets, a forced update of `main`, or a rewritten published history.
