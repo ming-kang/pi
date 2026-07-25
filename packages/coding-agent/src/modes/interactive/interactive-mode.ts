@@ -2881,6 +2881,24 @@ export class InteractiveMode {
 				this.ui.requestRender();
 				break;
 
+			case "turn_start":
+				// A mid-run compaction replaces the working indicator. Restore it before the
+				// next provider request without waiting for another agent_start event.
+				if (this.settingsManager.getShowTerminalProgress()) {
+					this.ui.terminal.setProgress(true);
+				}
+				if (this.workingVisible && this.activeStatusIndicator?.kind !== "working") {
+					this.showStatusIndicator(
+						new WorkingStatusIndicator(
+							this.ui,
+							this.workingMessage ?? this.defaultWorkingMessage,
+							this.workingIndicatorOptions,
+						),
+					);
+				}
+				this.ui.requestRender();
+				break;
+
 			case "queue_update":
 				this.updatePendingMessagesDisplay();
 				this.ui.requestRender();

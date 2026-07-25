@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 describe("InteractiveMode compaction events", () => {
 	test("rebuilds chat and appends a synthetic compaction summary at the bottom", async () => {
@@ -55,6 +56,33 @@ describe("InteractiveMode compaction events", () => {
 			}),
 		);
 		expect(fakeThis.flushCompactionQueue).toHaveBeenCalledWith({ willRetry: false });
+	});
+
+	test("restores the working indicator on the turn after mid-run compaction", async () => {
+		initTheme("dark");
+		const fakeThis = {
+			isInitialized: true,
+			footer: { invalidate: vi.fn() },
+			settingsManager: { getShowTerminalProgress: () => true },
+			ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
+			workingVisible: true,
+			workingMessage: undefined,
+			defaultWorkingMessage: "Working...",
+			workingIndicatorOptions: undefined,
+			activeStatusIndicator: { kind: "compaction" },
+			showStatusIndicator: vi.fn(),
+		};
+
+		const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (
+			this: typeof fakeThis,
+			event: { type: "turn_start" },
+		) => Promise<void>;
+
+		await handleEvent.call(fakeThis, { type: "turn_start" });
+
+		expect(fakeThis.ui.terminal.setProgress).toHaveBeenCalledWith(true);
+		expect(fakeThis.showStatusIndicator).toHaveBeenCalledWith(expect.objectContaining({ kind: "working" }));
+		expect(fakeThis.ui.requestRender).toHaveBeenCalled();
 	});
 
 	test("preserves steering behavior when flushing into an active agent run", async () => {

@@ -704,6 +704,47 @@ describe("Agent", () => {
 		expect(sawAbortSignal).toBe(true);
 	});
 
+	it("forwards shouldStopAfterTurn through the Agent lifecycle", async () => {
+		const schema = Type.Object({});
+		const tool: AgentTool<typeof schema> = {
+			name: "noop",
+			label: "Noop",
+			description: "Noop tool",
+			parameters: schema,
+			execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+		};
+		let requestCount = 0;
+		let sawAbortSignal = false;
+		const agent = new Agent({
+			initialState: { tools: [tool] },
+			shouldStopAfterTurn: async ({ toolResults }, signal) => {
+				sawAbortSignal = signal instanceof AbortSignal;
+				expect(toolResults).toHaveLength(1);
+				return true;
+			},
+			streamFn: () => {
+				requestCount++;
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({
+						type: "done",
+						reason: "toolUse",
+						message: createAssistantToolUseMessage([
+							{ type: "toolCall", id: "tool-1", name: "noop", arguments: {} },
+						]),
+					});
+				});
+				return stream;
+			},
+		});
+
+		await agent.prompt("start");
+
+		expect(requestCount).toBe(1);
+		expect(sawAbortSignal).toBe(true);
+		expect(agent.state.messages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult"]);
+	});
+
 	it("forwards sessionId to streamFunction options", async () => {
 		let receivedSessionId: string | undefined;
 		const agent = new Agent({

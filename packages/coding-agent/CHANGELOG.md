@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed auto-compaction during long tool loops: Pi now checks the completed tool batch before the next provider request, continues with rebuilt compacted context when successful, and safely ends the run if compaction is cancelled or fails rather than sending an oversized request.
+
 ## [0.82.1] - 2026-07-25
 
 ### Fixed

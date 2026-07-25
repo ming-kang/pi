@@ -123,7 +123,7 @@ The `beforeToolCall` hook runs after `tool_execution_start` and validated argume
 
 Tools can also return `terminate: true` to hint that the automatic follow-up LLM call should be skipped. The loop only stops early when every finalized tool result in that batch sets `terminate: true`. Mixed batches continue normally.
 
-Low-level loop callers can set `shouldStopAfterTurn` to stop gracefully after the current turn completes:
+Low-level loop callers and `Agent` instances can set `shouldStopAfterTurn` to stop gracefully after the current turn completes:
 
 ```typescript
 const stream = agentLoop(
@@ -141,7 +141,15 @@ const stream = agentLoop(
 );
 ```
 
-`shouldStopAfterTurn` runs after `turn_end` is emitted and after the assistant response and any tool executions have completed normally. If it returns `true`, the loop emits `agent_end` and exits before polling steering or follow-up queues, and before starting another LLM call. It does not abort the provider stream, does not cancel running tools, and does not alter the assistant message stop reason.
+`shouldStopAfterTurn` runs after `turn_end` is emitted and after the assistant response and any tool executions have completed normally. If it returns `true`, the loop emits `agent_end` and exits before polling steering or follow-up queues, and before starting another LLM call. It does not abort the provider stream, does not cancel running tools, and does not alter the assistant message stop reason. On an `Agent`, the callback also receives the active abort signal as its second argument.
+
+```typescript
+const agent = new Agent({
+  streamFn: models.streamSimple.bind(models),
+  shouldStopAfterTurn: async ({ context }, signal) =>
+    signal?.aborted === true || shouldCompactBeforeNextTurn(context.messages),
+});
+```
 
 When you use the `Agent` class, assistant `message_end` processing is treated as a barrier before tool preflight begins. That means `beforeToolCall` sees agent state that already includes the assistant message that requested the tool call.
 
@@ -191,6 +199,10 @@ const agent = new Agent({
 
   // Transform context before convertToLlm (for pruning, compaction)
   transformContext: async (messages, signal) => pruneOldMessages(messages),
+
+  // Gracefully stop after a completed turn, before another provider request.
+  shouldStopAfterTurn: async ({ context }, signal) =>
+    signal?.aborted === true || shouldCompactBeforeNextTurn(context.messages),
 
   // Steering mode: "one-at-a-time" (default) or "all"
   steeringMode: "one-at-a-time",

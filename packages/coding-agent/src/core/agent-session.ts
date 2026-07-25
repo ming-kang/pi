@@ -281,6 +281,16 @@ interface ToolDefinitionEntry {
 	sourceInfo: SourceInfo;
 }
 
+interface AutoCompactionOutcome {
+	compacted: boolean;
+	shouldContinue: boolean;
+}
+
+interface MidTurnCompactionOutcome {
+	messages?: AgentMessage[];
+	stopAfterTurn: boolean;
+}
+
 function estimateMessagesTokens(messages: AgentMessage[]): number {
 	let tokens = 0;
 	for (const message of messages) {
@@ -324,6 +334,7 @@ export class AgentSession {
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
+	private _stopAfterTurnRequested = false;
 	private _overflowRecoveryAttempted = false;
 
 	// Branch summarization state
@@ -438,12 +449,15 @@ export class AgentSession {
 		throw new Error(formatNoApiKeyFoundMessage(model.provider));
 	}
 
-	private async _getSummarizationRequestAuth(model: Model<any>): Promise<{
+	private async _getSummarizationRequestAuth(
+		model: Model<any>,
+		streamFunction: typeof this.agent.streamFunction = this.agent.streamFunction,
+	): Promise<{
 		apiKey?: string;
 		headers?: Record<string, string>;
 		env?: Record<string, string>;
 	}> {
-		if (this.agent.streamFunction === streamSimple) {
+		if (streamFunction === streamSimple) {
 			return this._getRequiredRequestAuth(model);
 		}
 
@@ -523,9 +537,24 @@ export class AgentSession {
 			(this.agent.prepareNextTurn
 				? async (_turn: PrepareNextTurnContext, signal?: AbortSignal) => await this.agent.prepareNextTurn?.(signal)
 				: undefined);
+		const previousShouldStopAfterTurn = this.agent.shouldStopAfterTurn;
 		this.agent.prepareNextTurnWithContext = async (turn, signal) => {
-			const previousSnapshot = await previousPrepareNextTurnWithContext?.(turn, signal);
-			const previousContext = previousSnapshot?.context ?? turn.context;
+			const compaction = await this._maybeCompactBeforeNextToolTurn(turn, signal);
+			if (compaction.stopAfterTurn) {
+				this._stopAfterTurnRequested = true;
+			}
+			const effectiveTurn =
+				compaction.messages === undefined
+					? turn
+					: {
+							...turn,
+							context: {
+								...turn.context,
+								messages: compaction.messages,
+							},
+						};
+			const previousSnapshot = await previousPrepareNextTurnWithContext?.(effectiveTurn, signal);
+			const previousContext = previousSnapshot?.context ?? effectiveTurn.context;
 
 			return {
 				...previousSnapshot,
@@ -537,6 +566,12 @@ export class AgentSession {
 				model: this.agent.state.model,
 				thinkingLevel: this.agent.state.thinkingLevel,
 			};
+		};
+		this.agent.shouldStopAfterTurn = async (turn, signal) => {
+			const shouldStop =
+				this._stopAfterTurnRequested || ((await previousShouldStopAfterTurn?.(turn, signal)) ?? false);
+			this._stopAfterTurnRequested = shouldStop;
+			return shouldStop;
 		};
 	}
 
@@ -1060,6 +1095,7 @@ export class AgentSession {
 
 	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
 		this._isAgentRunActive = true;
+		this._stopAfterTurnRequested = false;
 		try {
 			await this.agent.prompt(messages);
 			while (await this._handlePostAgentRun()) {
@@ -1076,6 +1112,13 @@ export class AgentSession {
 		const msg = this._lastAssistantMessage;
 		this._lastAssistantMessage = undefined;
 		if (!msg) {
+			this._stopAfterTurnRequested = false;
+			return false;
+		}
+
+		const stopAfterTurnRequested = this._stopAfterTurnRequested;
+		this._stopAfterTurnRequested = false;
+		if (stopAfterTurnRequested) {
 			return false;
 		}
 
@@ -1541,6 +1584,7 @@ export class AgentSession {
 	 */
 	async abort(): Promise<void> {
 		this.abortRetry();
+		this.abortCompaction();
 		this.agent.abort();
 		await this.waitForIdle();
 	}
@@ -1939,6 +1983,48 @@ export class AgentSession {
 		this._branchSummaryAbortController?.abort();
 	}
 
+	private async _maybeCompactBeforeNextToolTurn(
+		turn: PrepareNextTurnContext,
+		signal?: AbortSignal,
+	): Promise<MidTurnCompactionOutcome> {
+		if (signal?.aborted) {
+			return { stopAfterTurn: true };
+		}
+		if (turn.toolResults.length === 0) {
+			return { stopAfterTurn: false };
+		}
+
+		const settings = this.settingsManager.getCompactionSettings();
+		if (!settings.enabled) {
+			return { stopAfterTurn: false };
+		}
+
+		const estimate = estimateContextTokens(turn.context.messages);
+		let contextTokens = estimate.tokens;
+		const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
+		if (compactionEntry && estimate.lastUsageIndex !== null) {
+			const usageMessage = turn.context.messages[estimate.lastUsageIndex];
+			if (
+				usageMessage?.role === "assistant" &&
+				usageMessage.timestamp <= new Date(compactionEntry.timestamp).getTime()
+			) {
+				// A retained pre-compaction usage describes the old, larger context. Fall back
+				// to message estimates rather than immediately compacting again from stale data.
+				contextTokens = estimateMessagesTokens(turn.context.messages);
+			}
+		}
+
+		const contextWindow = this.model?.contextWindow ?? 0;
+		if (!shouldCompact(contextTokens, contextWindow, settings)) {
+			return { stopAfterTurn: false };
+		}
+
+		const outcome = await this._runAutoCompactionWithOutcome("threshold", false, signal);
+		return outcome.compacted
+			? { messages: this.agent.state.messages.slice(), stopAfterTurn: signal?.aborted === true }
+			: { stopAfterTurn: true };
+	}
+
 	/**
 	 * Check if compaction is needed and run it.
 	 * Called after agent_end and before prompt submission.
@@ -2045,36 +2131,63 @@ export class AgentSession {
 	 * Internal: Run auto-compaction with events.
 	 */
 	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
+		return (await this._runAutoCompactionWithOutcome(reason, willRetry)).shouldContinue;
+	}
+
+	private async _runAutoCompactionWithOutcome(
+		reason: "overflow" | "threshold",
+		willRetry: boolean,
+		parentSignal?: AbortSignal,
+	): Promise<AutoCompactionOutcome> {
 		const settings = this.settingsManager.getCompactionSettings();
 		let started = false;
+		let controller: AbortController | undefined;
+		let removeParentAbortListener: (() => void) | undefined;
 
 		try {
-			if (!this.model) {
-				return false;
+			if (
+				!this.model ||
+				this._autoCompactionAbortController ||
+				this._compactionAbortController ||
+				parentSignal?.aborted
+			) {
+				return { compacted: false, shouldContinue: false };
 			}
+			const model = this.model;
+			const streamFunction = this.agent.streamFunction;
+			const thinkingLevel = this.thinkingLevel;
+			const retrySettings = this.settingsManager.getRetrySettings();
 
-			let apiKey: string | undefined;
-			let headers: Record<string, string> | undefined;
-			let env: Record<string, string> | undefined;
-			if (this.agent.streamFunction === streamSimple) {
-				({ apiKey, headers, env } = await this._getRequiredRequestAuth(this.model));
-			} else {
-				({ apiKey, headers, env } = await this._getSummarizationRequestAuth(this.model));
+			controller = new AbortController();
+			if (parentSignal) {
+				const abortFromParent = () => controller?.abort();
+				parentSignal.addEventListener("abort", abortFromParent, { once: true });
+				removeParentAbortListener = () => parentSignal.removeEventListener("abort", abortFromParent);
 			}
-
-			const pathEntries = this.sessionManager.getBranch();
-
-			const preparation = prepareCompaction(pathEntries, settings);
-			if (!preparation) {
-				return false;
+			if (controller.signal.aborted) {
+				return { compacted: false, shouldContinue: false };
 			}
-
-			this._emit({ type: "compaction_start", reason });
-			this._autoCompactionAbortController = new AbortController();
+			this._autoCompactionAbortController = controller;
 			started = true;
+			this._emit({ type: "compaction_start", reason });
+			if (controller.signal.aborted) {
+				this._emit({
+					type: "compaction_end",
+					reason,
+					result: undefined,
+					aborted: true,
+					willRetry: false,
+				});
+				return { compacted: false, shouldContinue: false };
+			}
 
 			let extensionCompaction: CompactionResult | undefined;
 			let fromExtension = false;
+			const pathEntries = this.sessionManager.getBranch();
+			const preparation = prepareCompaction(pathEntries, settings);
+			if (!preparation) {
+				throw new Error("Nothing to compact while preserving the configured recent context.");
+			}
 
 			if (this._extensionRunner.hasHandlers("session_before_compact")) {
 				const extensionResult = (await this._extensionRunner.emit({
@@ -2084,7 +2197,7 @@ export class AgentSession {
 					customInstructions: undefined,
 					reason,
 					willRetry,
-					signal: this._autoCompactionAbortController.signal,
+					signal: controller.signal,
 				})) as SessionBeforeCompactResult | undefined;
 
 				if (extensionResult?.cancel) {
@@ -2095,7 +2208,7 @@ export class AgentSession {
 						aborted: true,
 						willRetry: false,
 					});
-					return false;
+					return { compacted: false, shouldContinue: false };
 				}
 
 				if (extensionResult?.compaction) {
@@ -2118,18 +2231,37 @@ export class AgentSession {
 				usage = extensionCompaction.usage;
 				details = extensionCompaction.details;
 			} else {
+				let apiKey: string | undefined;
+				let headers: Record<string, string> | undefined;
+				let env: Record<string, string> | undefined;
+				if (streamFunction === streamSimple) {
+					({ apiKey, headers, env } = await this._getRequiredRequestAuth(model));
+				} else {
+					({ apiKey, headers, env } = await this._getSummarizationRequestAuth(model, streamFunction));
+				}
+				if (controller.signal.aborted) {
+					this._emit({
+						type: "compaction_end",
+						reason,
+						result: undefined,
+						aborted: true,
+						willRetry: false,
+					});
+					return { compacted: false, shouldContinue: false };
+				}
+
 				// Generate compaction result
 				const compactResult = await compact(
 					preparation,
-					this.model,
+					model,
 					apiKey,
 					headers,
 					undefined,
-					this._autoCompactionAbortController.signal,
-					this.thinkingLevel,
-					this.agent.streamFunction,
+					controller.signal,
+					thinkingLevel,
+					streamFunction,
 					env,
-					this.settingsManager.getRetrySettings(),
+					retrySettings,
 					this._summarizationRetryCallbacks({ source: "compaction", reason }),
 				);
 				summary = compactResult.summary;
@@ -2139,7 +2271,7 @@ export class AgentSession {
 				details = compactResult.details;
 			}
 
-			if (this._autoCompactionAbortController.signal.aborted) {
+			if (controller.signal.aborted) {
 				this._emit({
 					type: "compaction_end",
 					reason,
@@ -2147,7 +2279,7 @@ export class AgentSession {
 					aborted: true,
 					willRetry: false,
 				});
-				return false;
+				return { compacted: false, shouldContinue: false };
 			}
 
 			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
@@ -2187,30 +2319,38 @@ export class AgentSession {
 				if (lastMsg?.role === "assistant" && (lastMsg as AssistantMessage).stopReason === "error") {
 					this.agent.state.messages = messages.slice(0, -1);
 				}
-				return true;
+				return { compacted: true, shouldContinue: true };
 			}
 
 			// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
 			// Continue once so queued messages are delivered.
-			return this.agent.hasQueuedMessages();
+			return { compacted: true, shouldContinue: this.agent.hasQueuedMessages() };
 		} catch (error) {
+			const aborted = controller?.signal.aborted || (error instanceof Error && error.name === "AbortError");
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
 			if (started) {
 				this._emit({
 					type: "compaction_end",
 					reason,
 					result: undefined,
-					aborted: false,
+					aborted,
 					willRetry: false,
-					errorMessage:
-						reason === "overflow"
-							? `Context overflow recovery failed: ${errorMessage}`
-							: `Auto-compaction failed: ${errorMessage}`,
+					...(aborted
+						? {}
+						: {
+								errorMessage:
+									reason === "overflow"
+										? `Context overflow recovery failed: ${errorMessage}`
+										: `Auto-compaction failed: ${errorMessage}`,
+							}),
 				});
 			}
-			return false;
+			return { compacted: false, shouldContinue: false };
 		} finally {
-			this._autoCompactionAbortController = undefined;
+			removeParentAbortListener?.();
+			if (this._autoCompactionAbortController === controller) {
+				this._autoCompactionAbortController = undefined;
+			}
 		}
 	}
 

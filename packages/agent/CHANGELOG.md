@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Exposed `Agent.shouldStopAfterTurn` so stateful Agent users can end a completed turn before another provider request, with access to the active abort signal.
+
 ## [0.82.0] - 2026-07-24
 
 ### Breaking Changes
