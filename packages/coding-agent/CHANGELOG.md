@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed bash execution to rewrite CMD-style `nul` redirects such as `2>nul` to `/dev/null`, preventing models that emit CMD syntax from creating a literal `nul` file — a reserved Windows name that Explorer cannot delete and that breaks `git add .` and `git clone`.
+
 ## [0.82.0] - 2026-07-24
 
 ### New Features
