@@ -2,12 +2,15 @@ import { randomBytes } from "node:crypto";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { OutputDecoder } from "../../utils/output-decoder.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type TruncationResult, truncateTail } from "./truncate.ts";
 
 export interface OutputAccumulatorOptions {
 	maxLines?: number;
 	maxBytes?: number;
 	tempFilePrefix?: string;
+	/** Fallback encoding override for tests. Default: the system console encoding. */
+	fallbackEncoding?: string | null;
 }
 
 export interface OutputSnapshot {
@@ -28,16 +31,17 @@ function byteLength(text: string): number {
 /**
  * Incrementally tracks streaming output with bounded memory.
  *
- * Appends decode chunks with a streaming UTF-8 decoder, keeps only a decoded
- * tail for display snapshots, and opens a temp file when the full output needs
- * to be preserved.
+ * Appends decode chunks with a streaming UTF-8 decoder that falls back to the
+ * system console encoding for non-UTF-8 output, keeps only a decoded tail for
+ * display snapshots, and opens a temp file when the full output needs to be
+ * preserved.
  */
 export class OutputAccumulator {
 	private readonly maxLines: number;
 	private readonly maxBytes: number;
 	private readonly maxRollingBytes: number;
 	private readonly tempFilePrefix: string;
-	private readonly decoder = new TextDecoder();
+	private readonly decoder: OutputDecoder;
 
 	private rawChunks: Buffer[] = [];
 	private tailText = "";
@@ -59,6 +63,10 @@ export class OutputAccumulator {
 		this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
 		this.maxRollingBytes = Math.max(this.maxBytes * 2, 1);
 		this.tempFilePrefix = options.tempFilePrefix ?? "pi-output";
+		this.decoder =
+			options.fallbackEncoding === undefined
+				? new OutputDecoder()
+				: new OutputDecoder({ fallbackEncoding: options.fallbackEncoding });
 	}
 
 	append(data: Buffer): void {
@@ -67,7 +75,11 @@ export class OutputAccumulator {
 		}
 
 		this.totalRawBytes += data.length;
-		this.appendDecodedText(this.decoder.decode(data, { stream: true }));
+		const { text, rewound } = this.decoder.push(data);
+		if (rewound) {
+			this.resetDecodedState();
+		}
+		this.appendDecodedText(text);
 
 		if (this.tempFileStream || this.shouldUseTempFile()) {
 			this.ensureTempFile();
@@ -82,7 +94,11 @@ export class OutputAccumulator {
 			return;
 		}
 		this.finished = true;
-		this.appendDecodedText(this.decoder.decode());
+		const { text, rewound } = this.decoder.flush();
+		if (rewound) {
+			this.resetDecodedState();
+		}
+		this.appendDecodedText(text);
 		if (this.shouldUseTempFile()) {
 			this.ensureTempFile();
 		}
@@ -143,6 +159,23 @@ export class OutputAccumulator {
 
 	getLastLineBytes(): number {
 		return this.currentLineBytes;
+	}
+
+	/**
+	 * Discard all decoded text state after the decoder rewinds to a fallback
+	 * encoding. Raw byte tracking (rawChunks, temp file, totalRawBytes) stays
+	 * intact — only the derived text view is rebuilt from the re-decoded
+	 * transcript.
+	 */
+	private resetDecodedState(): void {
+		this.tailText = "";
+		this.tailBytes = 0;
+		this.tailStartsAtLineBoundary = true;
+		this.totalDecodedBytes = 0;
+		this.completedLines = 0;
+		this.totalLines = 0;
+		this.currentLineBytes = 0;
+		this.hasOpenLine = false;
 	}
 
 	private appendDecodedText(text: string): void {

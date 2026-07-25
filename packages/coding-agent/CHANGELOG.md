@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed bash execution to rewrite CMD-style `nul` redirects such as `2>nul` to `/dev/null`, preventing models that emit CMD syntax from creating a literal `nul` file — a reserved Windows name that Explorer cannot delete and that breaks `git add .` and `git clone`.
+- Fixed CJK mojibake in bash output from Windows console programs: when output is not valid UTF-8, it is re-decoded with the system OEM code page (GBK, Big5, Shift_JIS, EUC-KR, and others), so cmd.exe builtins, Windows PowerShell — including `-NoProfile` — and classic tools such as `ipconfig` now display correctly.
 
 ## [0.82.0] - 2026-07-24
 
