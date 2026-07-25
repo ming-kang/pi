@@ -1,10 +1,10 @@
 {
 	"name": "@astralyn/pi-install",
-	"version": "0.82.0",
+	"version": "0.82.1",
 	"private": true,
 	"description": "Lockfile root used by the Pi installer and updater.",
 	"dependencies": {
-		"@astralyn/pi": "0.82.0"
+		"@astralyn/pi": "0.82.1"
 	},
 	"overrides": {
 		"protobufjs": "7.6.5",

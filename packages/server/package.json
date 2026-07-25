@@ -40,7 +40,7 @@
 		"node": ">=22.19.0"
 	},
 	"dependencies": {
-		"@astralyn/pi": "0.82.0"
+		"@astralyn/pi": "0.82.1"
 	},
 	"devDependencies": {
 		"shx": "0.4.0"
