@@ -5,13 +5,16 @@
 ### Added
 
 - Added digit quick-select to the `question` tool dialog: pressing `1`–`9` jumps to the numbered option — selecting it in single-select, toggling it in multi-select — and the custom-answer row's number opens its input. See [question](docs/bundled/extensions/question.md).
+- Added reverse dependency edges to the `todo` tool: `addBlocks`/`removeBlocks` on `update` let one call mark the tasks that must wait for the current one, with the same existence, tombstone, and cycle validation as `addBlockedBy`. See [todo](docs/bundled/extensions/todo.md).
 
 ### Changed
 
 - Tightened `question` tool validation: option previews on multi-select questions are now rejected with an explicit `preview_multiselect` error instead of being silently dropped, reserved-label and duplicate checks compare case-insensitively and ignore surrounding whitespace, the unused `Next` label is no longer reserved, and length/count checks that duplicated the JSON schema (already enforced before the tool executes) were removed. Preview markdown rendering is also memoized, so editor keystrokes no longer re-parse previews.
+- Tightened `todo` tool validation and model-facing output: parameters that do not apply to the chosen action are rejected with guidance instead of being silently ignored (`blockedBy` on `update` now points at `addBlockedBy`/`removeBlockedBy`), `create` requires a `description` stating what done means, id parameters must be positive integers at the schema level, an empty string clears `description`/`activeForm`/`owner`, a deletion cannot be combined with other edits and reports which pending dependents became fully unblocked, `list` lines show only unresolved blockers plus the task's owner, and the truncation notice no longer suggests a status filter that is already applied. The tool description was restructured into sectioned guidance (when to use, status workflow, examples) with explicit blocked-task handling: create a task for the blocker and link it with `addBlockedBy` instead of faking completion. See [todo](docs/bundled/extensions/todo.md).
 
 ### Fixed
 
+- Fixed the `todo` extension's stale-context guard being unreachable: lifecycle replay accessed `ctx.sessionManager` before entering its try block, so the error it meant to swallow after a session replacement raced ahead of the guard. The condition is now detected with the new `isStaleExtensionContextError` predicate (exported alongside `STALE_EXTENSION_CONTEXT_MESSAGE` from the extension API) instead of message-text matching.
 - Fixed the `question` tool ignoring turn aborts: the dialog now closes when the tool call is cancelled and resolves with the answers given so far, instead of lingering until the next interaction.
 - Fixed cancelling the `question` dialog discarding answers already given; the model-facing result now lists them as partial answers, matching the `Chat about this` flow.
 - Fixed `question` dialog interaction papercuts: `Tab` on an unselected single-select option no longer silently commits it when the note editor is cancelled (`Esc` restores the previous selection), and Enter on the `Type something.` row of a multi-select question opens the custom-answer input instead of warning that nothing is selected.

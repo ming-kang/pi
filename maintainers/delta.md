@@ -63,10 +63,10 @@ Native tool calls use a consistent `●` call and `│` result chrome with bound
 
 Personal workflow features are self-contained hidden built-ins using the public Extension API; only registration touches a hybrid file.
 
-- Hybrid: `src/extensions/index.ts` (registers deepwiki, plan, question, rewind, router, statusline, subagent, todo alongside upstream's `llama.cpp`)
-- Local: `src/extensions/{deepwiki,plan,question,rewind,router,statusline,subagent,todo}/**`, `test/plan-extension.test.ts`, `test/rewind-*.test.ts`, `test/subagent-*.test.ts`
+- Hybrid: `src/extensions/index.ts` (registers deepwiki, plan, question, rewind, router, statusline, subagent, todo alongside upstream's `llama.cpp`); `src/core/extensions/types.ts` + `src/core/extensions/index.ts` additionally export `STALE_EXTENSION_CONTEXT_MESSAGE`/`isStaleExtensionContextError` (referenced by `src/core/agent-session.ts` and `src/core/extensions/loader.ts` in place of the inlined message literal) so lifecycle extensions can detect stale-ctx errors without matching message text — todo's branch replay relies on it.
+- Local: `src/extensions/{deepwiki,plan,question,rewind,router,statusline,subagent,todo}/**`, `test/plan-extension.test.ts`, `test/question-*.test.ts`, `test/rewind-*.test.ts`, `test/subagent-*.test.ts`, `test/todo-*.test.ts`
 - Upstream assumptions: `InlineExtension` registration and the Extension API surface used by these extensions stay stable; no cross-extension internal imports. Rewind additionally assumes `navigateTree`'s leaf rules (user/custom_message target → leaf = parent; other targets → leaf = target) and that `before_agent_start` fires once per `prompt()` (steering/follow-ups are consumed inside the same run). Plan additionally assumes `setActiveTools` takes effect on the next LLM request within the same run, `agent_settled` fires once per fully settled run, `AgentToolResult.terminate` ends the run after the tool batch, and the per-run system prompt override is not rebuilt mid-run.
-- Verify: `test/plan-extension.test.ts`, `test/rewind-*.test.ts`, `test/subagent-*.test.ts`, `test/extensions-discovery.test.ts`; `/reload` and `/tree` in a real TTY for lifecycle extensions.
+- Verify: `test/plan-extension.test.ts`, `test/question-*.test.ts`, `test/rewind-*.test.ts`, `test/subagent-*.test.ts`, `test/todo-*.test.ts`, `test/extensions-discovery.test.ts`; `/reload` and `/tree` in a real TTY for lifecycle extensions.
 
 ## 8. Atomic terminal writes and scrollback preservation
 

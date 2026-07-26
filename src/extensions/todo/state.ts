@@ -1,6 +1,7 @@
 import { LIST_DISPLAY_MAX_ITEMS, TODO_TOOL_NAME } from "./constants.ts";
 import {
 	EMPTY_TODO_STATE,
+	type TodoAction,
 	type TodoDetails,
 	type TodoItem,
 	type TodoParams,
@@ -17,10 +18,12 @@ type Operation =
 			to: TodoStatus;
 			/** Other tasks auto-demoted from in_progress → pending to keep exactly one active. */
 			demotedIds?: number[];
+			/** Pending dependents left fully unblocked by an update to status deleted. */
+			releasedIds?: number[];
 			/** Soft note when the list is fully closed without a verification-style task. */
 			verificationNudge?: boolean;
 	  }
-	| { kind: "delete"; id: number; subject: string }
+	| { kind: "delete"; id: number; subject: string; releasedIds?: number[] }
 	| { kind: "list"; status?: TodoStatus; includeDeleted: boolean }
 	| { kind: "get"; item: TodoItem }
 	| { kind: "clear"; count: number }
@@ -48,8 +51,9 @@ export function setActiveTodoSession(sid: string): void {
 	activeSid = sid;
 }
 
+/** Snapshot of the active session's state; mutate via applyTodoMutation + commitTodoState. */
 export function getTodoState(): TodoState {
-	return states.get(activeSid) ?? cloneState(EMPTY_TODO_STATE);
+	return cloneState(states.get(activeSid) ?? EMPTY_TODO_STATE);
 }
 
 export function replaceTodoState(next: TodoState): void {
@@ -87,19 +91,77 @@ function omitBlockedBy(item: TodoItem): TodoItem {
 	return next;
 }
 
-/** Keep a tombstone while detaching its id from every dependent task. */
-function markDeleted(state: TodoState, id: number): TodoState {
+/**
+ * Keep a tombstone while detaching its id from every dependent task. Also
+ * reports which pending dependents ended up fully unblocked, so the tool
+ * result can tell the model what became workable (mirrors the demote note).
+ */
+function markDeleted(state: TodoState, id: number): { state: TodoState; releasedIds: number[] } {
 	const items = state.items.map((item) => {
 		if (item.id === id) return { ...item, status: "deleted" as const };
 		if (!item.blockedBy?.includes(id)) return item;
 		const blockedBy = item.blockedBy.filter((dependencyId) => dependencyId !== id);
 		return blockedBy.length ? { ...item, blockedBy } : omitBlockedBy(item);
 	});
-	return { items, nextId: state.nextId };
+	const nextState: TodoState = { items, nextId: state.nextId };
+	const releasedIds = state.items
+		.filter((item) => item.id !== id && item.status === "pending" && item.blockedBy?.includes(id))
+		.map((item) => item.id)
+		.filter((dependentId) => {
+			const dependent = findItem(nextState, dependentId);
+			return dependent !== undefined && unresolvedDependencyIds(nextState, dependent).length === 0;
+		});
+	return { state: nextState, releasedIds };
 }
 
 function error(state: TodoState, message: string): MutationResult {
 	return { state, operation: { kind: "error", message } };
+}
+
+// ---- per-action parameter validation ---------------------------------------
+// Parameters each action accepts. Anything else is rejected with guidance
+// instead of being silently ignored (a model that passes blockedBy on update
+// should learn about addBlockedBy, not lose the edit).
+const ACTION_PARAMS: Record<TodoAction, ReadonlySet<string>> = {
+	create: new Set(["subject", "description", "activeForm", "status", "blockedBy", "owner", "metadata"]),
+	update: new Set([
+		"id",
+		"subject",
+		"description",
+		"activeForm",
+		"status",
+		"addBlockedBy",
+		"removeBlockedBy",
+		"addBlocks",
+		"removeBlocks",
+		"owner",
+		"metadata",
+	]),
+	list: new Set(["status", "includeDeleted"]),
+	get: new Set(["id"]),
+	delete: new Set(["id"]),
+	clear: new Set<string>(),
+};
+
+const UPDATE_ONLY_EDGE_PARAMS = new Set(["addBlockedBy", "removeBlockedBy", "addBlocks", "removeBlocks"]);
+
+function inapplicableParamError(action: TodoAction, key: string): string {
+	if (action === "update" && key === "blockedBy") {
+		return "blockedBy is create-only; use addBlockedBy/removeBlockedBy on update";
+	}
+	if (action === "create" && UPDATE_ONLY_EDGE_PARAMS.has(key)) {
+		return `${key} is update-only; use blockedBy on create`;
+	}
+	return `${key} does not apply to action ${action}`;
+}
+
+function findInapplicableParam(params: TodoParams): string | undefined {
+	const allowed = ACTION_PARAMS[params.action];
+	for (const [key, value] of Object.entries(params)) {
+		if (key === "action" || value === undefined) continue;
+		if (!allowed.has(key)) return inapplicableParamError(params.action, key);
+	}
+	return undefined;
 }
 
 function isTransitionAllowed(from: TodoStatus, to: TodoStatus): boolean {
@@ -152,10 +214,11 @@ export function dependenciesSatisfied(state: TodoState, item: TodoItem): boolean
 	return unresolvedDependencyIds(state, item).length === 0;
 }
 
-function createsCycle(items: TodoItem[], id: number, nextDeps: number[]): boolean {
+/** True when any task whose deps change in nextDepsById can reach itself through blockedBy edges. */
+function createsCycle(items: TodoItem[], nextDepsById: ReadonlyMap<number, number[]>): boolean {
 	const depsById = new Map<number, number[]>();
 	for (const item of items) depsById.set(item.id, item.blockedBy ?? []);
-	depsById.set(id, nextDeps);
+	for (const [id, deps] of nextDepsById) depsById.set(id, deps);
 
 	const seen = new Set<number>();
 	const stack = new Set<number>();
@@ -172,16 +235,25 @@ function createsCycle(items: TodoItem[], id: number, nextDeps: number[]): boolea
 		return false;
 	}
 
-	return visit(id);
+	for (const id of nextDepsById.keys()) {
+		if (visit(id)) return true;
+	}
+	return false;
 }
 
 export function applyTodoMutation(input: TodoState, params: TodoParams): MutationResult {
 	const state = cloneState(input);
 
+	const inapplicable = findInapplicableParam(params);
+	if (inapplicable) return error(state, inapplicable);
+
 	switch (params.action) {
 		case "create": {
 			const subject = params.subject?.trim();
 			if (!subject) return error(state, "subject required for create");
+			if (!params.description?.trim()) {
+				return error(state, "description required for create: state what done means for this task");
+			}
 			if (params.status !== undefined && params.status !== "pending") {
 				return error(state, "create always starts pending; use update to start or complete a task");
 			}
@@ -192,8 +264,8 @@ export function applyTodoMutation(input: TodoState, params: TodoParams): Mutatio
 				id: state.nextId,
 				subject,
 				status: "pending",
+				description: params.description,
 			};
-			if (params.description) item.description = params.description;
 			if (params.activeForm) item.activeForm = params.activeForm;
 			if (params.blockedBy?.length) item.blockedBy = Array.from(new Set<number>(params.blockedBy));
 			if (params.owner) item.owner = params.owner;
@@ -213,23 +285,42 @@ export function applyTodoMutation(input: TodoState, params: TodoParams): Mutatio
 			if (current.status === "deleted") return error(state, `#${params.id} is deleted and cannot be updated`);
 			if (params.subject !== undefined && !params.subject.trim()) return error(state, "subject cannot be empty");
 
-			const hasChange =
+			const edgeChange =
+				(params.addBlockedBy?.length ?? 0) > 0 ||
+				(params.removeBlockedBy?.length ?? 0) > 0 ||
+				(params.addBlocks?.length ?? 0) > 0 ||
+				(params.removeBlocks?.length ?? 0) > 0;
+			const fieldChange =
 				params.subject !== undefined ||
 				params.description !== undefined ||
 				params.activeForm !== undefined ||
-				params.status !== undefined ||
 				params.owner !== undefined ||
-				params.metadata !== undefined ||
-				(params.addBlockedBy?.length ?? 0) > 0 ||
-				(params.removeBlockedBy?.length ?? 0) > 0;
-			if (!hasChange) return error(state, "update requires at least one field");
+				params.metadata !== undefined;
+			if (!fieldChange && !edgeChange && params.status === undefined) {
+				return error(state, "update requires at least one field");
+			}
 
 			// `status: deleted` is the update form of delete; keep its dependency
-			// cleanup identical to the dedicated delete action.
+			// cleanup identical to the dedicated delete action. Other edits do not
+			// combine with it: a tombstone is immutable, so applying them would
+			// silently produce an unreachable revision.
 			if (params.status === "deleted") {
+				if (fieldChange || edgeChange) {
+					return error(
+						state,
+						"status deleted cannot be combined with other changes; apply edits first or delete in a separate call",
+					);
+				}
+				const deleted = markDeleted(state, current.id);
 				return {
-					state: markDeleted(state, current.id),
-					operation: { kind: "update", id: current.id, from: current.status, to: "deleted" },
+					state: deleted.state,
+					operation: {
+						kind: "update",
+						id: current.id,
+						from: current.status,
+						to: "deleted",
+						...(deleted.releasedIds.length ? { releasedIds: deleted.releasedIds } : {}),
+					},
 				};
 			}
 
@@ -238,6 +329,9 @@ export function applyTodoMutation(input: TodoState, params: TodoParams): Mutatio
 				return error(state, `illegal transition ${current.status} -> ${nextStatus}`);
 			}
 
+			// Collect every task whose blockedBy changes: this task (addBlockedBy /
+			// removeBlockedBy) plus reverse-edge targets (addBlocks / removeBlocks).
+			const nextDepsById = new Map<number, number[]>();
 			let nextDeps = current.blockedBy ? [...current.blockedBy] : [];
 			if (params.removeBlockedBy?.length) {
 				const remove = new Set(params.removeBlockedBy);
@@ -250,10 +344,36 @@ export function applyTodoMutation(input: TodoState, params: TodoParams): Mutatio
 					if (!nextDeps.includes(dep)) nextDeps.push(dep);
 				}
 			}
-			if (createsCycle(state.items, current.id, nextDeps)) {
+			nextDepsById.set(current.id, nextDeps);
+
+			if (params.removeBlocks?.length) {
+				const release = new Set(params.removeBlocks);
+				for (const candidate of state.items) {
+					if (!release.has(candidate.id) || !candidate.blockedBy?.includes(current.id)) continue;
+					nextDepsById.set(
+						candidate.id,
+						candidate.blockedBy.filter((dependencyId) => dependencyId !== current.id),
+					);
+				}
+			}
+			if (params.addBlocks?.length) {
+				for (const targetId of params.addBlocks) {
+					if (targetId === current.id) return error(state, `cannot block #${targetId} on itself`);
+					const target = findItem(state, targetId);
+					if (!target) return error(state, `addBlocks: #${targetId} not found`);
+					if (target.status === "deleted") return error(state, `addBlocks: #${targetId} is deleted`);
+					const deps = nextDepsById.get(targetId) ?? (target.blockedBy ? [...target.blockedBy] : []);
+					if (!deps.includes(current.id)) deps.push(current.id);
+					nextDepsById.set(targetId, deps);
+				}
+			}
+			if (createsCycle(state.items, nextDepsById)) {
 				return error(state, "blockedBy would create a cycle");
 			}
 
+			// Readiness gates only status *changes*: an already-active task may take
+			// on a new incomplete dependency — a prerequisite discovered mid-work.
+			// The overlay flags it as "deps incomplete" instead.
 			if ((nextStatus === "in_progress" || nextStatus === "completed") && current.status !== nextStatus) {
 				const readyError = validateDependenciesReady(state, nextDeps);
 				if (readyError) return error(state, readyError);
@@ -261,9 +381,19 @@ export function applyTodoMutation(input: TodoState, params: TodoParams): Mutatio
 
 			const updated: TodoItem = { ...current, status: nextStatus };
 			if (params.subject !== undefined) updated.subject = params.subject.trim();
-			if (params.description !== undefined) updated.description = params.description;
-			if (params.activeForm !== undefined) updated.activeForm = params.activeForm;
-			if (params.owner !== undefined) updated.owner = params.owner;
+			// Empty string removes an optional text field (metadata uses null keys).
+			if (params.description !== undefined) {
+				if (params.description) updated.description = params.description;
+				else delete updated.description;
+			}
+			if (params.activeForm !== undefined) {
+				if (params.activeForm) updated.activeForm = params.activeForm;
+				else delete updated.activeForm;
+			}
+			if (params.owner !== undefined) {
+				if (params.owner) updated.owner = params.owner;
+				else delete updated.owner;
+			}
 			if (nextDeps.length) updated.blockedBy = nextDeps;
 			else delete updated.blockedBy;
 
@@ -277,7 +407,12 @@ export function applyTodoMutation(input: TodoState, params: TodoParams): Mutatio
 				else delete updated.metadata;
 			}
 
-			const items = [...state.items];
+			const items = state.items.map((task) => {
+				if (task.id === current.id) return task;
+				const deps = nextDepsById.get(task.id);
+				if (deps === undefined) return task;
+				return deps.length ? { ...task, blockedBy: deps } : omitBlockedBy(task);
+			});
 			items[index] = updated;
 
 			// Exactly one in_progress: demote any other active tasks to pending.
@@ -331,9 +466,15 @@ export function applyTodoMutation(input: TodoState, params: TodoParams): Mutatio
 			const current = state.items[index];
 			if (current.status === "deleted") return error(state, `#${params.id} is already deleted`);
 
+			const deleted = markDeleted(state, current.id);
 			return {
-				state: markDeleted(state, current.id),
-				operation: { kind: "delete", id: current.id, subject: current.subject },
+				state: deleted.state,
+				operation: {
+					kind: "delete",
+					id: current.id,
+					subject: current.subject,
+					...(deleted.releasedIds.length ? { releasedIds: deleted.releasedIds } : {}),
+				},
 			};
 		}
 
@@ -374,18 +515,22 @@ export function replayTodosFromBranch(ctx: { sessionManager: { getBranch(): Iter
 	return cloneState(EMPTY_TODO_STATE);
 }
 
-export function buildTodoDetails(params: TodoParams, next: TodoState, operation: Operation): TodoDetails {
+export function buildTodoDetails(params: TodoParams, next: TodoState): TodoDetails {
 	return {
 		action: params.action,
 		params: params as Record<string, unknown>,
 		items: cloneState(next).items,
 		nextId: next.nextId,
-		...(operation.kind === "error" ? { error: operation.message } : {}),
 	};
 }
 
 const VERIFICATION_NUDGE_NOTE =
 	"NOTE: You closed out 3+ tasks with no verification/test/review step. Before the final summary, run checks or add a verification task and complete it — do not self-declare done with known failures.";
+
+function formatReleasedSuffix(releasedIds: number[] | undefined): string {
+	if (!releasedIds?.length) return "";
+	return `; released ${releasedIds.map((id) => `#${id}`).join(",")} (no longer blocked)`;
+}
 
 export function formatTodoContent(operation: Operation, state: TodoState): string {
 	switch (operation.kind) {
@@ -399,11 +544,12 @@ export function formatTodoContent(operation: Operation, state: TodoState): strin
 			if (operation.demotedIds?.length) {
 				text += `; ${operation.demotedIds.map((id) => `#${id}`).join(",")} demoted to pending`;
 			}
+			text += formatReleasedSuffix(operation.releasedIds);
 			if (operation.verificationNudge) text += `\n\n${VERIFICATION_NUDGE_NOTE}`;
 			return text;
 		}
 		case "delete":
-			return `Deleted #${operation.id}: ${operation.subject}`;
+			return `Deleted #${operation.id}: ${operation.subject}${formatReleasedSuffix(operation.releasedIds)}`;
 		case "clear":
 			return `Cleared ${operation.count} tasks`;
 		case "list": {
@@ -412,7 +558,7 @@ export function formatTodoContent(operation: Operation, state: TodoState): strin
 			if (!operation.includeDeleted && operation.status !== "deleted")
 				view = view.filter((item) => item.status !== "deleted");
 			if (operation.status) view = view.filter((item) => item.status === operation.status);
-			return formatBoundedList(view, operation.status, operation.includeDeleted);
+			return formatBoundedList(view, state, operation.status);
 		}
 		case "get":
 			return formatDetailItem(operation.item, state);
@@ -438,24 +584,25 @@ function needsVerificationNudge(state: TodoState): boolean {
 	);
 }
 
-function formatBoundedList(view: TodoItem[], statusFilter: TodoStatus | undefined, includeDeleted: boolean): string {
+function formatBoundedList(view: TodoItem[], state: TodoState, statusFilter: TodoStatus | undefined): string {
 	if (!view.length) return "No tasks";
 	const shown = view.slice(0, LIST_DISPLAY_MAX_ITEMS);
-	const lines = shown.map(formatListItem);
+	const lines = shown.map((item) => formatListItem(item, state));
 	const omitted = view.length - shown.length;
 	if (omitted > 0) {
-		const filterHint = statusFilter ? `status=${statusFilter}` : includeDeleted ? "includeDeleted=true" : "list";
-		lines.push(
-			`… and ${omitted} more (${shown.length} of ${view.length} shown). Narrow with ${filterHint} or use get with id=.`,
-		);
+		// Do not suggest a filter that is already applied.
+		const hint = statusFilter ? "use get with id= for details" : "narrow with status= or use get with id=";
+		lines.push(`… and ${omitted} more (${shown.length} of ${view.length} shown); ${hint}.`);
 	}
 	return lines.join("\n");
 }
 
-function formatListItem(item: TodoItem): string {
-	const deps = item.blockedBy?.length ? ` blockedBy=${item.blockedBy.map((id) => `#${id}`).join(",")}` : "";
+function formatListItem(item: TodoItem, state: TodoState): string {
+	const unresolved = unresolvedDependencyIds(state, item);
+	const deps = unresolved.length ? ` blockedBy=${unresolved.map((id) => `#${id}`).join(",")}` : "";
+	const owner = item.owner ? ` @${item.owner}` : "";
 	const active = item.status === "in_progress" && item.activeForm ? ` (${item.activeForm})` : "";
-	return `[${item.status}] #${item.id} ${item.subject}${active}${deps}`;
+	return `[${item.status}] #${item.id} ${item.subject}${active}${owner}${deps}`;
 }
 
 function formatDetailItem(item: TodoItem, state: TodoState): string {

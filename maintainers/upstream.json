@@ -48,8 +48,10 @@
     "test/helpers/virtual-terminal.ts",
     "test/output-decoder.test.ts",
     "test/plan-extension.test.ts",
+    "test/question-*.test.ts",
     "test/rewind-*.test.ts",
     "test/subagent-*.test.ts",
+    "test/todo-*.test.ts",
     "tsconfig.base.json",
     "tsconfig.json"
   ],

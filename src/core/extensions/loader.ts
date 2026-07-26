@@ -31,17 +31,18 @@ import type { ExecOptions } from "../exec.ts";
 import { execCommand } from "../exec.ts";
 import { createSyntheticSourceInfo } from "../source-info.ts";
 import { time } from "../timings.ts";
-import type {
-	EntryRenderer,
-	Extension,
-	ExtensionAPI,
-	ExtensionFactory,
-	ExtensionRuntime,
-	LoadExtensionsResult,
-	MessageRenderer,
-	ProviderConfig,
-	RegisteredCommand,
-	ToolDefinition,
+import {
+	type EntryRenderer,
+	type Extension,
+	type ExtensionAPI,
+	type ExtensionFactory,
+	type ExtensionRuntime,
+	type LoadExtensionsResult,
+	type MessageRenderer,
+	type ProviderConfig,
+	type RegisteredCommand,
+	STALE_EXTENSION_CONTEXT_MESSAGE,
+	type ToolDefinition,
 } from "./types.ts";
 
 /** Modules available to extensions via virtualModules (for compiled Bun binary) */
@@ -189,9 +190,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		pendingNativeProviderRegistrations: [],
 		assertActive,
 		invalidate: (message) => {
-			state.staleMessage ??=
-				message ??
-				"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().";
+			state.staleMessage ??= message ?? STALE_EXTENSION_CONTEXT_MESSAGE;
 		},
 		// Pre-bind: queue registrations so bindCore() can flush them once the
 		// model registry is available. bindCore() replaces both with direct calls.

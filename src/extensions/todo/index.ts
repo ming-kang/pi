@@ -12,7 +12,12 @@
  * change the session within one process, and execute + lifecycle handlers
  * re-point the active bucket before touching state.
  */
-import type { AgentToolResult, ExtensionAPI, ToolExecutionMode } from "../../core/extensions/types.ts";
+import {
+	type AgentToolResult,
+	type ExtensionAPI,
+	isStaleExtensionContextError,
+	type ToolExecutionMode,
+} from "../../core/extensions/types.ts";
 import {
 	TODO_PROMPT_GUIDELINES,
 	TODO_PROMPT_SNIPPET,
@@ -41,11 +46,15 @@ interface TodoSessionCtx {
 }
 
 function safeReplay(ctx: TodoSessionCtx): void {
-	setActiveTodoSession(ctx.sessionManager.getSessionId());
+	// Every ctx.sessionManager access goes through a stale guard, so the whole
+	// body stays inside the try: a lifecycle event can race session replacement
+	// (resume, /tree, /reload), and a stale ctx just means another session took
+	// over — nothing left to replay for it.
 	try {
+		setActiveTodoSession(ctx.sessionManager.getSessionId());
 		replaceTodoState(replayTodosFromBranch(ctx));
 	} catch (error) {
-		if (!/stale after session replacement/.test(String(error))) throw error;
+		if (!isStaleExtensionContextError(error)) throw error;
 	}
 }
 
@@ -73,7 +82,7 @@ export default function todo(pi: ExtensionAPI): void {
 			const text = formatTodoContent(result.operation, result.state);
 			return {
 				content: [{ type: "text", text }],
-				details: buildTodoDetails(params, result.state, result.operation),
+				details: buildTodoDetails(params, result.state),
 			};
 		},
 	});

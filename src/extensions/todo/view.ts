@@ -28,12 +28,13 @@ export function hasVisibleOverlayItems(state: TodoState, hiddenCompleted: Readon
 }
 
 function todoCounts(items: TodoItem[]): { total: number; pending: number; inProgress: number; completed: number } {
-	return {
-		total: items.length,
-		pending: items.filter((item) => item.status === "pending").length,
-		inProgress: items.filter((item) => item.status === "in_progress").length,
-		completed: items.filter((item) => item.status === "completed").length,
-	};
+	const counts = { total: items.length, pending: 0, inProgress: 0, completed: 0 };
+	for (const item of items) {
+		if (item.status === "pending") counts.pending++;
+		else if (item.status === "in_progress") counts.inProgress++;
+		else if (item.status === "completed") counts.completed++;
+	}
+	return counts;
 }
 
 export function renderOverlayLines(

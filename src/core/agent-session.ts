@@ -82,6 +82,7 @@ import {
 	type SessionBeforeTreeResult,
 	type SessionStartEvent,
 	type ShutdownHandler,
+	STALE_EXTENSION_CONTEXT_MESSAGE,
 	type ToolDefinition,
 	type ToolExecutionEndEvent,
 	type ToolExecutionStartEvent,
@@ -891,9 +892,7 @@ export class AgentSession {
 			// Dispose must succeed even if an abort hook throws.
 		}
 
-		this._extensionRunner.invalidate(
-			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
-		);
+		this._extensionRunner.invalidate(STALE_EXTENSION_CONTEXT_MESSAGE);
 		this._disconnectFromAgent();
 		this._eventListeners = [];
 		cleanupSessionResources(this.sessionId);
