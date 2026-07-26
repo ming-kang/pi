@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a bundled `plan` extension: `/plan` (or `--plan`) enters a read-only planning mode that disables `edit`, `write`, `bash`, and `subagent`, interviews via the `question` tool, and exits through a user-approved `exit_plan` tool call. Approval saves the plan to `<agentDir>/plans/<sessionId>/NN-<slug>.md` and either continues in place or compacts the context first, restarting execution with the plan embedded in the kickoff message; `/plans` lists the branch's saved plans. See [plan](docs/bundled/extensions/plan.md).
+
 ### Changed
 
 - Changed mid-turn auto-compaction to distinguish an extension's voluntary `session_before_compact` cancel from a failure: a cancel now lets the run continue (skipping further mid-turn checks for that run) instead of failing closed, and the event carries a new `timing` field (`"manual" | "midTurn" | "postRun" | "prePrompt"`) so extensions can tell the contexts apart. The "nothing to compact" error now includes the same remediation guidance as the retained-context warning. See [Compaction](docs/compaction.md).
