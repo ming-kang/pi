@@ -47,6 +47,8 @@ node node_modules/vitest/dist/cli.js --run test/specific.test.ts
 
 When a test changes, run it and iterate until it passes. Run `npm run build` when source exports, package metadata, TypeScript configuration, or bundled assets change. Do not run the complete test suite unless explicitly requested or performing release verification.
 
+On native Windows, run a complete local suite through `npm run test:isolated`, not a direct `vitest` invocation, so user resources and credentials cannot affect results. Even isolated Windows runs are not the release gate: POSIX permission, symlink, path/glob, signal, watcher, external-editor, and child-process tests may behave differently or require Developer Mode. Require focused tests for changed code to pass locally, and use the Ubuntu GitHub Actions run as the authoritative complete-suite result. Do not dismiss a focused failure in changed code as platform noise.
+
 For interactive verification, use a real TTY. Check affected pending, success, error, collapsed, and expanded states, plus `/reload` and `/tree` for lifecycle extensions.
 
 ## Git and upstream
