@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.82.4] - 2026-07-26
+
 ### Added
 
 - Added a bundled `plan` extension: `/plan` (or `--plan`) enters a read-only planning mode that disables `edit`, `write`, `bash`, and `subagent`, interviews via the `question` tool, and exits through a user-approved `exit_plan` tool call. Approval saves the plan to `<agentDir>/plans/<sessionId>/NN-<slug>.md` and either continues in place or compacts the context first, restarting execution with the plan embedded in the kickoff message. See [plan](docs/bundled/extensions/plan.md).
@@ -13,7 +15,6 @@
 - Retired the subagent renderer's own `●` status dots in favor of the tool shell's call-level dot: `›` now marks the current position (the running task in a batch, the running tool elsewhere), `○`/`✓`/`×`/`■` cover queued and terminal states, and progress headers omit zero counts. Expanded batches gain a numbered contents list matched to `──` section headers, activity rows show durations of a second or longer and color failed result excerpts, the expanded view keeps the streaming tail visible while a run is in flight, and run metadata names the working directory when it differs from the parent's.
 - Raised the subagent concurrency gate from three to five workers, and re-headed parallel result sections as `### <description> (<agent>) — <status>` so repeated profile names stay distinguishable.
 - Removed the subagent `chain` mode along with `{previous}` substitution: later steps had to be written before earlier results existed, so chains could only hand off blindly. Sequential work is now driven by the parent, which reads each report before writing the next single-mode briefing and can adapt or stop between steps. See [subagent](docs/bundled/extensions/subagent.md).
-
 - Changed mid-turn auto-compaction to distinguish an extension's voluntary `session_before_compact` cancel from a failure: a cancel now lets the run continue (skipping further mid-turn checks for that run) instead of failing closed, and the event carries a new `timing` field (`"manual" | "midTurn" | "postRun" | "prePrompt"`) so extensions can tell the contexts apart. The "nothing to compact" error now includes the same remediation guidance as the retained-context warning. See [Compaction](docs/compaction.md).
 
 ### Fixed
