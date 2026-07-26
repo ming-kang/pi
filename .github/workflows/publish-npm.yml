@@ -72,7 +72,7 @@ jobs:
           NODE
 
           if npm view "@astralyn/pi@$RELEASE_VERSION" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
-            echo "@astralyn/pi@$RELEASE_VERSION is already published; the packed artifact must match before verification resumes."
+            echo "@astralyn/pi@$RELEASE_VERSION is already published; its provenance must identify this commit before verification resumes."
             echo "already_published=true" >> "$GITHUB_OUTPUT"
           else
             echo "already_published=false" >> "$GITHUB_OUTPUT"
@@ -111,28 +111,41 @@ jobs:
           test -f "$tarball"
           echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
 
-      - name: Verify existing registry artifact
+      - name: Verify existing registry provenance
         if: steps.release.outputs.already_published == 'true'
         env:
           RELEASE_VERSION: ${{ inputs.version }}
-          TARBALL: ${{ steps.pack.outputs.tarball }}
         run: |
-          local_integrity="$(node --input-type=module <<'NODE'
-          import { createHash } from "node:crypto";
-          import { readFileSync } from "node:fs";
-
-          const digest = createHash("sha512").update(readFileSync(process.env.TARBALL)).digest("base64");
-          console.log(`sha512-${digest}`);
+          node --input-type=module <<'NODE'
+          const packageName = "@astralyn/pi";
+          const encodedPackageName = encodeURIComponent(packageName);
+          const response = await fetch(
+            `https://registry.npmjs.org/-/npm/v1/attestations/${encodedPackageName}@${process.env.RELEASE_VERSION}`,
+          );
+          if (!response.ok) {
+            throw new Error(`Failed to load npm attestations: ${response.status} ${response.statusText}`);
+          }
+          const body = await response.json();
+          const provenance = body.attestations?.find(
+            (attestation) => attestation.predicateType === "https://slsa.dev/provenance/v1",
+          );
+          if (!provenance) {
+            throw new Error("Published package has no SLSA provenance attestation.");
+          }
+          const statement = JSON.parse(
+            Buffer.from(provenance.bundle.dsseEnvelope.payload, "base64url").toString("utf8"),
+          );
+          const source = statement.predicate?.buildDefinition?.resolvedDependencies?.find(
+            (dependency) => dependency.uri === "git+https://github.com/ming-kang/pi@refs/heads/main",
+          );
+          const publishedCommit = source?.digest?.gitCommit;
+          if (publishedCommit !== process.env.GITHUB_SHA) {
+            throw new Error(
+              `Published provenance identifies commit ${publishedCommit ?? "unknown"}, not ${process.env.GITHUB_SHA}.`,
+            );
+          }
+          console.log(`Published provenance identifies commit ${publishedCommit}.`);
           NODE
-          )"
-          published_integrity="$(npm view "@astralyn/pi@$RELEASE_VERSION" dist.integrity --registry=https://registry.npmjs.org)"
-          if [ "$local_integrity" != "$published_integrity" ]; then
-            echo "Published artifact integrity does not match this checkout." >&2
-            echo "local:     $local_integrity" >&2
-            echo "published: $published_integrity" >&2
-            exit 1
-          fi
-          echo "Published artifact matches the verified local tarball."
 
       - name: Verify packed package installation
         env:
