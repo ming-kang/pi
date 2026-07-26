@@ -196,7 +196,7 @@ export function subagentToolDescription(discovery: AgentDiscoveryResult): string
 	}
 
 	return [
-		"Delegate bounded work to isolated one-shot subagents. Choose exactly one mode: prompt for one task, tasks for independent parallel work, or chain for sequential work whose later prompts may include {previous}.",
+		"Delegate bounded work to isolated one-shot subagents. Choose exactly one mode: prompt for one task, or tasks for independent parallel work. For sequential work, call this tool again with the previous result folded into the next briefing.",
 		"",
 		"Available agent profiles:",
 		...agentLines,

@@ -2,7 +2,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 
 export type AgentSource = "builtin" | "user" | "project";
-export type SubagentMode = "single" | "parallel" | "chain";
+export type SubagentMode = "single" | "parallel";
 export type SubagentRunStatus = "queued" | "running" | "completed" | "failed" | "aborted";
 export type ToolActivityStatus = "running" | "succeeded" | "failed";
 
@@ -91,7 +91,6 @@ export interface SubagentRunDetails {
 	finalOutput: string;
 	error?: string;
 	usage: SubagentUsage;
-	step?: number;
 }
 
 export interface SubagentDetails {

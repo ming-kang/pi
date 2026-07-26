@@ -8,7 +8,8 @@ Exactly one mode is required per call:
 
 - **Single**: `agent`, `description`, and `prompt`.
 - **Parallel**: `tasks`, an array of independent task objects.
-- **Chain**: `chain`, an array of sequential task objects. `{previous}` in a later prompt is replaced by the previous worker's bounded final response.
+
+There is deliberately no chain mode: sequential work is driven by the parent, which reads each report before writing the next briefing.
 
 Every task object has:
 
@@ -19,7 +20,7 @@ prompt       Self-contained worker briefing
 cwd?         Relative directory inside the parent working directory
 ```
 
-Parallel and chain batches allow at most eight tasks. A session-scoped gate runs at most three workers concurrently, including sibling `subagent` calls from the same parent session.
+Parallel batches allow at most eight tasks. A session-scoped gate runs at most five workers concurrently, including sibling `subagent` calls from the same parent session.
 
 ## Agent profiles
 
@@ -82,7 +83,7 @@ They apply only to future subagent runs and never change the parent session's `/
 
 - The parent tool call waits until every worker reaches a terminal state.
 - Parent abort, `/reload`, `/new`, `/resume`, `/fork`, and session shutdown abort active child sessions. Queued workers do not survive the call.
-- Parallel worker failures do not cancel other independent workers. A failed or aborted chain step skips its remaining steps.
+- Parallel worker failures do not cancel other independent workers.
 - Transient provider errors auto-retry: the worker session retries retryable stream errors with backoff (visible as `Retrying (n/m) in Xs…`), and a failure that produced no work (for example a preflight auth throw) is rerun at the task level up to two more times. Runs with partial work behind them are never rerun.
 - Progress is rendered in Pi's native tool transcript. The collapsed view shows an intent line (for example `Verifying changes`), the current tool, live elapsed time, usage with a `ctx:` context watermark, and the configured expand hint; `Ctrl+O` shows bounded activities and final Markdown reports.
 - Full child transcripts are not stored separately. Bounded run details remain in the parent tool result, so completed calls restore naturally in the parent session tree.

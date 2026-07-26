@@ -40,7 +40,7 @@ describe("subagent extension registration", () => {
 		expect(initialTool?.description).toContain("Available agent profiles:");
 		expect(initialTool?.description).toContain("- general (default):");
 		expect(initialTool?.promptGuidelines).toEqual([
-			"Use subagent when a bounded task benefits from isolated context, parallel investigation, or a sequential specialist handoff; choose a profile and write its briefing using the tool description.",
+			"Use subagent when a bounded task benefits from isolated context or parallel investigation; choose a profile and write its briefing using the tool description.",
 		]);
 		expect(initialTool?.executionMode).toBeUndefined();
 		expect(initialTool?.prepareArguments).toBeUndefined();

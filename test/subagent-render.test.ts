@@ -71,23 +71,28 @@ describe("subagent rendering", () => {
 			},
 			theme,
 		);
-		expect(component.render(120).join("\n")).toContain("parallel · 2 tasks");
+		expect(component.render(120).join("\n")).toContain("Multi-Agent · 2 tasks");
+	});
+
+	it("labels single calls with the capitalized agent name", () => {
+		const component = renderSubagentCall({ agent: "code-reviewer", description: "Review the diff" }, theme);
+		const output = component.render(120).join("\n");
+		expect(output).toContain("Code Reviewer Agent · Review the diff");
+		const defaulted = renderSubagentCall({ description: "Fix the bug" }, theme);
+		expect(defaulted.render(120).join("\n")).toContain("General Agent · Fix the bug");
 	});
 
 	it("flags a call that provides multiple modes instead of guessing one", () => {
-		const component = renderSubagentCall(
-			{ prompt: "unused", tasks: [{ description: "task", prompt: "p" }], chain: null },
-			theme,
-		);
+		const component = renderSubagentCall({ prompt: "unused", tasks: [{ description: "task", prompt: "p" }] }, theme);
 		const output = component.render(120).join("\n");
 		expect(output).toContain("invalid · prompt + tasks");
-		expect(output).not.toContain("parallel");
+		expect(output).not.toContain("Multi-Agent");
 	});
 
 	it("renders collapsed progress, usage, and the configured expansion hint", () => {
 		const output = collapsed(details());
 		expect(output).toContain("1/1 complete");
-		expect(output).toContain("explorer · Map the code");
+		expect(output).toContain("Explorer · Map the code");
 		expect(output).toContain("3 tool uses");
 		expect(output).toContain("to expand");
 	});
@@ -162,7 +167,7 @@ describe("subagent rendering", () => {
 		expect(output).not.toContain("**");
 		expect(output).not.toContain("[Output truncated");
 		expect(output).not.toMatch(/^completed$/mu);
-		expect(output).not.toContain("explorer · Map the code");
+		expect(output).not.toContain("Explorer · Map the code");
 	});
 
 	it("shows the current activity and live tail while a single run is in flight", () => {
@@ -229,7 +234,7 @@ describe("subagent rendering", () => {
 		});
 		const output = collapsed(runningDetails, true);
 		expect(output).toContain("3 tool uses · 1.3k tokens");
-		expect(output).toContain("reviewer · Review the renderer");
+		expect(output).toContain("Reviewer · Review the renderer");
 		expect(output).toContain("0 tool uses");
 		expect(output).not.toContain("0 tokens");
 
@@ -251,19 +256,18 @@ describe("subagent rendering", () => {
 			run({ id: "5", agent: "a5", description: "five", status: "running", currentActivity: "reading files" }),
 		];
 		const output = collapsed(details({ status: "running", endedAt: undefined, runs }), true);
-		expect(output).toContain("a5 · five");
+		expect(output).toContain("A5 · five");
 		expect(output).toContain("reading files");
 		expect(output).toContain("+1 more");
 	});
 
-	it("prefixes chain steps and surfaces failures on the run line", () => {
+	it("surfaces failures on the run line", () => {
 		const output = collapsed(
 			details({
-				mode: "chain",
+				status: "failed",
 				runs: [
-					run({ step: 1, finalOutput: "First done." }),
+					run({ finalOutput: "First done." }),
 					run({
-						step: 2,
 						agent: "reviewer",
 						description: "Review it",
 						status: "failed",
@@ -273,8 +277,8 @@ describe("subagent rendering", () => {
 				],
 			}),
 		);
-		expect(output).toContain("1. explorer");
-		expect(output).toContain("2. reviewer");
+		expect(output).toContain("Explorer · Map the code");
+		expect(output).toContain("Reviewer · Review it");
 		expect(output).toContain("— boom");
 	});
 
@@ -380,7 +384,7 @@ describe("subagent rendering", () => {
 			false,
 		);
 		const output = component.render(120).join("\n");
-		expect(output).not.toContain("explorer · Map the code");
+		expect(output).not.toContain("Explorer · Map the code");
 		expect(output).not.toContain("[Output truncated");
 		expect(output.match(/tool use/gu)).toHaveLength(1);
 		expect(output).toContain("4.0s");

@@ -46,7 +46,7 @@ export const SubagentParamsSchema = Type.Object(
 		),
 		prompt: nullable(
 			Type.String({ minLength: 1, maxLength: 20_000 }),
-			"Complete self-contained briefing; providing it selects single mode — null or omit when using tasks or chain",
+			"Complete self-contained briefing; providing it selects single mode — null or omit when using tasks",
 		),
 		cwd: nullable(
 			Type.String({ minLength: 1, maxLength: 4_096 }),
@@ -54,11 +54,7 @@ export const SubagentParamsSchema = Type.Object(
 		),
 		tasks: nullable(
 			Type.Array(TaskSchema, { minItems: 1, maxItems: MAX_TASKS }),
-			"Independent tasks run concurrently; providing it selects parallel mode — null or omit when using prompt or chain",
-		),
-		chain: nullable(
-			Type.Array(TaskSchema, { minItems: 1, maxItems: MAX_TASKS }),
-			"Sequential tasks where {previous} in a later prompt is replaced by the prior result; providing it selects chain mode — null or omit otherwise",
+			"Independent tasks run concurrently; providing it selects parallel mode — null or omit when using prompt",
 		),
 	},
 	{ additionalProperties: false },

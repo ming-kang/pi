@@ -3,7 +3,6 @@ import type { ModelRuntime } from "../../core/model-runtime.ts";
 import { sleep } from "../../utils/sleep.ts";
 import { boundText, emptyUsage, mergeUsage, toNestedUsage } from "./activity.ts";
 import {
-	CHAIN_HANDOFF_LIMIT,
 	DETAILS_ACTIVITY_LIMIT,
 	DETAILS_OUTPUT_LIMIT,
 	ERROR_TEXT_LIMIT,
@@ -103,7 +102,7 @@ function runId(index: number): string {
 	return `subagent-${index + 1}`;
 }
 
-function createRun(task: ResolvedSubagentTask, index: number, step?: number): SubagentRunDetails {
+function createRun(task: ResolvedSubagentTask, index: number): SubagentRunDetails {
 	return {
 		id: runId(index),
 		agent: task.agent.name,
@@ -118,7 +117,6 @@ function createRun(task: ResolvedSubagentTask, index: number, step?: number): Su
 		liveText: "",
 		finalOutput: "",
 		usage: emptyUsage(),
-		step,
 	};
 }
 
@@ -252,12 +250,6 @@ function statusText(details: SubagentDetails): string {
 		}
 		return run.status === "running" ? "Thinking…" : run.status;
 	}
-	if (details.mode === "chain") {
-		const current = details.runs.find((run) => run.status === "running" || run.status === "queued");
-		return current
-			? `Step ${current.step ?? 1}/${details.runs.length} · ${current.currentActivity ?? current.agent}`
-			: `${completed}/${details.runs.length} steps complete`;
-	}
 	return `${completed}/${details.runs.length} complete · ${running} running · ${queued} queued${failed ? ` · ${failed} failed` : ""}${aborted ? ` · ${aborted} aborted` : ""}`;
 }
 
@@ -276,13 +268,6 @@ function emitDetails(
 	};
 	onUpdate?.(boundSubagentDetails(details));
 	return details;
-}
-
-function replacePrevious(prompt: string, previous: string): string {
-	// Function replacement: a plain string would interpret $&, $', $$ patterns
-	// in the previous step's output and silently corrupt the handoff.
-	const bounded = boundText(previous, CHAIN_HANDOFF_LIMIT);
-	return prompt.replace(/\{previous\}/gu, () => bounded);
 }
 
 function validateTaskCount(tasks: readonly SubagentTask[]): void {
@@ -396,43 +381,26 @@ function resultContent(details: SubagentDetails): string {
 		}
 		return run.finalOutput || EMPTY_OUTPUT;
 	}
-	if (details.mode === "chain") {
-		const failed = details.runs.find((run) => run.status === "failed" || run.status === "aborted");
-		if (failed)
-			return boundText(
-				`Chain stopped at step ${failed.step ?? "?"} (${failed.agent}): ${failed.error ?? "unknown error"}`,
-				ERROR_TEXT_LIMIT,
-			);
-		const last = details.runs[details.runs.length - 1];
-		return last?.finalOutput || EMPTY_OUTPUT;
-	}
 	const sections = details.runs.map((run) => {
 		const output = run.finalOutput || run.error || EMPTY_OUTPUT;
-		return `### ${run.agent} · ${run.status}\n\n${boundText(output, PARALLEL_TASK_OUTPUT_LIMIT)}`;
+		return `### ${run.description} (${run.agent}) — ${run.status}\n\n${boundText(output, PARALLEL_TASK_OUTPUT_LIMIT)}`;
 	});
-	return boundText(`Parallel results\n\n${sections.join("\n\n---\n\n")}`, PARALLEL_OUTPUT_LIMIT);
+	return boundText(sections.join("\n\n---\n\n"), PARALLEL_OUTPUT_LIMIT);
 }
 
 function invocationMode(params: SubagentParams): { mode: SubagentDetails["mode"]; tasks: SubagentTask[] } {
 	const provided: string[] = [];
 	if (params.prompt != null) provided.push("prompt");
 	if (params.tasks != null) provided.push("tasks");
-	if (params.chain != null) provided.push("chain");
 	if (provided.length !== 1) {
 		throw new Error(
 			provided.length === 0
-				? "Provide exactly one subagent mode: prompt (single), tasks (parallel), or chain (sequential); none was provided."
+				? "Provide exactly one subagent mode: prompt (single task) or tasks (parallel tasks); none was provided."
 				: `Provide exactly one subagent mode: received ${provided.join(", ")}. Keep one and set the unused mode fields to null or omit them.`,
 		);
 	}
 	if (params.tasks != null) {
 		return { mode: "parallel", tasks: params.tasks };
-	}
-	if (params.chain != null) {
-		return { mode: "chain", tasks: params.chain };
-	}
-	if (params.prompt == null) {
-		throw new Error("Provide exactly one subagent mode: prompt (single), tasks (parallel), or chain (sequential).");
 	}
 	if (!params.description) throw new Error("description is required for single mode.");
 	return {
@@ -441,7 +409,7 @@ function invocationMode(params: SubagentParams): { mode: SubagentDetails["mode"]
 			{
 				agent: params.agent,
 				description: params.description,
-				prompt: params.prompt,
+				prompt: params.prompt!,
 				cwd: params.cwd,
 			},
 		],
@@ -467,9 +435,9 @@ function progressKey(runs: readonly SubagentRunDetails[]): string {
 				run.usage.toolUses,
 				run.usage.totalTokens,
 				run.error ?? "",
-			].join(" ");
+			].join("|");
 		})
-		.join("");
+		.join("~");
 }
 
 export function isSubagentError(details: Pick<SubagentDetails, "status">): boolean {
@@ -479,7 +447,7 @@ export function isSubagentError(details: Pick<SubagentDetails, "status">): boole
 export async function runSubagentInvocation(options: SubagentInvocationOptions): Promise<SubagentExecutionResult> {
 	const { mode, tasks } = invocationMode(options.params);
 	const resolved = await resolveTasks(tasks, options);
-	const runs = resolved.map((task, index) => createRun(task, index, mode === "chain" ? index + 1 : undefined));
+	const runs = resolved.map((task, index) => createRun(task, index));
 	const startedAt = Date.now();
 	let latestDetails = emitDetails(mode, runs, startedAt, options.onUpdate);
 	let lastProgressKey = progressKey(runs);
@@ -492,27 +460,8 @@ export async function runSubagentInvocation(options: SubagentInvocationOptions):
 
 	if (mode === "single") {
 		await runWithGate(resolved[0]!, runs[0]!, options, progress);
-	} else if (mode === "parallel") {
-		await Promise.all(resolved.map((task, index) => runWithGate(task, runs[index]!, options, progress)));
 	} else {
-		let previous = "";
-		for (let index = 0; index < resolved.length; index++) {
-			if (options.signal?.aborted) {
-				runs[index]!.status = "aborted";
-				runs[index]!.error = "Skipped because the parent subagent call was aborted.";
-				continue;
-			}
-			const task = { ...resolved[index]!, prompt: replacePrevious(resolved[index]!.prompt, previous) };
-			await runWithGate(task, runs[index]!, options, progress);
-			if (runs[index]!.status !== "completed") {
-				for (let skipped = index + 1; skipped < runs.length; skipped++) {
-					runs[skipped]!.status = options.signal?.aborted ? "aborted" : "failed";
-					runs[skipped]!.error = `Skipped because chain step ${index + 1} did not complete.`;
-				}
-				break;
-			}
-			previous = runs[index]!.finalOutput;
-		}
+		await Promise.all(resolved.map((task, index) => runWithGate(task, runs[index]!, options, progress)));
 	}
 	latestDetails = emitDetails(mode, runs, startedAt, undefined);
 	latestDetails.endedAt = Date.now();

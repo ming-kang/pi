@@ -117,12 +117,12 @@ describe("subagent SDK runner", () => {
 		expect(result.content).toBe("(Subagent completed but returned no output.)");
 	});
 
-	it("executes chain steps sequentially and passes bounded previous output", async () => {
+	it("runs parallel tasks and labels each section with description and agent", async () => {
 		const { modelRuntime, model } = await setup(["first result", "second result"]);
 		const params: SubagentParams = {
-			chain: [
-				{ agent: "worker", description: "First", prompt: "Find the answer." },
-				{ agent: "worker", description: "Second", prompt: "Use this report:\n{previous}" },
+			tasks: [
+				{ agent: "worker", description: "First lookup", prompt: "Find the answer." },
+				{ agent: "worker", description: "Second lookup", prompt: "Find the other answer." },
 			],
 		};
 		const result = await runSubagentInvocation({
@@ -136,56 +136,19 @@ describe("subagent SDK runner", () => {
 			gate: new ConcurrencyGate(1),
 		});
 		expect(result.details.status).toBe("completed");
-		expect(result.content).toBe("second result");
 		expect(result.details.runs.map((run) => run.status)).toEqual(["completed", "completed"]);
-	});
-
-	it("passes chain output containing replacement patterns through literally", async () => {
-		let receivedPrompt = "";
-		const faux = fauxProvider({ provider: `subagent-dollar-${Date.now()}-${Math.random()}` });
-		faux.setResponses([
-			fauxAssistantMessage("price is $& and $' and $$1"),
-			(context) => {
-				const lastUser = [...context.messages].reverse().find((message) => message.role === "user");
-				receivedPrompt =
-					typeof lastUser?.content === "string"
-						? lastUser.content
-						: (lastUser?.content ?? []).map((part) => (part.type === "text" ? part.text : "")).join("");
-				return fauxAssistantMessage("done");
-			},
-		]);
-		const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
-		modelRuntime.registerNativeProvider(faux.provider);
-		const model = faux.getModel() as Model<Api>;
-		const result = await runSubagentInvocation({
-			params: {
-				chain: [
-					{ agent: "worker", description: "First", prompt: "Find prices." },
-					{ agent: "worker", description: "Second", prompt: "Report: {previous}" },
-				],
-			},
-			parentCwd: process.cwd(),
-			agents: [agent],
-			parent: createParentContext(model),
-			modelRuntime,
-			agentDir: process.cwd(),
-			projectTrusted: false,
-			gate: new ConcurrencyGate(1),
-		});
-		expect(result.details.status).toBe("completed");
-		// String.replace would swallow $& / $' / $$; the handoff must be literal.
-		expect(receivedPrompt).toContain("price is $& and $' and $$1");
+		expect(result.content).toContain("### First lookup (worker) — completed");
+		expect(result.content).toContain("### Second lookup (worker) — completed");
 	});
 
 	it("accepts null mode fields from strict providers that send every property", async () => {
-		const { modelRuntime, model } = await setup(["chain result"]);
+		const { modelRuntime, model } = await setup(["task result"]);
 		const params: SubagentParams = {
 			agent: null,
 			description: null,
 			prompt: null,
 			cwd: null,
-			tasks: null,
-			chain: [{ agent: "worker", description: "Only step", prompt: "Do it.", cwd: null }],
+			tasks: [{ agent: "worker", description: "Only task", prompt: "Do it.", cwd: null }],
 		};
 		const result = await runSubagentInvocation({
 			params,
@@ -199,7 +162,7 @@ describe("subagent SDK runner", () => {
 		});
 		expect(result.isError).toBe(false);
 		expect(result.details.status).toBe("completed");
-		expect(result.content).toBe("chain result");
+		expect(result.content).toContain("task result");
 	});
 
 	it("names the received modes when the call is ambiguous", async () => {
@@ -217,12 +180,9 @@ describe("subagent SDK runner", () => {
 			description: "Everything at once",
 			prompt: "unused",
 			tasks: [{ description: "task", prompt: "p" }],
-			chain: [{ description: "step", prompt: "p" }],
 		};
-		await expect(runSubagentInvocation({ ...base, params: ambiguous })).rejects.toThrow(
-			"received prompt, tasks, chain",
-		);
-		const empty: SubagentParams = { agent: null, description: null, prompt: null, tasks: null, chain: null };
+		await expect(runSubagentInvocation({ ...base, params: ambiguous })).rejects.toThrow("received prompt, tasks");
+		const empty: SubagentParams = { agent: null, description: null, prompt: null, tasks: null };
 		await expect(runSubagentInvocation({ ...base, params: empty })).rejects.toThrow("none was provided");
 	});
 

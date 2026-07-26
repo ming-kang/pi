@@ -21,8 +21,19 @@ const ACTIVITY_GROUPS = [
 	{ toolName: "write", verb: "wrote", singular: "file", plural: "files" },
 ] as const;
 
+// Display-only: profile names stay lowercase everywhere the model sees
+// them; the transcript shows "general" as "General", "code-reviewer" as
+// "Code Reviewer".
+function displayAgentName(name: string): string {
+	return name
+		.split(/[-_]/u)
+		.filter(Boolean)
+		.map((word) => `${word[0]?.toUpperCase() ?? ""}${word.slice(1)}`)
+		.join(" ");
+}
+
 function singleAgentName(args: { agent?: string | null }): string {
-	return args.agent ?? "general";
+	return displayAgentName(args.agent ?? "general");
 }
 
 function truncate(text: string, limit: number): string {
@@ -145,9 +156,8 @@ function statusMarker(status: SubagentRunStatus, theme: Theme): string {
 	}
 }
 
-function runTitle(run: SubagentRunDetails, theme: Theme, mode: SubagentDetails["mode"]): string {
-	const step = mode === "chain" && run.step ? theme.fg("muted", `${run.step}. `) : "";
-	return `${statusMarker(run.status, theme)} ${step}${theme.fg("accent", run.agent)}${theme.fg("dim", ` · ${truncate(run.description, 48)}`)}`;
+function runTitle(run: SubagentRunDetails, theme: Theme): string {
+	return `${statusMarker(run.status, theme)} ${theme.fg("accent", displayAgentName(run.agent))}${theme.fg("dim", ` · ${truncate(run.description, 48)}`)}`;
 }
 
 function runProgressText(run: SubagentRunDetails): string {
@@ -156,8 +166,8 @@ function runProgressText(run: SubagentRunDetails): string {
 	return items.join(" · ");
 }
 
-function runLine(run: SubagentRunDetails, theme: Theme, mode: SubagentDetails["mode"]): string {
-	let line = runTitle(run, theme, mode);
+function runLine(run: SubagentRunDetails, theme: Theme): string {
+	let line = runTitle(run, theme);
 	const detail =
 		run.status === "running"
 			? runIntent(run)
@@ -272,19 +282,14 @@ function formatDuration(seconds: number): string {
 // A single run's title and usage would duplicate the call header and
 // the call-level usage line, so `single` drops both and folds the
 // duration into the metadata line instead.
-function renderRunDetails(
-	run: SubagentRunDetails,
-	theme: Theme,
-	mode: SubagentDetails["mode"],
-	single: boolean,
-): Component {
+function renderRunDetails(run: SubagentRunDetails, theme: Theme, single: boolean): Component {
 	const container = new Container();
 	const duration =
 		run.startedAt !== undefined && run.endedAt !== undefined
 			? formatDuration(Math.max(0, (run.endedAt - run.startedAt) / 1000))
 			: undefined;
 	if (!single) {
-		let title = runTitle(run, theme, mode);
+		let title = runTitle(run, theme);
 		if (run.status === "running") title += theme.fg("dim", ` · ${runProgressText(run)}`);
 		else if (duration) title += theme.fg("dim", ` · ${duration}`);
 		container.addChild(new Text(title, 0, 0));
@@ -335,22 +340,28 @@ function renderRunDetails(
 
 // The call header stays a single line: run rows in the result area take
 // over within the first update and carry richer per-task state, so a
-// task list here would render everything twice.
+// task list here would render everything twice. The task count alone
+// distinguishes a batch from a single delegation.
 export function renderSubagentCall(args: SubagentParams, theme: Theme): Component {
-	let text = theme.fg("toolTitle", theme.bold("Subagent "));
-	const modes = [args.prompt != null && "prompt", args.tasks != null && "tasks", args.chain != null && "chain"].filter(
-		(mode): mode is string => Boolean(mode),
+	const modes = [args.prompt != null && "prompt", args.tasks != null && "tasks"].filter((mode): mode is string =>
+		Boolean(mode),
 	);
 	if (modes.length > 1) {
-		text += theme.fg("error", `invalid · ${modes.join(" + ")}`);
-	} else if (args.tasks) {
-		text += theme.fg("accent", `parallel · ${args.tasks.length} tasks`);
-	} else if (args.chain) {
-		text += theme.fg("accent", `chain · ${args.chain.length} steps`);
-	} else {
-		text += theme.fg("accent", singleAgentName(args));
-		if (args.description) text += theme.fg("dim", ` · ${truncate(args.description, 72)}`);
+		return new Text(
+			`${theme.fg("toolTitle", theme.bold("Subagent "))}${theme.fg("error", `invalid · ${modes.join(" + ")}`)}`,
+			0,
+			0,
+		);
 	}
+	if (args.tasks) {
+		return new Text(
+			`${theme.fg("toolTitle", theme.bold("Multi-Agent"))}${theme.fg("dim", ` · ${args.tasks.length} task${args.tasks.length === 1 ? "" : "s"}`)}`,
+			0,
+			0,
+		);
+	}
+	let text = theme.fg("toolTitle", theme.bold(`${singleAgentName(args)} Agent`));
+	if (args.description) text += theme.fg("dim", ` · ${truncate(args.description, 72)}`);
 	return new Text(text, 0, 0);
 }
 
@@ -376,7 +387,7 @@ export function renderSubagentResult(
 			}
 			lines.push(theme.fg(isError ? "error" : options.isPartial ? "accent" : "muted", header));
 			const shown = selectCollapsedRuns(details.runs, Boolean(options.isPartial));
-			for (const run of shown) lines.push(runLine(run, theme, details.mode));
+			for (const run of shown) lines.push(runLine(run, theme));
 			const hidden = details.runs.length - shown.length;
 			if (hidden > 0) lines.push(theme.fg("muted", `+${hidden} more`));
 		}
@@ -394,7 +405,7 @@ export function renderSubagentResult(
 	}
 	details.runs.forEach((run, index) => {
 		if (!single || index > 0) container.addChild(new Spacer(1));
-		container.addChild(renderRunDetails(run, theme, details.mode, single));
+		container.addChild(renderRunDetails(run, theme, single));
 	});
 	if (!single) {
 		const usage = usageText(details);
