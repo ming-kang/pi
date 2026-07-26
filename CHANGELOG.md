@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.82.3] - 2026-07-26
+
 ### Added
 
 - Exposed the `outputPad` setting to custom message renderers. See [Extensions](docs/extensions.md) ([#7045](https://github.com/earendil-works/pi/pull/7045) by [@xl0](https://github.com/xl0)).
