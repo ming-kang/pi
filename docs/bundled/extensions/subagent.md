@@ -50,9 +50,9 @@ Project definitions are loaded only after Pi trusts the project. Invalid Markdow
 Built-in profiles:
 
 - `general`: read, bash, edit, and write.
-- `explorer`: read-only `read`, `grep`, `find`, and `ls`.
+- `explorer`: `read`, `grep`, `find`, and `ls`, plus `bash` constrained by its system prompt to read-only inspection (git history, counting, and similar).
 
-A profile may only allow Pi built-in tools. Child sessions load no extensions, skills, or prompt templates, so a worker cannot recursively call `subagent` or inherit unrelated extension capabilities. Project context files such as `AGENTS.md` remain available.
+A profile may only allow Pi built-in tools. Child sessions load no extensions, skills, or prompt templates, so a worker cannot recursively call `subagent` or inherit unrelated extension capabilities. Project context files such as `AGENTS.md` remain available, except for the built-in `explorer`, which skips them: read-only exploration needs no commit/PR rules, and the parent interprets its results.
 
 ## Model and thinking selection
 

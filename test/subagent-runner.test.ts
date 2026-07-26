@@ -97,8 +97,39 @@ describe("subagent SDK runner", () => {
 		expect(settingsCreate).toHaveBeenCalledWith(process.cwd(), process.cwd(), { projectTrusted: false });
 		expect(systemPrompt).toContain("do not gold-plate it, but do not leave it half-done");
 		expect(systemPrompt).toContain("use absolute paths");
+		expect(systemPrompt).toContain("Only your final message is returned to the caller");
+		expect(systemPrompt).toContain("code snippets only when the exact text is load-bearing");
 		expect(systemPrompt).toContain("The caller will relay it to the user");
 		expect(systemPrompt).toContain(agent.systemPrompt);
+		// Default agents load project instructions (this repo has AGENTS.md).
+		expect(systemPrompt).toContain("<project_context>");
+	});
+
+	it("skips project instruction files for agents marked omitContextFiles", async () => {
+		let systemPrompt: string | undefined;
+		const faux = fauxProvider({ provider: `subagent-context-${Date.now()}-${Math.random()}` });
+		faux.setResponses([
+			(context) => {
+				systemPrompt = context.systemPrompt;
+				return fauxAssistantMessage("context checked");
+			},
+		]);
+		const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+		modelRuntime.registerNativeProvider(faux.provider);
+		const model = faux.getModel() as Model<Api>;
+		await runSubagentInvocation({
+			params: { agent: "scout", description: "Inspect context loading", prompt: "Check the prompt." },
+			parentCwd: process.cwd(),
+			agents: [{ ...agent, name: "scout", omitContextFiles: true }],
+			parent: createParentContext(model),
+			modelRuntime,
+			agentDir: process.cwd(),
+			projectTrusted: false,
+			gate: new ConcurrencyGate(1),
+		});
+
+		expect(systemPrompt).toContain(agent.systemPrompt);
+		expect(systemPrompt).not.toContain("<project_context>");
 	});
 
 	it("returns an explicit marker when a completed subagent has no output", async () => {

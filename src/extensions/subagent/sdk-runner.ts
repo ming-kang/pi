@@ -34,11 +34,13 @@ function workerSystemPrompt(base: string | undefined, task: ResolvedSubagentTask
 		base,
 		`You are Pi subagent "${task.agent.name}", working independently on one delegated task.`,
 		"You cannot see the parent conversation; rely entirely on the task briefing and repository context available in your working directory.",
+		"Only your final message is returned to the caller; nothing you write in earlier turns is visible to anyone.",
 		"Complete the task fully—do not gold-plate it, but do not leave it half-done.",
 		"Stay inside the assigned working directory and delegated scope.",
 		"Do not ask the end user questions. If blocked, report the exact blocker and what would resolve it.",
 		"Do not spawn subagents or invoke tools outside the configured tool list.",
 		"When referencing files in the final report, use absolute paths so the caller can locate them unambiguously.",
+		"Include code snippets only when the exact text is load-bearing (a bug you found, a signature the caller asked for); do not recap code you merely read.",
 		"End with a concise report covering findings or changes, verification performed, blockers, and unresolved risks. The caller will relay it to the user, so include only the essentials.",
 		task.agent.systemPrompt,
 	]
@@ -114,6 +116,9 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 			noSkills: true,
 			noPromptTemplates: true,
 			noThemes: true,
+			// Read-only explorers skip AGENTS.md/CLAUDE.md: they don't need
+			// commit/PR/style rules, and the parent interprets their results.
+			noContextFiles: task.agent.omitContextFiles ?? false,
 			systemPromptOverride: (base) => workerSystemPrompt(base, task),
 		});
 		await resourceLoader.reload();

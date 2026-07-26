@@ -83,8 +83,17 @@ describe("subagent configuration", () => {
 		const general = trusted.agents.find((agent) => agent.name === "general");
 		const explorer = trusted.agents.find((agent) => agent.name === "explorer");
 		expect(general?.systemPrompt).toContain("never create documentation files unless the task explicitly asks");
+		expect(general?.description).toContain("use explorer for read-only questions");
 		expect(explorer?.description).toContain('"quick" for a targeted lookup');
 		expect(explorer?.systemPrompt).toContain("batching independent searches and reads");
+		// Explorer carries bash for git history and similar inspection, but the
+		// prompt must pin it read-only, including the bash-native write paths
+		// (redirects, heredocs) that the tool list cannot block.
+		expect(explorer?.tools).toContain("bash");
+		expect(explorer?.description).toContain("git history");
+		expect(explorer?.systemPrompt).toContain("read-only inspection only");
+		expect(explorer?.systemPrompt).toContain("no redirect (>, >>) or heredoc writes");
+		expect(explorer?.omitContextFiles).toBe(true);
 		const trustedToolDescription = subagentToolDescription(trusted);
 		expect(trustedToolDescription).toContain("- reviewer: Project reviewer (Tools: read)");
 		expect(trustedToolDescription).toContain("When not to delegate:");

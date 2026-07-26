@@ -23,7 +23,7 @@ export const TaskSchema = Type.Object(
 		}),
 		prompt: Type.String({
 			minLength: 1,
-			maxLength: 20_000,
+			maxLength: 50_000,
 			description: "Complete self-contained briefing; the worker cannot see the parent conversation",
 		}),
 		cwd: nullable(
@@ -45,7 +45,7 @@ export const SubagentParamsSchema = Type.Object(
 			"Concise 3-8 word UI label; required for single mode, null or omit otherwise",
 		),
 		prompt: nullable(
-			Type.String({ minLength: 1, maxLength: 20_000 }),
+			Type.String({ minLength: 1, maxLength: 50_000 }),
 			"Complete self-contained briefing; providing it selects single mode — null or omit when using tasks",
 		),
 		cwd: nullable(

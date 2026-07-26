@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../../config.ts";
 import { parseFrontmatter } from "../../utils/frontmatter.ts";
 import { utf8Prefix } from "./activity.ts";
-import { BUILTIN_TOOL_NAMES, DEFAULT_AGENT_TOOLS, EXPLORER_TOOLS } from "./constants.ts";
+import { BUILTIN_TOOL_NAMES, DEFAULT_AGENT_TOOLS, EXPLORER_TOOLS, MAX_CONCURRENCY, MAX_TASKS } from "./constants.ts";
 import type { AgentDefinition, AgentDiagnostic, AgentDiscoveryResult, AgentSource } from "./types.ts";
 
 const AGENT_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,79}$/u;
@@ -14,7 +14,8 @@ const TOOL_DESCRIPTION_AGENT_SUMMARY_LIMIT = 480;
 const BUILTIN_AGENTS: AgentDefinition[] = [
 	{
 		name: "general",
-		description: "General-purpose implementation agent with coding tools",
+		description:
+			"Implementation agent for bounded coding tasks: edits, fixes, refactors, and verification in a scoped area. Use when the task changes files; use explorer for read-only questions",
 		tools: [...DEFAULT_AGENT_TOOLS],
 		systemPrompt: [
 			"Work independently on the delegated task from start to finish.",
@@ -29,18 +30,21 @@ const BUILTIN_AGENTS: AgentDefinition[] = [
 	{
 		name: "explorer",
 		description:
-			'Fast read-only agent for finding files, searching code, and answering codebase questions. State thoroughness in the prompt: "quick" for a targeted lookup, "medium" for checking likely related locations, or "very thorough" for exhaustive sweeps across locations and naming conventions',
+			'Fast read-only agent for finding files, searching code, and answering codebase questions. Can inspect git history (log, blame, diff) via read-only bash. State thoroughness in the prompt: "quick" for a targeted lookup, "medium" for checking likely related locations, or "very thorough" for exhaustive sweeps across locations and naming conventions',
 		tools: [...EXPLORER_TOOLS],
 		systemPrompt: [
 			"You are a fast read-only exploration agent; return findings as quickly as possible.",
 			"Explore the delegated question without modifying files.",
 			"Use read and search tools to gather exact evidence, batching independent searches and reads instead of running them one at a time.",
+			"bash is for read-only inspection only: git log/diff/blame/show/status, ls, wc, head, tail, cat, and similar.",
+			"Never run anything that modifies state: no file creation or deletion, no redirect (>, >>) or heredoc writes, no temp files, no git commands that write (add, commit, checkout, restore, stash, clean), no installs, no network access.",
 			"Match the depth the caller requested: quick targets the direct question, medium checks likely related locations, and very thorough sweeps multiple locations and naming conventions.",
 			"Return concise findings with precise paths, symbols, relationships, and unresolved uncertainties.",
 		].join("\n"),
 		source: "builtin",
 		filePath: "<builtin:explorer>",
 		backend: "sdk",
+		omitContextFiles: true,
 	},
 ];
 
@@ -196,20 +200,23 @@ export function subagentToolDescription(discovery: AgentDiscoveryResult): string
 	}
 
 	return [
-		"Delegate bounded work to isolated one-shot subagents. Choose exactly one mode: prompt for one task, or tasks for independent parallel work. For sequential work, call this tool again with the previous result folded into the next briefing.",
+		`Delegate bounded work to isolated one-shot subagents. Delegation keeps intermediate tool output (file dumps, search results) out of your context: you receive only the final report. Choose exactly one mode: prompt for one task, or tasks for independent parallel work (up to ${MAX_TASKS} per call; ${MAX_CONCURRENCY} run concurrently, the rest queue). For sequential work, call this tool again with the previous result folded into the next briefing.`,
 		"",
 		"Available agent profiles:",
 		...agentLines,
 		"",
 		"When not to delegate:",
 		"- Read a known file directly with read, or search for a known symbol directly with grep.",
+		"- Prefer direct tools when a directed lookup answers the question; delegate when the investigation will clearly take more than ~3 searches or would flood your context with intermediate output.",
 		"- Do not delegate a trivial task when the coordination overhead exceeds the work.",
 		"",
 		"Writing the briefing:",
 		"- Brief the worker like a capable colleague entering the project now: include the objective, relevant context, exact paths or symbols already known, constraints, and expected output.",
 		"- Never delegate understanding with vague instructions such as 'fix this based on your findings'; state what must be investigated or changed and whether the worker should research, implement, or review.",
-		"- Ask for a concise report when only findings are needed. Workers cannot see the parent conversation or ask the end user questions.",
+		"- Lookups: hand over the exact command or file. Investigations: hand over the question — prescribed steps become dead weight when the premise is wrong.",
+		'- If you need a short answer, say so (e.g. "report in under 200 words"). Workers cannot see the parent conversation or ask the end user questions.',
+		'- Example briefing (explorer): "Quick: which commit introduced the retry loop in src/net/client.ts? Use git log/blame; report the hash and a one-line summary."',
 		"",
-		"Subagent results are reports for you to interpret and relay. Surface the important findings, changes, verification, and unresolved risks to the user.",
+		"The subagent's report is not shown to the user. Interpret it and relay the important findings, changes, verification, and unresolved risks in your own reply.",
 	].join("\n");
 }

@@ -39,6 +39,8 @@ describe("subagent extension registration", () => {
 		expect(initialTool).toMatchObject({ name: "subagent", label: "Subagent" });
 		expect(initialTool?.description).toContain("Available agent profiles:");
 		expect(initialTool?.description).toContain("- general (default):");
+		expect(initialTool?.description).toContain("run concurrently, the rest queue");
+		expect(initialTool?.description).toContain("The subagent's report is not shown to the user.");
 		expect(initialTool?.promptGuidelines).toEqual([
 			"Use subagent when a bounded task benefits from isolated context or parallel investigation; choose a profile and write its briefing using the tool description.",
 		]);
@@ -89,9 +91,21 @@ describe("subagent extension registration", () => {
 			rmSync(root, { recursive: true, force: true });
 		}
 
-		const failed = await toolResultHandler?.({ toolName: "subagent", details: { status: "failed" } });
-		const completed = await toolResultHandler?.({ toolName: "subagent", details: { status: "completed" } });
+		const failed = await toolResultHandler?.({
+			toolName: "subagent",
+			details: { status: "failed", runs: [{ status: "failed" }] },
+		});
+		// A batch where any run succeeded is a partial result, not an error.
+		const partial = await toolResultHandler?.({
+			toolName: "subagent",
+			details: { status: "failed", runs: [{ status: "failed" }, { status: "completed" }] },
+		});
+		const completed = await toolResultHandler?.({
+			toolName: "subagent",
+			details: { status: "completed", runs: [{ status: "completed" }] },
+		});
 		expect(failed).toEqual({ isError: true });
+		expect(partial).toBeUndefined();
 		expect(completed).toBeUndefined();
 	});
 });

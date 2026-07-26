@@ -113,6 +113,54 @@ describe("subagent task-level retry", () => {
 		expect(result.isError).toBe(true);
 	});
 
+	it("does not mark a parallel batch as an error while any task succeeded", async () => {
+		runSdkTaskMock
+			.mockImplementationOnce(succeedWith("good result"))
+			.mockImplementationOnce(failWith("insufficient_quota: billing hard limit reached"));
+		const result = await runSubagentInvocation({
+			params: {
+				tasks: [
+					{ agent: "worker", description: "First task", prompt: "Do the first." },
+					{ agent: "worker", description: "Second task", prompt: "Do the second." },
+				],
+			},
+			parentCwd: process.cwd(),
+			agents: [agent],
+			parent: parentContext(model()),
+			modelRuntime: {} as ModelRuntime,
+			agentDir: process.cwd(),
+			projectTrusted: false,
+			gate: new ConcurrencyGate(1),
+			taskRetryBaseDelayMs: 1,
+		});
+		expect(result.details.status).toBe("failed");
+		expect(result.isError).toBe(false);
+		expect(result.content).toContain("good result");
+		expect(result.content).toContain("insufficient_quota");
+	});
+
+	it("marks a parallel batch as an error when every task failed", async () => {
+		runSdkTaskMock.mockImplementation(failWith("insufficient_quota: billing hard limit reached"));
+		const result = await runSubagentInvocation({
+			params: {
+				tasks: [
+					{ agent: "worker", description: "First task", prompt: "Do the first." },
+					{ agent: "worker", description: "Second task", prompt: "Do the second." },
+				],
+			},
+			parentCwd: process.cwd(),
+			agents: [agent],
+			parent: parentContext(model()),
+			modelRuntime: {} as ModelRuntime,
+			agentDir: process.cwd(),
+			projectTrusted: false,
+			gate: new ConcurrencyGate(1),
+			taskRetryBaseDelayMs: 1,
+		});
+		expect(result.isError).toBe(true);
+		expect(result.details.status).toBe("failed");
+	});
+
 	it("does not retry once the run has produced work", async () => {
 		runSdkTaskMock.mockImplementation(async (options) => {
 			options.run.status = "failed";

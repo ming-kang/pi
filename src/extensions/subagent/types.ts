@@ -14,6 +14,13 @@ export interface AgentDefinition {
 	source: AgentSource;
 	filePath: string;
 	backend: "sdk";
+	/**
+	 * Skip loading AGENTS.md/CLAUDE.md into the worker's system prompt.
+	 * Read-only exploration doesn't need commit/PR/style rules; the parent
+	 * has full context to interpret results. Builtin-only, not a
+	 * frontmatter field.
+	 */
+	omitContextFiles?: boolean;
 }
 
 export interface AgentDiagnostic {

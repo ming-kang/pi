@@ -18,8 +18,9 @@ export const TASK_RETRY_BASE_DELAY_MS = 1_000;
 export const BUILTIN_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
 // Matches the parent session's default toolset; bash covers search needs.
 export const DEFAULT_AGENT_TOOLS = ["read", "bash", "edit", "write"] as const;
-// Read-only agents get the standalone search tools instead of bash.
-export const EXPLORER_TOOLS = ["read", "grep", "find", "ls"] as const;
+// Read-only agents get the standalone search tools plus bash for read-only
+// inspection (git history, counting); the system prompt constrains bash.
+export const EXPLORER_TOOLS = ["read", "grep", "find", "ls", "bash"] as const;
 
 export const THINKING_LEVELS = [
 	"off",

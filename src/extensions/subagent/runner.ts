@@ -448,8 +448,11 @@ function progressKey(runs: readonly SubagentRunDetails[]): string {
 		.join("~");
 }
 
-export function isSubagentError(details: Pick<SubagentDetails, "status">): boolean {
-	return details.status === "failed" || details.status === "aborted";
+export function isSubagentError(details: Pick<SubagentDetails, "status" | "runs">): boolean {
+	if (details.status !== "failed" && details.status !== "aborted") return false;
+	// A batch with any successful run is a partial result, not an error:
+	// per-run status is already reported in the content sections.
+	return !details.runs.some((run) => run.status === "completed");
 }
 
 export async function runSubagentInvocation(options: SubagentInvocationOptions): Promise<SubagentExecutionResult> {
