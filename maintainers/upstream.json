@@ -43,6 +43,7 @@
     "src/utils/output-decoder.ts",
     "test/bash-nul-redirect.test.ts",
     "test/bash-tool-rendering.test.ts",
+    "test/coalescing-terminal-scrollback.test.ts",
     "test/coalescing-terminal.test.ts",
     "test/helpers/virtual-terminal.ts",
     "test/output-decoder.test.ts",
