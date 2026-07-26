@@ -191,11 +191,16 @@ describe("subagent configuration", () => {
 		expect(legacy.profiles.reviewer).toEqual({});
 	});
 
-	it("rejects absolute and escaping subagent cwd values", () => {
+	it("accepts an absolute cwd inside the parent and rejects escapes", () => {
 		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-cwd-"));
 		temporaryDirectories.push(root);
 		expect(() => resolveTaskCwd(root, "../outside")).toThrow(/escapes/);
-		expect(() => resolveTaskCwd(root, root)).toThrow(/relative/);
+		// Models routinely echo the parent cwd back as an absolute path.
+		expect(resolveTaskCwd(root, root)).toBe(realpathSync(root));
+		const sub = join(root, "sub");
+		mkdirSync(sub, { recursive: true });
+		expect(resolveTaskCwd(root, sub)).toBe(realpathSync(sub));
+		expect(() => resolveTaskCwd(root, join(root, ".."))).toThrow(/stay inside/);
 	});
 
 	it("accepts a symlinked parent cwd and still blocks symlink escapes", () => {

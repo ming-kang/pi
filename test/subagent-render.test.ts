@@ -94,12 +94,12 @@ describe("subagent rendering", () => {
 		expect(output).toContain("1/1 complete");
 		expect(output).not.toContain("0 running");
 		expect(output).not.toContain("0 queued");
-		expect(output).toContain("Explorer · Map the code");
-		expect(output).toContain("3 tool uses");
+		expect(output).toContain("✓ 1 · Explorer · Map the code");
+		expect(output).toContain("120 tok · 1.5s");
 		expect(output).toContain("to expand");
 	});
 
-	it("groups collapsed activity by tool purpose instead of a bare tool-use count", () => {
+	it("keeps the settled parallel footer to whole-call numbers", () => {
 		const output = collapsed(
 			details({
 				usage: {
@@ -117,45 +117,17 @@ describe("subagent rendering", () => {
 						activities: [
 							{ id: "read-1", toolName: "read", summary: "read a.ts", status: "succeeded", startedAt: 0 },
 							{ id: "read-2", toolName: "read", summary: "read b.ts", status: "succeeded", startedAt: 0 },
-							{ id: "grep-1", toolName: "grep", summary: "search one", status: "succeeded", startedAt: 0 },
-							{ id: "grep-2", toolName: "grep", summary: "search two", status: "succeeded", startedAt: 0 },
 							{ id: "bash-1", toolName: "bash", summary: "run check", status: "succeeded", startedAt: 0 },
-							{ id: "bash-2", toolName: "bash", summary: "run test", status: "succeeded", startedAt: 0 },
 						],
 					}),
 				],
 			}),
 		);
-		expect(output).toContain("Read 2 files · searched 2 patterns · ran 2 commands · 1 earlier tool use");
+		expect(output).toContain("120 tok");
+		expect(output).not.toContain("Read 2 files");
+		expect(output).not.toContain("read a.ts");
 		expect(output).not.toContain("7 tool uses");
-	});
-
-	it("uses accurate singular and plural labels for path operations", () => {
-		const output = collapsed(
-			details({
-				usage: {
-					turns: 2,
-					toolUses: 4,
-					input: 20,
-					output: 100,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 120,
-					cost: 0,
-				},
-				runs: [
-					run({
-						activities: [
-							{ id: "find-1", toolName: "find", summary: "find one", status: "succeeded", startedAt: 0 },
-							{ id: "find-2", toolName: "find", summary: "find two", status: "succeeded", startedAt: 0 },
-							{ id: "ls-1", toolName: "ls", summary: "list one", status: "succeeded", startedAt: 0 },
-							{ id: "ls-2", toolName: "ls", summary: "list two", status: "succeeded", startedAt: 0 },
-						],
-					}),
-				],
-			}),
-		);
-		expect(output).toContain("Searched 2 path patterns · listed 2 directories");
+		expect(output).not.toContain("2 turns");
 	});
 
 	it("collapses a completed single run to a clean response excerpt", () => {
@@ -170,6 +142,7 @@ describe("subagent rendering", () => {
 		expect(output).not.toContain("[Output truncated");
 		expect(output).not.toMatch(/^completed$/mu);
 		expect(output).not.toContain("Explorer · Map the code");
+		expect(output).toContain("120 tok · 3 tool uses · 1.5s");
 	});
 
 	it("shows the current activity and live tail while a single run is in flight", () => {
@@ -192,9 +165,10 @@ describe("subagent rendering", () => {
 			}),
 			true,
 		);
-		expect(output).toContain("Exploring code");
+		expect(output).toContain("Exploring code · 2 tool uses");
 		expect(output).toContain("› Run ls -d */");
 		expect(output).toContain("The workspace has five extensions");
+		expect(output).not.toContain("tokens");
 		expect(output).not.toContain("●");
 		expect(output).not.toContain("to expand");
 	});
@@ -222,7 +196,7 @@ describe("subagent rendering", () => {
 		expect(output).not.toContain("Running commands");
 	});
 
-	it("shows per-run live tool and token metrics for parallel work", () => {
+	it("shows per-run live tool and context metrics for parallel work", () => {
 		const runningDetails = details({
 			status: "running",
 			endedAt: undefined,
@@ -240,6 +214,7 @@ describe("subagent rendering", () => {
 						cacheWrite: 0,
 						totalTokens: 1_250,
 						cost: 0,
+						contextTokens: 1_250,
 					},
 				}),
 				run({
@@ -263,10 +238,10 @@ describe("subagent rendering", () => {
 			],
 		});
 		const output = collapsed(runningDetails, true);
-		expect(output).toContain("3 tool uses · 1.3k tokens");
+		expect(output).toContain("3 tool uses · ctx:1.3k");
 		expect(output).toContain("Reviewer · Review the renderer");
 		expect(output).toContain("0 tool uses");
-		expect(output).not.toContain("0 tokens");
+		expect(output).not.toContain("tokens");
 		expect(output).not.toContain("●");
 		expect(output).toContain("2 running");
 		expect(output).not.toContain("0 queued");
@@ -277,7 +252,11 @@ describe("subagent rendering", () => {
 			theme,
 			false,
 		);
-		expect(component.render(120).join("\n")).toContain("3 tool uses · 1.3k tokens");
+		const expandedOutput = component.render(120).join("\n");
+		expect(expandedOutput).toContain("3 tool uses · ctx:1.3k");
+		// The batch trailer must not quote the cache-inflated aggregate
+		// while any run is still in flight.
+		expect(expandedOutput).not.toContain("120 tok");
 	});
 
 	it("keeps running tasks visible in a partial parallel batch", () => {
@@ -289,7 +268,9 @@ describe("subagent rendering", () => {
 			run({ id: "5", agent: "a5", description: "five", status: "running", currentActivity: "reading files" }),
 		];
 		const output = collapsed(details({ status: "running", endedAt: undefined, runs }), true);
-		expect(output).toContain("A5 · five");
+		// The ordinal is the task position, not the display slot, so the
+		// active-first reordering cannot scramble identity.
+		expect(output).toContain("5 · A5 · five");
 		expect(output).toContain("reading files");
 		expect(output).toContain("+1 more");
 	});
@@ -387,7 +368,7 @@ describe("subagent rendering", () => {
 		expect(output).not.toMatch(/\bthinking\b/u);
 	});
 
-	it("expands a single run without repeating the call header or usage", () => {
+	it("expands a single run into a report cover sheet without repeating the call header", () => {
 		const component = renderSubagentResult(
 			{
 				content: [{ type: "text", text: "done" }],
@@ -413,7 +394,7 @@ describe("subagent rendering", () => {
 									summary: "read entry.ts",
 									status: "succeeded",
 									startedAt: 1_200,
-									endedAt: 1_400,
+									endedAt: 13_000,
 								},
 							],
 						}),
@@ -425,13 +406,23 @@ describe("subagent rendering", () => {
 			false,
 		);
 		const output = component.render(120).join("\n");
+		expect(output).toContain("✓ Completed · test/model · low thinking");
+		expect(output).toContain("60 tok · 2 tool uses · 1 turn · 4.0s");
+		expect(output).toContain("Prompt");
+		expect(output).toContain("Inspect the code.");
+		expect(output).toContain("Report");
+		expect(output).not.toContain("Response");
+		expect(output).not.toContain("Task");
 		expect(output).not.toContain("Explorer · Map the code");
-		expect(output).not.toContain("[Output truncated");
 		expect(output).not.toContain("──");
-		expect(output.match(/tool use/gu)).toHaveLength(1);
-		expect(output).toContain("4.0s");
-		expect(output).toContain("Run ls -la · total 383 drwxr-xr-x … · 1.2s");
-		expect(output).not.toContain("read entry.ts ·");
+		// Success rows are quiet one-liners: no glyph, no result echo, and
+		// durations only when they explain where the time went.
+		expect(output).toContain("Run ls -la");
+		expect(output).not.toContain("✓ Run ls -la");
+		expect(output).not.toContain("total 383");
+		expect(output).not.toContain("[Output truncated");
+		expect(output).not.toContain("· 1.2s");
+		expect(output).toContain("read entry.ts · 12s");
 	});
 
 	it("numbers the expanded batch contents and matches them to section headers", () => {
@@ -452,8 +443,11 @@ describe("subagent rendering", () => {
 		const output = component.render(120).join("\n");
 		expect(output).toContain("✓ 1 · Explorer · Map the code");
 		expect(output).toContain("✓ 2 · Reviewer · Review it");
-		expect(output).toContain("── 1 · Explorer · Map the code");
-		expect(output).toContain("── 2 · Reviewer · Review it");
+		expect(output).toContain("── 1 ✓ Explorer · Map the code");
+		expect(output).toContain("── 2 ✓ Reviewer · Review it");
+		expect(output).toContain("test/model · low · 60 tok");
+		expect(output).toContain("120 tok · 3 tool uses · 2 turns · 1.5s");
+		expect(output.match(/Report/gu)).toHaveLength(2);
 		expect(output).not.toContain("●");
 	});
 
@@ -479,7 +473,163 @@ describe("subagent rendering", () => {
 			false,
 		);
 		const output = component.render(120).join("\n");
+		expect(output).toContain("› Running · test/model · low thinking");
+		expect(output).toContain("Working");
 		expect(output).toContain("Second finding");
 		expect(output).toContain("The retry loop lives in runner.ts");
+	});
+
+	it("never surfaces a truncation notice as the live tail line", () => {
+		const output = collapsed(
+			details({
+				mode: "single",
+				status: "running",
+				endedAt: undefined,
+				runs: [
+					run({
+						status: "running",
+						finalOutput: "",
+						liveText: "[Earlier output omitted.]\nNewest streamed line\n\n[Output truncated: 999 bytes omitted.]",
+					}),
+				],
+			}),
+			true,
+		);
+		expect(output).toContain("Newest streamed line");
+		expect(output).not.toContain("[Output truncated");
+		expect(output).not.toContain("[Earlier output omitted");
+		expect(output).not.toMatch(/^…$/mu);
+	});
+
+	it("omits the thinking segment when thinking is off", () => {
+		const component = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "done" }],
+				details: details({ mode: "single", runs: [run({ thinking: "off" })] }),
+			},
+			{ expanded: true, isPartial: false },
+			theme,
+			false,
+		);
+		const output = component.render(120).join("\n");
+		expect(output).toContain("✓ Completed · test/model");
+		expect(output).not.toContain("off");
+	});
+
+	it("previews the prompt head, skipping blank lines, and counts the rest", () => {
+		const component = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "done" }],
+				details: details({
+					mode: "single",
+					runs: [run({ prompt: "Line one\n\nLine two\nLine three\nLine four" })],
+				}),
+			},
+			{ expanded: true, isPartial: false },
+			theme,
+			false,
+		);
+		const output = component.render(120).join("\n");
+		expect(output).toContain("Line one");
+		expect(output).toContain("Line two");
+		expect(output).not.toContain("Line three");
+		expect(output).toContain("… continues, 2 more lines");
+	});
+
+	it("marks a one-line prompt clipped mid-sentence as continuing", () => {
+		const component = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "done" }],
+				details: details({
+					mode: "single",
+					runs: [run({ prompt: `Quick: ${"survey the repository and report ".repeat(8)}` })],
+				}),
+			},
+			{ expanded: true, isPartial: false },
+			theme,
+			false,
+		);
+		const output = component.render(200).join("\n");
+		expect(output).toContain("… continues");
+		expect(output).not.toContain("more lines");
+	});
+
+	it("marks a capped prompt preview without leaking the truncation notice", () => {
+		const component = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "done" }],
+				details: details({
+					mode: "single",
+					runs: [run({ prompt: "Briefing head\n\n[Output truncated: 900 bytes omitted.]" })],
+				}),
+			},
+			{ expanded: true, isPartial: false },
+			theme,
+			false,
+		);
+		const output = component.render(120).join("\n");
+		expect(output).toContain("Briefing head");
+		expect(output).toContain("… continues · capped at 1KB");
+		expect(output).not.toContain("[Output truncated");
+	});
+
+	it("labels a failed run's partial output and separates the error", () => {
+		const component = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "failed" }],
+				details: details({
+					mode: "single",
+					status: "failed",
+					runs: [
+						run({
+							status: "failed",
+							error: "worker crashed mid-flight",
+							finalOutput: "Got halfway through the migration.",
+						}),
+					],
+				}),
+			},
+			{ expanded: true, isPartial: false },
+			theme,
+			true,
+		);
+		const output = component.render(120).join("\n");
+		expect(output).toContain("× Failed · test/model · low thinking");
+		expect(output).toContain("Error");
+		expect(output).toContain("worker crashed mid-flight");
+		expect(output).toContain("Report · partial");
+	});
+
+	it("labels a clipped activity list with the retained window", () => {
+		const component = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "done" }],
+				details: details({
+					mode: "single",
+					runs: [
+						run({
+							usage: {
+								turns: 2,
+								toolUses: 5,
+								input: 10,
+								output: 50,
+								cacheRead: 0,
+								cacheWrite: 0,
+								totalTokens: 60,
+								cost: 0,
+							},
+							activities: [
+								{ id: "read-1", toolName: "read", summary: "read a.ts", status: "succeeded", startedAt: 0 },
+								{ id: "read-2", toolName: "read", summary: "read b.ts", status: "succeeded", startedAt: 0 },
+							],
+						}),
+					],
+				}),
+			},
+			{ expanded: true, isPartial: false },
+			theme,
+			false,
+		);
+		expect(component.render(120).join("\n")).toContain("Activity · last 2 of 5");
 	});
 });

@@ -2,7 +2,7 @@ import { relative } from "node:path";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai/compat";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
 import { sleep } from "../../utils/sleep.ts";
-import { boundText, emptyUsage, mergeUsage, toNestedUsage } from "./activity.ts";
+import { boundText, emptyUsage, mergeUsage, tailText, toNestedUsage } from "./activity.ts";
 import {
 	DETAILS_ACTIVITY_LIMIT,
 	DETAILS_OUTPUT_LIMIT,
@@ -156,7 +156,9 @@ export function boundSubagentDetails(details: SubagentDetails): SubagentDetails 
 				summary: boundText(activity.summary, 256),
 				resultSummary: activity.resultSummary ? boundText(activity.resultSummary, 256) : undefined,
 			})),
-			liveText: boundText(run.liveText, 1_024),
+			// liveText is a tail by construction: keep the newest lines, not the
+			// head, or the transcript's live tail would freeze at the 1KB mark.
+			liveText: tailText(run.liveText, 1_024),
 			finalOutput: boundText(run.finalOutput, outputLimit),
 			error: run.error ? boundText(run.error, 1_024) : undefined,
 		})),

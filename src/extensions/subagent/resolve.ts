@@ -34,9 +34,13 @@ function requirePathSeparator(): string {
 
 export function resolveTaskCwd(parentCwd: string, requestedCwd: string | undefined): string {
 	const value = normalizeCwdInput(requestedCwd);
-	if (value !== undefined && isAbsolute(value))
-		throw new Error("cwd must be a relative path inside the parent working directory.");
-	const candidate = resolve(parentCwd, value ?? ".");
+	// Models routinely echo the parent working directory back as an absolute
+	// path; accept an absolute cwd that stays inside the parent instead of
+	// failing the whole task over path style.
+	const absolute = value !== undefined && isAbsolute(value);
+	if (absolute && !isWithin(resolve(parentCwd), resolve(value)))
+		throw new Error("cwd must stay inside the parent working directory.");
+	const candidate = absolute ? resolve(value) : resolve(parentCwd, value ?? ".");
 	// Lexical check first: candidate and parent are both un-realpathed here,
 	// so a symlinked parent (macOS /tmp, junctions) compares consistently and
 	// only genuine ".." traversal fails. Symlink escapes are caught below by

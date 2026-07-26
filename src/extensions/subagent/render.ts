@@ -10,16 +10,14 @@ const SINGLE_EXCERPT_LIMIT = 200;
 const RUN_LINE_EXCERPT_LIMIT = 64;
 const LIVE_TAIL_LIMIT = 100;
 const COLLAPSED_RUN_LIMIT = 4;
-
-const ACTIVITY_GROUPS = [
-	{ toolName: "read", verb: "read", singular: "file", plural: "files" },
-	{ toolName: "grep", verb: "searched", singular: "pattern", plural: "patterns" },
-	{ toolName: "find", verb: "searched", singular: "path pattern", plural: "path patterns" },
-	{ toolName: "ls", verb: "listed", singular: "directory", plural: "directories" },
-	{ toolName: "bash", verb: "ran", singular: "command", plural: "commands" },
-	{ toolName: "edit", verb: "edited", singular: "file", plural: "files" },
-	{ toolName: "write", verb: "wrote", singular: "file", plural: "files" },
-] as const;
+const PROMPT_PREVIEW_LINES = 2;
+const PROMPT_PREVIEW_LINE_LIMIT = 120;
+const ACTIVITY_SUMMARY_LIMIT = 96;
+const ACTIVITY_RESULT_LIMIT = 64;
+// Sub-10s tool calls are routine; a duration only earns ink when it
+// explains where the time went.
+const ACTIVITY_DURATION_MIN_MS = 10_000;
+const EXPANDED_LIVE_TAIL_LINES = 3;
 
 // Display-only: profile names stay lowercase everywhere the model sees
 // them; the transcript shows "general" as "General", "code-reviewer" as
@@ -65,19 +63,28 @@ function stripBlockMarkdown(text: string): string {
 		.join("\n");
 }
 
+// finalOutput/liveText carry model-facing truncation notices from
+// boundText/tailText; in the transcript an ellipsis is enough. Covers the
+// minimal "[Output truncated.]" fallback boundText emits on tiny budgets.
+const TRUNCATION_NOTICE_PATTERN = /\[(?:Output truncated(?:: \d+ bytes omitted)?\.|Earlier output omitted\.)\]/gu;
+const TRUNCATION_NOTICE_LINE_PATTERN = /^\[(?:Output truncated|Earlier output omitted)/u;
+
 function excerpt(text: string, limit: number): string {
-	// finalOutput/liveText carry model-facing truncation notices from
-	// boundText/tailText; in the transcript an ellipsis is enough.
-	const cleaned = text.replace(/\[(?:Output truncated(?:: \d+ bytes omitted\.)?|Earlier output omitted\.)\]/gu, "…");
+	const cleaned = text.replace(TRUNCATION_NOTICE_PATTERN, "…");
 	return truncate(stripInlineMarkdown(stripBlockMarkdown(cleaned)).replace(/\s+/gu, " ").trim(), limit);
 }
 
-function liveTail(run: SubagentRunDetails): string | undefined {
-	const lines = run.liveText
+// A notice-only line must never become the "live" line the user watches.
+function liveTailLines(run: SubagentRunDetails): string[] {
+	return run.liveText
 		.split("\n")
 		.map((line) => line.trim())
-		.filter(Boolean);
-	const last = lines.at(-1);
+		.filter(Boolean)
+		.filter((line) => !TRUNCATION_NOTICE_LINE_PATTERN.test(line));
+}
+
+function liveTail(run: SubagentRunDetails): string | undefined {
+	const last = liveTailLines(run).at(-1);
 	return last ? excerpt(last, LIVE_TAIL_LIMIT) : undefined;
 }
 
@@ -143,21 +150,50 @@ function liveElapsed(run: SubagentRunDetails): string | undefined {
 	return formatDuration(Math.max(0, (end - run.startedAt) / 1000));
 }
 
+function statusColor(status: SubagentRunStatus): "success" | "error" | "warning" | "accent" | "muted" {
+	switch (status) {
+		case "completed":
+			return "success";
+		case "failed":
+			return "error";
+		case "aborted":
+			return "warning";
+		case "running":
+			return "accent";
+		default:
+			return "muted";
+	}
+}
+
 // The tool shell already paints a call-level status dot (● in
 // warning/success/error), so `●` is off-limits here: `›` marks where the
 // work currently is, and the remaining glyphs are terminal states.
 function statusMarker(status: SubagentRunStatus, theme: Theme): string {
+	const glyph =
+		status === "completed"
+			? "✓"
+			: status === "failed"
+				? "×"
+				: status === "aborted"
+					? "■"
+					: status === "running"
+						? "›"
+						: "○";
+	return theme.fg(statusColor(status), glyph);
+}
+
+function statusWord(status: SubagentRunStatus): string {
 	switch (status) {
 		case "completed":
-			return theme.fg("success", "✓");
+			return "Completed";
 		case "failed":
-			return theme.fg("error", "×");
+			return "Failed";
 		case "aborted":
-			return theme.fg("warning", "■");
+			return "Aborted";
 		case "running":
-			return theme.fg("accent", "›");
+			return "Running";
 		default:
-			return theme.fg("muted", "○");
+			return "Queued";
 	}
 }
 
@@ -166,9 +202,12 @@ function runTitle(run: SubagentRunDetails, theme: Theme, index?: number): string
 	return `${statusMarker(run.status, theme)} ${number}${theme.fg("accent", displayAgentName(run.agent))}${theme.fg("dim", ` · ${truncate(run.description, 48)}`)}`;
 }
 
+// Mid-run token totals are cache-inflated (totalTokens sums cache reads
+// across turns), so live lines quote tool uses and the context watermark
+// instead; settled lines get the real total.
 function runProgressText(run: SubagentRunDetails): string {
 	const items = [`${run.usage.toolUses} tool use${run.usage.toolUses === 1 ? "" : "s"}`];
-	if (run.usage.totalTokens) items.push(`${formatTokens(run.usage.totalTokens)} tokens`);
+	if (run.usage.contextTokens) items.push(`ctx:${formatTokens(run.usage.contextTokens)}`);
 	return items.join(" · ");
 }
 
@@ -220,6 +259,7 @@ function singleCollapsedLines(details: SubagentDetails, theme: Theme): string[] 
 		let status = theme.fg("dim", intent);
 		if (run.status === "running" && !isInitializing) {
 			status += theme.fg("dim", ` · ${runProgressText(run)}`);
+			if (run.usage.cost) status += theme.fg("dim", ` · $${run.usage.cost.toFixed(3)}`);
 			const elapsed = liveElapsed(run);
 			if (elapsed) status += theme.fg("dim", ` · ${elapsed}`);
 		}
@@ -236,44 +276,35 @@ function singleCollapsedLines(details: SubagentDetails, theme: Theme): string[] 
 	return [theme.fg("muted", run.status)];
 }
 
-function activitySummaryText(details: SubagentDetails): string {
-	const toolCounts = new Map<string, number>();
-	let activityCount = 0;
-	for (const run of details.runs) {
-		for (const activity of run.activities) {
-			activityCount++;
-			toolCounts.set(activity.toolName, (toolCounts.get(activity.toolName) ?? 0) + 1);
-		}
-	}
-	const items: string[] = [];
-	let groupedCount = 0;
-	for (const group of ACTIVITY_GROUPS) {
-		const count = toolCounts.get(group.toolName) ?? 0;
-		if (count === 0) continue;
-		groupedCount += count;
-		items.push(`${group.verb} ${count} ${count === 1 ? group.singular : group.plural}`);
-	}
-	const otherCount = activityCount - groupedCount;
-	if (otherCount > 0) items.push(`used ${otherCount} other tool${otherCount === 1 ? "" : "s"}`);
-	if (items.length === 0) return "";
-	const earlierCount = Math.max(0, details.usage.toolUses - activityCount);
-	if (earlierCount > 0) items.push(`${earlierCount} earlier tool use${earlierCount === 1 ? "" : "s"}`);
-	return `${items[0]![0]!.toUpperCase()}${items[0]!.slice(1)}${items
-		.slice(1)
-		.map((item) => ` · ${item}`)
-		.join("")}`;
-}
-
-function usageText(details: SubagentDetails, includeToolUses = true): string {
+// Deep-trimmed settled footer: turns and per-run breakdowns belong to the
+// expanded view. Parallel batches keep only whole-call numbers — the run
+// rows above already localize the work.
+function collapsedUsageText(details: SubagentDetails, extended: boolean): string {
 	const usage = details.usage;
 	const items: string[] = [];
-	if (includeToolUses && usage.toolUses) items.push(`${usage.toolUses} tool use${usage.toolUses === 1 ? "" : "s"}`);
+	if (usage.totalTokens) items.push(`${formatTokens(usage.totalTokens)} tok`);
+	if (extended && usage.toolUses) items.push(`${usage.toolUses} tool use${usage.toolUses === 1 ? "" : "s"}`);
+	if (extended && usage.contextTokens) items.push(`ctx:${formatTokens(usage.contextTokens)}`);
+	if (usage.cost) items.push(`$${usage.cost.toFixed(3)}`);
+	if (details.endedAt !== undefined) {
+		items.push(formatDuration(Math.max(0, (details.endedAt - details.startedAt) / 1000)));
+	}
+	return items.join(" · ");
+}
+
+function batchUsageText(details: SubagentDetails, isPartial: boolean): string {
+	const usage = details.usage;
+	const items: string[] = [];
+	// The aggregate mixes settled and running runs while partial, and the
+	// running share is cache-inflated — quote the total only once settled.
+	if (!isPartial && usage.totalTokens) items.push(`${formatTokens(usage.totalTokens)} tok`);
+	if (usage.toolUses) items.push(`${usage.toolUses} tool use${usage.toolUses === 1 ? "" : "s"}`);
 	if (usage.turns) items.push(`${usage.turns} turn${usage.turns === 1 ? "" : "s"}`);
-	if (usage.output) items.push(`↓${formatTokens(usage.output)}`);
 	if (usage.contextTokens) items.push(`ctx:${formatTokens(usage.contextTokens)}`);
 	if (usage.cost) items.push(`$${usage.cost.toFixed(3)}`);
-	const duration = details.endedAt ? Math.max(0, (details.endedAt - details.startedAt) / 1000) : undefined;
-	if (duration !== undefined) items.push(formatDuration(duration));
+	if (details.endedAt !== undefined) {
+		items.push(formatDuration(Math.max(0, (details.endedAt - details.startedAt) / 1000)));
+	}
 	return items.join(" · ");
 }
 
@@ -288,59 +319,128 @@ function formatDuration(seconds: number): string {
 	return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
 }
 
-// A single run's title and usage would duplicate the call header and
-// the call-level usage line, so `single` drops both and folds the
-// duration into the metadata line instead. Multi-run sections carry a
-// numbered `──` header that matches the table of contents above them.
+function runDurationText(run: SubagentRunDetails): string | undefined {
+	if (run.startedAt === undefined || run.endedAt === undefined) return undefined;
+	return formatDuration(Math.max(0, (run.endedAt - run.startedAt) / 1000));
+}
+
+// One dim line per run: what it cost. Settled runs quote the real token
+// total; running runs skip it (cache-inflated mid-run) and tick elapsed
+// time instead. Batch sections fold model/thinking/cwd in here because
+// their `──` header already carries verdict and duration.
+function runMetricsText(run: SubagentRunDetails, includeIdentity: boolean): string {
+	const usage = run.usage;
+	const settled = run.status !== "running" && run.status !== "queued";
+	const items: string[] = [];
+	if (includeIdentity) {
+		items.push(run.model);
+		if (run.thinking !== "off") items.push(run.thinking);
+		if (run.cwd) items.push(`cwd: ${run.cwd}`);
+	}
+	if (settled && usage.totalTokens) items.push(`${formatTokens(usage.totalTokens)} tok`);
+	if (usage.toolUses) items.push(`${usage.toolUses} tool use${usage.toolUses === 1 ? "" : "s"}`);
+	if (usage.turns) items.push(`${usage.turns} turn${usage.turns === 1 ? "" : "s"}`);
+	if (usage.contextTokens) items.push(`ctx:${formatTokens(usage.contextTokens)}`);
+	if (usage.cost) items.push(`$${usage.cost.toFixed(3)}`);
+	const duration = settled ? (includeIdentity ? undefined : runDurationText(run)) : liveElapsed(run);
+	if (duration) items.push(duration);
+	return items.join(" · ");
+}
+
+// The details prompt is a 1KB bounded copy of the briefing; the preview
+// shows the first content lines (blank lines carry nothing at two lines
+// of budget) and never pretends to more fidelity than that.
+function promptSection(run: SubagentRunDetails, theme: Theme): string[] {
+	const capped = run.prompt.includes("[Output truncated");
+	const cleaned = run.prompt.replace(/\n*\[Output truncated[^\]]*\]/gu, "").trimEnd();
+	const lines = cleaned
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean);
+	const shown = lines.slice(0, PROMPT_PREVIEW_LINES);
+	const preview = shown.map((line) => theme.fg("dim", excerpt(line, PROMPT_PREVIEW_LINE_LIMIT)));
+	// A one-line briefing clipped mid-sentence must still say it continues.
+	const clipped = shown.some((line) => excerpt(line, Number.MAX_SAFE_INTEGER).length > PROMPT_PREVIEW_LINE_LIMIT);
+	const remaining = lines.length - shown.length;
+	const section = [theme.fg("muted", "Prompt"), ...preview];
+	if (remaining > 0 || capped || clipped) {
+		let note = "… continues";
+		if (remaining > 0) note += `, ${remaining} more line${remaining === 1 ? "" : "s"}`;
+		if (capped) note += " · capped at 1KB";
+		section.push(theme.fg("muted", note));
+	}
+	return section;
+}
+
+// Each run expands into a report cover sheet: verdict and cost up top, a
+// bounded Prompt/Activity digest in the middle, then the full Report —
+// the one unbounded element, placed last so the card ends where reading
+// begins. Single runs skip the `──` header (the call header already names
+// them); batch sections carry a numbered header matching the contents
+// list above.
 function renderRunDetails(run: SubagentRunDetails, theme: Theme, single: boolean, index?: number): Component {
 	const container = new Container();
-	const duration =
-		run.startedAt !== undefined && run.endedAt !== undefined
-			? formatDuration(Math.max(0, (run.endedAt - run.startedAt) / 1000))
-			: undefined;
-	if (!single) {
-		const label = index === undefined ? "" : `${index} · `;
+	const settled = run.status !== "running" && run.status !== "queued";
+	if (single) {
+		const identity = [run.model];
+		if (run.thinking !== "off") identity.push(`${run.thinking} thinking`);
+		if (run.cwd) identity.push(`cwd: ${run.cwd}`);
 		container.addChild(
 			new Text(
-				`${theme.fg("dim", `── ${label}`)}${theme.fg("accent", displayAgentName(run.agent))}${theme.fg("dim", ` · ${truncate(run.description, 48)}`)}`,
+				`${statusMarker(run.status, theme)} ${theme.fg(statusColor(run.status), statusWord(run.status))}${theme.fg("dim", ` · ${identity.join(" · ")}`)}`,
+				0,
+				0,
+			),
+		);
+	} else {
+		const label = index === undefined ? "" : `${index} `;
+		const duration = settled ? runDurationText(run) : undefined;
+		container.addChild(
+			new Text(
+				`${theme.fg("dim", `── ${label}`)}${statusMarker(run.status, theme)} ${theme.fg("accent", displayAgentName(run.agent))}${theme.fg("dim", ` · ${truncate(run.description, 48)}`)}${duration ? theme.fg("dim", ` · ${duration}`) : ""}`,
 				0,
 				0,
 			),
 		);
 	}
-	container.addChild(new Text(theme.fg("muted", "Task"), 0, 0));
-	container.addChild(new Text(theme.fg("dim", run.prompt), 0, 0));
+	if (run.status !== "queued") {
+		const metrics = runMetricsText(run, !single);
+		if (metrics) container.addChild(new Text(theme.fg("dim", metrics), 0, 0));
+	}
+	container.addChild(new Spacer(1));
+	for (const line of promptSection(run, theme)) container.addChild(new Text(line, 0, 0));
 	if (run.activities.length > 0) {
 		container.addChild(new Spacer(1));
-		container.addChild(new Text(theme.fg("muted", "Activity"), 0, 0));
+		const total = run.usage.toolUses;
+		const label = total > run.activities.length ? `Activity · last ${run.activities.length} of ${total}` : "Activity";
+		container.addChild(new Text(theme.fg("muted", label), 0, 0));
 		for (const activity of run.activities) {
-			const marker =
-				activity.status === "succeeded"
-					? theme.fg("success", "✓")
-					: activity.status === "failed"
-						? theme.fg("error", "×")
-						: theme.fg("accent", "›");
-			let text = `${marker} ${theme.fg("toolOutput", excerpt(activity.summary, 96))}`;
-			if (activity.resultSummary) {
-				const color = activity.status === "failed" ? "error" : "dim";
-				text += ` ${theme.fg(color, `· ${excerpt(activity.resultSummary, 64)}`)}`;
+			// Deviation earns ink: × and › are marked, success rows are quiet
+			// one-liners without result echoes.
+			let text: string;
+			if (activity.status === "failed") {
+				text = `${theme.fg("error", "×")} ${theme.fg("toolOutput", excerpt(activity.summary, ACTIVITY_SUMMARY_LIMIT))}`;
+				if (activity.resultSummary) {
+					text += ` ${theme.fg("error", `· ${excerpt(activity.resultSummary, ACTIVITY_RESULT_LIMIT)}`)}`;
+				}
+			} else if (activity.status === "running") {
+				text = `${theme.fg("accent", "›")} ${theme.fg("toolOutput", excerpt(activity.summary, ACTIVITY_SUMMARY_LIMIT))}`;
+			} else {
+				text = theme.fg("toolOutput", excerpt(activity.summary, ACTIVITY_SUMMARY_LIMIT));
 			}
-			if (activity.endedAt !== undefined && activity.endedAt - activity.startedAt >= 1_000) {
+			if (activity.endedAt !== undefined && activity.endedAt - activity.startedAt >= ACTIVITY_DURATION_MIN_MS) {
 				text += ` ${theme.fg("dim", `· ${formatDuration((activity.endedAt - activity.startedAt) / 1000)}`)}`;
 			}
 			container.addChild(new Text(text, 0, 0));
 		}
 	}
-	// The live tail is the "now" end of the timeline, so it sits after the
-	// activity list; once the run settles, Response takes its place.
+	// The live tail is the "now" end of the timeline; once the run settles,
+	// Report takes this slot without moving anything above it.
 	if (run.status === "running" && run.liveText) {
-		const tail = run.liveText
-			.split("\n")
-			.map((line) => line.trim())
-			.filter(Boolean)
-			.slice(-4);
+		const tail = liveTailLines(run).slice(-EXPANDED_LIVE_TAIL_LINES);
 		if (tail.length > 0) {
 			container.addChild(new Spacer(1));
+			container.addChild(new Text(theme.fg("muted", "Working"), 0, 0));
 			for (const line of tail) {
 				container.addChild(new Text(theme.fg("dim", excerpt(line, LIVE_TAIL_LIMIT)), 0, 0));
 			}
@@ -348,28 +448,14 @@ function renderRunDetails(run: SubagentRunDetails, theme: Theme, single: boolean
 	}
 	if (run.error) {
 		container.addChild(new Spacer(1));
-		container.addChild(new Text(theme.fg("error", `Error: ${run.error}`), 0, 0));
+		container.addChild(new Text(theme.fg("muted", "Error"), 0, 0));
+		container.addChild(new Text(theme.fg("error", run.error), 0, 0));
 	}
 	if (run.finalOutput) {
 		container.addChild(new Spacer(1));
-		container.addChild(new Text(theme.fg("muted", "Response"), 0, 0));
+		const label = settled && run.status !== "completed" ? "Report · partial" : "Report";
+		container.addChild(new Text(theme.fg("muted", label), 0, 0));
 		container.addChild(new Markdown(run.finalOutput, 0, 0, getMarkdownTheme()));
-	}
-	const metadata = [
-		`${run.model} · ${run.thinking}`,
-		run.cwd ? `cwd: ${run.cwd}` : undefined,
-		run.usage.toolUses ? `${run.usage.toolUses} tool use${run.usage.toolUses === 1 ? "" : "s"}` : undefined,
-		run.usage.turns ? `${run.usage.turns} turn${run.usage.turns === 1 ? "" : "s"}` : undefined,
-		run.usage.output ? `↓${formatTokens(run.usage.output)}` : undefined,
-		run.usage.contextTokens ? `ctx:${formatTokens(run.usage.contextTokens)}` : undefined,
-		run.usage.cost ? `$${run.usage.cost.toFixed(3)}` : undefined,
-		single ? duration : undefined,
-	]
-		.filter((item): item is string => Boolean(item))
-		.join(" · ");
-	if (metadata) {
-		container.addChild(new Spacer(1));
-		container.addChild(new Text(theme.fg("dim", metadata), 0, 0));
 	}
 	return container;
 }
@@ -412,6 +498,10 @@ export function renderSubagentResult(
 		const text = result.content.find((part) => part.type === "text");
 		return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
 	}
+	// The pre-resolution first paint carries no runs yet, in either mode.
+	if (details.runs.length === 0) {
+		return new Text(theme.fg("muted", "Initializing…"), 0, 0);
+	}
 	if (!options.expanded) {
 		const lines: string[] = [];
 		if (details.mode === "single") {
@@ -423,15 +513,18 @@ export function renderSubagentResult(
 			}
 			lines.push(theme.fg(isError ? "error" : options.isPartial ? "accent" : "muted", header));
 			const shown = selectCollapsedRuns(details.runs, Boolean(options.isPartial));
-			for (const run of shown) lines.push(runLine(run, theme));
+			// Stable ordinals (the run's task position, not its display slot)
+			// keep identity readable while active-first ordering reshuffles
+			// rows, and match the expanded section numbers.
+			for (const run of shown) lines.push(runLine(run, theme, details.runs.indexOf(run) + 1));
 			const hidden = details.runs.length - shown.length;
 			if (hidden > 0) lines.push(theme.fg("muted", `+${hidden} more`));
 		}
-		const activitySummary = activitySummaryText(details);
-		if (activitySummary) lines.push(theme.fg("dim", activitySummary));
-		const usage = usageText(details, !activitySummary);
-		if (usage) lines.push(theme.fg("dim", usage));
-		if (!options.isPartial) lines.push(theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`));
+		if (!options.isPartial) {
+			const usage = collapsedUsageText(details, details.mode === "single");
+			if (usage) lines.push(theme.fg("dim", usage));
+			lines.push(theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`));
+		}
 		return new Text(lines.join("\n"), 0, 0);
 	}
 	const container = new Container();
@@ -450,7 +543,7 @@ export function renderSubagentResult(
 		container.addChild(renderRunDetails(run, theme, single, single ? undefined : index + 1));
 	});
 	if (!single) {
-		const usage = usageText(details);
+		const usage = batchUsageText(details, Boolean(options.isPartial));
 		if (usage) {
 			container.addChild(new Spacer(1));
 			container.addChild(new Text(theme.fg("dim", usage), 0, 0));

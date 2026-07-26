@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Redesigned the subagent transcript around a deep-trimmed collapsed card and a report-cover-sheet expanded view. Collapsed: a running single delegation folds to at most three lines — the intent line now carries tool uses, the `ctx:` watermark, cost, and elapsed time — and a settled card ends with one `tok · tool uses · ctx · $ · duration` metrics line; parallel batches drop the cross-run activity digest, gain stable dim ordinals on run rows (matching the expanded section numbers, immune to active-first reordering), and settle to a `tok · $ · duration` footer. Live lines never quote token totals, which are cache-inflated mid-run. Expanded (`ctrl+o`): each run renders a status line (`✓ Completed · model · thinking`), a metrics line, a fixed two-line `Prompt` preview with honest continuation notes (`… continues, N more lines · capped at 1KB`), an `Activity · last n of N` digest whose successful rows are quiet one-liners (glyphs only for failures and the in-flight row, durations only at ten seconds or longer), a `Working` tail of the last three live lines while streaming, and the full `Report` (or `Error`, with `Report · partial` for salvaged output) rendered as Markdown — replacing the full prompt echo, the glyphed activity dump, and the trailing metadata line. See [subagent](docs/bundled/extensions/subagent.md).
+- The subagent tool now accepts an absolute task `cwd` that stays inside the parent working directory — models routinely echo the parent cwd back verbatim — instead of failing the task over path style; escapes are still rejected.
+
+### Fixed
+
+- Fixed the subagent live tail freezing into a lone `…` once a worker streamed more than 1KB of text: bounded details now keep the newest `liveText` via tail-bounding instead of head-bounding, and the renderer skips truncation-notice lines outright, in both the collapsed tail line and the expanded `Working` section.
+- Fixed the expanded parallel batch trailer quoting the cache-inflated aggregate token total while runs were still in flight; the trailer now omits `tok` until the batch settles, matching every other live line.
+- Fixed the subagent card sitting empty while first-use model-runtime creation or task resolution stalled: the tool now paints `Initializing…` before its first await.
+- Transcript excerpt scrubbing now also covers `boundText`'s minimal `[Output truncated.]` notice, and a worker running with `thinking: off` no longer renders a bare `off` segment in expanded batch metrics.
+
 ## [0.82.5] - 2026-07-26
 
 ### Added

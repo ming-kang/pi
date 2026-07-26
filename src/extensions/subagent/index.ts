@@ -11,6 +11,7 @@ import type {
 } from "../../core/extensions/types.ts";
 import type { ModelRegistry } from "../../core/model-registry.ts";
 import { ModelRuntime } from "../../core/model-runtime.ts";
+import { emptyUsage } from "./activity.ts";
 import { discoverAgents, subagentToolDescription } from "./agents.ts";
 import { SUBAGENT_COMMAND_NAME, SUBAGENT_TOOL_LABEL, SUBAGENT_TOOL_NAME, THINKING_LEVELS } from "./constants.ts";
 import { type PickerItem, SearchPickerComponent } from "./picker.ts";
@@ -235,6 +236,19 @@ export default function subagent(pi: ExtensionAPI): void {
 			],
 			parameters: SubagentParamsSchema,
 			async execute(_toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<SubagentDetails>> {
+				// First paint before any await: model-runtime creation and task
+				// resolution can stall on first use (network, filesystem), and
+				// the transcript card must not sit empty while they do.
+				onUpdate?.({
+					content: [{ type: "text", text: "Initializing…" }],
+					details: {
+						mode: params.tasks ? "parallel" : "single",
+						status: "running",
+						runs: [],
+						startedAt: Date.now(),
+						usage: emptyUsage(),
+					},
+				});
 				const discovery = discoverAgents(ctx.cwd, {
 					projectTrusted: ctx.isProjectTrusted(),
 					agentDir: getAgentDir(),
