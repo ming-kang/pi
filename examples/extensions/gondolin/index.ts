@@ -6,13 +6,11 @@
  * /workspace write through to the host; other guest filesystem changes are
  * isolated to the VM.
  *
- * Setup:
- *   cd packages/coding-agent/examples/extensions/gondolin
- *   npm install --ignore-scripts
+ * Setup (from the repository or package root):
+ *   npm install --ignore-scripts --prefix examples/extensions/gondolin
  *
- * Usage:
- *   cd /path/to/project
- *   pi -e /path/to/pi/packages/coding-agent/examples/extensions/gondolin
+ * Usage (from the project that should be mounted at /workspace):
+ *   pi -e /absolute/path/to/pi/examples/extensions/gondolin
  *
  * Requirements:
  *   - Node.js >= 23.6.0 for @earendil-works/gondolin

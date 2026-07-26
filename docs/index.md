@@ -1,8 +1,8 @@
-# Pi user and API documentation
+# @astralyn/pi user and API documentation
 
-Pi is a minimal terminal coding harness. It is designed to stay small at the core while being extended through TypeScript extensions, skills, prompt templates, themes, and pi packages.
+@astralyn/pi is a minimal terminal coding harness. It is designed to stay small at the core while being extended through TypeScript extensions, skills, prompt templates, themes, and pi packages.
 
-This documentation covers product usage and public APIs. Distribution architecture, bundled behavior, upstream synchronization, and publishing are documented in [`docs/distribution/`](distribution/README.md).
+This documentation is owned by @astralyn/pi and describes the behavior of the installed npm package, including its bundled features and public APIs. Upstream Pi documentation and release tags are used only as synchronization input; they are not the user-facing source for these docs.
 
 ## Quick start
 
@@ -45,6 +45,15 @@ For the full first-run flow, see [Quickstart](quickstart.md).
 - [Sessions](sessions.md) - session management, branching, and tree navigation.
 - [Compaction](compaction.md) - context compaction and branch summarization.
 
+## Bundled features
+
+The installed package includes built-in extensions, themes, and native tool presentation:
+
+- [Bundled overview](bundled/README.md) - package features and how they fit together.
+- [Bundled extensions](bundled/extensions/README.md) - catalog and links to every bundled extension.
+- [Bundled themes](bundled/themes.md) - the ice-cream themes included with the package.
+- [Native tool presentation](bundled/tool-presentation.md) - the shared tool-call and result layout.
+
 ## Customization
 
 - [Extensions](extensions.md) - TypeScript modules for tools, commands, events, and custom UI.
@@ -74,7 +83,3 @@ For the full first-run flow, see [Quickstart](quickstart.md).
 - [tmux](tmux.md)
 - [Terminal setup](terminal-setup.md)
 - [Shell aliases](shell-aliases.md)
-
-## Development
-
-- [Development](development.md) - local setup, project structure, and debugging.

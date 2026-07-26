@@ -93,10 +93,3 @@ They apply only to future subagent runs and never change the parent session's `/
 
 There are no background agents, persistent worker IDs, unread state, fleet panel, statusline widget, send/stop/resume control plane, completion notifications, swarm/coordinator, worktree isolation, nested agents, MCP, hooks, or agent memory.
 
-**Files:** `src/extensions/subagent/`
-
-- `index.ts` — registration, parent provider synchronization, `/agents`, shutdown cleanup
-- `agents.ts` / `settings.ts` / `resolve.ts` — profile discovery, persistent overrides, task validation
-- `sdk-runner.ts` / `runner.ts` — isolated sessions, progress, abort, concurrency, modes
-- `activity.ts` / `render.ts` — bounded evidence, usage, native transcript rendering
-- `schema.ts` / `types.ts` / `constants.ts` — public tool contract and data model

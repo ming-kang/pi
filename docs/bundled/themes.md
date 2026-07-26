@@ -1,8 +1,8 @@
 # Bundled theme design
 
-This document describes the themes shipped by the distribution. For theme discovery, JSON format, and custom theme authoring, see the [Theme API documentation](../themes.md).
+This document describes the themes shipped in the `@astralyn/pi` package. For theme discovery, JSON format, and custom theme authoring, see the [Theme API documentation](../themes.md).
 
-The Fork bundles two Pi themes using the native theme schema and loader:
+The package bundles two Pi themes using the native theme schema and loader:
 
 | Theme | Use |
 |---|---|
@@ -46,13 +46,6 @@ The palette keeps an ice-cream / sea-salt identity: cool cyan-blue accents with 
 
 Bundled dialogs, overlays, and the statusline use semantic theme helpers such as `theme.fg(...)` and `theme.bg(...)`. They do not hard-code ANSI colors or hex values.
 
-## Theme files
+## Theme assets
 
-The source assets are:
-
-```text
-src/modes/interactive/theme/ice-cream-dark.json
-src/modes/interactive/theme/ice-cream-light.json
-```
-
-The normal package build copies all theme JSON assets into the runtime package. The themes use the schema at `src/modes/interactive/theme/theme-schema.json`.
+The built-in theme names are stable user-facing identifiers. In an installed package, the JSON assets are available under `dist/modes/interactive/theme/` if you need to inspect them; normal use does not require accessing those internal files.

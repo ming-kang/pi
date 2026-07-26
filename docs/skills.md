@@ -131,7 +131,7 @@ cd /path/to/skill && npm install
 Use relative paths from the skill directory:
 
 ```markdown
-See [the reference guide](references/REFERENCE.md) for details.
+See the reference guide at `references/REFERENCE.md` for details.
 ```
 
 ## Frontmatter

@@ -46,14 +46,3 @@ The transcript uses a private `renderCall` / `renderResult` only to replace raw 
 - `validateQuestions` enforces uniqueness, reserved-label rejection, and text budgets beyond what the JSON schema can express.
 - Dialog navigation follows Pi's injected select/input keybindings where applicable; custom actions such as Space-to-toggle remain explicit in the footer.
 
-**Files:**
-
-- `constants.ts` — tool identity and model-facing prompt copy
-- `index.ts` — tool registration and execution
-- `dialog.ts` — interactive dialog, review, and discussion flow
-- `schema.ts` — params and semantic validation
-- `state.ts` — per-question dialog state helpers and answer ordering
-- `results.ts` — bounded model-result builders
-- `render.ts` — compact transcript summaries within Pi's native tool frame
-- `limits.ts` — UI and model-output budgets
-- `types.ts` — shared interfaces and the `OTHER_OPTION` sentinel

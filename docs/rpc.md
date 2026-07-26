@@ -2,7 +2,7 @@
 
 RPC mode enables headless operation of the coding agent via a JSON protocol over stdin/stdout. This is useful for embedding the agent in other applications, IDEs, or custom UIs.
 
-**Note for Node.js/TypeScript users**: If you're building a Node.js application, consider using `AgentSession` directly from `@astralyn/pi` instead of spawning a subprocess. See [`src/core/agent-session.ts`](../src/core/agent-session.ts) for the API. For a subprocess-based TypeScript client, see [`src/modes/rpc/rpc-client.ts`](../src/modes/rpc/rpc-client.ts).
+**Note for Node.js/TypeScript users**: If you're building a Node.js application, consider using `AgentSession` directly from `@astralyn/pi` instead of spawning a subprocess; see the [public SDK API](sdk.md). For a subprocess-based client, use the RPC protocol described below. The published [RPC extension UI example](../examples/rpc-extension-ui.ts) pairs with the published [RPC demo extension](../examples/extensions/rpc-demo.ts).
 
 ## Starting RPC Mode
 
@@ -1358,11 +1358,7 @@ Parse errors:
 
 ## Types
 
-Source files:
-- [upstream AI types](https://github.com/earendil-works/pi/blob/main/packages/ai/src/types.ts) - `Model`, `UserMessage`, `AssistantMessage`, `ToolResultMessage`
-- [upstream Agent types](https://github.com/earendil-works/pi/blob/main/packages/agent/src/types.ts) - `AgentMessage`, `AgentEvent`
-- [`src/core/messages.ts`](../src/core/messages.ts) - `BashExecutionMessage`
-- [`src/modes/rpc/rpc-types.ts`](../src/modes/rpc/rpc-types.ts) - RPC command/response types, extension UI request/response types
+RPC messages use the public SDK and protocol types documented by this package. The model and agent message shapes are summarized below; applications embedding Pi should import the public API from `@astralyn/pi` rather than relying on package source files.
 
 ### Model
 
@@ -1519,9 +1515,7 @@ for event in read_events():
 
 ## Example: Interactive Client (Node.js)
 
-See [`test/rpc-example.ts`](../test/rpc-example.ts) for a complete interactive example, or [`src/modes/rpc/rpc-client.ts`](../src/modes/rpc/rpc-client.ts) for a typed client implementation.
-
-For a complete example of handling the extension UI protocol, see [`examples/rpc-extension-ui.ts`](../examples/rpc-extension-ui.ts) which pairs with the [`examples/extensions/rpc-demo.ts`](../examples/extensions/rpc-demo.ts) extension.
+For a complete interactive example, see the published [RPC extension UI example](../examples/rpc-extension-ui.ts), which pairs with the published [RPC demo extension](../examples/extensions/rpc-demo.ts). For embedded Node.js or TypeScript clients, use the [public SDK API](sdk.md).
 
 ```javascript
 const { spawn } = require("child_process");

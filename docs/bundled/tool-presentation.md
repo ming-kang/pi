@@ -1,6 +1,6 @@
 # Native tool presentation
 
-This Fork changes Pi's native tool transcript presentation rather than replacing it with a separate `tools-view` extension.
+The `@astralyn/pi` package uses Pi's native tool transcript presentation rather than replacing it with a separate `tools-view` extension.
 
 ## Visual language
 
@@ -20,13 +20,7 @@ States use the same shell:
 
 ## Implementation boundary
 
-The main entry point is:
-
-```text
-src/modes/interactive/components/tool-execution.ts
-```
-
-It owns:
+The native tool presentation owns:
 
 - the default call/result shell;
 - pending, success, and error states;
@@ -43,7 +37,7 @@ Consecutive tools may opt into a shared collapsed group through `toolGroup`. Bui
 
 | Tool definition | Behavior |
 |---|---|
-| No `renderCall`/`renderResult` | Uses the Fork's native call and result fallback. |
+| No `renderCall`/`renderResult` | Uses the package's native call and result fallback. |
 | Custom renderer with the default shell | Uses the native shell around the custom content. |
 | `renderShell: "self"` | Keeps complete ownership of the tool's layout. |
 
@@ -80,7 +74,7 @@ The native path continues to preserve:
 
 ## Deliberately rejected approaches
 
-This Fork does not use:
+The package does not use:
 
 - prototype patching of `ToolExecutionComponent` from an extension;
 - same-name re-registration to replace built-in tools;

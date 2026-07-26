@@ -4,8 +4,8 @@
  * Provides access to GitLab Duo AI models (Claude and GPT) through GitLab's AI Gateway.
  * Delegates to pi-ai's built-in Anthropic and OpenAI streaming implementations.
  *
- * Usage:
- *   pi -e ./packages/coding-agent/examples/extensions/custom-provider-gitlab-duo
+ * Usage (from the repository or package root):
+ *   pi -e examples/extensions/custom-provider-gitlab-duo
  *   # Then /login gitlab-duo, or set GITLAB_TOKEN=glpat-...
  */
 

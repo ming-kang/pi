@@ -95,7 +95,7 @@ may be removed manually.
 
 ## Limits
 
-- Auto-enables only in TUI mode on `session_start`; RPC and print modes show the upstream footer.
+- Auto-enables only in TUI mode on `session_start`; RPC and print modes have no TUI footer.
 - The native `(auto)` compaction marker is not reproduced because Pi does not expose that state to extensions.
 
 ## Implementation notes
@@ -107,4 +107,3 @@ Footer paint is hot (every TUI render). The extension caches:
 
 Both caches clear on footer `invalidate()`.
 
-**Files:** `index.ts` — footer lifecycle, formatting, usage aggregation, and responsive two-line left/right layout.

@@ -4,11 +4,11 @@
  * Demonstrates the project_trust event. Install globally or pass via -e:
  *
  *   mkdir -p ~/.pi/agent/extensions
- *   cp packages/coding-agent/examples/extensions/project-trust.ts ~/.pi/agent/extensions/
+ *   cp examples/extensions/project-trust.ts ~/.pi/agent/extensions/
  *
  * Or:
  *
- *   pi -e packages/coding-agent/examples/extensions/project-trust.ts
+ *   pi -e examples/extensions/project-trust.ts
  *
  * Try it in a project containing .pi, AGENTS.md/CLAUDE.md, or .agents/skills.
  */

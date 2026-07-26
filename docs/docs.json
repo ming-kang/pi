@@ -20,6 +20,10 @@
           "path": "providers.md"
         },
         {
+          "title": "llama.cpp",
+          "path": "llama-cpp.md"
+        },
+        {
           "title": "Security",
           "path": "security.md"
         },
@@ -42,6 +46,55 @@
         {
           "title": "Compaction",
           "path": "compaction.md"
+        }
+      ]
+    },
+    {
+      "title": "Bundled features",
+      "items": [
+        {
+          "title": "Overview",
+          "path": "bundled/README.md"
+        },
+        {
+          "title": "Extension catalog",
+          "path": "bundled/extensions/README.md"
+        },
+        {
+          "title": "DeepWiki",
+          "path": "bundled/extensions/deepwiki.md"
+        },
+        {
+          "title": "Question",
+          "path": "bundled/extensions/question.md"
+        },
+        {
+          "title": "Rewind",
+          "path": "bundled/extensions/rewind.md"
+        },
+        {
+          "title": "Router",
+          "path": "bundled/extensions/router.md"
+        },
+        {
+          "title": "Statusline",
+          "path": "bundled/extensions/statusline.md"
+        },
+        {
+          "title": "Subagent",
+          "path": "bundled/extensions/subagent.md"
+        },
+        {
+          "title": "Todo",
+          "path": "bundled/extensions/todo.md"
+        },
+        {
+          "title": "Bundled themes",
+          "path": "bundled/themes.md"
+        },
+        {
+          "title": "Native tool presentation",
+          "path": "bundled/tool-presentation.md"
         }
       ]
     },
@@ -81,6 +134,10 @@
     {
       "title": "Reference",
       "items": [
+        {
+          "title": "Environment Variables",
+          "path": "environment-variables.md"
+        },
         {
           "title": "Session Format",
           "path": "session-format.md"
@@ -130,15 +187,6 @@
         {
           "title": "Shell Aliases",
           "path": "shell-aliases.md"
-        }
-      ]
-    },
-    {
-      "title": "Development",
-      "items": [
-        {
-          "title": "Development",
-          "path": "development.md"
         }
       ]
     }

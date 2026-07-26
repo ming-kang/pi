@@ -52,7 +52,7 @@ vim ~/.pi/agent/themes/my-theme.json
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "$schema": "https://raw.githubusercontent.com/ming-kang/pi/main/src/modes/interactive/theme/theme-schema.json",
   "name": "my-theme",
   "vars": {
     "primary": "#00aaff",
@@ -123,7 +123,7 @@ vim ~/.pi/agent/themes/my-theme.json
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "$schema": "https://raw.githubusercontent.com/ming-kang/pi/main/src/modes/interactive/theme/theme-schema.json",
   "name": "my-theme",
   "vars": {
     "blue": "#0066cc",
@@ -292,10 +292,6 @@ echo $COLORTERM  # Should output "truecolor" or "24bit"
 
 ## Examples
 
-See the built-in themes:
-- [dark.json](../src/modes/interactive/theme/dark.json)
-- [light.json](../src/modes/interactive/theme/light.json)
-- [ice-cream-dark.json](../src/modes/interactive/theme/ice-cream-dark.json)
-- [ice-cream-light.json](../src/modes/interactive/theme/ice-cream-light.json)
+The built-in themes are selected by name: `dark`, `light`, `ice-cream-dark`, and `ice-cream-light`. When inspecting an installed package, their JSON assets are under `node_modules/@astralyn/pi/dist/modes/interactive/theme/` (the global-install equivalent is under Pi's npm package directory).
 
-The ice-cream palette and distribution-specific design notes are documented in [`docs/distribution/themes.md`](distribution/themes.md).
+The ice-cream palette and bundled design notes are documented in [Bundled themes](bundled/themes.md).

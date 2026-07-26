@@ -4,7 +4,7 @@
 
 Configuration lives at `~/.pi/agent/router.json`.
 
-Providers are registered at extension load via `pi.registerProvider` (config form + `streamSimple`). They do **not** go through `models.json`. This follows Pi's documented custom-provider path ([providers.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/providers.md), [custom-provider.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/custom-provider.md)): the stream wraps the built-in `openAIResponsesApi()` from `@earendil-works/pi-ai/compat` (same approach as the GitLab Duo example), then reshapes the request for Codex-style relays.
+Providers are registered at extension load via `pi.registerProvider` (config form + `streamSimple`). They do **not** go through `models.json`. This follows Pi's documented custom-provider path ([providers.md](../../providers.md), [custom-provider.md](../../custom-provider.md)): the stream wraps the built-in `openAIResponsesApi()` from `@earendil-works/pi-ai/compat` (same approach as the GitLab Duo example), then reshapes the request for Codex-style relays.
 
 ---
 
@@ -123,17 +123,4 @@ Session affinity headers use hyphenated form (`session-id`, `x-client-request-id
 
 **Multi-turn tool calls.** On a fixed relay + fixed model, tool-call ids preserve the Responses form and replay like Codex. Pi only rewrites ids across model boundaries. Staying on one model for long tool + reasoning sessions avoids id sanitization.
 
-**Files:**
 
-| File | Role |
-|:-:|:-:|
-| `index.ts` | Async factory: load config, register providers, handle `/router` commands |
-| `store.ts` | `router.json` read / write |
-| `register.ts` | `registerProvider` / unregister |
-| `stream.ts` | Wraps `openAIResponsesApi` + payload reshape |
-| `probe.ts` | `GET …/models` catalog fetch |
-| `presets.ts` | 272k defaults + thinking-level map helpers |
-| `dialog.ts` | Selectors, multi-select, thinking editor (dirty Esc warning) |
-| `ui.ts` | Command flows; auto-save on relay mutations |
-| `constants.ts` | Command name, defaults, `router-codex` API tag |
-| `types.ts` | Config types |

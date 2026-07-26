@@ -1,6 +1,6 @@
 # SDK Examples
 
-Programmatic usage of pi-coding-agent via `createAgentSession()` and `createAgentSessionRuntime()`.
+Programmatic usage of `@astralyn/pi` via `createAgentSession()` and `createAgentSessionRuntime()`.
 
 The runtime example shows how to build a recreate function that closes over process-global fixed inputs and recreates cwd-bound services and sessions as the active session cwd changes.
 
@@ -15,7 +15,7 @@ The runtime example shows how to build a recreate function that closes over proc
 | `05-tools.ts` | Built-in tool allowlists |
 | `06-extensions.ts` | Logging, blocking, result modification |
 | `07-context-files.ts` | AGENTS.md context files |
-| `08-slash-commands.ts` | File-based slash commands |
+| `08-prompt-templates.ts` | File-based prompt templates |
 | `09-api-keys-and-oauth.ts` | API key resolution, OAuth config |
 | `10-settings.ts` | Override compaction, retry, terminal settings |
 | `11-sessions.ts` | In-memory, persistent, continue, list sessions |
@@ -24,75 +24,69 @@ The runtime example shows how to build a recreate function that closes over proc
 
 ## Running
 
+From the repository root, or from the root of an unpacked npm package:
+
 ```bash
-cd packages/coding-agent
 npx tsx examples/sdk/01-minimal.ts
 ```
 
 ## Quick Reference
 
 ```typescript
-import { getModel } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
+  getAgentDir,
   ModelRuntime,
   SessionManager,
   SettingsManager,
 } from "@astralyn/pi";
+import { getModel } from "@earendil-works/pi-ai/compat";
 
+// Minimal: uses the default model, resources, tools, settings, and session storage.
+const { session } = await createAgentSession();
+
+// Select a built-in model.
 const modelRuntime = await ModelRuntime.create();
-
-// Minimal
-const { session } = await createAgentSession({ modelRuntime });
-
-// Custom model
 const model = getModel("anthropic", "claude-opus-4-5");
-const { session } = await createAgentSession({ model, thinkingLevel: "high", modelRuntime });
+if (model) {
+  const { session: modelSession } = await createAgentSession({
+    model,
+    thinkingLevel: "high",
+    modelRuntime,
+  });
+}
 
-// Modify prompt
-const loader = new DefaultResourceLoader({
-  systemPromptOverride: (base) => `${base}\n\nBe concise.`,
-});
-await loader.reload();
-const { session } = await createAgentSession({ resourceLoader: loader, modelRuntime });
-
-// Read-only
-const { session } = await createAgentSession({ tools: ["read", "grep", "find", "ls"], modelRuntime });
-
-// In-memory
-const { session } = await createAgentSession({
-  sessionManager: SessionManager.inMemory(),
-  modelRuntime,
-});
-
-// Full control
-const customRuntime = await ModelRuntime.create({
-  authPath: "/my/app/auth.json",
-  modelsPath: "/my/app/models.json",
-});
-customRuntime.setRuntimeApiKey("anthropic", process.env.MY_KEY!);
-
+// Replace the system prompt.
 const resourceLoader = new DefaultResourceLoader({
-  systemPromptOverride: () => "You are helpful.",
-  extensionFactories: [myExtension],
-  skillsOverride: () => ({ skills: [], diagnostics: [] }),
-  agentsFilesOverride: () => ({ agentsFiles: [] }),
-  promptsOverride: () => ({ prompts: [], diagnostics: [] }),
+  cwd: process.cwd(),
+  agentDir: getAgentDir(),
+  systemPromptOverride: () => "You are helpful and concise.",
+  appendSystemPromptOverride: () => [],
 });
 await resourceLoader.reload();
-
-const { session } = await createAgentSession({
-  model,
-  modelRuntime: customRuntime,
+const { session: promptSession } = await createAgentSession({
   resourceLoader,
-  tools: ["read", "bash", "my_tool"],
-  customTools: [myTool],
   sessionManager: SessionManager.inMemory(),
-  settingsManager: SettingsManager.inMemory(),
 });
 
-// Run prompts
+// Enable only read-only built-in tools and keep the session in memory.
+const { session: readOnlySession } = await createAgentSession({
+  tools: ["read", "grep", "find", "ls"],
+  sessionManager: SessionManager.inMemory(),
+});
+
+// Override settings without file I/O.
+const settingsManager = SettingsManager.inMemory({
+  compaction: { enabled: false },
+  retry: { enabled: true, maxRetries: 2 },
+});
+const { session: configuredSession } = await createAgentSession({
+  settingsManager,
+  sessionManager: SessionManager.inMemory(),
+});
+
+// Stream a response.
 session.subscribe((event) => {
   if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
     process.stdout.write(event.assistantMessageEvent.delta);

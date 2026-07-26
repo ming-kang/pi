@@ -8,15 +8,15 @@
  * - API key support via environment variable
  * - Two model definitions
  *
- * Usage:
+ * Usage (from the repository or package root):
  *   # First install dependencies
- *   cd packages/coding-agent/examples/extensions/custom-provider && npm install
+ *   npm install --prefix examples/extensions/custom-provider-anthropic
  *
  *   # With OAuth (run /login custom-anthropic first)
- *   pi -e ./packages/coding-agent/examples/extensions/custom-provider
+ *   pi -e examples/extensions/custom-provider-anthropic
  *
  *   # With API key
- *   CUSTOM_ANTHROPIC_API_KEY=sk-ant-... pi -e ./packages/coding-agent/examples/extensions/custom-provider
+ *   CUSTOM_ANTHROPIC_API_KEY=sk-ant-... pi -e examples/extensions/custom-provider-anthropic
  *
  * Then use /model to select custom-anthropic/claude-sonnet-4-5
  */

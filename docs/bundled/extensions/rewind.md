@@ -71,15 +71,5 @@ rebuilt from them on `session_start`.
 - **Config is memory-cached.** `config.json` is re-read on `session_start` and updated in memory when `/rewind` saves.
 - **Restore path is single-scan.** The `/tree` confirm pass caches changed absolute paths; IO is concurrency-capped (16).
 
-**Files:**
-
-- `index.ts` — lifecycle hooks (`tool_call`, `before_agent_start`, `agent_settled`, `session_start`, `session_before_tree`/`session_tree`, `session_shutdown`) and the `/rewind` command
-- `engine.ts` — the file-history backup engine (track / snapshot / apply / resume-migrate), ported from Claude Code's file-history
-- `snapshot.ts` — persisted snapshot data shapes (pure)
-- `config.ts` — load/save `rewind/config.json`
-- `gc.ts` — age + orphan storage reclamation; storage inventory for the menu
-- `menu.ts` — the `/rewind` settings + storage menu
-- `restore.ts` — `/tree`-target → snapshot matching and restore
-- `paths.ts`, `text.ts`, `tool-path.ts` — private helpers owned by this plugin
 
 Architecture informed by oh-my-pi (GPL-3.0) and Claude Code's file-history; independent implementation.
