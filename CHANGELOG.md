@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- Exposed the `outputPad` setting to custom message renderers. See [Extensions](docs/extensions.md) ([#7045](https://github.com/earendil-works/pi/pull/7045) by [@xl0](https://github.com/xl0)).
+
+### Changed
+
+- Changed pi.dev model catalog refreshes to revalidate with `If-None-Match`, so unchanged provider catalogs answer with an empty `304` instead of a full download.
+- Reworked the package documentation as distribution-owned `@astralyn/pi` user and API guidance, with dedicated bundled-feature pages, standalone examples, complete navigation, and automated checks for broken package links or monorepo-only paths. Repository architecture, upstream synchronization, development, and release procedures now live separately under `maintainers/` and are excluded from npm packages.
+
+### Fixed
+
+- Fixed unavailable scoped models being hidden from `/models`, allowing them to be removed without editing settings manually ([#6949](https://github.com/earendil-works/pi/issues/6949), [#7032](https://github.com/earendil-works/pi/pull/7032) by [@christianklotz](https://github.com/christianklotz)).
+- Fixed startup context file discovery to skip directories that match context file names such as `AGENTS.md`, which produced `EISDIR` warnings ([#7106](https://github.com/earendil-works/pi/pull/7106) by [@mrexodia](https://github.com/mrexodia)).
+- Fixed the llama.cpp extension to persist its model catalog, so llama.cpp models stay listed before the first successful refresh. See [llama.cpp](docs/llama-cpp.md) ([#7072](https://github.com/earendil-works/pi/pull/7072) by [@davidbrai](https://github.com/davidbrai)).
+
 ## [0.82.2] - 2026-07-26
 
 ### Fixed
