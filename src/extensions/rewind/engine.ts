@@ -18,9 +18,11 @@
  *   - trackEdit()  (tool_call edit|write, before the write): back up a *newly*
  *     edited file at its pre-edit state into the working frame (null marker when
  *     the target does not exist yet, so rewind deletes the created file).
- *   - endTurn()    (agent_settled): if anything changed, stamp + return the frame
- *     to persist; else discard it. agent_settled (not agent_end) so auto-retry /
- *     overflow compact-retry / queued follow-ups share one logical turn.
+ *   - endTurn()    (agent_settled): if anything changed AND the caller resolved a
+ *     turn anchor, stamp + return the frame to persist; else discard it (an
+ *     unanchored frame could never be matched by /tree and would exist only in
+ *     memory). agent_settled (not agent_end) so auto-retry / overflow
+ *     compact-retry / queued follow-ups share one logical turn.
  *
  * Rewind = applySnapshot(): restore every tracked file to the version recorded in
  * the target frame (copy back / delete for null), touching only files that differ.
@@ -256,17 +258,25 @@ async function filesEqualChunked(aPath: string, bPath: string, size: number): Pr
 }
 
 /** True when the on-disk file differs from its backup blob. */
-async function originChanged(sid: string, filePath: string, name: string, hint?: Stats): Promise<boolean> {
+async function originChanged(
+	sid: string,
+	filePath: string,
+	name: string,
+	opts?: { hint?: Stats; trustMtime?: boolean },
+): Promise<boolean> {
 	const backupPath = backupPathFor(sid, name);
-	const orig = hint ?? (await statOrNull(filePath).catch(() => null));
+	const orig = opts?.hint ?? (await statOrNull(filePath).catch(() => null));
 	const back = await statOrNull(backupPath).catch(() => null);
 
 	// One exists, one missing -> changed.
 	if ((orig === null) !== (back === null)) return true;
 	if (orig === null || back === null) return false;
 	if (orig.mode !== back.mode || orig.size !== back.size) return true;
-	// Original untouched since the backup was written -> unchanged (skip content read).
-	if (orig.mtimeMs < back.mtimeMs) return false;
+	// Original untouched since the backup was written -> unchanged (skip content
+	// read). Trusted only on the beginTurn path (worst case there: one redundant
+	// version). Restore-side change detection must not be fooled by a same-size
+	// content swap that carries an older mtime (archive extraction, touch -d).
+	if (opts?.trustMtime && orig.mtimeMs < back.mtimeMs) return false;
 	// Memory guard: don't load huge files just to byte-compare; assume changed and
 	// let createBackup stream a new version instead (copyFile never buffers whole files).
 	if (orig.size > MAX_CONTENT_BYTES) return true;
@@ -425,7 +435,11 @@ export async function beginTurn(sid: string): Promise<void> {
 				backups[tracking] = latest;
 				return;
 			}
-			if (latest && latest.backupName !== null && !(await originChanged(sid, filePath, latest.backupName, st))) {
+			if (
+				latest &&
+				latest.backupName !== null &&
+				!(await originChanged(sid, filePath, latest.backupName, { hint: st, trustMtime: true }))
+			) {
 				backups[tracking] = latest; // unchanged -> reuse
 				state.lastSeen.set(tracking, seenFromStats(st));
 				return;
@@ -451,10 +465,24 @@ export async function beginTurn(sid: string): Promise<void> {
  * marker (rewind deletes the created file). Synchronous so the backup is on disk
  * before the hook returns (see createBackupSync).
  */
+/**
+ * Reuse an existing tracking key that differs only by case (Windows paths are
+ * case-insensitive): two keys for one physical file would race each other in
+ * applySnapshot's concurrent restore.
+ */
+function canonicalTracking(state: FileHistoryState, tracking: string): string {
+	if (process.platform !== "win32" || state.trackedFiles.has(tracking)) return tracking;
+	const lower = tracking.toLowerCase();
+	for (const existing of state.trackedFiles) {
+		if (existing.toLowerCase() === lower) return existing;
+	}
+	return tracking;
+}
+
 export function trackEdit(sid: string, absPath: string): void {
 	const state = getState(sid);
 	const cwd = cwdFor(sid);
-	const tracking = shorten(absPath, cwd);
+	const tracking = canonicalTracking(state, shorten(absPath, cwd));
 
 	if (!state.pending) {
 		state.pending = { v: 1, userEntryId: "", turnId: "", prompt: "", trackedFileBackups: {}, timestamp: "" };
@@ -501,6 +529,10 @@ export function endTurn(
 		return null;
 	}
 	state.dirty = false;
+	// No resolvable anchor (e.g. a custom-triggered run that appended no user
+	// entry): discard the frame. Pushing it into the ring without persisting it
+	// would diverge memory from the JSONL, and /tree could never match it anyway.
+	if (!userEntryId) return null;
 	const frame: FileHistorySnapshot = { ...pending, userEntryId, turnId, prompt, timestamp };
 	state.snapshots.push(frame);
 	if (state.snapshots.length > maxSnapshots) {
@@ -755,6 +787,11 @@ export async function applySnapshot(
 
 // ---- persistence rebuild + resume migration -------------------------------
 
+/** The trailing window of `snapshots` retained under the cap (endTurn's ring). */
+export function capSnapshots(snapshots: FileHistorySnapshot[], maxSnapshots = MAX_SNAPSHOTS): FileHistorySnapshot[] {
+	return snapshots.length > maxSnapshots ? snapshots.slice(-maxSnapshots) : snapshots;
+}
+
 /** Rebuild in-memory state from snapshots persisted in the session JSONL. */
 export function restoreStateFromSnapshots(
 	sid: string,
@@ -767,7 +804,7 @@ export function restoreStateFromSnapshots(
 	// in-memory ring past the limit. trackedFiles is rebuilt from the retained
 	// frames only (older frames are unreachable for rewind anyway); blobs only
 	// those frames referenced are pruned best-effort, mirroring endTurn.
-	const retained = snapshots.length > maxSnapshots ? snapshots.slice(-maxSnapshots) : snapshots;
+	const retained = capSnapshots(snapshots, maxSnapshots);
 	if (retained.length < snapshots.length) {
 		void pruneDroppedBlobs(sid, snapshots.slice(0, snapshots.length - retained.length), retained);
 	}

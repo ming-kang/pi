@@ -64,9 +64,9 @@ Native tool calls use a consistent `●` call and `│` result chrome with bound
 Personal workflow features are self-contained hidden built-ins using the public Extension API; only registration touches a hybrid file.
 
 - Hybrid: `src/extensions/index.ts` (registers deepwiki, question, rewind, router, statusline, subagent, todo alongside upstream's `llama.cpp`)
-- Local: `src/extensions/{deepwiki,question,rewind,router,statusline,subagent,todo}/**`, `test/subagent-*.test.ts`
-- Upstream assumptions: `InlineExtension` registration and the Extension API surface used by these extensions stay stable; no cross-extension internal imports.
-- Verify: `test/subagent-*.test.ts`, `test/extensions-discovery.test.ts`; `/reload` and `/tree` in a real TTY for lifecycle extensions.
+- Local: `src/extensions/{deepwiki,question,rewind,router,statusline,subagent,todo}/**`, `test/rewind-*.test.ts`, `test/subagent-*.test.ts`
+- Upstream assumptions: `InlineExtension` registration and the Extension API surface used by these extensions stay stable; no cross-extension internal imports. Rewind additionally assumes `navigateTree`'s leaf rules (user/custom_message target → leaf = parent; other targets → leaf = target) and that `before_agent_start` fires once per `prompt()` (steering/follow-ups are consumed inside the same run).
+- Verify: `test/rewind-*.test.ts`, `test/subagent-*.test.ts`, `test/extensions-discovery.test.ts`; `/reload` and `/tree` in a real TTY for lifecycle extensions.
 
 ## 8. Miscellaneous
 

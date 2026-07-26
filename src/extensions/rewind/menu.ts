@@ -16,6 +16,9 @@ import { formatSize } from "./text.ts";
 
 const RETENTION_PRESETS = [7, 14, 30, 60, 90];
 
+/** Backup dirs written to this recently likely belong to a live session in another Pi process. */
+const RECENT_ACTIVE_MS = 10 * 60 * 1000;
+
 export async function runRewindMenu(ctx: ExtensionCommandContext): Promise<void> {
 	if (!ctx.hasUI) {
 		ctx.ui.notify("/rewind requires an interactive UI.", "warning");
@@ -77,7 +80,10 @@ async function storageMenu(ctx: ExtensionCommandContext, sid: string | undefined
 		const sessions = listSessions(sid);
 		const total = sessions.reduce((n, s) => n + s.bytes, 0);
 		const orphans = sessions.filter((s) => s.orphan);
-		const others = sessions.filter((s) => s.sessionId !== sid);
+		// Skip recently-written dirs: they may belong to another running Pi
+		// process whose in-memory index still references those blobs.
+		const now = Date.now();
+		const others = sessions.filter((s) => s.sessionId !== sid && now - s.mtimeMs > RECENT_ACTIVE_MS);
 
 		const cleanLabel = "Clean now (aged + orphaned)";
 		const orphanLabel = `Remove orphaned (${orphans.length})`;
@@ -124,7 +130,7 @@ async function storageMenu(ctx: ExtensionCommandContext, sid: string | undefined
 			}
 			const ok = await ctx.ui.confirm(
 				"Remove all other backups?",
-				`Deletes backups for ${others.length} session(s), keeping only the current session.`,
+				`Deletes backups for ${others.length} session(s). Keeps the current session and any written to in the last 10 minutes (possibly running elsewhere).`,
 			);
 			if (!ok) continue;
 			let bytes = 0;

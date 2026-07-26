@@ -43,6 +43,7 @@
     "test/bash-tool-rendering.test.ts",
     "test/helpers/virtual-terminal.ts",
     "test/output-decoder.test.ts",
+    "test/rewind-*.test.ts",
     "test/subagent-*.test.ts",
     "tsconfig.base.json",
     "tsconfig.json"

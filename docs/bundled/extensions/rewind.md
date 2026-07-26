@@ -13,7 +13,11 @@ Per turn: `before_agent_start` opens a snapshot frame (re-recording every tracke
 file at its turn-start state, reusing the latest backup when unchanged);
 `tool_call(edit|write)` backs up each newly edited file *before* it lands;
 `agent_settled` persists the frame to the session JSONL as a `pi-rewind-snapshot`
-custom entry **only when files changed**. Using `agent_settled` (not `agent_end`)
+custom entry **only when files changed**. The frame anchors to the **first** user
+entry the run appended — the message whose start the frame recorded; steering and
+follow-up messages consumed inside the same run append later user entries and do
+not steal the anchor (a run that appends no user entry, e.g. custom-triggered,
+records no frame). Using `agent_settled` (not `agent_end`)
 keeps auto-retry, overflow compaction-retry, and queued follow-ups in one logical
 turn — `agent_end` can fire while Pi still continues. Requires **Pi ≥ 0.80.4**
 (when `agent_settled` was added); older hosts never fire that event, so frames
@@ -24,18 +28,25 @@ rebuilt from them on `session_start`.
   `edit` and `write` tools. Files written by `bash` (redirects, codegen, `mv`) or
   edited by hand outside Pi are **not** tracked — same boundary as Claude Code's
   file-history. Rewind undoes *Pi's edits*, not arbitrary filesystem state.
-- **Time-travel is via `/tree`.** Navigating to a node whose turn changed files
-  prompts to restore them, listing the affected files (cwd-relative, up to 8
-  then *"+N more"*) under *"Restore 3 files to this point?  (+120 / −40)"*
-  when coarse line stats are available; choosing yes restores the work tree to
-  that turn's start state. Nodes with no file changes navigate silently. Only
-  files that actually differ are rewritten. Line totals are a bag-of-lines
+- **Time-travel is via `/tree`.** Navigating to a node whose recorded state
+  differs from the work tree prompts to restore, listing the affected files
+  (cwd-relative, up to 8 then *"+N more"*) under *"Restore 3 files to this
+  point?  (+120 / −40)"* when coarse line stats are available. The restore
+  target mirrors `/tree`'s own semantics: a **user message** target (whose turn
+  is removed and returned to the editor) restores to the state *before* that
+  turn ran; any **other** target (whose turn stays in the conversation)
+  restores to the state *after* that turn — the state recorded when the next
+  run began. When nothing was recorded after the target (e.g. the last turn's
+  assistant message), navigation is silent rather than rolling back edits the
+  conversation still contains. Nodes with no file changes navigate silently.
+  Only files that actually differ are rewritten. Line totals are a bag-of-lines
   estimate (capped at 1 MB per file), not a full Myers diff.
 - **`/rewind` is a settings + storage menu**, not a restore picker:
   - toggle rewind on/off,
   - set the auto-clean retention window,
   - inspect storage and prune (clean aged + orphaned / remove orphaned / remove
-    all except current).
+    all except current — the latter also keeps backups written to in the last
+    10 minutes, which may belong to sessions running in another Pi process).
 - **New files** created by `write` are tracked with a "did not exist" marker, so
   rewinding deletes them.
 - **Resume/fork** hard-links the prior session's backup blobs into the new

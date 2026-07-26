@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed mid-turn auto-compaction to distinguish an extension's voluntary `session_before_compact` cancel from a failure: a cancel now lets the run continue (skipping further mid-turn checks for that run) instead of failing closed, and the event carries a new `timing` field (`"manual" | "midTurn" | "postRun" | "prePrompt"`) so extensions can tell the contexts apart. The "nothing to compact" error now includes the same remediation guidance as the retained-context warning. See [Compaction](docs/compaction.md).
+
+### Fixed
+
+- Fixed auto-compaction to also check the context before continuing a run with queued steering or follow-up messages; previously a turn without tool results skipped the mid-turn check and long follow-up chains could only recover via overflow.
+- Fixed the rewind extension's `/tree` restore semantics. Snapshots now anchor to the first user entry of a run (steering/follow-up messages no longer shift the anchor onto a mid-run message), and the restore target mirrors `/tree`'s leaf rules: user-message targets restore to the state before that turn, other targets to the state after it, and navigation is silent instead of rolling back the target turn's own edits when nothing was recorded afterwards. Also fixed resume/fork backup migration to link only retained frames (removing a race with over-cap blob pruning), made restore-side change detection immune to mtime-preserving content swaps, deduplicated case-insensitive tracking keys on Windows, and taught the storage menu's "remove all" to keep backups recently written by other running sessions. See [rewind](docs/bundled/extensions/rewind.md).
+
 ## [0.82.3] - 2026-07-26
 
 ### Added

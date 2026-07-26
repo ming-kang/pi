@@ -14,11 +14,15 @@
  * (custom "pi-rewind-snapshot" entry) when it changed. agent_settled is used
  * instead of agent_end so auto-retry, overflow compaction-retry, and queued
  * follow-ups stay in one logical turn (agent_end can fire mid-continuation).
- * On session_start the index is rebuilt from those entries; resume/fork
- * hard-links the prior session's blobs.
+ * The frame anchors to the FIRST user entry the run appended (tracked via
+ * anchorScanStart + anchor.ts) — the entry whose start the frame recorded;
+ * steering/follow-up messages append later user entries that must not steal
+ * the anchor. On session_start the index is rebuilt from those entries;
+ * resume/fork hard-links the prior session's blobs.
  *
  * Time-travel is fused into /tree: navigating to a node whose turn changed files
  * offers to sync the work tree to that point (session_before_tree/session_tree).
+ * Snapshot selection mirrors navigateTree's leaf rules (see restore.ts).
  * /rewind itself is a settings + storage menu (menu.ts), not a restore picker.
  *
  * Restore safety: applySnapshot only rewrites files that differ and never throws
@@ -33,9 +37,11 @@ import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "../../core/extensions/types.ts";
 
+import { firstUserEntryIdAfter } from "./anchor.ts";
 import { loadRewindConfig, type RewindConfig, reloadRewindConfig } from "./config.ts";
 import {
 	beginTurn,
+	capSnapshots,
 	disposeSession,
 	endTurn,
 	getSnapshots,
@@ -47,7 +53,13 @@ import {
 import { runGc, sessionIdFromFile } from "./gc.ts";
 import { runRewindMenu } from "./menu.ts";
 import { rewindBackupsRoot, sessionsDirectory } from "./paths.ts";
-import { restoreToSnapshot, snapshotChangeDiffStats, snapshotChangedPaths, snapshotForEntry } from "./restore.ts";
+import {
+	type EntryTreeView,
+	restoreToSnapshot,
+	snapshotChangeDiffStats,
+	snapshotChangedPaths,
+	snapshotForEntry,
+} from "./restore.ts";
 import { type FileHistorySnapshot, isSnapshot, SNAPSHOT_ENTRY_TYPE } from "./snapshot.ts";
 import { configureStorage } from "./storage.ts";
 import { truncateText } from "./text.ts";
@@ -71,17 +83,28 @@ interface PendingTreeRestore {
 // Per-session transient state held by the integration layer.
 const pendingPrompt = new Map<string, string>(); // turn prompt, captured for the snapshot label
 const pendingTreeRestore = new Map<string, PendingTreeRestore | null>(); // /tree sync intent
+// Leaf id before the current run started (null = branch root). agent_settled
+// scans forward from here for the run's FIRST user entry — the frame's anchor.
+const anchorScanStart = new Map<string, string | null>();
 
 // ---- helpers --------------------------------------------------------------
 
-/** The id of the last user message in the current branch (the turn's anchor). */
-function lastUserEntryId(ctx: ExtensionContext): string | undefined {
-	const branch = ctx.sessionManager.getBranch();
-	for (let i = branch.length - 1; i >= 0; i--) {
-		const e = branch[i];
-		if (e.type === "message" && (e.message as AgentMessage).role === "user") return e.id;
-	}
-	return undefined;
+/** Record the current leaf as the scan start for the next frame's anchor. */
+function markAnchorScanStart(sid: string, ctx: ExtensionContext): void {
+	anchorScanStart.set(sid, ctx.sessionManager.getLeafId() ?? null);
+}
+
+/** Adapt the session manager to restore.ts's tree view (turn-anchor = navigateTree's "leaf = parent" entries). */
+function sessionTreeView(ctx: ExtensionContext): EntryTreeView {
+	return {
+		getEntry(id) {
+			const e = ctx.sessionManager.getEntry(id);
+			if (!e) return undefined;
+			const isTurnAnchor =
+				(e.type === "message" && (e.message as AgentMessage).role === "user") || e.type === "custom_message";
+			return { id: e.id, parentId: e.parentId, isTurnAnchor };
+		},
+	};
 }
 
 /** Rebuild the snapshot list for a session from its persisted custom entries. */
@@ -131,18 +154,24 @@ export default function rewind(pi: ExtensionAPI): void {
 		registerSession(sid, ctx.cwd);
 
 		const snapshots = rebuildSnapshots(ctx);
-		restoreStateFromSnapshots(sid, ctx.cwd, snapshots, config.maxSnapshots);
 
+		// Migrate BEFORE rebuilding in-memory state: restoreStateFromSnapshots
+		// prunes over-cap blobs from THIS session's directory (fire-and-forget),
+		// and linking only the retained frames first keeps the two steps disjoint
+		// — no race, and dropped frames' blobs are never linked at all.
 		if ((event.reason === "resume" || event.reason === "fork") && event.previousSessionFile) {
 			const prevSid = sessionIdFromFile(event.previousSessionFile);
 			if (prevSid) {
 				try {
-					await migrateBackupsFromSession(prevSid, sid, snapshots);
+					await migrateBackupsFromSession(prevSid, sid, capSnapshots(snapshots, config.maxSnapshots));
 				} catch {
 					// best-effort; a missing blob just means that version can't restore
 				}
 			}
 		}
+
+		restoreStateFromSnapshots(sid, ctx.cwd, snapshots, config.maxSnapshots);
+		markAnchorScanStart(sid, ctx);
 
 		try {
 			runGc(config.retentionDays, sid);
@@ -172,9 +201,12 @@ export default function rewind(pi: ExtensionAPI): void {
 	pi.on("before_agent_start", async (event, ctx) => {
 		// Memory-cached; session_start reloads disk, /rewind save updates cache.
 		config = loadRewindConfig();
-		if (!config.enabled) return;
 		const sid = ctx.sessionManager.getSessionId();
 		if (!sid) return;
+		// The run's user entry is appended after this hook; the frame's anchor is
+		// the first user entry that appears past this leaf.
+		markAnchorScanStart(sid, ctx);
+		if (!config.enabled) return;
 		pendingPrompt.set(sid, event.prompt ?? "");
 		try {
 			await beginTurn(sid);
@@ -189,14 +221,23 @@ export default function rewind(pi: ExtensionAPI): void {
 		if (!config.enabled) return;
 		const sid = ctx.sessionManager.getSessionId();
 		if (!sid) return;
-		const userEntryId = lastUserEntryId(ctx) ?? "";
+		// Anchor = the run's FIRST appended user entry (whose start the frame
+		// recorded). Steering/follow-up messages consumed in the same run append
+		// later user entries and must not steal the anchor. Unresolvable (scan
+		// start missing / off-branch / no user entry appended) -> endTurn discards.
+		const scanStart = anchorScanStart.get(sid);
+		const userEntryId =
+			scanStart === undefined ? "" : (firstUserEntryIdAfter(ctx.sessionManager.getBranch(), scanStart) ?? "");
 		const turnId = ctx.sessionManager.getLeafId() ?? userEntryId;
 		const prompt = truncateText(pendingPrompt.get(sid) ?? "", 120, { collapseWhitespace: true });
 		pendingPrompt.delete(sid);
 		const frame = endTurn(sid, userEntryId, turnId, prompt, new Date().toISOString(), config.maxSnapshots);
-		if (frame && userEntryId) {
+		if (frame) {
 			pi.appendEntry(SNAPSHOT_ENTRY_TYPE, frame);
 		}
+		// Next run may start without before_agent_start (custom-triggered): scan
+		// from the settled leaf (past this run's entries + the snapshot entry).
+		markAnchorScanStart(sid, ctx);
 	});
 
 	// session_before_tree: offer to sync files when navigating to a changed point.
@@ -206,7 +247,7 @@ export default function rewind(pi: ExtensionAPI): void {
 		pendingTreeRestore.set(sid, null);
 		if (!config.enabled) return;
 
-		const target = snapshotForEntry(getSnapshots(sid), ctx.sessionManager, event.preparation.targetId);
+		const target = snapshotForEntry(getSnapshots(sid), sessionTreeView(ctx), event.preparation.targetId);
 		if (!target) return;
 		const changed = await snapshotChangedPaths(sid, target);
 		if (changed.length === 0) return; // silent nav, like native /tree
@@ -226,7 +267,7 @@ export default function rewind(pi: ExtensionAPI): void {
 			// Coarse stats are best-effort; still offer path preview.
 		}
 		const choice = await ctx.ui.select(
-			`Restore ${n} file${n === 1 ? "" : "s"} to this point?${lineStats}\n${formatRestorePreview(changed, ctx.cwd)}`,
+			`Restore ${n} file${n === 1 ? "" : "s"} to this point?${lineStats}\n${formatRestorePreview(changed, ctx.cwd)}\n  (covers edit/write changes only; files changed via bash are not tracked)`,
 			["Yes, restore files", "No, conversation only"],
 		);
 		if (choice?.startsWith("Yes")) {
@@ -239,6 +280,9 @@ export default function rewind(pi: ExtensionAPI): void {
 	pi.on("session_tree", async (_event, ctx) => {
 		const sid = ctx.sessionManager.getSessionId();
 		if (!sid) return;
+		// The leaf moved; the old scan start may now be off-branch. Re-mark so a
+		// custom-triggered run after navigation still anchors correctly.
+		markAnchorScanStart(sid, ctx);
 		const pending = pendingTreeRestore.get(sid);
 		pendingTreeRestore.set(sid, null);
 		if (!pending) return;
@@ -264,6 +308,7 @@ export default function rewind(pi: ExtensionAPI): void {
 		disposeSession(sid);
 		pendingTreeRestore.delete(sid);
 		pendingPrompt.delete(sid);
+		anchorScanStart.delete(sid);
 	});
 
 	// /rewind: settings + storage menu (time-travel itself is via /tree).
