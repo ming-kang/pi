@@ -72,12 +72,7 @@ jobs:
           NODE
 
           if npm view "@astralyn/pi@$RELEASE_VERSION" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
-            existing_git_head="$(npm view "@astralyn/pi@$RELEASE_VERSION" gitHead --registry=https://registry.npmjs.org 2>/dev/null || true)"
-            if [ "$existing_git_head" != "$GITHUB_SHA" ]; then
-              echo "@astralyn/pi@$RELEASE_VERSION already exists from commit ${existing_git_head:-unknown}, not $GITHUB_SHA." >&2
-              exit 1
-            fi
-            echo "@astralyn/pi@$RELEASE_VERSION is already published from this commit; verification will resume."
+            echo "@astralyn/pi@$RELEASE_VERSION is already published; the packed artifact must match before verification resumes."
             echo "already_published=true" >> "$GITHUB_OUTPUT"
           else
             echo "already_published=false" >> "$GITHUB_OUTPUT"
@@ -115,6 +110,29 @@ jobs:
           npm pack --ignore-scripts --silent --pack-destination "$package_dir" >/dev/null
           test -f "$tarball"
           echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+
+      - name: Verify existing registry artifact
+        if: steps.release.outputs.already_published == 'true'
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: |
+          local_integrity="$(node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync } from "node:fs";
+
+          const digest = createHash("sha512").update(readFileSync(process.env.TARBALL)).digest("base64");
+          console.log(`sha512-${digest}`);
+          NODE
+          )"
+          published_integrity="$(npm view "@astralyn/pi@$RELEASE_VERSION" dist.integrity --registry=https://registry.npmjs.org)"
+          if [ "$local_integrity" != "$published_integrity" ]; then
+            echo "Published artifact integrity does not match this checkout." >&2
+            echo "local:     $local_integrity" >&2
+            echo "published: $published_integrity" >&2
+            exit 1
+          fi
+          echo "Published artifact matches the verified local tarball."
 
       - name: Verify packed package installation
         env:
