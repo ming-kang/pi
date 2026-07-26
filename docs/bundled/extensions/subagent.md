@@ -17,7 +17,7 @@ Every task object has:
 agent?       Agent profile name; defaults to general
 description  Short UI label
 prompt       Self-contained worker briefing
-cwd?         Relative directory inside the parent working directory
+cwd?         Relative or absolute directory inside the parent working directory
 ```
 
 Parallel batches allow at most eight tasks. A session-scoped gate runs at most five workers concurrently, including sibling `subagent` calls from the same parent session.

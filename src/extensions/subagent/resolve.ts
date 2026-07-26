@@ -38,21 +38,20 @@ export function resolveTaskCwd(parentCwd: string, requestedCwd: string | undefin
 	// path; accept an absolute cwd that stays inside the parent instead of
 	// failing the whole task over path style.
 	const absolute = value !== undefined && isAbsolute(value);
-	if (absolute && !isWithin(resolve(parentCwd), resolve(value)))
-		throw new Error("cwd must stay inside the parent working directory.");
 	const candidate = absolute ? resolve(value) : resolve(parentCwd, value ?? ".");
-	// Lexical check first: candidate and parent are both un-realpathed here,
-	// so a symlinked parent (macOS /tmp, junctions) compares consistently and
-	// only genuine ".." traversal fails. Symlink escapes are caught below by
-	// comparing the realpathed candidate against the realpathed parent.
-	if (!isWithin(resolve(parentCwd), candidate))
+	// Relative inputs get a lexical traversal check before touching the file
+	// system. Absolute inputs may use the real spelling of a symlinked parent,
+	// so their containment is decided by the canonical check below.
+	if (!absolute && !isWithin(resolve(parentCwd), candidate))
 		throw new Error(`Subagent cwd escapes the parent working directory: ${requestedCwd}`);
 	if (!existsSync(candidate) || !statSync(candidate).isDirectory())
 		throw new Error(`Subagent cwd is not a directory: ${candidate}`);
 	const realParent = realpathSync(parentCwd);
 	const realCandidate = realpathSync(candidate);
-	if (!isWithin(realParent, realCandidate))
+	if (!isWithin(realParent, realCandidate)) {
+		if (absolute) throw new Error("cwd must stay inside the parent working directory.");
 		throw new Error(`Subagent cwd escapes the parent working directory: ${requestedCwd}`);
+	}
 	return realCandidate;
 }
 

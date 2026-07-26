@@ -145,6 +145,16 @@ describe("subagent rendering", () => {
 		expect(output).toContain("120 tok · 3 tool uses · 1.5s");
 	});
 
+	it("preserves literal truncation marker text in completed excerpts", () => {
+		const output = collapsed(
+			details({
+				mode: "single",
+				runs: [run({ finalOutput: "The marker [Output truncated.] is part of this finding." })],
+			}),
+		);
+		expect(output).toContain("The marker [Output truncated.] is part of this finding.");
+	});
+
 	it("shows the current activity and live tail while a single run is in flight", () => {
 		const output = collapsed(
 			details({
@@ -501,6 +511,25 @@ describe("subagent rendering", () => {
 		expect(output).not.toMatch(/^…$/mu);
 	});
 
+	it("preserves live lines that only begin like a truncation notice", () => {
+		const output = collapsed(
+			details({
+				mode: "single",
+				status: "running",
+				endedAt: undefined,
+				runs: [
+					run({
+						status: "running",
+						finalOutput: "",
+						liveText: "Previous line\n[Output truncated.] is a literal finding",
+					}),
+				],
+			}),
+			true,
+		);
+		expect(output).toContain("[Output truncated.] is a literal finding");
+	});
+
 	it("omits the thinking segment when thinking is off", () => {
 		const component = renderSubagentResult(
 			{
@@ -571,6 +600,51 @@ describe("subagent rendering", () => {
 		expect(output).toContain("Briefing head");
 		expect(output).toContain("… continues · capped at 1KB");
 		expect(output).not.toContain("[Output truncated");
+	});
+
+	it("preserves literal prompt markers without claiming the prompt was capped", () => {
+		const component = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "done" }],
+				details: details({
+					mode: "single",
+					runs: [run({ prompt: "Explain this literal marker:\n[Output truncated.]\nContinue the analysis" })],
+				}),
+			},
+			{ expanded: true, isPartial: false },
+			theme,
+			false,
+		);
+		const output = component.render(120).join("\n");
+		expect(output).toContain("Explain this literal marker:");
+		expect(output).toContain("[Output truncated.]");
+		expect(output).toContain("… continues, 1 more line");
+		expect(output).not.toContain("capped at 1KB");
+	});
+
+	it("selects prompt preview lines after removing markdown-only lines", () => {
+		const component = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "done" }],
+				details: details({
+					mode: "single",
+					runs: [
+						run({
+							prompt:
+								"| Name | Value |\n| --- | --- |\n```ts\nconst value = 1;\n```\nExplain the value\nFinal note",
+						}),
+					],
+				}),
+			},
+			{ expanded: true, isPartial: false },
+			theme,
+			false,
+		);
+		const output = component.render(120).join("\n");
+		expect(output).toContain("const value = 1;");
+		expect(output).toContain("Explain the value");
+		expect(output).not.toContain("Final note");
+		expect(output).toContain("… continues, 1 more line");
 	});
 
 	it("labels a failed run's partial output and separates the error", () => {

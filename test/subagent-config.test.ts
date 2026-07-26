@@ -214,10 +214,11 @@ describe("subagent configuration", () => {
 		mkdirSync(outside, { recursive: true });
 		symlinkSync(outside, join(real, "escape"), "junction");
 
-		// Symlinked parent (macOS /tmp, Windows junctions): both the default
-		// inherit case and a relative child must resolve instead of throwing.
+		// Symlinked parent (macOS /tmp, Windows junctions): the default,
+		// a relative child, and the child's real absolute spelling all resolve.
 		expect(resolveTaskCwd(link, undefined)).toBe(realpathSync(real));
 		expect(resolveTaskCwd(link, "sub")).toBe(realpathSync(join(real, "sub")));
+		expect(resolveTaskCwd(link, realpathSync(join(real, "sub")))).toBe(realpathSync(join(real, "sub")));
 		// A symlink inside the tree that points outside still escapes.
 		expect(() => resolveTaskCwd(link, "escape")).toThrow(/escapes/);
 	});

@@ -28,7 +28,7 @@ export const TaskSchema = Type.Object(
 		}),
 		cwd: nullable(
 			Type.String({ minLength: 1, maxLength: 4_096 }),
-			"Relative directory inside the parent working directory; null or omit to inherit it",
+			"Relative or absolute directory inside the parent working directory; null or omit to inherit it",
 		),
 	},
 	{ additionalProperties: false },
@@ -50,7 +50,7 @@ export const SubagentParamsSchema = Type.Object(
 		),
 		cwd: nullable(
 			Type.String({ minLength: 1, maxLength: 4_096 }),
-			"Relative directory inside the parent working directory (single mode); null or omit otherwise",
+			"Relative or absolute directory inside the parent working directory (single mode); null or omit otherwise",
 		),
 		tasks: nullable(
 			Type.Array(TaskSchema, { minItems: 1, maxItems: MAX_TASKS }),

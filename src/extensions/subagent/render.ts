@@ -64,23 +64,50 @@ function stripBlockMarkdown(text: string): string {
 }
 
 // finalOutput/liveText carry model-facing truncation notices from
-// boundText/tailText; in the transcript an ellipsis is enough. Covers the
-// minimal "[Output truncated.]" fallback boundText emits on tiny budgets.
-const TRUNCATION_NOTICE_PATTERN = /\[(?:Output truncated(?:: \d+ bytes omitted)?\.|Earlier output omitted\.)\]/gu;
-const TRUNCATION_NOTICE_LINE_PATTERN = /^\[(?:Output truncated|Earlier output omitted)/u;
+// boundText/tailText. Only recognize their exact boundary lines so literal
+// discussion of the marker remains visible in the transcript.
+const OUTPUT_TRUNCATION_NOTICE_PATTERN = /^\[Output truncated(?:: \d+ bytes omitted)?\.\]$/u;
+const EARLIER_OUTPUT_NOTICE = "[Earlier output omitted.]";
 
-function excerpt(text: string, limit: number): string {
-	const cleaned = text.replace(TRUNCATION_NOTICE_PATTERN, "…");
-	return truncate(stripInlineMarkdown(stripBlockMarkdown(cleaned)).replace(/\s+/gu, " ").trim(), limit);
+function terminalOutputNotice(text: string): { text: string; truncated: boolean } {
+	const lines = text.split("\n");
+	let index = lines.length - 1;
+	while (index >= 0 && !lines[index]?.trim()) index--;
+	if (index < 0 || !OUTPUT_TRUNCATION_NOTICE_PATTERN.test(lines[index]?.trim() ?? "")) {
+		return { text, truncated: false };
+	}
+	lines.splice(index, 1);
+	return { text: lines.join("\n").trimEnd(), truncated: true };
 }
 
-// A notice-only line must never become the "live" line the user watches.
+function replaceBoundaryNotices(text: string): string {
+	const lines = text.split("\n");
+	const first = lines.findIndex((line) => Boolean(line.trim()));
+	if (first >= 0 && lines[first]?.trim() === EARLIER_OUTPUT_NOTICE) lines[first] = "…";
+	let last = lines.length - 1;
+	while (last >= 0 && !lines[last]?.trim()) last--;
+	if (last >= 0 && OUTPUT_TRUNCATION_NOTICE_PATTERN.test(lines[last]?.trim() ?? "")) lines[last] = "…";
+	return lines.join("\n");
+}
+
+function plainExcerpt(text: string, limit: number): string {
+	return truncate(stripInlineMarkdown(stripBlockMarkdown(text)).replace(/\s+/gu, " ").trim(), limit);
+}
+
+function excerpt(text: string, limit: number): string {
+	return plainExcerpt(replaceBoundaryNotices(text), limit);
+}
+
+// Generated notice-only boundary lines must never become the live line the
+// user watches; identical text in the body remains ordinary model output.
 function liveTailLines(run: SubagentRunDetails): string[] {
-	return run.liveText
+	const { text } = terminalOutputNotice(run.liveText);
+	const lines = text
 		.split("\n")
 		.map((line) => line.trim())
-		.filter(Boolean)
-		.filter((line) => !TRUNCATION_NOTICE_LINE_PATTERN.test(line));
+		.filter(Boolean);
+	if (lines[0] === EARLIER_OUTPUT_NOTICE) lines.shift();
+	return lines;
 }
 
 function liveTail(run: SubagentRunDetails): string | undefined {
@@ -351,17 +378,17 @@ function runMetricsText(run: SubagentRunDetails, includeIdentity: boolean): stri
 // shows the first content lines (blank lines carry nothing at two lines
 // of budget) and never pretends to more fidelity than that.
 function promptSection(run: SubagentRunDetails, theme: Theme): string[] {
-	const capped = run.prompt.includes("[Output truncated");
-	const cleaned = run.prompt.replace(/\n*\[Output truncated[^\]]*\]/gu, "").trimEnd();
-	const lines = cleaned
+	const boundedPrompt = terminalOutputNotice(run.prompt);
+	const lines = boundedPrompt.text
 		.split("\n")
-		.map((line) => line.trim())
+		.map((line) => plainExcerpt(line.trim(), Number.MAX_SAFE_INTEGER))
 		.filter(Boolean);
 	const shown = lines.slice(0, PROMPT_PREVIEW_LINES);
-	const preview = shown.map((line) => theme.fg("dim", excerpt(line, PROMPT_PREVIEW_LINE_LIMIT)));
+	const preview = shown.map((line) => theme.fg("dim", truncate(line, PROMPT_PREVIEW_LINE_LIMIT)));
 	// A one-line briefing clipped mid-sentence must still say it continues.
-	const clipped = shown.some((line) => excerpt(line, Number.MAX_SAFE_INTEGER).length > PROMPT_PREVIEW_LINE_LIMIT);
+	const clipped = shown.some((line) => line.length > PROMPT_PREVIEW_LINE_LIMIT);
 	const remaining = lines.length - shown.length;
+	const capped = boundedPrompt.truncated;
 	const section = [theme.fg("muted", "Prompt"), ...preview];
 	if (remaining > 0 || capped || clipped) {
 		let note = "… continues";
