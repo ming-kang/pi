@@ -66,6 +66,7 @@ import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
 import {
+	type CompactionTiming,
 	type ContextUsage,
 	type ExtensionCommandContextActions,
 	type ExtensionErrorListener,
@@ -286,6 +287,8 @@ interface AutoCompactionOutcome {
 	shouldContinue: boolean;
 	/** Compaction persisted, but the rebuilt context is still unsafe to send. */
 	mustStop?: boolean;
+	/** An extension declined this compaction via session_before_compact. */
+	cancelled?: boolean;
 }
 
 interface MidTurnCompactionOutcome {
@@ -307,6 +310,8 @@ function estimateMessagesTokens(messages: AgentMessage[]): number {
 
 const CONTEXT_REMAINS_OVER_COMPACTION_THRESHOLD =
 	"Estimated retained context remains above the configured auto-compaction threshold. Reduce compaction.keepRecentTokens, remove large retained content, or switch to a model with a larger context window before continuing.";
+const NOTHING_TO_COMPACT_WITHIN_KEEP_WINDOW =
+	"Nothing to compact while preserving the configured recent context. Reduce compaction.keepRecentTokens, remove large retained content, or switch to a model with a larger context window before continuing.";
 const AUTO_COMPACTION_STOPPED_BEFORE_NEXT_PROVIDER =
 	"Stopped before the next provider request because auto-compaction did not produce a safe context. Review the compaction warning before continuing.";
 
@@ -342,6 +347,8 @@ export class AgentSession {
 	private _compactionAbortController: AbortController | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	private _stopAfterTurnRequested = false;
+	/** An extension cancelled a mid-turn compaction; skip further mid-turn checks this run. */
+	private _midTurnCompactionDeclined = false;
 	private _overflowRecoveryAttempted = false;
 
 	// Branch summarization state
@@ -1100,6 +1107,7 @@ export class AgentSession {
 	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
 		this._isAgentRunActive = true;
 		this._stopAfterTurnRequested = false;
+		this._midTurnCompactionDeclined = false;
 		try {
 			await this.agent.prompt(messages);
 			while (await this._handlePostAgentRun()) {
@@ -1250,7 +1258,7 @@ export class AgentSession {
 			// The user's new prompt is sent below, so do not call agent.continue() here.
 			const lastAssistant = this._findLastAssistantMessage();
 			if (lastAssistant) {
-				await this._checkCompaction(lastAssistant, false);
+				await this._checkCompaction(lastAssistant, false, "prePrompt");
 			}
 			const compactionSettings = this.settingsManager.getCompactionSettings();
 			// A compaction entry can be valid while its retained suffix is still too large.
@@ -1882,6 +1890,7 @@ export class AgentSession {
 					branchEntries: pathEntries,
 					customInstructions,
 					reason: "manual",
+					timing: "manual",
 					willRetry: false,
 					signal: this._compactionAbortController.signal,
 				})) as SessionBeforeCompactResult | undefined;
@@ -2029,7 +2038,13 @@ export class AgentSession {
 		if (signal?.aborted) {
 			return { stopErrorMessage: AUTO_COMPACTION_STOPPED_BEFORE_NEXT_PROVIDER };
 		}
-		if (turn.toolResults.length === 0) {
+		// Tool batches always continue the run; a turn without tool results only
+		// continues when steering/follow-up messages are queued, otherwise the
+		// post-run path covers it.
+		if (turn.toolResults.length === 0 && !this.agent.hasQueuedMessages()) {
+			return {};
+		}
+		if (this._midTurnCompactionDeclined) {
 			return {};
 		}
 
@@ -2044,8 +2059,13 @@ export class AgentSession {
 			return {};
 		}
 
-		const outcome = await this._runAutoCompactionWithOutcome("threshold", false, signal);
+		const outcome = await this._runAutoCompactionWithOutcome("threshold", false, "midTurn", signal);
 		if (!outcome.compacted) {
+			if (outcome.cancelled && signal?.aborted !== true) {
+				// The extension took ownership of the risk; don't re-ask on every batch.
+				this._midTurnCompactionDeclined = true;
+				return {};
+			}
 			return { stopErrorMessage: AUTO_COMPACTION_STOPPED_BEFORE_NEXT_PROVIDER };
 		}
 
@@ -2070,7 +2090,11 @@ export class AgentSession {
 	 * @param assistantMessage The assistant message to check
 	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
 	 */
-	private async _checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<boolean> {
+	private async _checkCompaction(
+		assistantMessage: AssistantMessage,
+		skipAbortedCheck = true,
+		timing: CompactionTiming = "postRun",
+	): Promise<boolean> {
 		const settings = this.settingsManager.getCompactionSettings();
 		if (!settings.enabled) return false;
 
@@ -2104,7 +2128,7 @@ export class AgentSession {
 			const willRetry = assistantMessage.stopReason !== "stop";
 
 			if (!willRetry) {
-				return await this._runAutoCompaction("overflow", false);
+				return await this._runAutoCompaction("overflow", false, timing);
 			}
 
 			if (this._overflowRecoveryAttempted) {
@@ -2128,7 +2152,7 @@ export class AgentSession {
 			if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
 				this.agent.state.messages = messages.slice(0, -1);
 			}
-			return await this._runAutoCompaction("overflow", willRetry);
+			return await this._runAutoCompaction("overflow", willRetry, timing);
 		}
 
 		// Case 2: Threshold - context is getting large
@@ -2157,7 +2181,7 @@ export class AgentSession {
 			contextTokens = directContextTokens;
 		}
 		if (shouldCompact(contextTokens, contextWindow, settings)) {
-			return await this._runAutoCompaction("threshold", false);
+			return await this._runAutoCompaction("threshold", false, timing);
 		}
 		return false;
 	}
@@ -2165,8 +2189,12 @@ export class AgentSession {
 	/**
 	 * Internal: Run auto-compaction with events.
 	 */
-	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
-		const outcome = await this._runAutoCompactionWithOutcome(reason, willRetry);
+	private async _runAutoCompaction(
+		reason: "overflow" | "threshold",
+		willRetry: boolean,
+		timing: CompactionTiming = "postRun",
+	): Promise<boolean> {
+		const outcome = await this._runAutoCompactionWithOutcome(reason, willRetry, timing);
 		if (!outcome.compacted || outcome.mustStop) {
 			this._stopAfterTurnRequested = true;
 		}
@@ -2176,6 +2204,7 @@ export class AgentSession {
 	private async _runAutoCompactionWithOutcome(
 		reason: "overflow" | "threshold",
 		willRetry: boolean,
+		timing: CompactionTiming,
 		parentSignal?: AbortSignal,
 	): Promise<AutoCompactionOutcome> {
 		const settings = this.settingsManager.getCompactionSettings();
@@ -2225,7 +2254,7 @@ export class AgentSession {
 			const pathEntries = this.sessionManager.getBranch();
 			const preparation = prepareCompaction(pathEntries, settings);
 			if (!preparation) {
-				throw new Error("Nothing to compact while preserving the configured recent context.");
+				throw new Error(NOTHING_TO_COMPACT_WITHIN_KEEP_WINDOW);
 			}
 
 			if (this._extensionRunner.hasHandlers("session_before_compact")) {
@@ -2235,6 +2264,7 @@ export class AgentSession {
 					branchEntries: pathEntries,
 					customInstructions: undefined,
 					reason,
+					timing,
 					willRetry,
 					signal: controller.signal,
 				})) as SessionBeforeCompactResult | undefined;
@@ -2247,7 +2277,9 @@ export class AgentSession {
 						aborted: true,
 						willRetry: false,
 					});
-					return { compacted: false, shouldContinue: false };
+					// A cancel produced by an abort (abortCompaction/parent abort) is not an
+					// extension decision; only a voluntary cancel hands the risk to the extension.
+					return { compacted: false, shouldContinue: false, cancelled: !controller.signal.aborted };
 				}
 
 				if (extensionResult?.compaction) {

@@ -284,7 +284,7 @@ Fired before auto-compaction or `/compact`. Can cancel or provide custom summary
 
 ```typescript
 pi.on("session_before_compact", async (event, ctx) => {
-  const { preparation, branchEntries, customInstructions, reason, willRetry, signal } = event;
+  const { preparation, branchEntries, customInstructions, reason, timing, willRetry, signal } = event;
 
   // preparation.messagesToSummarize - messages to summarize
   // preparation.turnPrefixMessages - split turn prefix (if isSplitTurn)
@@ -296,10 +296,14 @@ pi.on("session_before_compact", async (event, ctx) => {
 
   // branchEntries - all entries on current branch (for custom state)
   // reason - "manual" (/compact), "threshold", or "overflow"
+  // timing - "manual", "midTurn" (between tool batches), "postRun", or "prePrompt"
   // willRetry - whether overflow recovery intends to retry if compaction produces a safe retained context
   // signal - AbortSignal (pass to LLM calls)
 
-  // Cancel:
+  // Cancel. Consequences depend on timing: a "midTurn" cancel skips compaction
+  // for the rest of the run and the run continues at your risk of overflowing;
+  // other timings leave the over-threshold context to fail closed before the
+  // next provider request.
   return { cancel: true };
 
   // Custom summary:
