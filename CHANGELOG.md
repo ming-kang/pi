@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.82.5] - 2026-07-26
+
 ### Added
 
 - Added digit quick-select to the `question` tool dialog: pressing `1`–`9` jumps to the numbered option — selecting it in single-select, toggling it in multi-select — and the custom-answer row's number opens its input. See [question](docs/bundled/extensions/question.md).
