@@ -1,11 +1,17 @@
 import { describe, expect, test } from "vitest";
 import { EMPTY_TODO_STATE, type TodoParams, type TodoState } from "../src/extensions/todo/schema.ts";
 import { applyTodoMutation, cloneState } from "../src/extensions/todo/state.ts";
-import { formatCommandList, hasVisibleOverlayItems, renderOverlayLines } from "../src/extensions/todo/view.ts";
+import {
+	formatCommandList,
+	formatTodoCall,
+	hasVisibleOverlayItems,
+	renderOverlayLines,
+} from "../src/extensions/todo/view.ts";
 import type { Theme } from "../src/modes/interactive/theme/theme.ts";
 
 const theme = {
 	fg: (_color: string, text: string) => text,
+	bold: (text: string) => text,
 	strikethrough: (text: string) => text,
 } as unknown as Theme;
 
@@ -92,5 +98,59 @@ describe("formatCommandList", () => {
 		let state = createTask(cloneState(EMPTY_TODO_STATE), "Gone");
 		state = mutate(state, { action: "delete", id: 1 });
 		expect(formatCommandList(state)).toBe("No todos yet.");
+	});
+});
+
+describe("formatTodoCall", () => {
+	test("collapses a create to a single headline", () => {
+		const line = formatTodoCall(
+			{ action: "create", subject: "Fix login redirect", description: "Auth tests pass" },
+			theme,
+			false,
+		);
+		expect(line).toBe("todo create Fix login redirect");
+	});
+
+	test("expanded adds the parameters the result never echoes", () => {
+		const lines = formatTodoCall(
+			{
+				action: "create",
+				subject: "Fix login redirect",
+				description: "Auth tests pass",
+				activeForm: "fixing login redirect",
+				blockedBy: [1, 2],
+			},
+			theme,
+			true,
+		).split("\n");
+		expect(lines[0]).toBe("todo create Fix login redirect");
+		expect(lines).toContain("description: Auth tests pass");
+		expect(lines).toContain("activeForm: fixing login redirect");
+		expect(lines).toContain("blockedBy: #1,#2");
+	});
+
+	test("shows id and target status for updates", () => {
+		expect(formatTodoCall({ action: "update", id: 2, status: "in_progress" }, theme, false)).toBe(
+			"todo update #2 in_progress",
+		);
+	});
+
+	test("labels dependency-only updates", () => {
+		expect(formatTodoCall({ action: "update", id: 3, addBlocks: [4] }, theme, false)).toBe(
+			"todo update #3 dependencies",
+		);
+	});
+
+	test("renders bare actions and status filters", () => {
+		expect(formatTodoCall({ action: "list" }, theme, false)).toBe("todo list");
+		expect(formatTodoCall({ action: "list", status: "pending" }, theme, false)).toBe("todo list pending");
+		expect(formatTodoCall({ action: "delete", id: 7 }, theme, false)).toBe("todo delete #7");
+	});
+
+	test("tolerates partial and mistyped streaming args", () => {
+		expect(formatTodoCall(undefined, theme, false)).toBe("todo");
+		expect(formatTodoCall({}, theme, false)).toBe("todo");
+		expect(formatTodoCall({ action: "create", subject: 42, status: "bogus" }, theme, false)).toBe("todo create");
+		expect(formatTodoCall({ action: "update", id: 1.5, blockedBy: "nope" }, theme, false)).toBe("todo update");
 	});
 });

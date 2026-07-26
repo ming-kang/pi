@@ -12,6 +12,7 @@
  * change the session within one process, and execute + lifecycle handlers
  * re-point the active bucket before touching state.
  */
+import { Text } from "@earendil-works/pi-tui";
 import {
 	type AgentToolResult,
 	type ExtensionAPI,
@@ -39,7 +40,7 @@ import {
 	replayTodosFromBranch,
 	setActiveTodoSession,
 } from "./state.ts";
-import { formatCommandList } from "./view.ts";
+import { formatCommandList, formatTodoCall } from "./view.ts";
 
 interface TodoSessionCtx {
 	sessionManager: { getBranch(): Iterable<unknown>; getSessionId(): string };
@@ -69,6 +70,10 @@ export default function todo(pi: ExtensionAPI): void {
 		promptGuidelines: TODO_PROMPT_GUIDELINES,
 		parameters: TodoParamsSchema,
 		executionMode: "sequential" as ToolExecutionMode,
+		// Consecutive todo calls collapse into one run like read/find's `explore`
+		// group; the overlay already carries the live list, so the transcript only
+		// needs the sequence of operations.
+		toolGroup: TODO_TOOL_NAME,
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<TodoDetails>> {
 			// Re-point the active bucket: resume//tree can switch sessions between
@@ -84,6 +89,12 @@ export default function todo(pi: ExtensionAPI): void {
 				content: [{ type: "text", text }],
 				details: buildTodoDetails(params, result.state),
 			};
+		},
+
+		renderCall(args, theme, context) {
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			text.setText(formatTodoCall(args, theme, context.expanded));
+			return text;
 		},
 	});
 

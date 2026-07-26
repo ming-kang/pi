@@ -1,6 +1,6 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
-import type { TodoItem, TodoState, TodoStatus } from "./schema.ts";
+import type { TodoItem, TodoParams, TodoState, TodoStatus } from "./schema.ts";
 import { unresolvedDependencyIds } from "./state.ts";
 
 export const STATUS_MARK: Record<TodoStatus, string> = {
@@ -114,6 +114,81 @@ function formatOverlayItem(item: TodoItem, state: TodoState, theme: Theme, showI
 			text += ` ${theme.fg("warning", "(deps incomplete)")}`;
 	}
 	return text;
+}
+
+// ---- tool call rendering ----------------------------------------------------
+// Collapsed todo calls join the `todo` tool group, so each row must survive as a
+// single headline with no result beneath it (ToolGroupComponent drops results and
+// appends one shared expand hint). Args come straight off the wire and can be
+// partial while the call streams, so every field is read defensively.
+
+type TodoCallArgs = Partial<Record<keyof TodoParams, unknown>>;
+
+const EDGE_PARAMS = ["blockedBy", "addBlockedBy", "removeBlockedBy", "addBlocks", "removeBlocks"] as const;
+
+function callText(value: unknown): string {
+	return typeof value === "string" ? value.trim() : "";
+}
+
+function callId(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isInteger(value) ? value : undefined;
+}
+
+function callIds(value: unknown): number[] {
+	return Array.isArray(value) ? value.filter((entry): entry is number => typeof entry === "number") : [];
+}
+
+function isTodoStatus(value: string): value is TodoStatus {
+	return Object.hasOwn(STATUS_MARK, value);
+}
+
+function formatCallHeadline(args: TodoCallArgs | undefined, theme: Theme): string {
+	const action = callText(args?.action);
+	const parts = [theme.fg("toolTitle", theme.bold(action ? `todo ${action}` : "todo"))];
+
+	const id = callId(args?.id);
+	if (id !== undefined) parts.push(theme.fg("accent", `#${id}`));
+
+	const status = callText(args?.status);
+	if (status && isTodoStatus(status)) parts.push(theme.fg(STATUS_COLOR[status], status));
+
+	const subject = callText(args?.subject);
+	if (subject) parts.push(theme.fg("text", subject));
+
+	// Dependency-only updates would otherwise render as a bare `todo update #3`.
+	const hasEdgeChange = EDGE_PARAMS.some((key) => callIds(args?.[key]).length > 0);
+	if (!status && !subject && hasEdgeChange) parts.push(theme.fg("dim", "dependencies"));
+
+	return parts.join(" ");
+}
+
+function formatCallDetails(args: TodoCallArgs | undefined, theme: Theme): string[] {
+	const lines: string[] = [];
+	const push = (label: string, value: string) => {
+		if (value) lines.push(theme.fg("dim", `${label}: ${value}`));
+	};
+
+	push("description", callText(args?.description));
+	push("activeForm", callText(args?.activeForm));
+	push("owner", callText(args?.owner));
+	for (const key of EDGE_PARAMS) {
+		const ids = callIds(args?.[key]);
+		if (ids.length) push(key, ids.map((id) => `#${id}`).join(","));
+	}
+	if (args?.includeDeleted === true) push("includeDeleted", "true");
+	const metadata = args?.metadata;
+	if (metadata && typeof metadata === "object") push("metadata", Object.keys(metadata).join(","));
+	return lines;
+}
+
+/**
+ * One-line call summary when collapsed; the same headline plus the parameters
+ * the result never echoes (description, activeForm, dependencies) when expanded.
+ */
+export function formatTodoCall(args: TodoCallArgs | undefined, theme: Theme, expanded: boolean): string {
+	const headline = formatCallHeadline(args, theme);
+	if (!expanded) return headline;
+	return [headline, ...formatCallDetails(args, theme)].join("\n");
 }
 
 export function formatCommandList(state: TodoState): string {
