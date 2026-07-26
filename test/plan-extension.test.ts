@@ -21,7 +21,7 @@ describe("plan storage", () => {
 		expect(slugifyTitle("   ")).toBe("plan");
 		expect(slugifyTitle("计划")).toBe("plan");
 		expect(slugifyTitle("x".repeat(100)).length).toBeLessThanOrEqual(40);
-		expect(slugifyTitle("a".repeat(39) + "-b")).not.toMatch(/-$/);
+		expect(slugifyTitle(`${"a".repeat(39)}-b`)).not.toMatch(/-$/);
 	});
 
 	test("nextPlanNumber is monotonic over existing NN- names", () => {
