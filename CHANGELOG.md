@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added digit quick-select to the `question` tool dialog: pressing `1`–`9` jumps to the numbered option — selecting it in single-select, toggling it in multi-select — and the custom-answer row's number opens its input. See [question](docs/bundled/extensions/question.md).
+
+### Changed
+
+- Tightened `question` tool validation: option previews on multi-select questions are now rejected with an explicit `preview_multiselect` error instead of being silently dropped, reserved-label and duplicate checks compare case-insensitively and ignore surrounding whitespace, the unused `Next` label is no longer reserved, and length/count checks that duplicated the JSON schema (already enforced before the tool executes) were removed. Preview markdown rendering is also memoized, so editor keystrokes no longer re-parse previews.
+
+### Fixed
+
+- Fixed the `question` tool ignoring turn aborts: the dialog now closes when the tool call is cancelled and resolves with the answers given so far, instead of lingering until the next interaction.
+- Fixed cancelling the `question` dialog discarding answers already given; the model-facing result now lists them as partial answers, matching the `Chat about this` flow.
+- Fixed `question` dialog interaction papercuts: `Tab` on an unselected single-select option no longer silently commits it when the note editor is cancelled (`Esc` restores the previous selection), and Enter on the `Type something.` row of a multi-select question opens the custom-answer input instead of warning that nothing is selected.
+- Fixed tool output expanded with `ctrl+o` losing its top lines (for example an expanded subagent card's header, task, and activity sections) when the expansion pushed the transcript past the screen height. The scrollback-preserving full-redraw rewrite introduced in 0.82.4 repainted only the bottom screenful, so lines newly pushed above the viewport were never written anywhere. Full redraws that grow the transcript now repaint the visible rows in place and scroll the extra lines in at the bottom row, so the terminal pushes exactly the right rows — already bearing the new content — into scrollback, keeping the whole expansion readable while still never wiping scrollback or shell history. Content that had already scrolled off screen keeps its previous rendering in scrollback (append-only), but is no longer lost.
+
 ## [0.82.4] - 2026-07-26
 
 ### Added

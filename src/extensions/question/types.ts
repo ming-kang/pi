@@ -15,13 +15,10 @@ export type InputMode = "custom" | "notes" | undefined;
 
 export type QuestionToolError =
 	| "no_ui"
-	| "no_questions"
-	| "too_many_questions"
-	| "invalid_option_count"
 	| "duplicate_question"
 	| "duplicate_option_label"
 	| "reserved_label"
-	| "invalid_text_length";
+	| "preview_multiselect";
 
 export interface AnswerNote {
 	option: string;

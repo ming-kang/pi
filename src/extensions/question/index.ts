@@ -29,14 +29,14 @@ export default function question(pi: ExtensionAPI) {
 		renderCall: renderQuestionCall,
 		renderResult: renderQuestionResult,
 
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			const questions = params.questions as Question[];
 			if (!ctx.hasUI || ctx.mode !== "tui") return errorResult("no_ui", "question tool requires an interactive TUI");
 
 			const validation = validateQuestions(questions);
 			if (!validation.ok) return errorResult(validation.error, validation.message);
 
-			const result = await ctx.ui.custom<DialogResult>(createQuestionDialog(questions));
+			const result = await ctx.ui.custom<DialogResult>(createQuestionDialog(questions, signal));
 			if (result.outcome === "cancelled") return cancelResult(result.answers);
 			if (result.outcome === "needs_clarification") return clarificationResult(result.answers);
 			return successResult(result.answers);

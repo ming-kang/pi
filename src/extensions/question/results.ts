@@ -61,7 +61,12 @@ export function successResult(answers: QuestionAnswer[]): AgentToolResult<Questi
 }
 
 export function cancelResult(answers: QuestionAnswer[] = []): AgentToolResult<QuestionToolDetails> {
-	return buildToolResult(DECLINE_MESSAGE, { answers, outcome: "cancelled", cancelled: true });
+	const answered = answers.length ? `\n\nPartial answers so far:\n${answers.map(answerSegment).join("\n\n")}` : "";
+	return buildToolResult(boundedText(`${DECLINE_MESSAGE}${answered}`), {
+		answers,
+		outcome: "cancelled",
+		cancelled: true,
+	});
 }
 
 export function clarificationResult(answers: QuestionAnswer[] = []): AgentToolResult<QuestionToolDetails> {

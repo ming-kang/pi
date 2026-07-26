@@ -7,13 +7,15 @@ Adds a `question` tool for asking one to four multiple-choice questions when the
 - Each option requires a concise description of its consequence or trade-off. Questions, labels, descriptions, and previews have input-length limits so the dialog stays usable.
 - A single single-select question submits as soon as the user selects an option.
 - A multi-question flow advances after each single-select answer; multi-select uses `Space` to toggle choices and Enter to continue. Once every question is answered, a **Review answers** view requires explicit submission.
+- Options are numbered; pressing `1`–`9` jumps to the matching option — selecting it in single-select, toggling it in multi-select. The custom-answer row's number opens its input.
 - `←` / `→` switch between adjacent questions without wrapping. The tab bar marks answered questions and the Review state.
 - `Chat about this` is available after the choices. It returns a `needs_clarification` outcome so the model explains or reformulates instead of treating the user as having declined.
-- `Type something.` is appended automatically for custom answers. Authored options may not use reserved labels (`Other`, `Type something.`, `Chat about this`, `Next`).
-- `Tab` opens a note editor for the focused option; in multi-select, the option must be selected first. On the custom-answer row, it opens custom-answer input.
-- Multi-select custom answers stay on the `Type something.` row, are selected when saved, and can be toggled with `Space` without losing text.
-- `preview` shows focused single-select content beside the choices on wide terminals and beneath them on narrow terminals. Preview height is capped and reports hidden lines.
+- `Type something.` is appended automatically for custom answers. Authored options may not use reserved labels (`Other`, `Type something.`, `Chat about this`); the comparison is case-insensitive and ignores surrounding whitespace.
+- `Tab` opens a note editor for the focused option; in multi-select, the option must be selected first. In single-select it also selects the option, and cancelling the note editor with `Esc` restores the previous selection. On the custom-answer row, it opens custom-answer input.
+- Multi-select custom answers stay on the `Type something.` row, are selected when saved, and can be toggled with `Space` without losing text. Enter on that row opens the input while no custom answer exists yet.
+- `preview` shows focused single-select content beside the choices on wide terminals and beneath them on narrow terminals. Preview height is capped and reports hidden lines. Previews on multi-select questions are rejected with a `preview_multiselect` error.
 - The dialog is available only in TUI mode. RPC, JSON, and print calls return a structured `no_ui` error rather than attempting a custom component.
+- Aborting the turn closes the dialog and resolves the call as cancelled with the answers given so far.
 
 ## Result contract
 
@@ -28,7 +30,7 @@ Adds a `question` tool for asking one to four multiple-choice questions when the
 }
 ```
 
-Only `content` reaches the model. Successful results are numbered, clearly identify single/custom/multi answers, retain notes, and state when a preview was selected without echoing its full source. Model-facing output is capped at 12,000 characters; if it is truncated, the result instructs the model to ask a focused follow-up question. Notes and custom answers are capped at 4,000 characters in the dialog.
+Only `content` reaches the model. Successful results are numbered, clearly identify single/custom/multi answers, retain notes, and state when a preview was selected without echoing its full source. Cancelling — via `Esc` or a turn abort — lists any answers already given as partial answers alongside the decline message. Model-facing output is capped at 12,000 characters; if it is truncated, the result instructs the model to ask a focused follow-up question. Notes and custom answers are capped at 4,000 characters in the dialog.
 
 The transcript uses a private `renderCall` / `renderResult` only to replace raw question JSON and model-oriented result text with concise user summaries. Pi retains its native tool shell, pending/error state, and collapsed/expanded behavior.
 
@@ -42,7 +44,7 @@ The transcript uses a private `renderCall` / `renderResult` only to replace raw 
 ## Implementation notes
 
 - Uses Pi's native `ctx.ui.custom()` lifecycle; no state is shared with another extension.
-- The render cache is keyed by terminal width **and height**, because preview height depends on available rows and Pi resize only requests a render.
-- `validateQuestions` enforces uniqueness, reserved-label rejection, and text budgets beyond what the JSON schema can express.
+- The render cache is keyed by terminal width **and height**, because preview height depends on available rows and Pi resize only requests a render. Preview markdown rendering is additionally memoized per text and dimensions so editor keystrokes don't re-parse previews.
+- `validateQuestions` enforces only what the JSON schema cannot express: case-insensitive uniqueness, reserved-label rejection, and the preview/multi-select conflict. Length and count limits are enforced against the schema before the tool executes.
 - Dialog navigation follows Pi's injected select/input keybindings where applicable; custom actions such as Space-to-toggle remain explicit in the footer.
 
