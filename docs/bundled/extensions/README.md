@@ -8,7 +8,7 @@ They are registered as hidden built-in extensions and use the same public Extens
 |---|---|---|
 | `llama.cpp` | `/llama` | [llama.cpp](../../llama-cpp.md) |
 | `deepwiki` | `deepwiki` | [deepwiki.md](deepwiki.md) |
-| `plan` | `exit_plan`, `/plan`, `/plans` | [plan.md](plan.md) |
+| `plan` | `exit_plan`, `/plan` | [plan.md](plan.md) |
 | `question` | `question` | [question.md](question.md) |
 | `todo` | `todo`, `/todos` | [todo.md](todo.md) |
 | `rewind` | `/rewind`, `/tree` lifecycle | [rewind.md](rewind.md) |

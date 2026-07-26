@@ -38,7 +38,6 @@ import {
 	PLAN_ENTRY_TYPE,
 	PLAN_FLAG_NAME,
 	PLAN_STATUS_KEY,
-	PLANS_COMMAND_NAME,
 } from "./constants.ts";
 import { type ExitPlanDetails, type ExitPlanParams, ExitPlanParamsSchema } from "./schema.ts";
 import {
@@ -311,19 +310,6 @@ export default function plan(pi: ExtensionAPI): void {
 			} else {
 				enterPlanMode(ctx);
 			}
-		},
-	});
-
-	pi.registerCommand(PLANS_COMMAND_NAME, {
-		description: "List plan files saved for this conversation branch",
-		handler: async (_args, ctx) => {
-			setActivePlanSession(ctx.sessionManager.getSessionId());
-			const { planFiles } = getPlanState();
-			if (!planFiles.length) {
-				ctx.ui.notify("No plans saved for this session.", "info");
-				return;
-			}
-			ctx.ui.notify(planFiles.map((path, index) => `${index + 1}. ${path}`).join("\n"), "info");
 		},
 	});
 

@@ -9,7 +9,6 @@
 export const EXIT_PLAN_TOOL_NAME = "exit_plan";
 export const EXIT_PLAN_TOOL_LABEL = "Exit Plan";
 export const PLAN_COMMAND_NAME = "plan";
-export const PLANS_COMMAND_NAME = "plans";
 export const PLAN_FLAG_NAME = "plan";
 export const PLAN_ENTRY_TYPE = "plan-mode";
 export const PLAN_STATUS_KEY = "plan-mode";

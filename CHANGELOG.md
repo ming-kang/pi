@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added a bundled `plan` extension: `/plan` (or `--plan`) enters a read-only planning mode that disables `edit`, `write`, `bash`, and `subagent`, interviews via the `question` tool, and exits through a user-approved `exit_plan` tool call. Approval saves the plan to `<agentDir>/plans/<sessionId>/NN-<slug>.md` and either continues in place or compacts the context first, restarting execution with the plan embedded in the kickoff message; `/plans` lists the branch's saved plans. See [plan](docs/bundled/extensions/plan.md).
+- Added a bundled `plan` extension: `/plan` (or `--plan`) enters a read-only planning mode that disables `edit`, `write`, `bash`, and `subagent`, interviews via the `question` tool, and exits through a user-approved `exit_plan` tool call. Approval saves the plan to `<agentDir>/plans/<sessionId>/NN-<slug>.md` and either continues in place or compacts the context first, restarting execution with the plan embedded in the kickoff message. See [plan](docs/bundled/extensions/plan.md).
 
 ### Changed
 

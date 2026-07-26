@@ -12,7 +12,6 @@ Adds `/plan` for a Claude-Code-style planning phase: the model explores read-onl
   - **Keep planning** — optionally collects feedback (multi-line editor in the TUI, input dialog in RPC) and returns it to the model; plan mode stays active. `Esc` and dialog timeouts map here, never to an executing option.
 - Both executing options save the plan file. If the session has no name yet, the plan title becomes the session name.
 - `/plan` while planning exits directly without a menu or a file — the plan text is still in context. During a pending compaction the toggle is refused until the compaction settles.
-- `/plans` lists the plan files recorded for the current conversation branch.
 - Plan files live under `<agentDir>/plans/<sessionId>/NN-<slug>.md` (`~/.pi/agent/plans/…` by default, `PI_CODING_AGENT_DIR` respected) with `title`, `created`, `cwd`, `session`, and optional `revises` frontmatter. Numbering is append-only; revisions are new files that point back via `revises`.
 - To revise a plan mid-execution, re-enter with `/plan`: the system prompt lists the branch's saved plans so the model reads the latest one, accounts for completed work, and produces a revision.
 
