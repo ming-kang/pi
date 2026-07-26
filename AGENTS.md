@@ -57,12 +57,14 @@ For interactive verification, use a real TTY. Check affected pending, success, e
 - Use concise Conventional Commit messages with `feat`, `fix`, or `docs` types.
 - Keep upstream as the `upstream` remote and synchronize against release tags, never upstream `main`.
 - Do not merge an upstream monorepo tag into this standalone branch. Extract and review only `packages/coding-agent/**`, then update the exact upstream npm dependency versions for that release.
+- When a change alters which files differ from the reviewed upstream baseline, update the delta registry in `maintainers/upstream.json` and the rationale in `maintainers/delta.md`, then verify with `npm run diff:upstream -- --check`.
 
 ## Documentation
 
 - `README.md` is both the repository and npm package overview.
-- `docs/**` contains product usage and API documentation inherited from upstream coding-agent.
-- `docs/distribution/**` contains distribution-owned architecture, maintenance, extension, theme, and release documentation.
+- `docs/**` is distribution-owned user and API documentation. Upstream release tags inform it, but it is reviewed and rewritten for behavior adopted by this distribution rather than overwritten as an upstream mirror.
+- `docs/bundled/**` documents features shipped by this distribution.
+- `maintainers/**` contains repository-only architecture, development, synchronization, and release documentation and is excluded from the npm package.
 - `CHANGELOG.md` is the runtime and release changelog; keep Fork entries under `[Unreleased]`.
 - Do not add contribution, security-policy, governance, issue-triage, or external-tracker documents unless the owner explicitly asks.
 
@@ -75,4 +77,4 @@ upstream 0.82.x -> Fork 0.82.0, 0.82.1, 0.82.2, ...
 upstream 0.83.x -> Fork 0.83.0, 0.83.1, 0.83.2, ...
 ```
 
-Start at patch `0` when moving to a new upstream minor, then increment the Fork patch for every later release on that line. Tag releases as `pi-v<full-version>` so fetched upstream tags remain distinct. Follow `docs/distribution/release.md` when publishing.
+Start at patch `0` when moving to a new upstream minor, then increment the Fork patch for every later release on that line. Tag releases as `pi-v<full-version>` so fetched upstream tags remain distinct. Follow `maintainers/release.md` when publishing.
