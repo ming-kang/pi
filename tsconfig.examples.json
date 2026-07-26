@@ -1,0 +1,14 @@
+{
+	"extends": "./tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"paths": {
+			"@astralyn/pi": ["./src/index.ts"],
+			"@astralyn/pi/*": ["./src/*"]
+		}
+	},
+	"include": ["examples/**/*.ts", "src/**/*.d.ts"],
+	"exclude": ["node_modules", "dist", "examples/extensions/gondolin/**"]
+}

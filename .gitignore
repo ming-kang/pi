@@ -1,16 +1,12 @@
 node_modules/
 dist/
 .artifacts/
+binaries/
+*.bun-build
 *.log
-.DS_Store
 *.tsbuildinfo
-# packages/*/node_modules/
-packages/*/dist/
-packages/*/dist-chrome/
-packages/*/dist-firefox/
-packages/ai/src/providers/data/
-packages/ai/src/providers/.model-generation-*/
 *.cpuprofile
+.DS_Store
 
 # Environment
 .env
@@ -24,7 +20,7 @@ packages/ai/src/providers/.model-generation-*/
 *.swo
 *~
 
-# Package specific
+# Development and test output
 .npm/
 coverage/
 .nyc_output/
@@ -36,9 +32,10 @@ syntax.jsonl
 out.jsonl
 pi-*.html
 out.html
-packages/coding-agent/binaries/
 todo.md
 plans/
+profiles-node/
+profiles-bun/
 .pi/hf-sessions/
 .pi/hf-sessions-backup/
 collect.sh

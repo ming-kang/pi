@@ -25,16 +25,18 @@
 	},
 	"files": {
 		"includes": [
-			"packages/*/src/**/*.ts",
-			"packages/*/test/**/*.ts",
-			"packages/storage/*/src/**/*.ts",
-			"packages/storage/*/test/**/*.ts",
-			"packages/coding-agent/examples/**/*.ts",
+			"src/**/*.ts",
+			"test/**/*.ts",
+			"examples/**/*.ts",
+			"scripts/**/*.ts",
+			"scripts/**/*.mjs",
+			"*.ts",
+			"*.json",
 			"!**/node_modules/**/*",
 			"!**/test-sessions.ts",
-			"!**/models.generated.ts",
-			"!**/*.models.ts",
-			"!packages/mom/data/**/*",
+			"!test/fixtures/**/*",
+			"!npm-shrinkwrap.json",
+			"!package-lock.json",
 			"!!**/node_modules"
 		]
 	}

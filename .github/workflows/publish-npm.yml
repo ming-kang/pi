@@ -35,6 +35,7 @@ jobs:
         run: npm install --global npm@11.15.0
 
       - name: Verify release request
+        id: release
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
@@ -51,18 +52,17 @@ jobs:
             throw new Error(`Expected a stable numeric version such as 0.82.0, got ${version ?? "nothing"}.`);
           }
 
-          const codingAgent = JSON.parse(readFileSync("packages/coding-agent/package.json", "utf8"));
-          const server = JSON.parse(readFileSync("packages/server/package.json", "utf8"));
-          const changelog = readFileSync("packages/coding-agent/CHANGELOG.md", "utf8");
+          const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
+          const shrinkwrap = JSON.parse(readFileSync("npm-shrinkwrap.json", "utf8"));
+          const changelog = readFileSync("CHANGELOG.md", "utf8");
 
-          if (codingAgent.name !== "@astralyn/pi") {
-            throw new Error(`Expected packages/coding-agent to be @astralyn/pi, got ${codingAgent.name}.`);
+          if (packageJson.name !== "@astralyn/pi") {
+            throw new Error(`Expected the root package to be @astralyn/pi, got ${packageJson.name}.`);
           }
-          if (codingAgent.version !== version) {
-            throw new Error(`Release input ${version} does not match package version ${codingAgent.version}.`);
-          }
-          if (server.dependencies?.["@astralyn/pi"] !== version) {
-            throw new Error("packages/server must depend on the exact release version.");
+          if (packageJson.version !== version || shrinkwrap.version !== version) {
+            throw new Error(
+              `Release input ${version} must match package.json (${packageJson.version}) and npm-shrinkwrap.json (${shrinkwrap.version}).`,
+            );
           }
           const releaseHeading = `## [${version}] - `;
           const headingCount = changelog.split("\n").filter((line) => line.startsWith(releaseHeading)).length;
@@ -72,8 +72,15 @@ jobs:
           NODE
 
           if npm view "@astralyn/pi@$RELEASE_VERSION" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
-            echo "@astralyn/pi@$RELEASE_VERSION already exists on npm." >&2
-            exit 1
+            existing_git_head="$(npm view "@astralyn/pi@$RELEASE_VERSION" gitHead --registry=https://registry.npmjs.org 2>/dev/null || true)"
+            if [ "$existing_git_head" != "$GITHUB_SHA" ]; then
+              echo "@astralyn/pi@$RELEASE_VERSION already exists from commit ${existing_git_head:-unknown}, not $GITHUB_SHA." >&2
+              exit 1
+            fi
+            echo "@astralyn/pi@$RELEASE_VERSION is already published from this commit; verification will resume."
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Install system dependencies
@@ -85,11 +92,8 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
-      - name: Hydrate model data
-        run: npm run hydrate:model-data
-
-      - name: Build
-        run: npm run build:offline
+      - name: Build release artifact
+        run: npm run prepublishOnly
 
       - name: Check
         run: npm run check
@@ -100,21 +104,56 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Publish
-        working-directory: packages/coding-agent
-        run: npm publish --access public --provenance --registry=https://registry.npmjs.org
+      - name: Pack npm artifact
+        id: pack
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          package_dir="$RUNNER_TEMP/pi-package"
+          tarball="$package_dir/astralyn-pi-$RELEASE_VERSION.tgz"
+          mkdir -p "$package_dir"
+          npm pack --ignore-scripts --silent --pack-destination "$package_dir" >/dev/null
+          test -f "$tarball"
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
 
-      - name: Verify registry
+      - name: Verify packed package installation
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: npm run verify:package-install -- "${{ steps.pack.outputs.tarball }}" "$RELEASE_VERSION"
+
+      - name: Publish verified artifact
+        if: steps.release.outputs.already_published != 'true'
+        run: npm publish "${{ steps.pack.outputs.tarball }}" --access public --provenance --registry=https://registry.npmjs.org
+
+      - name: Wait for registry metadata
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           for attempt in $(seq 1 12); do
             published="$(npm view "@astralyn/pi@$RELEASE_VERSION" version --registry=https://registry.npmjs.org 2>/dev/null || true)"
             if [ "$published" = "$RELEASE_VERSION" ]; then
-              echo "Verified @astralyn/pi@$RELEASE_VERSION on npm."
+              echo "Verified @astralyn/pi@$RELEASE_VERSION metadata on npm."
               exit 0
             fi
             sleep 10
           done
           echo "Published version was not visible on npm after two minutes." >&2
+          exit 1
+
+      - name: Verify registry installation
+        env:
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+          PI_PACKAGE_ALLOW_FRESH: "1"
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          for attempt in $(seq 1 6); do
+            if npm run verify:package-install -- "@astralyn/pi@$RELEASE_VERSION" "$RELEASE_VERSION"; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 6 ]; then
+              echo "Registry installation attempt $attempt failed; retrying in 10 seconds."
+              sleep 10
+            fi
+          done
+          echo "Published package could not be installed and smoke-tested from npm." >&2
           exit 1

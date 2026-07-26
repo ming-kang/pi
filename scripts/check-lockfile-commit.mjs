@@ -31,8 +31,8 @@ function packageLabel(lockPath, entry) {
 }
 
 function getLockfilePackageChanges() {
-	const before = readJsonFromGit("HEAD:package-lock.json");
-	const after = readJsonFromGit(":package-lock.json");
+	const before = readJsonFromGit("HEAD:npm-shrinkwrap.json");
+	const after = readJsonFromGit(":npm-shrinkwrap.json");
 	if (!before?.packages || !after?.packages) return undefined;
 
 	const changes = [];
@@ -45,14 +45,6 @@ function getLockfilePackageChanges() {
 		}
 	}
 	return changes;
-}
-
-function isWorkspacePackagePath(lockPath) {
-	return lockPath.startsWith("packages/");
-}
-
-function hasOnlyWorkspacePackageChanges(changes) {
-	return changes.length > 0 && changes.every((change) => isWorkspacePackagePath(change.lockPath));
 }
 
 function summarizeLockfileChange(changes) {
@@ -79,28 +71,23 @@ const stagedFiles = git(["diff", "--cached", "--name-only"])
 	.map((line) => line.trim())
 	.filter(Boolean);
 
-if (!stagedFiles.includes("package-lock.json")) {
+if (!stagedFiles.includes("npm-shrinkwrap.json")) {
 	process.exit(0);
 }
 
 if (allowed) {
-	console.error("package-lock.json is staged; PI_ALLOW_LOCKFILE_CHANGE is set, allowing commit.");
+	console.error("npm-shrinkwrap.json is staged; PI_ALLOW_LOCKFILE_CHANGE is set, allowing commit.");
 	process.exit(0);
 }
 
 const changes = getLockfilePackageChanges();
-if (changes && hasOnlyWorkspacePackageChanges(changes)) {
-	console.error("package-lock.json only updates workspace package metadata; allowing commit.");
-	process.exit(0);
-}
-
-console.error("package-lock.json is staged.");
+console.error("npm-shrinkwrap.json is staged.");
 console.error("");
 console.error("Review lockfile changes before committing:");
 console.error("  - confirm every new/updated package is intentional");
 console.error("  - confirm npm age gates were active for resolution");
 console.error("  - review any new lifecycle scripts in the dependency tree");
-console.error("  - regenerate/check coding-agent shrinkwrap if release deps changed");
+console.error("  - confirm npm-shrinkwrap.json matches package.json and the intended runtime tree");
 
 const summary = changes ? summarizeLockfileChange(changes) : [];
 if (summary.length > 0) {

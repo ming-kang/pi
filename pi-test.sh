@@ -15,7 +15,7 @@ for arg in "$@"; do
 done
 
 if [[ "$NO_ENV" == "true" ]]; then
-  # Unset API keys (see packages/ai/src/env-api-keys.ts)
+  # Unset provider credentials for an isolated source run.
   unset ANTHROPIC_API_KEY
   unset ANTHROPIC_OAUTH_TOKEN
   unset OPENAI_API_KEY
@@ -54,4 +54,4 @@ if [[ "$NO_ENV" == "true" ]]; then
   echo "Running without API keys..."
 fi
 
-"$SCRIPT_DIR/node_modules/.bin/tsx" --tsconfig "$SCRIPT_DIR/tsconfig.json" "$SCRIPT_DIR/packages/coding-agent/src/cli.ts" ${ARGS[@]+"${ARGS[@]}"}
+"$SCRIPT_DIR/node_modules/.bin/tsx" --tsconfig "$SCRIPT_DIR/tsconfig.json" "$SCRIPT_DIR/src/cli.ts" ${ARGS[@]+"${ARGS[@]}"}
