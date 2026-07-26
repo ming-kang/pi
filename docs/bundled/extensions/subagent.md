@@ -85,7 +85,7 @@ They apply only to future subagent runs and never change the parent session's `/
 - Parent abort, `/reload`, `/new`, `/resume`, `/fork`, and session shutdown abort active child sessions. Queued workers do not survive the call.
 - Parallel worker failures do not cancel other independent workers.
 - Transient provider errors auto-retry: the worker session retries retryable stream errors with backoff (visible as `Retrying (n/m) in Xs…`), and a failure that produced no work (for example a preflight auth throw) is rerun at the task level up to two more times. Runs with partial work behind them are never rerun.
-- Progress is rendered in Pi's native tool transcript. The collapsed view shows an intent line (for example `Verifying changes`), the current tool, live elapsed time, usage with a `ctx:` context watermark, and the configured expand hint; `Ctrl+O` shows bounded activities and final Markdown reports.
+- Progress is rendered in Pi's native tool transcript. The collapsed view shows an intent line (for example `Verifying changes`), the current tool marked with `›`, live elapsed time, usage with a `ctx:` context watermark, and the configured expand hint. The call-level status dot belongs to the tool shell; run and activity rows only use `›`, `○`, `✓`, `×`, and `■`. `Ctrl+O` shows bounded activities and final Markdown reports; expanded batches start with a numbered contents list whose numbers match the `──` section headers.
 - Full child transcripts are not stored separately. Bounded run details remain in the parent tool result, so completed calls restore naturally in the parent session tree.
 - Nested usage is returned with the tool result and included in parent session accounting.
 

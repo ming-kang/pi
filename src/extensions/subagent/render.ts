@@ -97,6 +97,7 @@ function leadingSentences(text: string, limit: number): string {
 }
 
 const VERIFY_COMMAND_PATTERN = /\b(test|lint|typecheck|tsc|vitest|jest|pytest|build|check|fmt|format|compile)\b/iu;
+const INSPECT_COMMAND_PATTERN = /\b(rg|grep|find|git (?:diff|status|log|show)|ls|tree|cat|head|tail)\b/iu;
 const RETRY_MARKER_PATTERN = /^Retrying\b/u;
 const STREAM_MARKERS = new Set(["Thinking…", "Writing response…"]);
 
@@ -111,7 +112,8 @@ function runIntent(run: SubagentRunDetails): string {
 	if (running) {
 		if (running.toolName === "edit" || running.toolName === "write") return "Applying changes";
 		if (running.toolName === "bash") {
-			return VERIFY_COMMAND_PATTERN.test(running.summary) ? "Verifying changes" : "Running commands";
+			if (VERIFY_COMMAND_PATTERN.test(running.summary)) return "Verifying changes";
+			return INSPECT_COMMAND_PATTERN.test(running.summary) ? "Exploring code" : "Running commands";
 		}
 		return "Exploring code";
 	}
@@ -141,6 +143,9 @@ function liveElapsed(run: SubagentRunDetails): string | undefined {
 	return formatDuration(Math.max(0, (end - run.startedAt) / 1000));
 }
 
+// The tool shell already paints a call-level status dot (● in
+// warning/success/error), so `●` is off-limits here: `›` marks where the
+// work currently is, and the remaining glyphs are terminal states.
 function statusMarker(status: SubagentRunStatus, theme: Theme): string {
 	switch (status) {
 		case "completed":
@@ -150,14 +155,15 @@ function statusMarker(status: SubagentRunStatus, theme: Theme): string {
 		case "aborted":
 			return theme.fg("warning", "■");
 		case "running":
-			return theme.fg("accent", "●");
+			return theme.fg("accent", "›");
 		default:
 			return theme.fg("muted", "○");
 	}
 }
 
-function runTitle(run: SubagentRunDetails, theme: Theme): string {
-	return `${statusMarker(run.status, theme)} ${theme.fg("accent", displayAgentName(run.agent))}${theme.fg("dim", ` · ${truncate(run.description, 48)}`)}`;
+function runTitle(run: SubagentRunDetails, theme: Theme, index?: number): string {
+	const number = index === undefined ? "" : theme.fg("dim", `${index} · `);
+	return `${statusMarker(run.status, theme)} ${number}${theme.fg("accent", displayAgentName(run.agent))}${theme.fg("dim", ` · ${truncate(run.description, 48)}`)}`;
 }
 
 function runProgressText(run: SubagentRunDetails): string {
@@ -166,8 +172,8 @@ function runProgressText(run: SubagentRunDetails): string {
 	return items.join(" · ");
 }
 
-function runLine(run: SubagentRunDetails, theme: Theme): string {
-	let line = runTitle(run, theme);
+function runLine(run: SubagentRunDetails, theme: Theme, index?: number): string {
+	let line = runTitle(run, theme, index);
 	const detail =
 		run.status === "running"
 			? runIntent(run)
@@ -209,7 +215,9 @@ function singleCollapsedLines(details: SubagentDetails, theme: Theme): string[] 
 				: isInitializing
 					? "Initializing…"
 					: runIntent(run);
-		let status = `${statusMarker(run.status, theme)} ${theme.fg("dim", intent)}`;
+		// No status marker here: the shell's call-level dot already covers
+		// the whole card, and a single run has nothing to disambiguate.
+		let status = theme.fg("dim", intent);
 		if (run.status === "running" && !isInitializing) {
 			status += theme.fg("dim", ` · ${runProgressText(run)}`);
 			const elapsed = liveElapsed(run);
@@ -217,7 +225,8 @@ function singleCollapsedLines(details: SubagentDetails, theme: Theme): string[] 
 		}
 		const lines = [status];
 		const evidence = runEvidence(run);
-		if (evidence && evidence !== intent) lines.push(theme.fg("dim", excerpt(evidence, LIVE_TAIL_LIMIT)));
+		if (evidence && evidence !== intent)
+			lines.push(`${theme.fg("accent", "›")} ${theme.fg("dim", excerpt(evidence, LIVE_TAIL_LIMIT))}`);
 		const tail = liveTail(run);
 		if (tail) lines.push(theme.fg("dim", tail));
 		return lines;
@@ -281,18 +290,23 @@ function formatDuration(seconds: number): string {
 
 // A single run's title and usage would duplicate the call header and
 // the call-level usage line, so `single` drops both and folds the
-// duration into the metadata line instead.
-function renderRunDetails(run: SubagentRunDetails, theme: Theme, single: boolean): Component {
+// duration into the metadata line instead. Multi-run sections carry a
+// numbered `──` header that matches the table of contents above them.
+function renderRunDetails(run: SubagentRunDetails, theme: Theme, single: boolean, index?: number): Component {
 	const container = new Container();
 	const duration =
 		run.startedAt !== undefined && run.endedAt !== undefined
 			? formatDuration(Math.max(0, (run.endedAt - run.startedAt) / 1000))
 			: undefined;
 	if (!single) {
-		let title = runTitle(run, theme);
-		if (run.status === "running") title += theme.fg("dim", ` · ${runProgressText(run)}`);
-		else if (duration) title += theme.fg("dim", ` · ${duration}`);
-		container.addChild(new Text(title, 0, 0));
+		const label = index === undefined ? "" : `${index} · `;
+		container.addChild(
+			new Text(
+				`${theme.fg("dim", `── ${label}`)}${theme.fg("accent", displayAgentName(run.agent))}${theme.fg("dim", ` · ${truncate(run.description, 48)}`)}`,
+				0,
+				0,
+			),
+		);
 	}
 	container.addChild(new Text(theme.fg("muted", "Task"), 0, 0));
 	container.addChild(new Text(theme.fg("dim", run.prompt), 0, 0));
@@ -305,10 +319,31 @@ function renderRunDetails(run: SubagentRunDetails, theme: Theme, single: boolean
 					? theme.fg("success", "✓")
 					: activity.status === "failed"
 						? theme.fg("error", "×")
-						: theme.fg("accent", "●");
+						: theme.fg("accent", "›");
 			let text = `${marker} ${theme.fg("toolOutput", excerpt(activity.summary, 96))}`;
-			if (activity.resultSummary) text += ` ${theme.fg("dim", `· ${excerpt(activity.resultSummary, 64)}`)}`;
+			if (activity.resultSummary) {
+				const color = activity.status === "failed" ? "error" : "dim";
+				text += ` ${theme.fg(color, `· ${excerpt(activity.resultSummary, 64)}`)}`;
+			}
+			if (activity.endedAt !== undefined && activity.endedAt - activity.startedAt >= 1_000) {
+				text += ` ${theme.fg("dim", `· ${formatDuration((activity.endedAt - activity.startedAt) / 1000)}`)}`;
+			}
 			container.addChild(new Text(text, 0, 0));
+		}
+	}
+	// The live tail is the "now" end of the timeline, so it sits after the
+	// activity list; once the run settles, Response takes its place.
+	if (run.status === "running" && run.liveText) {
+		const tail = run.liveText
+			.split("\n")
+			.map((line) => line.trim())
+			.filter(Boolean)
+			.slice(-4);
+		if (tail.length > 0) {
+			container.addChild(new Spacer(1));
+			for (const line of tail) {
+				container.addChild(new Text(theme.fg("dim", excerpt(line, LIVE_TAIL_LIMIT)), 0, 0));
+			}
 		}
 	}
 	if (run.error) {
@@ -322,6 +357,7 @@ function renderRunDetails(run: SubagentRunDetails, theme: Theme, single: boolean
 	}
 	const metadata = [
 		`${run.model} · ${run.thinking}`,
+		run.cwd ? `cwd: ${run.cwd}` : undefined,
 		run.usage.toolUses ? `${run.usage.toolUses} tool use${run.usage.toolUses === 1 ? "" : "s"}` : undefined,
 		run.usage.turns ? `${run.usage.turns} turn${run.usage.turns === 1 ? "" : "s"}` : undefined,
 		run.usage.output ? `↓${formatTokens(run.usage.output)}` : undefined,
@@ -402,10 +438,16 @@ export function renderSubagentResult(
 	const single = details.mode === "single" && details.runs.length === 1;
 	if (!single) {
 		container.addChild(new Text(theme.fg(isError ? "error" : "toolTitle", statusSummary(details)), 0, 0));
+		// Numbered table of contents: the TUI cannot jump, but matching the
+		// numbers against the `──` section headers below makes an 8-run
+		// batch navigable by eye.
+		details.runs.forEach((run, index) => {
+			container.addChild(new Text(runLine(run, theme, index + 1), 0, 0));
+		});
 	}
 	details.runs.forEach((run, index) => {
 		if (!single || index > 0) container.addChild(new Spacer(1));
-		container.addChild(renderRunDetails(run, theme, single));
+		container.addChild(renderRunDetails(run, theme, single, single ? undefined : index + 1));
 	});
 	if (!single) {
 		const usage = usageText(details);

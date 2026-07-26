@@ -1,3 +1,4 @@
+import { relative } from "node:path";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai/compat";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
 import { sleep } from "../../utils/sleep.ts";
@@ -102,14 +103,16 @@ function runId(index: number): string {
 	return `subagent-${index + 1}`;
 }
 
-function createRun(task: ResolvedSubagentTask, index: number): SubagentRunDetails {
+function createRun(task: ResolvedSubagentTask, index: number, parentCwd: string): SubagentRunDetails {
 	return {
 		id: runId(index),
 		agent: task.agent.name,
 		agentSource: task.agent.source,
 		description: task.description,
 		prompt: task.prompt,
-		cwd: task.cwd,
+		// Display-only relative path; the worker session itself uses the
+		// resolved absolute task.cwd. Empty means "same as the parent".
+		cwd: relative(parentCwd, task.cwd),
 		model: `${task.model.provider}/${task.model.id}`,
 		thinking: task.thinking,
 		status: "queued",
@@ -250,7 +253,12 @@ function statusText(details: SubagentDetails): string {
 		}
 		return run.status === "running" ? "Thinking…" : run.status;
 	}
-	return `${completed}/${details.runs.length} complete · ${running} running · ${queued} queued${failed ? ` · ${failed} failed` : ""}${aborted ? ` · ${aborted} aborted` : ""}`;
+	const parts = [`${completed}/${details.runs.length} complete`];
+	if (running) parts.push(`${running} running`);
+	if (queued) parts.push(`${queued} queued`);
+	if (failed) parts.push(`${failed} failed`);
+	if (aborted) parts.push(`${aborted} aborted`);
+	return parts.join(" · ");
 }
 
 function emitDetails(
@@ -447,7 +455,7 @@ export function isSubagentError(details: Pick<SubagentDetails, "status">): boole
 export async function runSubagentInvocation(options: SubagentInvocationOptions): Promise<SubagentExecutionResult> {
 	const { mode, tasks } = invocationMode(options.params);
 	const resolved = await resolveTasks(tasks, options);
-	const runs = resolved.map((task, index) => createRun(task, index));
+	const runs = resolved.map((task, index) => createRun(task, index, options.parentCwd));
 	const startedAt = Date.now();
 	let latestDetails = emitDetails(mode, runs, startedAt, options.onUpdate);
 	let lastProgressKey = progressKey(runs);

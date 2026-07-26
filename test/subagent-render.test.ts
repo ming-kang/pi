@@ -15,7 +15,7 @@ function run(overrides: Partial<SubagentRunDetails> = {}): SubagentRunDetails {
 		agentSource: "builtin",
 		description: "Map the code",
 		prompt: "Inspect the code.",
-		cwd: "/project",
+		cwd: "",
 		model: "test/model",
 		thinking: "low",
 		status: "completed",
@@ -92,6 +92,8 @@ describe("subagent rendering", () => {
 	it("renders collapsed progress, usage, and the configured expansion hint", () => {
 		const output = collapsed(details());
 		expect(output).toContain("1/1 complete");
+		expect(output).not.toContain("0 running");
+		expect(output).not.toContain("0 queued");
 		expect(output).toContain("Explorer · Map the code");
 		expect(output).toContain("3 tool uses");
 		expect(output).toContain("to expand");
@@ -180,6 +182,9 @@ describe("subagent rendering", () => {
 					run({
 						status: "running",
 						currentActivity: "Run ls -d */",
+						activities: [
+							{ id: "bash-1", toolName: "bash", summary: "Run ls -d */", status: "running", startedAt: 0 },
+						],
 						liveText: "Scanning packages\nThe **workspace** has five extensions",
 						finalOutput: "",
 					}),
@@ -187,9 +192,34 @@ describe("subagent rendering", () => {
 			}),
 			true,
 		);
-		expect(output).toContain("Run ls -d */");
+		expect(output).toContain("Exploring code");
+		expect(output).toContain("› Run ls -d */");
 		expect(output).toContain("The workspace has five extensions");
+		expect(output).not.toContain("●");
 		expect(output).not.toContain("to expand");
+	});
+
+	it("classifies inspection commands as exploration instead of generic command runs", () => {
+		const output = collapsed(
+			details({
+				mode: "single",
+				status: "running",
+				endedAt: undefined,
+				runs: [
+					run({
+						status: "running",
+						finalOutput: "",
+						liveText: "Checking the tree",
+						activities: [
+							{ id: "bash-1", toolName: "bash", summary: "Run git status", status: "running", startedAt: 0 },
+						],
+					}),
+				],
+			}),
+			true,
+		);
+		expect(output).toContain("Exploring code");
+		expect(output).not.toContain("Running commands");
 	});
 
 	it("shows per-run live tool and token metrics for parallel work", () => {
@@ -237,6 +267,9 @@ describe("subagent rendering", () => {
 		expect(output).toContain("Reviewer · Review the renderer");
 		expect(output).toContain("0 tool uses");
 		expect(output).not.toContain("0 tokens");
+		expect(output).not.toContain("●");
+		expect(output).toContain("2 running");
+		expect(output).not.toContain("0 queued");
 
 		const component = renderSubagentResult(
 			{ content: [{ type: "text", text: "in progress" }], details: runningDetails },
@@ -371,8 +404,16 @@ describe("subagent rendering", () => {
 									summary: "Run ls -la",
 									status: "succeeded",
 									startedAt: 0,
-									endedAt: 100,
+									endedAt: 1_200,
 									resultSummary: "total 383 drwxr-xr-x\n[Output truncated: 1121 bytes omitted.]",
+								},
+								{
+									id: "call-2",
+									toolName: "read",
+									summary: "read entry.ts",
+									status: "succeeded",
+									startedAt: 1_200,
+									endedAt: 1_400,
 								},
 							],
 						}),
@@ -386,7 +427,59 @@ describe("subagent rendering", () => {
 		const output = component.render(120).join("\n");
 		expect(output).not.toContain("Explorer · Map the code");
 		expect(output).not.toContain("[Output truncated");
+		expect(output).not.toContain("──");
 		expect(output.match(/tool use/gu)).toHaveLength(1);
 		expect(output).toContain("4.0s");
+		expect(output).toContain("Run ls -la · total 383 drwxr-xr-x … · 1.2s");
+		expect(output).not.toContain("read entry.ts ·");
+	});
+
+	it("numbers the expanded batch contents and matches them to section headers", () => {
+		const component = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "done" }],
+				details: details({
+					runs: [
+						run(),
+						run({ id: "subagent-2", agent: "reviewer", description: "Review it", finalOutput: "Looks fine." }),
+					],
+				}),
+			},
+			{ expanded: true, isPartial: false },
+			theme,
+			false,
+		);
+		const output = component.render(120).join("\n");
+		expect(output).toContain("✓ 1 · Explorer · Map the code");
+		expect(output).toContain("✓ 2 · Reviewer · Review it");
+		expect(output).toContain("── 1 · Explorer · Map the code");
+		expect(output).toContain("── 2 · Reviewer · Review it");
+		expect(output).not.toContain("●");
+	});
+
+	it("keeps the live tail visible in the expanded view while a run streams", () => {
+		const component = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "in progress" }],
+				details: details({
+					mode: "single",
+					status: "running",
+					endedAt: undefined,
+					runs: [
+						run({
+							status: "running",
+							finalOutput: "",
+							liveText: "First finding\nSecond finding\nThe retry loop lives in runner.ts",
+						}),
+					],
+				}),
+			},
+			{ expanded: true, isPartial: true },
+			theme,
+			false,
+		);
+		const output = component.render(120).join("\n");
+		expect(output).toContain("Second finding");
+		expect(output).toContain("The retry loop lives in runner.ts");
 	});
 });
