@@ -32,7 +32,7 @@ syntax.jsonl
 out.jsonl
 pi-*.html
 out.html
-todo.md
+/todo.md
 plans/
 profiles-node/
 profiles-bun/
