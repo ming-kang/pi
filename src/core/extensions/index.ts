@@ -75,6 +75,7 @@ export type {
 	ExtensionMode,
 	// Runtime
 	ExtensionRuntime,
+	ExtensionSelectDialogOptions,
 	ExtensionShortcut,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
@@ -122,6 +123,7 @@ export type {
 	// Events - Resources
 	ResourcesDiscoverEvent,
 	ResourcesDiscoverResult,
+	SelectOption,
 	SendMessageHandler,
 	SendUserMessageHandler,
 	SessionBeforeCompactEvent,

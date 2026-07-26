@@ -6,6 +6,8 @@
  * model-facing contract; keep it stable.
  */
 
+import type { SelectOption } from "../../core/extensions/types.ts";
+
 export const EXIT_PLAN_TOOL_NAME = "exit_plan";
 export const EXIT_PLAN_TOOL_LABEL = "Exit Plan";
 export const PLAN_COMMAND_NAME = "plan";
@@ -24,9 +26,23 @@ export const PLAN_BLOCKED_TOOLS: ReadonlySet<string> = new Set(["edit", "write",
 /** Max characters of plan markdown echoed into the post-compaction kickoff message. */
 export const PLAN_EMBED_MAX_CHARS = 24_000;
 
-export const MENU_EXECUTE = "Start executing (keep full context)";
-export const MENU_COMPACT_EXECUTE = "Compact context, then execute (best for long tasks)";
+export const MENU_EXECUTE = "Start executing";
+export const MENU_COMPACT_EXECUTE = "Compact context, then execute";
 export const MENU_KEEP_PLANNING = "Keep planning";
+
+/**
+ * Approval choices. The label is the decision, the description is the
+ * trade-off, so the three options can be told apart without reading to the
+ * end of a sentence. select() resolves to the label.
+ */
+export const EXIT_PLAN_MENU_OPTIONS: readonly SelectOption[] = [
+	{ label: MENU_EXECUTE, description: "keep full context" },
+	{ label: MENU_COMPACT_EXECUTE, description: "best for long tasks" },
+	{ label: MENU_KEEP_PLANNING, description: "refine before running" },
+];
+
+/** Esc maps to "keep planning", so the dismiss hint must not read as "discard". */
+export const EXIT_PLAN_CANCEL_HINT = "keep planning";
 
 export const EXIT_PLAN_TOOL_DESCRIPTION =
 	"Submit the finished plan and ask the user to approve leaving plan mode. Present the complete plan as normal response text first, then call this tool with a short title and the same plan markdown; on approval the plan is saved to disk. The user chooses between executing with full context, compacting the context before executing, or continuing to plan. Only available while plan mode is active.";

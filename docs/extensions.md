@@ -2462,6 +2462,20 @@ Extensions can interact with users via `ctx.ui` methods and customize how messag
 // Select from options
 const choice = await ctx.ui.select("Pick one:", ["A", "B", "C"]);
 
+// Options can carry a muted description line, so the action and its
+// trade-off can be scanned separately. select() still resolves to the label.
+const action = await ctx.ui.select(
+  "Approve?",
+  [
+    { label: "Start executing", description: "keep full context" },
+    { label: "Compact, then execute", description: "best for long tasks" },
+  ],
+  {
+    subtitle: "Context now 29% full",   // muted line under the title
+    cancelHint: "keep planning",        // Esc is not destructive here
+  },
+);
+
 // Confirm dialog
 const ok = await ctx.ui.confirm("Delete?", "This cannot be undone");
 

@@ -16,6 +16,7 @@
  * - State is conversation-backed via custom entries and branch replay (same
  *   pattern as todo): /reload, /tree, resume, and fork all restore.
  */
+import { Text } from "@earendil-works/pi-tui";
 import type {
 	AgentToolResult,
 	ExtensionAPI,
@@ -24,6 +25,8 @@ import type {
 } from "../../core/extensions/types.ts";
 import {
 	buildPlanModePrompt,
+	EXIT_PLAN_CANCEL_HINT,
+	EXIT_PLAN_MENU_OPTIONS,
 	EXIT_PLAN_PROMPT_GUIDELINES,
 	EXIT_PLAN_PROMPT_SNIPPET,
 	EXIT_PLAN_TOOL_DESCRIPTION,
@@ -50,6 +53,7 @@ import {
 	setActivePlanSession,
 } from "./state.ts";
 import { savePlanFile } from "./storage.ts";
+import { formatApprovalSubtitle, formatExitPlanCall, formatExitPlanResult } from "./view.ts";
 
 interface PendingCompact {
 	title: string;
@@ -99,7 +103,7 @@ export default function plan(pi: ExtensionAPI): void {
 
 	function updateStatus(ctx: ExtensionContext): void {
 		const state = getPlanState();
-		ctx.ui.setStatus(PLAN_STATUS_KEY, state.planning ? ctx.ui.theme.fg("warning", "plan") : undefined);
+		ctx.ui.setStatus(PLAN_STATUS_KEY, state.planning ? ctx.ui.theme.fg("accent", "Plan Mode") : undefined);
 	}
 
 	function enterPlanMode(ctx: ExtensionContext): void {
@@ -219,13 +223,11 @@ export default function plan(pi: ExtensionAPI): void {
 			let choice: string | undefined;
 			menuOpen = true;
 			try {
-				choice = await ctx.ui.select(
-					`Approve plan "${title}"?`,
-					[MENU_EXECUTE, MENU_COMPACT_EXECUTE, MENU_KEEP_PLANNING],
-					{
-						signal,
-					},
-				);
+				choice = await ctx.ui.select(`Approve plan "${title}"?`, EXIT_PLAN_MENU_OPTIONS, {
+					signal,
+					subtitle: formatApprovalSubtitle(ctx),
+					cancelHint: EXIT_PLAN_CANCEL_HINT,
+				});
 			} finally {
 				menuOpen = false;
 			}
@@ -289,6 +291,18 @@ export default function plan(pi: ExtensionAPI): void {
 				],
 				details: { decision: "keepPlanning", title },
 			};
+		},
+
+		renderCall(args, theme, context) {
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			text.setText(formatExitPlanCall(args, theme, context.expanded));
+			return text;
+		},
+
+		renderResult(result, _options, theme, context) {
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			text.setText(formatExitPlanResult(result, theme));
+			return text;
 		},
 	});
 
