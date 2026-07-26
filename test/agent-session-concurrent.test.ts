@@ -183,7 +183,7 @@ describe("AgentSession concurrent prompt guard", () => {
 
 	it("should queue extension-origin steering messages while streaming", async () => {
 		const model = getModel("anthropic", "claude-sonnet-4-5")!;
-		let abortSignal: AbortSignal | undefined;
+		let completeInitialTurn: (() => void) | undefined;
 		let sawSteeringMessage = false;
 		let lastInputSource: string | undefined;
 		const queueEvents: Array<{ steering: readonly string[]; followUp: readonly string[] }> = [];
@@ -195,8 +195,7 @@ describe("AgentSession concurrent prompt guard", () => {
 				systemPrompt: "Test",
 				tools: [],
 			},
-			streamFn: (_model, context, options) => {
-				abortSignal = options?.signal;
+			streamFn: (_model, context) => {
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {
 					const userTexts = context.messages
@@ -220,14 +219,9 @@ describe("AgentSession concurrent prompt guard", () => {
 					}
 
 					stream.push({ type: "start", partial: createAssistantMessage("") });
-					const checkAbort = () => {
-						if (abortSignal?.aborted) {
-							stream.push({ type: "error", reason: "aborted", error: createAssistantMessage("Aborted") });
-						} else {
-							setTimeout(checkAbort, 5);
-						}
+					completeInitialTurn = () => {
+						stream.push({ type: "done", reason: "stop", message: createAssistantMessage("Initial turn done") });
 					};
-					checkAbort();
 				});
 				return stream;
 			},
@@ -285,10 +279,13 @@ describe("AgentSession concurrent prompt guard", () => {
 		expect(lastInputSource).toBe("extension");
 		expect(queueEvents.some((event) => event.steering.includes("Steer from extension"))).toBe(true);
 
-		await session.abort();
-		await firstPrompt.catch(() => {});
+		expect(completeInitialTurn).toBeDefined();
+		completeInitialTurn!();
+		await firstPrompt;
 
 		expect(sawSteeringMessage).toBe(true);
+		expect(session.pendingMessageCount).toBe(0);
+		expect(queueEvents.at(-1)?.steering).toEqual([]);
 	});
 
 	it("should allow prompt() after previous completes", async () => {
