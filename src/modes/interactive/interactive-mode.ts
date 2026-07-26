@@ -320,6 +320,8 @@ export interface InteractiveModeOptions {
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
 	private ui: TUI;
+	private coalescingTerminal: CoalescingTerminal;
+	private agentRunActive = false;
 	private loadedResourcesContainer: Container;
 	private chatContainer: Container;
 	private pendingMessagesContainer: Container;
@@ -453,7 +455,26 @@ export class InteractiveMode {
 			await this.rebindCurrentSession({ renderBeforeBind: true });
 		});
 		this.version = VERSION;
-		this.ui = new TUI(new CoalescingTerminal(), this.settingsManager.getShowHardwareCursor(), getAgentDir());
+		const terminal = new CoalescingTerminal();
+		this.coalescingTerminal = terminal;
+		this.ui = new TUI(terminal, this.settingsManager.getShowHardwareCursor(), getAgentDir());
+		// Lets full-redraw rewrites scroll grown content into scrollback
+		// instead of dropping the lines pushed above the screen.
+		// previousViewportTop is TS-private but a plain runtime field, and
+		// pi-tui writes each full-redraw frame before updating it, so the
+		// wrapper observes the pre-frame value; if either assumption breaks,
+		// readViewportTop falls back to the bottom-anchored repaint.
+		terminal.setViewportTopProvider(
+			() => (this.ui as unknown as { previousViewportTop?: unknown }).previousViewportTop as number | undefined,
+		);
+		// Scrollback preservation stays on from agent_start until the user's
+		// next input after the run settles: post-run reflow frames must not
+		// yank a reader who is still scrolled up, but once the user acts they
+		// are back at the bottom and upstream's clean wipe-and-replay wins.
+		this.ui.addInputListener(() => {
+			if (!this.agentRunActive) this.coalescingTerminal.setScrollbackPreservation(false);
+			return undefined;
+		});
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 		this.headerContainer = new Container();
 		this.loadedResourcesContainer = new Container();
@@ -2862,6 +2883,8 @@ export class InteractiveMode {
 
 		switch (event.type) {
 			case "agent_start":
+				this.agentRunActive = true;
+				this.coalescingTerminal.setScrollbackPreservation(true);
 				this.pendingTools.clear();
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
@@ -3068,6 +3091,10 @@ export class InteractiveMode {
 				break;
 
 			case "agent_settled":
+				// Preservation itself stays on until the next user input; the
+				// run's trailing reflow frames may land after this event while
+				// the reader is still scrolled up.
+				this.agentRunActive = false;
 				await this.checkShutdownRequested();
 				break;
 
@@ -3807,6 +3834,11 @@ export class InteractiveMode {
 
 	private setToolsExpanded(expanded: boolean): void {
 		this.toolOutputExpanded = expanded;
+		// An explicit toggle prefers upstream's clean wipe-and-replay even
+		// mid-run: the user just pressed the key, so they are interacting at
+		// the bottom, and a full replay leaves scrollback as the exact new
+		// transcript instead of preservation's stale seams.
+		this.coalescingTerminal.passNextFullRedraw();
 		const activeHeader = this.customHeader ?? this.builtInHeader;
 		if (isExpandable(activeHeader)) {
 			activeHeader.setExpanded(expanded);
@@ -3824,6 +3856,8 @@ export class InteractiveMode {
 	private toggleThinkingBlockVisibility(): void {
 		this.hideThinkingBlock = !this.hideThinkingBlock;
 		this.settingsManager.setHideThinkingBlock(this.hideThinkingBlock);
+		// Same reasoning as setToolsExpanded.
+		this.coalescingTerminal.passNextFullRedraw();
 
 		// Rebuild chat from session messages
 		this.chatContainer.clear();
