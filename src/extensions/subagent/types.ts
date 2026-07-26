@@ -69,6 +69,8 @@ export interface SubagentUsage {
 	cacheWrite: number;
 	totalTokens: number;
 	cost: number;
+	/** Context watermark: total tokens of the latest request, not a running sum. */
+	contextTokens?: number;
 }
 
 export interface SubagentRunDetails {

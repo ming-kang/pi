@@ -58,7 +58,6 @@ describe("subagent SDK runner", () => {
 			parent: createParentContext(model),
 			modelRuntime,
 			agentDir: process.cwd(),
-			configAgentDir: process.cwd(),
 			projectTrusted: false,
 			gate: new ConcurrencyGate(1),
 			onUpdate: (details) => updates.push(details.status),
@@ -91,7 +90,6 @@ describe("subagent SDK runner", () => {
 			parent: createParentContext(model),
 			modelRuntime,
 			agentDir: process.cwd(),
-			configAgentDir: process.cwd(),
 			projectTrusted: false,
 			gate: new ConcurrencyGate(1),
 		});
@@ -112,7 +110,6 @@ describe("subagent SDK runner", () => {
 			parent: createParentContext(model),
 			modelRuntime,
 			agentDir: process.cwd(),
-			configAgentDir: process.cwd(),
 			projectTrusted: false,
 			gate: new ConcurrencyGate(1),
 		});
@@ -135,13 +132,49 @@ describe("subagent SDK runner", () => {
 			parent: createParentContext(model),
 			modelRuntime,
 			agentDir: process.cwd(),
-			configAgentDir: process.cwd(),
 			projectTrusted: false,
 			gate: new ConcurrencyGate(1),
 		});
 		expect(result.details.status).toBe("completed");
 		expect(result.content).toBe("second result");
 		expect(result.details.runs.map((run) => run.status)).toEqual(["completed", "completed"]);
+	});
+
+	it("passes chain output containing replacement patterns through literally", async () => {
+		let receivedPrompt = "";
+		const faux = fauxProvider({ provider: `subagent-dollar-${Date.now()}-${Math.random()}` });
+		faux.setResponses([
+			fauxAssistantMessage("price is $& and $' and $$1"),
+			(context) => {
+				const lastUser = [...context.messages].reverse().find((message) => message.role === "user");
+				receivedPrompt =
+					typeof lastUser?.content === "string"
+						? lastUser.content
+						: (lastUser?.content ?? []).map((part) => (part.type === "text" ? part.text : "")).join("");
+				return fauxAssistantMessage("done");
+			},
+		]);
+		const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+		modelRuntime.registerNativeProvider(faux.provider);
+		const model = faux.getModel() as Model<Api>;
+		const result = await runSubagentInvocation({
+			params: {
+				chain: [
+					{ agent: "worker", description: "First", prompt: "Find prices." },
+					{ agent: "worker", description: "Second", prompt: "Report: {previous}" },
+				],
+			},
+			parentCwd: process.cwd(),
+			agents: [agent],
+			parent: createParentContext(model),
+			modelRuntime,
+			agentDir: process.cwd(),
+			projectTrusted: false,
+			gate: new ConcurrencyGate(1),
+		});
+		expect(result.details.status).toBe("completed");
+		// String.replace would swallow $& / $' / $$; the handoff must be literal.
+		expect(receivedPrompt).toContain("price is $& and $' and $$1");
 	});
 
 	it("accepts null mode fields from strict providers that send every property", async () => {
@@ -161,7 +194,6 @@ describe("subagent SDK runner", () => {
 			parent: createParentContext(model),
 			modelRuntime,
 			agentDir: process.cwd(),
-			configAgentDir: process.cwd(),
 			projectTrusted: false,
 			gate: new ConcurrencyGate(1),
 		});
@@ -178,7 +210,6 @@ describe("subagent SDK runner", () => {
 			parent: createParentContext(model),
 			modelRuntime,
 			agentDir: process.cwd(),
-			configAgentDir: process.cwd(),
 			projectTrusted: false,
 			gate: new ConcurrencyGate(1),
 		};

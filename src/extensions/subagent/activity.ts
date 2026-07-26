@@ -24,6 +24,9 @@ export function addUsage(target: SubagentUsage, usage: Usage | undefined): void 
 	target.cacheWrite += usage.cacheWrite ?? 0;
 	target.totalTokens += usage.totalTokens ?? 0;
 	target.cost += usage.cost?.total ?? 0;
+	// Watermark, not a sum: the latest request's total is the context size,
+	// and it can shrink again after the worker auto-compacts.
+	if (usage.totalTokens) target.contextTokens = usage.totalTokens;
 }
 
 export function mergeUsage(target: SubagentUsage, source: SubagentUsage): void {
@@ -35,6 +38,9 @@ export function mergeUsage(target: SubagentUsage, source: SubagentUsage): void {
 	target.cacheWrite += source.cacheWrite;
 	target.totalTokens += source.totalTokens;
 	target.cost += source.cost;
+	if (source.contextTokens) {
+		target.contextTokens = Math.max(target.contextTokens ?? 0, source.contextTokens);
+	}
 }
 
 export function toNestedUsage(usage: SubagentUsage): Usage {
@@ -54,10 +60,18 @@ export function toNestedUsage(usage: SubagentUsage): Usage {
 	};
 }
 
-function utf8Prefix(text: string, maxBytes: number): string {
+// Iterates code points so a surrogate pair is never split in half.
+export function utf8Prefix(text: string, maxBytes: number): string {
 	if (maxBytes <= 0) return "";
-	let output = text.slice(0, maxBytes);
-	while (Buffer.byteLength(output, "utf8") > maxBytes) output = output.slice(0, -1);
+	if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+	let output = "";
+	let bytes = 0;
+	for (const character of text) {
+		const characterBytes = Buffer.byteLength(character, "utf8");
+		if (bytes + characterBytes > maxBytes) break;
+		output += character;
+		bytes += characterBytes;
+	}
 	return output;
 }
 

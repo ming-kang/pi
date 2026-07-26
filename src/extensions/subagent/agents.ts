@@ -2,6 +2,7 @@ import { type Dirent, existsSync, readdirSync, readFileSync, statSync } from "no
 import { dirname, join } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../../config.ts";
 import { parseFrontmatter } from "../../utils/frontmatter.ts";
+import { utf8Prefix } from "./activity.ts";
 import { BUILTIN_TOOL_NAMES, DEFAULT_AGENT_TOOLS, EXPLORER_TOOLS } from "./constants.ts";
 import type { AgentDefinition, AgentDiagnostic, AgentDiscoveryResult, AgentSource } from "./types.ts";
 
@@ -9,18 +10,6 @@ const AGENT_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,79}$/u;
 const BUILTIN_TOOL_SET = new Set<string>(BUILTIN_TOOL_NAMES);
 const TOOL_DESCRIPTION_AGENT_LIST_LIMIT = 8_000;
 const TOOL_DESCRIPTION_AGENT_SUMMARY_LIMIT = 480;
-
-function utf8Prefix(text: string, maxBytes: number): string {
-	let output = "";
-	let bytes = 0;
-	for (const character of text) {
-		const characterBytes = Buffer.byteLength(character, "utf8");
-		if (bytes + characterBytes > maxBytes) break;
-		output += character;
-		bytes += characterBytes;
-	}
-	return output;
-}
 
 const BUILTIN_AGENTS: AgentDefinition[] = [
 	{

@@ -70,6 +70,66 @@ function liveTail(run: SubagentRunDetails): string | undefined {
 	return last ? excerpt(last, LIVE_TAIL_LIMIT) : undefined;
 }
 
+// Completed-run excerpts read better cut at a sentence boundary than
+// mid-word; fall back to a hard truncate when no boundary lands in the
+// second half of the window.
+function leadingSentences(text: string, limit: number): string {
+	const cleaned = excerpt(text, Number.MAX_SAFE_INTEGER);
+	if (cleaned.length <= limit) return cleaned;
+	const window = cleaned.slice(0, limit);
+	let boundary = -1;
+	for (const match of window.matchAll(/[.!?。！？](?=\s|$)/gu)) {
+		boundary = (match.index ?? 0) + match[0].length;
+	}
+	if (boundary >= limit / 2) return window.slice(0, boundary).trimEnd();
+	return truncate(window, limit);
+}
+
+const VERIFY_COMMAND_PATTERN = /\b(test|lint|typecheck|tsc|vitest|jest|pytest|build|check|fmt|format|compile)\b/iu;
+const RETRY_MARKER_PATTERN = /^Retrying\b/u;
+const STREAM_MARKERS = new Set(["Thinking…", "Writing response…"]);
+
+// Translates raw tool traffic into what the worker is doing right now, so
+// the collapsed card reads as a phase instead of a command line. Modelled
+// on tool-type classification; the raw tool summary stays as evidence on
+// the next line.
+function runIntent(run: SubagentRunDetails): string {
+	const current = run.currentActivity;
+	if (current && RETRY_MARKER_PATTERN.test(current)) return current;
+	const running = [...run.activities].reverse().find((activity) => activity.status === "running");
+	if (running) {
+		if (running.toolName === "edit" || running.toolName === "write") return "Applying changes";
+		if (running.toolName === "bash") {
+			return VERIFY_COMMAND_PATTERN.test(running.summary) ? "Verifying changes" : "Running commands";
+		}
+		return "Exploring code";
+	}
+	const recent = run.activities.slice(-5);
+	if (current && STREAM_MARKERS.has(current)) {
+		if (recent.some((activity) => activity.status === "failed")) return "Investigating a failure";
+		return current;
+	}
+	if (recent.some((activity) => activity.status === "failed")) return "Investigating a failure";
+	if (recent.some((activity) => activity.toolName === "edit" || activity.toolName === "write"))
+		return "Reviewing changes";
+	if (recent.length > 0) return "Exploring code";
+	return current ?? "Thinking…";
+}
+
+// The raw tool summary backs up the intent line; suppress it when it would
+// just repeat a stream/retry marker.
+function runEvidence(run: SubagentRunDetails): string | undefined {
+	const current = run.currentActivity;
+	if (!current || STREAM_MARKERS.has(current) || RETRY_MARKER_PATTERN.test(current)) return undefined;
+	return current;
+}
+
+function liveElapsed(run: SubagentRunDetails): string | undefined {
+	if (run.startedAt === undefined) return undefined;
+	const end = run.endedAt ?? Date.now();
+	return formatDuration(Math.max(0, (end - run.startedAt) / 1000));
+}
+
 function statusMarker(status: SubagentRunStatus, theme: Theme): string {
 	switch (status) {
 		case "completed":
@@ -100,12 +160,16 @@ function runLine(run: SubagentRunDetails, theme: Theme, mode: SubagentDetails["m
 	let line = runTitle(run, theme, mode);
 	const detail =
 		run.status === "running"
-			? run.currentActivity
+			? runIntent(run)
 			: run.status === "failed" || run.status === "aborted"
 				? run.error && excerpt(run.error, RUN_LINE_EXCERPT_LIMIT)
 				: run.finalOutput && excerpt(run.finalOutput, RUN_LINE_EXCERPT_LIMIT);
 	if (detail) line += theme.fg(run.status === "failed" ? "error" : "dim", ` — ${detail}`);
-	if (run.status === "running") line += theme.fg("dim", ` · ${runProgressText(run)}`);
+	if (run.status === "running") {
+		line += theme.fg("dim", ` · ${runProgressText(run)}`);
+		const elapsed = liveElapsed(run);
+		if (elapsed) line += theme.fg("dim", ` · ${elapsed}`);
+	}
 	const settled = run.status !== "running" && run.status !== "queued";
 	if (settled && run.startedAt !== undefined && run.endedAt !== undefined) {
 		line += theme.fg("dim", ` · ${formatDuration(Math.max(0, (run.endedAt - run.startedAt) / 1000))}`);
@@ -129,15 +193,27 @@ function singleCollapsedLines(details: SubagentDetails, theme: Theme): string[] 
 	if (run.status === "running" || run.status === "queued") {
 		const isInitializing =
 			run.status === "running" && run.usage.turns === 0 && run.usage.toolUses === 0 && run.liveText.length === 0;
-		const lines = [
-			`${statusMarker(run.status, theme)} ${theme.fg("dim", run.currentActivity ?? (run.status === "queued" ? "queued" : isInitializing ? "Initializing…" : "Thinking…"))}`,
-		];
+		const intent =
+			run.status === "queued"
+				? (run.currentActivity ?? "queued")
+				: isInitializing
+					? "Initializing…"
+					: runIntent(run);
+		let status = `${statusMarker(run.status, theme)} ${theme.fg("dim", intent)}`;
+		if (run.status === "running" && !isInitializing) {
+			status += theme.fg("dim", ` · ${runProgressText(run)}`);
+			const elapsed = liveElapsed(run);
+			if (elapsed) status += theme.fg("dim", ` · ${elapsed}`);
+		}
+		const lines = [status];
+		const evidence = runEvidence(run);
+		if (evidence && evidence !== intent) lines.push(theme.fg("dim", excerpt(evidence, LIVE_TAIL_LIMIT)));
 		const tail = liveTail(run);
 		if (tail) lines.push(theme.fg("dim", tail));
 		return lines;
 	}
 	if (run.error) return [theme.fg("error", excerpt(run.error, SINGLE_EXCERPT_LIMIT))];
-	if (run.finalOutput) return [theme.fg("toolOutput", excerpt(run.finalOutput, SINGLE_EXCERPT_LIMIT))];
+	if (run.finalOutput) return [theme.fg("toolOutput", leadingSentences(run.finalOutput, SINGLE_EXCERPT_LIMIT))];
 	return [theme.fg("muted", run.status)];
 }
 
@@ -175,6 +251,7 @@ function usageText(details: SubagentDetails, includeToolUses = true): string {
 	if (includeToolUses && usage.toolUses) items.push(`${usage.toolUses} tool use${usage.toolUses === 1 ? "" : "s"}`);
 	if (usage.turns) items.push(`${usage.turns} turn${usage.turns === 1 ? "" : "s"}`);
 	if (usage.output) items.push(`↓${formatTokens(usage.output)}`);
+	if (usage.contextTokens) items.push(`ctx:${formatTokens(usage.contextTokens)}`);
 	if (usage.cost) items.push(`$${usage.cost.toFixed(3)}`);
 	const duration = details.endedAt ? Math.max(0, (details.endedAt - details.startedAt) / 1000) : undefined;
 	if (duration !== undefined) items.push(formatDuration(duration));
@@ -243,6 +320,7 @@ function renderRunDetails(
 		run.usage.toolUses ? `${run.usage.toolUses} tool use${run.usage.toolUses === 1 ? "" : "s"}` : undefined,
 		run.usage.turns ? `${run.usage.turns} turn${run.usage.turns === 1 ? "" : "s"}` : undefined,
 		run.usage.output ? `↓${formatTokens(run.usage.output)}` : undefined,
+		run.usage.contextTokens ? `ctx:${formatTokens(run.usage.contextTokens)}` : undefined,
 		run.usage.cost ? `$${run.usage.cost.toFixed(3)}` : undefined,
 		single ? duration : undefined,
 	]
@@ -292,7 +370,11 @@ export function renderSubagentResult(
 		if (details.mode === "single") {
 			lines.push(...singleCollapsedLines(details, theme));
 		} else {
-			lines.push(theme.fg(isError ? "error" : options.isPartial ? "accent" : "muted", statusSummary(details)));
+			let header = statusSummary(details);
+			if (options.isPartial) {
+				header += ` · ${formatDuration(Math.max(0, (Date.now() - details.startedAt) / 1000))}`;
+			}
+			lines.push(theme.fg(isError ? "error" : options.isPartial ? "accent" : "muted", header));
 			const shown = selectCollapsedRuns(details.runs, Boolean(options.isPartial));
 			for (const run of shown) lines.push(runLine(run, theme, details.mode));
 			const hidden = details.runs.length - shown.length;

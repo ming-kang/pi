@@ -17,8 +17,6 @@ agent?       Agent profile name; defaults to general
 description  Short UI label
 prompt       Self-contained worker briefing
 cwd?         Relative directory inside the parent working directory
-model?       Temporary provider/model override
-thinking?    Temporary thinking-level override
 ```
 
 Parallel and chain batches allow at most eight tasks. A session-scoped gate runs at most three workers concurrently, including sibling `subagent` calls from the same parent session.
@@ -50,26 +48,26 @@ Project definitions are loaded only after Pi trusts the project. Invalid Markdow
 
 Built-in profiles:
 
-- `general`: read, bash, edit, write, grep, find, and ls.
-- `explorer`: read-only `read`, `grep`, `find`, and `ls`, with low thinking by default.
+- `general`: read, bash, edit, and write.
+- `explorer`: read-only `read`, `grep`, `find`, and `ls`.
 
 A profile may only allow Pi built-in tools. Child sessions load no extensions, skills, or prompt templates, so a worker cannot recursively call `subagent` or inherit unrelated extension capabilities. Project context files such as `AGENTS.md` remain available.
 
 ## Model and thinking selection
 
-The model/thinking resolution order is:
+The model/thinking resolution has exactly two layers:
 
 ```text
-per-call tool fields
-  > saved /agents profile override
-  > profile Markdown frontmatter
-  > current parent session
+saved /agents profile override > current parent session
 ```
+
+Callers cannot pick models per call, and profile Markdown `model`/`thinking`
+frontmatter is intentionally ignored: agent files travel across machines, so a
+pinned model rarely exists in the reader's environment.
 
 Run `/agents` to choose a profile and set either field to:
 
-- **inherit**: force the active parent-session value;
-- **agent default**: clear the saved override and use Markdown/default inheritance;
+- **inherit**: follow the parent session's current value;
 - a configured `provider/model` or explicit supported thinking level.
 
 Overrides are user-owned and saved atomically in:
@@ -85,7 +83,8 @@ They apply only to future subagent runs and never change the parent session's `/
 - The parent tool call waits until every worker reaches a terminal state.
 - Parent abort, `/reload`, `/new`, `/resume`, `/fork`, and session shutdown abort active child sessions. Queued workers do not survive the call.
 - Parallel worker failures do not cancel other independent workers. A failed or aborted chain step skips its remaining steps.
-- Progress is rendered in Pi's native tool transcript. The collapsed view shows status, recent activity, usage, and the configured expand hint; `Ctrl+O` shows bounded activities and final Markdown reports.
+- Transient provider errors auto-retry: the worker session retries retryable stream errors with backoff (visible as `Retrying (n/m) in Xs…`), and a failure that produced no work (for example a preflight auth throw) is rerun at the task level up to two more times. Runs with partial work behind them are never rerun.
+- Progress is rendered in Pi's native tool transcript. The collapsed view shows an intent line (for example `Verifying changes`), the current tool, live elapsed time, usage with a `ctx:` context watermark, and the configured expand hint; `Ctrl+O` shows bounded activities and final Markdown reports.
 - Full child transcripts are not stored separately. Bounded run details remain in the parent tool result, so completed calls restore naturally in the parent session tree.
 - Nested usage is returned with the tool result and included in parent session accounting.
 

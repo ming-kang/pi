@@ -9,6 +9,12 @@ export const SUBAGENT_CONFIG_FILE = "subagent.json";
 export const MAX_TASKS = 8;
 export const MAX_CONCURRENCY = 3;
 
+// Task-level retry for failures that bypass the session's own auto-retry
+// (preflight throws such as auth checks). Only runs that produced nothing
+// are retried, so a retry never discards partial work.
+export const TASK_RETRY_LIMIT = 2;
+export const TASK_RETRY_BASE_DELAY_MS = 1_000;
+
 export const BUILTIN_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
 // Matches the parent session's default toolset; bash covers search needs.
 export const DEFAULT_AGENT_TOOLS = ["read", "bash", "edit", "write"] as const;
@@ -34,4 +40,6 @@ export const PARALLEL_OUTPUT_LIMIT = 48 * 1024;
 export const CHAIN_HANDOFF_LIMIT = 16 * 1024;
 export const ERROR_TEXT_LIMIT = 8 * 1024;
 export const DETAILS_OUTPUT_LIMIT = 120 * 1024;
-export const DETAILS_ACTIVITY_LIMIT = 4;
+// Bounded per run inside DETAILS_OUTPUT_LIMIT; each activity costs up to
+// ~600 bytes, so 12 keeps an 8-run parallel batch from starving outputs.
+export const DETAILS_ACTIVITY_LIMIT = 12;

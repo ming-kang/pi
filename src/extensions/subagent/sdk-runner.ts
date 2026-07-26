@@ -59,25 +59,32 @@ function assistantError(message: ReturnType<typeof lastAssistantMessage>): strin
 	return message.errorMessage;
 }
 
-function emitThrottled(onProgress: (() => void) | undefined): () => void {
-	let pending = false;
-	return () => {
-		if (!onProgress || pending) return;
-		pending = true;
-		setTimeout(() => {
-			pending = false;
-			onProgress();
-		}, 80);
-	};
+interface ThrottledEmitter {
+	emit: () => void;
+	/** Drops any pending timer so nothing fires after the run has settled. */
+	cancel: () => void;
 }
 
-function cancelThrottled(onProgress: () => void): void {
-	onProgress();
+function createThrottledEmitter(onProgress: (() => void) | undefined): ThrottledEmitter {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	return {
+		emit: () => {
+			if (!onProgress || timer) return;
+			timer = setTimeout(() => {
+				timer = undefined;
+				onProgress();
+			}, 80);
+		},
+		cancel: () => {
+			if (timer) clearTimeout(timer);
+			timer = undefined;
+		},
+	};
 }
 
 export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRunDetails> {
 	const { task, run, modelRuntime, agentDir, projectTrusted, signal, onProgress } = options;
-	const emitTextProgress = emitThrottled(onProgress);
+	const throttled = createThrottledEmitter(onProgress);
 	let unsubscribe: (() => void) | undefined;
 	let unregisterAbort: (() => void) | undefined;
 	let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
@@ -123,8 +130,24 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 		});
 		session = created.session;
 		const emitImmediate = () => onProgress?.();
-		const emitText = emitTextProgress;
+		const emitText = throttled.emit;
 		unsubscribe = session.subscribe((event: AgentSessionEvent) => {
+			if (event.type === "auto_retry_start") {
+				// Session-level auto-retry backoff: without this the UI shows a
+				// stale "Thinking…" for the whole retry window.
+				const seconds = Math.max(1, Math.round(event.delayMs / 1000));
+				run.currentActivity = `Retrying (${event.attempt}/${event.maxAttempts}) in ${seconds}s — ${boundText(
+					event.errorMessage.replace(/\s+/gu, " ").trim(),
+					160,
+				)}`;
+				emitImmediate();
+				return;
+			}
+			if (event.type === "auto_retry_end") {
+				run.currentActivity = event.success ? undefined : run.currentActivity;
+				emitImmediate();
+				return;
+			}
 			if (event.type === "turn_end") {
 				run.usage.turns++;
 				run.currentActivity = undefined;
@@ -210,7 +233,7 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 		}
 		if (session) run.finalOutput = finalAssistantText(session.messages);
 	} finally {
-		cancelThrottled(emitTextProgress);
+		throttled.cancel();
 		unregisterAbort?.();
 		unsubscribe?.();
 		session?.dispose();

@@ -16,7 +16,7 @@ import { SUBAGENT_COMMAND_NAME, SUBAGENT_TOOL_LABEL, SUBAGENT_TOOL_NAME, THINKIN
 import { type PickerItem, SearchPickerComponent } from "./picker.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
 import type { ParentModelContext } from "./resolve.ts";
-import { ConcurrencyGate, runSubagentInvocation, statusSummary } from "./runner.ts";
+import { ConcurrencyGate, isSubagentError, runSubagentInvocation, statusSummary } from "./runner.ts";
 import { SubagentParamsSchema } from "./schema.ts";
 import { loadSubagentConfig, resetProfileOverrides, updateProfileOverride } from "./settings.ts";
 import type { AgentDefinition, AgentDiscoveryResult, SubagentDetails, SubagentProfileOverride } from "./types.ts";
@@ -207,10 +207,17 @@ export default function subagent(pi: ExtensionAPI): void {
 	const getModelRuntime = async (ctx: ExtensionContext): Promise<ModelRuntime> => {
 		if (!modelRuntimePromise) {
 			const agentDir = getAgentDir();
-			modelRuntimePromise = ModelRuntime.create({
+			const created = ModelRuntime.create({
 				authPath: join(agentDir, "auth.json"),
 				modelsPath: join(agentDir, "models.json"),
 			});
+			// A transient failure (network, filesystem) must not brick the tool
+			// for the rest of the session: drop the rejected promise so the
+			// next invocation retries creation.
+			created.catch(() => {
+				if (modelRuntimePromise === created) modelRuntimePromise = undefined;
+			});
+			modelRuntimePromise = created;
 		}
 		const runtime = await modelRuntimePromise;
 		await syncParentProviders(runtime, ctx.modelRegistry, syncedProviderIds);
@@ -245,7 +252,6 @@ export default function subagent(pi: ExtensionAPI): void {
 					parent,
 					modelRuntime: runtime,
 					agentDir: getAgentDir(),
-					configAgentDir: getAgentDir(),
 					projectTrusted: ctx.isProjectTrusted(),
 					signal,
 					gate,
@@ -287,7 +293,7 @@ export default function subagent(pi: ExtensionAPI): void {
 	pi.on("tool_result", async (event) => {
 		if (event.toolName !== SUBAGENT_TOOL_NAME) return;
 		const details = event.details as SubagentDetails | undefined;
-		if (details?.status === "failed" || details?.status === "aborted") return { isError: true };
+		if (details && isSubagentError(details)) return { isError: true };
 	});
 
 	pi.on("session_shutdown", async () => {

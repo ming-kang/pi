@@ -1,4 +1,6 @@
+import { isRetryableAssistantError } from "@earendil-works/pi-ai/compat";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
+import { sleep } from "../../utils/sleep.ts";
 import { boundText, emptyUsage, mergeUsage, toNestedUsage } from "./activity.ts";
 import {
 	CHAIN_HANDOFF_LIMIT,
@@ -10,10 +12,13 @@ import {
 	PARALLEL_OUTPUT_LIMIT,
 	PARALLEL_TASK_OUTPUT_LIMIT,
 	SINGLE_OUTPUT_LIMIT,
+	TASK_RETRY_BASE_DELAY_MS,
+	TASK_RETRY_LIMIT,
 } from "./constants.ts";
 import { type ParentModelContext, resolveSubagentTask } from "./resolve.ts";
 import type { SubagentParams, SubagentTask } from "./schema.ts";
 import { runSdkTask } from "./sdk-runner.ts";
+import { loadSubagentConfig } from "./settings.ts";
 import type {
 	AgentDefinition,
 	ResolvedSubagentTask,
@@ -85,12 +90,13 @@ export interface SubagentInvocationOptions {
 	parent: ParentModelContext;
 	modelRuntime: ModelRuntime;
 	agentDir: string;
-	configAgentDir: string;
 	projectTrusted: boolean;
 	signal?: AbortSignal;
 	gate: ConcurrencyGate;
 	onUpdate?: (details: SubagentDetails) => void;
 	registerAbort?: (abort: () => Promise<void>) => () => void;
+	/** Test hook: overrides the task-retry backoff base delay. */
+	taskRetryBaseDelayMs?: number;
 }
 
 function runId(index: number): string {
@@ -273,7 +279,10 @@ function emitDetails(
 }
 
 function replacePrevious(prompt: string, previous: string): string {
-	return prompt.replace(/\{previous\}/gu, boundText(previous, CHAIN_HANDOFF_LIMIT));
+	// Function replacement: a plain string would interpret $&, $', $$ patterns
+	// in the previous step's output and silently corrupt the handoff.
+	const bounded = boundText(previous, CHAIN_HANDOFF_LIMIT);
+	return prompt.replace(/\{previous\}/gu, () => bounded);
 }
 
 function validateTaskCount(tasks: readonly SubagentTask[]): void {
@@ -286,11 +295,42 @@ async function resolveTasks(
 	options: SubagentInvocationOptions,
 ): Promise<ResolvedSubagentTask[]> {
 	validateTaskCount(tasks);
+	const config = await loadSubagentConfig(options.agentDir);
 	return Promise.all(
 		tasks.map((task) =>
-			resolveSubagentTask(task, options.parentCwd, options.agents, options.parent, options.configAgentDir),
+			resolveSubagentTask(task, options.parentCwd, options.agents, options.parent, options.agentDir, config),
 		),
 	);
+}
+
+// Reuses pi-ai's provider-error classification by wrapping the stored error
+// text in the assistant-message shape it inspects.
+function isRetryableRunError(error: string | undefined): boolean {
+	if (!error) return false;
+	const probe = { role: "assistant", content: [], stopReason: "error", errorMessage: error };
+	return isRetryableAssistantError(probe as unknown as Parameters<typeof isRetryableAssistantError>[0]);
+}
+
+// Session-level auto-retry already covers errors that happen inside the agent
+// loop; this catches the paths that bypass it (preflight throws such as auth
+// checks). Only a run that produced nothing is retried, so partial work is
+// never discarded.
+function shouldRetryTask(run: SubagentRunDetails): boolean {
+	return (
+		run.status === "failed" && run.usage.turns === 0 && run.usage.toolUses === 0 && isRetryableRunError(run.error)
+	);
+}
+
+function resetRunForRetry(run: SubagentRunDetails, attempt: number, maxAttempts: number): void {
+	run.status = "queued";
+	run.error = undefined;
+	run.startedAt = undefined;
+	run.endedAt = undefined;
+	run.finalOutput = "";
+	run.liveText = "";
+	run.currentActivity = `Retrying (attempt ${attempt}/${maxAttempts})…`;
+	run.activities.length = 0;
+	run.usage = emptyUsage();
 }
 
 async function runWithGate(
@@ -308,16 +348,31 @@ async function runWithGate(
 			run.error = "Subagent was aborted while queued.";
 			return run;
 		}
-		return await runSdkTask({
-			task,
-			run,
-			modelRuntime: options.modelRuntime,
-			agentDir: options.agentDir,
-			projectTrusted: options.projectTrusted,
-			signal: options.signal,
-			onProgress,
-			registerAbort: options.registerAbort,
-		});
+		const baseDelayMs = options.taskRetryBaseDelayMs ?? TASK_RETRY_BASE_DELAY_MS;
+		for (let attempt = 0; ; attempt++) {
+			const result = await runSdkTask({
+				task,
+				run,
+				modelRuntime: options.modelRuntime,
+				agentDir: options.agentDir,
+				projectTrusted: options.projectTrusted,
+				signal: options.signal,
+				onProgress,
+				registerAbort: options.registerAbort,
+			});
+			if (attempt >= TASK_RETRY_LIMIT || options.signal?.aborted || !shouldRetryTask(result)) return result;
+			resetRunForRetry(run, attempt + 1, TASK_RETRY_LIMIT);
+			onProgress();
+			try {
+				await sleep(baseDelayMs * 2 ** attempt, options.signal);
+			} catch {
+				run.status = "aborted";
+				run.error = "Subagent was aborted while waiting to retry.";
+				run.endedAt = Date.now();
+				onProgress();
+				return run;
+			}
+		}
 	} catch (error) {
 		run.status = options.signal?.aborted ? "aborted" : "failed";
 		run.error = boundText(error instanceof Error ? error.message : String(error), ERROR_TEXT_LIMIT);
@@ -393,13 +448,45 @@ function invocationMode(params: SubagentParams): { mode: SubagentDetails["mode"]
 	};
 }
 
+// Cheap change detector: consecutive events that alter nothing user-visible
+// skip the bounded-details serialization in emitDetails entirely.
+function progressKey(runs: readonly SubagentRunDetails[]): string {
+	return runs
+		.map((run) => {
+			const last = run.activities[run.activities.length - 1];
+			return [
+				run.status,
+				run.currentActivity ?? "",
+				run.activities.length,
+				last?.status ?? "",
+				last?.resultSummary ?? "",
+				run.liveText.length,
+				run.liveText.slice(-24),
+				run.finalOutput.length,
+				run.usage.turns,
+				run.usage.toolUses,
+				run.usage.totalTokens,
+				run.error ?? "",
+			].join(" ");
+		})
+		.join("");
+}
+
+export function isSubagentError(details: Pick<SubagentDetails, "status">): boolean {
+	return details.status === "failed" || details.status === "aborted";
+}
+
 export async function runSubagentInvocation(options: SubagentInvocationOptions): Promise<SubagentExecutionResult> {
 	const { mode, tasks } = invocationMode(options.params);
 	const resolved = await resolveTasks(tasks, options);
 	const runs = resolved.map((task, index) => createRun(task, index, mode === "chain" ? index + 1 : undefined));
 	const startedAt = Date.now();
 	let latestDetails = emitDetails(mode, runs, startedAt, options.onUpdate);
+	let lastProgressKey = progressKey(runs);
 	const progress = () => {
+		const key = progressKey(runs);
+		if (key === lastProgressKey) return;
+		lastProgressKey = key;
 		latestDetails = emitDetails(mode, runs, startedAt, options.onUpdate);
 	};
 
@@ -429,7 +516,7 @@ export async function runSubagentInvocation(options: SubagentInvocationOptions):
 	}
 	latestDetails = emitDetails(mode, runs, startedAt, undefined);
 	latestDetails.endedAt = Date.now();
-	const isError = latestDetails.status === "failed" || latestDetails.status === "aborted";
+	const isError = isSubagentError(latestDetails);
 	return {
 		content: resultContent(latestDetails),
 		details: boundSubagentDetails(latestDetails),

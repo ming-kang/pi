@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -187,5 +187,24 @@ describe("subagent configuration", () => {
 		temporaryDirectories.push(root);
 		expect(() => resolveTaskCwd(root, "../outside")).toThrow(/escapes/);
 		expect(() => resolveTaskCwd(root, root)).toThrow(/relative/);
+	});
+
+	it("accepts a symlinked parent cwd and still blocks symlink escapes", () => {
+		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-symlink-"));
+		temporaryDirectories.push(root);
+		const real = join(root, "real");
+		mkdirSync(join(real, "sub"), { recursive: true });
+		const link = join(root, "link");
+		symlinkSync(real, link, "junction");
+		const outside = join(root, "outside");
+		mkdirSync(outside, { recursive: true });
+		symlinkSync(outside, join(real, "escape"), "junction");
+
+		// Symlinked parent (macOS /tmp, Windows junctions): both the default
+		// inherit case and a relative child must resolve instead of throwing.
+		expect(resolveTaskCwd(link, undefined)).toBe(realpathSync(real));
+		expect(resolveTaskCwd(link, "sub")).toBe(realpathSync(join(real, "sub")));
+		// A symlink inside the tree that points outside still escapes.
+		expect(() => resolveTaskCwd(link, "escape")).toThrow(/escapes/);
 	});
 });

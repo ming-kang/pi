@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { boundText } from "../src/extensions/subagent/activity.ts";
-import { DETAILS_OUTPUT_LIMIT } from "../src/extensions/subagent/constants.ts";
+import { DETAILS_ACTIVITY_LIMIT, DETAILS_OUTPUT_LIMIT } from "../src/extensions/subagent/constants.ts";
 import { boundSubagentDetails } from "../src/extensions/subagent/runner.ts";
 import type { SubagentDetails } from "../src/extensions/subagent/types.ts";
 
@@ -53,6 +53,6 @@ describe("subagent output bounds", () => {
 		};
 		const bounded = boundSubagentDetails(details);
 		expect(Buffer.byteLength(JSON.stringify(bounded), "utf8")).toBeLessThanOrEqual(DETAILS_OUTPUT_LIMIT);
-		expect(bounded.runs.every((run) => run.activities.length <= 4)).toBe(true);
+		expect(bounded.runs.every((run) => run.activities.length <= DETAILS_ACTIVITY_LIMIT)).toBe(true);
 	});
 });

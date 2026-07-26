@@ -6,7 +6,7 @@ import { getAgentDir } from "../../config.ts";
 import type { ModelRegistry } from "../../core/model-registry.ts";
 import type { SubagentTask } from "./schema.ts";
 import { loadSubagentConfig } from "./settings.ts";
-import type { AgentDefinition, ResolvedSubagentTask, SubagentProfileOverride } from "./types.ts";
+import type { AgentDefinition, ResolvedSubagentTask, SubagentConfigFile, SubagentProfileOverride } from "./types.ts";
 
 export interface ParentModelContext {
 	model: Model<Api> | undefined;
@@ -37,19 +37,19 @@ export function resolveTaskCwd(parentCwd: string, requestedCwd: string | undefin
 	if (value !== undefined && isAbsolute(value))
 		throw new Error("cwd must be a relative path inside the parent working directory.");
 	const candidate = resolve(parentCwd, value ?? ".");
-	const realParent = realpathSync(parentCwd);
-	if (!isWithin(realParent, candidate))
+	// Lexical check first: candidate and parent are both un-realpathed here,
+	// so a symlinked parent (macOS /tmp, junctions) compares consistently and
+	// only genuine ".." traversal fails. Symlink escapes are caught below by
+	// comparing the realpathed candidate against the realpathed parent.
+	if (!isWithin(resolve(parentCwd), candidate))
 		throw new Error(`Subagent cwd escapes the parent working directory: ${requestedCwd}`);
 	if (!existsSync(candidate) || !statSync(candidate).isDirectory())
 		throw new Error(`Subagent cwd is not a directory: ${candidate}`);
+	const realParent = realpathSync(parentCwd);
 	const realCandidate = realpathSync(candidate);
 	if (!isWithin(realParent, realCandidate))
 		throw new Error(`Subagent cwd escapes the parent working directory: ${requestedCwd}`);
 	return realCandidate;
-}
-
-function formatModel(model: Model<Api>): string {
-	return `${model.provider}/${model.id}`;
 }
 
 function findAvailableModel(spec: string, parent: ParentModelContext): Model<Api> {
@@ -96,6 +96,7 @@ export async function resolveSubagentTask(
 	agents: readonly AgentDefinition[],
 	parent: ParentModelContext,
 	configAgentDir = getAgentDir(),
+	preloadedConfig?: SubagentConfigFile,
 ): Promise<ResolvedSubagentTask> {
 	const agentName = task.agent ?? "general";
 	const agent = agents.find((candidate) => candidate.name === agentName);
@@ -103,7 +104,7 @@ export async function resolveSubagentTask(
 		const available = agents.map((candidate) => candidate.name).join(", ") || "none";
 		throw new Error(`Unknown agent "${agentName}". Available agents: ${available}.`);
 	}
-	const config = await loadSubagentConfig(configAgentDir);
+	const config = preloadedConfig ?? (await loadSubagentConfig(configAgentDir));
 	const override = config.profiles[agent.name];
 	const resolvedModel = resolveModel(override, parent);
 	const resolvedThinking = resolveThinking(override, parent, resolvedModel.model);
@@ -117,14 +118,4 @@ export async function resolveSubagentTask(
 		modelSource: resolvedModel.source,
 		thinkingSource: resolvedThinking.source,
 	};
-}
-
-export async function loadProfileOverrides(
-	agentDir = getAgentDir(),
-): Promise<Awaited<ReturnType<typeof loadSubagentConfig>>> {
-	return loadSubagentConfig(agentDir);
-}
-
-export function modelLabel(model: Model<Api>): string {
-	return formatModel(model);
 }
