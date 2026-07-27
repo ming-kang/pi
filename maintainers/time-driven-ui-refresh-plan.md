@@ -21,8 +21,8 @@ Do not add an isolated `setInterval` inside Subagent. First give the native tool
 | Work package                              | Status    | Commit      | Verification          |
 | ----------------------------------------- | --------- | ----------- | --------------------- |
 | Plan document                             | Completed | `be6166d4` | Initial plan recorded                |
-| WP1: Tool progress/render refresh split   | Completed | This commit | 4 focused files, 51 tests; check     |
-| WP2: Subagent independent elapsed refresh | Pending   | —           | —                     |
+| WP1: Tool progress/render refresh split   | Completed | `025fb307` | 4 focused files, 51 tests; check |
+| WP2: Subagent independent elapsed refresh | Completed | This commit | 4 focused files, 69 tests; check |
 | WP3: Subagent retry countdown             | Pending   | —           | —                     |
 | WP4: Other time/timer defects             | Pending   | —           | —                     |
 | WP5: Documentation and delta registry     | Pending   | —           | —                     |
@@ -305,7 +305,24 @@ WP1-WP3 form the core fix. Each work package must nevertheless update and commit
   - 51 focused tests total
   - `npm run check`
 
+### WP2
+
+- Registered Subagent with a 1000ms native-shell renderer refresh while retaining `rendersOwnProgress: true`.
+- Added integration coverage using the actual registered Subagent definition and `ToolExecutionComponent`.
+- Confirmed silent single-run elapsed time advances in collapsed and expanded views without partial-result updates.
+- Confirmed separate single and parallel call cards advance from their own start times, including expanded parallel metrics.
+- Confirmed final results stop refreshing and no duplicate generic `Running…` row appears.
+- The test TUI intentionally has no Working loader, proving the clock does not depend on spinner redraws.
+- Verification passed:
+  - `test/subagent-live-refresh.test.ts`
+  - `test/subagent-render.test.ts`
+  - `test/subagent-extension.test.ts`
+  - `test/tool-execution-component.test.ts`
+  - 69 focused tests total
+  - `npm run check`
+
 ## Commit log
 
 - Initial plan document: `be6166d4 docs: add time-driven UI refresh plan`.
-- WP1: `feat: add lifecycle-safe tool render refresh` (this commit).
+- WP1: `025fb307 feat: add lifecycle-safe tool render refresh`.
+- WP2: `fix: refresh live Subagent elapsed time` (this commit).
