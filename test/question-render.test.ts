@@ -109,6 +109,38 @@ describe("question rendering", () => {
 		expect(output).toContain("Approach: Alpha");
 	});
 
+	it("collapses schema validation failures and expands the bounded raw details", () => {
+		const invalid = {
+			content: [
+				{
+					type: "text",
+					text: [
+						'Validation failed for tool "question":',
+						"  - questions.0.question: must have required properties question",
+						"  - questions.0.options: must have at least 2 items",
+						"",
+						"Received arguments:",
+						'{ "questions": [{ "header": "Testing" }] }',
+					].join("\n"),
+				},
+			],
+		};
+
+		const collapsed = rendered(renderQuestionResult(invalid, { expanded: false }, theme, args));
+		expect(collapsed).toContain("Invalid arguments · questions.0.question: must have required properties question");
+		expect(collapsed).toContain("+1 more");
+		expect(collapsed).toMatch(/to expand|more details available/u);
+		expect(collapsed).not.toContain("Received arguments");
+		expect(collapsed).not.toContain('"header": "Testing"');
+
+		const expanded = rendered(renderQuestionResult(invalid, { expanded: true }, theme, args));
+		expect(expanded).toContain('Validation failed for tool "question"');
+		expect(expanded).toContain("questions.0.options: must have at least 2 items");
+		expect(expanded).toContain("Received arguments:");
+		expect(expanded).toContain('"header": "Testing"');
+		expect(expanded).not.toContain("to expand");
+	});
+
 	it("defensively bounds malformed historical details", () => {
 		const malformed = {
 			content: [{ type: "text", text: "Question tool error (no_ui): interactive UI required" }],

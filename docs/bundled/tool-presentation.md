@@ -6,17 +6,13 @@ The `@astralyn/pi` package uses Pi's native tool transcript presentation rather 
 
 ```text
 ● ToolName(args)
-│ result
+│ first result line
+│ second result line
+│
+│ final result line
 ```
 
-States use the same shell:
-
-```text
-● ToolName(args)       completed call
-● ToolName Working...  pending call
-● ToolName(args)       failed call (error color)
-│ result               successful or failed output
-```
+The dim result rail continues through every visual line; an empty output line renders as a bare `│`. Calls keep their status in the leading dot: warning while pending or running, green after success, and red after failure. For default-shell tools that are still running after two seconds, the shell adds a live result row such as `Running… (2.1s)` and removes it when the call settles. Tools with purpose-built progress UI can opt out through `rendersOwnProgress`; tools using `renderShell: "self"` continue to own their entire presentation.
 
 ## Implementation boundary
 
@@ -31,7 +27,7 @@ The native tool presentation owns:
 
 Built-in renderers remain responsible for semantic content such as file paths, syntax highlighting, search results, Diff previews, and command output. The outer shell is native so built-in tools, bundled extensions, and compatible third-party tools share the same presentation.
 
-Consecutive tools may opt into a shared collapsed group through `toolGroup`. Built-in `read` and `find` calls use the `explore` group, and the bundled `todo` tool uses the `todo` group: their call rows render as one compact run with a single leading gap, while `Ctrl+O` restores each tool's complete call and result. Collapsed Todo rows are result-aware: successful current snapshots summarize the completed operation (created ids, update/get status, list counts, deletion, or clear) rather than only its arguments. Failures include a sanitized reason capped at 120 characters; missing or unrecognized result details fall back safely to the call summary.
+Consecutive tools may opt into a shared collapsed group through `toolGroup`. Built-in `read`, `find`, `grep`, and `ls` calls use the `explore` group, and the bundled `todo` tool uses the `todo` group: their call rows render as one compact run with a single leading gap, while the configured expand-tools key (`Ctrl+O` by default) restores each tool's complete call and result. Collapsed Todo rows are result-aware: successful current snapshots summarize the completed operation, including task IDs and subjects for creation, rather than only its arguments. Failures include a sanitized reason capped at 120 characters; missing or unrecognized result details fall back safely to the call summary.
 
 ## Renderer inheritance
 
@@ -51,9 +47,10 @@ When no semantic renderer is available:
 
 - arguments are serialized into a bounded one-line summary;
 - output is collapsed to the most recent ten visual lines;
-- `Ctrl+O` expands the complete output;
+- a shared hint above the tail reports the number of hidden earlier lines and the configured expand key;
+- expanding restores the complete output;
 - historical tools that are no longer registered still receive the same shell;
-- failed calls use the error-colored bullet while result details keep the result bar.
+- failed calls use the error-colored bullet while result details keep the result rail.
 
 The fallback does not change tool schemas, execution logic, or result protocols.
 
@@ -62,15 +59,16 @@ The fallback does not change tool schemas, execution logic, or result protocols.
 The native path continues to preserve:
 
 - `read`, `bash`, `grep`, `find`, `ls`, `write`, and `edit` semantics;
-- faithful width-aware raw command previews for Bash;
-- running Bash duration after the two-second progress threshold, without a permanent completion timer;
-- Diff previews and first-change-line metadata for `edit`;
+- faithful width-aware raw command previews for Bash, with honest multi-line and width truncation markers;
+- shell-wide running duration after the two-second progress threshold, without a permanent completion timer;
+- path links and consistent search flags/limits across built-in renderers;
+- Diff statistics plus a ten-line collapsed Diff preview for `edit`, with the complete Diff restored on expand;
 - syntax highlighting;
 - image output and Kitty conversion;
 - native collapsed/expanded handling;
 - custom UI explicitly using `renderShell: "self"`.
 
-`edit` now uses the native outer shell while keeping its asynchronous Diff preview and final Diff result.
+Built-in result truncation hints share the same `… (N earlier/more lines, … to expand)` language and correct singular/plural forms. `edit` uses the native outer shell while keeping its asynchronous Diff preview and final Diff result.
 
 ## Deliberately rejected approaches
 

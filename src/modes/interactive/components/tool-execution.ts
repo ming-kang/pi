@@ -26,9 +26,10 @@ const FALLBACK_RESULT_LINES = 10;
 const PROGRESS_THRESHOLD_MS = 2000;
 
 function formatElapsed(ms: number): string {
-	const seconds = ms / 1000;
-	if (seconds < 60) return `${seconds.toFixed(1)}s`;
-	return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+	const roundedTenths = Math.round(ms / 100) / 10;
+	if (roundedTenths < 60) return `${roundedTenths.toFixed(1)}s`;
+	const roundedSeconds = Math.round(ms / 1000);
+	return `${Math.floor(roundedSeconds / 60)}m ${roundedSeconds % 60}s`;
 }
 
 class ToolChromeComponent implements Component {

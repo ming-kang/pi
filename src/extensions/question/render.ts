@@ -1,4 +1,5 @@
 import { Text } from "@earendil-works/pi-tui";
+import { keyLabel } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { QUESTION_LIMITS } from "./limits.ts";
 import { answerScalar } from "./results.ts";
@@ -29,6 +30,7 @@ const MAX_RENDERED_SELECTIONS = 5;
 const MAX_RENDERED_ANSWER_CHARS = 400;
 const MAX_RENDERED_NOTE_CHARS = 400;
 const MAX_RENDERED_ERROR_CHARS = 400;
+const MAX_RENDERED_VALIDATION_SUMMARY_CHARS = 240;
 const MAX_RENDERED_FALLBACK_CHARS = 1_000;
 
 function safeRecord(value: unknown): Record<string, unknown> | undefined {
@@ -84,6 +86,34 @@ function resultFallback(result: ResultLike): string {
 		if (typeof text === "string") blocks.push(text);
 	}
 	return truncate(blocks.join("\n"), MAX_RENDERED_FALLBACK_CHARS);
+}
+
+function validationSummary(text: string): { summary: string; hiddenErrors: number } | undefined {
+	const match = /^Validation failed for tool\s+"question":\s*([\s\S]*?)(?:\r?\n\s*\r?\nReceived arguments:|$)/u.exec(
+		text.trim(),
+	);
+	if (!match) return undefined;
+	const errors = match[1]
+		.split(/\r?\n/u)
+		.map((line) => line.trim().replace(/^-\s*/u, ""))
+		.filter(Boolean);
+	const firstError = oneLine(errors[0], MAX_RENDERED_VALIDATION_SUMMARY_CHARS) || "schema validation failed";
+	return {
+		summary: `Invalid arguments · ${firstError}`,
+		hiddenErrors: Math.max(0, errors.length - 1),
+	};
+}
+
+function renderFallbackResult(result: ResultLike, expanded: boolean, theme: Theme): Text {
+	const fallback = resultFallback(result);
+	if (!fallback) return new Text("Question result unavailable", 0, 0);
+	const validation = validationSummary(fallback);
+	if (!validation || expanded) return new Text(fallback, 0, 0);
+
+	const moreErrors = validation.hiddenErrors > 0 ? ` · +${validation.hiddenErrors} more` : "";
+	const expandKey = keyLabel("app.tools.expand");
+	const hint = theme.fg("muted", expandKey ? ` (${expandKey} to expand)` : " (more details available)");
+	return new Text(`${theme.fg("error", validation.summary)}${theme.fg("muted", moreErrors)}${hint}`, 0, 0);
 }
 
 function normalizeAnswer(value: unknown, index: number): QuestionAnswer | undefined {
@@ -196,7 +226,7 @@ export function renderQuestionCall(args: unknown, theme: Theme, expanded: boolea
 
 export function renderQuestionResult(result: ResultLike, options: RenderOptions, theme: Theme, args?: unknown): Text {
 	const details = normalizeDetails(result.details);
-	if (!details) return new Text(resultFallback(result) || "Question result unavailable", 0, 0);
+	if (!details) return renderFallbackResult(result, options.expanded, theme);
 
 	if (details.outcome === "error") {
 		return new Text(theme.fg("error", `Question error: ${errorMessage(result, details)}`), 0, 0);

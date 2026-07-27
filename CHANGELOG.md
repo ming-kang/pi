@@ -2,12 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added shell-wide delayed progress for native tool calls: default-shell tools still running after two seconds show a live `Running… (Ns)` row, while tools with purpose-built progress UI can opt out.
+
 ### Changed
 
+- Reworked native tool presentation so the dim `│` rail continues through every result line, empty lines retain the rail, collapsed-line hints share one counted and keybinding-aware format, and `grep`/`ls` join `read`/`find` in the collapsed `explore` group. Built-in calls now use consistent path links, flags, limits, and honest truncation; Bash reports hidden command lines, and `edit` shows Diff statistics with a bounded ten-line collapsed preview.
+- Improved bundled tool transcripts: Todo batch calls preview subjects and expand every bounded item; Subagent failures use separate wrapped reason lines with sentence-aware excerpts and consistent expanded sections; Question calls reveal full prompts on expand and preserve partial cancelled/clarification answers; Plan calls render expanded Markdown with clearer decision hierarchy; and DeepWiki uses normalized, subdued one-line summaries with an inline expand hint.
+- Standardized compact interactive key hints on the first configured binding with readable special-key labels and `key action • key action` phrasing in the extension selector and Question dialogs.
 - Documentation checks now validate same-page and cross-page Markdown fragments, and upstream delta checks reject stale distribution-owned registrations.
 
 ### Fixed
 
+- Fixed nested foreground/background theme styling losing the outer color after an inner reset, and fixed manual `!!` command headers losing their dim border color after the first output update.
+- Fixed Todo batch headlines saying `1 tasks`, fixed shell-wide and Subagent duration rollover from showing raw 60–89 second values or impossible `1m 60s` timestamps, and stopped collapsed Question schema errors from dumping the full validator report and received arguments.
 - Corrected bundled-extension inventories and usage guidance to reflect the shipped plan, subagent, and todo workflows; repaired the RPC type link and clarified that activating `bash` is not a read-only tool configuration.
 
 ## [0.82.6] - 2026-07-27

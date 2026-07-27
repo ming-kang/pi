@@ -140,6 +140,15 @@ describe("bash tool call rendering", () => {
 		vi.advanceTimersByTime(1);
 		expect(renderCall(component, 120)).toContain("Running… (2.0s)");
 
+		vi.setSystemTime(59_950);
+		component.invalidate();
+		expect(renderCall(component, 120)).toContain("Running… (1m 0s)");
+		vi.setSystemTime(119_500);
+		component.invalidate();
+		const roundedMinutes = renderCall(component, 120);
+		expect(roundedMinutes).toContain("Running… (2m 0s)");
+		expect(roundedMinutes).not.toContain("1m 60s");
+
 		component.updateResult({ content: [{ type: "text", text: "(no output)" }], isError: false }, false);
 		const completed = renderCall(component, 120);
 		expect(completed).toContain("(no output)");
