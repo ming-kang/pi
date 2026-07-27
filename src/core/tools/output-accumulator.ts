@@ -31,10 +31,10 @@ function byteLength(text: string): number {
 /**
  * Incrementally tracks streaming output with bounded memory.
  *
- * Appends decode chunks with a streaming UTF-8 decoder that falls back to the
- * system console encoding for non-UTF-8 output, keeps only a decoded tail for
- * display snapshots, and opens a temp file when the full output needs to be
- * preserved.
+ * Appends decode chunks with a streaming decoder that keeps UTF-8 output as
+ * UTF-8 and decodes non-UTF-8 lines with the system console encoding, keeps
+ * only a decoded tail for display snapshots, and opens a temp file when the
+ * full output needs to be preserved.
  */
 export class OutputAccumulator {
 	private readonly maxLines: number;
@@ -75,11 +75,7 @@ export class OutputAccumulator {
 		}
 
 		this.totalRawBytes += data.length;
-		const { text, rewound } = this.decoder.push(data);
-		if (rewound) {
-			this.resetDecodedState();
-		}
-		this.appendDecodedText(text);
+		this.appendDecodedText(this.decoder.push(data));
 
 		if (this.tempFileStream || this.shouldUseTempFile()) {
 			this.ensureTempFile();
@@ -94,11 +90,7 @@ export class OutputAccumulator {
 			return;
 		}
 		this.finished = true;
-		const { text, rewound } = this.decoder.flush();
-		if (rewound) {
-			this.resetDecodedState();
-		}
-		this.appendDecodedText(text);
+		this.appendDecodedText(this.decoder.flush());
 		if (this.shouldUseTempFile()) {
 			this.ensureTempFile();
 		}
@@ -159,23 +151,6 @@ export class OutputAccumulator {
 
 	getLastLineBytes(): number {
 		return this.currentLineBytes;
-	}
-
-	/**
-	 * Discard all decoded text state after the decoder rewinds to a fallback
-	 * encoding. Raw byte tracking (rawChunks, temp file, totalRawBytes) stays
-	 * intact — only the derived text view is rebuilt from the re-decoded
-	 * transcript.
-	 */
-	private resetDecodedState(): void {
-		this.tailText = "";
-		this.tailBytes = 0;
-		this.tailStartsAtLineBoundary = true;
-		this.totalDecodedBytes = 0;
-		this.completedLines = 0;
-		this.totalLines = 0;
-		this.currentLineBytes = 0;
-		this.hasOpenLine = false;
 	}
 
 	private appendDecodedText(text: string): void {

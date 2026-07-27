@@ -62,95 +62,207 @@ function detectConsoleFallbackEncoding(): string | null {
 	}
 }
 
-export interface DecodedChunk {
-	/** Decoded text for this push, or the full re-decoded transcript when rewound. */
-	text: string;
-	/**
-	 * True when the decoder switched to the fallback encoding. All previously
-	 * returned text is invalid; `text` replaces the entire transcript.
-	 */
-	rewound: boolean;
-}
+/**
+ * Bound on the undecided (no line boundary yet) byte carry. A single line
+ * longer than this is force-decoded so memory stays flat and streaming
+ * latency stays bounded.
+ */
+const DEFAULT_MAX_PENDING_BYTES = 64 * 1024;
 
-const DEFAULT_DETECTION_LIMIT_BYTES = 256 * 1024;
+const LF = 0x0a;
+const CR = 0x0d;
 
 /**
- * Streaming decoder that assumes UTF-8 and falls back to the system console
- * encoding when the stream turns out not to be UTF-8.
+ * Characters that essentially never appear in legitimate console text:
+ * C0 controls except tab, LF, CR, and ESC (ANSI sequences), plus DEL and the
+ * replacement character. Their presence in a fallback-decoded line means the
+ * bytes were binary, not OEM-encoded text.
+ */
+const NON_TEXT_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001A\u001C-\u001F\u007F\uFFFD]/;
+
+/** Byte-level version of NON_TEXT_RE, checked before any decode. */
+function containsBinaryBytes(buf: Buffer): boolean {
+	for (const b of buf) {
+		if (b > 0x1f) {
+			if (b === 0x7f) {
+				return true;
+			}
+			continue;
+		}
+		if (b !== 0x09 && b !== LF && b !== CR && b !== 0x1b) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * Number of trailing bytes that form the start of an incomplete but
+ * well-formed UTF-8 sequence, or 0 when the buffer ends at a character
+ * boundary (or in bytes no completion could repair).
+ */
+function utf8PartialTailLength(buf: Buffer): number {
+	for (let i = 1; i <= 3 && i <= buf.length; i++) {
+		const b = buf[buf.length - i];
+		if ((b & 0xc0) === 0xc0) {
+			const need = b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : 2;
+			return i < need ? i : 0;
+		}
+		if ((b & 0xc0) !== 0x80) {
+			return 0;
+		}
+	}
+	return 0;
+}
+
+/**
+ * Streaming decoder that decodes UTF-8 output and falls back to the system
+ * console encoding for the parts of the stream that are not UTF-8.
  *
- * Decoding starts as plain streaming UTF-8 — the fast path for virtually all
- * output. When a replacement character appears, the bytes seen so far are
- * checked with isUtf8: if they are genuinely invalid UTF-8, everything is
- * re-decoded with the fallback encoding and the result is reported with
- * `rewound: true` so the caller can rebuild its derived state. If the bytes
- * are valid UTF-8 (the source itself contained replacement characters),
- * detection stops and UTF-8 decoding continues.
+ * The stream is segmented at line boundaries — LF and CR are single-byte
+ * codes in every supported fallback encoding, so they are safe split points —
+ * and each line is decided independently: valid UTF-8 stays UTF-8, invalid
+ * lines are decoded with the fallback encoding. Mixed streams (a UTF-8 tool
+ * followed by an OEM-code-page tool, or the reverse) therefore decode
+ * correctly line by line; nothing already emitted is ever revised.
  *
- * Raw bytes are retained only while detection is active and only up to
- * `detectionLimitBytes`; larger streams lock to UTF-8 and memory stays flat.
+ * Binary data is kept away from the fallback: a segment containing bytes
+ * that console text never contains, or a fallback decode that produces such
+ * characters, is decoded as UTF-8 (with replacement characters) so downstream
+ * binary sanitization sees it unchanged.
+ *
+ * The ASCII prefix of an incomplete line is emitted immediately — ASCII is
+ * identical in UTF-8 and in every fallback encoding — so plain-text output
+ * still streams with no added latency. Only the non-ASCII part of an
+ * unfinished line is held back, bounded by `maxPendingBytes`.
  */
 export class OutputDecoder {
-	private decoder = new TextDecoder();
-	private readonly fallbackEncoding: string | null;
-	private readonly detectionLimitBytes: number;
-	private pending: Buffer[] = [];
-	private pendingBytes = 0;
-	private detecting: boolean;
+	private readonly utf8 = new TextDecoder();
+	private readonly utf8Stream = new TextDecoder();
+	private readonly fallback: TextDecoder | null;
+	private readonly maxPendingBytes: number;
+	private carry: Buffer | null = null;
 
-	constructor(options: { fallbackEncoding?: string | null; detectionLimitBytes?: number } = {}) {
-		this.fallbackEncoding =
-			options.fallbackEncoding === undefined ? getConsoleFallbackEncoding() : options.fallbackEncoding;
-		this.detectionLimitBytes = options.detectionLimitBytes ?? DEFAULT_DETECTION_LIMIT_BYTES;
-		this.detecting = this.fallbackEncoding !== null;
+	constructor(options: { fallbackEncoding?: string | null; maxPendingBytes?: number } = {}) {
+		const label = options.fallbackEncoding === undefined ? getConsoleFallbackEncoding() : options.fallbackEncoding;
+		let fallback: TextDecoder | null = null;
+		if (label !== null) {
+			try {
+				fallback = new TextDecoder(label);
+			} catch {
+				fallback = null;
+			}
+		}
+		this.fallback = fallback;
+		this.maxPendingBytes = options.maxPendingBytes ?? DEFAULT_MAX_PENDING_BYTES;
 	}
 
-	push(data: Buffer): DecodedChunk {
-		const text = this.decoder.decode(data, { stream: true });
-		if (!this.detecting) {
-			return { text, rewound: false };
+	push(data: Buffer): string {
+		if (!this.fallback) {
+			return this.utf8Stream.decode(data, { stream: true });
 		}
-		this.pending.push(data);
-		this.pendingBytes += data.length;
-		if (text.includes("�")) {
-			return this.tryRewind(text);
+
+		let buf = this.carry ? Buffer.concat([this.carry, data]) : data;
+		this.carry = null;
+		let out = "";
+
+		const boundary = Math.max(buf.lastIndexOf(LF), buf.lastIndexOf(CR));
+		if (boundary >= 0) {
+			out += this.decodeSegment(buf.subarray(0, boundary + 1));
+			buf = buf.subarray(boundary + 1);
 		}
-		if (this.pendingBytes > this.detectionLimitBytes) {
-			this.stopDetecting();
+
+		// Emit the encoding-neutral ASCII prefix of the unfinished line.
+		let firstHigh = 0;
+		while (firstHigh < buf.length && buf[firstHigh] < 0x80) {
+			firstHigh++;
 		}
-		return { text, rewound: false };
+		if (firstHigh > 0) {
+			out += this.utf8.decode(buf.subarray(0, firstHigh));
+			buf = buf.subarray(firstHigh);
+		}
+
+		if (buf.length > 0) {
+			if (buf.length > this.maxPendingBytes) {
+				out += this.forceDecide(buf);
+			} else {
+				this.carry = buf;
+			}
+		}
+		return out;
 	}
 
-	flush(): DecodedChunk {
-		const text = this.decoder.decode();
-		if (this.detecting && text.includes("�")) {
-			return this.tryRewind(text);
+	flush(): string {
+		if (!this.fallback) {
+			return this.utf8Stream.decode();
 		}
-		this.stopDetecting();
-		return { text, rewound: false };
+		const buf = this.carry;
+		this.carry = null;
+		return buf ? this.decodeSegment(buf) : "";
 	}
 
-	private tryRewind(utf8Text: string): DecodedChunk {
-		const raw = Buffer.concat(this.pending);
-		if (isUtf8(raw)) {
-			// The replacement characters exist in the source bytes themselves;
-			// the stream is valid UTF-8, so stop watching and keep it.
-			this.stopDetecting();
-			return { text: utf8Text, rewound: false };
+	/** Decode a run of complete lines (or the final remainder at flush). */
+	private decodeSegment(buf: Buffer): string {
+		if (buf.length === 0) {
+			return "";
 		}
-		try {
-			this.decoder = new TextDecoder(this.fallbackEncoding as string);
-		} catch {
-			this.stopDetecting();
-			return { text: utf8Text, rewound: false };
+		if (isUtf8(buf) || containsBinaryBytes(buf)) {
+			return this.utf8.decode(buf);
 		}
-		const text = this.decoder.decode(raw, { stream: true });
-		this.stopDetecting();
-		return { text, rewound: true };
+		let out = "";
+		let start = 0;
+		for (let i = 0; i < buf.length; i++) {
+			if (buf[i] === LF || buf[i] === CR) {
+				out += this.decodeLine(buf.subarray(start, i + 1));
+				start = i + 1;
+			}
+		}
+		if (start < buf.length) {
+			out += this.decodeLine(buf.subarray(start));
+		}
+		return out;
 	}
 
-	private stopDetecting(): void {
-		this.detecting = false;
-		this.pending = [];
-		this.pendingBytes = 0;
+	private decodeLine(line: Buffer): string {
+		if (isUtf8(line)) {
+			return this.utf8.decode(line);
+		}
+		const text = (this.fallback as TextDecoder).decode(line);
+		return NON_TEXT_RE.test(text) ? this.utf8.decode(line) : text;
+	}
+
+	/**
+	 * A single line outgrew maxPendingBytes: decode what is decidable now.
+	 * May keep a few trailing bytes in the carry when they look like the
+	 * start of a character the next push will complete.
+	 */
+	private forceDecide(buf: Buffer): string {
+		if (containsBinaryBytes(buf)) {
+			return this.utf8.decode(buf);
+		}
+
+		const tail = utf8PartialTailLength(buf);
+		const head = tail > 0 ? buf.subarray(0, buf.length - tail) : buf;
+		if (isUtf8(head)) {
+			this.carry = tail > 0 ? buf.subarray(buf.length - tail) : null;
+			return this.utf8.decode(head);
+		}
+
+		// Not UTF-8: try the fallback, holding back the final byte when that
+		// is what lets the decode end on a clean character boundary.
+		for (const holdback of [0, 1]) {
+			if (holdback >= buf.length || (holdback === 1 && buf[buf.length - 1] < 0x80)) {
+				break;
+			}
+			const text = (this.fallback as TextDecoder).decode(buf.subarray(0, buf.length - holdback));
+			if (!text.includes("�")) {
+				if (NON_TEXT_RE.test(text)) {
+					break;
+				}
+				this.carry = holdback === 1 ? buf.subarray(buf.length - 1) : null;
+				return text;
+			}
+		}
+		return this.utf8.decode(buf);
 	}
 }

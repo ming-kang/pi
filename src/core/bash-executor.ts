@@ -11,7 +11,7 @@ import { createWriteStream, type WriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripAnsi } from "../utils/ansi.ts";
-import { type DecodedChunk, OutputDecoder } from "../utils/output-decoder.ts";
+import { OutputDecoder } from "../utils/output-decoder.ts";
 import { sanitizeBinaryOutput } from "../utils/shell.ts";
 import type { BashOperations } from "./tools/bash.ts";
 import { DEFAULT_MAX_BYTES, truncateTail } from "./tools/truncate.ts";
@@ -76,23 +76,13 @@ export async function executeBashWithOperations(
 
 	const decoder = new OutputDecoder();
 
-	const handleDecoded = (decoded: DecodedChunk) => {
-		if (!decoded.text && !decoded.rewound) {
+	const handleText = (raw: string) => {
+		if (!raw) {
 			return;
 		}
 
 		// Sanitize: strip ANSI, replace binary garbage, normalize newlines
-		const text = sanitizeBinaryOutput(stripAnsi(decoded.text)).replace(/\r/g, "");
-
-		if (decoded.rewound) {
-			// The decoder switched to the system console encoding and re-decoded
-			// the entire stream: rebuild the rolling buffer from the corrected
-			// transcript. Chunks already streamed to onChunk cannot be recalled,
-			// and an already-open temp file keeps its earlier mojibake prefix —
-			// both only affect the rare case where the switch happens late.
-			outputChunks.length = 0;
-			outputBytes = 0;
-		}
+		const text = sanitizeBinaryOutput(stripAnsi(raw)).replace(/\r/g, "");
 
 		// Start writing to temp file if exceeds threshold
 		if (totalBytes > DEFAULT_MAX_BYTES) {
@@ -119,7 +109,7 @@ export async function executeBashWithOperations(
 
 	const onData = (data: Buffer) => {
 		totalBytes += data.length;
-		handleDecoded(decoder.push(data));
+		handleText(decoder.push(data));
 	};
 
 	try {
@@ -127,7 +117,7 @@ export async function executeBashWithOperations(
 			onData,
 			signal: options?.signal,
 		});
-		handleDecoded(decoder.flush());
+		handleText(decoder.flush());
 
 		const fullOutput = outputChunks.join("");
 		const truncationResult = truncateTail(fullOutput);
@@ -149,7 +139,7 @@ export async function executeBashWithOperations(
 	} catch (err) {
 		// Check if it was an abort
 		if (options?.signal?.aborted) {
-			handleDecoded(decoder.flush());
+			handleText(decoder.flush());
 			const fullOutput = outputChunks.join("");
 			const truncationResult = truncateTail(fullOutput);
 			if (truncationResult.truncated) {

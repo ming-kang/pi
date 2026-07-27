@@ -16,6 +16,7 @@
 
 ### Fixed
 
+- Reworked the non-UTF-8 console output fallback from a whole-stream encoding switch into per-line detection. The previous design corrupted mixed-encoding streams both ways — a UTF-8 tool followed by an OEM-code-page tool re-decoded the valid UTF-8 prefix as GBK, and the reverse order silently mojibake'd everything after the switch — and re-decoded binary output into plausible-looking CJK garbage. Lines that are valid UTF-8 now stay UTF-8, non-UTF-8 lines decode with the OEM code page, detection continues for the whole stream, segments with binary bytes keep the lossy UTF-8 path for downstream sanitization, and a trailing incomplete sequence renders as a replacement character instead of being dropped at flush.
 - Fixed the subagent live tail freezing into a lone `…` once a worker streamed more than 1KB of text: bounded details now keep the newest `liveText` via tail-bounding instead of head-bounding, and the renderer skips truncation-notice lines outright, in both the collapsed tail line and the expanded `Working` section.
 - Fixed the expanded parallel batch trailer quoting the cache-inflated aggregate token total while runs were still in flight; the trailer now omits `tok` until the batch settles, matching every other live line.
 - Fixed the subagent card sitting empty while first-use model-runtime creation or task resolution stalled: the tool now paints `Initializing…` before its first await.
