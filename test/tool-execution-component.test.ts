@@ -3,11 +3,12 @@ import { Text, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { beforeAll, describe, expect, test } from "vitest";
 import { getReadmePath } from "../src/config.ts";
-import type { ToolDefinition } from "../src/core/extensions/types.ts";
+import type { ExtensionAPI, ToolDefinition } from "../src/core/extensions/types.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { createFindToolDefinition } from "../src/core/tools/find.ts";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
+import todo from "../src/extensions/todo/index.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { ToolGroupComponent } from "../src/modes/interactive/components/tool-group.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
@@ -30,6 +31,20 @@ function createFakeTui(): TUI {
 	return {
 		requestRender: () => {},
 	} as unknown as TUI;
+}
+
+function createTodoToolDefinition(): ToolDefinition {
+	let definition: ToolDefinition | undefined;
+	const api = {
+		registerTool: (tool: ToolDefinition) => {
+			definition = tool;
+		},
+		registerCommand: () => {},
+		on: () => {},
+	} as unknown as ExtensionAPI;
+	todo(api);
+	if (!definition) throw new Error("todo tool was not registered");
+	return definition;
 }
 
 describe("ToolExecutionComponent parity", () => {
@@ -367,6 +382,72 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain("arg:bar");
 	});
 
+	test("passes partial and completed results to normal and grouped call renderers", () => {
+		type ResultDetails = { marker: string };
+		const parameters = Type.Object({});
+		const observations: Array<{
+			groupSummary: boolean;
+			isPartial: boolean;
+			marker: string | undefined;
+			content: string | undefined;
+		}> = [];
+		const toolDefinition: ToolDefinition<typeof parameters, ResultDetails> = {
+			name: "custom_tool",
+			label: "custom tool",
+			description: "custom tool",
+			parameters,
+			execute: async () => ({ content: [{ type: "text", text: "ok" }], details: { marker: "unused" } }),
+			renderCall: (_args, _theme, context) => {
+				const firstContent = context.result?.content[0];
+				observations.push({
+					groupSummary: context.toolGroupSummary === true,
+					isPartial: context.isPartial,
+					marker: context.result?.details.marker,
+					content: firstContent?.type === "text" ? firstContent.text : undefined,
+				});
+				return new Text("call", 0, 0);
+			},
+		};
+
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-result-context",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(
+			{ content: [{ type: "text", text: "partial output" }], details: { marker: "partial" }, isError: false },
+			true,
+		);
+		component.updateResult(
+			{ content: [{ type: "text", text: "final output" }], details: { marker: "final" }, isError: false },
+			false,
+		);
+		component.renderCallSummary(120);
+
+		expect(observations).toContainEqual({
+			groupSummary: false,
+			isPartial: true,
+			marker: "partial",
+			content: "partial output",
+		});
+		expect(observations).toContainEqual({
+			groupSummary: false,
+			isPartial: false,
+			marker: "final",
+			content: "final output",
+		});
+		expect(observations).toContainEqual({
+			groupSummary: true,
+			isPartial: false,
+			marker: "final",
+			content: "final output",
+		});
+	});
+
 	test("falls back when custom renderers are absent", () => {
 		const toolDefinition: ToolDefinition = {
 			...createBaseToolDefinition(),
@@ -625,6 +706,65 @@ describe("ToolExecutionComponent parity", () => {
 		const expanded = stripAnsi(group.render(120).join("\n"));
 		expect(expanded).not.toContain("Explore");
 		expect(expanded).not.toContain("to expand");
+	});
+
+	test("shows todo group result summaries and a bounded error in collapsed groups", () => {
+		const todoDefinition = createTodoToolDefinition();
+		const created = new ToolExecutionComponent(
+			"todo",
+			"todo-group-created",
+			{
+				action: "create_many",
+				items: [
+					{ subject: "Wire parser", description: "Parser handles config" },
+					{ subject: "Test parser", description: "Parser tests pass" },
+				],
+			},
+			{},
+			todoDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		created.updateResult(
+			{
+				content: [{ type: "text", text: "Created 2 tasks" }],
+				details: {
+					schemaVersion: 1,
+					action: "create_many",
+					operation: { kind: "create_many", ids: [4, 5] },
+					items: [],
+					nextId: 6,
+				},
+				isError: false,
+			},
+			false,
+		);
+
+		const failed = new ToolExecutionComponent(
+			"todo",
+			"todo-group-failed",
+			{ action: "update", id: 7 },
+			{},
+			todoDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		failed.updateResult(
+			{
+				content: [{ type: "text", text: `bad request\n${"x".repeat(500)}` }],
+				isError: true,
+			},
+			false,
+		);
+
+		const group = new ToolGroupComponent("todo");
+		group.addTool(created);
+		group.addTool(failed);
+		const rendered = stripAnsi(group.render(500).join("\n"));
+		expect(rendered).toContain("todo created 2 tasks #4, #5");
+		expect(rendered).toContain("todo update #7 failed: bad request");
+		expect(rendered).not.toContain("x".repeat(200));
+		expect(rendered.split("\n").filter((line) => line.includes("todo update #7"))).toHaveLength(1);
 	});
 
 	for (const scenario of [

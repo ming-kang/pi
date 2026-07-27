@@ -4,9 +4,13 @@
 
 ### Added
 
+- The bundled `todo` tool now supports atomic `create_many` planning batches (up to 20 tasks) with stable batch keys and intra-batch dependencies, paged/searchable/unblocked `list` queries, and bounded nested JSON metadata. Task snapshots are schema-versioned and defensively replayed, so malformed latest history falls back to the last valid snapshot. `clear` now requires `confirm: true` plus the current `expectedCount`; an active task that gains an unresolved dependency automatically returns to `pending`.
+
 - Select dialogs can now carry a second layer of information: `ctx.ui.select()` accepts `{ label, description }` options, rendering the description as a muted line under the label so the action and its trade-off can be scanned separately, and takes `subtitle` (a muted line under the title, for context that is not itself a choice) and `cancelHint` (wording for the dismiss hint, for dialogs where `Esc` is not destructive). Plain `string[]` options still work, and `select()` still resolves to the chosen label. RPC clients receive labels only, so the wire protocol is unchanged. See [extensions](docs/extensions.md).
 
 ### Changed
+
+- Collapsed `todo` groups now summarize completed operations — created IDs, status updates, list counts, deletion, and clearing — instead of hiding their results; failed rows include a sanitized 120-character reason, and `ctrl+o` still reveals full calls and results. See [todo](docs/bundled/extensions/todo.md).
 
 - Redesigned the `exit_plan` approval dialog and tool row. The three choices now separate the decision from its trade-off (`Start executing` / *keep full context*) instead of burying it in a parenthetical, the dialog subtitle reports current context usage — the fact the compact-or-not decision actually turns on — and the dismiss hint reads "keep planning" rather than "cancel", matching what `Esc` has always done. The tool row no longer echoes the plan: a collapsed call shows `exit_plan <title>` (plan body on `ctrl+o`) instead of the whole markdown document escaped onto one line, and the result shows where the plan landed plus what happens next, instead of the mode-precedence text written for the model. See [plan](docs/bundled/extensions/plan.md).
 - The plan-mode footer marker now reads `Plan Mode` in the theme's accent color rather than a `plan` tag in warning yellow — plan mode is a working mode, not a warning state.

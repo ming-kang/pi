@@ -4,6 +4,7 @@ import { applyTodoMutation, cloneState } from "../src/extensions/todo/state.ts";
 import {
 	formatCommandList,
 	formatTodoCall,
+	formatTodoGroupCall,
 	hasVisibleOverlayItems,
 	renderOverlayLines,
 } from "../src/extensions/todo/view.ts";
@@ -99,6 +100,15 @@ describe("formatCommandList", () => {
 		state = mutate(state, { action: "delete", id: 1 });
 		expect(formatCommandList(state)).toBe("No todos yet.");
 	});
+
+	test("bounds command output and directs users to paged tool results", () => {
+		let state = cloneState(EMPTY_TODO_STATE);
+		for (let index = 1; index <= 55; index++) state = createTask(state, `Task ${index}`);
+		const output = formatCommandList(state);
+		expect(output).toContain("#50 Task 50");
+		expect(output).not.toContain("#51 Task 51");
+		expect(output).toContain("… and 5 more; use todo list with limit and afterId to page.");
+	});
 });
 
 describe("formatTodoCall", () => {
@@ -152,5 +162,160 @@ describe("formatTodoCall", () => {
 		expect(formatTodoCall({}, theme, false)).toBe("todo");
 		expect(formatTodoCall({ action: "create", subject: 42, status: "bogus" }, theme, false)).toBe("todo create");
 		expect(formatTodoCall({ action: "update", id: 1.5, blockedBy: "nope" }, theme, false)).toBe("todo update");
+	});
+
+	test("includes create_many batch and list/clear parameters when expanded", () => {
+		const batch = formatTodoCall(
+			{
+				action: "create_many",
+				items: [
+					{ subject: "Wire parser", description: "Parser handles config" },
+					{ subject: "Test parser", description: "Parser tests pass" },
+				],
+			},
+			theme,
+			true,
+		).split("\n");
+		expect(batch[0]).toBe("todo create_many 2 tasks");
+		expect(batch).toContain("batch: 2 tasks (Wire parser; Test parser)");
+
+		const filters = formatTodoCall(
+			{
+				action: "list",
+				includeDeleted: true,
+				limit: 10,
+				afterId: 5,
+				query: "parser",
+				unblockedOnly: true,
+			},
+			theme,
+			true,
+		);
+		expect(filters).toContain("includeDeleted: true");
+		expect(filters).toContain("limit: 10");
+		expect(filters).toContain("afterId: 5");
+		expect(filters).toContain("query: parser");
+		expect(filters).toContain("unblockedOnly: true");
+		expect(formatTodoCall({ action: "clear", confirm: true, expectedCount: 3 }, theme, true)).toContain(
+			"expectedCount: 3",
+		);
+	});
+});
+
+describe("formatTodoGroupCall", () => {
+	function completed(details: unknown) {
+		return { isError: false, isPartial: false, result: { content: [], details } };
+	}
+
+	test("uses successful structured details for concise operation summaries", () => {
+		expect(
+			formatTodoGroupCall(
+				{ action: "create_many", items: [{}, {}] },
+				theme,
+				completed({
+					schemaVersion: 1,
+					action: "create_many",
+					operation: { kind: "create_many", ids: [4, 5] },
+					items: [],
+					nextId: 6,
+				}),
+			),
+		).toBe("todo created 2 tasks #4, #5");
+		expect(
+			formatTodoGroupCall(
+				{ action: "update", id: 4, status: "completed" },
+				theme,
+				completed({
+					schemaVersion: 1,
+					action: "update",
+					operation: { kind: "update", id: 4, status: "completed" },
+					items: [],
+					nextId: 5,
+				}),
+			),
+		).toBe("todo updated #4 completed");
+		expect(
+			formatTodoGroupCall(
+				{ action: "list", status: "pending", limit: 1 },
+				theme,
+				completed({
+					schemaVersion: 1,
+					action: "list",
+					operation: {
+						kind: "list",
+						status: "pending",
+						limit: 1,
+						statusCounts: { pending: 1 },
+						resultCount: 1,
+					},
+					// The stored snapshot contains tasks that the filtered page did not return.
+					items: [{ status: "pending" }, { status: "in_progress" }, { status: "deleted" }],
+					nextId: 4,
+				}),
+			),
+		).toBe("todo list: 1 pending");
+		expect(
+			formatTodoGroupCall(
+				{ action: "get", id: 3 },
+				theme,
+				completed({
+					schemaVersion: 1,
+					action: "get",
+					operation: { kind: "get", id: 3 },
+					items: [{ id: 3, status: "in_progress" }],
+					nextId: 4,
+				}),
+			),
+		).toBe("todo get #3 in_progress");
+		expect(
+			formatTodoGroupCall(
+				{ action: "delete", id: 3 },
+				theme,
+				completed({
+					schemaVersion: 1,
+					action: "delete",
+					operation: { kind: "delete", id: 3 },
+					items: [],
+					nextId: 4,
+				}),
+			),
+		).toBe("todo deleted #3");
+		expect(
+			formatTodoGroupCall(
+				{ action: "clear", confirm: true, expectedCount: 2 },
+				theme,
+				completed({
+					schemaVersion: 1,
+					action: "clear",
+					operation: { kind: "clear", count: 2 },
+					items: [],
+					nextId: 3,
+				}),
+			),
+		).toBe("todo cleared 2 tasks");
+	});
+
+	test("falls back for partial or malformed details and bounds one-line failures", () => {
+		const details = {
+			schemaVersion: 1,
+			action: "list",
+			operation: { kind: "list" },
+			items: "not an item list",
+			nextId: 1,
+		};
+		expect(formatTodoGroupCall({ action: "list" }, theme, { ...completed(details), isPartial: true })).toBe(
+			"todo list",
+		);
+		expect(formatTodoGroupCall({ action: "list" }, theme, completed(details))).toBe("todo list");
+
+		const failure = formatTodoGroupCall({ action: "update", id: 7 }, theme, {
+			isError: true,
+			isPartial: false,
+			result: { content: [{ type: "text", text: `bad request\n${"x".repeat(500)}` }], details: undefined },
+		});
+		expect(failure).toMatch(/^todo update #7 failed: bad request /);
+		expect(failure).not.toContain("\n");
+		expect(failure).not.toContain("x".repeat(200));
+		expect(failure.length).toBeLessThanOrEqual(150);
 	});
 });

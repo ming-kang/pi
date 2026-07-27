@@ -40,7 +40,7 @@ import {
 	replayTodosFromBranch,
 	setActiveTodoSession,
 } from "./state.ts";
-import { formatCommandList, formatTodoCall } from "./view.ts";
+import { formatCommandList, formatTodoCall, formatTodoGroupCall } from "./view.ts";
 
 interface TodoSessionCtx {
 	sessionManager: { getBranch(): Iterable<unknown>; getSessionId(): string };
@@ -93,7 +93,11 @@ export default function todo(pi: ExtensionAPI): void {
 
 		renderCall(args, theme, context) {
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(formatTodoCall(args, theme, context.expanded));
+			text.setText(
+				context.toolGroupSummary
+					? formatTodoGroupCall(args, theme, context)
+					: formatTodoCall(args, theme, context.expanded),
+			);
 			return text;
 		},
 	});

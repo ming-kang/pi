@@ -437,7 +437,7 @@ export interface ToolRenderResultOptions {
 }
 
 /** Context passed to tool renderers. */
-export interface ToolRenderContext<TState = any, TArgs = any> {
+export interface ToolRenderContext<TState = any, TArgs = any, TDetails = unknown> {
 	/** Current tool call arguments. Shared across call/result renders for the same tool call. */
 	args: TArgs;
 	/** Unique id for this tool execution. Stable across call/result renders for the same tool call. */
@@ -462,6 +462,8 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 	showImages: boolean;
 	/** Whether the current result is an error. */
 	isError: boolean;
+	/** Current final or partial result, when one has been received. Error state remains available through isError. */
+	result?: AgentToolResult<TDetails>;
 	/** True when renderCall is producing a collapsed grouped-tool summary. */
 	toolGroupSummary?: boolean;
 }
@@ -511,14 +513,18 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	): Promise<AgentToolResult<TDetails>>;
 
 	/** Custom rendering for tool call display */
-	renderCall?: (args: Static<TParams>, theme: Theme, context: ToolRenderContext<TState, Static<TParams>>) => Component;
+	renderCall?: (
+		args: Static<TParams>,
+		theme: Theme,
+		context: ToolRenderContext<TState, Static<TParams>, TDetails>,
+	) => Component;
 
 	/** Custom rendering for tool result display */
 	renderResult?: (
 		result: AgentToolResult<TDetails>,
 		options: ToolRenderResultOptions,
 		theme: Theme,
-		context: ToolRenderContext<TState, Static<TParams>>,
+		context: ToolRenderContext<TState, Static<TParams>, TDetails>,
 	) => Component;
 }
 

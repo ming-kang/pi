@@ -8,7 +8,7 @@ import {
 	type TUI,
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
-import type { ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.ts";
+import type { AgentToolResult, ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.ts";
 import { createAllToolDefinitions, type ToolName } from "../../../core/tools/index.ts";
 import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
 import { convertToPng } from "../../../utils/image-convert.ts";
@@ -206,6 +206,12 @@ export class ToolExecutionComponent extends Container {
 			expanded: this.expanded,
 			showImages: this.showImages,
 			isError: this.result?.isError ?? false,
+			result: this.result
+				? {
+						content: this.result.content as AgentToolResult<unknown>["content"],
+						details: this.result.details,
+					}
+				: undefined,
 			toolGroupSummary,
 		};
 	}

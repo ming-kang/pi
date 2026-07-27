@@ -4,11 +4,20 @@ import {
 	type ExtensionContext,
 	STALE_EXTENSION_CONTEXT_MESSAGE,
 } from "../src/core/extensions/types.ts";
-import { LIST_DISPLAY_MAX_ITEMS, TODO_TOOL_NAME } from "../src/extensions/todo/constants.ts";
+import {
+	LIST_DISPLAY_MAX_ITEMS,
+	TODO_MAX_BATCH_ITEMS,
+	TODO_MAX_METADATA_BYTES,
+	TODO_MAX_METADATA_DEPTH,
+	TODO_MAX_METADATA_ENTRIES,
+	TODO_MAX_SUBJECT_LENGTH,
+	TODO_TOOL_NAME,
+} from "../src/extensions/todo/constants.ts";
 import todo from "../src/extensions/todo/index.ts";
 import { EMPTY_TODO_STATE, type TodoParams, type TodoState } from "../src/extensions/todo/schema.ts";
 import {
 	applyTodoMutation,
+	buildTodoDetails,
 	cloneState,
 	disposeTodoSession,
 	formatTodoContent,
@@ -259,7 +268,7 @@ describe("todo list, get, clear", () => {
 
 	test("clear empties the list but keeps ids monotonic", () => {
 		let state = createTask(cloneState(EMPTY_TODO_STATE), "Task");
-		const result = applyTodoMutation(state, { action: "clear" } as TodoParams);
+		const result = applyTodoMutation(state, { action: "clear", confirm: true, expectedCount: 1 } as TodoParams);
 		expect(result.state.items).toHaveLength(0);
 		expect(result.state.nextId).toBe(2);
 		state = createTask(result.state, "Next");
@@ -587,6 +596,342 @@ describe("getTodoState isolation", () => {
 		first.items.push({ id: 99, subject: "Injected", status: "pending" });
 		expect(getTodoState().items).toHaveLength(1);
 		expect(getTodoState().items[0].subject).toBe("Task");
+	});
+});
+
+describe("todo create_many", () => {
+	test("creates a dependency-linked batch atomically in input order", () => {
+		const state = createTask(cloneState(EMPTY_TODO_STATE), "Existing prerequisite");
+		const result = applyTodoMutation(state, {
+			action: "create_many",
+			items: [
+				{
+					key: "implementation",
+					subject: "Implement batch support",
+					description: "The batch is persisted in input order",
+					blockedBy: [1],
+					owner: "agent-a",
+					metadata: { nested: { source: "batch" } },
+				},
+				{
+					key: "tests",
+					subject: "Test batch support",
+					description: "The new behavior is covered",
+					blockedByKeys: ["implementation"],
+				},
+			],
+		} as TodoParams);
+		expect(result.operation.kind).toBe("create_many");
+		expect(result.state.items.map((task) => task.id)).toEqual([1, 2, 3]);
+		expect(item(result.state, 2)).toMatchObject({ status: "pending", owner: "agent-a", blockedBy: [1] });
+		expect(item(result.state, 3).blockedBy).toEqual([2]);
+		expect(result.state.nextId).toBe(4);
+	});
+
+	test("rejects invalid batches without changing state", () => {
+		let state = createTask(cloneState(EMPTY_TODO_STATE), "Existing");
+		state = applyTodoMutation(state, { action: "delete", id: 1 } as TodoParams).state;
+		const invalidBatches: TodoParams[] = [
+			{
+				action: "create_many",
+				items: [
+					{ key: "same", subject: "First", description: "First description" },
+					{ key: "same", subject: "Second", description: "Second description" },
+				],
+			},
+			{
+				action: "create_many",
+				items: [{ subject: "Missing key", description: "No batch key exists", blockedByKeys: ["absent"] }],
+			},
+			{
+				action: "create_many",
+				items: [{ subject: "Deleted dependency", description: "Must fail", blockedBy: [1] }],
+			},
+			{
+				action: "create_many",
+				items: [
+					{ key: "a", subject: "A", description: "A description", blockedByKeys: ["b"] },
+					{ key: "b", subject: "B", description: "B description", blockedByKeys: ["a"] },
+				],
+			},
+		];
+		for (const params of invalidBatches) {
+			const result = applyTodoMutation(state, params);
+			expect(result.operation.kind).toBe("error");
+			expect(result.state).toEqual(state);
+		}
+	});
+
+	test("enforces batch count and task text limits before writing", () => {
+		const tooMany = Array.from({ length: TODO_MAX_BATCH_ITEMS + 1 }, (_, index) => ({
+			subject: `Task ${index}`,
+			description: "A valid description",
+		}));
+		const state = cloneState(EMPTY_TODO_STATE);
+		expectMutationError(state, { action: "create_many", items: tooMany } as TodoParams, /exceeds/);
+		expectMutationError(
+			state,
+			{
+				action: "create_many",
+				items: [{ subject: "x".repeat(TODO_MAX_SUBJECT_LENGTH + 1), description: "A valid description" }],
+			} as TodoParams,
+			/subject exceeds/,
+		);
+	});
+});
+
+describe("todo bounded metadata", () => {
+	test("deeply clones valid metadata and rejects invalid JSON-like values", () => {
+		const metadata: Record<string, unknown> = { nested: { value: "original" } };
+		const state = createTask(cloneState(EMPTY_TODO_STATE), "Metadata task", { metadata });
+		(metadata.nested as { value: string }).value = "mutated input";
+		expect((item(state, 1).metadata?.nested as { value: string }).value).toBe("original");
+		const copied = cloneState(state);
+		(copied.items[0].metadata?.nested as { value: string }).value = "mutated clone";
+		expect((item(state, 1).metadata?.nested as { value: string }).value).toBe("original");
+
+		const protoMetadata = JSON.parse('{"__proto__":"created"}') as Record<string, unknown>;
+		let protoState = createTask(cloneState(EMPTY_TODO_STATE), "Prototype key", { metadata: protoMetadata });
+		expect(Object.hasOwn(item(protoState, 1).metadata ?? {}, "__proto__")).toBe(true);
+		expect(item(protoState, 1).metadata?.__proto__).toBe("created");
+		const protoPatch = JSON.parse('{"__proto__":{"nested":true}}') as Record<string, unknown>;
+		const protoResult = update(protoState, 1, { metadata: protoPatch });
+		expect(protoResult.operation.kind).toBe("update");
+		protoState = protoResult.state;
+		expect(Object.hasOwn(item(protoState, 1).metadata ?? {}, "__proto__")).toBe(true);
+		expect(item(protoState, 1).metadata?.__proto__).toEqual({ nested: true });
+
+		const cyclic: Record<string, unknown> = {};
+		cyclic.self = cyclic;
+		for (const invalid of [{ nonFinite: Infinity }, { callback: () => undefined }, cyclic]) {
+			const result = applyTodoMutation(state, { action: "update", id: 1, metadata: invalid } as TodoParams);
+			expect(result.operation.kind).toBe("error");
+			expect(result.state).toEqual(state);
+		}
+	});
+
+	test("enforces metadata depth, entry, and byte bounds on create and update", () => {
+		const deep: Record<string, unknown> = {};
+		let cursor = deep;
+		for (let index = 0; index < TODO_MAX_METADATA_DEPTH; index++) {
+			const child: Record<string, unknown> = {};
+			cursor.child = child;
+			cursor = child;
+		}
+		expectMutationError(
+			cloneState(EMPTY_TODO_STATE),
+			{
+				action: "create",
+				subject: "Too deep",
+				description: "Metadata cannot be too deep",
+				metadata: deep,
+			} as TodoParams,
+			/depth/,
+		);
+		let state = createTask(cloneState(EMPTY_TODO_STATE), "Task");
+		const result = update(state, 1, { metadata: { payload: "x".repeat(TODO_MAX_METADATA_BYTES + 1) } });
+		expect(result.operation.kind).toBe("error");
+		expect(result.state).toEqual(state);
+		expectMutationError(
+			state,
+			{
+				action: "update",
+				id: 1,
+				metadata: { entries: Array.from({ length: TODO_MAX_METADATA_ENTRIES }, () => 0) },
+			} as TodoParams,
+			/entries/,
+		);
+		state = createTask(state, "Bounded text");
+		expectMutationError(
+			state,
+			{ action: "update", id: 2, subject: "x".repeat(TODO_MAX_SUBJECT_LENGTH + 1) } as TodoParams,
+			/subject exceeds/,
+		);
+	});
+});
+
+describe("todo list pagination and filters", () => {
+	function list(state: TodoState, params: Partial<TodoParams>): string {
+		const result = applyTodoMutation(state, { action: "list", ...params } as TodoParams);
+		expect(result.operation.kind).toBe("list");
+		return formatTodoContent(result.operation, result.state);
+	}
+
+	test("applies limit, afterId, query, and unblockedOnly without changing legacy defaults", () => {
+		let state = createTask(cloneState(EMPTY_TODO_STATE), "Foundation");
+		state = createTask(state, "Alpha subject", { description: "Includes a Needle in the description" });
+		state = createTask(state, "Beta subject");
+		state = createTask(state, "Blocked task", { blockedBy: [1] });
+
+		const firstPage = list(state, { limit: 1 });
+		expect(firstPage).toContain("#1 Foundation");
+		expect(firstPage).toContain("next page: afterId=1");
+		expect(list(state, { afterId: 1, limit: 2 })).toContain("#2 Alpha subject");
+		expect(list(state, { query: "needle" })).toContain("Alpha subject");
+		expect(list(state, { query: "needle" })).not.toContain("Beta subject");
+		const unblocked = list(state, { unblockedOnly: true });
+		expect(unblocked).not.toContain("Blocked task");
+		expect(list(state, {})).toContain("Blocked task");
+		const unordered: TodoState = {
+			items: [
+				{ id: 100, subject: "Last inserted", status: "pending" },
+				{ id: 1, subject: "First", status: "pending" },
+				{ id: 2, subject: "Second", status: "pending" },
+			],
+			nextId: 101,
+		};
+		const unorderedFirst = list(unordered, { limit: 1 });
+		expect(unorderedFirst).toContain("#1 First");
+		expect(unorderedFirst).toContain("next page: afterId=1");
+		expect(list(unordered, { limit: 1, afterId: 1 })).toContain("#2 Second");
+		expectMutationError(state, { action: "list", limit: 0 } as TodoParams, /limit must/);
+	});
+});
+
+describe("todo clear confirmation", () => {
+	test("requires an explicit matching confirmation and leaves state unchanged otherwise", () => {
+		const state = createTask(cloneState(EMPTY_TODO_STATE), "Task");
+		for (const params of [
+			{ action: "clear" },
+			{ action: "clear", confirm: false, expectedCount: 1 },
+			{ action: "clear", confirm: true, expectedCount: 0 },
+		]) {
+			const result = applyTodoMutation(state, params as TodoParams);
+			expect(result.operation.kind).toBe("error");
+			expect(result.state).toEqual(state);
+		}
+	});
+});
+
+describe("todo dependency demotions", () => {
+	test("demotes an active task that gains an incomplete dependency through either edge direction", () => {
+		let state = createTask(cloneState(EMPTY_TODO_STATE), "Blocker");
+		state = createTask(state, "Active task");
+		state = update(state, 2, { status: "in_progress" }).state;
+		const direct = update(state, 2, { addBlockedBy: [1] });
+		expect(item(direct.state, 2).status).toBe("pending");
+		if (direct.operation.kind === "update") expect(direct.operation.blockedIds).toEqual([2]);
+		expect(formatTodoContent(direct.operation, direct.state)).toContain("#2 moved to pending");
+
+		state = createTask(cloneState(EMPTY_TODO_STATE), "Blocker");
+		state = createTask(state, "Active task");
+		state = update(state, 2, { status: "in_progress" }).state;
+		const reverse = update(state, 1, { addBlocks: [2] });
+		expect(item(reverse.state, 2).status).toBe("pending");
+		if (reverse.operation.kind === "update") expect(reverse.operation.blockedIds).toEqual([2]);
+	});
+});
+
+describe("todo snapshot versioning and defensive replay", () => {
+	function entry(details: unknown): unknown {
+		return { type: "message", message: { role: "toolResult", toolName: TODO_TOOL_NAME, details } };
+	}
+
+	test("writes versioned typed operation details", () => {
+		const state = createTask(cloneState(EMPTY_TODO_STATE), "Task");
+		const details = buildTodoDetails({ action: "list", limit: 1 } as TodoParams, state);
+		expect(details.schemaVersion).toBe(1);
+		expect(details.operation).toMatchObject({
+			kind: "list",
+			limit: 1,
+			includeDeleted: false,
+			resultCount: 1,
+			statusCounts: { pending: 1 },
+		});
+	});
+
+	test("falls back past malformed latest details and accepts oversized legacy snapshots", () => {
+		const older = createTask(cloneState(EMPTY_TODO_STATE), "Older task");
+		const validCurrent = buildTodoDetails({ action: "list" } as TodoParams, older);
+		const malformedLatest = { ...validCurrent, nextId: 1 };
+		const replayed = replayTodosFromBranch({
+			sessionManager: { getBranch: () => [entry(validCurrent), entry(malformedLatest)] },
+		});
+		expect(replayed.items.map((task) => task.subject)).toEqual(["Older task"]);
+
+		const legacy = {
+			action: "list",
+			params: {},
+			items: [
+				{
+					id: 1,
+					subject: "x".repeat(TODO_MAX_SUBJECT_LENGTH + 1),
+					description: "Legacy text remains replayable",
+					status: "pending",
+					unknown: "drop this",
+				},
+			],
+			nextId: 2,
+		};
+		const legacyReplayed = replayTodosFromBranch({ sessionManager: { getBranch: () => [entry(legacy)] } });
+		expect(legacyReplayed.items[0].subject).toHaveLength(TODO_MAX_SUBJECT_LENGTH + 1);
+		expect((legacyReplayed.items[0] as unknown as Record<string, unknown>).unknown).toBeUndefined();
+	});
+
+	test("normalizes legacy active-but-blocked states and canonicalizes task order", () => {
+		const legacy = {
+			action: "list",
+			params: {},
+			items: [
+				{ id: 2, subject: "Active dependent", status: "in_progress", blockedBy: [1] },
+				{ id: 1, subject: "Incomplete prerequisite", status: "pending" },
+			],
+			nextId: 3,
+		};
+		const replayed = replayTodosFromBranch({ sessionManager: { getBranch: () => [entry(legacy)] } });
+		expect(replayed.items.map((task) => task.id)).toEqual([1, 2]);
+		expect(item(replayed, 2).status).toBe("pending");
+	});
+
+	test("replays a deep acyclic dependency chain without recursive traversal", () => {
+		const count = 12_000;
+		const items = Array.from({ length: count }, (_, index) => ({
+			id: index + 1,
+			subject: `Task ${index + 1}`,
+			status: "pending" as const,
+			...(index > 0 ? { blockedBy: [index] } : {}),
+		}));
+		const replayed = replayTodosFromBranch({
+			sessionManager: { getBranch: () => [entry({ action: "list", params: {}, items, nextId: count + 1 })] },
+		});
+		expect(replayed.items).toHaveLength(count);
+		expect(item(replayed, count).blockedBy).toEqual([count - 1]);
+	});
+
+	test("rejects malformed graph and state invariants during replay", () => {
+		const validItem = { id: 1, subject: "Task", status: "pending" };
+		const invalidSnapshots = [
+			{ items: [validItem, validItem], nextId: 2 },
+			{ items: [{ ...validItem, status: "unknown" }], nextId: 2 },
+			{ items: [validItem], nextId: 1 },
+			{
+				items: [
+					{ id: 1, subject: "A", status: "in_progress" },
+					{ id: 2, subject: "B", status: "in_progress" },
+				],
+				nextId: 3,
+			},
+			{ items: [{ ...validItem, blockedBy: [9] }], nextId: 2 },
+			{
+				items: [
+					{ id: 1, subject: "Deleted", status: "deleted" },
+					{ id: 2, subject: "Dependent", status: "pending", blockedBy: [1] },
+				],
+				nextId: 3,
+			},
+			{
+				items: [
+					{ id: 1, subject: "A", status: "pending", blockedBy: [2] },
+					{ id: 2, subject: "B", status: "pending", blockedBy: [1] },
+				],
+				nextId: 3,
+			},
+		];
+		for (const snapshot of invalidSnapshots) {
+			const details = { action: "list", params: {}, ...snapshot };
+			const replayed = replayTodosFromBranch({ sessionManager: { getBranch: () => [entry(details)] } });
+			expect(replayed).toEqual(EMPTY_TODO_STATE);
+		}
 	});
 });
 

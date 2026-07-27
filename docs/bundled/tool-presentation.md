@@ -31,7 +31,7 @@ The native tool presentation owns:
 
 Built-in renderers remain responsible for semantic content such as file paths, syntax highlighting, search results, Diff previews, and command output. The outer shell is native so built-in tools, bundled extensions, and compatible third-party tools share the same presentation.
 
-Consecutive tools may opt into a shared collapsed group through `toolGroup`. Built-in `read` and `find` calls use the `explore` group, and the bundled `todo` tool uses the `todo` group: their call rows render as one compact run with a single leading gap, while `Ctrl+O` restores each tool's complete call and result.
+Consecutive tools may opt into a shared collapsed group through `toolGroup`. Built-in `read` and `find` calls use the `explore` group, and the bundled `todo` tool uses the `todo` group: their call rows render as one compact run with a single leading gap, while `Ctrl+O` restores each tool's complete call and result. Collapsed Todo rows are result-aware: successful current snapshots summarize the completed operation (created ids, update/get status, list counts, deletion, or clear) rather than only its arguments. Failures include a sanitized reason capped at 120 characters; missing or unrecognized result details fall back safely to the call summary.
 
 ## Renderer inheritance
 
