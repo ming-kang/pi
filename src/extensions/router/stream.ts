@@ -128,6 +128,13 @@ async function reshapePayloadForRelay(
 	if (instructions) base.instructions = instructions;
 	if (input !== undefined) base.input = input;
 
+	// Codex CLI's ResponseItem serialization never emits `status` on replayed
+	// message/function_call/function_call_output/reasoning items (only
+	// local_shell_call has it), and output_text content has no `annotations`.
+	// Strict Codex-schema gateways 400 on both (e.g. "input[i].status:
+	// unknown_parameter"), while pi-ai emits them per the Platform schema.
+	sanitizeInputItemsForCodex(base.input);
+
 	// Fields common on Codex CLI / rejected by many transparent Codex upstreams.
 	if (!base.text || typeof base.text !== "object") {
 		base.text = { verbosity: "low" };
@@ -144,6 +151,7 @@ async function reshapePayloadForRelay(
 
 	// Drop Platform-only fields that Codex OAuth endpoints often 400 on.
 	delete base.prompt_cache_retention;
+	delete base.prompt_cache_options;
 	delete base.max_output_tokens;
 	delete base.temperature;
 	delete base.top_p;
@@ -160,6 +168,45 @@ async function reshapePayloadForRelay(
 		if (next !== undefined) return next;
 	}
 	return base;
+}
+
+/**
+ * Item types where Codex CLI's ResponseItem serialization has NO `status`
+ * field (codex-rs/protocol/src/models.rs): Message, Reasoning, FunctionCall,
+ * FunctionCallOutput, CustomToolCallOutput. Other item types either require
+ * `status` (local_shell_call, tool_search_output, image_generation_call) or
+ * accept it optionally (tool_search_call, custom_tool_call, web_search_call),
+ * so we must not strip it there.
+ */
+const STATUS_LESS_ITEM_TYPES = new Set([
+	"message",
+	"reasoning",
+	"function_call",
+	"function_call_output",
+	"custom_tool_call_output",
+]);
+
+function sanitizeInputItemsForCodex(input: unknown): void {
+	if (!Array.isArray(input)) return;
+	for (const item of input) {
+		if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+		const record = item as Record<string, unknown>;
+		if (typeof record.type === "string" && STATUS_LESS_ITEM_TYPES.has(record.type) && "status" in record) {
+			delete record.status;
+		}
+		if (Array.isArray(record.content)) {
+			for (const part of record.content) {
+				if (
+					part &&
+					typeof part === "object" &&
+					(part as { type?: string }).type === "output_text" &&
+					"annotations" in part
+				) {
+					delete (part as Record<string, unknown>).annotations;
+				}
+			}
+		}
+	}
 }
 
 function extractInstructions(
