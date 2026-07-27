@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.82.6] - 2026-07-27
+
 ### Added
 
 - The bundled `todo` tool now supports atomic `create_many` planning batches (up to 20 tasks) with stable batch keys and intra-batch dependencies, paged/searchable/unblocked `list` queries, and bounded nested JSON metadata. Task snapshots are schema-versioned and defensively replayed, so malformed latest history falls back to the last valid snapshot. `clear` now requires `confirm: true` plus the current `expectedCount`; an active task that gains an unresolved dependency automatically returns to `pending`.
