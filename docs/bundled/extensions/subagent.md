@@ -92,4 +92,3 @@ They apply only to future subagent runs and never change the parent session's `/
 ## Deliberate non-features
 
 There are no background agents, persistent worker IDs, unread state, fleet panel, statusline widget, send/stop/resume control plane, completion notifications, swarm/coordinator, worktree isolation, nested agents, MCP, hooks, or agent memory.
-

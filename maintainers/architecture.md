@@ -50,12 +50,13 @@ Personal workflow features remain self-contained extensions:
 ```text
 src/extensions/
 ├── deepwiki/
+├── plan/
 ├── question/
-├── todo/
 ├── rewind/
 ├── router/
 ├── statusline/
-└── subagent/
+├── subagent/
+└── todo/
 ```
 
 They are registered as hidden `InlineExtension` entries in `src/extensions/index.ts`. No shared Fork framework, feature registry, or cross-extension internal API is used.

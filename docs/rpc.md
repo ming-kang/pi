@@ -210,7 +210,7 @@ Response:
 }
 ```
 
-Messages are `AgentMessage` objects (see [Message Types](#message-types)).
+Messages are `AgentMessage` objects (see [Types](#types)).
 
 ### Model
 

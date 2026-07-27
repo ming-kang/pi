@@ -122,5 +122,3 @@ Session affinity headers use hyphenated form (`session-id`, `x-client-request-id
 **Differences from ChatGPT Codex OAuth.** Auth uses Bearer `sk-…` (not OAuth JWT), endpoint is `{baseUrl}/responses` (not `/codex/responses`), transport is SSE only (no WebSocket or zstd), and `OpenAI-Beta` is not set. These match **sk- relays**, not the official ChatGPT backend.
 
 **Multi-turn tool calls.** On a fixed relay + fixed model, tool-call ids preserve the Responses form and replay like Codex. Pi only rewrites ids across model boundaries. Staying on one model for long tool + reasoning sessions avoids id sanitization.
-
-

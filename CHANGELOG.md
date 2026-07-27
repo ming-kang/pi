@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Documentation checks now validate same-page and cross-page Markdown fragments, and upstream delta checks reject stale distribution-owned registrations.
+
+### Fixed
+
+- Corrected bundled-extension inventories and usage guidance to reflect the shipped plan, subagent, and todo workflows; repaired the RPC type link and clarified that activating `bash` is not a read-only tool configuration.
+
 ## [0.82.6] - 2026-07-27
 
 ### Added

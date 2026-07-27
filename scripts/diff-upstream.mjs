@@ -133,12 +133,14 @@ const hybridChanges = [];
 const ownedChanges = [];
 const droppedChanges = [];
 const unregisteredChanges = [];
+const usedLocalOnlyPatterns = new Set();
 const usedHybridPatterns = new Set();
 const usedDroppedPatterns = new Set();
 
 for (const entry of entries) {
 	const localOnlyMatch = localOnlyPatterns.find(({ regexp }) => regexp.test(entry.path));
 	if (localOnlyMatch) {
+		usedLocalOnlyPatterns.add(localOnlyMatch.pattern);
 		ownedChanges.push(entry);
 		continue;
 	}
@@ -168,6 +170,13 @@ for (const entry of entries) {
 	);
 }
 
+for (const { pattern } of localOnlyPatterns) {
+	if (!usedLocalOnlyPatterns.has(pattern)) {
+		failures.push(
+			`maintainers/upstream.json: localOnly pattern matches no difference against the baseline: ${pattern}`,
+		);
+	}
+}
 for (const { pattern } of hybridPatterns) {
 	if (!usedHybridPatterns.has(pattern)) {
 		failures.push(`maintainers/upstream.json: hybrid pattern matches no difference against the baseline: ${pattern}`);

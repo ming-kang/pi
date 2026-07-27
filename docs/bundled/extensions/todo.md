@@ -29,4 +29,3 @@ Adds a `todo` tool plus `/todos` for multi-step work, with a live overlay above 
 - **Status transitions are gated.** `completed` can be reopened to `in_progress` or `pending`, but a `deleted` tombstone is terminal. Single-active is enforced on demote (not hard-reject) so the model does not need a retry loop.
 - **Tool execution is sequential** (`executionMode: "sequential"`) so parallel tool calls cannot race on in-memory state. Validation failures **throw** so Pi marks `isError: true` and the branch replays the last good snapshot.
 - **Overlay paint is pure + width-cached.** Completion visibility bookkeeping runs in `update()` plus a disposable timeout, never during `render`. Same terminal width reuses the last line array.
-

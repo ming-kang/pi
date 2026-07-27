@@ -47,4 +47,3 @@ The transcript uses a private `renderCall` / `renderResult` only to replace raw 
 - The render cache is keyed by terminal width **and height**, because preview height depends on available rows and Pi resize only requests a render. Preview markdown rendering is additionally memoized per text and dimensions so editor keystrokes don't re-parse previews.
 - `validateQuestions` enforces only what the JSON schema cannot express: case-insensitive uniqueness, reserved-label rejection, and the preview/multi-select conflict. Length and count limits are enforced against the schema before the tool executes.
 - Dialog navigation follows Pi's injected select/input keybindings where applicable; custom actions such as Space-to-toggle remain explicit in the footer.
-

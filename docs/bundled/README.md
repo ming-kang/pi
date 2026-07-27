@@ -10,6 +10,7 @@ The following extensions are loaded as hidden built-ins. They use the same publi
 |---|---|---|
 | `llama.cpp` | `/llama` | Manage models served by the local llama.cpp router |
 | `deepwiki` | `deepwiki` | Query indexed public GitHub repository documentation |
+| `plan` | `exit_plan`, `/plan` | Explore and interview under planning-mode tool restrictions before execution |
 | `question` | `question` | Ask structured questions through native interactive UI |
 | `rewind` | `/rewind` | Create and restore project snapshots around session lifecycle operations |
 | `router` | `/router` | Configure and probe Codex-style routing endpoints |

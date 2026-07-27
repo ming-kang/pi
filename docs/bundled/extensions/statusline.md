@@ -106,4 +106,3 @@ Footer paint is hot (every TUI render). The extension caches:
 - **Branch stats** (thinking level + cumulative usage) by branch length, leaf entry identity, and a leaf usage fingerprint.
 
 Both caches clear on footer `invalidate()`.
-
