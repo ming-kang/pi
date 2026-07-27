@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { QUESTION_LIMITS } from "../src/extensions/question/limits.ts";
-import { cancelResult, clarificationResult, successResult } from "../src/extensions/question/results.ts";
+import { cancelResult, clarificationResult, errorResult, successResult } from "../src/extensions/question/results.ts";
 import type { QuestionAnswer } from "../src/extensions/question/types.ts";
 
 function answer(overrides?: Partial<QuestionAnswer>): QuestionAnswer {
@@ -17,6 +17,14 @@ function answer(overrides?: Partial<QuestionAnswer>): QuestionAnswer {
 function textOf(result: ReturnType<typeof successResult>): string {
 	return result.content.map((block) => ("text" in block ? block.text : "")).join("\n");
 }
+
+describe("errorResult", () => {
+	it("keeps the human-readable message in structured details for rendering", () => {
+		const result = errorResult("preview_multiselect", "Option previews are not supported on multiSelect questions");
+		expect(result.details?.error).toBe("preview_multiselect");
+		expect(result.details?.message).toBe("Option previews are not supported on multiSelect questions");
+	});
+});
 
 describe("successResult", () => {
 	it("wraps answers in the decisions envelope", () => {

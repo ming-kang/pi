@@ -1,7 +1,7 @@
 # 工具调用 UI 全面修复 — 交接文档
 
-> 状态:进行中,WP1–WP4 已完成并通过测试;WP5–WP8 未开始。
-> 本文档不随发布提交,仅供接力会话使用,本轮开发全部完成后删除。owner 当前未要求提交 WP4——遵守 AGENTS.md:不要主动 commit。
+> 状态:进行中,WP1–WP5 已完成并通过测试;WP6–WP8 未开始。
+> 本文档不随发布提交,仅供接力会话使用,本轮开发全部完成后删除。owner 当前未要求提交 WP5——遵守 AGENTS.md:不要主动 commit。
 
 ## 一、动机与背景
 
@@ -63,12 +63,12 @@ Owner 在 0.82.6 发布后截图指出 `todo create_many` 的工具行不美观(
 | WP2 | 内置七工具 + bash-execution `!!` bug | ✅ 完成 |
 | WP3 | todo:create_many 内容化、摘要保 subject、展开逐任务、模型文案 | ✅ 完成 |
 | WP4 | subagent:截断策略、展开态一致性、杂项 | ✅ 完成 |
-| WP5 | question:调用行可展开、取消态、错误行、对话框 | ⬜ 未开始 |
+| WP5 | question:调用行可展开、取消态、错误行、对话框 | ✅ 完成 |
 | WP6 | plan 正文 Markdown 化 + deepwiki 小修 | ⬜ 未开始 |
 | WP7 | 键名 hint 统一 | ⬜ 未开始 |
 | WP8 | 全量测试、docs、CHANGELOG、delta 登记 | ⬜ 未开始 |
 
-## 四、已完成明细(WP1–WP4)
+## 四、已完成明细(WP1–WP5)
 
 ### WP1 壳层(全部通过类型/lint/测试)
 
@@ -108,9 +108,16 @@ Owner 在 0.82.6 发布后截图指出 `todo create_many` 的工具行不美观(
 - **状态与时长**:queued/无输出 settled 使用 `statusWord`;时长从四舍五入后的 60s 起显示分钟,并避免 `1m 60s`/裸 `60s` 边界。
 - **展开态层级**:Activity 成功行补两格 marker 占位;Report Markdown 默认正文降为 `toolOutput`;section header 统一为 `── N · ✓ Agent`;theme 嵌套修复已覆盖折叠提示括号,未重复包色。
 
+### WP5 question
+
+- **调用/结果展开**:registerTool 显式接入 render context;折叠调用保持 header 摘要,展开逐行显示完整问题并标注 multi-select。cancelled/needs_clarification 显示 `answered N of M`,展开时复用已回答决策与 notes 清单。
+- **错误展示**:`errorResult` 在 details 增加可选 human-readable `message`;渲染优先用 message,旧会话则从既有 content 文本解析,不再暴露 `preview_multiselect` 等机器码。render 对历史 malformed details 做防御性归一化,问题/答案/选择/notes/error/fallback 全部限界;合法的四选项加 custom 第五项不会丢失。
+- **对话框**:默认 hint 增加 `1-N select/toggle`;single option 补空 marker 列,与 multi label 左缘对齐;自定义项改为无句号 `Type something`,schema 同步保留新旧两种拼写以兼容历史 caller。键名美化仍留给 WP7,本包未提前混入。
+
 ### 测试状态
 
 - 已更新断言:`test/tool-execution-component.test.ts`(rail 空行、todo 组摘要);`test/edit-tool-no-full-redraw.test.ts` 两个用例(组件 `setExpanded(true)` 保持大 diff 断言意图,另补折叠态断言:含前部行、不含 `line 950 changed`、含 `more lines`);`test/todo-render.test.ts`(单复数、subject 预览、真实/流式 id、展开逐任务、依赖、限界、create/delete/create_many 摘要);`test/todo-extension.test.ts`(逐任务模型文案)。
+- WP5 聚焦测试已跑绿:question-dialog/results/schema/state/render 共 38;新增 `test/question-render.test.ts`,覆盖展开问题、取消/澄清进度与部分答案、current/legacy error、malformed/超长历史数据、五项 multi 选择和空 header fallback。
 - WP4 聚焦测试已跑绿:`subagent-render` 32;覆盖失败行折叠/展开与长错误换行、句边界摘录、live intent 限界、分钟边界、状态大小写、`ctx: `、运行 cost、Activity 对齐、Report 正文色和序号风格。
 - WP3 聚焦测试已跑绿:`todo-render` 19、`todo-extension` 69、`tool-execution-component` 31。
 - WP1/WP2 既有聚焦测试已跑绿:tool-execution-component、bash-tool-rendering、bash-execution-width、edit-tool-no-full-redraw、edit-tool-legacy-input、theme-picker、theme-export、syntax-highlight、export-html-whitespace、export-html-skill-block、subagent-render、todo-render、plan-render。
@@ -119,17 +126,7 @@ Owner 在 0.82.6 发布后截图指出 `todo create_many` 的工具行不美观(
 
 ## 五、未完成工作包的实施方案
 
-以下 file:line 以当前工作区为准(WP1–WP4 的改动可能使个别行号略移,先 grep 定位)。每个 WP 完成后:跑该扩展的 `test/<name>-*.test.ts` 迭代至绿,再 `tsgo --noEmit` + `npx biome check`。
-
-### WP5 question
-
-文件:`src/extensions/question/{index.ts,render.ts,dialog.ts,types.ts}`、`test/question-*.test.ts`。
-
-1. **renderCall 接 expanded**:index.ts registerTool 的 `renderCall: renderQuestionCall` 目前是 `(args, theme)` 二参(render.ts:33-39)。改三参签名接 `context`,`context.expanded` 时在 headline 下列出每个问题:`<header>: <question 全文>`(dim),多选注明;有 result 后展开态已有答案清单(render.ts:53-65),调用行的问题列表与之呼应。
-2. **取消态**(render.ts:41-66):`Cancelled` → `Cancelled · answered N of M`(N=details.answers.length,M 从 args.questions 长度取);`needs_clarification` 同理。expanded 时列出已答条目(复用 answered 分支的渲染)。注意现在 cancelled 分支在 expanded 判断之前 return——调整分支顺序。details 无需改(answers 已在,results.ts:63-84)。
-3. **错误行**:`Question error: preview_multiselect` → 显示人类可读 message。message 在 content 文本 `Question tool error (code): message`(results.ts:23-30)里,从 content 解析,或(更稳)在 errorResult 的 details 加 `message` 字段——details 加可选字段属 UI 侧数据,可接受,但注意旧会话回放兜底。
-4. **对话框**(dialog.ts):hint 行(:596-647)补数字快选提示(如单选 `1-9 select`);`Type something.`(types.ts:71 OTHER_OPTION)去句号并同步 schema.ts:8 保留词与相关断言;单/多选左缘统一(:517-545,单选 marker 列补空位使编号对齐)。键名渲染交给 WP7。
-5. 测试:question-dialog、question-render(若有)逐条适配;取消态补新断言。
+以下 file:line 以当前工作区为准(WP1–WP5 的改动可能使个别行号略移,先 grep 定位)。每个 WP 完成后:跑该扩展的 `test/<name>-*.test.ts` 迭代至绿,再 `tsgo --noEmit` + `npx biome check`。
 
 ### WP6 plan + deepwiki
 

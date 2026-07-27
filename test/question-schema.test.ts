@@ -26,7 +26,7 @@ describe("validateQuestions", () => {
 	});
 
 	it("rejects reserved labels case-insensitively and ignoring padding", () => {
-		for (const label of ["OTHER", " other ", "type something.", "Chat About This"]) {
+		for (const label of ["OTHER", " other ", "type something", "Type something.", "Chat About This"]) {
 			const result = validateQuestions([question({ options: [option(label), option("Beta")] })]);
 			expect(result, label).toMatchObject({ ok: false, error: "reserved_label" });
 		}

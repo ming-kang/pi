@@ -5,7 +5,7 @@ import type { Question, QuestionOption, QuestionToolError } from "./types.ts";
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 4;
 const MAX_QUESTIONS = 4;
-const RESERVED_LABELS = ["Other", "Type something.", "Chat about this"] as const;
+const RESERVED_LABELS = ["Other", "Type something", "Type something.", "Chat about this"] as const;
 
 const normalizeLabel = (text: string) => text.trim().toLowerCase();
 const RESERVED_NORMALIZED = new Set(RESERVED_LABELS.map(normalizeLabel));
@@ -14,7 +14,7 @@ const OptionSchema = Type.Object({
 	label: Type.String({
 		maxLength: QUESTION_LIMITS.optionLabelChars,
 		description:
-			"Short user-facing option label (1-5 words), distinct within the question. Reserved labels ('Other', 'Type something.', 'Chat about this') are rejected — the UI adds the custom-answer path itself.",
+			"Short user-facing option label (1-5 words), distinct within the question. Reserved labels ('Other', 'Type something', 'Chat about this') are rejected — the UI adds the custom-answer path itself.",
 	}),
 	description: Type.String({
 		maxLength: QUESTION_LIMITS.optionDescriptionChars,

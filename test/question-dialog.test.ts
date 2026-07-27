@@ -39,6 +39,20 @@ describe("question dialog", () => {
 	beforeAll(() => initTheme("dark"));
 	beforeEach(() => setKeybindings(new KeybindingsManager()));
 
+	it("shows numeric shortcuts, punctuation-free custom copy, and aligned option labels", () => {
+		const singleOutput = createDialog([question()]).view();
+		const multiOutput = createDialog([question({ multiSelect: true })]).view();
+		expect(singleOutput).toContain("1-3 select");
+		expect(multiOutput).toContain("1-3 toggle");
+		expect(singleOutput).toContain("Type something");
+		expect(singleOutput).not.toContain("Type something.");
+		const singleOption = singleOutput.split("\n").find((line) => line.includes("1. Alpha"));
+		const multiOption = multiOutput.split("\n").find((line) => line.includes("1. Alpha"));
+		expect(singleOption).toBeDefined();
+		expect(multiOption).toBeDefined();
+		expect(singleOption?.indexOf("1. Alpha")).toBe(multiOption?.indexOf("1. Alpha"));
+	});
+
 	it("selects an option by digit and submits a single single-select question", () => {
 		const { component, results } = createDialog([question()]);
 		component.handleInput("2");

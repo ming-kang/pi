@@ -16,10 +16,10 @@ import { createQuestionDialog } from "./dialog.ts";
 import { renderQuestionCall, renderQuestionResult } from "./render.ts";
 import { cancelResult, clarificationResult, errorResult, successResult } from "./results.ts";
 import { QuestionParams, validateQuestions } from "./schema.ts";
-import type { DialogResult, Question } from "./types.ts";
+import type { DialogResult, Question, QuestionToolDetails } from "./types.ts";
 
 export default function question(pi: ExtensionAPI) {
-	pi.registerTool({
+	pi.registerTool<typeof QuestionParams, QuestionToolDetails>({
 		name: QUESTION_TOOL_NAME,
 		label: QUESTION_LABEL,
 		description: QUESTION_DESCRIPTION,
@@ -27,8 +27,12 @@ export default function question(pi: ExtensionAPI) {
 		promptGuidelines: QUESTION_PROMPT_GUIDELINES,
 		parameters: QuestionParams,
 		rendersOwnProgress: true,
-		renderCall: renderQuestionCall,
-		renderResult: renderQuestionResult,
+		renderCall(args, theme, context) {
+			return renderQuestionCall(args, theme, context.expanded);
+		},
+		renderResult(result, options, theme, context) {
+			return renderQuestionResult(result, options, theme, context.args);
+		},
 
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			const questions = params.questions as Question[];

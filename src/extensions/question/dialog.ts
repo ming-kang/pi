@@ -501,6 +501,7 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 			const state = currentState();
 			const options = currentOptions();
 			const isMulti = question.multiSelect === true;
+			const digitRange = `1-${Math.min(9, options.length)}`;
 			wrapWithPrefix(
 				" ",
 				`${theme.fg("accent", question.header)}  ${theme.fg("text", question.question)}`,
@@ -526,7 +527,7 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 					(option.kind === "other"
 						? state.singleAnswer?.kind === "custom"
 						: state.singleAnswer?.answer === option.label);
-				const marker = isMulti ? multiMarker(option, checked, state.customAnswer !== undefined) : "";
+				const marker = isMulti ? multiMarker(option, checked, state.customAnswer !== undefined) : "   ";
 				const focusArrow = focused ? theme.fg("accent", "→") : " ";
 				const note =
 					option.kind === "option" && state.notesByOption.has(option.label) ? theme.fg("success", " +note") : "";
@@ -629,7 +630,7 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 					" ",
 					theme.fg(
 						"dim",
-						`${keyLabel("app.list.toggle", "Space")} to toggle • ${keyLabel("tui.input.tab", "Tab")} for notes/custom • ${keyLabel("tui.select.confirm", "Enter")} to continue • ${keyLabel("tui.editor.cursorLeft", "Left")}/${keyLabel("tui.editor.cursorRight", "Right")} questions • ${keyLabel("tui.select.cancel", "Esc")} to cancel`,
+						`${digitRange} toggle • ${keyLabel("app.list.toggle", "Space")} to toggle focused • ${keyLabel("tui.input.tab", "Tab")} for notes/custom • ${keyLabel("tui.select.confirm", "Enter")} to continue • ${keyLabel("tui.editor.cursorLeft", "Left")}/${keyLabel("tui.editor.cursorRight", "Right")} questions • ${keyLabel("tui.select.cancel", "Esc")} to cancel`,
 					),
 					renderWidth,
 					lines,
@@ -639,7 +640,7 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 					" ",
 					theme.fg(
 						"dim",
-						`${keyLabel("tui.input.tab", "Tab")} for notes/custom • ${keyLabel("tui.select.confirm", "Enter")} to select • ${keyLabel("tui.editor.cursorLeft", "Left")}/${keyLabel("tui.editor.cursorRight", "Right")} questions • ${keyLabel("tui.select.cancel", "Esc")} to cancel`,
+						`${digitRange} select • ${keyLabel("tui.input.tab", "Tab")} for notes/custom • ${keyLabel("tui.select.confirm", "Enter")} to select • ${keyLabel("tui.editor.cursorLeft", "Left")}/${keyLabel("tui.editor.cursorRight", "Right")} questions • ${keyLabel("tui.select.cancel", "Esc")} to cancel`,
 					),
 					renderWidth,
 					lines,

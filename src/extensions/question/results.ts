@@ -26,6 +26,7 @@ export function errorResult(error: QuestionToolError, message: string): AgentToo
 		outcome: "error",
 		cancelled: false,
 		error,
+		message,
 	});
 }
 
