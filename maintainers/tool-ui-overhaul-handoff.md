@@ -1,7 +1,7 @@
 # 工具调用 UI 全面修复 — 交接文档
 
-> 状态:进行中,WP1–WP5 已完成并通过测试;WP6–WP8 未开始。
-> 本文档不随发布提交,仅供接力会话使用,本轮开发全部完成后删除。owner 当前未要求提交 WP5——遵守 AGENTS.md:不要主动 commit。
+> 状态:进行中,WP1–WP6 已完成并通过测试;WP7–WP8 未开始。
+> 本文档不随发布提交,仅供接力会话使用,本轮开发全部完成后删除。owner 当前未要求提交 WP6——遵守 AGENTS.md:不要主动 commit。
 
 ## 一、动机与背景
 
@@ -64,11 +64,11 @@ Owner 在 0.82.6 发布后截图指出 `todo create_many` 的工具行不美观(
 | WP3 | todo:create_many 内容化、摘要保 subject、展开逐任务、模型文案 | ✅ 完成 |
 | WP4 | subagent:截断策略、展开态一致性、杂项 | ✅ 完成 |
 | WP5 | question:调用行可展开、取消态、错误行、对话框 | ✅ 完成 |
-| WP6 | plan 正文 Markdown 化 + deepwiki 小修 | ⬜ 未开始 |
+| WP6 | plan 正文 Markdown 化 + deepwiki 小修 | ✅ 完成 |
 | WP7 | 键名 hint 统一 | ⬜ 未开始 |
 | WP8 | 全量测试、docs、CHANGELOG、delta 登记 | ⬜ 未开始 |
 
-## 四、已完成明细(WP1–WP5)
+## 四、已完成明细(WP1–WP6)
 
 ### WP1 壳层(全部通过类型/lint/测试)
 
@@ -114,9 +114,16 @@ Owner 在 0.82.6 发布后截图指出 `todo create_many` 的工具行不美观(
 - **错误展示**:`errorResult` 在 details 增加可选 human-readable `message`;渲染优先用 message,旧会话则从既有 content 文本解析,不再暴露 `preview_multiselect` 等机器码。render 对历史 malformed details 做防御性归一化,问题/答案/选择/notes/error/fallback 全部限界;合法的四选项加 custom 第五项不会丢失。
 - **对话框**:默认 hint 增加 `1-N select/toggle`;single option 补空 marker 列,与 multi label 左缘对齐;自定义项改为无句号 `Type something`,schema 同步保留新旧两种拼写以兼容历史 caller。键名美化仍留给 WP7,本包未提前混入。
 
+### WP6 plan + deepwiki
+
+- **plan 调用展开**:`renderCall` 改为 typed Component 渲染;折叠仍只显示标题,展开使用 `Container + Markdown` 呈现完整计划,普通正文为 `toolOutput`,heading/list/code 等沿用标准 Markdown theme,`revises` 保持 dim。registerTool 补齐 params/details 泛型并移除不安全的 Text-only lastComponent 假设。
+- **plan 对话框/结果**:Context 副标题与 statusline 精度对齐为 `Context 29.4% of 200k`(无窗口时省略后半);决策行升为 normal text,`Saved to` 降 dim,stale `No approval was pending` 改 warning。历史 malformed decision/path 会安全回退到既有模型文本。
+- **deepwiki**:question/page 显示先压缩空白再截断;折叠摘要从 accent 降为 `toolOutput`,expand hint 并到同一逻辑行。结构/page title 摘要统一单行并限 180 字符;旧会话中的 malformed title/requestedPage/errorMessage 不再导致渲染异常。新增独立 deepwiki renderer 测试,未改键名实现(WP7 范围)。
+
 ### 测试状态
 
 - 已更新断言:`test/tool-execution-component.test.ts`(rail 空行、todo 组摘要);`test/edit-tool-no-full-redraw.test.ts` 两个用例(组件 `setExpanded(true)` 保持大 diff 断言意图,另补折叠态断言:含前部行、不含 `line 950 changed`、含 `more lines`);`test/todo-render.test.ts`(单复数、subject 预览、真实/流式 id、展开逐任务、依赖、限界、create/delete/create_many 摘要);`test/todo-extension.test.ts`(逐任务模型文案)。
+- WP6 聚焦测试已跑绿:plan-render + deepwiki-render 共 19;覆盖 Markdown 展开/折叠 streaming args、Context 窗口文案、结果颜色层级、question whitespace、inline hint、窄宽度、历史摘要限界与 malformed details。
 - WP5 聚焦测试已跑绿:question-dialog/results/schema/state/render 共 38;新增 `test/question-render.test.ts`,覆盖展开问题、取消/澄清进度与部分答案、current/legacy error、malformed/超长历史数据、五项 multi 选择和空 header fallback。
 - WP4 聚焦测试已跑绿:`subagent-render` 32;覆盖失败行折叠/展开与长错误换行、句边界摘录、live intent 限界、分钟边界、状态大小写、`ctx: `、运行 cost、Activity 对齐、Report 正文色和序号风格。
 - WP3 聚焦测试已跑绿:`todo-render` 19、`todo-extension` 69、`tool-execution-component` 31。
@@ -126,20 +133,7 @@ Owner 在 0.82.6 发布后截图指出 `todo create_many` 的工具行不美观(
 
 ## 五、未完成工作包的实施方案
 
-以下 file:line 以当前工作区为准(WP1–WP5 的改动可能使个别行号略移,先 grep 定位)。每个 WP 完成后:跑该扩展的 `test/<name>-*.test.ts` 迭代至绿,再 `tsgo --noEmit` + `npx biome check`。
-
-### WP6 plan + deepwiki
-
-plan(`src/extensions/plan/view.ts`、`test/plan-render.test.ts`):
-1. 展开正文(view.ts:53-62):逐行 dim 纯文本 → `Markdown` 渲染(import getMarkdownTheme,参照 subagent Report;考虑 revises 行保持 dim)。无需加截断(计划是要读的),但若 Markdown 组件需要宽度处理注意 Text→Component 的返回类型变化(renderCall 返回 Component,现在是拼 string 进 Text——需要改成 Container)。
-2. 结果行(view.ts:86-94):决策行(`Compacting context, then executing`)是主信息,升为正常色;`Saved to <path>` 降 dim(路径仍 `shortenPlanPath`)。
-3. Context 行(view.ts:30-34):`Context now 29% full` → 与 statusline 一致的 `Context 29.4% of 200k`(statusline/index.ts:207 格式为 `CTX 42.3%/200k`,对话框里可稍展开;拿得到窗口大小就带上,拿不到就 `Context 29.4%`)。
-4. cancelled 的 `No approval was pending` 用 warning 而非 dim(view.ts:67-72 DECISION_SUMMARY 与 :86-94 的着色处)。
-
-deepwiki(`src/extensions/deepwiki/render.ts`):
-1. :136 headline question:先 `\s+→" "` 压缩再 `truncateText(…, 64)`。
-2. :169-171 折叠摘要 accent → toolOutput;`(ctrl+o to expand)` 从独立行并入摘要行尾 ` (ctrl+o to expand)`(dim,参照 tool-group 行尾风格),或直接复用统一 hint 措辞。
-3. 检查有无 deepwiki 渲染测试(评审未见,可能无;有则适配)。
+以下 file:line 以当前工作区为准(WP1–WP6 的改动可能使个别行号略移,先 grep 定位)。每个 WP 完成后:跑该扩展的 `test/<name>-*.test.ts` 迭代至绿,再 `tsgo --noEmit` + `npx biome check`。
 
 ### WP7 键名 hint 统一
 

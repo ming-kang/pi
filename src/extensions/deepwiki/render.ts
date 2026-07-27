@@ -24,6 +24,10 @@ function truncateText(text: string, maxLength: number, options?: { word?: boolea
 	return `${text.slice(0, maxLength - 3)}...`;
 }
 
+function singleLine(text: unknown): string {
+	return typeof text === "string" ? text.replace(/\s+/g, " ").trim() : "";
+}
+
 function firstText(result: AgentToolResult<DeepWikiDetails>): string {
 	for (const part of result.content ?? []) {
 		if (part.type === "text" && typeof part.text === "string") return part.text;
@@ -41,13 +45,19 @@ function firstContentLine(text: string): string {
 }
 
 function formatPageList(pages: string[], maxItems = 4): string {
-	const shown = pages.slice(0, maxItems).join(", ");
+	const shown = pages.slice(0, maxItems).map(singleLine).join(", ");
 	return pages.length > maxItems ? `${shown}...` : shown;
 }
 
 function pageTitlesFromResult(text: string, details: DeepWikiDetails | undefined): string[] {
-	if (details?.pageTitles?.length) return details.pageTitles;
-	if (details?.sectionTitles?.length) return details.sectionTitles;
+	if (Array.isArray(details?.pageTitles)) {
+		const titles = details.pageTitles.filter((title) => typeof title === "string");
+		if (titles.length) return titles;
+	}
+	if (Array.isArray(details?.sectionTitles)) {
+		const titles = details.sectionTitles.filter((title) => typeof title === "string");
+		if (titles.length) return titles;
+	}
 	const fromContent = extractContentPages(text);
 	if (fromContent.length) return fromContent;
 	return extractStructureSections(text);
@@ -61,11 +71,11 @@ function summarizeStructure(text: string, details: DeepWikiDetails | undefined):
 }
 
 function summarizeContents(text: string, details: DeepWikiDetails | undefined): string {
-	if (details?.requestedPage) {
+	if (typeof details?.requestedPage === "string" && details.requestedPage.trim()) {
 		const position =
 			details.pageIndex !== undefined && details.pageCount ? `${details.pageIndex}/${details.pageCount} · ` : "";
 		const cut = details.truncatedChars ? " (truncated)" : "";
-		return `Page ${position}${details.requestedPage}${cut}`;
+		return `Page ${position}${singleLine(details.requestedPage)}${cut}`;
 	}
 	const pages = pageTitlesFromResult(text, details);
 	if (details?.shownPages !== undefined) {
@@ -95,10 +105,12 @@ function summarizeQuestion(text: string): string {
 }
 
 function summarizeCollapsed(text: string, details: DeepWikiDetails | undefined): string {
-	if (details?.action === "structure") return summarizeStructure(text, details);
-	if (details?.action === "contents") return summarizeContents(text, details);
-	if (details?.action === "question") return summarizeQuestion(text);
-	return truncateText(firstContentLine(text), 120);
+	let summary: string;
+	if (details?.action === "structure") summary = summarizeStructure(text, details);
+	else if (details?.action === "contents") summary = summarizeContents(text, details);
+	else if (details?.action === "question") summary = summarizeQuestion(text);
+	else summary = truncateText(firstContentLine(text), 120);
+	return truncateText(singleLine(summary), 180, { word: true });
 }
 
 function repoLabel(repoName: DeepWikiParams["repoName"] | undefined): string {
@@ -133,9 +145,9 @@ export function renderDeepWikiCall(args: DeepWikiParams, theme: Theme): Componen
 	line += theme.fg("muted", args.action);
 	line += ` ${theme.fg("accent", repoLabelForCall(args.repoName))}`;
 	if (args.action === "question" && args.question) {
-		line += ` ${theme.fg("dim", truncateText(args.question, 64))}`;
+		line += ` ${theme.fg("dim", truncateText(singleLine(args.question), 64))}`;
 	} else if (args.action === "contents" && args.page !== undefined) {
-		line += ` ${theme.fg("dim", truncateText(String(args.page), 40))}`;
+		line += ` ${theme.fg("dim", truncateText(singleLine(String(args.page)), 40))}`;
 	}
 	return new Text(line, 0, 0);
 }
@@ -154,22 +166,22 @@ export function renderDeepWikiResult(
 	isError: boolean,
 ): Component {
 	if (options.isPartial) {
-		const repo = result.details?.repoName;
+		const repo = typeof result.details?.repoName === "string" ? singleLine(result.details.repoName) : "";
 		const label = repo ? `Querying ${repo}...` : "Querying...";
 		return new Text(theme.fg("warning", label), 0, 0);
 	}
 
 	const text = firstText(result);
-	if (isError || result.details?.errorMessage) {
-		const msg = result.details?.errorMessage ?? firstContentLine(text);
-		const line = truncateText(msg, 200);
+	const errorMessage = typeof result.details?.errorMessage === "string" ? result.details.errorMessage : undefined;
+	if (isError || errorMessage) {
+		const line = truncateText(errorMessage ?? firstContentLine(text), 200);
 		return new Text(theme.fg("error", `failed · ${line}`), 0, 0);
 	}
 
 	if (!options.expanded) {
-		const summary = theme.fg("accent", summarizeCollapsed(text, result.details));
-		const hint = `${theme.fg("muted", "(")}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
-		return new Text(`${summary}\n${hint}`, 0, 0);
+		const summary = theme.fg("toolOutput", summarizeCollapsed(text, result.details));
+		const hint = `${theme.fg("muted", " (")}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+		return new Text(`${summary}${hint}`, 0, 0);
 	}
 
 	return markdownBlock(text);

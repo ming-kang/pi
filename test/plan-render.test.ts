@@ -1,59 +1,119 @@
-import { describe, expect, test } from "vitest";
-import type { AgentToolResult } from "../src/core/extensions/types.ts";
+import { beforeAll, describe, expect, test } from "vitest";
+import type { AgentToolResult, ExtensionContext } from "../src/core/extensions/types.ts";
 import type { ExitPlanDetails } from "../src/extensions/plan/schema.ts";
-import { formatExitPlanCall, formatExitPlanResult, shortenPlanPath } from "../src/extensions/plan/view.ts";
-import type { Theme } from "../src/modes/interactive/theme/theme.ts";
+import {
+	formatApprovalSubtitle,
+	formatExitPlanResult,
+	renderExitPlanCall,
+	shortenPlanPath,
+} from "../src/extensions/plan/view.ts";
+import { initTheme, type Theme } from "../src/modes/interactive/theme/theme.ts";
+import { stripAnsi } from "../src/utils/ansi.ts";
 
 const theme = {
 	fg: (_color: string, text: string) => text,
 	bold: (text: string) => text,
 } as unknown as Theme;
 
-const PLAN_BODY = "# Subagent regression fix\n\n## Goal\n\nFix the five issues.";
+const recordingTheme = {
+	fg: (color: string, text: string) => `[${color}]${text}[/${color}]`,
+	bold: (text: string) => text,
+} as unknown as Theme;
+
+const PLAN_BODY = "# Subagent regression fix\n\n## Goal\n\nFix the **five** issues.\n\n- Preserve behavior";
 
 function result(details: ExitPlanDetails | undefined, text = "Model-facing text."): AgentToolResult<ExitPlanDetails> {
 	return { content: [{ type: "text", text }], details } as AgentToolResult<ExitPlanDetails>;
 }
 
-describe("formatExitPlanCall", () => {
+function renderedCall(
+	args: Parameters<typeof renderExitPlanCall>[0],
+	expanded: boolean,
+	width = 100,
+): { lines: string[]; text: string } {
+	const lines = renderExitPlanCall(args, theme, expanded)
+		.render(width)
+		.map((line) => stripAnsi(line).trimEnd());
+	return { lines, text: lines.join("\n") };
+}
+
+function context(percent: number | null, contextWindow: number): ExtensionContext {
+	return {
+		getContextUsage: () => ({ tokens: percent == null ? null : 58_800, percent, contextWindow }),
+	} as unknown as ExtensionContext;
+}
+
+beforeAll(() => initTheme("dark"));
+
+describe("renderExitPlanCall", () => {
 	test("collapsed shows the title and never the plan body", () => {
-		const line = formatExitPlanCall({ title: "Fix subagent regression", plan: PLAN_BODY }, theme, false);
-		expect(line).toBe("exit_plan Fix subagent regression");
-		expect(line).not.toContain("Goal");
-		expect(line).not.toContain("\n");
+		const output = renderedCall({ title: "Fix subagent regression", plan: PLAN_BODY }, false);
+		expect(output.lines).toEqual(["exit_plan Fix subagent regression"]);
+		expect(output.text).not.toContain("Goal");
 	});
 
-	test("expanded appends the plan body and the revision target", () => {
-		const text = formatExitPlanCall(
-			{ title: "Fix subagent regression", plan: PLAN_BODY, revises: "01-old.md" },
-			theme,
-			true,
-		);
-		expect(text).toContain("revises 01-old.md");
-		expect(text).toContain("## Goal");
-		expect(text).toContain("Fix the five issues.");
+	test("expanded renders the plan as Markdown and keeps the revision target dim", () => {
+		const output = renderedCall({ title: "Fix subagent regression", plan: PLAN_BODY, revises: "01-old.md" }, true);
+		expect(output.text).toContain("revises 01-old.md");
+		expect(output.text).toContain("Goal");
+		expect(output.text).toContain("Fix the five issues.");
+		expect(output.text).toContain("- Preserve behavior");
+		expect(output.text).not.toContain("## Goal");
+		expect(output.text).not.toContain("**five**");
 	});
 
 	test("survives partial args while the call streams", () => {
-		expect(formatExitPlanCall(undefined, theme, false)).toBe("exit_plan …");
-		expect(formatExitPlanCall({}, theme, true)).toBe("exit_plan …");
-		expect(formatExitPlanCall({ title: 42, plan: null }, theme, true)).toBe("exit_plan …");
+		expect(renderedCall(undefined, false).text).toBe("exit_plan …");
+		expect(renderedCall({}, true).text).toBe("exit_plan …");
+		expect(renderedCall({ title: 42, plan: null }, true).text).toBe("exit_plan …");
+	});
+});
+
+describe("formatApprovalSubtitle", () => {
+	test("shows precise context pressure and the model window", () => {
+		expect(formatApprovalSubtitle(context(29.37, 200_000))).toBe("Context 29.4% of 200k");
+	});
+
+	test("omits unavailable usage or window data", () => {
+		expect(formatApprovalSubtitle(context(null, 200_000))).toBeUndefined();
+		expect(formatApprovalSubtitle(context(29.37, 0))).toBe("Context 29.4%");
 	});
 });
 
 describe("formatExitPlanResult", () => {
-	test("reports where the plan landed and what happens next", () => {
+	test("makes the decision primary and the saved path secondary", () => {
 		const text = formatExitPlanResult(
 			result({ decision: "compactAndExecute", title: "t", planPath: "/tmp/plans/sid/01-fix.md" }),
-			theme,
+			recordingTheme,
 		);
-		expect(text).toContain("Saved to /tmp/plans/sid/01-fix.md");
-		expect(text).toContain("Compacting context, then executing");
+		expect(text).toBe(
+			"[dim]Saved to /tmp/plans/sid/01-fix.md[/dim]\n[text]Compacting context, then executing[/text]",
+		);
 	});
 
 	test("omits the path for decisions that save nothing", () => {
 		const text = formatExitPlanResult(result({ decision: "keepPlanning", title: "t" }), theme);
 		expect(text).toBe("Still planning");
+	});
+
+	test("renders a stale cancellation as a warning", () => {
+		const text = formatExitPlanResult(result({ decision: "cancelled", title: "t" }), recordingTheme);
+		expect(text).toBe("[warning]No approval was pending[/warning]");
+	});
+
+	test("falls back safely for malformed historical details", () => {
+		const unknownDecision = result(
+			{ decision: "future", title: "t" } as unknown as ExitPlanDetails,
+			"Historical plan result",
+		);
+		expect(formatExitPlanResult(unknownDecision, theme)).toBe("Historical plan result");
+
+		const invalidPath = result({
+			decision: "execute",
+			title: "t",
+			planPath: 42,
+		} as unknown as ExitPlanDetails);
+		expect(formatExitPlanResult(invalidPath, theme)).toBe("Executing with full context");
 	});
 
 	test("never echoes the model-facing result text when details are present", () => {

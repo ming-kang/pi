@@ -53,7 +53,7 @@ import {
 	setActivePlanSession,
 } from "./state.ts";
 import { savePlanFile } from "./storage.ts";
-import { formatApprovalSubtitle, formatExitPlanCall, formatExitPlanResult } from "./view.ts";
+import { formatApprovalSubtitle, formatExitPlanResult, renderExitPlanCall } from "./view.ts";
 
 interface PendingCompact {
 	title: string;
@@ -181,7 +181,7 @@ export default function plan(pi: ExtensionAPI): void {
 		updateStatus(ctx);
 	}
 
-	pi.registerTool({
+	pi.registerTool<typeof ExitPlanParamsSchema, ExitPlanDetails>({
 		name: EXIT_PLAN_TOOL_NAME,
 		label: EXIT_PLAN_TOOL_LABEL,
 		description: EXIT_PLAN_TOOL_DESCRIPTION,
@@ -295,15 +295,11 @@ export default function plan(pi: ExtensionAPI): void {
 		},
 
 		renderCall(args, theme, context) {
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(formatExitPlanCall(args, theme, context.expanded));
-			return text;
+			return renderExitPlanCall(args, theme, context.expanded);
 		},
 
-		renderResult(result, _options, theme, context) {
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(formatExitPlanResult(result, theme));
-			return text;
+		renderResult(result, _options, theme) {
+			return new Text(formatExitPlanResult(result, theme), 0, 0);
 		},
 	});
 
