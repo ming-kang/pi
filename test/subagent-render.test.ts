@@ -99,6 +99,22 @@ describe("subagent rendering", () => {
 		expect(output).toContain("to expand");
 	});
 
+	it("formats minute boundaries without emitting sixty seconds", () => {
+		const output = collapsed(
+			details({
+				runs: [
+					run({ startedAt: 0, endedAt: 75_000 }),
+					run({ id: "subagent-2", startedAt: 0, endedAt: 119_600 }),
+					run({ id: "subagent-3", startedAt: 0, endedAt: 59_600 }),
+				],
+			}),
+		);
+		expect(output).toContain("1m 15s");
+		expect(output).toContain("2m 0s");
+		expect(output).toContain("1m 0s");
+		expect(output).not.toMatch(/\b60s\b/u);
+	});
+
 	it("keeps the settled parallel footer to whole-call numbers", () => {
 		const output = collapsed(
 			details({
@@ -143,6 +159,17 @@ describe("subagent rendering", () => {
 		expect(output).not.toMatch(/^completed$/mu);
 		expect(output).not.toContain("Explorer · Map the code");
 		expect(output).toContain("120 tok · 3 tool uses · 1.5s");
+	});
+
+	it("uses sentence boundaries for completed batch excerpts", () => {
+		const first = "The renderer keeps this complete sentence before trimming the rest of the successful report.";
+		const output = collapsed(
+			details({
+				runs: [run({ finalOutput: `${first} Second sentence should stay out of the compact row.` })],
+			}),
+		);
+		expect(output.replace(/\s+/gu, " ")).toContain(first);
+		expect(output).not.toContain("Second sentence");
 	});
 
 	it("preserves literal truncation marker text in completed excerpts", () => {
@@ -206,6 +233,26 @@ describe("subagent rendering", () => {
 		expect(output).not.toContain("Running commands");
 	});
 
+	it("bounds live intent text in single and batch rows", () => {
+		const currentActivity = `Inspecting ${"renderer ".repeat(20)}`;
+		const activeRun = run({
+			status: "running",
+			currentActivity,
+			finalOutput: "",
+			usage: { ...run().usage, toolUses: 1 },
+		});
+		const singleOutput = collapsed(
+			details({ mode: "single", status: "running", endedAt: undefined, runs: [activeRun] }),
+			true,
+		);
+		const batchOutput = collapsed(details({ status: "running", endedAt: undefined, runs: [activeRun] }), true);
+		for (const output of [singleOutput, batchOutput]) {
+			expect(output).toContain("Inspecting renderer");
+			expect(output).toContain("…");
+			expect(output).not.toContain(currentActivity);
+		}
+	});
+
 	it("shows per-run live tool and context metrics for parallel work", () => {
 		const runningDetails = details({
 			status: "running",
@@ -223,7 +270,7 @@ describe("subagent rendering", () => {
 						cacheRead: 0,
 						cacheWrite: 0,
 						totalTokens: 1_250,
-						cost: 0,
+						cost: 0.012,
 						contextTokens: 1_250,
 					},
 				}),
@@ -248,7 +295,7 @@ describe("subagent rendering", () => {
 			],
 		});
 		const output = collapsed(runningDetails, true);
-		expect(output).toContain("3 tool uses · ctx:1.3k");
+		expect(output).toContain("3 tool uses · ctx: 1.3k · $0.012");
 		expect(output).toContain("Reviewer · Review the renderer");
 		expect(output).toContain("0 tool uses");
 		expect(output).not.toContain("tokens");
@@ -263,7 +310,8 @@ describe("subagent rendering", () => {
 			false,
 		);
 		const expandedOutput = component.render(120).join("\n");
-		expect(expandedOutput).toContain("3 tool uses · ctx:1.3k");
+		expect(expandedOutput).toContain("3 tool uses · ctx: 1.3k");
+		expect(expandedOutput).toContain("$0.012");
 		// The batch trailer must not quote the cache-inflated aggregate
 		// while any run is still in flight.
 		expect(expandedOutput).not.toContain("120 tok");
@@ -285,25 +333,55 @@ describe("subagent rendering", () => {
 		expect(output).toContain("+1 more");
 	});
 
-	it("surfaces failures on the run line", () => {
-		const output = collapsed(
-			details({
-				status: "failed",
-				runs: [
-					run({ finalOutput: "First done." }),
-					run({
-						agent: "reviewer",
-						description: "Review it",
-						status: "failed",
-						error: "boom",
-						finalOutput: "",
-					}),
-				],
-			}),
-		);
-		expect(output).toContain("Explorer · Map the code");
-		expect(output).toContain("Reviewer · Review it");
-		expect(output).toContain("— boom");
+	it("puts batch failure reasons on a bounded, aligned line in collapsed and expanded views", () => {
+		const omitted = "OMITTED_ERROR_TAIL";
+		const error = `${"failure context ".repeat(20)}${omitted}`;
+		const failedDetails = details({
+			status: "failed",
+			runs: [
+				run({ finalOutput: "First done." }),
+				run({
+					agent: "reviewer",
+					description: "Review it",
+					status: "failed",
+					error,
+					finalOutput: "",
+				}),
+			],
+		});
+		const assertWrappedError = (lines: string[], failureIndex: number) => {
+			const wrapped: string[] = [];
+			for (let index = failureIndex + 1; index < lines.length; index++) {
+				const line = lines[index] ?? "";
+				if (!line.trim() || !line.startsWith("      ")) break;
+				wrapped.push(line);
+			}
+			expect(wrapped.length).toBeGreaterThan(1);
+			expect(wrapped.every((line) => line.startsWith("      "))).toBe(true);
+			const excerpt = wrapped.map((line) => line.trim()).join(" ");
+			expect(excerpt).toMatch(/…$/u);
+			expect(excerpt).not.toContain(omitted);
+		};
+
+		const output = collapsed(failedDetails);
+		const collapsedLines = output.split("\n");
+		const collapsedFailure = collapsedLines.findIndex((line) => line.includes("× 2 · Reviewer · Review it"));
+		expect(collapsedFailure).toBeGreaterThanOrEqual(0);
+		assertWrappedError(collapsedLines, collapsedFailure);
+		expect(collapsedLines[collapsedFailure]).not.toContain("—");
+
+		const expanded = renderSubagentResult(
+			{ content: [{ type: "text", text: "failed" }], details: failedDetails },
+			{ expanded: true, isPartial: false },
+			theme,
+			true,
+		)
+			.render(120)
+			.join("\n");
+		const expandedLines = expanded.split("\n");
+		const expandedFailure = expandedLines.findIndex((line) => line.includes("× 2 · Reviewer · Review it"));
+		expect(expandedFailure).toBeGreaterThanOrEqual(0);
+		assertWrappedError(expandedLines, expandedFailure);
 	});
 
 	it("drops markdown tables and rules from collapsed excerpts", () => {
@@ -359,9 +437,19 @@ describe("subagent rendering", () => {
 			}),
 			true,
 		);
-		expect(queuedOutput).toContain("queued");
+		expect(queuedOutput).toContain("Queued");
 		expect(queuedOutput).not.toContain("Initializing…");
 		expect(startingOutput).toContain("Initializing…");
+
+		const abortedOutput = collapsed(
+			details({
+				mode: "single",
+				status: "aborted",
+				runs: [run({ status: "aborted", error: undefined, finalOutput: "" })],
+			}),
+		);
+		expect(abortedOutput).toContain("Aborted");
+		expect(abortedOutput).not.toMatch(/^aborted$/mu);
 	});
 
 	it("labels idle gaps between activities like the streaming state", () => {
@@ -428,11 +516,36 @@ describe("subagent rendering", () => {
 		// Success rows are quiet one-liners: no glyph, no result echo, and
 		// durations only when they explain where the time went.
 		expect(output).toContain("Run ls -la");
+		const activityLines = output.split("\n");
+		expect(activityLines.find((line) => line.includes("Run ls -la"))?.startsWith("  ")).toBe(true);
+		expect(activityLines.find((line) => line.includes("read entry.ts"))?.startsWith("  ")).toBe(true);
 		expect(output).not.toContain("✓ Run ls -la");
 		expect(output).not.toContain("total 383");
 		expect(output).not.toContain("[Output truncated");
 		expect(output).not.toContain("· 1.2s");
 		expect(output).toContain("read entry.ts · 12s");
+	});
+
+	it("renders report prose with the tool output base color", () => {
+		const colors: string[] = [];
+		const trackingTheme = {
+			...theme,
+			fg: (color: string, text: string) => {
+				colors.push(color);
+				return text;
+			},
+		} as Theme;
+		const component = renderSubagentResult(
+			{
+				content: [{ type: "text", text: "done" }],
+				details: details({ mode: "single", runs: [run({ finalOutput: "Plain report prose." })] }),
+			},
+			{ expanded: true, isPartial: false },
+			trackingTheme,
+			false,
+		);
+		component.render(120);
+		expect(colors).toContain("toolOutput");
 	});
 
 	it("numbers the expanded batch contents and matches them to section headers", () => {
@@ -453,8 +566,8 @@ describe("subagent rendering", () => {
 		const output = component.render(120).join("\n");
 		expect(output).toContain("✓ 1 · Explorer · Map the code");
 		expect(output).toContain("✓ 2 · Reviewer · Review it");
-		expect(output).toContain("── 1 ✓ Explorer · Map the code");
-		expect(output).toContain("── 2 ✓ Reviewer · Review it");
+		expect(output).toContain("── 1 · ✓ Explorer · Map the code");
+		expect(output).toContain("── 2 · ✓ Reviewer · Review it");
 		expect(output).toContain("test/model · low · 60 tok");
 		expect(output).toContain("120 tok · 3 tool uses · 2 turns · 1.5s");
 		expect(output.match(/Report/gu)).toHaveLength(2);

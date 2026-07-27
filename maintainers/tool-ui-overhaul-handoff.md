@@ -1,7 +1,7 @@
 # 工具调用 UI 全面修复 — 交接文档
 
-> 状态:进行中,WP1–WP3 已完成并通过测试;WP4–WP8 未开始。
-> 本文档不随发布提交,仅供接力会话使用,本轮开发全部完成后删除。owner 已要求将 WP3 与本次文档更新一同提交;除此之外不要主动 commit。
+> 状态:进行中,WP1–WP4 已完成并通过测试;WP5–WP8 未开始。
+> 本文档不随发布提交,仅供接力会话使用,本轮开发全部完成后删除。owner 当前未要求提交 WP4——遵守 AGENTS.md:不要主动 commit。
 
 ## 一、动机与背景
 
@@ -62,13 +62,13 @@ Owner 在 0.82.6 发布后截图指出 `todo create_many` 的工具行不美观(
 | WP1 | 壳层:theme 嵌套、│ rail、通用 Running 行、截断 helper | ✅ 完成 |
 | WP2 | 内置七工具 + bash-execution `!!` bug | ✅ 完成 |
 | WP3 | todo:create_many 内容化、摘要保 subject、展开逐任务、模型文案 | ✅ 完成 |
-| WP4 | subagent:截断策略、展开态一致性、杂项 | ⬜ 未开始 |
+| WP4 | subagent:截断策略、展开态一致性、杂项 | ✅ 完成 |
 | WP5 | question:调用行可展开、取消态、错误行、对话框 | ⬜ 未开始 |
 | WP6 | plan 正文 Markdown 化 + deepwiki 小修 | ⬜ 未开始 |
 | WP7 | 键名 hint 统一 | ⬜ 未开始 |
 | WP8 | 全量测试、docs、CHANGELOG、delta 登记 | ⬜ 未开始 |
 
-## 四、已完成明细(WP1–WP3)
+## 四、已完成明细(WP1–WP4)
 
 ### WP1 壳层(全部通过类型/lint/测试)
 
@@ -101,9 +101,17 @@ Owner 在 0.82.6 发布后截图指出 `todo create_many` 的工具行不美观(
 - **模型文案**:`create_many` 从只列 ids 改为逐任务 `#id: subject (pending)` 行,并修单条 batch 的 `task` 单数;schema、协议和 details 结构未变。
 - **范围选择**:未实现评审中的可选 `renderResult`;单独 todo 调用仍保留现有模型结果回显,避免在 owner 未拍板时扩大行为变化。
 
+### WP4 subagent
+
+- **批次摘要**:failed/aborted 的 error 从 run headline 移到紧随其后的独立 error 色行,按 agent label 做 hanging indent;新增 `IndentedText` 让 200 字符错误摘录换行后仍对齐,窄宽度下也不越界。completed 摘录升到 96 字符并使用句边界;`leadingSentences` 的 hard fallback 修为真正带 `…` 的诚实截断。
+- **运行态**:single/batch 的 intent 都按 100 字符限界;batch 运行行补 cost,与 single 对称。所有 `ctx:` 统一为 `ctx: `。
+- **状态与时长**:queued/无输出 settled 使用 `statusWord`;时长从四舍五入后的 60s 起显示分钟,并避免 `1m 60s`/裸 `60s` 边界。
+- **展开态层级**:Activity 成功行补两格 marker 占位;Report Markdown 默认正文降为 `toolOutput`;section header 统一为 `── N · ✓ Agent`;theme 嵌套修复已覆盖折叠提示括号,未重复包色。
+
 ### 测试状态
 
 - 已更新断言:`test/tool-execution-component.test.ts`(rail 空行、todo 组摘要);`test/edit-tool-no-full-redraw.test.ts` 两个用例(组件 `setExpanded(true)` 保持大 diff 断言意图,另补折叠态断言:含前部行、不含 `line 950 changed`、含 `more lines`);`test/todo-render.test.ts`(单复数、subject 预览、真实/流式 id、展开逐任务、依赖、限界、create/delete/create_many 摘要);`test/todo-extension.test.ts`(逐任务模型文案)。
+- WP4 聚焦测试已跑绿:`subagent-render` 32;覆盖失败行折叠/展开与长错误换行、句边界摘录、live intent 限界、分钟边界、状态大小写、`ctx: `、运行 cost、Activity 对齐、Report 正文色和序号风格。
 - WP3 聚焦测试已跑绿:`todo-render` 19、`todo-extension` 69、`tool-execution-component` 31。
 - WP1/WP2 既有聚焦测试已跑绿:tool-execution-component、bash-tool-rendering、bash-execution-width、edit-tool-no-full-redraw、edit-tool-legacy-input、theme-picker、theme-export、syntax-highlight、export-html-whitespace、export-html-skill-block、subagent-render、todo-render、plan-render。
 - **Windows 本地既有失败(非本次改动,勿修)**:`test/tools.test.ts` 的 3 个——edit EACCES ×2(POSIX 权限语义)、grep "flag-like patterns"(rg 把 `C:\Users` 的 `\U` 当 hex escape)。全部在 execute 路径,本次 diff 未触及;AGENTS.md 明言 Windows 平台差异以 Ubuntu CI 为权威。
@@ -111,23 +119,7 @@ Owner 在 0.82.6 发布后截图指出 `todo create_many` 的工具行不美观(
 
 ## 五、未完成工作包的实施方案
 
-以下 file:line 以当前工作区为准(WP1–WP3 的改动可能使个别行号略移,先 grep 定位)。每个 WP 完成后:跑该扩展的 `test/<name>-*.test.ts` 迭代至绿,再 `tsgo --noEmit` + `npx biome check`。
-
-### WP4 subagent
-
-文件:`src/extensions/subagent/render.ts`(唯一渲染源,580 行)、`test/subagent-render.test.ts`。
-
-1. **失败原因独立行**(核心,截图问题):`runLine`(:241-260)现在把 failed/aborted 的 `run.error` 用 `excerpt(…, 64)` 拼在 ` — ` 后。目标:失败/中止的 run 行不再拼 error,改为紧随其后的独立行(缩进对齐,error 色,`excerpt(error, 200)` 或 `leadingSentences`),折叠批次与展开目录都生效。成功摘录保留在行内但升到 96 并走 `leadingSentences`(:121-131 现仅折叠单委派用)。
-2. **运行中 detail 截断**(:245 与 :286):`runIntent` 返回值无上限,统一 `excerpt(…, 100)`(与 LIVE_TAIL_LIMIT 一致)。
-3. **formatDuration**(:338-347):阈值 90 → 60(60s 起显示 `1m 0s`)。
-4. **裸状态字符串**(:280 queued、:303 settled 无输出):改用 `statusWord`(:212-225)。
-5. **`ctx:` 空格**(:235-239 runProgressText 与 :309-320 collapsedUsageText 等处):`ctx:24k` → `ctx: 24k`,与 `cwd: x` 一致。全文件 grep `ctx:` 统一。
-6. **Activity 对齐**(:447-457):成功行补两格前缀空位,与 `× `/`› ` 行左缘对齐。
-7. **Report 亮度**(:481-486):`new Markdown(run.finalOutput, 0, 0, getMarkdownTheme())` 传 defaultTextStyle 至 toolOutput 灰阶(查 Markdown 组件签名;question/dialog.ts:438 有用例)。
-8. **序号风格统一**:目录行(:565,`✓ 1 · Explorer`)与 section 头(:422-431,`── 1 ✓ Explorer`)统一为 `1 · ` 一种(建议 section 头改 `── 1 · ✓ Explorer …`)。
-9. 批次 run 行运行中补 `$`(与单委派 :289 对称)或统一去掉——二选一,建议补上。
-10. 验证 :553 括号颜色已被 theme 修复(视觉验证即可,勿再包一层)。
-11. 测试:subagent-render.test.ts:253(`0 tool uses` 恒显)、:514-531(truncation notice)等,逐条适配。
+以下 file:line 以当前工作区为准(WP1–WP4 的改动可能使个别行号略移,先 grep 定位)。每个 WP 完成后:跑该扩展的 `test/<name>-*.test.ts` 迭代至绿,再 `tsgo --noEmit` + `npx biome check`。
 
 ### WP5 question
 
