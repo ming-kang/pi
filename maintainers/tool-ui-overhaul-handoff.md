@@ -1,7 +1,7 @@
 # 工具调用 UI 全面修复 — 交接文档
 
-> 状态:进行中,WP1–WP6 已完成并通过测试;WP7–WP8 未开始。
-> 本文档不随发布提交,仅供接力会话使用,本轮开发全部完成后删除。owner 当前未要求提交 WP6——遵守 AGENTS.md:不要主动 commit。
+> 状态:进行中,WP1–WP7 已完成并通过测试;WP8 未开始。
+> 本文档不随发布提交,仅供接力会话使用,本轮开发全部完成后删除。owner 当前未要求提交 WP7——遵守 AGENTS.md:不要主动 commit。
 
 ## 一、动机与背景
 
@@ -65,10 +65,10 @@ Owner 在 0.82.6 发布后截图指出 `todo create_many` 的工具行不美观(
 | WP4 | subagent:截断策略、展开态一致性、杂项 | ✅ 完成 |
 | WP5 | question:调用行可展开、取消态、错误行、对话框 | ✅ 完成 |
 | WP6 | plan 正文 Markdown 化 + deepwiki 小修 | ✅ 完成 |
-| WP7 | 键名 hint 统一 | ⬜ 未开始 |
+| WP7 | 键名 hint 统一 | ✅ 完成 |
 | WP8 | 全量测试、docs、CHANGELOG、delta 登记 | ⬜ 未开始 |
 
-## 四、已完成明细(WP1–WP6)
+## 四、已完成明细(WP1–WP7)
 
 ### WP1 壳层(全部通过类型/lint/测试)
 
@@ -120,9 +120,16 @@ Owner 在 0.82.6 发布后截图指出 `todo create_many` 的工具行不美观(
 - **plan 对话框/结果**:Context 副标题与 statusline 精度对齐为 `Context 29.4% of 200k`(无窗口时省略后半);决策行升为 normal text,`Saved to` 降 dim,stale `No approval was pending` 改 warning。历史 malformed decision/path 会安全回退到既有模型文本。
 - **deepwiki**:question/page 显示先压缩空白再截断;折叠摘要从 accent 降为 `toolOutput`,expand hint 并到同一逻辑行。结构/page title 摘要统一单行并限 180 字符;旧会话中的 malformed title/requestedPage/errorMessage 不再导致渲染异常。新增独立 deepwiki renderer 测试,未改键名实现(WP7 范围)。
 
+### WP7 键名 hint
+
+- **共享首键 label**:`keybinding-hints.ts` 新增 `formatKeyLabel`/`keyLabel`;compact hint 只显示第一项 configured binding,并把 Esc/Enter/Tab/Space、方向键、PgUp/PgDn 和 modifiers 美化为人类可读形式。literal `+`/`/` 不会被误当分隔符;保留既有 `keyText`/`keyHint` 全键语义,避免全局无关 UI 变化。helper 支持 injected manager 与 honest fallback。
+- **extension selector**:footer 改为 `↑/↓ navigate • Enter select • Esc cancel`,自定义 bindings 的 label 与实际 global manager 输入一致;unbound action 自动省略。selector 的既有 j/k/newline 兼容行为未在纯展示包中改动。
+- **question dialog**:所有 question/review/notes/custom/discuss hint 收敛为 `key action` + ` • `;方向键只显示首键并用箭头,取消键不再列 `escape/ctrl+c`。dialog controls 使用 injected manager;嵌入 Editor 的 submit hint 特意读取 Editor 实际使用的 global manager。无 Tab 时 warning 使用无键 fallback,窄宽度不会越界。
+
 ### 测试状态
 
 - 已更新断言:`test/tool-execution-component.test.ts`(rail 空行、todo 组摘要);`test/edit-tool-no-full-redraw.test.ts` 两个用例(组件 `setExpanded(true)` 保持大 diff 断言意图,另补折叠态断言:含前部行、不含 `line 950 changed`、含 `more lines`);`test/todo-render.test.ts`(单复数、subject 预览、真实/流式 id、展开逐任务、依赖、限界、create/delete/create_many 摘要);`test/todo-extension.test.ts`(逐任务模型文案)。
+- WP7 聚焦测试已跑绿:keybinding-hints、extension-selector、question-dialog、keybindings-migration 共 29;覆盖别名/符号/modifier/首键/injected manager、统一文案、各 question mode、custom binding 输入一致性及窄宽度。
 - WP6 聚焦测试已跑绿:plan-render + deepwiki-render 共 19;覆盖 Markdown 展开/折叠 streaming args、Context 窗口文案、结果颜色层级、question whitespace、inline hint、窄宽度、历史摘要限界与 malformed details。
 - WP5 聚焦测试已跑绿:question-dialog/results/schema/state/render 共 38;新增 `test/question-render.test.ts`,覆盖展开问题、取消/澄清进度与部分答案、current/legacy error、malformed/超长历史数据、五项 multi 选择和空 header fallback。
 - WP4 聚焦测试已跑绿:`subagent-render` 32;覆盖失败行折叠/展开与长错误换行、句边界摘录、live intent 限界、分钟边界、状态大小写、`ctx: `、运行 cost、Activity 对齐、Report 正文色和序号风格。
@@ -133,15 +140,7 @@ Owner 在 0.82.6 发布后截图指出 `todo create_many` 的工具行不美观(
 
 ## 五、未完成工作包的实施方案
 
-以下 file:line 以当前工作区为准(WP1–WP6 的改动可能使个别行号略移,先 grep 定位)。每个 WP 完成后:跑该扩展的 `test/<name>-*.test.ts` 迭代至绿,再 `tsgo --noEmit` + `npx biome check`。
-
-### WP7 键名 hint 统一
-
-文件:`src/modes/interactive/components/keybinding-hints.ts`、`extension-selector.ts:75-84`、`question/dialog.ts:59-60`。
-
-- 现状:`keyText` 渲染原始键 id 小写全列;dialog.ts:59-60 直接 `getKeys().join("/")` → `escape/ctrl+c`、`left/ctrl+b/right/ctrl+f`。
-- 目标:hint 只取**首键**并美化大小写(`escape`→`Esc`、`left`→`←` 或 `Left`);多键绑定不再全列。在 keybinding-hints.ts 加导出(如 `keyLabel(action)`),extension-selector 与 question dialog 接入。两对话框 hint 语法(`key desc` 双空格 vs `key to verb` ` • `)统一成一种(建议 ` • ` + `key verb`)。
-- 注意:keybinding-hints.ts 会成为新 hybrid 文件(见 WP8);extension-selector.ts 已在 hybrid 登记。改动会波及 plan 审批框、question 对话框、trust/config 等所有 extension-selector 用户,测试 test/extension-selector.test.ts。
+以下 file:line 以当前工作区为准(WP1–WP7 的改动可能使个别行号略移,先 grep 定位)。
 
 ### WP8 收尾(必须完整执行)
 

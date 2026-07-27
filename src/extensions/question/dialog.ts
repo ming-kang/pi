@@ -1,5 +1,6 @@
 import { Editor, type EditorTheme, Markdown, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Keybinding, KeybindingsManager } from "../../core/keybindings.ts";
+import { keyLabel as configuredKeyLabel } from "../../modes/interactive/components/keybinding-hints.ts";
 import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
 import { ruleBorder, wrapWithPrefix } from "./dialog-primitives.ts";
 import { QUESTION_LIMITS } from "./limits.ts";
@@ -56,8 +57,21 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 		const currentState = () => states[currentIdx];
 		const currentOptions = () => optionsByQuestion[currentIdx];
 		const keyMatches = (data: string, keybinding: Keybinding) => keybindings.matches(data, keybinding);
-		const keyLabel = (keybinding: Keybinding, fallback: string) =>
-			keybindings.getKeys(keybinding).join("/") || fallback;
+		const keyLabel = (keybinding: Keybinding) => configuredKeyLabel(keybinding, { keybindings });
+		const keyAction = (keybinding: Keybinding, action: string) => {
+			const label = keyLabel(keybinding);
+			return label ? `${label} ${action}` : "";
+		};
+		// Editor reads the global TUI manager internally, while dialog controls use the injected manager.
+		const editorSubmitAction = (action: string) => {
+			const label = configuredKeyLabel("tui.input.submit");
+			return label ? `${label} ${action}` : "";
+		};
+		const keyGroupAction = (bindings: Keybinding[], action: string) => {
+			const labels = bindings.map(keyLabel).filter(Boolean).join("/");
+			return labels ? `${labels} ${action}` : "";
+		};
+		const joinHints = (...hints: string[]) => hints.filter(Boolean).join(" • ");
 
 		function finish(result: DialogResult): void {
 			if (finished) return;
@@ -207,7 +221,10 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 					state.customAnswer.selected = !state.customAnswer.selected;
 					clearWarning();
 				} else {
-					state.warning = `Press ${keyLabel("tui.input.tab", "Tab")} to type a custom answer.`;
+					const tabKey = keyLabel("tui.input.tab");
+					state.warning = tabKey
+						? `Press ${tabKey} to type a custom answer.`
+						: "Choose Type something to type a custom answer.";
 				}
 				return;
 			}
@@ -478,7 +495,10 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 				" ",
 				theme.fg(
 					"dim",
-					`${keyLabel("tui.select.confirm", "Enter")} to submit • ${keyLabel("tui.select.cancel", "Esc")} to edit the last question`,
+					joinHints(
+						keyAction("tui.select.confirm", "submit"),
+						keyAction("tui.select.cancel", "edit last question"),
+					),
 				),
 				renderWidth,
 				lines,
@@ -597,21 +617,15 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 			if (inputMode === "notes") {
 				wrapWithPrefix(
 					" ",
-					theme.fg(
-						"dim",
-						`${keyLabel("tui.select.confirm", "Enter")} to save notes • ${keyLabel("tui.select.cancel", "Esc")} to go back`,
-					),
+					theme.fg("dim", joinHints(editorSubmitAction("save notes"), keyAction("tui.select.cancel", "back"))),
 					renderWidth,
 					lines,
 				);
 			} else if (inputMode === "custom") {
-				const hint = isMulti ? "to save custom answer" : "to continue";
+				const hint = isMulti ? "save custom answer" : "continue";
 				wrapWithPrefix(
 					" ",
-					theme.fg(
-						"dim",
-						`${keyLabel("tui.select.confirm", "Enter")} ${hint} • ${keyLabel("tui.select.cancel", "Esc")} to go back`,
-					),
+					theme.fg("dim", joinHints(editorSubmitAction(hint), keyAction("tui.select.cancel", "back"))),
 					renderWidth,
 					lines,
 				);
@@ -620,7 +634,11 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 					" ",
 					theme.fg(
 						"dim",
-						`${keyLabel("tui.select.confirm", "Enter")} to discuss • ${keyLabel("tui.select.up", "Up")} to return to options`,
+						joinHints(
+							keyAction("tui.select.confirm", "discuss"),
+							keyAction("tui.select.up", "return to options"),
+							keyAction("tui.select.cancel", "cancel"),
+						),
 					),
 					renderWidth,
 					lines,
@@ -630,7 +648,14 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 					" ",
 					theme.fg(
 						"dim",
-						`${digitRange} toggle • ${keyLabel("app.list.toggle", "Space")} to toggle focused • ${keyLabel("tui.input.tab", "Tab")} for notes/custom • ${keyLabel("tui.select.confirm", "Enter")} to continue • ${keyLabel("tui.editor.cursorLeft", "Left")}/${keyLabel("tui.editor.cursorRight", "Right")} questions • ${keyLabel("tui.select.cancel", "Esc")} to cancel`,
+						joinHints(
+							`${digitRange} toggle`,
+							keyAction("app.list.toggle", "toggle focused"),
+							keyAction("tui.input.tab", "notes/custom"),
+							keyAction("tui.select.confirm", "continue"),
+							keyGroupAction(["tui.editor.cursorLeft", "tui.editor.cursorRight"], "questions"),
+							keyAction("tui.select.cancel", "cancel"),
+						),
 					),
 					renderWidth,
 					lines,
@@ -640,7 +665,13 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 					" ",
 					theme.fg(
 						"dim",
-						`${digitRange} select • ${keyLabel("tui.input.tab", "Tab")} for notes/custom • ${keyLabel("tui.select.confirm", "Enter")} to select • ${keyLabel("tui.editor.cursorLeft", "Left")}/${keyLabel("tui.editor.cursorRight", "Right")} questions • ${keyLabel("tui.select.cancel", "Esc")} to cancel`,
+						joinHints(
+							`${digitRange} select`,
+							keyAction("tui.input.tab", "notes/custom"),
+							keyAction("tui.select.confirm", "select"),
+							keyGroupAction(["tui.editor.cursorLeft", "tui.editor.cursorRight"], "questions"),
+							keyAction("tui.select.cancel", "cancel"),
+						),
 					),
 					renderWidth,
 					lines,

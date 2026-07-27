@@ -8,7 +8,7 @@ import type { SelectOption } from "../../../core/extensions/types.ts";
 import { theme } from "../theme/theme.ts";
 import { CountdownTimer } from "./countdown-timer.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
-import { keyHint, rawKeyHint } from "./keybinding-hints.ts";
+import { keyLabel, rawKeyHint } from "./keybinding-hints.ts";
 
 export interface ExtensionSelectorOptions {
 	tui?: TUI;
@@ -71,17 +71,15 @@ export class ExtensionSelectorComponent extends Container {
 		this.listContainer = new Container();
 		this.addChild(this.listContainer);
 		this.addChild(new Spacer(1));
-		this.addChild(
-			new Text(
-				rawKeyHint("↑↓", "navigate") +
-					"  " +
-					keyHint("tui.select.confirm", "select") +
-					"  " +
-					keyHint("tui.select.cancel", opts?.cancelHint ?? "cancel"),
-				1,
-				0,
-			),
-		);
+		const navigationKeys = [keyLabel("tui.select.up"), keyLabel("tui.select.down")].filter(Boolean).join("/");
+		const confirmKey = keyLabel("tui.select.confirm");
+		const cancelKey = keyLabel("tui.select.cancel");
+		const hints = [
+			navigationKeys ? rawKeyHint(navigationKeys, "navigate") : "",
+			confirmKey ? rawKeyHint(confirmKey, "select") : "",
+			cancelKey ? rawKeyHint(cancelKey, opts?.cancelHint ?? "cancel") : "",
+		].filter(Boolean);
+		this.addChild(new Text(hints.join(theme.fg("muted", " • ")), 1, 0));
 		this.addChild(new Spacer(1));
 		this.addChild(new DynamicBorder());
 

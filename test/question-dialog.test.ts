@@ -1,4 +1,4 @@
-import { setKeybindings, type TUI } from "@earendil-works/pi-tui";
+import { setKeybindings, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { createQuestionDialog } from "../src/extensions/question/dialog.ts";
@@ -24,15 +24,20 @@ function question(overrides?: Partial<Question>): Question {
 	};
 }
 
-function createDialog(questions: Question[], signal?: AbortSignal) {
+function createDialog(
+	questions: Question[],
+	signal?: AbortSignal,
+	keybindings: KeybindingsManager = new KeybindingsManager(),
+) {
 	const tui = { requestRender: () => {}, terminal: { rows: 40, columns: 120 } } as unknown as TUI;
 	const results: DialogResult[] = [];
-	const component = createQuestionDialog(questions, signal)(tui, theme, new KeybindingsManager(), (result) => {
+	const component = createQuestionDialog(questions, signal)(tui, theme, keybindings, (result) => {
 		results.push(result);
 	});
 	component.focused = true;
-	const view = () => stripAnsi(component.render(120).join("\n"));
-	return { component, results, view };
+	const viewAt = (width: number) => stripAnsi(component.render(width).join("\n"));
+	const view = () => viewAt(120);
+	return { component, results, view, viewAt };
 }
 
 describe("question dialog", () => {
@@ -42,8 +47,10 @@ describe("question dialog", () => {
 	it("shows numeric shortcuts, punctuation-free custom copy, and aligned option labels", () => {
 		const singleOutput = createDialog([question()]).view();
 		const multiOutput = createDialog([question({ multiSelect: true })]).view();
-		expect(singleOutput).toContain("1-3 select");
-		expect(multiOutput).toContain("1-3 toggle");
+		expect(singleOutput).toContain("1-3 select • Tab notes/custom • Enter select • ←/→ questions • Esc cancel");
+		expect(multiOutput).toContain(
+			"1-3 toggle • Space toggle focused • Tab notes/custom • Enter continue • ←/→ questions • Esc cancel",
+		);
 		expect(singleOutput).toContain("Type something");
 		expect(singleOutput).not.toContain("Type something.");
 		const singleOption = singleOutput.split("\n").find((line) => line.includes("1. Alpha"));
@@ -51,6 +58,61 @@ describe("question dialog", () => {
 		expect(singleOption).toBeDefined();
 		expect(multiOption).toBeDefined();
 		expect(singleOption?.indexOf("1. Alpha")).toBe(multiOption?.indexOf("1. Alpha"));
+	});
+
+	it("wraps unified hints within narrow dialog widths", () => {
+		const { component } = createDialog([question({ multiSelect: true })]);
+		expect(component.render(40).every((line) => visibleWidth(line) <= 40)).toBe(true);
+	});
+
+	it("uses unified key-action hints in every dialog mode", () => {
+		const notes = createDialog([question()]);
+		notes.component.handleInput(TAB);
+		expect(notes.view()).toContain("Enter save notes • Esc back");
+
+		const custom = createDialog([question()]);
+		custom.component.handleInput("3");
+		expect(custom.view()).toContain("Enter continue • Esc back");
+
+		const multiCustom = createDialog([question({ multiSelect: true })]);
+		multiCustom.component.handleInput(DOWN);
+		multiCustom.component.handleInput(DOWN);
+		multiCustom.component.handleInput(ENTER);
+		expect(multiCustom.view()).toContain("Enter save custom answer • Esc back");
+
+		const discuss = createDialog([question()]);
+		discuss.component.handleInput(DOWN);
+		discuss.component.handleInput(DOWN);
+		discuss.component.handleInput(DOWN);
+		expect(discuss.view()).toContain("Enter discuss • ↑ return to options • Esc cancel");
+
+		const review = createDialog([question(), question({ question: "Second?", header: "Second" })]);
+		review.component.handleInput(ENTER);
+		review.component.handleInput(ENTER);
+		expect(review.view()).toContain("Enter submit • Esc edit last question");
+	});
+
+	it("shows only the first injected custom binding", () => {
+		const keybindings = new KeybindingsManager({
+			"tui.input.submit": ["ctrl+s", "enter"],
+			"tui.input.tab": ["ctrl+t", "tab"],
+			"tui.select.confirm": ["ctrl+x", "enter"],
+			"tui.select.cancel": ["ctrl+g", "escape"],
+			"tui.editor.cursorLeft": ["alt+h", "left"],
+			"tui.editor.cursorRight": ["alt+l", "right"],
+		});
+		const dialog = createDialog([question()], undefined, keybindings);
+		const output = dialog.view();
+		expect(output).toContain(
+			`${process.platform === "darwin" ? "Option" : "Alt"}+H/${process.platform === "darwin" ? "Option" : "Alt"}+L questions`,
+		);
+		expect(output).toContain("Ctrl+T notes/custom • Ctrl+X select");
+		expect(output).toContain("Ctrl+G cancel");
+		expect(output).not.toContain("escape/ctrl+c");
+
+		dialog.component.handleInput(TAB);
+		expect(dialog.view()).toContain("Enter save notes • Ctrl+G back");
+		expect(dialog.view()).not.toContain("Ctrl+S save notes");
 	});
 
 	it("selects an option by digit and submits a single single-select question", () => {
