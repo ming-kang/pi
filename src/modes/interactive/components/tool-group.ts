@@ -45,6 +45,12 @@ export class ToolGroupComponent implements Component {
 		}
 	}
 
+	dispose(): void {
+		for (const tool of this.tools) {
+			tool.dispose();
+		}
+	}
+
 	render(width: number): string[] {
 		if (this.tools.length === 0) return [];
 

@@ -20,8 +20,8 @@ Do not add an isolated `setInterval` inside Subagent. First give the native tool
 
 | Work package                              | Status    | Commit      | Verification          |
 | ----------------------------------------- | --------- | ----------- | --------------------- |
-| Plan document                             | Completed | This commit | Initial plan recorded |
-| WP1: Tool progress/render refresh split   | Pending   | —           | —                     |
+| Plan document                             | Completed | `be6166d4` | Initial plan recorded                |
+| WP1: Tool progress/render refresh split   | Completed | This commit | 4 focused files, 51 tests; check     |
 | WP2: Subagent independent elapsed refresh | Pending   | —           | —                     |
 | WP3: Subagent retry countdown             | Pending   | —           | —                     |
 | WP4: Other time/timer defects             | Pending   | —           | —                     |
@@ -284,7 +284,28 @@ WP1-WP3 form the core fix. Each work package must nevertheless update and commit
 - `rendersOwnProgress` currently suppresses both generic content and the shell timer; WP1 intentionally separates those concerns.
 - Time displays use absolute timestamps or deadlines; intervals only trigger rendering.
 - Timer cleanup is a correctness requirement, not an optional optimization.
+- When generic progress and an explicit renderer interval both apply, the shared timer uses the shorter interval. The explicit value therefore defines the maximum refresh gap, not a promise that no other shell concern will rebuild sooner.
+- WP1 also keys pending Kitty conversions by source image and ignores stale or post-disposal completion, preventing detached or superseded results from requesting renders.
+
+## Completed implementation notes
+
+### WP1
+
+- Added bounded `renderRefreshIntervalMs` support (250ms–60s) without changing generic progress presentation.
+- Added idempotent disposal for individual and grouped tool components.
+- Centralized pending-tool and chat-tool disposal across rebuild, session replacement, run end, and shutdown paths.
+- Guarded renderer invalidation and asynchronous Kitty conversion completion after disposal.
+- Prevented a superseded partial image conversion from overwriting a newer image at the same result index.
+- Updated borrowed-`InteractiveMode` regression fixtures for the new cleanup methods.
+- Verification passed:
+  - `test/tool-execution-component.test.ts`
+  - `test/bash-tool-rendering.test.ts`
+  - `test/interactive-mode-compaction.test.ts`
+  - `test/suite/regressions/4167-thinking-toggle-pending-tool-render.test.ts`
+  - 51 focused tests total
+  - `npm run check`
 
 ## Commit log
 
-- Initial plan document: `docs: add time-driven UI refresh plan` (this commit).
+- Initial plan document: `be6166d4 docs: add time-driven UI refresh plan`.
+- WP1: `feat: add lifecycle-safe tool render refresh` (this commit).

@@ -1,7 +1,7 @@
 import { join, resolve } from "node:path";
-import { Text, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { resetCapabilitiesCache, setCapabilities, Text, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { beforeAll, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { getReadmePath } from "../src/config.ts";
 import type { ExtensionAPI, ToolDefinition } from "../src/core/extensions/types.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
@@ -13,6 +13,7 @@ import { ToolExecutionComponent } from "../src/modes/interactive/components/tool
 import { ToolGroupComponent } from "../src/modes/interactive/components/tool-group.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
+import * as imageConvert from "../src/utils/image-convert.ts";
 
 function createBaseToolDefinition(name = "custom_tool"): ToolDefinition {
 	return {
@@ -27,9 +28,9 @@ function createBaseToolDefinition(name = "custom_tool"): ToolDefinition {
 	};
 }
 
-function createFakeTui(): TUI {
+function createFakeTui(requestRender: () => void = () => {}): TUI {
 	return {
-		requestRender: () => {},
+		requestRender,
 	} as unknown as TUI;
 }
 
@@ -50,6 +51,148 @@ function createTodoToolDefinition(): ToolDefinition {
 describe("ToolExecutionComponent parity", () => {
 	beforeAll(() => {
 		initTheme("dark");
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+		resetCapabilitiesCache();
+	});
+
+	test("ignores stale and post-disposal image conversions", async () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		const conversions: Array<{
+			resolve: (value: { data: string; mimeType: string } | null) => void;
+		}> = [];
+		vi.spyOn(imageConvert, "convertToPng").mockImplementation(
+			() =>
+				new Promise((resolveConversion) => {
+					conversions.push({ resolve: resolveConversion });
+				}),
+		);
+		const requestRender = vi.fn();
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-image-lifecycle",
+			{},
+			{},
+			createBaseToolDefinition(),
+			createFakeTui(requestRender),
+			process.cwd(),
+		);
+
+		component.updateResult(
+			{ content: [{ type: "image", data: "old-image", mimeType: "image/jpeg" }], isError: false },
+			true,
+		);
+		component.updateResult(
+			{ content: [{ type: "image", data: "new-image", mimeType: "image/jpeg" }], isError: false },
+			true,
+		);
+		expect(conversions).toHaveLength(2);
+
+		conversions[0]!.resolve({ data: "old-png", mimeType: "image/png" });
+		await Promise.resolve();
+		expect(requestRender).not.toHaveBeenCalled();
+
+		conversions[1]!.resolve({ data: "new-png", mimeType: "image/png" });
+		await Promise.resolve();
+		expect(requestRender).toHaveBeenCalledTimes(1);
+
+		component.updateResult(
+			{ content: [{ type: "image", data: "final-image", mimeType: "image/jpeg" }], isError: false },
+			true,
+		);
+		expect(conversions).toHaveLength(3);
+		component.dispose();
+		conversions[2]!.resolve({ data: "final-png", mimeType: "image/png" });
+		await Promise.resolve();
+		expect(requestRender).toHaveBeenCalledTimes(1);
+	});
+
+	test("refreshes own-progress renderers without adding generic progress", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+		const requestRender = vi.fn();
+		let resultRenderCount = 0;
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			rendersOwnProgress: true,
+			renderRefreshIntervalMs: 1000,
+			renderResult: () => {
+				resultRenderCount++;
+				return new Text(`elapsed ${Date.now()}ms`, 0, 0);
+			},
+		};
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-live-refresh",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(requestRender),
+			process.cwd(),
+		);
+
+		component.markExecutionStarted();
+		component.updateResult({ content: [], details: {}, isError: false }, true);
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("elapsed 0ms");
+		const initialRenderCount = resultRenderCount;
+
+		vi.advanceTimersByTime(3000);
+		const refreshed = stripAnsi(component.render(120).join("\n"));
+		expect(refreshed).toContain("elapsed 3000ms");
+		expect(refreshed).not.toContain("Running…");
+		expect(resultRenderCount).toBe(initialRenderCount + 3);
+
+		component.updateResult({ content: [], details: {}, isError: false }, false);
+		const finalRenderCount = resultRenderCount;
+		const finalRenderRequests = requestRender.mock.calls.length;
+		vi.advanceTimersByTime(3000);
+		expect(resultRenderCount).toBe(finalRenderCount);
+		expect(requestRender).toHaveBeenCalledTimes(finalRenderRequests);
+	});
+
+	test("clamps custom refresh intervals and disposes grouped tools idempotently", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+		const requestRender = vi.fn();
+		let resultRenderCount = 0;
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			rendersOwnProgress: true,
+			renderRefreshIntervalMs: 1,
+			renderResult: () => {
+				resultRenderCount++;
+				return new Text("live", 0, 0);
+			},
+		};
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-disposed-refresh",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(requestRender),
+			process.cwd(),
+		);
+		component.markExecutionStarted();
+		component.updateResult({ content: [], details: {}, isError: false }, true);
+		const initialRenderCount = resultRenderCount;
+
+		vi.advanceTimersByTime(249);
+		expect(resultRenderCount).toBe(initialRenderCount);
+		vi.advanceTimersByTime(1);
+		expect(resultRenderCount).toBe(initialRenderCount + 1);
+
+		const group = new ToolGroupComponent("custom", [component]);
+		group.dispose();
+		group.dispose();
+		const disposedRenderCount = resultRenderCount;
+		const disposedRenderRequests = requestRender.mock.calls.length;
+		vi.advanceTimersByTime(1000);
+		expect(resultRenderCount).toBe(disposedRenderCount);
+		expect(requestRender).toHaveBeenCalledTimes(disposedRenderRequests);
 	});
 
 	test("stacks custom call and result renderers like the old implementation", () => {

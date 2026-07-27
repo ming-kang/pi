@@ -1669,7 +1669,7 @@ export class InteractiveMode {
 						return { cancelled: true };
 					}
 
-					this.chatContainer.clear();
+					this.clearChat();
 					this.renderInitialMessages();
 					if (result.editorText && !this.editor.getText().trim()) {
 						this.editor.setText(result.editorText);
@@ -1753,14 +1753,34 @@ export class InteractiveMode {
 		process.exit(1);
 	}
 
+	private disposeChatToolComponents(): void {
+		for (const child of this.chatContainer.children) {
+			if (child instanceof ToolExecutionComponent || child instanceof ToolGroupComponent) {
+				child.dispose();
+			}
+		}
+	}
+
+	private clearChat(): void {
+		this.disposeChatToolComponents();
+		this.chatContainer.clear();
+	}
+
+	private clearPendingTools(): void {
+		for (const component of this.pendingTools.values()) {
+			component.dispose();
+		}
+		this.pendingTools.clear();
+	}
+
 	private renderCurrentSessionState(): void {
 		this.loadedResourcesContainer.clear();
-		this.chatContainer.clear();
+		this.clearChat();
 		this.pendingMessagesContainer.clear();
 		this.compactionQueuedMessages = [];
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
-		this.pendingTools.clear();
+		this.clearPendingTools();
 		this.renderInitialMessages();
 	}
 
@@ -2893,7 +2913,7 @@ export class InteractiveMode {
 			case "agent_start":
 				this.agentRunActive = true;
 				this.coalescingTerminal.setScrollbackPreservation(true);
-				this.pendingTools.clear();
+				this.clearPendingTools();
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
 				}
@@ -3093,7 +3113,7 @@ export class InteractiveMode {
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
 				}
-				this.pendingTools.clear();
+				this.clearPendingTools();
 
 				this.ui.requestRender();
 				break;
@@ -3137,7 +3157,7 @@ export class InteractiveMode {
 					}
 				} else {
 					if (event.result) {
-						this.chatContainer.clear();
+						this.clearChat();
 						this.rebuildChatFromMessages();
 						this.addMessageToChat(
 							createCompactionSummaryMessage(
@@ -3384,7 +3404,7 @@ export class InteractiveMode {
 		items: readonly RenderSessionItem[],
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
-		this.pendingTools.clear();
+		this.clearPendingTools();
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
 		// Cache-miss notices are not persisted; re-derive them from the full entry
 		// list and re-inject them after the assistant messages that paid for them.
@@ -3553,7 +3573,7 @@ export class InteractiveMode {
 	}
 
 	private rebuildChatFromMessages(): void {
-		this.chatContainer.clear();
+		this.clearChat();
 		this.renderSessionEntries(this.sessionManager.buildContextEntries());
 	}
 
@@ -3868,7 +3888,7 @@ export class InteractiveMode {
 		this.coalescingTerminal.passNextFullRedraw();
 
 		// Rebuild chat from session messages
-		this.chatContainer.clear();
+		this.clearChat();
 		this.rebuildChatFromMessages();
 
 		// If streaming, re-add the streaming component with updated visibility and re-render
@@ -4265,7 +4285,7 @@ export class InteractiveMode {
 								child.setHideThinkingBlock(hidden);
 							}
 						}
-						this.chatContainer.clear();
+						this.clearChat();
 						this.rebuildChatFromMessages();
 					},
 					onShowCacheMissNoticesChange: (shown) => {
@@ -4758,7 +4778,7 @@ export class InteractiveMode {
 						}
 
 						// Update UI
-						this.chatContainer.clear();
+						this.clearChat();
 						this.renderInitialMessages();
 						if (result.editorText && !this.editor.getText().trim()) {
 							this.editor.setText(result.editorText);
@@ -6066,6 +6086,8 @@ export class InteractiveMode {
 		this.clearStatusIndicator();
 		this.themeController.disableAutoSync();
 		this.clearExtensionTerminalInputListeners();
+		this.clearPendingTools();
+		this.disposeChatToolComponents();
 		this.footer.dispose();
 		this.footerDataProvider.dispose();
 		if (this.unsubscribe) {

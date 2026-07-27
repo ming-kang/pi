@@ -20,10 +20,30 @@ export interface ToolExecutionOptions {
 	imageWidthCells?: number;
 }
 
+interface ConvertedImage {
+	sourceData: string;
+	sourceMimeType: string;
+	data: string;
+	mimeType: string;
+}
+
+interface PendingImageConversion {
+	sourceData: string;
+	sourceMimeType: string;
+}
+
 const TOOL_CHROME_WIDTH = 2;
 const FALLBACK_ARGS_WIDTH = 120;
 const FALLBACK_RESULT_LINES = 10;
 const PROGRESS_THRESHOLD_MS = 2000;
+const DEFAULT_PROGRESS_REFRESH_INTERVAL_MS = 1000;
+const MIN_RENDER_REFRESH_INTERVAL_MS = 250;
+const MAX_RENDER_REFRESH_INTERVAL_MS = 60_000;
+
+function normalizeRenderRefreshInterval(intervalMs: number | undefined): number | undefined {
+	if (intervalMs === undefined || !Number.isFinite(intervalMs) || intervalMs <= 0) return undefined;
+	return Math.min(MAX_RENDER_REFRESH_INTERVAL_MS, Math.max(MIN_RENDER_REFRESH_INTERVAL_MS, Math.round(intervalMs)));
+}
 
 function formatElapsed(ms: number): string {
 	const roundedTenths = Math.round(ms / 100) / 10;
@@ -136,10 +156,12 @@ export class ToolExecutionComponent extends Container {
 		isError: boolean;
 		details?: any;
 	};
-	private convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
+	private convertedImages = new Map<number, ConvertedImage>();
+	private pendingImageConversions = new Map<number, PendingImageConversion>();
 	private hideComponent = false;
 	private progressStartedAt?: number;
-	private progressTimer?: NodeJS.Timeout;
+	private refreshTimer?: NodeJS.Timeout;
+	private disposed = false;
 
 	constructor(
 		toolName: string,
@@ -208,11 +230,30 @@ export class ToolExecutionComponent extends Container {
 		return this.toolDefinition?.rendersOwnProgress ?? this.builtInToolDefinition?.rendersOwnProgress ?? false;
 	}
 
+	private shouldRenderGenericProgress(): boolean {
+		return !this.getRendersOwnProgress() && this.getRenderShell() !== "self";
+	}
+
+	private getExplicitRenderRefreshInterval(): number | undefined {
+		const intervalMs =
+			this.toolDefinition?.renderRefreshIntervalMs ?? this.builtInToolDefinition?.renderRefreshIntervalMs;
+		return normalizeRenderRefreshInterval(intervalMs);
+	}
+
+	private getActiveRenderRefreshInterval(): number | undefined {
+		const explicitInterval = this.getExplicitRenderRefreshInterval();
+		if (!this.shouldRenderGenericProgress()) return explicitInterval;
+		return explicitInterval === undefined
+			? DEFAULT_PROGRESS_REFRESH_INTERVAL_MS
+			: Math.min(DEFAULT_PROGRESS_REFRESH_INTERVAL_MS, explicitInterval);
+	}
+
 	private getRenderContext(lastComponent: Component | undefined, toolGroupSummary = false): ToolRenderContext {
 		return {
 			args: this.args,
 			toolCallId: this.toolCallId,
 			invalidate: () => {
+				if (this.disposed) return;
 				this.invalidate();
 				this.ui.requestRender();
 			},
@@ -269,26 +310,33 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	markExecutionStarted(): void {
+		if (this.disposed) return;
 		this.executionStarted = true;
-		if (this.progressStartedAt === undefined && !this.getRendersOwnProgress() && this.getRenderShell() !== "self") {
+		if (this.progressStartedAt === undefined && this.shouldRenderGenericProgress()) {
 			this.progressStartedAt = Date.now();
-			this.progressTimer = setInterval(() => {
-				if (!this.isPartial) {
-					this.clearProgressTimer();
-					return;
-				}
-				this.invalidate();
-				this.ui.requestRender();
-			}, 1000);
+		}
+		if (this.refreshTimer === undefined) {
+			const intervalMs = this.getActiveRenderRefreshInterval();
+			if (intervalMs !== undefined) {
+				this.refreshTimer = setInterval(() => {
+					if (this.disposed || !this.isPartial) {
+						this.clearRefreshTimer();
+						return;
+					}
+					this.invalidate();
+					this.ui.requestRender();
+				}, intervalMs);
+				this.refreshTimer.unref?.();
+			}
 		}
 		this.updateDisplay();
 		this.ui.requestRender();
 	}
 
-	private clearProgressTimer(): void {
-		if (this.progressTimer) {
-			clearInterval(this.progressTimer);
-			this.progressTimer = undefined;
+	private clearRefreshTimer(): void {
+		if (this.refreshTimer) {
+			clearInterval(this.refreshTimer);
+			this.refreshTimer = undefined;
 		}
 	}
 
@@ -308,7 +356,7 @@ export class ToolExecutionComponent extends Container {
 	): void {
 		this.result = result;
 		this.isPartial = isPartial;
-		if (!isPartial) this.clearProgressTimer();
+		if (!isPartial) this.clearRefreshTimer();
 		this.updateDisplay();
 		this.maybeConvertImagesForKitty();
 	}
@@ -318,21 +366,48 @@ export class ToolExecutionComponent extends Container {
 		if (caps.images !== "kitty") return;
 		if (!this.result) return;
 
-		const imageBlocks = this.result.content.filter((c) => c.type === "image");
+		const imageBlocks = this.result.content.filter((content) => content.type === "image");
+		const sourceMatches = (
+			image: { data?: string; mimeType?: string } | undefined,
+			entry: PendingImageConversion | undefined,
+		): boolean => image?.data === entry?.sourceData && image?.mimeType === entry?.sourceMimeType;
+		for (const [index, converted] of this.convertedImages) {
+			if (!sourceMatches(imageBlocks[index], converted)) this.convertedImages.delete(index);
+		}
+		for (const [index, pending] of this.pendingImageConversions) {
+			if (!sourceMatches(imageBlocks[index], pending)) this.pendingImageConversions.delete(index);
+		}
+
 		for (let i = 0; i < imageBlocks.length; i++) {
-			const img = imageBlocks[i];
-			if (!img.data || !img.mimeType) continue;
-			if (img.mimeType === "image/png") continue;
-			if (this.convertedImages.has(i)) continue;
+			const image = imageBlocks[i];
+			if (!image.data || !image.mimeType || image.mimeType === "image/png") continue;
+			if (sourceMatches(image, this.convertedImages.get(i))) continue;
+			if (sourceMatches(image, this.pendingImageConversions.get(i))) continue;
 
 			const index = i;
-			convertToPng(img.data, img.mimeType).then((converted) => {
-				if (converted) {
-					this.convertedImages.set(index, converted);
-					this.updateDisplay();
-					this.ui.requestRender();
-				}
-			});
+			const sourceData = image.data;
+			const sourceMimeType = image.mimeType;
+			this.pendingImageConversions.set(index, { sourceData, sourceMimeType });
+			void convertToPng(sourceData, sourceMimeType)
+				.then((converted) => {
+					const pending = this.pendingImageConversions.get(index);
+					if (pending?.sourceData !== sourceData || pending.sourceMimeType !== sourceMimeType) return;
+					this.pendingImageConversions.delete(index);
+					if (this.disposed) return;
+					const currentImage = this.result?.content.filter((content) => content.type === "image")[index];
+					if (currentImage?.data !== sourceData || currentImage.mimeType !== sourceMimeType) return;
+					if (converted) {
+						this.convertedImages.set(index, { sourceData, sourceMimeType, ...converted });
+						this.updateDisplay();
+						this.ui.requestRender();
+					}
+				})
+				.catch(() => {
+					const pending = this.pendingImageConversions.get(index);
+					if (pending?.sourceData === sourceData && pending.sourceMimeType === sourceMimeType) {
+						this.pendingImageConversions.delete(index);
+					}
+				});
 		}
 	}
 
@@ -479,8 +554,8 @@ export class ToolExecutionComponent extends Container {
 				const img = imageBlocks[i];
 				if (caps.images && this.showImages && img.data && img.mimeType) {
 					const converted = this.convertedImages.get(i);
-					const imageData = converted?.data ?? img.data;
-					const imageMimeType = converted?.mimeType ?? img.mimeType;
+					const imageData = converted?.sourceData === img.data ? converted.data : img.data;
+					const imageMimeType = converted?.sourceMimeType === img.mimeType ? converted.mimeType : img.mimeType;
 					if (caps.images === "kitty" && imageMimeType !== "image/png") continue;
 
 					const spacer = new Spacer(1);
@@ -505,5 +580,12 @@ export class ToolExecutionComponent extends Container {
 
 	private getTextOutput(): string {
 		return getRenderedTextOutput(this.result, this.showImages);
+	}
+
+	dispose(): void {
+		if (this.disposed) return;
+		this.disposed = true;
+		this.clearRefreshTimer();
+		this.pendingImageConversions.clear();
 	}
 }

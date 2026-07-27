@@ -4,6 +4,7 @@ import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 describe("InteractiveMode compaction events", () => {
 	test("rebuilds chat and appends a synthetic compaction summary at the bottom", async () => {
+		const clearChat = vi.fn();
 		const fakeThis = {
 			isInitialized: true,
 			footer: { invalidate: vi.fn() },
@@ -11,7 +12,8 @@ describe("InteractiveMode compaction events", () => {
 			autoCompactionLoader: undefined,
 			defaultEditor: {},
 			statusContainer: { clear: vi.fn() },
-			chatContainer: { clear: vi.fn() },
+			chatContainer: { clear: clearChat },
+			clearChat,
 			rebuildChatFromMessages: vi.fn(),
 			addMessageToChat: vi.fn(),
 			showError: vi.fn(),
@@ -60,6 +62,7 @@ describe("InteractiveMode compaction events", () => {
 
 	test("shows a retained-context warning after a successful compaction", async () => {
 		initTheme("dark");
+		const clearChat = vi.fn();
 		const fakeThis = {
 			isInitialized: true,
 			footer: { invalidate: vi.fn() },
@@ -67,7 +70,8 @@ describe("InteractiveMode compaction events", () => {
 			autoCompactionLoader: undefined,
 			defaultEditor: {},
 			statusContainer: { clear: vi.fn() },
-			chatContainer: { clear: vi.fn(), addChild: vi.fn() },
+			chatContainer: { clear: clearChat, addChild: vi.fn() },
+			clearChat,
 			rebuildChatFromMessages: vi.fn(),
 			addMessageToChat: vi.fn(),
 			showError: vi.fn(),

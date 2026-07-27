@@ -490,8 +490,10 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	toolGroup?: string;
 	/** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
 	renderShell?: "default" | "self";
-	/** Set when the tool's own renderers already show live progress; suppresses the shell's generic `Running… (Ns)` row. */
+	/** Set when the tool's own renderers already show live progress; suppresses only the shell's generic `Running… (Ns)` row. */
 	rendersOwnProgress?: boolean;
+	/** While execution is partial, periodically rebuild the tool renderers at this interval in milliseconds. */
+	renderRefreshIntervalMs?: number;
 
 	/** Optional compatibility shim to prepare raw tool call arguments before schema validation. Must return an object conforming to TParams. */
 	prepareArguments?: (args: unknown) => Static<TParams>;
