@@ -26,13 +26,13 @@ Install reporting to `pi.dev` is removed entirely; the former telemetry switch n
 
 ## 3. Windows bash correctness
 
-Two fixes for models and tools running through bash on Windows.
+Two Windows-specific adjustments cover shell syntax compatibility and local test portability.
 
-- Hybrid: `src/utils/shell.ts`, `src/core/tools/bash.ts` (spawn path), `src/core/bash-executor.ts`, `src/core/tools/output-accumulator.ts`, `test/resource-loader.test.ts` (skips the directory-symlink test on Windows checkouts without Developer Mode, in addition to its other local modifications)
-- Local: `src/utils/output-decoder.ts`, `test/bash-nul-redirect.test.ts`, `test/output-decoder.test.ts`
-- Changes: `rewriteCmdNulRedirects()` rewrites CMD-style `2>nul` redirects to `/dev/null` before spawning, preventing creation of a reserved-name `nul` file; `OutputDecoder` segments console output at line boundaries and decodes each line independently — valid UTF-8 stays UTF-8, non-UTF-8 lines use the detected OEM code page (registry `OEMCP`) — so mixed UTF-8/OEM streams decode correctly and nothing already emitted is revised; segments carrying binary-only bytes (or fallback decodes yielding control characters) stay on lossy UTF-8 so binary sanitization still applies.
-- Upstream assumptions: bash execution flows through `createLocalBashOperations` and decodes output in `bash-executor.ts`/`output-accumulator.ts`; both call sites must keep feeding the decoder (`push()` returns plain text) and call `flush()` at end of stream.
-- Verify: `test/bash-nul-redirect.test.ts`, `test/output-decoder.test.ts`; on Windows, run a CJK-emitting console command (for example `ipconfig`) and a `2>nul` command in a real session.
+- Hybrid: `src/utils/shell.ts`, `src/core/tools/bash.ts` (spawn path), `test/resource-loader.test.ts` (skips the directory-symlink test on Windows checkouts without Developer Mode, in addition to its other local modifications)
+- Local: `test/bash-nul-redirect.test.ts`
+- Changes: `rewriteCmdNulRedirects()` rewrites CMD-style `2>nul` redirects to `/dev/null` before spawning, preventing creation of a reserved-name `nul` file; the resource-loader directory-symlink test skips Windows checkouts where symlink creation is unavailable.
+- Upstream assumptions: bash execution flows through `createLocalBashOperations`, which normalizes the command immediately before spawning the resolved POSIX shell.
+- Verify: `test/bash-nul-redirect.test.ts`, `test/resource-loader.test.ts`; on Windows, run a `2>nul` command in a real session.
 
 ## 4. Between-tool-batch auto-compaction
 

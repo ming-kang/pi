@@ -2,15 +2,12 @@ import { randomBytes } from "node:crypto";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OutputDecoder } from "../../utils/output-decoder.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type TruncationResult, truncateTail } from "./truncate.ts";
 
 export interface OutputAccumulatorOptions {
 	maxLines?: number;
 	maxBytes?: number;
 	tempFilePrefix?: string;
-	/** Fallback encoding override for tests. Default: the system console encoding. */
-	fallbackEncoding?: string | null;
 }
 
 export interface OutputSnapshot {
@@ -31,17 +28,16 @@ function byteLength(text: string): number {
 /**
  * Incrementally tracks streaming output with bounded memory.
  *
- * Appends decode chunks with a streaming decoder that keeps UTF-8 output as
- * UTF-8 and decodes non-UTF-8 lines with the system console encoding, keeps
- * only a decoded tail for display snapshots, and opens a temp file when the
- * full output needs to be preserved.
+ * Appends decode chunks with a streaming UTF-8 decoder, keeps only a decoded
+ * tail for display snapshots, and opens a temp file when the full output needs
+ * to be preserved.
  */
 export class OutputAccumulator {
 	private readonly maxLines: number;
 	private readonly maxBytes: number;
 	private readonly maxRollingBytes: number;
 	private readonly tempFilePrefix: string;
-	private readonly decoder: OutputDecoder;
+	private readonly decoder = new TextDecoder();
 
 	private rawChunks: Buffer[] = [];
 	private tailText = "";
@@ -63,10 +59,6 @@ export class OutputAccumulator {
 		this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
 		this.maxRollingBytes = Math.max(this.maxBytes * 2, 1);
 		this.tempFilePrefix = options.tempFilePrefix ?? "pi-output";
-		this.decoder =
-			options.fallbackEncoding === undefined
-				? new OutputDecoder()
-				: new OutputDecoder({ fallbackEncoding: options.fallbackEncoding });
 	}
 
 	append(data: Buffer): void {
@@ -75,7 +67,7 @@ export class OutputAccumulator {
 		}
 
 		this.totalRawBytes += data.length;
-		this.appendDecodedText(this.decoder.push(data));
+		this.appendDecodedText(this.decoder.decode(data, { stream: true }));
 
 		if (this.tempFileStream || this.shouldUseTempFile()) {
 			this.ensureTempFile();
@@ -90,7 +82,7 @@ export class OutputAccumulator {
 			return;
 		}
 		this.finished = true;
-		this.appendDecodedText(this.decoder.flush());
+		this.appendDecodedText(this.decoder.decode());
 		if (this.shouldUseTempFile()) {
 			this.ensureTempFile();
 		}
