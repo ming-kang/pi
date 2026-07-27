@@ -5,12 +5,11 @@ import { Text } from "@earendil-works/pi-tui";
 import { spawn } from "child_process";
 import path from "path";
 import { type Static, Type } from "typebox";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { resolveToCwd } from "./path-utils.ts";
-import { getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.ts";
+import { collapsedLinesHint, getTextOutput, invalidArgText, renderToolPath, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import {
 	DEFAULT_MAX_BYTES,
@@ -66,12 +65,22 @@ export interface GrepToolOptions {
 }
 
 function formatGrepCall(
-	args: { pattern: string; path?: string; glob?: string; limit?: number } | undefined,
+	args:
+		| {
+				pattern: string;
+				path?: string;
+				glob?: string;
+				ignoreCase?: boolean;
+				literal?: boolean;
+				context?: number;
+				limit?: number;
+		  }
+		| undefined,
 	theme: Theme,
+	cwd: string,
 ): string {
 	const pattern = str(args?.pattern);
 	const rawPath = str(args?.path);
-	const path = rawPath !== null ? shortenPath(rawPath || ".") : null;
 	const glob = str(args?.glob);
 	const limit = args?.limit;
 	const invalidArg = invalidArgText(theme);
@@ -79,9 +88,15 @@ function formatGrepCall(
 		theme.fg("toolTitle", theme.bold("grep")) +
 		" " +
 		(pattern === null ? invalidArg : theme.fg("accent", `/${pattern || ""}/`)) +
-		theme.fg("toolOutput", ` in ${path === null ? invalidArg : path}`);
+		theme.fg("toolOutput", " in ") +
+		renderToolPath(rawPath, theme, cwd, { emptyFallback: "." });
 	if (glob) text += theme.fg("toolOutput", ` (${glob})`);
-	if (limit !== undefined) text += theme.fg("toolOutput", ` limit ${limit}`);
+	const flags: string[] = [];
+	if (args?.ignoreCase === true) flags.push("-i");
+	if (args?.literal === true) flags.push("-F");
+	if (typeof args?.context === "number") flags.push(`-C ${args.context}`);
+	if (flags.length > 0) text += theme.fg("toolOutput", ` (${flags.join(" ")})`);
+	if (limit !== undefined) text += theme.fg("toolOutput", ` (limit ${limit})`);
 	return text;
 }
 
@@ -103,7 +118,7 @@ function formatGrepResult(
 		const remaining = lines.length - maxLines;
 		text += `\n${displayLines.map((line) => theme.fg("toolOutput", line)).join("\n")}`;
 		if (remaining > 0) {
-			text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+			text += `\n${collapsedLinesHint(theme, remaining, "more")}`;
 		}
 	}
 
@@ -131,6 +146,7 @@ export function createGrepToolDefinition(
 		description: `Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output is truncated to ${DEFAULT_LIMIT} matches or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Long lines are truncated to ${GREP_MAX_LINE_LENGTH} chars.`,
 		promptSnippet: "Search file contents for patterns (respects .gitignore)",
 		parameters: grepSchema,
+		toolGroup: "explore",
 		async execute(
 			_toolCallId,
 			{
@@ -369,7 +385,7 @@ export function createGrepToolDefinition(
 		},
 		renderCall(args, theme, context) {
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(formatGrepCall(args, theme));
+			text.setText(formatGrepCall(args, theme, cwd));
 			return text;
 		},
 		renderResult(result, options, theme, context) {

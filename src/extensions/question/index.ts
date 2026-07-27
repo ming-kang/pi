@@ -26,6 +26,7 @@ export default function question(pi: ExtensionAPI) {
 		promptSnippet: QUESTION_PROMPT_SNIPPET,
 		promptGuidelines: QUESTION_PROMPT_GUIDELINES,
 		parameters: QuestionParams,
+		rendersOwnProgress: true,
 		renderCall: renderQuestionCall,
 		renderResult: renderQuestionResult,
 

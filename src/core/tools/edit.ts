@@ -21,7 +21,7 @@ import {
 } from "./edit-diff.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
-import { renderToolPath, str } from "./render-utils.ts";
+import { collapsedLinesHint, renderToolPath, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
 type EditPreview = EditDiffResult | EditDiffError;
@@ -186,12 +186,39 @@ function formatEditCall(args: RenderableEditArgs | undefined, theme: Theme, cwd:
 	return `${theme.fg("toolTitle", theme.bold("edit"))} ${pathDisplay}`;
 }
 
+const EDIT_COLLAPSED_DIFF_LINES = 10;
+
+function diffStat(diff: string): { added: number; removed: number } {
+	let added = 0;
+	let removed = 0;
+	for (const line of diff.split("\n")) {
+		if (line.startsWith("+")) added++;
+		else if (line.startsWith("-")) removed++;
+	}
+	return { added, removed };
+}
+
+function formatDiffStat(diff: string, theme: Theme): string {
+	const { added, removed } = diffStat(diff);
+	return ` ${theme.fg("toolDiffAdded", `+${added}`)} ${theme.fg("toolDiffRemoved", `-${removed}`)}`;
+}
+
+function boundDiffBody(renderedDiff: string, expanded: boolean, theme: Theme): string {
+	if (expanded) return renderedDiff;
+	const lines = renderedDiff.split("\n");
+	if (lines.length <= EDIT_COLLAPSED_DIFF_LINES) return renderedDiff;
+	const shown = lines.slice(0, EDIT_COLLAPSED_DIFF_LINES);
+	const remaining = lines.length - shown.length;
+	return `${shown.join("\n")}\n${collapsedLinesHint(theme, remaining, "more")}`;
+}
+
 function formatEditResult(
 	args: RenderableEditArgs | undefined,
 	preview: EditPreview | undefined,
 	result: EditToolResultLike,
 	theme: Theme,
 	isError: boolean,
+	expanded: boolean,
 ): string | undefined {
 	const rawPath = str(args?.file_path ?? args?.path);
 	const previewDiff = preview && !("error" in preview) ? preview.diff : undefined;
@@ -209,7 +236,7 @@ function formatEditResult(
 
 	const resultDiff = result.details?.diff;
 	if (resultDiff && resultDiff !== previewDiff) {
-		return renderDiff(resultDiff, { filePath: rawPath ?? undefined });
+		return boundDiffBody(renderDiff(resultDiff, { filePath: rawPath ?? undefined }), expanded, theme);
 	}
 
 	return undefined;
@@ -220,16 +247,22 @@ function buildEditCallComponent(
 	args: RenderableEditArgs | undefined,
 	theme: Theme,
 	cwd: string,
+	expanded: boolean,
 ): EditCallRenderComponent {
 	component.clear();
-	component.addChild(new Text(formatEditCall(args, theme, cwd), 0, 0));
 
-	if (!component.preview) {
+	const preview = component.preview;
+	const previewDiff = preview && !("error" in preview) ? preview.diff : undefined;
+	let headline = formatEditCall(args, theme, cwd);
+	if (previewDiff !== undefined) headline += formatDiffStat(previewDiff, theme);
+	component.addChild(new Text(headline, 0, 0));
+
+	if (!preview) {
 		return component;
 	}
 
 	const body =
-		"error" in component.preview ? theme.fg("error", component.preview.error) : renderDiff(component.preview.diff);
+		"error" in preview ? theme.fg("error", preview.error) : boundDiffBody(renderDiff(preview.diff), expanded, theme);
 	component.addChild(new Spacer(1));
 	component.addChild(new Text(body, 0, 0));
 	return component;
@@ -354,9 +387,9 @@ export function createEditToolDefinition(
 				});
 			}
 
-			return buildEditCallComponent(component, args, theme, context.cwd);
+			return buildEditCallComponent(component, args, theme, context.cwd, context.expanded);
 		},
-		renderResult(result, _options, theme, context) {
+		renderResult(result, options, theme, context) {
 			const callComponent = context.state.callComponent;
 			const previewInput = getRenderablePreviewInput(context.args as RenderableEditArgs | undefined);
 			const argsKey = previewInput
@@ -380,11 +413,19 @@ export function createEditToolDefinition(
 						context.args as RenderableEditArgs | undefined,
 						theme,
 						context.cwd,
+						context.expanded,
 					);
 				}
 			}
 
-			const output = formatEditResult(context.args, callComponent?.preview, typedResult, theme, context.isError);
+			const output = formatEditResult(
+				context.args,
+				callComponent?.preview,
+				typedResult,
+				theme,
+				context.isError,
+				options.expanded,
+			);
 			const component = (context.lastComponent as Container | undefined) ?? new Container();
 			component.clear();
 			if (!output) {

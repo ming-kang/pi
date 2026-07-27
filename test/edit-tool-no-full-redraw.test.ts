@@ -109,6 +109,7 @@ describe("edit tool TUI rendering", () => {
 			tui,
 			process.cwd(),
 		);
+		component.setExpanded(true);
 		root.addChild(component);
 		tui.addChild(root);
 		tui.start();
@@ -147,6 +148,12 @@ describe("edit tool TUI rendering", () => {
 		expect(settledRender).toContain("line 50 changed");
 		expect(settledRender).toContain("line 950 changed");
 		expect(settledRender).not.toContain("Successfully replaced");
+
+		component.setExpanded(false);
+		const collapsedRender = component.render(80).join("\n");
+		expect(collapsedRender).toContain("line 50 changed");
+		expect(collapsedRender).not.toContain("line 950 changed");
+		expect(collapsedRender).toContain("more lines");
 	});
 
 	it("reconstructs the boxed preview from a settled result without argsComplete", async () => {
@@ -178,6 +185,7 @@ describe("edit tool TUI rendering", () => {
 			tui,
 			process.cwd(),
 		);
+		component.setExpanded(true);
 		tui.addChild(component);
 		tui.start();
 		await waitForRender();

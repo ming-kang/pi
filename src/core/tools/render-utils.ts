@@ -2,6 +2,7 @@ import * as os from "node:os";
 import { pathToFileURL } from "node:url";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { getCapabilities, getImageDimensions, hyperlink, imageFallback } from "@earendil-works/pi-tui";
+import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../utils/ansi.ts";
 import { resolvePath } from "../../utils/paths.ts";
@@ -82,4 +83,22 @@ export function renderToolPath(
 	const value = rawPath || options?.emptyFallback;
 	if (!value) return theme.fg("toolOutput", "...");
 	return linkPath(theme.fg("accent", shortenPath(value)), value, cwd);
+}
+
+/**
+ * Shared collapsed-output hint: `… (N earlier/more lines, ctrl+o to expand)`.
+ * `direction` is "earlier" when the preview keeps the tail, "more" when it keeps the head.
+ */
+export function collapsedLinesHint(
+	theme: Theme,
+	hidden: number,
+	direction: "earlier" | "more",
+	options?: { total?: number },
+): string {
+	const totalSuffix = options?.total !== undefined ? `, ${options.total} total` : "";
+	const noun = hidden === 1 ? "line" : "lines";
+	return (
+		theme.fg("muted", `… (${hidden} ${direction} ${noun}${totalSuffix},`) +
+		` ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`
+	);
 }

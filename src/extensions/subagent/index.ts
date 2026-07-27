@@ -230,6 +230,7 @@ export default function subagent(pi: ExtensionAPI): void {
 			name: SUBAGENT_TOOL_NAME,
 			label: SUBAGENT_TOOL_LABEL,
 			description: subagentToolDescription(discovery),
+			rendersOwnProgress: true,
 			promptSnippet: "Delegate focused research, review, or implementation tasks to isolated subagents",
 			promptGuidelines: [
 				"Use subagent when a bounded task benefits from isolated context or parallel investigation; choose a profile and write its briefing using the tool description.",

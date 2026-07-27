@@ -10,10 +10,9 @@ import {
 } from "@earendil-works/pi-tui";
 import type { AgentToolResult, ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.ts";
 import { createAllToolDefinitions, type ToolName } from "../../../core/tools/index.ts";
-import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
+import { collapsedLinesHint, getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
 import { convertToPng } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
-import { keyHint } from "./keybinding-hints.ts";
 import { truncateToVisualLines } from "./visual-truncate.ts";
 
 export interface ToolExecutionOptions {
@@ -24,16 +23,31 @@ export interface ToolExecutionOptions {
 const TOOL_CHROME_WIDTH = 2;
 const FALLBACK_ARGS_WIDTH = 120;
 const FALLBACK_RESULT_LINES = 10;
+const PROGRESS_THRESHOLD_MS = 2000;
+
+function formatElapsed(ms: number): string {
+	const seconds = ms / 1000;
+	if (seconds < 60) return `${seconds.toFixed(1)}s`;
+	return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+}
 
 class ToolChromeComponent implements Component {
 	private component: Component;
 	private prefix: string;
+	private continuationPrefix: string;
+	private blankLinePrefix: string;
 	private trimLeadingBlankLines: boolean;
 
-	constructor(component: Component, prefix: string, trimLeadingBlankLines = false) {
+	constructor(
+		component: Component,
+		prefix: string,
+		options: { trimLeadingBlankLines?: boolean; continuationPrefix?: string; blankLinePrefix?: string } = {},
+	) {
 		this.component = component;
 		this.prefix = prefix;
-		this.trimLeadingBlankLines = trimLeadingBlankLines;
+		this.continuationPrefix = options.continuationPrefix ?? "  ";
+		this.blankLinePrefix = options.blankLinePrefix ?? "";
+		this.trimLeadingBlankLines = options.trimLeadingBlankLines ?? false;
 	}
 
 	render(width: number): string[] {
@@ -46,7 +60,7 @@ class ToolChromeComponent implements Component {
 		if (lines.length === 0) return [];
 		return lines.map((line, index) => {
 			if (index === 0) return `${this.prefix}${line}`;
-			return line ? `  ${line}` : "";
+			return line ? `${this.continuationPrefix}${line}` : this.blankLinePrefix;
 		});
 	}
 
@@ -70,10 +84,8 @@ class FallbackResultComponent implements Component {
 
 		const preview = truncateToVisualLines(styledOutput, FALLBACK_RESULT_LINES, width);
 		if (preview.skippedCount <= 0) return preview.visualLines;
-		const hint =
-			theme.fg("muted", `... (${preview.skippedCount} earlier lines,`) +
-			` ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
-		return [...preview.visualLines, truncateToWidth(hint, width, "...")];
+		const hint = collapsedLinesHint(theme, preview.skippedCount, "earlier");
+		return [truncateToWidth(hint, width, "…"), ...preview.visualLines];
 	}
 
 	invalidate(): void {}
@@ -125,6 +137,8 @@ export class ToolExecutionComponent extends Container {
 	};
 	private convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
 	private hideComponent = false;
+	private progressStartedAt?: number;
+	private progressTimer?: NodeJS.Timeout;
 
 	constructor(
 		toolName: string,
@@ -189,6 +203,10 @@ export class ToolExecutionComponent extends Container {
 		return this.toolDefinition.renderShell ?? this.builtInToolDefinition.renderShell ?? "default";
 	}
 
+	private getRendersOwnProgress(): boolean {
+		return this.toolDefinition?.rendersOwnProgress ?? this.builtInToolDefinition?.rendersOwnProgress ?? false;
+	}
+
 	private getRenderContext(lastComponent: Component | undefined, toolGroupSummary = false): ToolRenderContext {
 		return {
 			args: this.args,
@@ -228,7 +246,12 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private wrapResult(component: Component): Component {
-		return new ToolChromeComponent(component, theme.fg("dim", "│ "), true);
+		const rail = theme.fg("dim", "│ ");
+		return new ToolChromeComponent(component, rail, {
+			trimLeadingBlankLines: true,
+			continuationPrefix: rail,
+			blankLinePrefix: theme.fg("dim", "│"),
+		});
 	}
 
 	private createResultFallback(): Component | undefined {
@@ -246,8 +269,26 @@ export class ToolExecutionComponent extends Container {
 
 	markExecutionStarted(): void {
 		this.executionStarted = true;
+		if (this.progressStartedAt === undefined && !this.getRendersOwnProgress() && this.getRenderShell() !== "self") {
+			this.progressStartedAt = Date.now();
+			this.progressTimer = setInterval(() => {
+				if (!this.isPartial) {
+					this.clearProgressTimer();
+					return;
+				}
+				this.invalidate();
+				this.ui.requestRender();
+			}, 1000);
+		}
 		this.updateDisplay();
 		this.ui.requestRender();
+	}
+
+	private clearProgressTimer(): void {
+		if (this.progressTimer) {
+			clearInterval(this.progressTimer);
+			this.progressTimer = undefined;
+		}
 	}
 
 	setArgsComplete(): void {
@@ -266,6 +307,7 @@ export class ToolExecutionComponent extends Container {
 	): void {
 		this.result = result;
 		this.isPartial = isPartial;
+		if (!isPartial) this.clearProgressTimer();
 		this.updateDisplay();
 		this.maybeConvertImagesForKitty();
 	}
@@ -410,6 +452,13 @@ export class ToolExecutionComponent extends Container {
 					const component = this.createResultFallback();
 					if (component) addResult(component);
 				}
+			}
+		}
+
+		if (this.executionStarted && this.isPartial && this.progressStartedAt !== undefined) {
+			const elapsedMs = Date.now() - this.progressStartedAt;
+			if (elapsedMs >= PROGRESS_THRESHOLD_MS) {
+				addResult(new Text(theme.fg("muted", `Running… (${formatElapsed(elapsedMs)})`), 0, 0));
 			}
 		}
 

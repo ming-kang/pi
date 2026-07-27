@@ -189,6 +189,7 @@ export default function plan(pi: ExtensionAPI): void {
 		promptGuidelines: EXIT_PLAN_PROMPT_GUIDELINES,
 		parameters: ExitPlanParamsSchema,
 		executionMode: "sequential" as ToolExecutionMode,
+		rendersOwnProgress: true,
 
 		async execute(_toolCallId, params, signal, _onUpdate, ctx): Promise<AgentToolResult<ExitPlanDetails>> {
 			setActivePlanSession(ctx.sessionManager.getSessionId());
