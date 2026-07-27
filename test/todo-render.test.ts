@@ -162,22 +162,70 @@ describe("formatTodoCall", () => {
 		expect(formatTodoCall({}, theme, false)).toBe("todo");
 		expect(formatTodoCall({ action: "create", subject: 42, status: "bogus" }, theme, false)).toBe("todo create");
 		expect(formatTodoCall({ action: "update", id: 1.5, blockedBy: "nope" }, theme, false)).toBe("todo update");
+
+		const sparseItems: unknown[] = new Array(2);
+		sparseItems[1] = {
+			subject: "Valid item",
+			description: "Still renders",
+			blockedBy: [1.5, -2, 4],
+		};
+		const sparse = formatTodoCall({ action: "create_many", items: sparseItems }, theme, true);
+		expect(sparse).toContain("1.");
+		expect(sparse).toContain("2. Valid item · blocked by #4");
+
+		const oversized = Array.from({ length: 25 }, (_, index) => ({ subject: `Task ${index + 1}` }));
+		const bounded = formatTodoCall({ action: "create_many", items: oversized }, theme, true);
+		expect(bounded).toContain("todo create 25 tasks · Task 1, Task 2, +23 more");
+		expect(bounded).toContain("20. Task 20");
+		expect(bounded).not.toContain("21. Task 21");
 	});
 
-	test("includes create_many batch and list/clear parameters when expanded", () => {
+	test("includes every create_many item and list/clear parameters when expanded", () => {
+		expect(
+			formatTodoCall(
+				{
+					action: "create_many",
+					items: [{ subject: "Wire parser", description: "Parser handles config" }],
+				},
+				theme,
+				false,
+			),
+		).toBe("todo create 1 task · Wire parser");
+
 		const batch = formatTodoCall(
 			{
 				action: "create_many",
 				items: [
-					{ subject: "Wire parser", description: "Parser handles config" },
-					{ subject: "Test parser", description: "Parser tests pass" },
+					{ key: "parser", subject: "Wire parser", description: "Parser handles config" },
+					{
+						subject: "Test parser",
+						description: "Parser tests pass",
+						blockedByKeys: ["parser"],
+					},
+					{ subject: "Ship parser", description: "x".repeat(140), blockedBy: [9] },
+					{ subject: "Document parser", description: "Docs are current" },
 				],
 			},
 			theme,
 			true,
+			{
+				content: [],
+				details: {
+					schemaVersion: 1,
+					action: "create_many",
+					operation: { kind: "create_many", ids: [4, 5, 6, 7] },
+					items: [],
+					nextId: 8,
+				},
+			},
 		).split("\n");
-		expect(batch[0]).toBe("todo create_many 2 tasks");
-		expect(batch).toContain("batch: 2 tasks (Wire parser; Test parser)");
+		expect(batch[0]).toBe("todo create 4 tasks · Wire parser, Test parser, +2 more");
+		expect(batch).toContain("#4 Wire parser");
+		expect(batch).toContain("  Parser handles config");
+		expect(batch).toContain("#5 Test parser · blocked by parser");
+		expect(batch).toContain("#6 Ship parser · blocked by #9");
+		expect(batch).toContain(`  ${"x".repeat(119)}…`);
+		expect(batch).toContain("#7 Document parser");
 
 		const filters = formatTodoCall(
 			{
@@ -210,17 +258,46 @@ describe("formatTodoGroupCall", () => {
 	test("uses successful structured details for concise operation summaries", () => {
 		expect(
 			formatTodoGroupCall(
-				{ action: "create_many", items: [{}, {}] },
+				{ action: "create", subject: "Fix login redirect" },
+				theme,
+				completed({
+					schemaVersion: 1,
+					action: "create",
+					operation: { kind: "create", ids: [3] },
+					items: [],
+					nextId: 4,
+				}),
+			),
+		).toBe("todo created #3 Fix login redirect");
+		const longCreate = formatTodoGroupCall(
+			{ action: "create", subject: `Long\n${"subject ".repeat(20)}` },
+			theme,
+			completed({
+				schemaVersion: 1,
+				action: "create",
+				operation: { kind: "create", ids: [4] },
+				items: [],
+				nextId: 5,
+			}),
+		);
+		expect(longCreate).not.toContain("\n");
+		expect(longCreate).toContain("…");
+		expect(
+			formatTodoGroupCall(
+				{
+					action: "create_many",
+					items: [{ subject: "Wire parser" }, { subject: "Test parser" }, { subject: "Document parser" }],
+				},
 				theme,
 				completed({
 					schemaVersion: 1,
 					action: "create_many",
-					operation: { kind: "create_many", ids: [4, 5] },
+					operation: { kind: "create_many", ids: [4, 5, 6] },
 					items: [],
-					nextId: 6,
+					nextId: 7,
 				}),
 			),
-		).toBe("todo created 2 tasks #4, #5");
+		).toBe("todo created #4–#6 · Wire parser, Test parser, +1 more");
 		expect(
 			formatTodoGroupCall(
 				{ action: "update", id: 4, status: "completed" },
@@ -275,11 +352,11 @@ describe("formatTodoGroupCall", () => {
 					schemaVersion: 1,
 					action: "delete",
 					operation: { kind: "delete", id: 3 },
-					items: [],
+					items: [{ id: 3, subject: "Remove\nlegacy task", status: "deleted" }],
 					nextId: 4,
 				}),
 			),
-		).toBe("todo deleted #3");
+		).toBe("todo deleted #3 Remove legacy task");
 		expect(
 			formatTodoGroupCall(
 				{ action: "clear", confirm: true, expectedCount: 2 },

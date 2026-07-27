@@ -96,7 +96,7 @@ export default function todo(pi: ExtensionAPI): void {
 			text.setText(
 				context.toolGroupSummary
 					? formatTodoGroupCall(args, theme, context)
-					: formatTodoCall(args, theme, context.expanded),
+					: formatTodoCall(args, theme, context.expanded, context.result),
 			);
 			return text;
 		},

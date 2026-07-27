@@ -1282,8 +1282,16 @@ export function formatTodoContent(operation: Operation, state: TodoState): strin
 				? `Created #${item.id}: ${formatDisplayText(item.subject, TODO_MAX_SUBJECT_LENGTH)} (pending)`
 				: `Created #${operation.id}`;
 		}
-		case "create_many":
-			return `Created ${operation.ids.length} tasks: ${operation.ids.map((id) => `#${id}`).join(", ")}`;
+		case "create_many": {
+			const noun = operation.ids.length === 1 ? "task" : "tasks";
+			const lines = operation.ids.map((id) => {
+				const item = findItem(state, id);
+				return item
+					? `#${item.id}: ${formatDisplayText(item.subject, TODO_MAX_SUBJECT_LENGTH)} (${item.status})`
+					: `#${id}`;
+			});
+			return `Created ${operation.ids.length} ${noun}:${lines.length ? `\n${lines.join("\n")}` : ""}`;
+		}
 		case "update": {
 			const transition = operation.from === operation.to ? "" : ` (${operation.from} -> ${operation.to})`;
 			let text = `Updated #${operation.id}${transition}`;

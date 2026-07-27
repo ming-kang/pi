@@ -1,7 +1,7 @@
 # 工具调用 UI 全面修复 — 交接文档
 
-> 状态:进行中,WP1、WP2 已完成并通过测试;WP3–WP8 未开始。
-> 本文档不随发布提交,仅供接力会话使用。工作区当前有未提交的改动(见"已完成"一节),owner 未要求 commit——遵守 AGENTS.md:不要主动提交。
+> 状态:进行中,WP1–WP3 已完成并通过测试;WP4–WP8 未开始。
+> 本文档不随发布提交,仅供接力会话使用,本轮开发全部完成后删除。owner 已要求将 WP3 与本次文档更新一同提交;除此之外不要主动 commit。
 
 ## 一、动机与背景
 
@@ -61,14 +61,14 @@ Owner 在 0.82.6 发布后截图指出 `todo create_many` 的工具行不美观(
 |---|---|---|
 | WP1 | 壳层:theme 嵌套、│ rail、通用 Running 行、截断 helper | ✅ 完成 |
 | WP2 | 内置七工具 + bash-execution `!!` bug | ✅ 完成 |
-| WP3 | todo:create_many 内容化、摘要保 subject、展开逐任务、模型文案 | ⬜ 未开始 |
+| WP3 | todo:create_many 内容化、摘要保 subject、展开逐任务、模型文案 | ✅ 完成 |
 | WP4 | subagent:截断策略、展开态一致性、杂项 | ⬜ 未开始 |
 | WP5 | question:调用行可展开、取消态、错误行、对话框 | ⬜ 未开始 |
 | WP6 | plan 正文 Markdown 化 + deepwiki 小修 | ⬜ 未开始 |
 | WP7 | 键名 hint 统一 | ⬜ 未开始 |
 | WP8 | 全量测试、docs、CHANGELOG、delta 登记 | ⬜ 未开始 |
 
-## 四、已完成明细(WP1 + WP2)
+## 四、已完成明细(WP1–WP3)
 
 ### WP1 壳层(全部通过类型/lint/测试)
 
@@ -93,30 +93,25 @@ Owner 在 0.82.6 发布后截图指出 `todo create_many` 的工具行不美观(
 - **ls.ts**:`toolGroup: "explore"`;提示接 helper。
 - **bash-execution.ts**:`colorKey` 提为实例字段,`updateDisplay` 重建 header 用 `this.colorKey`,修复 `!!` dim 色丢失。
 
+### WP3 todo
+
+- **headline**:`create_many` 动作词化为 `todo create`,显示正确单复数的 `N task(s) · <前2个 subject>, +N more`;subject 预览压到单行并按 72 列截断。
+- **展开态**:全部合法批次项逐任务展示;settled 后使用结构化结果里的真实 task id,流式/无结果时使用不会冒充 id 的序号。每项附 `blockedBy`/`blockedByKeys` 与约 120 字符 description 预览。未验证/历史参数按 `TODO_MAX_BATCH_ITEMS`、`TODO_MAX_BLOCKED_BY` 防御性限界,稀疏数组和非法 dependency id 不会误渲染或刷屏。
+- **组内成功摘要**:`create` 保留 subject;`create_many` 使用 `#4–#6 · Subject A, Subject B, +1 more`(非连续 id 保持逗号列);`delete` 从 details snapshot 取 tombstone subject。所有摘要 subject 单行化并限宽。
+- **模型文案**:`create_many` 从只列 ids 改为逐任务 `#id: subject (pending)` 行,并修单条 batch 的 `task` 单数;schema、协议和 details 结构未变。
+- **范围选择**:未实现评审中的可选 `renderResult`;单独 todo 调用仍保留现有模型结果回显,避免在 owner 未拍板时扩大行为变化。
+
 ### 测试状态
 
-- 已更新断言:`test/tool-execution-component.test.ts:226-227`(rail 后空行是 `│`);`test/edit-tool-no-full-redraw.test.ts` 两个用例(组件 `setExpanded(true)` 保持大 diff 断言意图,另补折叠态断言:含前部行、不含 `line 950 changed`、含 `more lines`)。
-- 已跑绿:tool-execution-component、bash-tool-rendering、bash-execution-width、edit-tool-no-full-redraw、edit-tool-legacy-input、theme-picker、theme-export、syntax-highlight、export-html-whitespace、export-html-skill-block、subagent-render、todo-render、plan-render。
+- 已更新断言:`test/tool-execution-component.test.ts`(rail 空行、todo 组摘要);`test/edit-tool-no-full-redraw.test.ts` 两个用例(组件 `setExpanded(true)` 保持大 diff 断言意图,另补折叠态断言:含前部行、不含 `line 950 changed`、含 `more lines`);`test/todo-render.test.ts`(单复数、subject 预览、真实/流式 id、展开逐任务、依赖、限界、create/delete/create_many 摘要);`test/todo-extension.test.ts`(逐任务模型文案)。
+- WP3 聚焦测试已跑绿:`todo-render` 19、`todo-extension` 69、`tool-execution-component` 31。
+- WP1/WP2 既有聚焦测试已跑绿:tool-execution-component、bash-tool-rendering、bash-execution-width、edit-tool-no-full-redraw、edit-tool-legacy-input、theme-picker、theme-export、syntax-highlight、export-html-whitespace、export-html-skill-block、subagent-render、todo-render、plan-render。
 - **Windows 本地既有失败(非本次改动,勿修)**:`test/tools.test.ts` 的 3 个——edit EACCES ×2(POSIX 权限语义)、grep "flag-like patterns"(rg 把 `C:\Users` 的 `\U` 当 hex escape)。全部在 execute 路径,本次 diff 未触及;AGENTS.md 明言 Windows 平台差异以 Ubuntu CI 为权威。
-- biome、tsgo --noEmit 全部干净。注意:用脚本批量改文件时保持 CRLF(仓库工作区是 CRLF,写成 LF 会触发 biome;`npm run format` 可修)。
+- `npm run check`、biome、tsgo --noEmit 全部干净。注意:用脚本批量改文件时保持 CRLF(仓库工作区是 CRLF,写成 LF 会触发 biome;`npm run format` 可修)。
 
 ## 五、未完成工作包的实施方案
 
-以下 file:line 以当前工作区为准(WP1/2 的改动可能使个别行号略移,先 grep 定位)。每个 WP 完成后:跑该扩展的 `test/<name>-*.test.ts` 迭代至绿,再 `tsgo --noEmit` + `npx biome check`。
-
-### WP3 todo(owner 点名的原始问题,优先做)
-
-文件:`src/extensions/todo/view.ts`(渲染)、`src/extensions/todo/state.ts`(模型文案)、`test/todo-render.test.ts`。
-
-1. **headline**(view.ts:172-195):create_many 分支现在是 `todo create_many` + dim `N tasks`(:176-179)。目标:动作词化为 `todo create`,后接 `N tasks · <subject 预览>`:复用 `callBatchSubjects`(:153-162,`"; "` 连接前 3 个),建议改为逗号连接前 2 个 + `+N more`,单条时直接显示该 subject。修单复数(`1 task`)。
-2. **组内成功摘要**(view.ts:366-403):
-   - create(:374 附近):`todo created 1 task #4` → `todo created #4 <subject>`(subject 从 args 取,operation 里若有更好)。
-   - create_many:`todo created 3 tasks #1, #2, #3` → `todo created #1–#3 · <前2个subject>, +N more`(连续 id 用区间,不连续保持逗号列)。
-   - delete(:396):带 subject(details.items 快照里按 id 查——参照 get 的 :334-347 做法)。
-3. **展开态**(view.ts:197-232):create_many 目前只有 `batch: 3 tasks (前3个)` 一行。目标:逐任务一行 `#k <subject>`(有 blockedBy/blockedByKeys 时追加 ` · blocked by …`),下挂各自 description(dim,可截 ~120);覆盖全部条目,删除 `slice(0,3)`。注意展开态 headline 与细节行都在 renderCall 里(todo 无 renderResult)。
-4. **模型文案**(state.ts:1285-1286):`Created 3 tasks: #1, #2, #3` → 逐条 `#1 Wire parser` 式列表(与 :1279-1284 单条格式家族一致)。**这是 owner 明确批准的唯一模型侧改动**。
-5. 可选(评审建议,owner 未单独拍板,做不做由接力判断):给 todo 补 renderResult,使**未成组**的单独调用不再把模型原文整段回显(现在 headline `todo update #1 in_progress` + 结果 `Updated #1 (pending → in_progress)` 几乎逐字重复)。若做,折叠态渲染与组摘要同款的一行(复用 :366-403 的逻辑),展开态保留模型原文。
-6. 测试:test/todo-render.test.ts:114-165 是 headline 断言区,组摘要断言在后段;逐条更新并为新行为补断言(单复数、区间 id、展开逐任务)。
+以下 file:line 以当前工作区为准(WP1–WP3 的改动可能使个别行号略移,先 grep 定位)。每个 WP 完成后:跑该扩展的 `test/<name>-*.test.ts` 迭代至绿,再 `tsgo --noEmit` + `npx biome check`。
 
 ### WP4 subagent
 

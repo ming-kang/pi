@@ -1,7 +1,7 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { AgentToolResult } from "../../core/extensions/types.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
-import { LIST_DISPLAY_MAX_ITEMS } from "./constants.ts";
+import { LIST_DISPLAY_MAX_ITEMS, TODO_MAX_BATCH_ITEMS, TODO_MAX_BLOCKED_BY } from "./constants.ts";
 import {
 	TODO_DETAILS_SCHEMA_VERSION,
 	type TodoItem,
@@ -138,27 +138,125 @@ function callText(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
 }
 
+function callSubject(value: unknown): string {
+	return callText(value).replace(/\s+/g, " ");
+}
+
 function callId(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isInteger(value) ? value : undefined;
 }
 
 function callIds(value: unknown): number[] {
-	return Array.isArray(value) ? value.filter((entry): entry is number => typeof entry === "number") : [];
+	if (!Array.isArray(value)) return [];
+	const ids: number[] = [];
+	let count: number;
+	try {
+		count = Math.min(value.length, TODO_MAX_BLOCKED_BY);
+	} catch {
+		return ids;
+	}
+	for (let index = 0; index < count; index++) {
+		let entry: unknown;
+		try {
+			entry = value[index];
+		} catch {
+			continue;
+		}
+		if (typeof entry === "number" && Number.isSafeInteger(entry) && entry >= 1) ids.push(entry);
+	}
+	return ids;
 }
 
 function callArrayLength(value: unknown): number | undefined {
-	return Array.isArray(value) ? value.length : undefined;
+	try {
+		return Array.isArray(value) ? value.length : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
-function callBatchSubjects(value: unknown): string {
-	if (!Array.isArray(value)) return "";
-	const subjects: string[] = [];
-	for (const item of value.slice(0, 3)) {
-		if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-		const subject = callText((item as Record<string, unknown>).subject);
-		if (subject) subjects.push(subject);
+const CALL_BATCH_SUBJECT_PREVIEW_COUNT = 2;
+const CALL_SUBJECT_PREVIEW_WIDTH = 72;
+const CALL_DESCRIPTION_PREVIEW_LENGTH = 120;
+
+interface CallBatchItem {
+	subject: string;
+	description: string;
+	blockedBy: number[];
+	blockedByKeys: string[];
+}
+
+function callStrings(value: unknown): string[] {
+	if (!Array.isArray(value)) return [];
+	const strings: string[] = [];
+	let count: number;
+	try {
+		count = Math.min(value.length, TODO_MAX_BLOCKED_BY);
+	} catch {
+		return strings;
 	}
-	return subjects.join("; ");
+	for (let index = 0; index < count; index++) {
+		let entry: unknown;
+		try {
+			entry = value[index];
+		} catch {
+			continue;
+		}
+		const text = callText(entry);
+		if (text) strings.push(text);
+	}
+	return strings;
+}
+
+function callBatchItems(value: unknown): CallBatchItem[] {
+	if (!Array.isArray(value)) return [];
+	let count: number;
+	try {
+		count = Math.min(value.length, TODO_MAX_BATCH_ITEMS);
+	} catch {
+		return [];
+	}
+	const items: CallBatchItem[] = [];
+	for (let index = 0; index < count; index++) {
+		let valueAtIndex: unknown;
+		try {
+			valueAtIndex = value[index];
+		} catch {
+			valueAtIndex = undefined;
+		}
+		const item = safeRecord(valueAtIndex);
+		items.push({
+			subject: item ? callSubject(safeValue(item, "subject")) : "",
+			description: item ? callText(safeValue(item, "description")) : "",
+			blockedBy: item ? callIds(safeValue(item, "blockedBy")) : [],
+			blockedByKeys: item ? callStrings(safeValue(item, "blockedByKeys")) : [],
+		});
+	}
+	return items;
+}
+
+function formatSubjectPreview(subjects: string[], total: number): string {
+	const shown = subjects
+		.slice(0, CALL_BATCH_SUBJECT_PREVIEW_COUNT)
+		.filter(Boolean)
+		.map((subject) => truncateToWidth(subject, CALL_SUBJECT_PREVIEW_WIDTH, "…"));
+	if (!shown.length) return "";
+	const hidden = Math.max(0, total - shown.length);
+	return `${shown.join(", ")}${hidden ? `, +${hidden} more` : ""}`;
+}
+
+function callBatchSubjectPreview(items: CallBatchItem[], total: number): string {
+	return formatSubjectPreview(
+		items.map((item) => item.subject),
+		total,
+	);
+}
+
+function callDescriptionPreview(value: string): string {
+	const text = value.replace(/\s+/g, " ");
+	return text.length > CALL_DESCRIPTION_PREVIEW_LENGTH
+		? `${text.slice(0, CALL_DESCRIPTION_PREVIEW_LENGTH - 1)}…`
+		: text;
 }
 
 function callNonNegativeInteger(value: unknown): number | undefined {
@@ -171,11 +269,20 @@ function isTodoStatus(value: string): value is TodoStatus {
 
 function formatCallHeadline(args: TodoCallArgs | undefined, theme: Theme): string {
 	const action = callText(args?.action);
-	const parts = [theme.fg("toolTitle", theme.bold(action ? `todo ${action}` : "todo"))];
+	const displayAction = action === "create_many" ? "create" : action;
+	const parts = [theme.fg("toolTitle", theme.bold(displayAction ? `todo ${displayAction}` : "todo"))];
 
 	if (action === "create_many") {
+		const items = callBatchItems(args?.items);
 		const count = callArrayLength(args?.items);
-		if (count !== undefined) parts.push(theme.fg("dim", `${count} tasks`));
+		if (count !== undefined) {
+			parts.push(theme.fg("dim", `${count} ${count === 1 ? "task" : "tasks"}`));
+			const preview = callBatchSubjectPreview(items, count);
+			if (preview) {
+				parts.push(theme.fg("dim", "·"));
+				parts.push(theme.fg("text", preview));
+			}
+		}
 	}
 
 	const id = callId(args?.id);
@@ -184,7 +291,7 @@ function formatCallHeadline(args: TodoCallArgs | undefined, theme: Theme): strin
 	const status = callText(args?.status);
 	if (status && isTodoStatus(status)) parts.push(theme.fg(STATUS_COLOR[status], status));
 
-	const subject = callText(args?.subject);
+	const subject = callSubject(args?.subject);
 	if (subject) parts.push(theme.fg("text", subject));
 
 	// Dependency-only updates would otherwise render as a bare `todo update #3`.
@@ -194,7 +301,14 @@ function formatCallHeadline(args: TodoCallArgs | undefined, theme: Theme): strin
 	return parts.join(" ");
 }
 
-function formatCallDetails(args: TodoCallArgs | undefined, theme: Theme): string[] {
+function batchResultIds(result: AgentToolResult<unknown> | undefined, count: number): number[] | undefined {
+	const details = groupDetails(result?.details);
+	if (!details || details.action !== "create_many") return undefined;
+	const ids = groupIds(safeValue(details.operation, "ids"));
+	return ids?.length === count ? ids : undefined;
+}
+
+function formatCallDetails(args: TodoCallArgs | undefined, theme: Theme, result?: AgentToolResult<unknown>): string[] {
 	const lines: string[] = [];
 	const push = (label: string, value: string) => {
 		if (value) lines.push(theme.fg("dim", `${label}: ${value}`));
@@ -202,10 +316,15 @@ function formatCallDetails(args: TodoCallArgs | undefined, theme: Theme): string
 
 	const action = callText(args?.action);
 	if (action === "create_many") {
-		const count = callArrayLength(args?.items);
-		if (count !== undefined) {
-			const subjects = callBatchSubjects(args?.items);
-			push("batch", `${count} tasks${subjects ? ` (${subjects})` : ""}`);
+		const items = callBatchItems(args?.items);
+		const ids = batchResultIds(result, items.length);
+		for (const [index, item] of items.entries()) {
+			const dependencies = [...item.blockedBy.map((id) => `#${id}`), ...item.blockedByKeys];
+			let line = theme.fg("accent", ids ? `#${ids[index]}` : `${index + 1}.`);
+			if (item.subject) line += ` ${theme.fg("text", item.subject)}`;
+			if (dependencies.length) line += ` ${theme.fg("dim", `· blocked by ${dependencies.join(", ")}`)}`;
+			lines.push(line);
+			if (item.description) lines.push(`  ${theme.fg("dim", callDescriptionPreview(item.description))}`);
 		}
 	}
 
@@ -235,10 +354,15 @@ function formatCallDetails(args: TodoCallArgs | undefined, theme: Theme): string
  * One-line call summary when collapsed; the same headline plus the parameters
  * the result never echoes (description, activeForm, dependencies) when expanded.
  */
-export function formatTodoCall(args: TodoCallArgs | undefined, theme: Theme, expanded: boolean): string {
+export function formatTodoCall(
+	args: TodoCallArgs | undefined,
+	theme: Theme,
+	expanded: boolean,
+	result?: AgentToolResult<unknown>,
+): string {
 	const headline = formatCallHeadline(args, theme);
 	if (!expanded) return headline;
-	return [headline, ...formatCallDetails(args, theme)].join("\n");
+	return [headline, ...formatCallDetails(args, theme, result)].join("\n");
 }
 
 interface TodoGroupRenderContext {
@@ -331,19 +455,36 @@ function formatGroupStatusCounts(value: unknown, resultCount: unknown): string |
 	return total === count && parts.length ? parts.join(", ") : undefined;
 }
 
-function groupItemStatus(value: unknown, id: number): TodoStatus | undefined {
+function groupItem(value: unknown, id: number): Record<string, unknown> | undefined {
 	try {
 		if (!Array.isArray(value) || value.length > GROUP_MAX_SNAPSHOT_ITEMS) return undefined;
 		for (const rawItem of value) {
 			const item = safeRecord(rawItem);
-			if (!item || safeValue(item, "id") !== id) continue;
-			const status = safeString(safeValue(item, "status"));
-			return status && isTodoStatus(status) ? status : undefined;
+			if (item && safeValue(item, "id") === id) return item;
 		}
 	} catch {
 		return undefined;
 	}
 	return undefined;
+}
+
+function groupItemStatus(value: unknown, id: number): TodoStatus | undefined {
+	const item = groupItem(value, id);
+	if (!item) return undefined;
+	const status = safeString(safeValue(item, "status"));
+	return status && isTodoStatus(status) ? status : undefined;
+}
+
+function groupItemSubject(value: unknown, id: number): string | undefined {
+	const item = groupItem(value, id);
+	if (!item) return undefined;
+	const subject = callSubject(safeValue(item, "subject"));
+	return subject || undefined;
+}
+
+function formatGroupIds(ids: number[]): string {
+	const consecutive = ids.length > 1 && ids.every((id, index) => id === ids[0] + index);
+	return consecutive ? `#${ids[0]}–#${ids.at(-1)}` : ids.map((id) => `#${id}`).join(", ");
 }
 
 function formatGroupFailure(result: AgentToolResult<unknown> | undefined): string {
@@ -363,16 +504,27 @@ function formatGroupFailure(result: AgentToolResult<unknown> | undefined): strin
 	return "tool failed";
 }
 
-function formatTodoGroupSuccess(result: AgentToolResult<unknown>): string | undefined {
+function formatTodoGroupSuccess(args: TodoCallArgs | undefined, result: AgentToolResult<unknown>): string | undefined {
 	const details = groupDetails(result.details);
 	if (!details) return undefined;
 
 	switch (details.action) {
-		case "create":
+		case "create": {
+			const ids = groupIds(safeValue(details.operation, "ids"));
+			if (!ids || ids.length !== 1) return undefined;
+			const subject = groupItemSubject(details.items, ids[0]) ?? callSubject(args?.subject);
+			const preview = subject ? truncateToWidth(subject, CALL_SUBJECT_PREVIEW_WIDTH, "…") : "";
+			return `todo created #${ids[0]}${preview ? ` ${preview}` : ""}`;
+		}
 		case "create_many": {
 			const ids = groupIds(safeValue(details.operation, "ids"));
-			if (!ids || (details.action === "create" && ids.length !== 1)) return undefined;
-			return `todo created ${ids.length} ${ids.length === 1 ? "task" : "tasks"} ${ids.map((id) => `#${id}`).join(", ")}`;
+			if (!ids) return undefined;
+			const callItems = callBatchItems(args?.items);
+			const subjects = ids.map(
+				(id, index) => groupItemSubject(details.items, id) ?? callItems[index]?.subject ?? "",
+			);
+			const preview = formatSubjectPreview(subjects, ids.length);
+			return `todo created ${formatGroupIds(ids)}${preview ? ` · ${preview}` : ""}`;
 		}
 		case "update": {
 			const id = groupPositiveInteger(safeValue(details.operation, "id"));
@@ -393,7 +545,10 @@ function formatTodoGroupSuccess(result: AgentToolResult<unknown>): string | unde
 		}
 		case "delete": {
 			const id = groupPositiveInteger(safeValue(details.operation, "id"));
-			return id === undefined ? undefined : `todo deleted #${id}`;
+			if (id === undefined) return undefined;
+			const subject = groupItemSubject(details.items, id);
+			const preview = subject ? truncateToWidth(subject, CALL_SUBJECT_PREVIEW_WIDTH, "…") : "";
+			return `todo deleted #${id}${preview ? ` ${preview}` : ""}`;
 		}
 		case "clear": {
 			const count = callNonNegativeInteger(safeValue(details.operation, "count"));
@@ -412,7 +567,7 @@ export function formatTodoGroupCall(
 		return `${formatTodoCall(args, theme, false)} ${theme.fg("error", `failed: ${formatGroupFailure(context.result)}`)}`;
 	}
 	if (!context.isPartial && context.result) {
-		const summary = formatTodoGroupSuccess(context.result);
+		const summary = formatTodoGroupSuccess(args, context.result);
 		if (summary) return theme.fg("toolTitle", summary);
 	}
 	return formatTodoCall(args, theme, false);

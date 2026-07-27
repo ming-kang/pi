@@ -622,6 +622,9 @@ describe("todo create_many", () => {
 			],
 		} as TodoParams);
 		expect(result.operation.kind).toBe("create_many");
+		expect(formatTodoContent(result.operation, result.state)).toBe(
+			"Created 2 tasks:\n#2: Implement batch support (pending)\n#3: Test batch support (pending)",
+		);
 		expect(result.state.items.map((task) => task.id)).toEqual([1, 2, 3]);
 		expect(item(result.state, 2)).toMatchObject({ status: "pending", owner: "agent-a", blockedBy: [1] });
 		expect(item(result.state, 3).blockedBy).toEqual([2]);

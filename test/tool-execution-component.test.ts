@@ -761,7 +761,7 @@ describe("ToolExecutionComponent parity", () => {
 		group.addTool(created);
 		group.addTool(failed);
 		const rendered = stripAnsi(group.render(500).join("\n"));
-		expect(rendered).toContain("todo created 2 tasks #4, #5");
+		expect(rendered).toContain("todo created #4–#5 · Wire parser, Test parser");
 		expect(rendered).toContain("todo update #7 failed: bad request");
 		expect(rendered).not.toContain("x".repeat(200));
 		expect(rendered.split("\n").filter((line) => line.includes("todo update #7"))).toHaveLength(1);
