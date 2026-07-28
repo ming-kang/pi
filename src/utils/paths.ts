@@ -85,9 +85,8 @@ export function resolvePath(input: string, baseDir: string = process.cwd(), opti
 }
 
 /**
- * Encode a cwd into a filesystem-safe directory name, e.g.
- * `C:\Users\me\proj` -> `--C--Users-me-proj--`. Shared by the sessions and
- * plans storage layouts; callers decide whether to resolve the path first.
+ * Encode a cwd into the filesystem-safe directory name shared by session
+ * storage and session migrations. Callers decide whether to resolve first.
  */
 export function cwdToSafeDirName(cwd: string): string {
 	return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;

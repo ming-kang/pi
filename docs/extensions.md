@@ -1590,9 +1590,9 @@ Register a keyboard shortcut. See [keybindings.md](keybindings.md) for the short
 
 ```typescript
 pi.registerShortcut("ctrl+shift+p", {
-  description: "Toggle plan mode",
+  description: "Open the project picker",
   handler: async (ctx) => {
-    ctx.ui.notify("Toggled!");
+    ctx.ui.notify("Project picker opened!");
   },
 });
 ```
@@ -1602,15 +1602,15 @@ pi.registerShortcut("ctrl+shift+p", {
 Register a CLI flag.
 
 ```typescript
-pi.registerFlag("plan", {
-  description: "Start in plan mode",
-  type: "boolean",
-  default: false,
+pi.registerFlag("profile", {
+  description: "Start with a named profile",
+  type: "string",
 });
 
 // Check value
-if (pi.getFlag("plan")) {
-  // Plan mode enabled
+const profile = pi.getFlag("profile");
+if (profile) {
+  // Apply the selected profile
 }
 ```
 
@@ -2487,7 +2487,7 @@ const action = await ctx.ui.select(
   ],
   {
     subtitle: "Context now 29% full",   // muted line under the title
-    cancelHint: "keep planning",        // Esc is not destructive here
+    cancelHint: "go back",              // Describe what Esc actually does
   },
 );
 
@@ -2965,7 +2965,6 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `timed-confirm.ts` | Dialogs with timeout | `ui.confirm` with timeout/signal |
 | `mac-system-theme.ts` | Auto-switch theme | `setTheme`, `exec` |
 | **Complex Extensions** |||
-| `plan-mode/` | Full plan mode implementation | All event types, `registerCommand`, `registerShortcut`, `registerFlag`, `setStatus`, `setWidget`, `sendMessage`, `setActiveTools` |
 | `preset.ts` | Saveable presets (model, tools, thinking) | `registerCommand`, `registerShortcut`, `registerFlag`, `setModel`, `setActiveTools`, `setThinkingLevel`, `appendEntry` |
 | `tools.ts` | Toggle tools on/off UI | `registerCommand`, `setActiveTools`, `SettingsList`, session events |
 | **Remote & Sandbox** |||

@@ -808,8 +808,8 @@ describe("InteractiveMode.showLoadedResources", () => {
 	test("strips index.ts from local extension label, showing parent dir", () => {
 		const extensions: ExtensionFixture[] = [
 			{
-				path: "/tmp/extensions/plan-mode/index.ts",
-				sourceInfo: createSourceInfo("/tmp/extensions/plan-mode/index.ts", {
+				path: "/tmp/extensions/nested-extension/index.ts",
+				sourceInfo: createSourceInfo("/tmp/extensions/nested-extension/index.ts", {
 					source: "local",
 					scope: "project",
 					origin: "top-level",
@@ -830,14 +830,14 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
 "[Extensions]
-  plan-mode"`);
+  nested-extension"`);
 	});
 
 	test("strips index.js from local extension label, showing parent dir", () => {
 		const extensions: ExtensionFixture[] = [
 			{
-				path: "/tmp/extensions/plan-mode/index.js",
-				sourceInfo: createSourceInfo("/tmp/extensions/plan-mode/index.js", {
+				path: "/tmp/extensions/nested-extension/index.js",
+				sourceInfo: createSourceInfo("/tmp/extensions/nested-extension/index.js", {
 					source: "local",
 					scope: "project",
 					origin: "top-level",
@@ -858,7 +858,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
 "[Extensions]
-  plan-mode"`);
+  nested-extension"`);
 	});
 
 	test("mixed single-file and subdirectory index.ts extensions strip index.ts", () => {
@@ -873,8 +873,8 @@ describe("InteractiveMode.showLoadedResources", () => {
 				}),
 			},
 			{
-				path: "/tmp/extensions/plan-mode/index.ts",
-				sourceInfo: createSourceInfo("/tmp/extensions/plan-mode/index.ts", {
+				path: "/tmp/extensions/nested-extension/index.ts",
+				sourceInfo: createSourceInfo("/tmp/extensions/nested-extension/index.ts", {
 					source: "local",
 					scope: "project",
 					origin: "top-level",
@@ -895,7 +895,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
 "[Extensions]
-  plan-mode, webfetch.ts"`);
+  nested-extension, webfetch.ts"`);
 	});
 
 	test("multiple index.ts with unique parent dirs need no disambiguation", () => {

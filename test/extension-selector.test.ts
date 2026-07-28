@@ -8,9 +8,9 @@ import { stripAnsi } from "../src/utils/ansi.ts";
 const WIDTH = 120;
 
 const APPROVAL_OPTIONS = [
-	{ label: "Start executing", description: "keep full context" },
-	{ label: "Compact context, then execute", description: "best for long tasks" },
-	{ label: "Keep planning" },
+	{ label: "Use cached result", description: "fastest option" },
+	{ label: "Refresh and continue", description: "uses the latest data" },
+	{ label: "Go back" },
 ];
 
 function render(selector: ExtensionSelectorComponent): string {
@@ -35,12 +35,12 @@ describe("ExtensionSelectorComponent", () => {
 		);
 
 		const lines = render(selector).split("\n");
-		const labelIndex = lines.findIndex((line) => line.includes("Start executing"));
+		const labelIndex = lines.findIndex((line) => line.includes("Use cached result"));
 
 		expect(labelIndex).toBeGreaterThanOrEqual(0);
-		expect(lines[labelIndex + 1]).toContain("keep full context");
+		expect(lines[labelIndex + 1]).toContain("fastest option");
 		// An option without a description must not borrow the next one's line.
-		expect(render(selector)).toContain("Keep planning");
+		expect(render(selector)).toContain("Go back");
 	});
 
 	it("resolves to the label, not the label plus description", () => {
@@ -49,7 +49,7 @@ describe("ExtensionSelectorComponent", () => {
 
 		selector.handleInput("\n");
 
-		expect(onSelect).toHaveBeenCalledWith("Start executing");
+		expect(onSelect).toHaveBeenCalledWith("Use cached result");
 	});
 
 	it("navigates past descriptions one option at a time", () => {
@@ -59,7 +59,7 @@ describe("ExtensionSelectorComponent", () => {
 		selector.handleInput("j");
 		selector.handleInput("\n");
 
-		expect(onSelect).toHaveBeenCalledWith("Compact context, then execute");
+		expect(onSelect).toHaveBeenCalledWith("Refresh and continue");
 	});
 
 	it("still accepts plain string options", () => {
@@ -143,11 +143,11 @@ describe("ExtensionSelectorComponent", () => {
 			() => {},
 			() => {},
 			{
-				cancelHint: "keep planning",
+				cancelHint: "go back",
 			},
 		);
 		const output = render(withOverride);
-		expect(output).toContain("keep planning");
+		expect(output).toContain("go back");
 		expect(output).not.toContain("cancel");
 	});
 });

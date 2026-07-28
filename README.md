@@ -23,7 +23,7 @@ The package keeps Pi's extensible terminal coding-agent architecture and adds a 
 
 - native `●` call and `│` result presentation with bounded collapsed tool output;
 - automatic compaction between completed tool batches and the next provider request;
-- bundled `deepwiki`, `plan`, `question`, `rewind`, `router`, `statusline`, `subagent`, and `todo` extensions;
+- bundled `deepwiki`, `question`, `rewind`, `router`, `statusline`, `subagent`, and `todo` extensions;
 - bundled `ice-cream-dark` and `ice-cream-light` themes;
 - exact registry dependencies on the upstream AI, Agent core, and TUI packages.
 

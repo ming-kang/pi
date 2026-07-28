@@ -50,7 +50,6 @@ Personal workflow features remain self-contained extensions:
 ```text
 src/extensions/
 ├── deepwiki/
-├── plan/
 ├── question/
 ├── rewind/
 ├── router/

@@ -16,7 +16,7 @@ export interface ExtensionSelectorOptions {
 	onToggleToolsExpanded?: () => void;
 	/** Muted line under the title, for context that is not itself a choice. */
 	subtitle?: string;
-	/** Overrides the "cancel" wording in the key hints (e.g. when Esc means "keep planning"). */
+	/** Overrides the "cancel" wording in the key hints when Esc has a more specific meaning. */
 	cancelHint?: string;
 }
 

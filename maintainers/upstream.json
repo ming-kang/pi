@@ -29,7 +29,6 @@
     "scripts/test-isolated.mjs",
     "scripts/verify-package-install.mjs",
     "src/extensions/deepwiki/**",
-    "src/extensions/plan/**",
     "src/extensions/question/**",
     "src/extensions/rewind/**",
     "src/extensions/router/**",
@@ -48,8 +47,6 @@
     "test/extension-selector.test.ts",
     "test/helpers/virtual-terminal.ts",
     "test/keybinding-hints.test.ts",
-    "test/plan-extension.test.ts",
-    "test/plan-render.test.ts",
     "test/question-*.test.ts",
     "test/rewind-*.test.ts",
     "test/router-*.test.ts",
@@ -65,6 +62,7 @@
     "npm-shrinkwrap.json",
     "package.json",
     "scripts/migrate-sessions.sh",
+    "src/cli/args.ts",
     "src/cli/config-selector.ts",
     "src/cli/project-trust.ts",
     "src/cli/session-picker.ts",
@@ -131,6 +129,8 @@
     "vitest.config.ts"
   ],
   "dropped": [
-    "install-lock/**"
+    "install-lock/**",
+    "test/plan-mode-extension.test.ts",
+    "test/plan-mode-utils.test.ts"
   ]
 }

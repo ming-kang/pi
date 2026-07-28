@@ -123,7 +123,16 @@ try {
 			throw new Error(`Installed package is missing ${relativePath}.`);
 		}
 	}
-	for (const forbiddenPath of ["maintainers", "node_modules/.package-lock.json", "packages", "src", "test"]) {
+	for (const forbiddenPath of [
+		"dist/extensions/plan",
+		"docs/bundled/extensions/plan.md",
+		"examples/extensions/plan-mode",
+		"maintainers",
+		"node_modules/.package-lock.json",
+		"packages",
+		"src",
+		"test",
+	]) {
 		if (existsSync(join(packageDirectory, ...forbiddenPath.split("/")))) {
 			throw new Error(`Installed package unexpectedly contains ${forbiddenPath}.`);
 		}

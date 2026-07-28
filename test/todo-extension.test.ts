@@ -364,7 +364,7 @@ describe("replayTodosFromBranch", () => {
 			todoResultEntry(older),
 			{ type: "message", message: { role: "toolResult", toolName: "bash", details: { items: [], nextId: 9 } } },
 			todoResultEntry(newer),
-			{ type: "custom", customType: "plan-mode" },
+			{ type: "custom", customType: "unrelated-state" },
 		];
 		const replayed = replayTodosFromBranch({ sessionManager: { getBranch: () => branch } });
 		expect(replayed.items).toHaveLength(2);

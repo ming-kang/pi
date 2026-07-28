@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the existing bundled Plan Mode implementation, its legacy extension example, tests, and user documentation ahead of a replacement design.
+
 ## [0.82.7] - 2026-07-28
 
 ### Added
