@@ -84,6 +84,15 @@ export function resolvePath(input: string, baseDir: string = process.cwd(), opti
 	return isAbsolute(normalized) ? nodeResolvePath(normalized) : nodeResolvePath(normalizedBaseDir, normalized);
 }
 
+/**
+ * Encode a cwd into a filesystem-safe directory name, e.g.
+ * `C:\Users\me\proj` -> `--C--Users-me-proj--`. Shared by the sessions and
+ * plans storage layouts; callers decide whether to resolve the path first.
+ */
+export function cwdToSafeDirName(cwd: string): string {
+	return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+}
+
 export function getCwdRelativePath(filePath: string, cwd: string): string | undefined {
 	const resolvedCwd = resolvePath(cwd);
 	const resolvedPath = resolvePath(filePath, resolvedCwd);

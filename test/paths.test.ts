@@ -3,7 +3,14 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { canonicalizePath, getCwdRelativePath, isLocalPath, normalizePath, resolvePath } from "../src/utils/paths.ts";
+import {
+	canonicalizePath,
+	cwdToSafeDirName,
+	getCwdRelativePath,
+	isLocalPath,
+	normalizePath,
+	resolvePath,
+} from "../src/utils/paths.ts";
 
 let tempDir: string;
 
@@ -146,5 +153,15 @@ describe("isLocalPath", () => {
 
 	it("returns false for https: protocol", () => {
 		expect(isLocalPath("https://example.com")).toBe(false);
+	});
+});
+
+describe("cwdToSafeDirName", () => {
+	it("encodes windows paths with drive colons", () => {
+		expect(cwdToSafeDirName("C:\\Users\\me\\proj")).toBe("--C--Users-me-proj--");
+	});
+
+	it("encodes posix paths, dropping the leading slash", () => {
+		expect(cwdToSafeDirName("/home/me/proj")).toBe("--home-me-proj--");
 	});
 });

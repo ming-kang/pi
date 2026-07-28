@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, w
 import { dirname, join } from "path";
 import { CONFIG_DIR_NAME, getAgentDir, getBinDir } from "./config.ts";
 import { migrateKeybindingsConfig } from "./core/keybindings.ts";
+import { cwdToSafeDirName } from "./utils/paths.ts";
 
 const MIGRATION_GUIDE_URL =
 	"https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/CHANGELOG.md#extensions-migration";
@@ -109,7 +110,7 @@ export function migrateSessionsFromAgentRoot(): void {
 			const cwd: string = header.cwd;
 
 			// Compute the correct session directory (same encoding as session-manager.ts)
-			const safePath = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+			const safePath = cwdToSafeDirName(cwd);
 			const correctDir = join(agentDir, "sessions", safePath);
 
 			// Create directory if needed

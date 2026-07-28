@@ -3,9 +3,11 @@
  * then a user-approved exit that saves the plan and optionally compacts.
  *
  * Shape:
- * - Entry (/plan or --plan) removes write-capable tools (edit/write/bash/
- *   subagent) and activates exit_plan; a tool_call guard covers requests
- *   already in flight before the tool-set change lands.
+ * - Entry (/plan or --plan) snapshots the active tool set and swaps to the
+ *   exploration set (read/grep/find/ls/bash + exit_plan; edit/write removed,
+ *   bash prompt-constrained to read-only, subagent guarded to the explorer
+ *   profile); a tool_call guard covers requests already in flight before the
+ *   tool-set change lands.
  * - The plan text travels as an exit_plan parameter, so the model needs no
  *   write access to produce the plan file.
  * - "Compact, then execute" keeps plan mode active until compaction completes
@@ -16,6 +18,8 @@
  * - State is conversation-backed via custom entries and branch replay (same
  *   pattern as todo): /reload, /tree, resume, and fork all restore.
  */
+
+import { basename } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import type {
 	AgentToolResult,
@@ -35,12 +39,20 @@ import {
 	MENU_COMPACT_EXECUTE,
 	MENU_EXECUTE,
 	MENU_KEEP_PLANNING,
+	PLAN_ALLOWED_SUBAGENT,
 	PLAN_BLOCKED_TOOLS,
 	PLAN_COMMAND_NAME,
 	PLAN_EMBED_MAX_CHARS,
 	PLAN_ENTRY_TYPE,
+	PLAN_EXPLORE_TOOLS,
 	PLAN_FLAG_NAME,
+	PLAN_PANEL_CANCEL_HINT,
+	PLAN_PANEL_EXIT,
+	PLAN_PANEL_EXIT_DESCRIPTION,
+	PLAN_PANEL_MAX_FILES,
+	PLAN_PANEL_TITLE,
 	PLAN_STATUS_KEY,
+	PLAN_SUBAGENT_TOOL_NAME,
 } from "./constants.ts";
 import { type ExitPlanDetails, type ExitPlanParams, ExitPlanParamsSchema } from "./schema.ts";
 import {
@@ -52,8 +64,8 @@ import {
 	replayPlanFromBranch,
 	setActivePlanSession,
 } from "./state.ts";
-import { savePlanFile } from "./storage.ts";
-import { formatApprovalSubtitle, formatExitPlanResult, renderExitPlanCall } from "./view.ts";
+import { listProjectPlanFiles, savePlanFile } from "./storage.ts";
+import { formatApprovalSubtitle, formatExitPlanResult, renderExitPlanCall, shortenPlanPath } from "./view.ts";
 
 interface PendingCompact {
 	title: string;
@@ -73,6 +85,26 @@ ${body}
 Start now. Track multi-step work with the todo tool, and report back instead of improvising if the plan turns out to need revision.`;
 }
 
+/**
+ * First subagent profile in the call that is not allowed in plan mode, or
+ * undefined when every profile is the read-only explorer. An omitted or null
+ * agent resolves to the default "general" profile, so it is disallowed too.
+ * Args arrive off the wire, so every field is read defensively.
+ */
+export function findDisallowedSubagentProfile(input: unknown): string | undefined {
+	const record = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+	const requested: unknown[] = Array.isArray(record.tasks)
+		? record.tasks.map((task) =>
+				task && typeof task === "object" ? (task as Record<string, unknown>).agent : undefined,
+			)
+		: [record.agent];
+	for (const profile of requested) {
+		const name = typeof profile === "string" && profile.trim() ? profile.trim() : "general";
+		if (name !== PLAN_ALLOWED_SUBAGENT) return name;
+	}
+	return undefined;
+}
+
 export default function plan(pi: ExtensionAPI): void {
 	let menuOpen = false;
 	let pendingCompact: PendingCompact | undefined;
@@ -83,18 +115,36 @@ export default function plan(pi: ExtensionAPI): void {
 		default: false,
 	});
 
-	/** Remove blocked tools, activate exit_plan, and return what was actually removed. */
+	/**
+	 * Swap to the exploration tool set and return the pre-entry snapshot.
+	 * Snapshot + delta rather than a fixed allowlist: edit/write are dropped,
+	 * the explore tools (grep/find/ls are registered but not active by
+	 * default) and exit_plan are added, and every other active tool — question,
+	 * todo, deepwiki, subagent, ... — stays active.
+	 */
 	function applyPlanTools(): string[] {
-		const active = pi.getActiveTools();
-		const removed = active.filter((name) => PLAN_BLOCKED_TOOLS.has(name));
-		pi.setActiveTools([...new Set([...active.filter((name) => !PLAN_BLOCKED_TOOLS.has(name)), EXIT_PLAN_TOOL_NAME])]);
-		return removed;
+		const snapshot = pi.getActiveTools();
+		pi.setActiveTools([
+			...new Set([
+				...snapshot.filter((name) => !PLAN_BLOCKED_TOOLS.has(name)),
+				...PLAN_EXPLORE_TOOLS,
+				EXIT_PLAN_TOOL_NAME,
+			]),
+		]);
+		return snapshot;
 	}
 
-	/** Inverse of applyPlanTools: drop exit_plan, re-add exactly what was removed. */
-	function restoreTools(removedTools: string[]): void {
-		const active = pi.getActiveTools().filter((name) => name !== EXIT_PLAN_TOOL_NAME);
-		pi.setActiveTools([...new Set([...active, ...removedTools])]);
+	/**
+	 * Inverse of applyPlanTools: restore the snapshot verbatim. An empty
+	 * snapshot (legacy entries) only drops exit_plan — there is nothing
+	 * recorded to restore to.
+	 */
+	function restoreTools(toolSnapshot: string[]): void {
+		if (toolSnapshot.length > 0) {
+			pi.setActiveTools([...new Set(toolSnapshot)].filter((name) => name !== EXIT_PLAN_TOOL_NAME));
+			return;
+		}
+		pi.setActiveTools(pi.getActiveTools().filter((name) => name !== EXIT_PLAN_TOOL_NAME));
 	}
 
 	function persist(): void {
@@ -109,17 +159,20 @@ export default function plan(pi: ExtensionAPI): void {
 	function enterPlanMode(ctx: ExtensionContext): void {
 		const state = getPlanState();
 		if (state.planning) return;
-		const removedTools = applyPlanTools();
-		replacePlanState({ planning: true, removedTools, awaitingCompact: false, planFiles: state.planFiles });
+		const toolSnapshot = applyPlanTools();
+		replacePlanState({ planning: true, toolSnapshot, awaitingCompact: false, planFiles: state.planFiles });
 		persist();
 		updateStatus(ctx);
-		ctx.ui.notify("Plan mode enabled: edit, write, bash, and subagent are disabled.", "info");
+		ctx.ui.notify(
+			"Plan mode: read-only exploration — edit/write disabled, bash constrained to read-only, subagent limited to explorer.",
+			"info",
+		);
 	}
 
 	function exitPlanMode(ctx: ExtensionContext, notifyText?: string): void {
 		const state = getPlanState();
-		restoreTools(state.removedTools);
-		replacePlanState({ ...state, planning: false, awaitingCompact: false, removedTools: [] });
+		restoreTools(state.toolSnapshot);
+		replacePlanState({ ...state, planning: false, awaitingCompact: false, toolSnapshot: [] });
 		persist();
 		updateStatus(ctx);
 		if (notifyText) ctx.ui.notify(notifyText, "info");
@@ -163,14 +216,18 @@ export default function plan(pi: ExtensionAPI): void {
 		}
 
 		if (next.planning) {
-			// The fresh removal set is authoritative for the eventual restore:
-			// the live tool set may differ from what the entry recorded.
-			next.removedTools = applyPlanTools();
+			// Re-applying is idempotent, but the returned live snapshot is only
+			// authoritative when the live set was NOT already restricted: on a
+			// branch switch while planning, re-snapshotting would capture the
+			// plan-mode set, so the in-memory snapshot wins there.
+			const liveSnapshot = applyPlanTools();
+			next.toolSnapshot =
+				before.planning && before.toolSnapshot.length > 0 ? [...before.toolSnapshot] : liveSnapshot;
 		} else {
 			if (pi.getActiveTools().includes(EXIT_PLAN_TOOL_NAME)) {
-				restoreTools(before.planning ? before.removedTools : next.removedTools);
+				restoreTools(before.planning ? before.toolSnapshot : next.toolSnapshot);
 			}
-			next.removedTools = [];
+			next.toolSnapshot = [];
 		}
 
 		replacePlanState(next);
@@ -303,8 +360,42 @@ export default function plan(pi: ExtensionAPI): void {
 		},
 	});
 
+	/**
+	 * Plans offered in the /plan panel: this branch's plans first (newest
+	 * first), then the rest of the project's, deduped, bounded. Legacy plans
+	 * from other sessions' directories only appear via planFiles entries.
+	 */
+	function collectPanelPlanFiles(ctx: ExtensionContext): string[] {
+		const state = getPlanState();
+		const seen = new Set<string>();
+		const files: string[] = [];
+		for (const path of [...[...state.planFiles].reverse(), ...listProjectPlanFiles(ctx.cwd)]) {
+			const key = path.replace(/\\/g, "/").toLowerCase();
+			if (seen.has(key)) continue;
+			seen.add(key);
+			files.push(path);
+			if (files.length >= PLAN_PANEL_MAX_FILES) break;
+		}
+		return files;
+	}
+
+	/** Panel behind /plan while planning: pick a plan file or exit the mode. */
+	async function openPlanPanel(ctx: ExtensionContext): Promise<void> {
+		const files = collectPanelPlanFiles(ctx);
+		const fileOptions = files.map((path) => ({ label: basename(path), description: shortenPlanPath(path) }));
+		const options = [{ label: PLAN_PANEL_EXIT, description: PLAN_PANEL_EXIT_DESCRIPTION }, ...fileOptions];
+		const choice = await ctx.ui.select(PLAN_PANEL_TITLE, options, { cancelHint: PLAN_PANEL_CANCEL_HINT });
+		if (choice === PLAN_PANEL_EXIT) {
+			exitPlanMode(ctx, "Plan mode disabled: full tool access restored.");
+			return;
+		}
+		if (!choice) return; // Esc: keep planning, no side effects.
+		const selected = files.find((path) => basename(path) === choice);
+		if (selected) ctx.ui.pasteToEditor(selected);
+	}
+
 	pi.registerCommand(PLAN_COMMAND_NAME, {
-		description: "Toggle plan mode (read-only planning with user-approved exit)",
+		description: "Enter plan mode; while planning, open the plan panel (pick a plan file or exit)",
 		handler: async (_args, ctx) => {
 			setActivePlanSession(ctx.sessionManager.getSessionId());
 			const state = getPlanState();
@@ -316,11 +407,16 @@ export default function plan(pi: ExtensionAPI): void {
 				ctx.ui.notify("Waiting for compaction to finish before leaving plan mode.", "warning");
 				return;
 			}
-			if (state.planning) {
-				exitPlanMode(ctx, "Plan mode disabled: full tool access restored.");
-			} else {
+			if (!state.planning) {
 				enterPlanMode(ctx);
+				return;
 			}
+			if (ctx.mode !== "tui") {
+				// No panel affordances outside the TUI: keep the toggle semantic.
+				exitPlanMode(ctx, "Plan mode disabled: full tool access restored.");
+				return;
+			}
+			await openPlanPanel(ctx);
 		},
 	});
 
@@ -330,11 +426,22 @@ export default function plan(pi: ExtensionAPI): void {
 	pi.on("tool_call", async (event, ctx) => {
 		setActivePlanSession(ctx.sessionManager.getSessionId());
 		const state = getPlanState();
-		if (!state.planning || !PLAN_BLOCKED_TOOLS.has(event.toolName)) return;
-		return {
-			block: true,
-			reason: `Plan mode: ${event.toolName} is disabled. Keep exploring with read-only tools, or call ${EXIT_PLAN_TOOL_NAME} to submit the plan for approval.`,
-		};
+		if (!state.planning) return;
+		if (PLAN_BLOCKED_TOOLS.has(event.toolName)) {
+			return {
+				block: true,
+				reason: `Plan mode: ${event.toolName} is disabled. Keep exploring with read-only tools, or call ${EXIT_PLAN_TOOL_NAME} to submit the plan for approval.`,
+			};
+		}
+		if (event.toolName === PLAN_SUBAGENT_TOOL_NAME) {
+			const disallowed = findDisallowedSubagentProfile(event.input);
+			if (disallowed !== undefined) {
+				return {
+					block: true,
+					reason: `Plan mode: subagent profile "${disallowed}" is blocked while planning. Delegate read-only exploration with agent: "${PLAN_ALLOWED_SUBAGENT}" (set it on every task in tasks mode).`,
+				};
+			}
+		}
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {

@@ -16,8 +16,13 @@ import { PLAN_ENTRY_TYPE } from "./constants.ts";
 export interface PlanSessionState {
 	/** True from entry until the exit is fully applied (including a pending compaction). */
 	planning: boolean;
-	/** Tools actually removed on entry; restored verbatim on exit. */
-	removedTools: string[];
+	/**
+	 * Full active-tool set snapshotted on entry; restored verbatim on exit.
+	 * Empty for legacy entries (pre-snapshot `removedTools` shape) — replay
+	 * re-derives a fresh snapshot for active planning, and an inactive legacy
+	 * entry needs no restore beyond dropping exit_plan.
+	 */
+	toolSnapshot: string[];
 	/** A compact-and-execute exit was approved and is waiting for agent_settled + compaction. */
 	awaitingCompact: boolean;
 	/** Absolute paths of plan files saved on this conversation branch. */
@@ -26,7 +31,7 @@ export interface PlanSessionState {
 
 export const EMPTY_PLAN_STATE: PlanSessionState = {
 	planning: false,
-	removedTools: [],
+	toolSnapshot: [],
 	awaitingCompact: false,
 	planFiles: [],
 };
@@ -57,21 +62,38 @@ export function disposePlanSession(sid: string): void {
 export function clonePlanState(source: PlanSessionState): PlanSessionState {
 	return {
 		planning: source.planning,
-		removedTools: [...source.removedTools],
+		toolSnapshot: [...source.toolSnapshot],
 		awaitingCompact: source.awaitingCompact,
 		planFiles: [...source.planFiles],
 	};
 }
 
+/**
+ * Accepts both the current shape (`toolSnapshot`) and the legacy one
+ * (`removedTools`), so branches recorded before the snapshot change replay.
+ */
 export function isPlanState(value: unknown): value is PlanSessionState {
-	if (!value || typeof value !== "object") return false;
+	const parsed = parsePlanState(value);
+	return parsed !== undefined;
+}
+
+function parsePlanState(value: unknown): PlanSessionState | undefined {
+	if (!value || typeof value !== "object") return undefined;
 	const record = value as Record<string, unknown>;
-	return (
-		typeof record.planning === "boolean" &&
-		typeof record.awaitingCompact === "boolean" &&
-		Array.isArray(record.removedTools) &&
-		Array.isArray(record.planFiles)
-	);
+	if (typeof record.planning !== "boolean" || typeof record.awaitingCompact !== "boolean") return undefined;
+	if (!Array.isArray(record.planFiles)) return undefined;
+	const snapshot = Array.isArray(record.toolSnapshot)
+		? record.toolSnapshot
+		: Array.isArray(record.removedTools)
+			? [] // Legacy entries recorded removals, not a snapshot; nothing to restore from.
+			: undefined;
+	if (!snapshot) return undefined;
+	return {
+		planning: record.planning,
+		toolSnapshot: snapshot.filter((tool): tool is string => typeof tool === "string"),
+		awaitingCompact: record.awaitingCompact,
+		planFiles: record.planFiles.filter((path): path is string => typeof path === "string"),
+	};
 }
 
 /**
@@ -85,8 +107,9 @@ export function replayPlanFromBranch(ctx: {
 	for (let i = branch.length - 1; i >= 0; i--) {
 		const item = branch[i] as { type?: string; customType?: string; data?: unknown };
 		if (item.type !== "custom" || item.customType !== PLAN_ENTRY_TYPE) continue;
-		if (!isPlanState(item.data)) continue;
-		return clonePlanState(item.data);
+		const parsed = parsePlanState(item.data);
+		if (!parsed) continue;
+		return parsed;
 	}
 	return undefined;
 }
