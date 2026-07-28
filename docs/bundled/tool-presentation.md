@@ -14,6 +14,8 @@ The `@astralyn/pi` package uses Pi's native tool transcript presentation rather 
 
 The dim result rail continues through every visual line; an empty output line renders as a bare `│`. Calls keep their status in the leading dot: warning while pending or running, green after success, and red after failure. For default-shell tools that are still running after two seconds, the shell adds a live result row such as `Running… (2.1s)` and removes it when the call settles. Tools with purpose-built progress UI can opt out through `rendersOwnProgress`; tools using `renderShell: "self"` continue to own their entire presentation.
 
+Time-driven renderers use `renderRefreshIntervalMs` separately from `rendersOwnProgress`. The former periodically rebuilds call/result components only during the partial lifecycle; the latter only hides the generic `Running…` row. The native shell shares the shortest needed interval, constrains explicit intervals to 250ms–60s, and stops refreshing on final result, abort, disposal, session replacement, chat rebuild, or shutdown. Renderers compute elapsed/countdown values from absolute timestamps or deadlines, so a delayed repaint never changes the underlying wall-clock meaning.
+
 ## Implementation boundary
 
 The native tool presentation owns:
@@ -60,13 +62,14 @@ The native path continues to preserve:
 
 - `read`, `bash`, `grep`, `find`, `ls`, `write`, and `edit` semantics;
 - faithful width-aware raw command previews for Bash, with honest multi-line and width truncation markers;
-- shell-wide running duration after the two-second progress threshold, without a permanent completion timer;
+- shell-wide running duration after the two-second progress threshold, with lifecycle-safe refresh disposal and no permanent completion timer;
 - path links and consistent search flags/limits across built-in renderers;
 - Diff statistics plus a ten-line collapsed Diff preview for `edit`, with the complete Diff restored on expand;
 - syntax highlighting;
 - image output and Kitty conversion;
 - native collapsed/expanded handling;
-- custom UI explicitly using `renderShell: "self"`.
+- custom UI explicitly using `renderShell: "self"`;
+- independently refreshed custom elapsed time and retry countdowns without a duplicate generic progress row.
 
 Built-in result truncation hints share the same `… (N earlier/more lines, … to expand)` language and correct singular/plural forms. `edit` uses the native outer shell while keeping its asynchronous Diff preview and final Diff result.
 

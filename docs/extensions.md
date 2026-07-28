@@ -1951,6 +1951,10 @@ pi.registerTool({
   },
 
   // Optional: Custom rendering
+  // rendersOwnProgress suppresses only the shell's generic Running… row.
+  rendersOwnProgress: true,
+  // While the result is partial, rebuild renderCall/renderResult every second.
+  renderRefreshIntervalMs: 1000,
   renderCall(args, theme, context) { ... },
   renderResult(result, options, theme, context) { ... },
 });
@@ -2184,9 +2188,18 @@ export default function (pi: ExtensionAPI) {
 
 Tools can provide `renderCall` and `renderResult` for custom TUI display. See [tui.md](tui.md) for the full component API and [tool-execution.ts](https://github.com/ming-kang/pi/blob/main/src/modes/interactive/components/tool-execution.ts) for how tool rows are composed.
 
-By default, tool output is wrapped in a `Box` that handles padding and background. A defined `renderCall` or `renderResult` must return a `Component`. If a slot renderer is not defined, `tool-execution.ts` uses fallback rendering for that slot.
+By default, tool output is wrapped in Pi's native call/result shell, which owns the status dot, result rail, padding, and fallback rendering. A defined `renderCall` or `renderResult` must return a `Component`. If a slot renderer is not defined, `tool-execution.ts` uses fallback rendering for that slot.
 
-Set `renderShell: "self"` when the tool should render its own shell instead of using the default `Box`. This is useful for tools that need complete control over framing or background behavior, for example large previews that must stay visually stable after the tool settles.
+Set `renderShell: "self"` when the tool should render its own shell instead of using the native shell. This is useful for tools that need complete control over framing or background behavior, for example large previews that must stay visually stable after the tool settles.
+
+Two independent options control live presentation:
+
+- `rendersOwnProgress: true` suppresses only the native shell's generic `Running… (Ns)` row. It does not schedule renderer updates.
+- `renderRefreshIntervalMs` periodically rebuilds `renderCall` and `renderResult` while the tool result is partial. It does not suppress generic progress.
+
+Use both when a tool renders its own elapsed time, retry countdown, or similar progress UI. Refresh intervals are rounded and constrained to 250–60,000ms. The shell may rebuild sooner when another native concern needs it, so the configured interval is the maximum refresh gap rather than an exclusive cadence. Refresh stops when the result settles or the row is disposed.
+
+Derive displayed time from an absolute timestamp or deadline (`Date.now()`), not by decrementing a counter on every refresh. A refresh is only a repaint opportunity; event-loop stalls and machine sleep must not extend a wall-clock timeout.
 
 ```typescript
 pi.registerTool({
@@ -2289,15 +2302,17 @@ Custom editors and `ctx.ui.custom()` components receive `keybindings: Keybinding
 
 #### Best Practices
 
-- Use `Text` with padding `(0, 0)`. The default Box handles padding.
+- Use `Text` with padding `(0, 0)`. The native shell handles padding.
 - Use `\n` for multi-line content.
 - Handle `isPartial` for streaming progress.
+- Use `renderRefreshIntervalMs` only for values that must change without a new partial result, and compute those values from absolute time.
+- Set `rendersOwnProgress` separately when the renderer replaces the native `Running…` row.
 - Support `expanded` for detail on demand.
 - Keep default view compact.
 - Read `context.args` in `renderResult` instead of copying args into `context.state`.
 - Use `context.state` only for data that must be shared across call and result slots.
 - Reuse `context.lastComponent` when the same component instance can be updated in place.
-- Use `renderShell: "self"` only when the default boxed shell gets in the way. In self-shell mode the tool is responsible for its own framing, padding, and background.
+- Use `renderShell: "self"` only when the native shell gets in the way. In self-shell mode the tool is responsible for its own framing, padding, and background.
 
 #### Fallback
 

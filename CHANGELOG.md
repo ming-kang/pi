@@ -5,6 +5,7 @@
 ### Added
 
 - Added shell-wide delayed progress for native tool calls: default-shell tools still running after two seconds show a live `Running… (Ns)` row, while tools with purpose-built progress UI can opt out.
+- Added `renderRefreshIntervalMs` for extension tools that need their call/result renderers rebuilt while a result is partial. It is independent of `rendersOwnProgress`, which only suppresses the generic `Running…` row, and refresh is bounded and lifecycle-safe.
 
 ### Changed
 
@@ -17,6 +18,8 @@
 
 - Fixed nested foreground/background theme styling losing the outer color after an inner reset, and fixed manual `!!` command headers losing their dim border color after the first output update.
 - Fixed Todo batch headlines saying `1 tasks`, fixed shell-wide and Subagent duration rollover from showing raw 60–89 second values or impossible `1m 60s` timestamps, and stopped collapsed Question schema errors from dumping the full validator report and received arguments.
+- Fixed silent Subagent elapsed clocks and retry countdowns freezing between progress updates. Single and parallel cards now refresh once per second without a duplicate generic progress row; provider/task retry countdowns share bounded deadline metadata, show `Retrying now…` at zero, and abort cleanly during backoff or SDK initialization.
+- Fixed other time-driven TUI lifecycle defects: deadline-based dialog countdowns no longer drift across event-loop stalls or sleep; `/resume` relative ages refresh while open; `/tree` label timestamps reclassify at local midnight; Armin rain no longer redraws forever on empty columns; and selector/animation timers are disposed on close, replacement, chat rebuild, or shutdown.
 - Corrected bundled-extension inventories and usage guidance to reflect the shipped plan, subagent, and todo workflows; repaired the RPC type link and clarified that activating `bash` is not a read-only tool configuration.
 
 ## [0.82.6] - 2026-07-27

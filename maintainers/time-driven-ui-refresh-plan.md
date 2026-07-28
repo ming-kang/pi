@@ -24,8 +24,8 @@ Do not add an isolated `setInterval` inside Subagent. First give the native tool
 | WP1: Tool progress/render refresh split   | Completed | `025fb307` | 4 focused files, 51 tests; check |
 | WP2: Subagent independent elapsed refresh | Completed | `b5436ecf` | 4 focused files, 69 tests; check |
 | WP3: Subagent retry countdown             | Completed | `8cc4b63a` | 7 focused files, 60 tests; check |
-| WP4: Other time/timer defects             | Completed | This commit | 6 focused files, 45 applicable tests; check |
-| WP5: Documentation and delta registry     | Pending   | —           | —                     |
+| WP4: Other time/timer defects             | Completed | `6ce011fb` | 6 focused files, 45 applicable tests; check |
+| WP5: Documentation and delta registry     | Completed | This commit | docs check; delta check |
 | Automated verification                    | Pending   | —           | —                     |
 | Owner real-TTY acceptance                 | Pending   | —           | —                     |
 
@@ -360,10 +360,22 @@ WP1-WP3 form the core fix. Each work package must nevertheless update and commit
   - `npm run check`
   - `git diff --check`
 
+### WP5
+
+- Documented `renderRefreshIntervalMs` as a partial-lifecycle renderer rebuild interval distinct from `rendersOwnProgress`, including its 250ms–60s bounds, shared-shortest-interval behavior, and absolute-time guidance.
+- Documented Subagent's independent elapsed/retry refresh, fixed final elapsed time, shared provider/task retry deadlines, and abortable backoff.
+- Updated native tool presentation and the changelog for lifecycle-safe shell refresh plus the `/resume`, `/tree`, countdown, and Armin fixes.
+- Registered all newly divergent upstream files and the time-driven UI test in `maintainers/upstream.json`, with rationale and verification guidance in `maintainers/delta.md`.
+- Verification passed:
+  - `npm run check:docs`
+  - `npm run diff:upstream -- --check` (347 differences: 65 hybrid, 280 distribution-owned, 2 dropped, 0 unregistered)
+  - `git diff --check`
+
 ## Commit log
 
 - Initial plan document: `be6166d4 docs: add time-driven UI refresh plan`.
 - WP1: `025fb307 feat: add lifecycle-safe tool render refresh`.
 - WP2: `b5436ecf fix: refresh live Subagent elapsed time`.
 - WP3: `8cc4b63a fix: make Subagent retry countdown live`.
-- WP4: `fix: make time-driven UI lifecycle-safe` (this commit).
+- WP4: `6ce011fb fix: make time-driven UI lifecycle-safe`.
+- WP5: `docs: document lifecycle-safe UI refresh` (this commit).
