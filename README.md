@@ -1,12 +1,10 @@
 # Pi
 
-`@astralyn/pi` is a standalone distribution of the Pi terminal coding agent. It follows the coding-agent package from [earendil-works/pi](https://github.com/earendil-works/pi) release tags while shipping its own documentation, bundled workflows, context-safety behavior, and npm release process.
-
-This is not an upstream release. The repository is maintained privately and does not accept external issues or pull requests.
+`@astralyn/pi` is a standalone terminal coding agent for working in your projects. It runs locally in your terminal and can be extended with TypeScript extensions, skills, prompt templates, themes, and pi packages.
 
 ## Install
 
-Pi requires Node.js 22.19 or later.
+Pi requires Node.js >=22.19.
 
 ```bash
 npm install -g --ignore-scripts @astralyn/pi
@@ -19,11 +17,11 @@ Use `/login` for a supported subscription provider, or configure an API key befo
 
 ## What This Distribution Ships
 
-The package keeps Pi's extensible terminal coding-agent architecture and adds a small set of built-in behaviors:
+The package ships Pi's extensible terminal coding-agent architecture with these built-in capabilities:
 
 - native `●` call and `│` result presentation with bounded collapsed tool output;
 - automatic compaction between completed tool batches and the next provider request;
-- bundled `deepwiki`, `question`, `rewind`, `router`, `statusline`, `subagent`, and `todo` extensions;
+- bundled `llama.cpp`, `deepwiki`, `question`, `rewind`, `router`, `statusline`, `subagent`, and `todo` extensions;
 - bundled `ice-cream-dark` and `ice-cream-light` themes;
 - exact registry dependencies on the upstream AI, Agent core, and TUI packages.
 
@@ -120,17 +118,13 @@ See the [SDK guide](docs/sdk.md) and [SDK examples](examples/sdk/README.md).
 - [Bundled features](docs/bundled/README.md)
 - [Security](docs/security.md)
 
-Repository architecture, upstream synchronization, development, and publishing are documented in the source repository's [maintainer guide](https://github.com/ming-kang/pi/tree/main/maintainers). Those files are intentionally excluded from the npm package.
+## Runtime dependencies
 
-## Upstream Boundary
-
-The repository contains only the coding-agent package. AI, Agent core, and TUI are consumed as exact npm dependencies:
+`@astralyn/pi` consumes its AI, Agent core, and TUI runtime as exact npm dependencies:
 
 - [`@earendil-works/pi-ai`](https://www.npmjs.com/package/@earendil-works/pi-ai)
 - [`@earendil-works/pi-agent-core`](https://www.npmjs.com/package/@earendil-works/pi-agent-core)
 - [`@earendil-works/pi-tui`](https://www.npmjs.com/package/@earendil-works/pi-tui)
-
-Upstream release tags are reviewed selectively. Their documentation and examples are inputs to synchronization, not files that overwrite this distribution's documentation.
 
 ## License
 

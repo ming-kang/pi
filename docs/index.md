@@ -1,12 +1,12 @@
 # @astralyn/pi user and API documentation
 
-@astralyn/pi is a minimal terminal coding harness. It is designed to stay small at the core while being extended through TypeScript extensions, skills, prompt templates, themes, and pi packages.
+The installed `@astralyn/pi` package provides a terminal coding agent that stays small at the core and can be extended through TypeScript extensions, skills, prompt templates, themes, and pi packages.
 
-This documentation is owned by @astralyn/pi and describes the behavior of the installed npm package, including its bundled features and public APIs. Upstream Pi documentation and release tags are used only as synchronization input; they are not the user-facing source for these docs.
+This documentation describes installed-package behavior, including bundled features and public APIs.
 
 ## Quick start
 
-Install Pi with npm:
+Install Pi with npm. Pi requires Node.js >=22.19.
 
 ```bash
 npm install -g --ignore-scripts @astralyn/pi
@@ -51,6 +51,13 @@ The installed package includes built-in extensions, themes, and native tool pres
 
 - [Bundled overview](bundled/README.md) - package features and how they fit together.
 - [Bundled extensions](bundled/extensions/README.md) - catalog and links to every bundled extension.
+- [DeepWiki](bundled/extensions/deepwiki.md) - query indexed public GitHub repository documentation.
+- [Question](bundled/extensions/question.md) - ask structured questions through native interactive UI.
+- [Rewind](bundled/extensions/rewind.md) - create and restore project snapshots around session operations.
+- [Router](bundled/extensions/router.md) - configure and probe Codex-style routing endpoints.
+- [Statusline](bundled/extensions/statusline.md) - show concise extension-managed activity state.
+- [Subagent](bundled/extensions/subagent.md) - delegate bounded work to isolated child Pi sessions.
+- [Todo](bundled/extensions/todo.md) - track multi-step work with dependencies and status.
 - [Bundled themes](bundled/themes.md) - the ice-cream themes included with the package.
 - [Native tool presentation](bundled/tool-presentation.md) - the shared tool-call and result layout.
 
@@ -64,17 +71,17 @@ The installed package includes built-in extensions, themes, and native tool pres
 - [Custom models](models.md) - add model entries for supported provider APIs.
 - [Custom providers](custom-provider.md) - implement custom APIs and OAuth flows.
 
+## Reference
+
+- [Environment variables](environment-variables.md) - Pi process configuration and session metadata available to bash tools.
+- [Session format](session-format.md) - JSONL session file format, entry types, and SessionManager API.
+
 ## Programmatic usage
 
 - [SDK](sdk.md) - embed pi in Node.js applications.
 - [RPC mode](rpc.md) - integrate over stdin/stdout JSONL.
 - [JSON event stream mode](json.md) - print mode with structured events.
 - [TUI components](tui.md) - build custom terminal UI for extensions.
-
-## Reference
-
-- [Environment variables](environment-variables.md) - Pi process configuration and session metadata available to bash tools.
-- [Session format](session-format.md) - JSONL session file format, entry types, and SessionManager API.
 
 ## Platform setup
 

@@ -1,6 +1,6 @@
 # Bundled features
 
-The installed `@astralyn/pi` package includes a small set of workflows and presentation choices on top of its coding-agent behavior. Upstream Pi release tags are synchronization input, not a separate user documentation set.
+The installed `@astralyn/pi` package includes a small set of workflows and presentation choices on top of its coding-agent behavior.
 
 ## Extensions
 
@@ -8,7 +8,7 @@ The following extensions are loaded as hidden built-ins. They use the same publi
 
 | Extension | Tool or command | Purpose |
 |---|---|---|
-| `llama.cpp` | `/llama` | Manage models served by the local llama.cpp router |
+| [`llama.cpp`](../llama-cpp.md) | `/llama` | Manage models served by the local llama.cpp router |
 | `deepwiki` | `deepwiki` | Query indexed public GitHub repository documentation |
 | `question` | `question` | Ask structured questions through native interactive UI |
 | `rewind` | `/rewind` | Create and restore project snapshots around session lifecycle operations |

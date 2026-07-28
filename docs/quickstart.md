@@ -4,7 +4,7 @@ This page gets you from install to a useful first pi session.
 
 ## Install
 
-Pi is distributed as an npm package:
+Pi is distributed as an npm package. Pi requires Node.js >=22.19.
 
 ```bash
 npm install -g --ignore-scripts @astralyn/pi
@@ -14,10 +14,10 @@ npm install -g --ignore-scripts @astralyn/pi
 
 ### Uninstall
 
-Use the package manager that installed pi. The curl installer uses npm globally, so curl and npm installs are removed with npm:
+Use the package manager that installed pi:
 
 ```bash
-# curl installer or npm install -g
+# npm
 npm uninstall -g @astralyn/pi
 
 # pnpm
