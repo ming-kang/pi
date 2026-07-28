@@ -26,7 +26,7 @@ Do not add an isolated `setInterval` inside Subagent. First give the native tool
 | WP3: Subagent retry countdown             | Completed | `8cc4b63a` | 7 focused files, 60 tests; check |
 | WP4: Other time/timer defects             | Completed | `6ce011fb` | 6 focused files, 45 applicable tests; check |
 | WP5: Documentation and delta registry     | Completed | This commit | docs check; delta check |
-| Automated verification                    | Pending   | —           | —                     |
+| Automated verification                    | Completed | This commit | 139 focused; check/build/docs/delta; isolated suite |
 | Owner real-TTY acceptance                 | Pending   | —           | —                     |
 
 ## WP1: Split progress presentation from render refresh
@@ -249,6 +249,19 @@ npm run test:isolated
 
 Classify platform-only failures separately, but do not dismiss any focused failure in changed code.
 
+## Automated verification result
+
+- Focused time-driven UI and Subagent coverage passed:
+  - 13 files and 133 tests covering tool refresh, Subagent render/retry/abort/activity, extension countdown consumers, selectors, tree timestamps, and Armin lifecycle;
+  - 6 applicable `/resume` path/delete tests passed, with the 2 symlink-only cases excluded because this Windows checkout lacks Developer Mode.
+- Static and package checks passed:
+  - `npm run check`
+  - `npm run build`
+  - `npm run check:docs` (through `npm run check`)
+  - `git diff --check`
+- The committed HEAD passed `npm run diff:upstream -- --check` in a clean detached worktree: 347 differences, 65 hybrid, 280 distribution-owned, 2 dropped, 0 unregistered. The owner has unrelated in-progress Router files and registry edits in the primary working tree, so the clean worktree avoided touching or misclassifying them.
+- `npm run test:isolated` completed on Windows with 193 files passing, 6 skipped, and 15 failing; 1,944 tests passed, 49 skipped, and 37 failed. The 37 failures match the pre-existing Windows baseline count and categories: POSIX permission semantics, unavailable symlink creation, path/glob separator behavior, child-process/external-editor assumptions, package-manager/self-update environment detection, and user-resource isolation. No changed-domain focused test failed. Ubuntu GitHub Actions remains authoritative for the complete cross-platform suite.
+
 ## Owner real-TTY acceptance
 
 The final acceptance checkpoint belongs to the owner. Verify:
@@ -378,4 +391,5 @@ WP1-WP3 form the core fix. Each work package must nevertheless update and commit
 - WP2: `b5436ecf fix: refresh live Subagent elapsed time`.
 - WP3: `8cc4b63a fix: make Subagent retry countdown live`.
 - WP4: `6ce011fb fix: make time-driven UI lifecycle-safe`.
-- WP5: `docs: document lifecycle-safe UI refresh` (this commit).
+- WP5: `4cfa02d3 docs: document lifecycle-safe UI refresh`.
+- Automated verification: `docs: record time-driven UI verification` (this commit).
