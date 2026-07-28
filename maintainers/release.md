@@ -35,7 +35,7 @@ Use patch `0` for the first distribution release on a new upstream minor and the
    npm pack --dry-run
    ```
 
-The upstream-delta command is required local boundary verification. CI wiring for it is intentionally deferred, so workflow success does not substitute for this check until that wiring is added.
+The upstream-delta command is required boundary verification for local release checks and a hard gate in both CI and publication. Ordinary `npm run check` remains offline; baseline network access is isolated to the dedicated workflow fetch step. That step reads `baseline.repository` and `baseline.tag` from `maintainers/upstream.json` and fetches that exact recorded public upstream tag; local verification uses the recorded canonical tree/tag available in the local clone.
 
 Inspect the dry-run tarball. It must contain built `dist`, distribution-owned documentation and examples, README, changelog, and `npm-shrinkwrap.json`; it must not contain `maintainers/**`, source workspaces, or local configuration. For a stronger smoke test, install a real tarball outside the repository and run `pi --version` and `pi --list-models`.
 
