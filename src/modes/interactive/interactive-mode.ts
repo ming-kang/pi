@@ -344,6 +344,8 @@ export class InteractiveMode {
 	private onInputCallback?: (text: string) => void;
 	private pendingUserInputs: string[] = [];
 	private activeStatusIndicator: StatusIndicator | undefined = undefined;
+	private activeSelector: (Component & { dispose?: () => void }) | null = null;
+	private activeSelectorCleanup: (() => void) | null = null;
 	private readonly idleStatus = new IdleStatus();
 	private workingMessage: string | undefined = undefined;
 	private workingVisible = true;
@@ -1755,7 +1757,12 @@ export class InteractiveMode {
 
 	private disposeChatToolComponents(): void {
 		for (const child of this.chatContainer.children) {
-			if (child instanceof ToolExecutionComponent || child instanceof ToolGroupComponent) {
+			if (
+				child instanceof ToolExecutionComponent ||
+				child instanceof ToolGroupComponent ||
+				child instanceof ArminComponent ||
+				child instanceof DaxnutsComponent
+			) {
 				child.dispose();
 			}
 		}
@@ -4173,16 +4180,46 @@ export class InteractiveMode {
 	 * Shows a selector component in place of the editor.
 	 * @param create Factory that receives a `done` callback and returns the component and focus target
 	 */
-	private showSelector(create: (done: () => void) => { component: Component; focus: Component }): void {
-		const done = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.ui.setFocus(this.editor);
+	private showSelector(
+		create: (done: () => void) => { component: Component & { dispose?: () => void }; focus: Component },
+	): void {
+		this.activeSelectorCleanup?.();
+		this.activeSelectorCleanup = null;
+		this.activeSelector = null;
+
+		let selector: (Component & { dispose?: () => void }) | undefined;
+		let disposed = false;
+		let closed = false;
+		const dispose = () => {
+			if (disposed || !selector) return;
+			disposed = true;
+			selector.dispose?.();
 		};
-		const { component, focus } = create(done);
+		const done = () => {
+			if (closed) return;
+			closed = true;
+			dispose();
+			if (!selector || this.activeSelector === selector) {
+				this.activeSelector = null;
+				this.activeSelectorCleanup = null;
+				this.editorContainer.clear();
+				this.editorContainer.addChild(this.editor);
+				this.ui.setFocus(this.editor);
+			}
+		};
+
+		const created = create(done);
+		selector = created.component;
+		if (closed) {
+			dispose();
+			return;
+		}
+
+		this.activeSelector = selector;
+		this.activeSelectorCleanup = dispose;
 		this.editorContainer.clear();
-		this.editorContainer.addChild(component);
-		this.ui.setFocus(focus);
+		this.editorContainer.addChild(selector);
+		this.ui.setFocus(created.focus);
 		this.ui.requestRender();
 	}
 
@@ -4804,6 +4841,7 @@ export class InteractiveMode {
 				},
 				initialSelectedId,
 				initialFilterMode,
+				() => this.ui.requestRender(),
 			);
 			selector.onCopy = async (text) => {
 				if (!text) {
@@ -6080,6 +6118,9 @@ export class InteractiveMode {
 	}
 
 	stop(): void {
+		this.activeSelectorCleanup?.();
+		this.activeSelectorCleanup = null;
+		this.activeSelector = null;
 		if (this.settingsManager.getShowTerminalProgress()) {
 			this.ui.terminal.setProgress(false);
 		}

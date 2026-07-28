@@ -23,8 +23,8 @@ Do not add an isolated `setInterval` inside Subagent. First give the native tool
 | Plan document                             | Completed | `be6166d4` | Initial plan recorded                |
 | WP1: Tool progress/render refresh split   | Completed | `025fb307` | 4 focused files, 51 tests; check |
 | WP2: Subagent independent elapsed refresh | Completed | `b5436ecf` | 4 focused files, 69 tests; check |
-| WP3: Subagent retry countdown             | Completed | This commit | 7 focused files, 60 tests; check |
-| WP4: Other time/timer defects             | Pending   | —           | —                     |
+| WP3: Subagent retry countdown             | Completed | `8cc4b63a` | 7 focused files, 60 tests; check |
+| WP4: Other time/timer defects             | Completed | This commit | 6 focused files, 45 applicable tests; check |
 | WP5: Documentation and delta registry     | Pending   | —           | —                     |
 | Automated verification                    | Pending   | —           | —                     |
 | Owner real-TTY acceptance                 | Pending   | —           | —                     |
@@ -342,9 +342,28 @@ WP1-WP3 form the core fix. Each work package must nevertheless update and commit
   - 60 focused tests total
   - `npm run check`
 
+### WP4
+
+- Empty Armin rain columns now settle immediately, and Armin/Daxnuts animations are disposed when chat is rebuilt or interactive mode stops.
+- The shared countdown derives display values and expiry from an absolute deadline, aligns fractional deadlines precisely, handles event-loop stalls, and unreferences all scheduled callbacks.
+- `/resume` requests a fresh render once per minute while open; disposal stops that interval, clears status timeouts, and ignores late loader, rename, delete, and progress callbacks.
+- The generic selector host disposes replaced, completed, and shutdown selectors exactly once; stale completion callbacks cannot replace the current selector.
+- The startup `--resume` picker also disposes its selector before stopping the TUI or exiting.
+- `/tree` schedules a one-shot refresh at the next local midnight only while label timestamps are visible, then reschedules for the following midnight and clears all timeouts on disposal.
+- Verification passed:
+  - `test/time-driven-ui.test.ts`
+  - `test/tree-selector.test.ts`
+  - `test/session-selector-rename.test.ts`
+  - applicable tests in `test/session-selector-path-delete.test.ts`
+  - 45 applicable focused tests total
+  - two unrelated Windows symlink cases remain unavailable without Developer Mode (`EPERM`)
+  - `npm run check`
+  - `git diff --check`
+
 ## Commit log
 
 - Initial plan document: `be6166d4 docs: add time-driven UI refresh plan`.
 - WP1: `025fb307 feat: add lifecycle-safe tool render refresh`.
 - WP2: `b5436ecf fix: refresh live Subagent elapsed time`.
-- WP3: `fix: make Subagent retry countdown live` (this commit).
+- WP3: `8cc4b63a fix: make Subagent retry countdown live`.
+- WP4: `fix: make time-driven UI lifecycle-safe` (this commit).

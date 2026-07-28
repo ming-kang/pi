@@ -65,6 +65,7 @@ class SessionSelectorHeader implements Component {
 	private statusMessage: { type: "info" | "error"; message: string } | null = null;
 	private statusTimeout: ReturnType<typeof setTimeout> | null = null;
 	private showRenameHint = false;
+	private disposed = false;
 
 	constructor(scope: SessionScope, sortMode: SortMode, nameFilter: NameFilter, requestRender: () => void) {
 		this.scope = scope;
@@ -114,6 +115,7 @@ class SessionSelectorHeader implements Component {
 	}
 
 	setStatusMessage(msg: { type: "info" | "error"; message: string } | null, autoHideMs?: number): void {
+		if (this.disposed) return;
 		this.clearStatusTimeout();
 		this.statusMessage = msg;
 		if (!msg || !autoHideMs) return;
@@ -123,9 +125,16 @@ class SessionSelectorHeader implements Component {
 			this.statusTimeout = null;
 			this.requestRender();
 		}, autoHideMs);
+		this.statusTimeout.unref?.();
 	}
 
 	invalidate(): void {}
+
+	dispose(): void {
+		if (this.disposed) return;
+		this.disposed = true;
+		this.clearStatusTimeout();
+	}
 
 	render(width: number): string[] {
 		const title = this.scope === "current" ? "Resume Session (Current Folder)" : "Resume Session (All)";
@@ -713,6 +722,8 @@ export class SessionSelectorComponent extends Container implements Focusable {
 	private currentLoading = false;
 	private allLoading = false;
 	private allLoadSeq = 0;
+	private relativeAgeInterval: ReturnType<typeof setInterval> | undefined;
+	private disposed = false;
 
 	private mode: "list" | "rename" = "list";
 	private renameInput = new Input();
@@ -764,12 +775,18 @@ export class SessionSelectorComponent extends Container implements Focusable {
 		this.keybindings = options?.keybindings ?? KeybindingsManager.create();
 		this.currentSessionsLoader = currentSessionsLoader;
 		this.allSessionsLoader = allSessionsLoader;
-		this.requestRender = requestRender;
+		this.requestRender = () => {
+			if (!this.disposed) requestRender();
+		};
 		this.header = new SessionSelectorHeader(this.scope, this.sortMode, this.nameFilter, this.requestRender);
 		const renameSession = options?.renameSession;
 		this.renameSession = renameSession;
 		this.canRename = !!renameSession;
 		this.header.setShowRenameHint(options?.showRenameHint ?? this.canRename);
+		this.relativeAgeInterval = setInterval(() => {
+			if (!this.disposed) this.requestRender();
+		}, 60_000);
+		this.relativeAgeInterval.unref?.();
 
 		// Create session list (starts empty, will be populated after load)
 		this.sessionList = new SessionList(
@@ -831,6 +848,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 		// Handle session deletion
 		this.sessionList.onDeleteSession = async (sessionPath: string) => {
 			const result = await deleteSessionFile(sessionPath);
+			if (this.disposed) return;
 
 			if (result.ok) {
 				if (this.currentSessions) {
@@ -847,6 +865,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 				const msg = result.method === "trash" ? "Session moved to trash" : "Session deleted";
 				this.header.setStatusMessage({ type: "info", message: msg }, 2000);
 				await this.refreshSessionsAfterMutation();
+				if (this.disposed) return;
 			} else {
 				const errorMessage = result.error ?? "Unknown error";
 				this.header.setStatusMessage({ type: "error", message: `Failed to delete: ${errorMessage}` }, 3000);
@@ -864,6 +883,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 	}
 
 	private enterRenameMode(sessionPath: string, currentName: string | undefined): void {
+		if (this.disposed) return;
 		this.mode = "rename";
 		this.renameTargetPath = sessionPath;
 		this.renameInput.setValue(currentName ?? "");
@@ -887,6 +907,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 	}
 
 	private exitRenameMode(): void {
+		if (this.disposed) return;
 		this.mode = "list";
 		this.renameTargetPath = null;
 
@@ -913,13 +934,15 @@ export class SessionSelectorComponent extends Container implements Focusable {
 
 		try {
 			await renameSession(target, next);
+			if (this.disposed) return;
 			await this.refreshSessionsAfterMutation();
 		} finally {
-			this.exitRenameMode();
+			if (!this.disposed) this.exitRenameMode();
 		}
 	}
 
 	private async loadScope(scope: SessionScope, reason: "initial" | "refresh" | "toggle"): Promise<void> {
+		if (this.disposed) return;
 		const showCwd = scope === "all";
 
 		// Mark loading
@@ -935,6 +958,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 		this.requestRender();
 
 		const onProgress = (loaded: number, total: number) => {
+			if (this.disposed) return;
 			if (scope !== this.scope) return;
 			if (seq !== undefined && seq !== this.allLoadSeq) return;
 			this.header.setProgress(loaded, total);
@@ -945,6 +969,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 			const sessions = await (scope === "current"
 				? this.currentSessionsLoader(onProgress)
 				: this.allSessionsLoader(onProgress));
+			if (this.disposed) return;
 
 			if (scope === "current") {
 				this.currentSessions = sessions;
@@ -961,6 +986,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 			this.sessionList.setSessions(sessions, showCwd);
 			this.requestRender();
 		} catch (err) {
+			if (this.disposed) return;
 			if (scope === "current") {
 				this.currentLoading = false;
 			} else {
@@ -1027,5 +1053,16 @@ export class SessionSelectorComponent extends Container implements Focusable {
 
 	getSessionList(): SessionList {
 		return this.sessionList;
+	}
+
+	dispose(): void {
+		if (this.disposed) return;
+		this.disposed = true;
+		this.allLoadSeq++;
+		this.header.dispose();
+		if (this.relativeAgeInterval !== undefined) {
+			clearInterval(this.relativeAgeInterval);
+			this.relativeAgeInterval = undefined;
+		}
 	}
 }

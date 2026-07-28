@@ -1,6 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import { setKeybindings, visibleWidth } from "@earendil-works/pi-tui";
-import { beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type {
 	ModelChangeEntry,
@@ -18,6 +18,10 @@ beforeAll(() => {
 beforeEach(() => {
 	// Ensure test isolation: keybindings are a global singleton
 	setKeybindings(new KeybindingsManager());
+});
+
+afterEach(() => {
+	vi.useRealTimers();
 });
 
 // Helper to create a user message entry
@@ -322,6 +326,39 @@ describe("TreeSelectorComponent", () => {
 			render = list.render(200).join("\n");
 			expect(render).toContain("3/28 14:32");
 			expect(render).toContain("[+label time]");
+		});
+
+		test("refreshes timestamp classification at local midnight and stops after disposal", async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date(2026, 2, 28, 23, 59, 30));
+			const tree = buildTree([userMessage("user-1", null, "hello"), assistantMessage("asst-1", "user-1", "hi")]);
+			tree[0]!.label = "checkpoint";
+			tree[0]!.labelTimestamp = new Date(2026, 2, 28, 14, 32, 0).toISOString();
+			const requestRender = vi.fn();
+			const selector = new TreeSelectorComponent(
+				tree,
+				"asst-1",
+				24,
+				() => {},
+				() => {},
+				undefined,
+				undefined,
+				undefined,
+				requestRender,
+			);
+
+			selector.handleInput("T");
+			expect(selector.getTreeList().render(200).join("\n")).toContain("14:32");
+			expect(selector.getTreeList().render(200).join("\n")).not.toContain("3/28 14:32");
+
+			await vi.advanceTimersByTimeAsync(30_001);
+			expect(requestRender).toHaveBeenCalledTimes(1);
+			expect(selector.getTreeList().render(200).join("\n")).toContain("3/28 14:32");
+
+			selector.dispose();
+			const requestsAfterDisposal = requestRender.mock.calls.length;
+			await vi.advanceTimersByTimeAsync(86_400_000);
+			expect(requestRender).toHaveBeenCalledTimes(requestsAfterDisposal);
 		});
 	});
 

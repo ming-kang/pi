@@ -124,6 +124,7 @@ class TreeList implements Component {
 	public onCancel?: () => void;
 	public onCopy?: (text: string | undefined) => void;
 	public onLabelEdit?: (entryId: string, currentLabel: string | undefined) => void;
+	public onLabelTimestampVisibilityChange?: (visible: boolean) => void;
 
 	constructor(
 		tree: SessionTreeNode[],
@@ -624,6 +625,10 @@ class TreeList implements Component {
 		return this.filteredNodes[this.selectedIndex]?.node;
 	}
 
+	isShowingLabelTimestamps(): boolean {
+		return this.showLabelTimestamps;
+	}
+
 	copySelected(): void {
 		const node = this.getSelectedNode();
 		this.onCopy?.(node ? this.getEntryCopyText(node) : undefined);
@@ -1088,6 +1093,7 @@ class TreeList implements Component {
 			}
 		} else if (kb.matches(keyData, "app.tree.toggleLabelTimestamp")) {
 			this.showLabelTimestamps = !this.showLabelTimestamps;
+			this.onLabelTimestampVisibilityChange?.(this.showLabelTimestamps);
 		} else {
 			const hasControlChars = [...keyData].some((ch) => {
 				const code = ch.charCodeAt(0);
@@ -1331,6 +1337,10 @@ export class TreeSelectorComponent extends Container implements Focusable {
 	private labelInputContainer: Container;
 	private treeContainer: Container;
 	private onLabelChangeCallback?: (entryId: string, label: string | undefined) => void;
+	private readonly requestRender: () => void;
+	private midnightTimeout: ReturnType<typeof setTimeout> | undefined;
+	private emptyTreeTimeout: ReturnType<typeof setTimeout> | undefined;
+	private disposed = false;
 	public onCopy?: (text: string | undefined) => void;
 
 	// Focusable implementation - propagate to labelInput when active for IME cursor positioning
@@ -1355,10 +1365,12 @@ export class TreeSelectorComponent extends Container implements Focusable {
 		onLabelChange?: (entryId: string, label: string | undefined) => void,
 		initialSelectedId?: string,
 		initialFilterMode?: FilterMode,
+		requestRender: () => void = () => {},
 	) {
 		super();
 
 		this.onLabelChangeCallback = onLabelChange;
+		this.requestRender = requestRender;
 		const maxVisibleLines = Math.max(5, Math.floor(terminalHeight / 2));
 
 		this.treeList = new TreeList(tree, currentLeafId, maxVisibleLines, initialSelectedId, initialFilterMode);
@@ -1366,6 +1378,10 @@ export class TreeSelectorComponent extends Container implements Focusable {
 		this.treeList.onCancel = onCancel;
 		this.treeList.onCopy = (text) => this.onCopy?.(text);
 		this.treeList.onLabelEdit = (entryId, currentLabel) => this.showLabelInput(entryId, currentLabel);
+		this.treeList.onLabelTimestampVisibilityChange = (visible) => {
+			if (visible) this.scheduleMidnightRefresh();
+			else this.clearMidnightRefresh();
+		};
 
 		this.treeContainer = new Container();
 		this.treeContainer.addChild(this.treeList);
@@ -1385,8 +1401,35 @@ export class TreeSelectorComponent extends Container implements Focusable {
 		this.addChild(new DynamicBorder());
 
 		if (tree.length === 0) {
-			setTimeout(() => onCancel(), 100);
+			this.emptyTreeTimeout = setTimeout(() => {
+				this.emptyTreeTimeout = undefined;
+				if (!this.disposed) onCancel();
+			}, 100);
+			this.emptyTreeTimeout.unref?.();
 		}
+	}
+
+	private clearMidnightRefresh(): void {
+		if (this.midnightTimeout !== undefined) {
+			clearTimeout(this.midnightTimeout);
+			this.midnightTimeout = undefined;
+		}
+	}
+
+	private scheduleMidnightRefresh(): void {
+		this.clearMidnightRefresh();
+		if (this.disposed || !this.treeList.isShowingLabelTimestamps()) return;
+
+		const nextMidnight = new Date();
+		nextMidnight.setHours(24, 0, 0, 0);
+		const delayMs = Math.max(1, nextMidnight.getTime() - Date.now());
+		this.midnightTimeout = setTimeout(() => {
+			this.midnightTimeout = undefined;
+			if (this.disposed) return;
+			this.requestRender();
+			this.scheduleMidnightRefresh();
+		}, delayMs);
+		this.midnightTimeout.unref?.();
 	}
 
 	private showLabelInput(entryId: string, currentLabel: string | undefined): void {
@@ -1423,5 +1466,15 @@ export class TreeSelectorComponent extends Container implements Focusable {
 
 	getTreeList(): TreeList {
 		return this.treeList;
+	}
+
+	dispose(): void {
+		if (this.disposed) return;
+		this.disposed = true;
+		this.clearMidnightRefresh();
+		if (this.emptyTreeTimeout !== undefined) {
+			clearTimeout(this.emptyTreeTimeout);
+			this.emptyTreeTimeout = undefined;
+		}
 	}
 }
