@@ -8,6 +8,12 @@ Synchronize this standalone package only from an upstream release tag. The repos
 
 `upstream-extract` is an optional derived cache, not a baseline. It can make a Git-object diff convenient, but it never authorizes a comparison or a manifest update. Likewise, Git ancestry and `HEAD` do not identify the reviewed baseline. `npm run diff:upstream` always compares the current worktree—including staged changes, unstaged changes, and nonignored untracked files—against the manifest's canonical source tree.
 
+## Read-only release audit
+
+[`.github/workflows/upstream-audit.yml`](../.github/workflows/upstream-audit.yml) runs weekly and can also be started manually. It is a read-only signal: it queries remote tag refs with `git ls-remote --tags --refs` for `baseline.repository`, reports stable `v<semver>` releases newer than the recorded baseline, fetches only that exact baseline tag at depth 1, and runs the current `npm run diff:upstream -- --check` boundary check.
+
+The audit also runs a focused synthetic exact-baseline, zero-delta simulation. Newer release tags are informational and do not fail the audit. The workflow never updates the manifest or cache and never creates commits, pull requests, or issues; selecting and adopting a release remains the manual process below.
+
 ## 1. Select and inspect a release tag
 
 Start from a clean synchronization branch, fetch upstream tags, and select a release tag rather than `upstream/main`:

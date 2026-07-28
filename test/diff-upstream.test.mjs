@@ -266,6 +266,26 @@ describe("diff-upstream manifest and classification", () => {
 });
 
 describe("diff-upstream temporary Git repositories", () => {
+	test("passes a synthetic exact-baseline worktree with zero delta", () => {
+		const { root, manifest } = createRepository();
+		manifest.owned = { overlays: [], additions: [] };
+		manifest.deltas = [];
+		manifest.budget = {
+			hybridPathCeiling: 0,
+			hybridSourcePathCeiling: 0,
+			droppedPathCeiling: 0,
+			deltaUnitCeiling: 0,
+			highRiskUnitCeiling: 0,
+			privateUpstreamAssumptionCeiling: 0,
+		};
+		writeJson(join(root, "maintainers", "upstream.json"), manifest);
+		writeFileSync(join(root, ".git", "info", "exclude"), "maintainers/\nnpm-shrinkwrap.json\n");
+
+		const result = invoke(root, ["--check"]);
+		expect(result.code).toBe(0);
+		expect(result.stdout).toContain("Verified 0 worktree differences");
+	});
+
 	test("collects staged, unstaged, nonignored untracked changes in deterministic order and rejects tracked/untracked conflicts", () => {
 		const { root, manifest } = createRepository();
 		manifest.owned.additions.push("owned/**");
