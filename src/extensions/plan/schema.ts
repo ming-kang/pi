@@ -24,3 +24,9 @@ export interface ExitPlanDetails {
 	/** Absolute path of the saved plan file. Present for both execute decisions. */
 	planPath?: string;
 }
+
+/** details of the post-compaction kickoff custom message. */
+export interface PlanKickoffDetails {
+	title: string;
+	planPath: string;
+}

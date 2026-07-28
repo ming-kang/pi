@@ -1,10 +1,12 @@
 import { beforeAll, describe, expect, test } from "vitest";
 import type { AgentToolResult, ExtensionContext } from "../src/core/extensions/types.ts";
-import type { ExitPlanDetails } from "../src/extensions/plan/schema.ts";
+import type { CustomMessage } from "../src/core/messages.ts";
+import type { ExitPlanDetails, PlanKickoffDetails } from "../src/extensions/plan/schema.ts";
 import {
 	formatApprovalSubtitle,
 	formatExitPlanResult,
 	renderExitPlanCall,
+	renderPlanKickoffMessage,
 	shortenPlanPath,
 } from "../src/extensions/plan/view.ts";
 import { initTheme, type Theme } from "../src/modes/interactive/theme/theme.ts";
@@ -141,5 +143,53 @@ describe("shortenPlanPath", () => {
 
 	test("leaves paths outside home untouched", () => {
 		expect(shortenPlanPath("/var/tmp/01-fix.md")).toBe("/var/tmp/01-fix.md");
+	});
+});
+
+describe("renderPlanKickoffMessage", () => {
+	const KICKOFF_BODY = `Execute the approved plan "Fix rewind" (saved at /p/20260728-1444-rewind.md).\n\n# Goal\n\nHarden restore.\n\nStart now.`;
+
+	function kickoffMessage(overrides?: Partial<CustomMessage<PlanKickoffDetails>>): CustomMessage<PlanKickoffDetails> {
+		return {
+			role: "custom",
+			customType: "plan-kickoff",
+			content: KICKOFF_BODY,
+			display: true,
+			details: { title: "Fix rewind", planPath: "/p/20260728-1444-rewind.md" },
+			timestamp: 0,
+			...overrides,
+		};
+	}
+
+	function rendered(message: CustomMessage<PlanKickoffDetails>, expanded: boolean): string {
+		return renderPlanKickoffMessage(message, { expanded, outputPad: 0 }, theme)
+			.render(100)
+			.map((line) => stripAnsi(line).trimEnd())
+			.join("\n");
+	}
+
+	test("collapsed shows the title card with the expand hint, never the plan body", () => {
+		const text = rendered(kickoffMessage(), false);
+		expect(text).toContain('plan Executing "Fix rewind"');
+		expect(text).toContain("/p/20260728-1444-rewind.md");
+		expect(text).toContain("to expand");
+		expect(text).not.toContain("Goal");
+	});
+
+	test("expanded renders the full kickoff markdown without the hint", () => {
+		const text = rendered(kickoffMessage(), true);
+		expect(text).toContain('plan Executing "Fix rewind"');
+		expect(text).toContain("Goal");
+		expect(text).toContain("Harden restore.");
+		expect(text).not.toContain("to expand");
+	});
+
+	test("survives missing details and array content", () => {
+		const text = rendered(
+			kickoffMessage({ details: undefined, content: [{ type: "text", text: "# Goal\n\nBody" }] }),
+			true,
+		);
+		expect(text).toContain('plan Executing "plan"');
+		expect(text).toContain("Body");
 	});
 });

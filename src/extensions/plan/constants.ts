@@ -16,6 +16,12 @@ export const PLAN_ENTRY_TYPE = "plan-mode";
 export const PLAN_STATUS_KEY = "plan-mode";
 
 /**
+ * customType of the post-compaction kickoff message. Sent via sendMessage so
+ * the LLM receives the full plan while the TUI renders a collapsed card.
+ */
+export const PLAN_KICKOFF_MESSAGE_TYPE = "plan-kickoff";
+
+/**
  * Tools blocked while planning: edit/write grant write access directly.
  * bash stays available and is constrained to read-only inspection via the
  * plan-mode system prompt (same contract as the explorer subagent), and

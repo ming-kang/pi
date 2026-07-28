@@ -11,8 +11,10 @@
  */
 import { type Component, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { AgentToolResult, ExtensionContext } from "../../core/extensions/types.ts";
+import type { CustomMessage } from "../../core/messages.ts";
+import { keyText } from "../../modes/interactive/components/keybinding-hints.ts";
 import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
-import type { ExitPlanDecision, ExitPlanDetails } from "./schema.ts";
+import type { ExitPlanDecision, ExitPlanDetails, PlanKickoffDetails } from "./schema.ts";
 
 /** Collapse the home prefix so a plan path stays on one line. */
 export function shortenPlanPath(path: string): string {
@@ -41,6 +43,58 @@ export function formatApprovalSubtitle(ctx: ExtensionContext): string | undefine
 	if (usage?.percent == null) return undefined;
 	const window = usage.contextWindow > 0 ? ` of ${formatTokenCount(usage.contextWindow)}` : "";
 	return `Context ${usage.percent.toFixed(1)}%${window}`;
+}
+
+// ---- kickoff message rendering ----------------------------------------------
+
+/**
+ * The kickoff message body repeats the whole plan for the LLM, so the default
+ * renderer would flood the chat with markdown the user already approved.
+ * Collapsed: a two-line card (title + saved path with the expand hint).
+ * Expanded: the complete kickoff markdown, styled like the exit_plan body.
+ */
+export function renderPlanKickoffMessage(
+	message: CustomMessage<PlanKickoffDetails>,
+	options: { expanded: boolean; outputPad: number },
+	theme: Theme,
+): Component {
+	const details = (message.details ?? {}) as Partial<PlanKickoffDetails>;
+	const title = typeof details.title === "string" && details.title.trim() ? details.title.trim() : "plan";
+	const planPath = typeof details.planPath === "string" ? details.planPath.trim() : "";
+
+	const container = new Container();
+	container.addChild(
+		new Text(
+			[theme.fg("toolTitle", theme.bold("plan")), theme.fg("text", `Executing "${title}"`)].join(" "),
+			options.outputPad,
+			0,
+		),
+	);
+	const pathText = planPath ? `${shortenPlanPath(planPath)} ` : "";
+	const secondLine = options.expanded
+		? planPath
+			? theme.fg("dim", shortenPlanPath(planPath))
+			: undefined
+		: theme.fg("dim", `${pathText}(${keyText("app.tools.expand")} to expand)`);
+	if (secondLine) container.addChild(new Text(secondLine, options.outputPad, 0));
+	if (!options.expanded) return container;
+
+	const body =
+		typeof message.content === "string"
+			? message.content
+			: message.content
+					.filter((block): block is { type: "text"; text: string } => block.type === "text")
+					.map((block) => block.text)
+					.join("\n");
+	if (body.trim()) {
+		container.addChild(new Spacer(1));
+		container.addChild(
+			new Markdown(body, options.outputPad, 0, getMarkdownTheme(), {
+				color: (text) => theme.fg("toolOutput", text),
+			}),
+		);
+	}
+	return container;
 }
 
 // ---- tool call rendering ----------------------------------------------------

@@ -46,6 +46,7 @@ import {
 	PLAN_ENTRY_TYPE,
 	PLAN_EXPLORE_TOOLS,
 	PLAN_FLAG_NAME,
+	PLAN_KICKOFF_MESSAGE_TYPE,
 	PLAN_PANEL_CANCEL_HINT,
 	PLAN_PANEL_EXIT,
 	PLAN_PANEL_EXIT_DESCRIPTION,
@@ -54,7 +55,7 @@ import {
 	PLAN_STATUS_KEY,
 	PLAN_SUBAGENT_TOOL_NAME,
 } from "./constants.ts";
-import { type ExitPlanDetails, type ExitPlanParams, ExitPlanParamsSchema } from "./schema.ts";
+import { type ExitPlanDetails, type ExitPlanParams, ExitPlanParamsSchema, type PlanKickoffDetails } from "./schema.ts";
 import {
 	clonePlanState,
 	disposePlanSession,
@@ -65,7 +66,13 @@ import {
 	setActivePlanSession,
 } from "./state.ts";
 import { listProjectPlanFiles, savePlanFile } from "./storage.ts";
-import { formatApprovalSubtitle, formatExitPlanResult, renderExitPlanCall, shortenPlanPath } from "./view.ts";
+import {
+	formatApprovalSubtitle,
+	formatExitPlanResult,
+	renderExitPlanCall,
+	renderPlanKickoffMessage,
+	shortenPlanPath,
+} from "./view.ts";
 
 interface PendingCompact {
 	title: string;
@@ -108,6 +115,26 @@ export function findDisallowedSubagentProfile(input: unknown): string | undefine
 export default function plan(pi: ExtensionAPI): void {
 	let menuOpen = false;
 	let pendingCompact: PendingCompact | undefined;
+
+	pi.registerMessageRenderer<PlanKickoffDetails>(PLAN_KICKOFF_MESSAGE_TYPE, renderPlanKickoffMessage);
+
+	/**
+	 * Kickoff as a custom message, not a user message: the LLM still receives
+	 * the full kickoff text (custom messages convert to user-role context),
+	 * while the TUI renders the registered collapsed card instead of echoing
+	 * the whole plan again.
+	 */
+	function sendKickoff(pending: PendingCompact): void {
+		pi.sendMessage(
+			{
+				customType: PLAN_KICKOFF_MESSAGE_TYPE,
+				content: buildKickoffMessage(pending),
+				display: true,
+				details: { title: pending.title, planPath: pending.planPath },
+			},
+			{ triggerTurn: true },
+		);
+	}
 
 	pi.registerFlag(PLAN_FLAG_NAME, {
 		description: "Start in plan mode (read-only planning)",
@@ -462,12 +489,12 @@ export default function plan(pi: ExtensionAPI): void {
 			customInstructions: `The user approved an implementation plan saved at ${pending.planPath}. Preserve decisions, constraints, and rejected alternatives from the planning discussion that are not already written in the plan file.`,
 			onComplete: () => {
 				exitPlanMode(ctx, "Context compacted; executing the plan.");
-				pi.sendUserMessage(buildKickoffMessage(pending));
+				sendKickoff(pending);
 			},
 			onError: (error) => {
 				// Never leave the user stuck read-only: degrade to keep-context execution.
 				exitPlanMode(ctx, `Compaction failed (${error.message}); executing with full context instead.`);
-				pi.sendUserMessage(buildKickoffMessage(pending));
+				sendKickoff(pending);
 			},
 		});
 	});
