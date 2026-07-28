@@ -8,6 +8,10 @@ The upstream delta is frozen: do not add or expand a hybrid change merely becaus
 
 A proposed new or expanded unit needs owner-approved review material that states the need, why an extension or adapter is insufficient, upstream behavioral assumptions, automated and manual verification, failure risk, and a concrete removal or re-evaluation condition. Update the manifest registry and budget only for the approved final delta; update this guide with the durable human rationale. Re-evaluate high-lifecycle-risk changes whenever their upstream lifecycle, rendering, terminal, or timing assumptions change.
 
+## Distribution-owned surfaces
+
+The manifest's owned overlays and additions are standalone distribution material rather than edits to an upstream coding-agent path. They may contain package identity, user and maintainer documentation, release/CI automation, distribution extensions, and focused governance tests. Keep infrastructure checks offline and pair nontrivial policy logic with a pure, focused test seam; do not use the owned registry to hide an upstream-derived runtime change that belongs in a delta unit.
+
 ## dist-standalone
 
 **Rationale and scope.** The package ships independently as `@astralyn/pi`, so package identity, standalone resolution, package metadata, and release metadata differ from the upstream workspace layout.

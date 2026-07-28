@@ -2,6 +2,7 @@
 
 import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, posix, relative, resolve, sep } from "node:path";
+import { staleTermFailures } from "./check-docs-core.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const markdownRoots = ["README.md", "CHANGELOG.md", "docs", "examples", "maintainers"];
@@ -383,14 +384,8 @@ for (const path of docsMarkdown) {
 
 for (const path of ["README.md", "CHANGELOG.md", "docs", "examples"]) {
 	for (const file of collectFiles(path, (entry) => /\.(?:md|ts|json)$/.test(entry))) {
-		let content = readFileSync(join(root, file), "utf8");
-		if (file === "CHANGELOG.md") content = checkedMarkdown(file);
-		const contentWithoutExternalLinks = content
-			.replace(/!?\[[^\]]*\]\(https?:\/\/[^)]+\)/g, "")
-			.replace(/https?:\/\/[^\s)>"']+/g, "");
-		if (contentWithoutExternalLinks.includes("packages/coding-agent")) {
-			failures.push(`${toPosix(file)}: contains a standalone-invalid packages/coding-agent path`);
-		}
+		const content = readFileSync(join(root, file), "utf8");
+		failures.push(...staleTermFailures(toPosix(file), content));
 	}
 }
 
