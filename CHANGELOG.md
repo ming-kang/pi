@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.82.7] - 2026-07-28
+
 ### Added
 
 - Added shell-wide delayed progress for native tool calls: default-shell tools still running after two seconds show a live `Running… (Ns)` row, while tools with purpose-built progress UI can opt out.
@@ -11,6 +13,9 @@
 
 - Reworked native tool presentation so the dim `│` rail continues through every result line, empty lines retain the rail, collapsed-line hints share one counted and keybinding-aware format, and `grep`/`ls` join `read`/`find` in the collapsed `explore` group. Built-in calls now use consistent path links, flags, limits, and honest truncation; Bash reports hidden command lines, and `edit` shows Diff statistics with a bounded ten-line collapsed preview.
 - Improved bundled tool transcripts: Todo batch calls preview subjects and expand every bounded item; Subagent failures use separate wrapped reason lines with sentence-aware excerpts and consistent expanded sections; Question calls reveal full prompts on expand and preserve partial cancelled/clarification answers; Plan calls render expanded Markdown with clearer decision hierarchy; and DeepWiki uses normalized, subdued one-line summaries with an inline expand hint.
+- Reworked plan mode into read-only exploration: it now activates `grep`/`find`/`ls`, permits only the read-only `explorer` subagent profile, and keeps Bash available under a prompt-enforced (not sandboxed) read-only contract; `edit` and `write` remain disabled.
+- Plan files now live per project under `<agentDir>/plans/<project>/` with timestamped names; `/plan` opens a TUI panel to exit or paste a saved plan path, while existing legacy plan paths remain usable.
+- Compact-then-execute plan kickoffs now appear as a collapsed plan card showing the title and saved path; expand it to view the full kickoff Markdown.
 - Standardized compact interactive key hints on the first configured binding with readable special-key labels and `key action • key action` phrasing in the extension selector and Question dialogs.
 - Documentation checks now validate same-page and cross-page Markdown fragments, and upstream delta checks reject stale distribution-owned registrations.
 
@@ -22,6 +27,7 @@
 - Fixed silent Subagent elapsed clocks and retry countdowns freezing between progress updates. Single and parallel cards now refresh once per second without a duplicate generic progress row; provider/task retry countdowns share bounded deadline metadata, show `Retrying now…` at zero, and abort cleanly during backoff or SDK initialization.
 - Fixed other time-driven TUI lifecycle defects: deadline-based dialog countdowns no longer drift across event-loop stalls or sleep; `/resume` relative ages refresh while open; `/tree` label timestamps reclassify at local midnight; Armin rain no longer redraws forever on empty columns; and selector/animation timers are disposed on close, replacement, chat rebuild, or shutdown.
 - Corrected bundled-extension inventories and usage guidance to reflect the shipped plan, subagent, and todo workflows; repaired the RPC type link and clarified that activating `bash` is not a read-only tool configuration.
+- Updated the packaged `brace-expansion` dependency to 5.0.8 to address GHSA-mh99-v99m-4gvg.
 
 ## [0.82.6] - 2026-07-27
 
