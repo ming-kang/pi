@@ -2,13 +2,13 @@
 
 # TUI Components
 
-Extensions and custom tools can render custom TUI components for interactive user interfaces. This page covers the component system and available building blocks.
+Extensions and custom tools can render custom terminal UI in interactive mode. This page documents the public TUI package API that Pi exposes to extensions, plus Pi's extension UI helpers.
 
-**Source:** [`@earendil-works/pi-tui@0.82.1`](https://github.com/earendil-works/pi/tree/v0.82.1/packages/tui)
+**API reference:** the public declarations shipped by [`@earendil-works/pi-tui`](https://www.npmjs.com/package/@earendil-works/pi-tui) are authoritative. Pi builds on the [earendil-works/pi project](https://github.com/earendil-works/pi); Pi-specific helpers below are exported by `@astralyn/pi`.
 
 ## Component Interface
 
-All components implement:
+Every rendered component implements the public `Component` interface:
 
 ```typescript
 interface Component {
@@ -19,56 +19,51 @@ interface Component {
 }
 ```
 
-| Method | Description |
-|--------|-------------|
-| `render(width)` | Return array of strings (one per line). Each line **must not exceed `width`**. |
-| `handleInput?(data)` | Receive keyboard input when component has focus. |
-| `wantsKeyRelease?` | If true, component receives key release events (Kitty protocol). Default: false. |
-| `invalidate()` | Clear cached render state. Called on theme changes. |
+| Member | Description |
+|---|---|
+| `render(width)` | Return one string per line. Every line must be at most `width` terminal columns wide. |
+| `handleInput?(data)` | Receives raw terminal input while this component has focus. |
+| `wantsKeyRelease?` | Set to `true` only when the component needs Kitty keyboard key-release events. Releases are otherwise filtered. |
+| `invalidate()` | Clear cached render state. TUI calls it when the theme changes; call it yourself before rendering changed cached state. |
 
-The TUI appends a full SGR reset and OSC 8 reset at the end of each rendered line. Styles do not carry across lines. If you emit multi-line text with styling, reapply styles per line or use `wrapTextWithAnsi()` so styles are preserved for each wrapped line.
+`invalidate()` is required even for an uncached component; an empty implementation is fine. `invalidate()` does **not** schedule a frame. After application state changes, call the injected `tui.requestRender()`.
 
-## Focusable Interface (IME Support)
+## Focusable Components and IME
 
-Components that display a text cursor and need IME (Input Method Editor) support should implement the `Focusable` interface:
+A component that renders a text cursor and needs IME candidate-window placement implements `Focusable` as well as `Component`:
 
 ```typescript
 import { CURSOR_MARKER, type Component, type Focusable } from "@earendil-works/pi-tui";
 
-class MyInput implements Component, Focusable {
-  focused: boolean = false;  // Set by TUI when focus changes
-  
+class CursorCell implements Component, Focusable {
+  focused = false;
+
   render(width: number): string[] {
+    if (width < 1) return [];
+    // Put the zero-width marker immediately before the visual cursor.
     const marker = this.focused ? CURSOR_MARKER : "";
-    // Emit marker right before the fake cursor
-    return [`> ${beforeCursor}${marker}\x1b[7m${atCursor}\x1b[27m${afterCursor}`];
+    return [`${marker}\x1b[7m \x1b[27m`];
   }
+
+  invalidate(): void {}
 }
 ```
 
-When a `Focusable` component has focus, TUI:
-1. Sets `focused = true` on the component
-2. Scans rendered output for `CURSOR_MARKER` (a zero-width APC escape sequence)
-3. Positions the hardware terminal cursor at that location
-4. Shows the hardware cursor only when `showHardwareCursor` is enabled
+When a focused component has a `focused` property, TUI sets it and looks for `CURSOR_MARKER` in its rendered lines to position the hardware cursor. `Input` and `Editor` already implement this. An extension can query or change the injected TUI's hardware-cursor setting with `tui.getShowHardwareCursor()` and `tui.setShowHardwareCursor(enabled)`; changing it affects the whole application UI.
 
-The cursor remains hidden by default. This keeps the fake cursor rendering, while still positioning the hardware cursor for terminals that track IME candidate windows with hidden cursors. Some terminals require a visible hardware cursor for IME positioning; enable it with `showHardwareCursor`, `setShowHardwareCursor(true)`, or `PI_HARDWARE_CURSOR=1`. The `Editor` and `Input` built-in components already implement this interface.
-
-### Container Components with Embedded Inputs
-
-When a container component (dialog, selector, etc.) contains an `Input` or `Editor` child, the container must implement `Focusable` and propagate the focus state to the child. Otherwise, the hardware cursor won't be positioned correctly for IME input.
+A container that owns an `Input` or `Editor` must forward both focus and input to its child. `Container` only groups and renders children; it does not route input for them.
 
 ```typescript
 import { Container, type Focusable, Input } from "@earendil-works/pi-tui";
 
 class SearchDialog extends Container implements Focusable {
-  private searchInput: Input;
-
-  // Focusable implementation - propagate to child input for IME cursor positioning
+  private readonly searchInput: Input;
   private _focused = false;
+
   get focused(): boolean {
     return this._focused;
   }
+
   set focused(value: boolean) {
     this._focused = value;
     this.searchInput.focused = value;
@@ -79,297 +74,255 @@ class SearchDialog extends Container implements Focusable {
     this.searchInput = new Input();
     this.addChild(this.searchInput);
   }
+
+  handleInput(data: string): void {
+    this.searchInput.handleInput(data);
+  }
 }
 ```
 
-Without this propagation, typing with an IME (Chinese, Japanese, Korean, etc.) will show the candidate window in the wrong position on screen.
+Without that propagation, an IME can place its candidate window at the wrong screen location.
 
-## Using Components
+## Show a Component in Pi
 
-**In extensions** via `ctx.ui.custom()`:
-
-```typescript
-pi.on("session_start", async (_event, ctx) => {
-  const result = await ctx.ui.custom<string | null>((tui, theme, keybindings, done) =>
-    new MyComponent({
-      theme,
-      keybindings,
-      onChange: () => tui.requestRender(),
-      onSelect: (value) => done(value),
-      onCancel: () => done(null),
-    })
-  );
-});
-```
-
-**In custom tools** via `ctx.ui.custom()`:
+`ctx.ui.custom()` replaces the editor until its `done` callback is called. It is available only in TUI mode, so guard commands or tools that use it with `ctx.mode === "tui"`.
 
 ```typescript
-async execute(toolCallId, params, signal, onUpdate, ctx) {
-  const result = await ctx.ui.custom<string | null>((tui, theme, keybindings, done) =>
-    new MyComponent({
-      theme,
-      keybindings,
-      onChange: () => tui.requestRender(),
-      onSelect: (value) => done(value),
-      onCancel: () => done(null),
-    })
-  );
-  // Use result...
-}
+if (ctx.mode !== "tui") return;
+
+const result = await ctx.ui.custom<string | null>((tui, theme, keybindings, done) =>
+  new MyComponent({
+    theme,
+    keybindings,
+    onChange: () => tui.requestRender(),
+    onSelect: (value) => done(value),
+    onCancel: () => done(null),
+  })
+);
 ```
+
+The factory receives Pi's current `TUI`, semantic `Theme`, and configured `KeybindingsManager`. It may return a component synchronously or as a promise. The `custom()` promise resolves only when the component calls `done(result)`.
+
+### Disposal
+
+A component returned from `ctx.ui.custom()`, `setWidget()`, `setFooter()`, or `setHeader()` may also implement `dispose(): void`. Use it to stop timers, abort owned work, and unsubscribe listeners. Pi calls it after a custom component finishes, or when a widget, footer, or header is replaced or cleared.
+
+Do not reuse a component after it has called `done`. Create a fresh instance if it must be shown again. In particular, an overlay handle's `hide()` only removes that overlay; it does not resolve the surrounding `ctx.ui.custom()` promise or dispose the component. Have the component call `done` to close its Pi UI lifecycle.
 
 ## Overlays
 
-Overlays render components on top of existing content without clearing the screen. Pass `{ overlay: true }` to `ctx.ui.custom()`:
+Pass `{ overlay: true }` to leave the existing UI visible and show a component above it:
 
 ```typescript
 const result = await ctx.ui.custom<string | null>(
-  (tui, theme, keybindings, done) => new MyDialog({ onClose: done }),
+  (_tui, theme, _keybindings, done) => new MyDialog({ theme, onClose: () => done(null) }),
   { overlay: true }
 );
 ```
 
-For positioning and sizing, use `overlayOptions`:
+Use `overlayOptions` to choose its layout and focus behavior:
 
 ```typescript
-const result = await ctx.ui.custom<string | null>(
-  (tui, theme, keybindings, done) => new SidePanel({ onClose: done }),
+await ctx.ui.custom<void>(
+  (_tui, theme, _keybindings, done) => new SidePanel({ theme, onClose: () => done() }),
   {
     overlay: true,
     overlayOptions: {
-      // Size: number or percentage string
-      width: "50%",          // 50% of terminal width
-      minWidth: 40,          // minimum 40 columns
-      maxHeight: "80%",      // max 80% of terminal height
-
-      // Position: anchor-based (default: "center")
-      anchor: "right-center", // 9 positions: center, top-left, top-center, etc.
-      offsetX: -2,            // offset from anchor
+      width: "50%",          // number of columns or a percentage string
+      minWidth: 40,
+      maxHeight: "80%",      // number of rows or a percentage string
+      anchor: "right-center", // center plus eight edge/corner anchors
+      offsetX: -2,
       offsetY: 0,
-
-      // Or percentage/absolute positioning
-      row: "25%",            // 25% from top
-      col: 10,               // column 10
-
-      // Margins
-      margin: 2,             // all sides, or { top, right, bottom, left }
-
-      // Responsive: hide on narrow terminals
-      visible: (termWidth, termHeight) => termWidth >= 80,
+      row: "25%",            // absolute number or percentage from the top
+      col: 10,                // absolute number or percentage from the left
+      margin: 2,              // number, or { top, right, bottom, left }
+      visible: (termWidth, _termHeight) => termWidth >= 80,
+      nonCapturing: false,    // set true for a visible overlay that never takes input
     },
-    // Get handle for programmatic focus and visibility control
     onHandle: (handle) => {
-      // handle.focus() - focus this overlay and bring it to the visual front
-      // handle.unfocus() - release input to normal fallback
-      // handle.unfocus({ target }) - release input to a specific component or null
-      // handle.setHidden(true/false) - toggle visibility
-      // handle.hide() - permanently remove
+      // handle.focus(), handle.unfocus(), handle.setHidden(), and handle.hide()
     },
   }
 );
 ```
 
-### Overlay Focus
+The anchors are `"center"`, `"top-left"`, `"top-center"`, `"top-right"`, `"left-center"`, `"right-center"`, `"bottom-left"`, `"bottom-center"`, and `"bottom-right"`. An `overlayOptions` function is also accepted when the options need to be computed at the time the overlay is shown.
 
-A focused visible overlay keeps input ownership across temporary non-overlay UI. If an overlay opens another `ctx.ui.custom()` component without `{ overlay: true }`, that replacement UI receives input while it is active; when it closes, the focused overlay can reclaim input.
+`onHandle` receives the public `OverlayHandle` after the overlay is shown:
 
-Use `handle.unfocus()` when a visible overlay should stop owning input and let TUI fall back to another visible capturing overlay or the previous focus target. Use `handle.unfocus({ target })` when a specific component should receive input while the overlay stays visible. Passing `{ target: null }` intentionally leaves no focused component until focus is set again.
+- `focus()` gives the overlay input and brings it to the visual front.
+- `unfocus()` releases input to another visible capturing overlay or the prior focus target. Use `unfocus({ target })` to focus a particular component, or `unfocus({ target: null })` to leave nothing focused.
+- `setHidden(true)` temporarily hides the overlay; `setHidden(false)` shows it again. `isHidden()` reports that state.
+- `hide()` permanently removes the overlay. `isFocused()` reports whether it owns focus.
 
-### Overlay Lifecycle
+A visible focused overlay can regain focus after a temporary non-overlay `ctx.ui.custom()` view closes. Use `unfocus()` when it should stop capturing input instead.
 
-Overlay components are disposed when closed. Don't reuse references - create fresh instances:
-
-```typescript
-// Wrong - stale reference
-let menu: MenuComponent;
-await ctx.ui.custom((_, __, ___, done) => {
-  menu = new MenuComponent(done);
-  return menu;
-}, { overlay: true });
-setActiveComponent(menu);  // Disposed
-
-// Correct - re-call to re-show
-const showMenu = () => ctx.ui.custom((_, __, ___, done) => 
-  new MenuComponent(done), { overlay: true });
-
-await showMenu();  // First show
-await showMenu();  // "Back" = just call again
-```
-
-See [overlay-qa-tests.ts](../examples/extensions/overlay-qa-tests.ts) for comprehensive examples covering anchors, margins, stacking, responsive visibility, and animation.
+See [overlay-qa-tests.ts](../examples/extensions/overlay-qa-tests.ts) for anchors, margins, stacking, responsive visibility, and focus examples.
 
 ## Built-in Components
 
-Import from `@earendil-works/pi-tui`:
+Import TUI primitives from `@earendil-works/pi-tui`. In Pi extension factories, use the supplied `theme` and its semantic helpers rather than hard-coded ANSI colors.
+
+### Layout and text
 
 ```typescript
-import { Text, Box, Container, Spacer, Markdown } from "@earendil-works/pi-tui";
-```
+import { Box, Container, Spacer, Text, TruncatedText } from "@earendil-works/pi-tui";
 
-### Text
+const background = (text: string) => theme.bg("selectedBg", text);
 
-Multi-line text with word wrapping.
-
-```typescript
-const text = new Text(
-  "Hello World",    // content
-  1,                // paddingX (default: 1)
-  1,                // paddingY (default: 1)
-  (s) => bgGray(s)  // optional background function
-);
+const text = new Text("Hello World", 1, 1, background);
 text.setText("Updated");
-```
+text.setCustomBgFn((value: string) => theme.bg("toolPendingBg", value));
 
-### Box
-
-Container with padding and background color.
-
-```typescript
-const box = new Box(
-  1,                // paddingX
-  1,                // paddingY
-  (s) => bgGray(s)  // background function
-);
+const box = new Box(1, 1, background);
 box.addChild(new Text("Content", 0, 0));
-box.setBgFn((s) => bgBlue(s));
-```
+box.setBgFn((value: string) => theme.bg("selectedBg", value));
 
-### Container
-
-Groups child components vertically.
-
-```typescript
 const container = new Container();
-container.addChild(component1);
-container.addChild(component2);
-container.removeChild(component1);
+container.addChild(box);
+container.addChild(new Spacer(1));
+container.removeChild(box);
+container.clear();
+
+const singleLine = new TruncatedText("A long status line", 0, 0);
 ```
 
-### Spacer
+`Text` wraps multi-line text. `TruncatedText` renders text constrained to one line. `Box` applies padding and an optional background function around its children. `Spacer(lines?)` creates empty lines and supports `setLines(lines)`.
 
-Empty vertical space.
+### Markdown and images
 
-```typescript
-const spacer = new Spacer(2);  // 2 empty lines
-```
-
-### Markdown
-
-Renders markdown with syntax highlighting.
+Pi exports a semantic Markdown theme builder. `Markdown` requires its text, horizontal padding, vertical padding, and a `MarkdownTheme`.
 
 ```typescript
-const md = new Markdown(
-  "# Title\n\nSome **bold** text",
-  1,        // paddingX
-  1,        // paddingY
-  theme     // MarkdownTheme (see below)
-);
-md.setText("Updated markdown");
-```
+import { getMarkdownTheme } from "@astralyn/pi";
+import { Image, Markdown } from "@earendil-works/pi-tui";
 
-### Image
+const markdown = new Markdown("# Title\n\nSome **bold** text", 1, 1, getMarkdownTheme());
+markdown.setText("Updated markdown");
 
-Renders images in supported terminals (Kitty, iTerm2, Ghostty, WezTerm, Warp).
-
-```typescript
 const image = new Image(
-  base64Data,   // base64-encoded image
-  "image/png",  // MIME type
-  theme,        // ImageTheme
+  base64Data,
+  "image/png",
+  { fallbackColor: (text: string) => theme.fg("muted", text) },
   { maxWidthCells: 80, maxHeightCells: 24 }
 );
 ```
 
+`Image` accepts base64 data, a MIME type, an `ImageTheme` with `fallbackColor`, and optional sizing, filename, or reusable `imageId` options. It renders a text fallback where inline images are unsupported.
+
+### Inputs, selectors, and loaders
+
+`Input` is a single-line focused editor. `Editor` is the multi-line editor component; for Pi's main editor, extend Pi's `CustomEditor` instead of constructing a bare `Editor` so app shortcuts continue to work.
+
+`SelectList` takes `(items, maxVisible, theme, layout?)`; `SettingsList` takes `(items, maxVisible, theme, onChange, onCancel, options?)`. Both use Pi's configured selection bindings. `Loader` takes `(tui, spinnerColorFn, messageColorFn, message?, indicator?)`; `CancellableLoader` adds `signal`, `aborted`, `onAbort`, and `dispose()`. Pi's `BorderedLoader` wraps the latter with Pi-native framing and cancellation hints; see [Pattern 2](#pattern-2-async-operation-with-cancel-borderedloader).
+
 ## Keyboard Input
 
-Use `matchesKey()` for key detection:
+Use `matchesKey()` and `Key` for fixed, extension-specific keys. They handle legacy terminal sequences and Kitty keyboard protocol.
 
 ```typescript
-import { matchesKey, Key } from "@earendil-works/pi-tui";
+import { Key, matchesKey } from "@earendil-works/pi-tui";
 
-handleInput(data: string) {
+handleInput(data: string): void {
   if (matchesKey(data, Key.up)) {
-    this.selectedIndex--;
+    this.moveUp();
   } else if (matchesKey(data, Key.enter)) {
-    this.onSelect?.(this.selectedIndex);
+    this.confirm();
   } else if (matchesKey(data, Key.escape)) {
-    this.onCancel?.();
+    this.cancel();
   } else if (matchesKey(data, Key.ctrl("c"))) {
-    // Ctrl+C
+    this.cancel();
   }
 }
 ```
 
-**Key identifiers** (use `Key.*` for autocomplete, or string literals):
-- Basic keys: `Key.enter`, `Key.escape`, `Key.tab`, `Key.space`, `Key.backspace`, `Key.delete`, `Key.home`, `Key.end`
-- Arrow keys: `Key.up`, `Key.down`, `Key.left`, `Key.right`
-- With modifiers: `Key.ctrl("c")`, `Key.shift("tab")`, `Key.alt("left")`, `Key.ctrlShift("p")`
-- String format also works: `"enter"`, `"ctrl+c"`, `"shift+tab"`, `"ctrl+shift+p"`
+`Key` provides basic, navigation, function, and symbol keys, plus `ctrl`, `shift`, `alt`, `super`, and combined-modifier helpers. A `KeyId` string such as `"enter"`, `"ctrl+c"`, or `"ctrl+shift+p"` also works.
+
+For behavior that follows a Pi-configurable binding, use the `keybindings` callback argument instead of checking a default key directly:
+
+```typescript
+import type { KeybindingsManager } from "@astralyn/pi";
+
+class MyDialog {
+  constructor(private readonly keybindings: KeybindingsManager) {}
+
+  handleInput(data: string): void {
+    if (this.keybindings.matches(data, "tui.select.cancel")) {
+      this.close();
+    }
+  }
+}
+```
+
+Pi supplies `tui.*` IDs such as `tui.select.up`, `tui.select.confirm`, and `tui.select.cancel`, along with `app.*` IDs such as `app.interrupt`. Use Pi's `keyHint()` helper when displaying a configured binding in UI text; it formats the current binding rather than hard-coding a key label.
 
 ## Line Width
 
-**Critical:** Each line from `render()` must not exceed the `width` parameter.
+Every string returned by `render(width)` must fit within `width` visible terminal columns. ANSI styling does not count toward display width.
 
 ```typescript
-import { visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 render(width: number): string[] {
-  // Truncate long lines
-  return [truncateToWidth(this.text, width)];
+  const line = truncateToWidth(this.text, width);
+  const wrapped = wrapTextWithAnsi(this.longText, width);
+  return visibleWidth(line) <= width ? [line, ...wrapped] : [truncateToWidth(line, width)];
 }
 ```
 
-Utilities:
-- `visibleWidth(str)` - Get display width (ignores ANSI codes)
-- `truncateToWidth(str, width, ellipsis?)` - Truncate with optional ellipsis
-- `wrapTextWithAnsi(str, width)` - Word wrap preserving ANSI codes
+`truncateToWidth(text, width, ellipsis?, pad?)` preserves ANSI sequences and can use `""` as its ellipsis. `wrapTextWithAnsi()` preserves active ANSI styles across wrapped lines.
 
-## Creating Custom Components
+## Creating a Custom Component
 
-Example: Interactive selector
+This selector uses Pi's configured list bindings, semantic colors, width-safe output, caching, and explicit render requests without a forwarding wrapper:
 
 ```typescript
-import {
-  matchesKey, Key,
-  truncateToWidth, visibleWidth
-} from "@earendil-works/pi-tui";
+import type { KeybindingsManager, Theme } from "@astralyn/pi";
+import { type Component, truncateToWidth } from "@earendil-works/pi-tui";
 
-class MySelector {
-  private items: string[];
+class MySelector implements Component {
   private selected = 0;
   private cachedWidth?: number;
   private cachedLines?: string[];
-  
-  public onSelect?: (item: string) => void;
-  public onCancel?: () => void;
 
-  constructor(items: string[]) {
-    this.items = items;
-  }
+  constructor(
+    private readonly items: readonly string[],
+    private readonly theme: Theme,
+    private readonly keybindings: KeybindingsManager,
+    private readonly requestRender: () => void,
+    private readonly onSelect: (item: string) => void,
+    private readonly onCancel: () => void,
+  ) {}
 
   handleInput(data: string): void {
-    if (matchesKey(data, Key.up) && this.selected > 0) {
+    if (this.keybindings.matches(data, "tui.select.up") && this.selected > 0) {
       this.selected--;
-      this.invalidate();
-    } else if (matchesKey(data, Key.down) && this.selected < this.items.length - 1) {
+    } else if (this.keybindings.matches(data, "tui.select.down") && this.selected < this.items.length - 1) {
       this.selected++;
-      this.invalidate();
-    } else if (matchesKey(data, Key.enter)) {
-      this.onSelect?.(this.items[this.selected]);
-    } else if (matchesKey(data, Key.escape)) {
-      this.onCancel?.();
+    } else if (this.keybindings.matches(data, "tui.select.confirm")) {
+      const item = this.items[this.selected];
+      if (item !== undefined) this.onSelect(item);
+      return;
+    } else if (this.keybindings.matches(data, "tui.select.cancel")) {
+      this.onCancel();
+      return;
+    } else {
+      return;
     }
+
+    this.invalidate();
+    this.requestRender();
   }
 
   render(width: number): string[] {
-    if (this.cachedLines && this.cachedWidth === width) {
-      return this.cachedLines;
-    }
+    if (this.cachedLines && this.cachedWidth === width) return this.cachedLines;
 
-    this.cachedLines = this.items.map((item, i) => {
-      const prefix = i === this.selected ? "> " : "  ";
-      return truncateToWidth(prefix + item, width);
+    this.cachedLines = this.items.map((item, index) => {
+      const selected = index === this.selected;
+      const prefix = selected ? this.theme.fg("accent", "› ") : "  ";
+      const label = this.theme.fg(selected ? "accent" : "text", item);
+      return truncateToWidth(prefix + label, width);
     });
     this.cachedWidth = width;
     return this.cachedLines;
@@ -382,55 +335,34 @@ class MySelector {
 }
 ```
 
-Usage in an extension:
+Use it directly from an extension command:
 
 ```typescript
-pi.registerCommand("pick", {
-  description: "Pick an item",
-  handler: async (_args, ctx) => {
-    const items = ["Option A", "Option B", "Option C"];
-    const selected = await ctx.ui.custom<string | null>((tui, _theme, _keybindings, done) => {
-      const selector = new MySelector(items);
-      selector.onSelect = done;
-      selector.onCancel = () => done(null);
+const items = ["Option A", "Option B", "Option C"];
+const selected = await ctx.ui.custom<string | null>((tui, theme, keybindings, done) =>
+  new MySelector(items, theme, keybindings, () => tui.requestRender(), done, () => done(null))
+);
 
-      return {
-        render: (width) => selector.render(width),
-        handleInput: (data) => {
-          selector.handleInput(data);
-          tui.requestRender();
-        },
-        invalidate: () => selector.invalidate(),
-      };
-    });
-
-    if (selected !== null) {
-      ctx.ui.notify(`Selected: ${selected}`, "info");
-    }
-  }
-});
+if (selected !== null) {
+  ctx.ui.notify(`Selected: ${selected}`, "info");
+}
 ```
 
 ## Theming
 
-Components accept theme objects for styling.
-
-**In `renderCall`/`renderResult`**, use the `theme` parameter:
+Use the `Theme` passed to a UI factory or renderer. `theme.fg(color, text)` and `theme.bg(color, text)` use the user's semantic theme instead of fixed ANSI colors.
 
 ```typescript
-renderResult(result, options, theme, context) {
-  // Use theme.fg() for foreground colors
-  return new Text(theme.fg("success", "Done!"), 0, 0);
-  
-  // Use theme.bg() for background colors
-  const styled = theme.bg("toolPendingBg", theme.fg("accent", "text"));
+renderResult(_result, _options, theme, _context) {
+  const text = theme.bg("toolSuccessBg", theme.fg("success", "Done!"));
+  return new Text(text, 0, 0);
 }
 ```
 
-**Foreground colors** (`theme.fg(color, text)`):
+Foreground color names:
 
 | Category | Colors |
-|----------|--------|
+|---|---|
 | General | `text`, `accent`, `muted`, `dim` |
 | Status | `success`, `error`, `warning` |
 | Borders | `border`, `borderAccent`, `borderMuted` |
@@ -439,59 +371,66 @@ renderResult(result, options, theme, context) {
 | Diffs | `toolDiffAdded`, `toolDiffRemoved`, `toolDiffContext` |
 | Markdown | `mdHeading`, `mdLink`, `mdLinkUrl`, `mdCode`, `mdCodeBlock`, `mdCodeBlockBorder`, `mdQuote`, `mdQuoteBorder`, `mdHr`, `mdListBullet` |
 | Syntax | `syntaxComment`, `syntaxKeyword`, `syntaxFunction`, `syntaxVariable`, `syntaxString`, `syntaxNumber`, `syntaxType`, `syntaxOperator`, `syntaxPunctuation` |
-| Thinking | `thinkingOff`, `thinkingMinimal`, `thinkingLow`, `thinkingMedium`, `thinkingHigh`, `thinkingXhigh`, `thinkingMax` |
-| Modes | `bashMode` |
+| Thinking | `thinkingText`, `thinkingOff`, `thinkingMinimal`, `thinkingLow`, `thinkingMedium`, `thinkingHigh`, `thinkingXhigh`, `thinkingMax` |
+| Mode | `bashMode` |
 
-**Background colors** (`theme.bg(color, text)`):
+Background color names: `selectedBg`, `userMessageBg`, `customMessageBg`, `toolPendingBg`, `toolSuccessBg`, and `toolErrorBg`.
 
-`selectedBg`, `userMessageBg`, `customMessageBg`, `toolPendingBg`, `toolSuccessBg`, `toolErrorBg`
-
-**For Markdown**, use `getMarkdownTheme()`:
+For Markdown, use Pi's public helper:
 
 ```typescript
 import { getMarkdownTheme } from "@astralyn/pi";
 import { Markdown } from "@earendil-works/pi-tui";
 
-renderResult(result, options, theme, context) {
-  const mdTheme = getMarkdownTheme();
-  return new Markdown(result.details.markdown, 0, 0, mdTheme);
+renderResult(result, _options, _theme, _context) {
+  return new Markdown(result.details.markdown, 0, 0, getMarkdownTheme());
 }
 ```
 
-**For custom components**, define your own theme interface:
+## Invalidation and Theme Changes
+
+If a component caches lines that contain styled strings, it must clear that cache in `invalidate()`. If it creates a `Text`, `SettingsList`, or other child with already styled strings, clear the child cache **and recreate those strings** on invalidation. Calling `Container.invalidate()` alone cannot change ANSI sequences already stored in a child.
 
 ```typescript
-interface MyTheme {
-  selected: (s: string) => string;
-  normal: (s: string) => string;
-}
+import { Container, Text } from "@earendil-works/pi-tui";
+
+// Inside a ctx.ui.custom() factory, where `theme` is supplied:
+const container = new Container();
+const title = new Text("", 1, 0);
+container.addChild(title);
+
+const refreshTheme = () => {
+  title.setText(theme.fg("accent", theme.bold("Current title")));
+};
+
+refreshTheme();
+
+const component = {
+  render: (width: number) => container.render(width),
+  invalidate: () => {
+    refreshTheme();
+    container.invalidate();
+  },
+};
 ```
 
-## Debug logging
-
-Set `PI_TUI_WRITE_LOG` to capture the raw ANSI stream written to stdout.
-
-```bash
-PI_TUI_WRITE_LOG=/tmp/tui-ansi.log pi
-```
-
-## Performance
-
-Cache rendered output when possible:
+For a component that styles its output inside `render()`, simply clearing cached lines is enough:
 
 ```typescript
-class CachedComponent {
+import type { Theme } from "@astralyn/pi";
+import { type Component, truncateToWidth } from "@earendil-works/pi-tui";
+
+class CachedComponent implements Component {
   private cachedWidth?: number;
   private cachedLines?: string[];
 
+  constructor(private readonly theme: Theme, private readonly text: string) {}
+
   render(width: number): string[] {
-    if (this.cachedLines && this.cachedWidth === width) {
-      return this.cachedLines;
-    }
-    // ... compute lines ...
+    if (this.cachedLines && this.cachedWidth === width) return this.cachedLines;
     this.cachedWidth = width;
-    this.cachedLines = lines;
-    return lines;
+    this.cachedLines = [truncateToWidth(this.theme.fg("muted", this.text), width)];
+    return this.cachedLines;
   }
 
   invalidate(): void {
@@ -501,192 +440,95 @@ class CachedComponent {
 }
 ```
 
-Call `invalidate()` when state changes, then use the injected `tui.requestRender()` to trigger re-render.
-
-## Invalidation and Theme Changes
-
-When the theme changes, the TUI calls `invalidate()` on all components to clear their caches. Components must properly implement `invalidate()` to ensure theme changes take effect.
-
-### The Problem
-
-If a component pre-bakes theme colors into strings (via `theme.fg()`, `theme.bg()`, etc.) and caches them, the cached strings contain ANSI escape codes from the old theme. Simply clearing the render cache isn't enough if the component stores the themed content separately.
-
-**Wrong approach** (theme colors won't update):
-
-```typescript
-class BadComponent extends Container {
-  private content: Text;
-
-  constructor(message: string, theme: Theme) {
-    super();
-    // Pre-baked theme colors stored in Text component
-    this.content = new Text(theme.fg("accent", message), 1, 0);
-    this.addChild(this.content);
-  }
-  // No invalidate override - parent's invalidate only clears
-  // child render caches, not the pre-baked content
-}
-```
-
-### The Solution
-
-Components that build content with theme colors must rebuild that content when `invalidate()` is called:
-
-```typescript
-class GoodComponent extends Container {
-  private message: string;
-  private content: Text;
-
-  constructor(message: string) {
-    super();
-    this.message = message;
-    this.content = new Text("", 1, 0);
-    this.addChild(this.content);
-    this.updateDisplay();
-  }
-
-  private updateDisplay(): void {
-    // Rebuild content with current theme
-    this.content.setText(theme.fg("accent", this.message));
-  }
-
-  override invalidate(): void {
-    super.invalidate();  // Clear child caches
-    this.updateDisplay(); // Rebuild with new theme
-  }
-}
-```
-
-### Pattern: Rebuild on Invalidate
-
-For components with complex content:
-
-```typescript
-class ComplexComponent extends Container {
-  private data: SomeData;
-
-  constructor(data: SomeData) {
-    super();
-    this.data = data;
-    this.rebuild();
-  }
-
-  private rebuild(): void {
-    this.clear();  // Remove all children
-
-    // Build UI with current theme
-    this.addChild(new Text(theme.fg("accent", theme.bold("Title")), 1, 0));
-    this.addChild(new Spacer(1));
-
-    for (const item of this.data.items) {
-      const color = item.active ? "success" : "muted";
-      this.addChild(new Text(theme.fg(color, item.label), 1, 0));
-    }
-  }
-
-  override invalidate(): void {
-    super.invalidate();
-    this.rebuild();
-  }
-}
-```
-
-### When This Matters
-
-This pattern is needed when:
-
-1. **Pre-baking theme colors** - Using `theme.fg()` or `theme.bg()` to create styled strings stored in child components
-2. **Syntax highlighting** - Using `highlightCode()` which applies theme-based syntax colors
-3. **Complex layouts** - Building child component trees that embed theme colors
-
-This pattern is NOT needed when:
-
-1. **Using theme callbacks** - Passing functions like `(text) => theme.fg("accent", text)` that are called during render
-2. **Simple containers** - Just grouping other components without adding themed content
-3. **Stateless render** - Computing themed output fresh in every `render()` call (no caching)
+Call `invalidate()` and then `tui.requestRender()` whenever component state changes outside input handling, such as in a timer, event listener, or async completion. Implement `dispose()` as well when that state is driven by a timer or subscription.
 
 ## Common Patterns
 
-These patterns cover the most common UI needs in extensions. **Copy these patterns instead of building from scratch.**
-
-### Pattern 1: Selection Dialog (SelectList)
-
-For letting users pick from a list of options. Use `SelectList` from `@earendil-works/pi-tui` with `DynamicBorder` for framing.
+### Pattern 1: Selection Dialog (`SelectList`)
 
 ```typescript
-import type { ExtensionAPI } from "@astralyn/pi";
-import { DynamicBorder } from "@astralyn/pi";
+import { DynamicBorder, keyHint } from "@astralyn/pi";
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 
 pi.registerCommand("pick", {
   handler: async (_args, ctx) => {
+    if (ctx.mode !== "tui") return;
+
     const items: SelectItem[] = [
       { value: "opt1", label: "Option 1", description: "First option" },
       { value: "opt2", label: "Option 2", description: "Second option" },
-      { value: "opt3", label: "Option 3" },  // description is optional
+      { value: "opt3", label: "Option 3" },
     ];
 
-    const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+    const result = await ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
       const container = new Container();
-
-      // Top border
-      container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-
-      // Title
-      container.addChild(new Text(theme.fg("accent", theme.bold("Pick an Option")), 1, 0));
-
-      // SelectList with theme
+      const title = new Text("", 1, 0);
+      const hint = new Text("", 1, 0);
       const selectList = new SelectList(items, Math.min(items.length, 10), {
-        selectedPrefix: (t) => theme.fg("accent", t),
-        selectedText: (t) => theme.fg("accent", t),
-        description: (t) => theme.fg("muted", t),
-        scrollInfo: (t) => theme.fg("dim", t),
-        noMatch: (t) => theme.fg("warning", t),
+        selectedPrefix: (text: string) => theme.fg("accent", text),
+        selectedText: (text: string) => theme.fg("accent", text),
+        description: (text: string) => theme.fg("muted", text),
+        scrollInfo: (text: string) => theme.fg("dim", text),
+        noMatch: (text: string) => theme.fg("warning", text),
       });
       selectList.onSelect = (item) => done(item.value);
       selectList.onCancel = () => done(null);
+
+      const refreshTheme = () => {
+        title.setText(theme.fg("accent", theme.bold("Pick an option")));
+        hint.setText(
+          [
+            keyHint("tui.select.up", "up"),
+            keyHint("tui.select.down", "down"),
+            keyHint("tui.select.confirm", "select"),
+            keyHint("tui.select.cancel", "cancel"),
+          ].join(theme.fg("dim", " • ")),
+        );
+      };
+
+      container.addChild(new DynamicBorder((text: string) => theme.fg("borderAccent", text)));
+      container.addChild(title);
       container.addChild(selectList);
-
-      // Help text
-      container.addChild(new Text(theme.fg("dim", "↑↓ navigate • enter select • esc cancel"), 1, 0));
-
-      // Bottom border
-      container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+      container.addChild(hint);
+      container.addChild(new DynamicBorder((text: string) => theme.fg("borderAccent", text)));
+      refreshTheme();
 
       return {
-        render: (w) => container.render(w),
-        invalidate: () => container.invalidate(),
-        handleInput: (data) => { selectList.handleInput(data); tui.requestRender(); },
+        render: (width: number) => container.render(width),
+        invalidate: () => {
+          refreshTheme();
+          container.invalidate();
+        },
+        handleInput: (data: string) => {
+          selectList.handleInput(data);
+          tui.requestRender();
+        },
       };
     });
 
-    if (result) {
-      ctx.ui.notify(`Selected: ${result}`, "info");
-    }
+    if (result !== null) ctx.ui.notify(`Selected: ${result}`, "info");
   },
 });
 ```
 
 **Examples:** [preset.ts](../examples/extensions/preset.ts), [tools.ts](../examples/extensions/tools.ts)
 
-### Pattern 2: Async Operation with Cancel (BorderedLoader)
+### Pattern 2: Async Operation with Cancel (`BorderedLoader`)
 
-For operations that take time and should be cancellable. `BorderedLoader` shows a spinner and handles escape to cancel.
+`BorderedLoader` is Pi's public framed wrapper around the TUI package's cancellable loader. Its `dispose()` stops its loader, so returning it directly gives the operation a clean lifecycle.
 
 ```typescript
 import { BorderedLoader } from "@astralyn/pi";
 
 pi.registerCommand("fetch", {
   handler: async (_args, ctx) => {
-    const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+    if (ctx.mode !== "tui") return;
+
+    const result = await ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
       const loader = new BorderedLoader(tui, theme, "Fetching data...");
       loader.onAbort = () => done(null);
 
-      // Do async work
-      fetchData(loader.signal)
-        .then((data) => done(data))
-        .catch(() => done(null));
-
+      void fetchData(loader.signal).then(done, () => done(null));
       return loader;
     });
 
@@ -701,9 +543,9 @@ pi.registerCommand("fetch", {
 
 **Examples:** [qna.ts](../examples/extensions/qna.ts), [handoff.ts](../examples/extensions/handoff.ts)
 
-### Pattern 3: Settings/Toggles (SettingsList)
+### Pattern 3: Settings and Toggles (`SettingsList`)
 
-For toggling multiple settings. Use `SettingsList` from `@earendil-works/pi-tui` with `getSettingsListTheme()`.
+Use Pi's semantic settings-list theme. Rebuild this small list on invalidation so its pre-styled cursor also follows a theme change.
 
 ```typescript
 import { getSettingsListTheme } from "@astralyn/pi";
@@ -711,32 +553,44 @@ import { Container, type SettingItem, SettingsList, Text } from "@earendil-works
 
 pi.registerCommand("settings", {
   handler: async (_args, ctx) => {
+    if (ctx.mode !== "tui") return;
+
     const items: SettingItem[] = [
       { id: "verbose", label: "Verbose mode", currentValue: "off", values: ["on", "off"] },
       { id: "color", label: "Color output", currentValue: "on", values: ["on", "off"] },
     ];
 
-    await ctx.ui.custom((_tui, theme, _kb, done) => {
+    await ctx.ui.custom((tui, theme, _keybindings, done) => {
       const container = new Container();
-      container.addChild(new Text(theme.fg("accent", theme.bold("Settings")), 1, 1));
+      const title = new Text("", 1, 1);
+      container.addChild(title);
+      let settingsList: SettingsList | undefined;
 
-      const settingsList = new SettingsList(
-        items,
-        Math.min(items.length + 2, 15),
-        getSettingsListTheme(),
-        (id, newValue) => {
-          // Handle value change
-          ctx.ui.notify(`${id} = ${newValue}`, "info");
-        },
-        () => done(undefined),  // On close
-        { enableSearch: true }, // Optional: enable fuzzy search by label
-      );
-      container.addChild(settingsList);
+      const rebuild = () => {
+        title.setText(theme.fg("accent", theme.bold("Settings")));
+        if (settingsList) container.removeChild(settingsList);
+        settingsList = new SettingsList(
+          items,
+          Math.min(items.length + 2, 15),
+          getSettingsListTheme(),
+          (id, newValue) => ctx.ui.notify(`${id} = ${newValue}`, "info"),
+          () => done(undefined),
+          { enableSearch: true },
+        );
+        container.addChild(settingsList);
+      };
 
+      rebuild();
       return {
-        render: (w) => container.render(w),
-        invalidate: () => container.invalidate(),
-        handleInput: (data) => settingsList.handleInput?.(data),
+        render: (width: number) => container.render(width),
+        invalidate: () => {
+          rebuild();
+          container.invalidate();
+        },
+        handleInput: (data: string) => {
+          settingsList?.handleInput(data);
+          tui.requestRender();
+        },
       };
     });
   },
@@ -747,27 +601,20 @@ pi.registerCommand("settings", {
 
 ### Pattern 4: Persistent Status Indicator
 
-Show status in the footer that persists across renders. Good for mode indicators.
-
 ```typescript
-// Set status (shown in footer)
-ctx.ui.setStatus("my-ext", ctx.ui.theme.fg("accent", "● active"));
-
-// Clear status
-ctx.ui.setStatus("my-ext", undefined);
+ctx.ui.setStatus("my-extension", ctx.ui.theme.fg("accent", "● active"));
+ctx.ui.setStatus("my-extension", undefined); // Clear
 ```
 
 **Examples:** [status-line.ts](../examples/extensions/status-line.ts), [preset.ts](../examples/extensions/preset.ts)
 
 ### Pattern 4b: Working Indicator Customization
 
-Customize the inline working indicator shown while pi is streaming a response.
-
 ```typescript
 // Static indicator
 ctx.ui.setWorkingIndicator({ frames: [ctx.ui.theme.fg("accent", "●")] });
 
-// Custom animated indicator
+// Custom animation. Frames are rendered verbatim, so style them explicitly.
 ctx.ui.setWorkingIndicator({
   frames: [
     ctx.ui.theme.fg("dim", "·"),
@@ -778,121 +625,145 @@ ctx.ui.setWorkingIndicator({
   intervalMs: 120,
 });
 
-// Hide the indicator entirely
-ctx.ui.setWorkingIndicator({ frames: [] });
-
-// Restore pi's default spinner
-ctx.ui.setWorkingIndicator();
+ctx.ui.setWorkingIndicator({ frames: [] }); // Hide
+ctx.ui.setWorkingIndicator(); // Restore Pi's default
 ```
-
-This only affects the normal streaming working indicator. Compaction and retry loaders keep their built-in styling. Custom frames are rendered verbatim, so extensions must add their own colors when needed.
 
 **Examples:** [working-indicator.ts](../examples/extensions/working-indicator.ts)
 
-### Pattern 5: Widgets Above/Below Editor
-
-Show persistent content above or below the input editor. Good for todo lists, progress.
+### Pattern 5: Widgets Above or Below the Editor
 
 ```typescript
-// Simple string array (above editor by default)
-ctx.ui.setWidget("my-widget", ["Line 1", "Line 2"]);
+import { truncateToWidth } from "@earendil-works/pi-tui";
 
-// Render below the editor
-ctx.ui.setWidget("my-widget", ["Line 1", "Line 2"], { placement: "belowEditor" });
+const tasks = [
+  { text: "Review changes", done: true },
+  { text: "Run checks", done: false },
+];
 
-// Or with theme
-ctx.ui.setWidget("my-widget", (_tui, theme) => {
-  const lines = items.map((item, i) =>
-    item.done
-      ? theme.fg("success", "✓ ") + theme.fg("muted", item.text)
-      : theme.fg("dim", "○ ") + item.text
-  );
-  return {
-    render: () => lines,
-    invalidate: () => {},
-  };
-});
+ctx.ui.setWidget("my-widget", (_tui, theme) => ({
+  render(width: number): string[] {
+    return tasks.map((task) =>
+      truncateToWidth(
+        task.done
+          ? theme.fg("success", "✓ ") + theme.fg("muted", task.text)
+          : theme.fg("dim", "○ ") + theme.fg("text", task.text),
+        width,
+      ),
+    );
+  },
+  invalidate(): void {},
+}));
 
-// Clear
-ctx.ui.setWidget("my-widget", undefined);
+ctx.ui.setWidget("my-widget", undefined); // Clear
+ctx.ui.setWidget("my-widget", ["Below the editor"], { placement: "belowEditor" });
 ```
+
+The factory's component is disposed when that widget key is replaced or cleared. If mutable widget state changes, retain the factory's `tui` argument and call `tui.requestRender()`.
 
 **Examples:** [widget-placement.ts](../examples/extensions/widget-placement.ts)
 
 ### Pattern 6: Custom Footer
 
-Replace the footer. `footerData` exposes data not otherwise accessible to extensions.
+A footer factory receives branch and extension-status data unavailable elsewhere. Return the unsubscribe function as `dispose` so it is released when the footer changes.
 
 ```typescript
+import { truncateToWidth } from "@earendil-works/pi-tui";
+
 ctx.ui.setFooter((tui, theme, footerData) => ({
-  invalidate() {},
   render(width: number): string[] {
-    // footerData.getGitBranch(): string | null
-    // footerData.getExtensionStatuses(): ReadonlyMap<string, string>
-    return [`${ctx.model?.id} (${footerData.getGitBranch() || "no git"})`];
+    const branch = footerData.getGitBranch() ?? "no git";
+    const text = theme.fg("dim", `${ctx.model?.id ?? "no model"} (${branch})`);
+    return [truncateToWidth(text, width)];
   },
-  dispose: footerData.onBranchChange(() => tui.requestRender()), // reactive
+  invalidate(): void {},
+  dispose: footerData.onBranchChange(() => tui.requestRender()),
 }));
 
-ctx.ui.setFooter(undefined); // restore default
+ctx.ui.setFooter(undefined); // Restore Pi's default footer
 ```
 
-Token stats available via `ctx.sessionManager.getBranch()` and `ctx.model`.
+`footerData.getExtensionStatuses()` returns the read-only status map set through `ctx.ui.setStatus()`. Session statistics are available from `ctx.sessionManager` and `ctx.model`.
 
 **Examples:** [custom-footer.ts](../examples/extensions/custom-footer.ts)
 
-### Pattern 7: Custom Editor (vim mode, etc.)
+### Pattern 7: Custom Editor
 
-Replace the main input editor with a custom implementation. Useful for modal editing (vim), different keybindings (emacs), or specialized input handling.
+Extend `CustomEditor` to preserve Pi's application keybindings. This example uses the configured `app.interrupt` binding to enter normal mode and `decodeKittyPrintable()` for vim's printable commands.
 
 ```typescript
-import { CustomEditor, type ExtensionAPI } from "@astralyn/pi";
-import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import { CustomEditor, type ExtensionAPI, type KeybindingsManager } from "@astralyn/pi";
+import {
+  decodeKittyPrintable,
+  truncateToWidth,
+  type EditorTheme,
+  type TUI,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 
 type Mode = "normal" | "insert";
 
 class VimEditor extends CustomEditor {
   private mode: Mode = "insert";
 
+  constructor(tui: TUI, theme: EditorTheme, private readonly bindings: KeybindingsManager) {
+    super(tui, theme, bindings);
+  }
+
+  private setMode(mode: Mode): void {
+    if (this.mode === mode) return;
+    this.mode = mode;
+    this.invalidate();
+    this.tui.requestRender();
+  }
+
   handleInput(data: string): void {
-    // Escape: switch to normal mode, or pass through for app handling
-    if (matchesKey(data, "escape")) {
+    if (this.bindings.matches(data, "app.interrupt")) {
       if (this.mode === "insert") {
-        this.mode = "normal";
-        return;
+        this.setMode("normal");
+      } else {
+        super.handleInput(data);
       }
-      // In normal mode, escape aborts agent (handled by CustomEditor)
-      super.handleInput(data);
       return;
     }
 
-    // Insert mode: pass everything to CustomEditor
     if (this.mode === "insert") {
       super.handleInput(data);
       return;
     }
 
-    // Normal mode: vim-style navigation
-    switch (data) {
-      case "i": this.mode = "insert"; return;
-      case "h": super.handleInput("\x1b[D"); return; // Left
-      case "j": super.handleInput("\x1b[B"); return; // Down
-      case "k": super.handleInput("\x1b[A"); return; // Up
-      case "l": super.handleInput("\x1b[C"); return; // Right
+    const key = decodeKittyPrintable(data) ?? data;
+    switch (key) {
+      case "i":
+        this.setMode("insert");
+        return;
+      case "h":
+        super.handleInput("\x1b[D");
+        return;
+      case "j":
+        super.handleInput("\x1b[B");
+        return;
+      case "k":
+        super.handleInput("\x1b[A");
+        return;
+      case "l":
+        super.handleInput("\x1b[C");
+        return;
     }
-    // Pass unhandled keys to super (ctrl+c, etc.), but filter printable chars
-    if (data.length === 1 && data.charCodeAt(0) >= 32) return;
+
+    // Keep application controls, but do not insert normal-mode text.
+    if (key.length === 1 && key.charCodeAt(0) >= 32) return;
     super.handleInput(data);
   }
 
   render(width: number): string[] {
     const lines = super.render(width);
-    // Add mode indicator to bottom border (use truncateToWidth for ANSI-safe truncation)
-    if (lines.length > 0) {
-      const label = this.mode === "normal" ? " NORMAL " : " INSERT ";
-      const lastLine = lines[lines.length - 1]!;
-      // Pass "" as ellipsis to avoid adding "..." when truncating
-      lines[lines.length - 1] = truncateToWidth(lastLine, width - label.length, "") + label;
+    const last = lines.length - 1;
+    if (last < 0) return lines;
+
+    const label = this.mode === "normal" ? " NORMAL " : " INSERT ";
+    if (width >= label.length && visibleWidth(lines[last]!) >= label.length) {
+      lines[last] = truncateToWidth(lines[last]!, width - label.length, "") + label;
     }
     return lines;
   }
@@ -900,44 +771,42 @@ class VimEditor extends CustomEditor {
 
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
-    // Factory receives the TUI, theme, and keybindings from the app
-    ctx.ui.setEditorComponent((tui, theme, keybindings) =>
-      new VimEditor(tui, theme, keybindings)
-    );
+    ctx.ui.setEditorComponent((tui, theme, keybindings) => new VimEditor(tui, theme, keybindings));
   });
 }
 ```
 
-**Key points:**
-
-- **Extend `CustomEditor`** (not base `Editor`) to get app keybindings (escape to abort, ctrl+d to exit, model switching, etc.)
-- **Call `super.handleInput(data)`** for keys you don't handle
-- **Factory pattern**: `setEditorComponent` receives a factory function that gets `tui`, `theme`, and `keybindings`
-- **Pass `undefined`** to restore the default editor: `ctx.ui.setEditorComponent(undefined)`
+Pass `undefined` to `ctx.ui.setEditorComponent()` to restore Pi's default editor.
 
 **Examples:** [modal-editor.ts](../examples/extensions/modal-editor.ts)
 
+## Debug Logging
+
+Set `PI_TUI_WRITE_LOG` to capture the ANSI stream written to stdout.
+
+```bash
+PI_TUI_WRITE_LOG=/tmp/tui-ansi.log pi
+```
+
 ## Key Rules
 
-1. **Always use theme from callback** - Don't import theme directly. Use `theme` from the `ctx.ui.custom((tui, theme, keybindings, done) => ...)` callback.
-
-2. **Always type DynamicBorder color param** - Write `(s: string) => theme.fg("accent", s)`, not `(s) => theme.fg("accent", s)`.
-
-3. **Call tui.requestRender() after state changes** - In `handleInput`, call `tui.requestRender()` after updating state.
-
-4. **Return the three-method object** - Custom components need `{ render, invalidate, handleInput }`.
-
-5. **Use existing components** - `SelectList`, `SettingsList`, `BorderedLoader` cover 90% of cases. Don't rebuild them.
+1. Guard terminal-only UI with `ctx.mode === "tui"`.
+2. Use the callback `theme` or `ctx.ui.theme`; use semantic `fg()` and `bg()` helpers, never fixed ANSI colors.
+3. Use `keybindings.matches()` and `keyHint()` for configurable Pi actions. Reserve `matchesKey()` for deliberately fixed extension-specific keys.
+4. Keep every rendered line within the supplied width, including styled lines.
+5. Invalidate cached output and call `tui.requestRender()` after state changes.
+6. Implement `dispose()` for timers, subscriptions, or other owned resources.
+7. Prefer `SelectList`, `SettingsList`, and `BorderedLoader` over rebuilding their behavior.
 
 ## Examples
 
-- **Selection UI**: [examples/extensions/preset.ts](../examples/extensions/preset.ts) - SelectList with DynamicBorder framing
-- **Async with cancel**: [examples/extensions/qna.ts](../examples/extensions/qna.ts) - BorderedLoader for LLM calls
-- **Settings toggles**: [examples/extensions/tools.ts](../examples/extensions/tools.ts) - SettingsList for tool enable/disable
-- **Status indicators**: [examples/extensions/status-line.ts](../examples/extensions/status-line.ts) - setStatus across session events
-- **Widgets**: [examples/extensions/widget-placement.ts](../examples/extensions/widget-placement.ts) - setWidget above and below the editor
-- **Working indicator**: [examples/extensions/working-indicator.ts](../examples/extensions/working-indicator.ts) - setWorkingIndicator
-- **Custom footer**: [examples/extensions/custom-footer.ts](../examples/extensions/custom-footer.ts) - setFooter with stats
-- **Custom editor**: [examples/extensions/modal-editor.ts](../examples/extensions/modal-editor.ts) - Vim-like modal editing
-- **Snake game**: [examples/extensions/snake.ts](../examples/extensions/snake.ts) - Full game with keyboard input, game loop
-- **Custom tool rendering**: [examples/extensions/todo.ts](../examples/extensions/todo.ts) - renderCall and renderResult
+- **Selection UI:** [examples/extensions/preset.ts](../examples/extensions/preset.ts)
+- **Async with cancellation:** [examples/extensions/qna.ts](../examples/extensions/qna.ts)
+- **Settings toggles:** [examples/extensions/tools.ts](../examples/extensions/tools.ts)
+- **Status indicators:** [examples/extensions/status-line.ts](../examples/extensions/status-line.ts)
+- **Widgets:** [examples/extensions/widget-placement.ts](../examples/extensions/widget-placement.ts)
+- **Working indicator:** [examples/extensions/working-indicator.ts](../examples/extensions/working-indicator.ts)
+- **Custom footer:** [examples/extensions/custom-footer.ts](../examples/extensions/custom-footer.ts)
+- **Custom editor:** [examples/extensions/modal-editor.ts](../examples/extensions/modal-editor.ts)
+- **Game loop and disposal:** [examples/extensions/snake.ts](../examples/extensions/snake.ts)
+- **Custom tool rendering:** [examples/extensions/todo.ts](../examples/extensions/todo.ts)

@@ -26,7 +26,7 @@ Extensions are TypeScript modules that extend pi's behavior. They can subscribe 
 - External integrations (file watchers, webhooks, CI triggers)
 - Games while you wait (see `snake.ts` example)
 
-See [examples/extensions/](../examples/extensions/) for working implementations.
+See the [extension examples catalog](../examples/extensions/README.md) for working implementations.
 
 ## Table of Contents
 
@@ -49,9 +49,10 @@ See [examples/extensions/](../examples/extensions/) for working implementations.
 - [Custom Tools](#custom-tools)
   - [Dynamic Tool Loading](#dynamic-tool-loading)
 - [Custom UI](#custom-ui)
+  - [Terminal Input](#terminal-input)
 - [Error Handling](#error-handling)
 - [Mode Behavior](#mode-behavior)
-- [Examples Reference](#examples-reference)
+- [Examples](#examples)
 
 ## Quick Start
 
@@ -143,6 +144,7 @@ To share extensions via npm or git as pi packages, see [packages.md](packages.md
 | `@astralyn/pi` | Extension types (`ExtensionAPI`, `ExtensionContext`, events) |
 | `typebox` | Schema definitions for tool parameters |
 | `@earendil-works/pi-ai` | AI utilities (`StringEnum` for Google-compatible enums) |
+| `@earendil-works/pi-agent-core` | Agent-core types for advanced integrations |
 | `@earendil-works/pi-tui` | TUI components for custom rendering |
 
 npm dependencies work too. Add a `package.json` next to your extension (or in a parent directory), run `npm install`, and imports from `node_modules/` are resolved automatically.
@@ -490,8 +492,16 @@ Fired on `/tree` navigation. See [Sessions](sessions.md) for tree navigation con
 ```typescript
 pi.on("session_before_tree", async (event, ctx) => {
   const { preparation, signal } = event;
+  // preparation: targetId, oldLeafId, commonAncestorId, entriesToSummarize,
+  // userWantsSummary, customInstructions, replaceInstructions, label
   return { cancel: true };
-  // OR provide custom summary:
+  // OR customize the built-in summarizer:
+  return {
+    customInstructions: "Preserve decisions and open questions.",
+    replaceInstructions: false,
+    label: "review-checkpoint",
+  };
+  // OR provide a custom summary (used only when navigation requests a summary):
   return {
     summary: {
       summary: "...",
@@ -502,9 +512,11 @@ pi.on("session_before_tree", async (event, ctx) => {
 });
 
 pi.on("session_tree", async (event, ctx) => {
-  // event.newLeafId, oldLeafId, summaryEntry, fromExtension
+  // event.newLeafId, event.oldLeafId, event.summaryEntry, event.fromExtension
 });
 ```
+
+`customInstructions` and `replaceInstructions` override the corresponding options for Pi's built-in branch summarizer. `label` overrides the label attached to the generated summary, or to the target when not summarizing. `summary` replaces the built-in summarizer only when the navigation requested a summary; otherwise it is ignored. `cancel` stops navigation.
 
 #### session_shutdown
 
@@ -513,7 +525,7 @@ Fired before a started session runtime is torn down. Use this to clean up resour
 ```typescript
 pi.on("session_shutdown", async (event, ctx) => {
   // event.reason - "quit" | "reload" | "new" | "resume" | "fork"
-  // event.targetSessionFile - destination session for session replacement flows
+  // event.targetSessionFile - destination for new/resume/fork replacement, if persisted
   // Cleanup, save state, etc.
 });
 ```
@@ -988,7 +1000,7 @@ ctx.sessionManager.getLeafId()              // Current leaf entry ID
 
 ### ctx.modelRegistry / ctx.model / ctx.thinkingLevel
 
-Access to models, providers, and resolved authentication. `ctx.modelRegistry.getProvider(id)` returns the effective pi-ai provider, while `getProviderAuth(id)` resolves its current API key, headers, base URL, and provider-scoped environment without requiring a loaded model. `ctx.model` is the active model, and `ctx.thinkingLevel` is its current effective thinking level.
+Access to models, providers, and resolved authentication. `ctx.modelRegistry.getProvider(id)` returns the effective pi-ai provider, while `getProviderAuth(id)` resolves its current API key, headers, base URL, and provider-scoped environment without requiring a loaded model. `ctx.model` is the active model (or `undefined` when none is active), and `ctx.thinkingLevel` is its current effective thinking level when the session runtime provides one.
 
 ### ctx.signal
 
@@ -1188,6 +1200,8 @@ Options:
 - `replaceInstructions`: If true, `customInstructions` replaces the default prompt instead of being appended
 - `label`: Label to attach to the branch summary entry (or target entry if not summarizing)
 
+Like the other session-control methods, this resolves to `{ cancelled: boolean }`; cancellation comes from `session_before_tree`.
+
 ### ctx.switchSession(sessionPath, options?)
 
 Switch to a different session file:
@@ -1233,7 +1247,7 @@ pi.registerCommand("switch", {
 
 ### Session replacement lifecycle and footguns
 
-`withSession` receives a fresh `ReplacedSessionContext`, which extends `ExtensionCommandContext` with async `sendMessage()` and `sendUserMessage()` helpers bound to the replacement session.
+`withSession` receives a fresh `ReplacedSessionContext`, which extends `ExtensionCommandContext` with `sendMessage()` and `sendUserMessage()` helpers bound to the replacement session. Unlike the corresponding `pi` methods, both helpers return `Promise<void>`; `await` them when later work depends on delivery.
 
 Lifecycle and footguns:
 - `withSession` runs only after the old session has emitted `session_shutdown`, the old runtime has been torn down, the replacement session has been rebound, and the new extension instance has already received `session_start`.
@@ -1273,6 +1287,10 @@ pi.registerCommand("handoff", {
   },
 });
 ```
+
+### Stale context errors
+
+After a session replacement or `await ctx.reload()`, captured `pi`, event `ctx`, and command `ctx` objects from the old runtime throw when used. This protects the replacement session from accidental writes through the old runtime. Use the `withSession` context for replacement work, treat reload as terminal for the old handler, and keep shutdown cleanup independent of session-bound APIs.
 
 ### ctx.reload()
 
@@ -1960,6 +1978,31 @@ pi.registerTool({
 });
 ```
 
+Use `defineTool()` when a definition is assigned to a variable or passed through an array before registration. It preserves TypeBox parameter inference that contextual `pi.registerTool({ ... })` calls already receive:
+
+```typescript
+import { defineTool } from "@astralyn/pi";
+import { Type } from "typebox";
+
+const myTool = defineTool({
+  name: "my_tool",
+  label: "My Tool",
+  description: "A typed standalone tool",
+  parameters: Type.Object({ value: Type.String() }),
+  async execute(_id, params) {
+    return { content: [{ type: "text", text: params.value }], details: {} };
+  },
+});
+
+pi.registerTool(myTool);
+```
+
+**Execution mode:** `executionMode: "sequential"` makes this tool run one at a time with other tool calls. Use it for shared mutable state or a dialog that should not compete with sibling calls. `"parallel"` explicitly allows concurrent execution; when omitted, Pi uses the default execution mode.
+
+**Constrained sampling:** `constrainedSampling: { type: "json_schema", strict: "prefer" }` requests provider-side schema enforcement when the active provider supports it, otherwise normal tool calling is used. Use `strict: "require"` only when the request should fail on unsupported providers. For provider-specific grammars, use `{ type: "grammar", variants: { openai_lark: "...", openai_regex: "..." } }`; each variant is optional, and unsupported providers fall back to normal function tools. `constrainedSampling: false` explicitly opts out (the same behavior as omitting it).
+
+**Tool groups:** `toolGroup: "my-group"` is a freeform display identifier. Adjacent default-shell tool rows with the same identifier collapse together in the interactive transcript; it does not change execution. In the collapsed group header, `renderCall` receives `context.toolGroupSummary === true`. Tools with `renderShell: "self"` are not grouped.
+
 **Usage accounting:** If a tool makes nested LLM calls, return their combined `Usage` as `usage`. Pi persists it on the tool result and includes it in footer, `/session`, and RPC session totals. `tool_result` handlers can inspect or replace this value.
 
 **Signaling errors:** To mark a tool execution as failed (sets `isError: true` on the result and reports it to the LLM), throw an error from `execute`. Returning a value never sets the error flag regardless of what properties you include in the return object.
@@ -2046,16 +2089,7 @@ See [examples/extensions/tool-override.ts](../examples/extensions/tool-override.
 
 **Prompt metadata:** `promptSnippet` and `promptGuidelines` are not inherited from the built-in tool. If your override should keep those prompt instructions, define them on the override explicitly.
 
-**Your implementation must match the exact result shape**, including the `details` type. The UI and session logic depend on these shapes for rendering and state tracking.
-
-Built-in tool implementations:
-- [read.ts](https://github.com/ming-kang/pi/blob/main/src/core/tools/read.ts) - `ReadToolDetails`
-- [bash.ts](https://github.com/ming-kang/pi/blob/main/src/core/tools/bash.ts) - `BashToolDetails`
-- [edit.ts](https://github.com/ming-kang/pi/blob/main/src/core/tools/edit.ts)
-- [write.ts](https://github.com/ming-kang/pi/blob/main/src/core/tools/write.ts)
-- [grep.ts](https://github.com/ming-kang/pi/blob/main/src/core/tools/grep.ts) - `GrepToolDetails`
-- [find.ts](https://github.com/ming-kang/pi/blob/main/src/core/tools/find.ts) - `FindToolDetails`
-- [ls.ts](https://github.com/ming-kang/pi/blob/main/src/core/tools/ls.ts) - `LsToolDetails`
+**Your implementation must match the exact result shape**, including the `details` type. The UI and session logic depend on these shapes for rendering and state tracking. The built-in detail types available from `@astralyn/pi` are `ReadToolDetails`, `BashToolDetails`, `EditToolDetails`, `GrepToolDetails`, `FindToolDetails`, and `LsToolDetails`.
 
 ### Remote Execution
 
@@ -2186,7 +2220,7 @@ export default function (pi: ExtensionAPI) {
 
 ### Custom Rendering
 
-Tools can provide `renderCall` and `renderResult` for custom TUI display. See [tui.md](tui.md) for the full component API and [tool-execution.ts](https://github.com/ming-kang/pi/blob/main/src/modes/interactive/components/tool-execution.ts) for how tool rows are composed.
+Tools can provide `renderCall` and `renderResult` for custom TUI display. See [tui.md](tui.md) for the full component API.
 
 By default, tool output is wrapped in Pi's native call/result shell, which owns the status dot, result rail, padding, and fallback rendering. A defined `renderCall` or `renderResult` must return a `Component`. If a slot renderer is not defined, `tool-execution.ts` uses fallback rendering for that slot.
 
@@ -2223,6 +2257,8 @@ pi.registerTool({
 - `lastComponent` - the previously returned component for that slot, if any
 - `invalidate()` - request a rerender of this tool row
 - `toolCallId`, `cwd`, `executionStarted`, `argsComplete`, `isPartial`, `expanded`, `showImages`, `isError`
+- `result` - the current partial or final result, if one has arrived
+- `toolGroupSummary` - true while `renderCall` builds a collapsed group header
 
 Use `context.state` for cross-slot shared state. Keep slot-local caches on the returned component instance when you want to reuse and mutate the same component across renders.
 
@@ -2555,9 +2591,35 @@ if (confirmed) {
 
 See [examples/extensions/timed-confirm.ts](../examples/extensions/timed-confirm.ts) for complete examples.
 
+### Terminal Input
+
+`ctx.ui.onTerminalInput()` listens to raw terminal input in interactive TUI mode. It returns an unsubscribe function. Handlers run synchronously in registration order before Pi processes the input:
+
+```typescript
+let unsubscribe: (() => void) | undefined;
+
+pi.on("session_start", (_event, ctx) => {
+  unsubscribe?.();
+  unsubscribe = ctx.ui.onTerminalInput((data) => {
+    if (data === "\u0007") return { consume: true }; // Stop later handlers and Pi's input handling
+    if (data === "j") return { data: "\u001b[B" };   // Rewrite for later handlers and the focused component
+    return undefined;                                  // Pass through unchanged
+  });
+});
+
+pi.on("session_shutdown", () => {
+  unsubscribe?.();
+  unsubscribe = undefined;
+});
+```
+
+Return `{ consume: true }` to stop dispatch immediately. Return `{ data }` to replace the input seen by later listeners and then Pi's focused component; an empty replacement also prevents focused-component handling after listeners finish. In RPC, JSON, and print modes this is a no-op, so guard terminal-specific behavior with `ctx.mode === "tui"`.
+
 ### Widgets, Status, and Footer
 
 ```typescript
+import { Text } from "@earendil-works/pi-tui";
+
 // Status in footer (persistent until cleared)
 ctx.ui.setStatus("my-ext", "Processing...");
 ctx.ui.setStatus("my-ext", undefined);  // Clear
@@ -2590,11 +2652,24 @@ ctx.ui.setWidget("my-widget", (tui, theme) => new Text(theme.fg("accent", "Custo
 ctx.ui.setWidget("my-widget", undefined);  // Clear
 
 // Custom footer (replaces built-in footer entirely)
-ctx.ui.setFooter((tui, theme) => ({
-  render(width) { return [theme.fg("dim", "Custom footer")]; },
+ctx.ui.setFooter((_tui, theme, footerData) => ({
+  render(_width) {
+    const branch = footerData.getGitBranch() ?? "not a git repository";
+    return [theme.fg("dim", `Custom footer: ${branch}`)];
+  },
   invalidate() {},
 }));
 ctx.ui.setFooter(undefined);  // Restore built-in footer
+// footerData also exposes getExtensionStatuses(), getAvailableProviderCount(),
+// and onBranchChange() for an invalidating custom footer.
+
+// Custom startup header
+ctx.ui.setHeader((_tui, theme) => new Text(theme.fg("accent", "Project ready"), 0, 0));
+ctx.ui.setHeader(undefined);  // Restore built-in header
+
+// Label used for collapsed thinking blocks
+ctx.ui.setHiddenThinkingLabel("Reasoning");
+ctx.ui.setHiddenThinkingLabel();  // Restore default label
 
 // Terminal title
 ctx.ui.setTitle("pi - my-project");
@@ -2724,7 +2799,7 @@ if (result) {
 }
 ```
 
-The callback receives:
+The factory may return a component directly or a `Promise` for one. The callback receives:
 - `tui` - TUI instance (for screen dimensions, focus management)
 - `theme` - Current theme for styling
 - `keybindings` - App keybinding manager (for checking shortcuts)
@@ -2907,86 +2982,6 @@ const highlighted = highlightCode(code, lang, theme);
 
 Use `ctx.mode === "tui"` before TUI-specific features (`custom()`, component factories, terminal input). Use `ctx.hasUI` before dialog and notification methods that work in both TUI and RPC modes.
 
-## Examples Reference
+## Examples
 
-All examples in [examples/extensions/](../examples/extensions/).
-
-| Example | Description | Key APIs |
-|---------|-------------|----------|
-| **Tools** |||
-| `hello.ts` | Minimal tool registration | `registerTool` |
-| `question.ts` | Tool with user interaction | `registerTool`, `ui.select` |
-| `questionnaire.ts` | Multi-step wizard tool | `registerTool`, `ui.custom` |
-| `todo.ts` | Stateful tool with persistence | `registerTool`, `appendEntry`, `renderResult`, session events |
-| `dynamic-tools.ts` | Register tools after startup and during commands | `registerTool`, `session_start`, `registerCommand` |
-| `structured-output.ts` | Final structured-output tool with `terminate: true` | `registerTool`, terminating tool results |
-| `truncated-tool.ts` | Output truncation example | `registerTool`, `truncateHead` |
-| `tool-override.ts` | Override built-in read tool | `registerTool` (same name as built-in) |
-| **Commands** |||
-| `pirate.ts` | Modify system prompt per-turn | `registerCommand`, `before_agent_start` |
-| `summarize.ts` | Conversation summary command | `registerCommand`, `ui.custom` |
-| `handoff.ts` | Cross-provider model handoff | `registerCommand`, `ui.editor`, `ui.custom` |
-| `qna.ts` | Q&A with custom UI | `registerCommand`, `ui.custom`, `setEditorText` |
-| `send-user-message.ts` | Inject user messages | `registerCommand`, `sendUserMessage` |
-| `reload-runtime.ts` | Reload command and LLM tool handoff | `registerCommand`, `ctx.reload()`, `sendUserMessage` |
-| `shutdown-command.ts` | Graceful shutdown command | `registerCommand`, `shutdown()` |
-| **Events & Gates** |||
-| `permission-gate.ts` | Block dangerous commands | `on("tool_call")`, `ui.confirm` |
-| `project-trust.ts` | Decide or defer project trust from a user/global or CLI extension | `on("project_trust")`, trust UI, required trust result |
-| `protected-paths.ts` | Block writes to specific paths | `on("tool_call")` |
-| `confirm-destructive.ts` | Confirm session changes | `on("session_before_switch")`, `on("session_before_fork")` |
-| `dirty-repo-guard.ts` | Warn on dirty git repo | `on("session_before_*")`, `exec` |
-| `input-transform.ts` | Transform user input | `on("input")` |
-| `input-transform-streaming.ts` | Streaming-aware input transform | `on("input")`, `streamingBehavior` |
-| `model-status.ts` | React to model changes | `on("model_select")`, `setStatus` |
-| `provider-payload.ts` | Inspect payloads and provider response headers | `on("before_provider_request")`, `on("after_provider_response")` |
-| `system-prompt-header.ts` | Display system prompt info | `on("agent_start")`, `getSystemPrompt` |
-| `claude-rules.ts` | Load rules from files | `on("session_start")`, `on("before_agent_start")` |
-| `prompt-customizer.ts` | Add context-aware tool guidance using `systemPromptOptions` | `on("before_agent_start")`, `BuildSystemPromptOptions` |
-| `file-trigger.ts` | File watcher triggers messages | `sendMessage` |
-| **Compaction & Sessions** |||
-| `custom-compaction.ts` | Custom compaction summary | `on("session_before_compact")` |
-| `trigger-compact.ts` | Trigger compaction manually | `compact()` |
-| `git-checkpoint.ts` | Git stash on turns | `on("turn_start")`, `on("session_before_fork")`, `exec` |
-| `git-merge-and-resolve.ts` | Fetch, merge, and resolve conflicts | `on("agent_end")`, `exec`, `sendUserMessage` |
-| `auto-commit-on-exit.ts` | Commit on shutdown | `on("session_shutdown")`, `exec` |
-| **UI Components** |||
-| `status-line.ts` | Footer status indicator | `setStatus`, session events |
-| `working-indicator.ts` | Customize the streaming working indicator | `setWorkingIndicator`, `registerCommand` |
-| `github-issue-autocomplete.ts` | Add `#1234` issue completions on top of built-in autocomplete by preloading recent open issues from `gh issue list` | `addAutocompleteProvider`, `on("session_start")`, `exec` |
-| `custom-footer.ts` | Replace footer entirely | `registerCommand`, `setFooter` |
-| `custom-header.ts` | Replace startup header | `on("session_start")`, `setHeader` |
-| `modal-editor.ts` | Vim-style modal editor | `setEditorComponent`, `CustomEditor` |
-| `rainbow-editor.ts` | Custom editor styling | `setEditorComponent` |
-| `widget-placement.ts` | Widget above/below editor | `setWidget` |
-| `overlay-test.ts` | Overlay components | `ui.custom` with overlay options |
-| `overlay-qa-tests.ts` | Comprehensive overlay tests | `ui.custom`, all overlay options |
-| `notify.ts` | Simple notifications | `ui.notify` |
-| `timed-confirm.ts` | Dialogs with timeout | `ui.confirm` with timeout/signal |
-| `mac-system-theme.ts` | Auto-switch theme | `setTheme`, `exec` |
-| **Complex Extensions** |||
-| `preset.ts` | Saveable presets (model, tools, thinking) | `registerCommand`, `registerShortcut`, `registerFlag`, `setModel`, `setActiveTools`, `setThinkingLevel`, `appendEntry` |
-| `tools.ts` | Toggle tools on/off UI | `registerCommand`, `setActiveTools`, `SettingsList`, session events |
-| **Remote & Sandbox** |||
-| `ssh.ts` | SSH remote execution | `registerFlag`, `on("user_bash")`, `on("before_agent_start")`, tool operations |
-| `interactive-shell.ts` | Persistent shell session | `on("user_bash")` |
-| `sandbox/` | Sandboxed tool execution | Tool operations |
-| `gondolin/` | Route built-in tools and `!` commands into a Gondolin micro-VM | Tool operations, built-in tool overrides, `on("user_bash")` |
-| **Games** |||
-| `snake.ts` | Snake game | `registerCommand`, `ui.custom`, keyboard handling |
-| `space-invaders.ts` | Space Invaders game | `registerCommand`, `ui.custom` |
-| `doom-overlay/` | Doom in overlay | `ui.custom` with overlay |
-| **Providers** |||
-| `custom-provider-anthropic/` | Custom Anthropic proxy | `registerProvider` |
-| `custom-provider-gitlab-duo/` | GitLab Duo integration | `registerProvider` with OAuth |
-| **Messages & Communication** |||
-| `message-renderer.ts` | Custom message rendering | `registerMessageRenderer`, `sendMessage` |
-| `entry-renderer.ts` | TUI-only custom entry rendering | `registerEntryRenderer`, `appendEntry` |
-| `event-bus.ts` | Inter-extension events | `pi.events` |
-| **Session Metadata** |||
-| `session-name.ts` | Name sessions for selector | `setSessionName`, `getSessionName` |
-| `bookmark.ts` | Bookmark entries for /tree | `setLabel` |
-| **Misc** |||
-| `inline-bash.ts` | Inline bash in tool calls | `on("tool_call")` |
-| `bash-spawn-hook.ts` | Adjust bash command, cwd, and env before execution | `createBashTool`, `spawnHook` |
-| `with-deps/` | Extension with npm dependencies | Package structure with `package.json` |
+The complete, maintained catalog is [examples/extensions/README.md](../examples/extensions/README.md). Use it to find a focused starting point by capability.

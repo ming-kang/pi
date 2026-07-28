@@ -190,7 +190,7 @@ Response:
 }
 ```
 
-The `model` field is a full [Model](#model) object or `null`. The `sessionName` field is the display name set via `set_session_name`, or omitted if not set.
+The `model` field is a full [Model](#model) object when one is selected, otherwise it is omitted. The `sessionFile` and `sessionName` fields are also omitted when unavailable; `sessionName` is the display name set via `set_session_name`.
 
 #### get_messages
 
@@ -287,6 +287,8 @@ Set the reasoning/thinking level for models that support it.
 ```
 
 Levels: `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`
+
+The requested level is clamped to one supported by the selected model. Use `get_available_thinking_levels`, `get_state`, or the `thinking_level_changed` event to observe the effective level.
 
 `"xhigh"` and `"max"` are exposed only when supported by the selected model. Some models, including GPT-5.6, expose both.
 
@@ -408,7 +410,7 @@ Response:
 }
 ```
 
-`estimatedTokensAfter` is a heuristic estimate over the rebuilt message context immediately after compaction, not a provider-exact token count. `usage` reports the LLM call or calls that generated the summary and may be omitted by custom compaction handlers.
+`estimatedTokensAfter`, `usage`, and `details` are optional. When present, `estimatedTokensAfter` is a heuristic estimate over the rebuilt message context immediately after compaction, not a provider-exact token count. `usage` reports the LLM call or calls that generated the summary.
 
 #### set_auto_compaction
 
@@ -455,13 +457,17 @@ Response:
 
 #### bash
 
-Execute a shell command and add output to conversation context. Output streams as `bash_execution_update` events while the command runs; the response contains the final result.
+Execute a shell command and record its output in the session. By default the output is added to LLM context on the next prompt; `excludeFromContext` opts out. Output streams as `bash_execution_update` events while the command runs; the response contains the final result.
 
 ```json
 {"id": "req-1", "type": "bash", "command": "ls -la"}
 ```
 
-Include an `id` to associate streamed `bash_execution_update` events with this command.
+Include an `id` to associate streamed `bash_execution_update` events with this command. Set `excludeFromContext: true` to record and return the result without including it in the LLM context:
+
+```json
+{"type": "bash", "command": "git status --short", "excludeFromContext": true}
+```
 
 Response:
 ```json
@@ -479,7 +485,7 @@ Response:
 }
 ```
 
-If output was truncated, includes `fullOutputPath`:
+If output was truncated, `fullOutputPath` is present with the temporary file path. `exitCode` is omitted when the command was cancelled:
 ```json
 {
   "type": "response",
@@ -497,9 +503,9 @@ If output was truncated, includes `fullOutputPath`:
 
 **How bash results reach the LLM:**
 
-The `bash` command executes immediately and returns a `BashResult`. Internally, a `BashExecutionMessage` is created and stored in the agent's message state.
+The `bash` command executes immediately and returns a `BashResult`. Internally, Pi creates and stores a `BashExecutionMessage`.
 
-When the next `prompt` command is sent, all messages (including `BashExecutionMessage`) are transformed before being sent to the LLM. The `BashExecutionMessage` is converted to a `UserMessage` with this format:
+Unless `excludeFromContext` is `true`, the next `prompt` converts that message to a `UserMessage` for the LLM in this format:
 
 ````
 Ran `ls -la`
@@ -510,8 +516,9 @@ drwxr-xr-x ...
 ````
 
 This means:
-1. Bash output is included in the LLM context on the **next prompt**, not immediately
-2. Multiple bash commands can be executed before a prompt; all outputs will be included
+1. Unless `excludeFromContext` is `true`, bash output is included in the LLM context on the **next prompt**, not immediately.
+2. Multiple bash commands can be executed before a prompt; all non-excluded outputs are included.
+3. `excludeFromContext` affects only LLM context. The command still returns its result, streams `bash_execution_update`, and is visible through `get_messages`.
 
 #### abort_bash
 
@@ -567,7 +574,7 @@ Response:
 }
 ```
 
-`tokens` and `cost` include assistant messages, usage reported by tools, and compaction/branch-summary generation across the full session. `contextUsage` contains the actual current context-window estimate used for compaction and footer display.
+`tokens` and `cost` include assistant messages, usage reported by tools, and compaction/branch-summary generation across the full session. `sessionFile` is omitted when session persistence is disabled. `contextUsage` contains the actual current context-window estimate used for compaction and footer display.
 
 `contextUsage` is omitted when no model or context window is available. `contextUsage.tokens` and `contextUsage.percent` are `null` immediately after compaction until a fresh post-compaction assistant response provides valid usage data.
 
@@ -806,9 +813,39 @@ Response:
   "success": true,
   "data": {
     "commands": [
-      {"name": "session-name", "description": "Set or clear session name", "source": "extension", "path": "/home/user/.pi/agent/extensions/session.ts"},
-      {"name": "fix-tests", "description": "Fix failing tests", "source": "prompt", "location": "project", "path": "/home/user/myproject/.pi/agent/prompts/fix-tests.md"},
-      {"name": "skill:brave-search", "description": "Web search via Brave API", "source": "skill", "location": "user", "path": "/home/user/.pi/agent/skills/brave-search/SKILL.md"}
+      {
+        "name": "session-name",
+        "description": "Set session name",
+        "source": "extension",
+        "sourceInfo": {
+          "path": "/home/user/.pi/agent/extensions/session.ts",
+          "source": "auto",
+          "scope": "user",
+          "origin": "top-level"
+        }
+      },
+      {
+        "name": "fix-tests",
+        "description": "Fix failing tests",
+        "source": "prompt",
+        "sourceInfo": {
+          "path": "/home/user/myproject/.pi/prompts/fix-tests.md",
+          "source": "auto",
+          "scope": "project",
+          "origin": "top-level"
+        }
+      },
+      {
+        "name": "skill:brave-search",
+        "description": "Web search via Brave API",
+        "source": "skill",
+        "sourceInfo": {
+          "path": "/home/user/.pi/agent/skills/brave-search/SKILL.md",
+          "source": "auto",
+          "scope": "user",
+          "origin": "top-level"
+        }
+      }
     ]
   }
 }
@@ -817,15 +854,10 @@ Response:
 Each command has:
 - `name`: Command name (invoke with `/name`)
 - `description`: Human-readable description (optional for extension commands)
-- `source`: What kind of command:
-  - `"extension"`: Registered via `pi.registerCommand()` in an extension
-  - `"prompt"`: Loaded from a prompt template `.md` file
-  - `"skill"`: Loaded from a skill directory (name is prefixed with `skill:`)
-- `location`: Where it was loaded from (optional, not present for extensions):
-  - `"user"`: User-level (`~/.pi/agent/`)
-  - `"project"`: Project-level (`./.pi/agent/`)
-  - `"path"`: Explicit path via CLI or settings
-- `path`: Absolute file path to the command source (optional)
+- `source`: What kind of command: `"extension"`, `"prompt"`, or `"skill"`
+- `sourceInfo`: Required [SourceInfo](#sourceinfo) provenance metadata for the resource; it replaces the former flat `location` and `path` fields.
+
+Project-local resources use `.pi/extensions/`, `.pi/prompts/`, and `.pi/skills/`; they do not live under `.pi/agent/`.
 
 **Note**: Built-in TUI commands (`/settings`, `/hotkeys`, etc.) are not included. They are handled only in interactive mode and would not execute if sent via `prompt`.
 
@@ -850,6 +882,9 @@ Events are streamed to stdout as JSON lines during agent operation. Events do no
 | `tool_execution_update` | Tool execution progress (streaming output) |
 | `tool_execution_end` | Tool completes |
 | `queue_update` | Pending steering/follow-up queue changed |
+| `entry_appended` | An extension appended a custom session entry |
+| `session_info_changed` | Session display name changed |
+| `thinking_level_changed` | Effective thinking level changed |
 | `compaction_start` | Compaction begins |
 | `compaction_end` | Compaction completes |
 | `auto_retry_start` | Auto-retry begins (after transient error) |
@@ -981,7 +1016,7 @@ Emitted when a tool begins, streams progress, and completes execution.
 }
 ```
 
-During execution, `tool_execution_update` events stream partial results (e.g., bash output as it arrives):
+During execution, `tool_execution_update` events carry a tool-defined partial result. For the built-in `bash` tool, each nonempty update is an accumulated output snapshot rather than only the newest delta:
 
 ```json
 {
@@ -991,7 +1026,7 @@ During execution, `tool_execution_update` events stream partial results (e.g., b
   "args": {"command": "ls -la"},
   "partialResult": {
     "content": [{"type": "text", "text": "partial output so far..."}],
-    "details": {"truncation": null, "fullOutputPath": null}
+    "details": {}
   }
 }
 ```
@@ -1011,7 +1046,7 @@ When complete:
 }
 ```
 
-Use `toolCallId` to correlate events. The `partialResult` in `tool_execution_update` contains the accumulated output so far (not just the delta), allowing clients to simply replace their display on each update.
+Use `toolCallId` to correlate events. The `partialResult` shape is tool-defined; built-in bash snapshots can be rendered by replacement, while other tools may use a different shape.
 
 ### queue_update
 
@@ -1023,6 +1058,28 @@ Emitted whenever the pending steering or follow-up queue changes.
   "steering": ["Focus on error handling"],
   "followUp": ["After that, summarize the result"]
 }
+```
+
+### entry_appended / session_info_changed / thinking_level_changed
+
+These session-state events are also part of `AgentSessionEvent` (see [JSON mode](json.md#event-types)).
+
+`entry_appended` is emitted when an extension appends a custom session entry:
+
+```json
+{"type": "entry_appended", "entry": {"type": "custom", "id": "abc123", "parentId": "def456", "timestamp": "...", "customType": "my-extension", "data": {}}}
+```
+
+`session_info_changed` carries the current display name; `name` is omitted when it is undefined:
+
+```json
+{"type": "session_info_changed", "name": "my-feature-work"}
+```
+
+`thinking_level_changed` carries the effective level after a change or model switch:
+
+```json
+{"type": "thinking_level_changed", "level": "high"}
 ```
 
 ### compaction_start / compaction_end
@@ -1061,9 +1118,9 @@ The `reason` field is `"manual"`, `"threshold"`, or `"overflow"`.
 
 If `reason` was `"overflow"` and compaction succeeds, `willRetry` is `true` and the agent will automatically retry the prompt.
 
-If compaction was aborted, `result` is `null` and `aborted` is `true`.
+If compaction was aborted, `result` is omitted and `aborted` is `true`.
 
-If compaction failed (e.g., API quota exceeded), `result` is `null`, `aborted` is `false`, and `errorMessage` contains the error description.
+If compaction failed (e.g., API quota exceeded), `result` is omitted, `aborted` is `false`, and `errorMessage` contains the error description. `errorMessage` can also accompany a successful result when the retained context remains above the compaction threshold.
 
 ### auto_retry_start / auto_retry_end
 
@@ -1152,14 +1209,16 @@ There are two categories of extension UI methods:
 If a dialog method includes a `timeout` field, the agent-side will auto-resolve with a default value when the timeout expires. The client does not need to track timeouts.
 
 Some `ExtensionUIContext` methods are not supported or degraded in RPC mode because they require direct TUI access:
-- `custom()` returns `undefined`
-- `setWorkingMessage()`, `setWorkingIndicator()`, `setFooter()`, `setHeader()`, `setEditorComponent()`, `setToolsExpanded()` are no-ops
+- `custom()` and `getEditorComponent()` return `undefined`
+- `onTerminalInput()` returns a no-op unsubscribe function
+- `addAutocompleteProvider()`, `setWorkingMessage()`, `setWorkingVisible()`, `setWorkingIndicator()`, `setHiddenThinkingLabel()`, `setFooter()`, `setHeader()`, `setEditorComponent()`, and `setToolsExpanded()` are no-ops
 - `getEditorText()` returns `""`
 - `getToolsExpanded()` returns `false`
 - `pasteToEditor()` delegates to `setEditorText()` (no paste/collapse handling)
-- `getAllThemes()` returns `[]`
-- `getTheme()` returns `undefined`
+- `getAllThemes()` returns `[]`; `getTheme()` returns `undefined`
 - `setTheme()` returns `{ success: false, error: "..." }`
+
+`select()` sends only string labels on the wire. Descriptions supplied through the richer Extension API option objects are not included.
 
 Note: `ctx.mode` is `"rpc"` and `ctx.hasUI` is `true` in RPC mode because the dialog and fire-and-forget methods are functional via the extension UI sub-protocol. Use `ctx.mode === "tui"` to guard TUI-specific features like `custom()` that require a real terminal.
 
@@ -1182,7 +1241,7 @@ Prompt the user to choose from a list. Dialog methods with a `timeout` field inc
 }
 ```
 
-Expected response: `extension_ui_response` with `value` (the selected option string) or `cancelled: true`.
+The `options` array contains string labels. If an extension registered richer select options, their descriptions are not sent over RPC. Expected response: `extension_ui_response` with `value` (the selected option string) or `cancelled: true`.
 
 #### confirm
 
@@ -1263,7 +1322,7 @@ Set or clear a status entry in the footer/status bar. Fire-and-forget.
 }
 ```
 
-Send `statusText: undefined` (or omit it) to clear the status entry for that key.
+Omit `statusText` to clear the status entry for that key. JSON has no `undefined` value.
 
 #### setWidget
 
@@ -1280,7 +1339,7 @@ Set or clear a widget (block of text lines) displayed above or below the editor.
 }
 ```
 
-Send `widgetLines: undefined` (or omit it) to clear the widget. The `widgetPlacement` field is `"aboveEditor"` (default) or `"belowEditor"`. Only string arrays are supported in RPC mode; component factories are ignored.
+Omit `widgetLines` to clear the widget. The `widgetPlacement` field is `"aboveEditor"` (default) or `"belowEditor"`. Only string arrays are supported in RPC mode; component factories are ignored.
 
 #### setTitle
 
@@ -1358,9 +1417,48 @@ Parse errors:
 
 ## Types
 
-RPC messages use the public SDK and protocol types documented by this package. The model and agent message shapes are summarized below; applications embedding Pi should import the public API from `@astralyn/pi` rather than relying on package source files.
+For Node.js and TypeScript clients, the public type exports are the authority rather than copied protocol declarations:
 
-### Model
+```typescript
+import type {
+  AgentSessionEvent,
+  CompactionResult,
+  RpcCommand,
+  RpcExtensionUIRequest,
+  RpcExtensionUIResponse,
+  RpcResponse,
+  RpcSessionState,
+  SessionEntry,
+  SessionTreeNode,
+  SourceInfo,
+} from "@astralyn/pi";
+import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { AssistantMessageEvent, ImageContent, Model } from "@earendil-works/pi-ai";
+```
+
+`RpcCommand` and `RpcResponse` are discriminated unions for the commands and responses above. `AgentSessionEvent` is the event union also documented in [JSON mode](json.md#event-types). Raw RPC stdout additionally carries `extension_ui_request` and `extension_error` objects; extension UI requests use `RpcExtensionUIRequest`.
+
+Optional TypeScript properties are omitted in JSON; JSON never represents an omitted property as `undefined`.
+
+### SourceInfo
+
+`get_commands` returns `sourceInfo` with this shape:
+
+```json
+{
+  "path": "/home/user/myproject/.pi/prompts/fix-tests.md",
+  "source": "auto",
+  "scope": "project",
+  "origin": "top-level",
+  "baseDir": "/home/user/myproject/.pi"
+}
+```
+
+`path`, `source`, `scope`, and `origin` are required. `scope` is `"user"`, `"project"`, or `"temporary"`; `origin` is `"top-level"` or `"package"`; `baseDir` is optional. `source` is a source identifier, not the command kind—use the containing command's `source` field for `"extension"`, `"prompt"`, or `"skill"`.
+
+### Model and messages
+
+A `Model` response is a full model object. This example shows its required common fields; optional provider-specific fields, such as `thinkingLevelMap`, `headers`, and `compat`, may also be present:
 
 ```json
 {
@@ -1382,72 +1480,17 @@ RPC messages use the public SDK and protocol types documented by this package. T
 }
 ```
 
-### UserMessage
+`AgentMessage` is the standard `UserMessage`, `AssistantMessage`, or `ToolResultMessage` union, plus Pi's session roles. A user message has no `attachments` field: images are `ImageContent` blocks in `content`.
 
 ```json
-{
-  "role": "user",
-  "content": "Hello!",
-  "timestamp": 1733234567890,
-  "attachments": []
-}
+{"role":"user","content":[{"type":"text","text":"Hello!"},{"type":"image","data":"base64-encoded-data","mimeType":"image/png"}],"timestamp":1733234567890}
+{"role":"assistant","content":[{"type":"text","text":"Hello!"},{"type":"toolCall","id":"call_123","name":"bash","arguments":{"command":"ls"}}],"api":"anthropic-messages","provider":"anthropic","model":"claude-sonnet-4-20250514","usage":{"input":100,"output":50,"cacheRead":0,"cacheWrite":0,"totalTokens":150,"cost":{"input":0.0003,"output":0.00075,"cacheRead":0,"cacheWrite":0,"total":0.00105}},"stopReason":"stop","timestamp":1733234567890}
+{"role":"toolResult","toolCallId":"call_123","toolName":"bash","content":[{"type":"text","text":"total 48\ndrwxr-xr-x ..."}],"isError":false,"timestamp":1733234567890}
 ```
 
-The `content` field can be a string or an array of `TextContent`/`ImageContent` blocks.
+Assistant stop reasons are `"stop"`, `"length"`, `"toolUse"`, `"error"`, and `"aborted"`. Tool results can additionally carry `details`, `usage`, and `addedToolNames`; when present, `usage` reports nested LLM work and contributes to session totals.
 
-### AssistantMessage
-
-```json
-{
-  "role": "assistant",
-  "content": [
-    {"type": "text", "text": "Hello! How can I help?"},
-    {"type": "thinking", "thinking": "User is greeting me..."},
-    {"type": "toolCall", "id": "call_123", "name": "bash", "arguments": {"command": "ls"}}
-  ],
-  "api": "anthropic-messages",
-  "provider": "anthropic",
-  "model": "claude-sonnet-4-20250514",
-  "usage": {
-    "input": 100,
-    "output": 50,
-    "cacheRead": 0,
-    "cacheWrite": 0,
-    "cost": {"input": 0.0003, "output": 0.00075, "cacheRead": 0, "cacheWrite": 0, "total": 0.00105}
-  },
-  "stopReason": "stop",
-  "timestamp": 1733234567890
-}
-```
-
-Stop reasons: `"stop"`, `"length"`, `"toolUse"`, `"error"`, `"aborted"`
-
-### ToolResultMessage
-
-```json
-{
-  "role": "toolResult",
-  "toolCallId": "call_123",
-  "toolName": "bash",
-  "content": [{"type": "text", "text": "total 48\ndrwxr-xr-x ..."}],
-  "usage": {
-    "input": 100,
-    "output": 50,
-    "cacheRead": 0,
-    "cacheWrite": 0,
-    "totalTokens": 150,
-    "cost": {"input": 0.0003, "output": 0.00075, "cacheRead": 0, "cacheWrite": 0, "total": 0.00105}
-  },
-  "isError": false,
-  "timestamp": 1733234567890
-}
-```
-
-`usage` is optional and reports nested LLM work performed by the tool. When present, it contributes to session token and cost totals.
-
-### BashExecutionMessage
-
-Created by the `bash` RPC command (not by LLM tool calls):
+The Pi-specific roles are `bashExecution`, `custom`, `branchSummary`, and `compactionSummary`. For example, `bash` creates this message (not an LLM tool result):
 
 ```json
 {
@@ -1457,46 +1500,45 @@ Created by the `bash` RPC command (not by LLM tool calls):
   "exitCode": 0,
   "cancelled": false,
   "truncated": false,
-  "fullOutputPath": null,
-  "timestamp": 1733234567890
+  "timestamp": 1733234567890,
+  "excludeFromContext": true
 }
 ```
 
-### Attachment
-
-```json
-{
-  "id": "img1",
-  "type": "image",
-  "fileName": "photo.jpg",
-  "mimeType": "image/jpeg",
-  "size": 102400,
-  "content": "base64-encoded-data...",
-  "extractedText": null,
-  "preview": null
-}
-```
+`fullOutputPath` is an optional string on `BashExecutionMessage` and `BashResult`, and `exitCode` is omitted when cancellation leaves it undefined. See [Session Format](session-format.md) for the other Pi-specific message and `SessionEntry` shapes.
 
 ## Example: Basic Client (Python)
 
 ```python
-import subprocess
 import json
+import os
+import subprocess
 
 proc = subprocess.Popen(
     ["pi", "--mode", "rpc", "--no-session"],
     stdin=subprocess.PIPE,
     stdout=subprocess.PIPE,
-    text=True
 )
 
-def send(cmd):
-    proc.stdin.write(json.dumps(cmd) + "\n")
+def send(command):
+    proc.stdin.write((json.dumps(command) + "\n").encode("utf-8"))
     proc.stdin.flush()
 
+def decode_record(record):
+    if record.endswith(b"\r"):
+        record = record[:-1]
+    return json.loads(record.decode("utf-8"))
+
 def read_events():
-    for line in proc.stdout:
-        yield json.loads(line)
+    buffer = b""
+    while chunk := os.read(proc.stdout.fileno(), 4096):
+        buffer += chunk
+        while (newline := buffer.find(b"\n")) != -1:
+            record, buffer = buffer[:newline], buffer[newline + 1:]
+            if record:
+                yield decode_record(record)
+    if buffer:
+        yield decode_record(buffer)
 
 # Send prompt
 send({"type": "prompt", "message": "Hello!"})
@@ -1507,15 +1549,15 @@ for event in read_events():
         delta = event.get("assistantMessageEvent", {})
         if delta.get("type") == "text_delta":
             print(delta["delta"], end="", flush=True)
-    
-    if event.get("type") == "agent_end":
+
+    if event.get("type") == "agent_settled":
         print()
         break
 ```
 
 ## Example: Interactive Client (Node.js)
 
-For a complete interactive example, see the published [RPC extension UI example](../examples/rpc-extension-ui.ts), which pairs with the published [RPC demo extension](../examples/extensions/rpc-demo.ts). For embedded Node.js or TypeScript clients, use the [public SDK API](sdk.md).
+For a TUI demonstration of handling extension UI requests, see the published [RPC extension UI example](../examples/rpc-extension-ui.ts), which pairs with the published [RPC demo extension](../examples/extensions/rpc-demo.ts). Use strict JSONL framing such as the reader below in protocol clients. For embedded Node.js or TypeScript clients, use the [public SDK API](sdk.md).
 
 ```javascript
 const { spawn } = require("child_process");

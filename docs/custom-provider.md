@@ -1,433 +1,328 @@
 # Custom Providers
 
-Extensions can register custom model providers via `pi.registerProvider()`. This enables:
-
-- **Proxies** - Route requests through corporate proxies or API gateways
-- **Custom endpoints** - Use self-hosted or private model deployments
-- **OAuth/SSO** - Add authentication flows for enterprise providers
-- **Custom APIs** - Implement streaming for non-standard LLM APIs
+Use an extension when a provider needs runtime behavior: an OAuth flow, dynamic catalog, proxy-specific headers, payload rewriting, or a streaming protocol that Pi does not already support. For built-in provider setup, see [Providers](providers.md); for a static OpenAI-compatible endpoint, `models.json` is usually simpler; see [Custom Models](models.md).
 
 ## Example Extensions
 
-See these complete provider examples:
+These published extensions are the maintained end-to-end references:
 
-- [`examples/extensions/custom-provider-anthropic/`](../examples/extensions/custom-provider-anthropic/)
-- [`examples/extensions/custom-provider-gitlab-duo/`](../examples/extensions/custom-provider-gitlab-duo/)
+- [`custom-provider-anthropic`](../examples/extensions/custom-provider-anthropic/) implements OAuth and a custom event stream.
+- [`custom-provider-gitlab-duo`](../examples/extensions/custom-provider-gitlab-duo/) obtains provider-specific credentials, then delegates to Pi AI's public Anthropic and OpenAI stream APIs.
 
 ## Table of Contents
 
-- [Example Extensions](#example-extensions)
-- [Quick Reference](#quick-reference)
-- [Override Existing Provider](#override-existing-provider)
-- [Register New Provider](#register-new-provider)
-- [Unregister Provider](#unregister-provider)
-- [OAuth Support](#oauth-support)
-- [Custom Streaming API](#custom-streaming-api)
-- [Context Overflow Errors](#context-overflow-errors)
-- [Testing Your Implementation](#testing-your-implementation)
-- [Config Reference](#config-reference)
-- [Model Definition Reference](#model-definition-reference)
+- [Provider Registration](#provider-registration)
+  - [Configuration Form](#configuration-form)
+  - [Complete pi-ai Provider](#complete-pi-ai-provider)
+  - [Composition, Updates, and Removal](#composition-updates-and-removal)
+  - [Dynamic Model Catalogs](#dynamic-model-catalogs)
+- [API and Model Configuration](#api-and-model-configuration)
+- [Authentication, Headers, and Request Hooks](#authentication-headers-and-request-hooks)
+  - [API Keys and Registered Headers](#api-keys-and-registered-headers)
+  - [OAuth](#oauth)
+  - [Payload and Header Hooks](#payload-and-header-hooks)
+- [Custom Streaming APIs](#custom-streaming-apis)
+  - [Stream Contract](#stream-contract)
+  - [Forwarding Hooks from a Custom Stream](#forwarding-hooks-from-a-custom-stream)
+- [Context Overflow Recovery](#context-overflow-recovery)
+- [Testing](#testing)
 
-## Quick Reference
+## Provider Registration
 
-Extensions can register either a complete pi-ai `Provider` or use the legacy provider-config form. Prefer a complete provider when custom authentication, filtering, refresh, or streaming behavior is required. Pi composes `models.json` overrides above registered native providers.
+`pi.registerProvider()` has two forms:
+
+1. `pi.registerProvider(name, config)` configures a provider, models, optional OAuth, and an optional custom `streamSimple` handler.
+2. `pi.registerProvider(provider)` registers a complete public pi-ai `Provider` when the extension owns native auth, catalog, filtering, or both stream methods.
+
+An extension factory may be `async`; Pi waits for it before startup continues. Register during the factory when models must be present in `/model` and `pi --list-models`. See [Writing an Extension](extensions.md#writing-an-extension).
+
+### Configuration Form
+
+Use the configuration form for a standard supported API or to override a built-in provider:
 
 ```typescript
-import { createProvider, openAICompletionsApi } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@astralyn/pi";
 
 export default function (pi: ExtensionAPI) {
-  pi.registerProvider(createProvider({
-    id: "native-local",
-    name: "Native Local",
-    baseUrl: "http://localhost:8080/v1",
-    auth: {
-      apiKey: {
-        name: "Local server API key",
-        async login(interaction) {
-          return {
-            type: "api_key",
-            key: await interaction.prompt({ type: "secret", message: "API key" })
-          };
-        },
-        async resolve({ credential }) {
-          return credential?.key
-            ? { auth: { apiKey: credential.key }, source: "stored API key" }
-            : undefined;
-        }
-      }
-    },
-    models: [],
-    api: openAICompletionsApi()
-  }));
-
-  // Legacy provider-config form:
-  // Override baseUrl for existing provider
+  // Keeps Anthropic's existing models and auth; only the endpoint changes.
   pi.registerProvider("anthropic", {
-    baseUrl: "https://proxy.example.com"
+    baseUrl: "https://proxy.example.com/anthropic",
+    headers: { "X-Proxy-Tenant": "$PROXY_TENANT" },
   });
 
-  // Register new provider with models
-  pi.registerProvider("my-provider", {
-    name: "My Provider",
-    baseUrl: "https://api.example.com",
-    apiKey: "$MY_API_KEY",
+  // A new OpenAI-compatible provider.
+  pi.registerProvider("local-openai", {
+    name: "Local OpenAI",
+    baseUrl: "http://127.0.0.1:8080/v1",
+    apiKey: "local", // A literal placeholder for a server that ignores keys.
     api: "openai-completions",
     models: [
       {
-        id: "my-model",
-        name: "My Model",
+        id: "local-model",
+        name: "Local Model",
         reasoning: false,
-        input: ["text", "image"],
+        input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 128000,
-        maxTokens: 4096
-      }
-    ]
+        maxTokens: 4096,
+      },
+    ],
   });
 }
 ```
 
-The extension factory can also be `async`. For dynamic model discovery, fetch and register models in the factory instead of `session_start`. pi waits for the factory before startup continues, so the provider is available during interactive startup and to `pi --list-models`.
+When `models` is omitted, existing models are retained. When it is supplied, it replaces the models supplied by the built-in/native provider and earlier extension registration for that provider. A model can set its own `api` or `baseUrl` to override the provider default.
 
-## Override Existing Provider
+A `streamSimple` registration must also set the provider-level `api`. Pi invokes that handler only for models whose effective `api` matches the registered API tag. A custom tag such as `"my-company-api"` is valid; do **not** call the compatibility API registry's `registerApiProvider()` merely to use it with `pi.registerProvider()`.
 
-The simplest use case: redirect an existing provider through a proxy.
+### Complete pi-ai Provider
 
-```typescript
-// All Anthropic requests now go through your proxy
-pi.registerProvider("anthropic", {
-  baseUrl: "https://proxy.example.com"
-});
-
-// Add custom headers to OpenAI requests
-pi.registerProvider("openai", {
-  headers: {
-    "X-Custom-Header": "value"
-  }
-});
-
-// Both baseUrl and headers
-pi.registerProvider("google", {
-  baseUrl: "https://ai-gateway.corp.com/google",
-  headers: {
-    "X-Corp-Auth": "$CORP_AUTH_TOKEN"  // env var or literal
-  }
-});
-```
-
-When only `baseUrl` and/or `headers` are provided (no `models`), all existing models for that provider are preserved with the new endpoint.
-
-## Register New Provider
-
-To add a completely new provider, specify `models` along with the required configuration.
-
-If the model list comes from a remote endpoint, use an async extension factory:
+For a provider with native behavior, construct a public pi-ai `Provider` and register it directly. `createProvider`, `envApiKeyAuth`, and the `Provider`/`Model` types are public root exports. The lazy built-in API factories, including `openAICompletionsApi`, are public from `@earendil-works/pi-ai/compat`.
 
 ```typescript
 import type { ExtensionAPI } from "@astralyn/pi";
+import { createProvider, envApiKeyAuth, type Model } from "@earendil-works/pi-ai";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/compat";
 
-export default async function (pi: ExtensionAPI) {
-  const response = await fetch("http://localhost:1234/v1/models");
-  const payload = (await response.json()) as {
-    data: Array<{
-      id: string;
-      name?: string;
-      context_window?: number;
-      max_tokens?: number;
-    }>;
-  };
+const model: Model<"openai-completions"> = {
+  id: "local-model",
+  name: "Local Model",
+  api: "openai-completions",
+  provider: "native-local",
+  baseUrl: "http://127.0.0.1:8080/v1",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 128000,
+  maxTokens: 4096,
+};
 
-  pi.registerProvider("local-openai", {
-    baseUrl: "http://localhost:1234/v1",
-    apiKey: "$LOCAL_OPENAI_API_KEY",
-    api: "openai-completions",
-    models: payload.data.map((model) => ({
-      id: model.id,
-      name: model.name ?? model.id,
+export default function (pi: ExtensionAPI) {
+  pi.registerProvider(
+    createProvider({
+      id: "native-local",
+      name: "Native Local",
+      baseUrl: model.baseUrl,
+      auth: {
+        apiKey: envApiKeyAuth("Local server API key", ["LOCAL_OPENAI_API_KEY"]),
+      },
+      models: [model],
+      api: openAICompletionsApi(),
+    }),
+  );
+}
+```
+
+A complete `Provider` must have auth, `getModels()`, `stream()`, and `streamSimple()` behavior. `createProvider()` supplies the model/catalog plumbing and both stream methods from the public `ProviderStreams` value passed as `api`; use a hand-written `Provider` only when that helper does not fit. For hand-written API-key auth, `login(interaction)` returns an `ApiKeyCredential` and `resolve({ ctx, credential })` returns an `AuthResult` or `undefined`; `envApiKeyAuth()` implements that standard pattern.
+
+### Composition, Updates, and Removal
+
+A complete registered `Provider` is the base provider for its ID. Pi applies `models.json` configuration above that base, including final `modelOverrides`; see [Per-model Overrides](models.md#per-model-overrides). A named configuration registration is instead applied over the native/built-in provider and `models.json` layers.
+
+A later named registration for the same ID merges its defined configuration values with the prior named registration. Registering a complete `Provider` for that ID replaces the named registration; registering by name replaces a complete extension provider for that ID.
+
+Provider calls made from the factory are queued until the extension runner is ready. Calls made later, such as from a command, take effect immediately; no `/reload` is needed.
+
+```typescript
+pi.unregisterProvider("local-openai");
+```
+
+`unregisterProvider()` removes either form registered by the extension and recomposes the remaining layers. A built-in provider is restored when one exists; `models.json` configuration remains, while a provider defined only by the extension disappears.
+
+### Dynamic Model Catalogs
+
+The configuration form can refresh an extension-owned model list. Pi calls `refreshModels` during model refresh. Its returned list replaces the extension-provided models. Use `context.signal` for requests and `context.store` only when the catalog should persist across sessions.
+
+```typescript
+pi.registerProvider("local-openai", {
+  baseUrl: "http://127.0.0.1:8080/v1",
+  apiKey: "local",
+  api: "openai-completions",
+  async refreshModels({ signal }) {
+    const response = await fetch("http://127.0.0.1:8080/v1/models", { signal });
+    if (!response.ok) throw new Error(`Model discovery failed: ${response.status}`);
+
+    const payload = (await response.json()) as { data: Array<{ id: string }> };
+    return payload.data.map((entry) => ({
+      id: entry.id,
+      name: entry.id,
       reasoning: false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: model.context_window ?? 128000,
-      maxTokens: model.max_tokens ?? 4096,
-    })),
+      contextWindow: 128000,
+      maxTokens: 4096,
+    }));
+  },
+});
+```
+
+For one-time discovery that must finish before model selection, make the extension factory `async`, fetch the catalog there, and then call `registerProvider()` with `models`.
+
+## API and Model Configuration
+
+Set `api` on the provider as the default, or on a model when one provider has models served by different APIs. The built-in API tags are:
+
+| API | Use |
+| --- | --- |
+| `anthropic-messages` | Anthropic Messages-compatible APIs |
+| `openai-completions` | OpenAI Chat Completions-compatible APIs |
+| `openai-responses` | OpenAI Responses APIs |
+| `azure-openai-responses` | Azure OpenAI Responses APIs |
+| `openai-codex-responses` | OpenAI Codex Responses APIs |
+| `mistral-conversations` | Mistral Conversations APIs |
+| `google-generative-ai` | Google Generative AI APIs |
+| `google-vertex` | Google Vertex AI APIs |
+| `bedrock-converse-stream` | Amazon Bedrock Converse Stream APIs |
+| `pi-messages` | Pi Messages APIs |
+
+A configuration-form model requires `id`, `name`, `reasoning`, `input`, `cost`, `contextWindow`, and `maxTokens`. It may also set `api`, `baseUrl`, `headers`, `thinkingLevelMap`, and `compat`. `cost` rates are per million tokens. `thinkingLevelMap` maps Pi's `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max` levels; `null` hides an unsupported level.
+
+Keep endpoint-specific compatibility settings in `compat` rather than reimplementing a standard protocol. The full model fields, thinking maps, cost tiers, and Anthropic/OpenAI compatibility options are documented in [Custom Models](models.md#model-configuration), [Anthropic Messages Compatibility](models.md#anthropic-messages-compatibility), and [OpenAI Compatibility](models.md#openai-compatibility).
+
+## Authentication, Headers, and Request Hooks
+
+### API Keys and Registered Headers
+
+For a new config-form provider, supply `apiKey` unless it has OAuth or a complete native provider supplies auth. `apiKey`, provider `headers`, and model `headers` use the same value syntax as `models.json`:
+
+- `$NAME` and `${NAME}` interpolate environment variables.
+- A value beginning with `!` runs a command for the whole value.
+- `$$` and `$!` emit literal `$` and `!`.
+- Other text, including uppercase text, is literal.
+
+Values are resolved at request time. See [Value Resolution](models.md#value-resolution) for command behavior and security considerations.
+
+```typescript
+pi.registerProvider("company-api", {
+  baseUrl: "https://api.example.com/v1",
+  apiKey: "$COMPANY_API_KEY",
+  api: "openai-completions",
+  headers: {
+    "X-Tenant": "$COMPANY_TENANT",
+    "X-Proxy-Token": "!company-token print",
+  },
+  authHeader: true, // Adds Authorization: Bearer <resolved API key>.
+  models: [/* ... */],
+});
+```
+
+`authHeader` is useful for a custom API that expects a bearer token but does not create that header itself. Standard Pi AI API implementations already apply their own authentication. A custom stream receives the resolved key as `options.apiKey` and the final headers as `options.headers`; forward both as appropriate for its protocol.
+
+### OAuth
+
+The configuration form adapts the extension OAuth callbacks to Pi AI's provider auth and exposes the provider through `/login`. This callback shape is specific to `ProviderConfig.oauth`: a complete native `Provider` instead supplies `auth.oauth.login(interaction)`, `refresh(credential, signal?)`, and `toAuth(credential)`. Do not use the configuration form's `refreshToken` or `getApiKey` names on native `auth.oauth`.
+
+```typescript
+import type { ExtensionAPI } from "@astralyn/pi";
+import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
+
+async function login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+  callbacks.onAuth({
+    url: "https://sso.example.com/authorize?...",
+    instructions: "Sign in, then paste the authorization code.",
+  });
+  const code = await callbacks.onPrompt({ message: "Authorization code" });
+
+  // Exchange the code with this provider's OAuth server. Pass callbacks.signal
+  // to provider requests when supported.
+  return exchangeAuthorizationCode(code, callbacks.signal);
+}
+
+async function refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
+  return refreshAuthorization(credentials.refresh);
+}
+
+export default function (pi: ExtensionAPI) {
+  pi.registerProvider("company-api", {
+    baseUrl: "https://api.example.com/v1",
+    api: "openai-responses",
+    models: [/* ... */],
+    oauth: {
+      name: "Company AI",
+      login,
+      refreshToken,
+      getApiKey: (credentials) => credentials.access,
+    },
   });
 }
 ```
 
-This registers the fetched models before startup finishes.
+Return credentials with `refresh`, `access`, and `expires` (a millisecond timestamp). Pi adds the stored OAuth credential's internal type tag; extension callbacks return `OAuthCredentials`, not a credential with `type: "oauth"`.
+
+`OAuthLoginCallbacks` provides these UI-neutral operations:
+
+- `onAuth({ url, instructions? })` opens/displays an authorization URL.
+- `onDeviceCode({ userCode, verificationUri, intervalSeconds?, expiresInSeconds? })` displays a device flow code.
+- `onPrompt({ message, placeholder?, allowEmpty? })` asks for text and resolves to the entered string.
+- `onSelect({ message, options: [{ id, label }] })` resolves to an option ID or `undefined`.
+- `onManualCodeInput?.()` optionally requests a manually pasted code.
+- `onProgress?.(message)` reports transient progress, and `signal` is an optional `AbortSignal` for the login flow.
+
+Do not use `usesCallbackServer`; it is deprecated and ignored by the canonical OAuth flow. Keep OAuth tokens out of logs and error messages.
+
+### Payload and Header Hooks
+
+For a standard Pi AI API stream, Pi's extension hooks work automatically:
+
+- `before_provider_headers` mutates the fully assembled headers. A `null` header value removes that header.
+- `before_provider_request` inspects or replaces the serialized payload.
+- `after_provider_response` sees the status and normalized headers before the response body is consumed.
+
+See [provider request events](extensions.md#before_provider_headers) for ordering and examples. `onPayload`, `onResponse`, and `transformHeaders` are **not** `ProviderConfig` fields. Pi passes the first two to a stream as `SimpleStreamOptions`; header transformation has already happened before a custom `streamSimple` is called.
+
+A custom stream that sends HTTP itself must call `options.onPayload` and `options.onResponse` to preserve the payload/response hooks. It must also use the supplied headers. For example, immediately before consuming a custom HTTP response:
 
 ```typescript
-pi.registerProvider("my-llm", {
-  baseUrl: "https://api.my-llm.com/v1",
-  apiKey: "$MY_LLM_API_KEY",  // env var reference
-  api: "openai-completions",  // which streaming API to use
-  models: [
-    {
-      id: "my-llm-large",
-      name: "My LLM Large",
-      reasoning: true,        // supports extended thinking
-      input: ["text", "image"],
-      cost: {
-        input: 3.0,           // $/million tokens
-        output: 15.0,
-        cacheRead: 0.3,
-        cacheWrite: 3.75
-      },
-      contextWindow: 200000,
-      maxTokens: 16384
-    }
-  ]
+const payload = { model: model.id, stream: true };
+const replacement = await options?.onPayload?.(payload, model);
+const requestPayload = replacement === undefined ? payload : replacement;
+
+const headers = Object.fromEntries(
+  Object.entries(options?.headers ?? {}).filter((entry): entry is [string, string] => entry[1] !== null),
+);
+const response = await fetch(`${model.baseUrl}/stream`, {
+  method: "POST",
+  headers: { "content-type": "application/json", ...headers },
+  body: JSON.stringify(requestPayload),
+  signal: options?.signal,
 });
+await options?.onResponse?.(
+  { status: response.status, headers: Object.fromEntries(response.headers.entries()) },
+  model,
+);
+if (!response.ok) throw new Error(`Request failed: ${response.status}`);
 ```
 
-When `models` is provided, it **replaces** all existing models for that provider.
+When a custom stream delegates to a public Pi AI API stream, pass through `options` (and merge rather than discard `options.headers`) so those hooks continue to run. The GitLab Duo example follows this pattern.
 
-`apiKey` and custom header values use the same config value syntax as `models.json`: `!command` at the start executes a command for the whole value, `$ENV_VAR` and `${ENV_VAR}` interpolate environment variables, `$$` emits a literal `$`, and `$!` emits a literal `!`.
+## Custom Streaming APIs
 
-## Unregister Provider
+Implement `streamSimple` only for a protocol that cannot use a built-in API tag or a public Pi AI API stream. The custom Anthropic example implements the event protocol directly; the GitLab Duo example shows the preferred delegation approach when an endpoint is still Anthropic- or OpenAI-compatible.
 
-Use `pi.unregisterProvider(name)` to remove a provider that was previously registered via `pi.registerProvider(name, ...)`:
+### Stream Contract
 
-```typescript
-// Register
-pi.registerProvider("my-llm", {
-  baseUrl: "https://api.my-llm.com/v1",
-  apiKey: "$MY_LLM_API_KEY",
-  api: "openai-completions",
-  models: [
-    {
-      id: "my-llm-large",
-      name: "My LLM Large",
-      reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 3.0, output: 15.0, cacheRead: 0.3, cacheWrite: 3.75 },
-      contextWindow: 200000,
-      maxTokens: 16384
-    }
-  ]
-});
-
-// Later, remove it
-pi.unregisterProvider("my-llm");
-```
-
-Unregistering removes that provider's dynamic models, API key fallback, OAuth provider registration, and custom stream handler registrations. Any built-in models or provider behavior that were overridden are restored.
-
-Calls made after the initial extension load phase are applied immediately, so no `/reload` is required.
-
-### API Types
-
-The `api` field determines which streaming implementation is used:
-
-| API | Use for |
-|-----|---------|
-| `anthropic-messages` | Anthropic Claude API and compatibles |
-| `openai-completions` | OpenAI Chat Completions API and compatibles |
-| `openai-responses` | OpenAI Responses API |
-| `azure-openai-responses` | Azure OpenAI Responses API |
-| `openai-codex-responses` | OpenAI Codex Responses API |
-| `mistral-conversations` | Mistral SDK Conversations/Chat streaming |
-| `google-generative-ai` | Google Generative AI API |
-| `google-vertex` | Google Vertex AI API |
-| `bedrock-converse-stream` | Amazon Bedrock Converse API |
-
-Most OpenAI-compatible providers work with `openai-completions`. Use model-level `thinkingLevelMap` for model-specific thinking levels, and `compat` for provider quirks. The `xhigh` and `max` levels are opt-in, require non-null map entries, and may be separated by unsupported holes:
-
-```typescript
-models: [{
-  id: "custom-model",
-  // ...
-  reasoning: true,
-  thinkingLevelMap: {              // map pi levels to provider values; null hides unsupported levels
-    minimal: null,
-    low: null,
-    medium: null,
-    high: "default",
-    xhigh: null,
-    max: "max"
-  },
-  compat: {
-    supportsDeveloperRole: false,   // use "system" instead of "developer"
-    supportsReasoningEffort: true,
-    maxTokensField: "max_tokens",   // instead of "max_completion_tokens"
-    requiresToolResultName: true,   // tool results need name field
-    thinkingFormat: "qwen",        // top-level enable_thinking: true
-    cacheControlFormat: "anthropic" // Anthropic-style cache_control markers
-  }
-}]
-```
-
-Use `openrouter` for OpenRouter-style `reasoning: { effort }` controls. Use `together` for Together-style `reasoning: { enabled }` controls; with `supportsReasoningEffort`, it also sends `reasoning_effort`. Use `qwen-chat-template` for local Qwen-compatible servers that read `chat_template_kwargs.enable_thinking` and need `preserve_thinking`.
-Use `cacheControlFormat: "anthropic"` for OpenAI-compatible providers that expose Anthropic-style prompt caching via `cache_control` on the system prompt, last tool definition, and last user, assistant, or tool-result text content.
-
-For Anthropic-compatible providers using `api: "anthropic-messages"`, set `compat.forceAdaptiveThinking: true` on models or providers whose upstream model requires adaptive thinking (`thinking.type: "adaptive"` plus `output_config.effort`). Built-in adaptive Claude models set this automatically. Set `compat.allowEmptySignature: true` only for providers that emit empty thinking signatures and expect `signature: ""` on replay.
-
-> Migration note: Mistral moved from `openai-completions` to `mistral-conversations`.
-> Use `mistral-conversations` for native Mistral models.
-> If you intentionally route Mistral-compatible/custom endpoints through `openai-completions`, set `compat` flags explicitly as needed.
-
-### Auth Header
-
-If your provider expects `Authorization: Bearer <key>` but doesn't use a standard API, set `authHeader: true`:
-
-```typescript
-pi.registerProvider("custom-api", {
-  baseUrl: "https://api.example.com",
-  apiKey: "$MY_API_KEY",
-  authHeader: true,  // adds Authorization: Bearer header
-  api: "openai-completions",
-  models: [...]
-});
-```
-
-The key is resolved for each request. An explicit request `Authorization` header takes precedence over the generated value.
-
-## OAuth Support
-
-Add OAuth/SSO authentication that integrates with `/login`:
-
-```typescript
-import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
-
-pi.registerProvider("corporate-ai", {
-  baseUrl: "https://ai.corp.com/v1",
-  api: "openai-responses",
-  models: [...],
-  oauth: {
-    name: "Corporate AI (SSO)",
-
-    async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
-      const method = await callbacks.onSelect({
-        message: "Select login method:",
-        options: [
-          { id: "browser", label: "Browser OAuth" },
-          { id: "device", label: "Device code" }
-        ]
-      });
-      if (!method) throw new Error("Login cancelled");
-
-      let code: string;
-      if (method === "device") {
-        callbacks.onDeviceCode({
-          userCode: "ABCD-1234",
-          verificationUri: "https://sso.corp.com/device",
-          intervalSeconds: 5,
-          expiresInSeconds: 900
-        });
-        code = await pollDeviceCodeUntilComplete();
-      } else {
-        callbacks.onAuth({ url: "https://sso.corp.com/authorize?..." });
-        code = await callbacks.onPrompt({ message: "Enter SSO code:" });
-      }
-
-      // Exchange for tokens (your implementation)
-      const tokens = await exchangeCodeForTokens(code);
-
-      return {
-        refresh: tokens.refreshToken,
-        access: tokens.accessToken,
-        expires: Date.now() + tokens.expiresIn * 1000
-      };
-    },
-
-    async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
-      const tokens = await refreshAccessToken(credentials.refresh);
-      return {
-        refresh: tokens.refreshToken ?? credentials.refresh,
-        access: tokens.accessToken,
-        expires: Date.now() + tokens.expiresIn * 1000
-      };
-    },
-
-    getApiKey(credentials: OAuthCredentials): string {
-      return credentials.access;
-    }
-  }
-});
-```
-
-After registration, users can authenticate via `/login corporate-ai`.
-
-### OAuthLoginCallbacks
-
-The `callbacks` object provides UI-neutral interactions for the provider-owned flow:
-
-```typescript
-interface OAuthLoginCallbacks {
-  // Open URL in browser (for OAuth redirects)
-  onAuth(params: { url: string }): void;
-
-  // Show device code (for device authorization flow)
-  onDeviceCode(params: {
-    userCode: string;
-    verificationUri: string;
-    intervalSeconds?: number;
-    expiresInSeconds?: number;
-  }): void;
-
-  // Show transient progress
-  onProgress?(message: string): void;
-
-  // Prompt user for input (for manual token entry)
-  onPrompt(params: { message: string }): Promise<string>;
-
-  // Show an interactive selector, e.g. to choose browser OAuth vs device code
-  onSelect(params: {
-    message: string;
-    options: { id: string; label: string }[];
-  }): Promise<string | undefined>;
-}
-```
-
-### OAuthCredentials
-
-Credentials are persisted in `~/.pi/agent/auth.json`:
-
-```typescript
-interface OAuthCredentials {
-  refresh: string;   // Refresh token (for refreshToken())
-  access: string;    // Access token (returned by getApiKey())
-  expires: number;   // Expiration timestamp in milliseconds
-}
-```
-
-## Custom Streaming API
-
-For providers with non-standard APIs, implement `streamSimple`. Study the existing provider implementations before writing your own:
-
-**Reference implementations:**
-- [anthropic.ts](https://github.com/earendil-works/pi/blob/v0.82.1/packages/ai/src/providers/anthropic.ts) - Anthropic Messages API
-- [mistral.ts](https://github.com/earendil-works/pi/blob/v0.82.1/packages/ai/src/providers/mistral.ts) - Mistral Conversations API
-- [openai-completions.ts](https://github.com/earendil-works/pi/blob/v0.82.1/packages/ai/src/providers/openai-completions.ts) - OpenAI Chat Completions
-- [openai-responses.ts](https://github.com/earendil-works/pi/blob/v0.82.1/packages/ai/src/providers/openai-responses.ts) - OpenAI Responses API
-- [google.ts](https://github.com/earendil-works/pi/blob/v0.82.1/packages/ai/src/providers/google.ts) - Google Generative AI
-- [amazon-bedrock.ts](https://github.com/earendil-works/pi/blob/v0.82.1/packages/ai/src/providers/amazon-bedrock.ts) - AWS Bedrock
-
-### Stream Pattern
-
-All providers follow the same pattern:
+The configuration-form handler signature is exactly:
 
 ```typescript
 import {
+  type Api,
   type AssistantMessage,
   type AssistantMessageEventStream,
+  calculateCost,
   type Context,
+  createAssistantMessageEventStream,
   type Model,
   type SimpleStreamOptions,
-  calculateCost,
-  createAssistantMessageEventStream,
 } from "@earendil-works/pi-ai";
 
 function streamMyProvider(
-  model: Model<any>,
+  model: Model<Api>,
   context: Context,
-  options?: SimpleStreamOptions
+  options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
   const stream = createAssistantMessageEventStream();
 
-  (async () => {
-    // Initialize output message
+  void (async () => {
     const output: AssistantMessage = {
       role: "assistant",
       content: [],
@@ -447,23 +342,39 @@ function streamMyProvider(
     };
 
     try {
-      // Push start event
       stream.push({ type: "start", partial: output });
 
-      // Make API request and process response...
-      // Push content events as they arrive...
+      // Send the request, consume the provider stream, and update output.
+      const contentIndex = output.content.length;
+      output.content.push({ type: "text", text: "" });
+      stream.push({ type: "text_start", contentIndex, partial: output });
 
-      // Push done event
-      stream.push({
-        type: "done",
-        reason: output.stopReason as "stop" | "length" | "toolUse",
-        message: output
-      });
-      stream.end();
+      // For each provider text delta:
+      const delta = "...";
+      const block = output.content[contentIndex];
+      if (block.type === "text") {
+        block.text += delta;
+        stream.push({ type: "text_delta", contentIndex, delta, partial: output });
+      }
+
+      // After the provider completes this block:
+      if (block.type === "text") {
+        stream.push({ type: "text_end", contentIndex, content: block.text, partial: output });
+      }
+
+      // Update usage whenever the provider reports it, then recalculate cost.
+      output.usage.totalTokens =
+        output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
+      calculateCost(model, output.usage);
+
+      output.stopReason = "stop";
+      stream.push({ type: "done", reason: "stop", message: output });
     } catch (error) {
-      output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+      const reason = options?.signal?.aborted ? "aborted" : "error";
+      output.stopReason = reason;
       output.errorMessage = error instanceof Error ? error.message : String(error);
-      stream.push({ type: "error", reason: output.stopReason, error: output });
+      stream.push({ type: "error", reason, error: output });
+    } finally {
       stream.end();
     }
   })();
@@ -472,122 +383,68 @@ function streamMyProvider(
 }
 ```
 
-### Event Types
+Emit `start` before partial content events, update `output.content` before each event's `partial`, and end exactly once after either terminal event. The terminal event shapes are deliberately narrow: `done.reason` is `"stop" | "length" | "toolUse"`; `error.reason` is `"error" | "aborted"`. Map the upstream stop reason to one of those values and keep it equal to `output.stopReason`.
 
-Push events via `stream.push()` in this order:
+Use the index of each block in `output.content` as `contentIndex` and emit matching start, delta, and end events:
 
-1. `{ type: "start", partial: output }` - Stream started
+| Block | Events | Final content field |
+| --- | --- | --- |
+| Text | `text_start`, `text_delta`, `text_end` | `text` |
+| Thinking | `thinking_start`, `thinking_delta`, `thinking_end` | `thinking` |
+| Tool call | `toolcall_start`, `toolcall_delta`, `toolcall_end` | `ToolCall` |
 
-2. Content events (repeatable, track `contentIndex` for each block):
-   - `{ type: "text_start", contentIndex, partial }` - Text block started
-   - `{ type: "text_delta", contentIndex, delta, partial }` - Text chunk
-   - `{ type: "text_end", contentIndex, content, partial }` - Text block ended
-   - `{ type: "thinking_start", contentIndex, partial }` - Thinking started
-   - `{ type: "thinking_delta", contentIndex, delta, partial }` - Thinking chunk
-   - `{ type: "thinking_end", contentIndex, content, partial }` - Thinking ended
-   - `{ type: "toolcall_start", contentIndex, partial }` - Tool call started
-   - `{ type: "toolcall_delta", contentIndex, delta, partial }` - Tool call JSON chunk
-   - `{ type: "toolcall_end", contentIndex, toolCall, partial }` - Tool call ended
+Tool calls need an `id`, `name`, and parsed `arguments` object in the final `toolcall_end`. Accumulate streamed JSON before parsing it. For replayable thinking, preserve any provider signature in the block's `thinkingSignature` field. Populate `usage` with provider-reported values (`input`, `output`, `cacheRead`, `cacheWrite`, and optional `cacheWrite1h`/`reasoning`) before calling `calculateCost()`.
 
-3. `{ type: "done", reason, message }` or `{ type: "error", reason, error }` - Stream ended
-
-The `partial` field in each event contains the current `AssistantMessage` state. Update `output.content` as you receive data, then include `output` as the `partial`.
-
-### Content Blocks
-
-Add content blocks to `output.content` as they arrive:
+Register the handler with a matching custom API tag:
 
 ```typescript
-// Text block
-output.content.push({ type: "text", text: "" });
-stream.push({ type: "text_start", contentIndex: output.content.length - 1, partial: output });
-
-// As text arrives
-const block = output.content[contentIndex];
-if (block.type === "text") {
-  block.text += delta;
-  stream.push({ type: "text_delta", contentIndex, delta, partial: output });
-}
-
-// When block completes
-stream.push({ type: "text_end", contentIndex, content: block.text, partial: output });
-```
-
-### Tool Calls
-
-Tool calls require accumulating JSON and parsing:
-
-```typescript
-// Start tool call
-output.content.push({
-  type: "toolCall",
-  id: toolCallId,
-  name: toolName,
-  arguments: {}
-});
-stream.push({ type: "toolcall_start", contentIndex: output.content.length - 1, partial: output });
-
-// Accumulate JSON
-let partialJson = "";
-partialJson += jsonDelta;
-try {
-  block.arguments = JSON.parse(partialJson);
-} catch {}
-stream.push({ type: "toolcall_delta", contentIndex, delta: jsonDelta, partial: output });
-
-// Complete
-stream.push({
-  type: "toolcall_end",
-  contentIndex,
-  toolCall: { type: "toolCall", id, name, arguments: block.arguments },
-  partial: output
+pi.registerProvider("my-provider", {
+  baseUrl: "https://api.example.com",
+  apiKey: "$MY_PROVIDER_API_KEY",
+  api: "my-provider-stream",
+  models: [/* models whose effective api is my-provider-stream */],
+  streamSimple: streamMyProvider,
 });
 ```
 
-### Usage and Cost
+### Forwarding Hooks from a Custom Stream
 
-Update usage from API response and calculate cost:
+`SimpleStreamOptions` also carries cancellation, the resolved API key, reasoning level, thinking budgets, cache/session settings, retry/timeout options, headers, and the payload/response callbacks. Honor the options your protocol supports, especially `signal`, `apiKey`, and `headers`. Do not silently replace the supplied options when delegating:
 
 ```typescript
-output.usage.input = response.usage.input_tokens;
-output.usage.output = response.usage.output_tokens;
-output.usage.cacheRead = response.usage.cache_read_tokens ?? 0;
-output.usage.cacheWrite = response.usage.cache_write_tokens ?? 0;
-output.usage.totalTokens = output.usage.input + output.usage.output +
-                           output.usage.cacheRead + output.usage.cacheWrite;
-calculateCost(model, output.usage);
+import { openAIResponsesApi } from "@earendil-works/pi-ai/compat";
+
+const responsesApi = openAIResponsesApi();
+
+// Inside a custom handler, after adapting the model/API as necessary:
+return responsesApi.streamSimple(adaptedModel, context, {
+  ...options,
+  headers: { ...options?.headers, "X-Relay": "company" },
+});
 ```
 
-### Context Overflow Errors
+This is a public API. It avoids depending on pi-ai implementation files and preserves Pi's request hooks.
 
-When a request exceeds the model's context window, pi can recover automatically by compacting the conversation and retrying. This recovery only kicks in if pi recognizes the failure as an overflow.
+## Context Overflow Recovery
 
-Detection runs on the finalized assistant message:
+Pi uses the public `isContextOverflow(message, contextWindow)` helper when deciding whether to auto-compact. It recognizes its built-in error patterns and also detects a few silent-overflow usage shapes. A custom stream should emit `stopReason: "error"` with the provider's real error in `errorMessage`.
 
-- `stopReason === "error"`
-- `errorMessage` matches one of pi's known overflow patterns (see [`packages/ai/src/utils/overflow.ts`](https://github.com/earendil-works/pi/blob/v0.82.1/packages/ai/src/utils/overflow.ts))
-
-If your provider returns overflow errors with a message pi does not recognize, normalize the error from the same extension that registers the provider. Use a `message_end` handler to rewrite the assistant message so its `errorMessage` starts with a phrase pi recognizes. The generic fallback `context_length_exceeded` is the safest choice.
+If an upstream uses an unrecognized overflow message, normalize only that provider's known overflow error. The generic `context_length_exceeded` prefix is recognized. A `message_end` replacement occurs before Pi's overflow recovery check:
 
 ```typescript
-const MY_PROVIDER_OVERFLOW_PATTERN = /your provider's overflow phrase/i;
+import type { ExtensionAPI } from "@astralyn/pi";
+
+const PROVIDER_OVERFLOW = /request exceeds the acme input limit/i;
 
 export default function (pi: ExtensionAPI) {
-  pi.registerProvider("my-provider", { /* ... */ });
-
-  pi.on("message_end", (event, ctx) => {
+  pi.on("message_end", (event) => {
     const message = event.message;
-    if (message.role !== "assistant") return;
+    if (message.role !== "assistant" || message.provider !== "my-provider") return;
     if (message.stopReason !== "error") return;
-    if (
-      message.provider !== "my-provider" &&
-      ctx.model?.provider !== "my-provider"
-    )
-      return;
 
     const errorMessage = message.errorMessage ?? "";
     if (errorMessage.includes("context_length_exceeded")) return;
-    if (!MY_PROVIDER_OVERFLOW_PATTERN.test(errorMessage)) return;
+    if (!PROVIDER_OVERFLOW.test(errorMessage)) return;
 
     return {
       message: {
@@ -599,168 +456,19 @@ export default function (pi: ExtensionAPI) {
 }
 ```
 
-`message_end` runs before pi tracks the assistant message for auto-compaction, so the rewritten `errorMessage` is what pi checks. With this in place, pi will:
+Do not rewrite rate limits, authentication failures, or generic server errors as overflows. With auto-compaction enabled, Pi removes the failed assistant message from live context, compacts, and retries once. Test the normalized message with the public `isContextOverflow()` helper and the model's configured `contextWindow`.
 
-1. Detect the overflow from `errorMessage`.
-2. Drop the failed assistant message from live context.
-3. Run compaction.
-4. Retry the request once.
+## Testing
 
-Guard the rewrite carefully:
+Use the local examples as references rather than copying pi-ai's private implementation or test sources. Test a custom stream directly by iterating its public `AssistantMessageEventStream`, then awaiting `stream.result()` for the final message.
 
-- Scope it to your provider (`message.provider` and `ctx.model?.provider`) so unrelated errors from other providers are untouched.
-- Match a provider-specific pattern, not pi's generic overflow patterns. Rewriting rate-limit or throttling errors (`rate limit`, `too many requests`) would falsely trigger compaction instead of pi's normal retry-with-backoff path.
-- Skip when `errorMessage` already includes `context_length_exceeded` so the handler is idempotent.
+At minimum, cover:
 
-### Registration
+- registration and discovery with `pi -e path/to/extension --list-models`;
+- normal text, thinking, and tool-call event ordering, including fragmented tool JSON;
+- final usage/cost values, empty responses, provider errors, and aborts;
+- resolved API keys and headers, plus payload/response hook forwarding for a stream that makes HTTP itself;
+- the configured context window and overflow normalization with `isContextOverflow(message, model.contextWindow)`;
+- one interactive request with the selected provider, including a tool call if the provider claims tool support.
 
-Register your stream function:
-
-```typescript
-pi.registerProvider("my-provider", {
-  baseUrl: "https://api.example.com",
-  apiKey: "$MY_API_KEY",
-  api: "my-custom-api",
-  models: [...],
-  streamSimple: streamMyProvider
-});
-```
-
-## Testing Your Implementation
-
-Test your provider against the same test suites used by built-in providers. Copy and adapt these test files from [packages/ai/test/](https://github.com/earendil-works/pi/tree/v0.82.1/packages/ai/test):
-
-| Test | Purpose |
-|------|---------|
-| `stream.test.ts` | Basic streaming, text output |
-| `tokens.test.ts` | Token counting and usage |
-| `abort.test.ts` | AbortSignal handling |
-| `empty.test.ts` | Empty/minimal responses |
-| `context-overflow.test.ts` | Context window limits |
-| `image-limits.test.ts` | Image input handling |
-| `unicode-surrogate.test.ts` | Unicode edge cases |
-| `tool-call-without-result.test.ts` | Tool call edge cases |
-| `image-tool-result.test.ts` | Images in tool results |
-| `total-tokens.test.ts` | Total token calculation |
-| `cross-provider-handoff.test.ts` | Context handoff between providers |
-
-Run tests with your provider/model pairs to verify compatibility.
-
-## Config Reference
-
-```typescript
-interface ProviderConfig {
-  /** Display name for the provider in UI such as /login. */
-  name?: string;
-
-  /** API endpoint URL. Required when defining models. */
-  baseUrl?: string;
-
-  /** API key literal, env interpolation ($ENV_VAR or ${ENV_VAR}), or !command. Required when defining models (unless oauth). */
-  apiKey?: string;
-
-  /** API type for streaming. Required at provider or model level when defining models. */
-  api?: Api;
-
-  /** Custom streaming implementation for non-standard APIs. */
-  streamSimple?: (
-    model: Model<Api>,
-    context: Context,
-    options?: SimpleStreamOptions
-  ) => AssistantMessageEventStream;
-
-  /** Custom headers to include in requests. Values use the same resolution syntax as apiKey. */
-  headers?: Record<string, string>;
-
-  /** If true, adds Authorization: Bearer header with the resolved API key. */
-  authHeader?: boolean;
-
-  /** Models to register. If provided, replaces all existing models for this provider. */
-  models?: ProviderModelConfig[];
-
-  /** OAuth provider for /login support. */
-  oauth?: {
-    name: string;
-    login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials>;
-    refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials>;
-    getApiKey(credentials: OAuthCredentials): string;
-  };
-}
-```
-
-## Model Definition Reference
-
-```typescript
-interface ProviderModelConfig {
-  /** Model ID (e.g., "claude-sonnet-4-20250514"). */
-  id: string;
-
-  /** Display name (e.g., "Claude 4 Sonnet"). */
-  name: string;
-
-  /** API type override for this specific model. */
-  api?: Api;
-
-  /** API endpoint URL override for this specific model. */
-  baseUrl?: string;
-
-  /** Whether the model supports extended thinking. */
-  reasoning: boolean;
-
-  /** Maps pi thinking levels to provider/model-specific values; null marks a level unsupported. */
-  thinkingLevelMap?: Partial<Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max", string | null>>;
-
-  /** Supported input types. */
-  input: ("text" | "image")[];
-
-  /** Cost per million tokens (for usage tracking). */
-  cost: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-  };
-
-  /** Maximum context window size in tokens. */
-  contextWindow: number;
-
-  /** Maximum output tokens. */
-  maxTokens: number;
-
-  /** Custom headers for this specific model. */
-  headers?: Record<string, string>;
-
-  /** Compatibility settings for the selected API. */
-  compat?: {
-    // openai-completions
-    supportsStore?: boolean;
-    supportsDeveloperRole?: boolean;
-    supportsReasoningEffort?: boolean;
-    supportsUsageInStreaming?: boolean;
-    supportsStrictMode?: boolean;
-    supportsOpenAIGrammarTools?: boolean; // openai-completions/openai-responses; false falls back to normal function tools
-    maxTokensField?: "max_completion_tokens" | "max_tokens";
-    requiresToolResultName?: boolean;
-    requiresAssistantAfterToolResult?: boolean;
-    requiresThinkingAsText?: boolean;
-    requiresReasoningContentOnAssistantMessages?: boolean;
-    thinkingFormat?: "openai" | "openrouter" | "deepseek" | "together" | "zai" | "qwen" | "chat-template" | "qwen-chat-template" | "string-thinking" | "ant-ling";
-    chatTemplateKwargs?: Record<string, string | number | boolean | null | { "$var": "thinking.enabled" | "thinking.effort"; omitWhenOff?: boolean }>;
-    cacheControlFormat?: "anthropic";
-    sessionAffinityFormat?: "openai" | "openai-nosession" | "openrouter";
-    sendSessionAffinityHeaders?: boolean;
-
-    // anthropic-messages
-    supportsEagerToolInputStreaming?: boolean;
-    supportsLongCacheRetention?: boolean;
-    sendSessionAffinityHeaders?: boolean;
-    supportsCacheControlOnTools?: boolean;
-    forceAdaptiveThinking?: boolean;
-    allowEmptySignature?: boolean;
-    supportsStrictTools?: boolean;
-  };
-}
-```
-
-`openrouter` sends `reasoning: { effort }`. `deepseek` sends `thinking: { type: "enabled" | "disabled" }` and `reasoning_effort` when enabled. `together` sends `reasoning: { enabled }` and also `reasoning_effort` when `supportsReasoningEffort` is enabled. `qwen` is for DashScope-style top-level `enable_thinking`. Use `qwen-chat-template` for local Qwen-compatible servers that read `chat_template_kwargs.enable_thinking` and need `preserve_thinking`. Use `chat-template` for configurable `chat_template_kwargs`, for example DeepSeek V3.x behind vLLM with `chatTemplateKwargs: { "thinking": { "$var": "thinking.enabled" } }`.
-`cacheControlFormat: "anthropic"` applies Anthropic-style `cache_control` markers to the system prompt, last tool definition, and last user, assistant, or tool-result text content.
+The two example extensions above cover the two main test seams: direct custom event production and delegation to Pi AI's public streaming APIs.

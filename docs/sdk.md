@@ -53,11 +53,10 @@ The main factory function for a single `AgentSession`.
 import { createAgentSession, SessionManager } from "@astralyn/pi";
 
 // Minimal: defaults with DefaultResourceLoader
-const { session } = await createAgentSession();
+const { session: defaultSession } = await createAgentSession();
 
 // Custom: override specific options
-const { session } = await createAgentSession({
-  model: myModel,
+const { session: customSession } = await createAgentSession({
   tools: ["read", "bash"],
   sessionManager: SessionManager.inMemory(),
 });
@@ -65,18 +64,18 @@ const { session } = await createAgentSession({
 
 ### AgentSession
 
-The session manages agent lifecycle, message history, model state, compaction, and event streaming.
+The session manages agent lifecycle, message history, model state, compaction, and event streaming. Common API members include:
 
 ```typescript
 interface AgentSession {
   // Send a prompt and wait for completion
   prompt(text: string, options?: PromptOptions): Promise<void>;
 
-  // Queue messages during streaming
-  steer(text: string): Promise<void>;
-  followUp(text: string): Promise<void>;
+  // Queue messages, optionally with image attachments
+  steer(text: string, images?: ImageContent[]): Promise<void>;
+  followUp(text: string, images?: ImageContent[]): Promise<void>;
 
-  // Subscribe to events (returns unsubscribe function)
+  // Subscribe to events (returns an unsubscribe function)
   subscribe(listener: (event: AgentSessionEvent) => void): () => void;
 
   // Session info
@@ -86,7 +85,7 @@ interface AgentSession {
   // Model control
   setModel(model: Model): Promise<void>;
   setThinkingLevel(level: ThinkingLevel): void;
-  cycleModel(): Promise<ModelCycleResult | undefined>;
+  cycleModel(direction?: "forward" | "backward"): Promise<ModelCycleResult | undefined>;
   cycleThinkingLevel(): ThinkingLevel | undefined;
 
   // State access
@@ -97,13 +96,16 @@ interface AgentSession {
   isStreaming: boolean;
 
   // In-place tree navigation within the current session file
-  navigateTree(targetId: string, options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string }): Promise<{ editorText?: string; cancelled: boolean }>;
+  navigateTree(targetId: string, options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string }): Promise<{
+    editorText?: string;
+    cancelled: boolean;
+    aborted?: boolean;
+    summaryEntry?: BranchSummaryEntry;
+  }>;
 
-  // Compaction
+  // Compaction and cancellation
   compact(customInstructions?: string): Promise<CompactionResult>;
   abortCompaction(): void;
-
-  // Abort current operation
   abort(): Promise<void>;
 
   // Cleanup
@@ -130,8 +132,8 @@ import {
   SessionManager,
 } from "@astralyn/pi";
 
-const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
-  const services = await createAgentSessionServices({ cwd });
+const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
+  const services = await createAgentSessionServices({ cwd, agentDir });
   return {
     ...(await createAgentSessionFromServices({
       services,
@@ -161,8 +163,8 @@ const runtime = await createAgentSessionRuntime(createRuntime, {
 Important behavior:
 
 - `runtime.session` changes after those operations
-- event subscriptions are attached to a specific `AgentSession`, so re-subscribe after replacement
-- if you use extensions, call `runtime.session.bindExtensions(...)` again for the new session
+- event subscriptions are attached to a specific `AgentSession`, so re-subscribe after replacement (or use `runtime.setRebindSession()`)
+- if you use extensions, bind them again for the new session (or do so from the rebind callback)
 - creation returns diagnostics on `runtime.diagnostics`
 - if runtime creation or replacement fails, the method throws and the caller decides how to handle it
 
@@ -196,7 +198,7 @@ interface PromptOptions {
 - `true` when the prompt was accepted, queued, or handled immediately
 - `false` when prompt preflight rejected before acceptance
 
-It fires before `prompt()` resolves. `prompt()` still resolves only after the full accepted run finishes, including retries. Failures after acceptance are reported through the normal event and message stream, not through `preflightResult(false)`.
+It fires before `prompt()` resolves. A prompt that starts a run resolves after the full accepted run finishes, including retries; a queued or immediately handled prompt resolves after acceptance or handling. Failures after acceptance are reported through the normal event and message stream, not through `preflightResult(false)`.
 
 The `prompt()` method handles prompt templates, extension commands, and message sending:
 
@@ -206,7 +208,7 @@ await session.prompt("What files are here?");
 
 // With images
 await session.prompt("What's in this image?", {
-  images: [{ type: "image", source: { type: "base64", mediaType: "image/png", data: "..." } }]
+  images: [{ type: "image", mimeType: "image/png", data: "..." }],
 });
 
 // During streaming: must specify how to queue the message
@@ -224,11 +226,13 @@ await session.prompt("After you're done, also check X", { streamingBehavior: "fo
 For explicit queueing during streaming:
 
 ```typescript
-// Queue a steering message for delivery after the current assistant turn finishes its tool calls
-await session.steer("New instruction");
+const image = { type: "image" as const, mimeType: "image/png", data: "..." };
 
-// Wait for agent to finish (delivered only when agent stops)
-await session.followUp("After you're done, also do this");
+// Queue a steering message for delivery after the current assistant turn finishes its tool calls
+await session.steer("New instruction", [image]);
+
+// Queue a follow-up for when there are no more tool calls or steering messages
+await session.followUp("After you're done, also do this", [image]);
 ```
 
 Both `steer()` and `followUp()` expand file-based prompt templates but error on extension commands (extension commands cannot be queued).
@@ -302,6 +306,9 @@ session.subscribe((event) => {
     case "agent_end":
       // Agent finished (event.messages contains new messages)
       break;
+    case "agent_settled":
+      // Agent, retries, compaction, and queued continuations have settled
+      break;
     
     // Turn lifecycle (one LLM response + tool calls)
     case "turn_start":
@@ -311,7 +318,7 @@ session.subscribe((event) => {
       // event.toolResults: tool results from this turn
       break;
     
-    // Session events (queue, compaction, retry)
+    // Session events (queue, compaction, retry, and persisted state)
     case "queue_update":
       console.log(event.steering, event.followUp);
       break;
@@ -322,6 +329,10 @@ session.subscribe((event) => {
     case "summarization_retry_scheduled":
     case "summarization_retry_attempt_start":
     case "summarization_retry_finished":
+    case "entry_appended":
+    case "session_info_changed":
+    case "thinking_level_changed":
+    case "bash_execution_update":
       break;
   }
 });
@@ -347,7 +358,7 @@ const { session } = await createAgentSession({
   - `.pi/skills/`
   - `.agents/skills/` in `cwd` and ancestor directories (up to git repo root, or filesystem root when not in a repo)
 - Project prompts (`.pi/prompts/`)
-- Context files (`AGENTS.md` walking up from cwd)
+- Context files (`AGENTS.md` or `CLAUDE.md`, walking up from cwd)
 - Session directory naming
 
 `agentDir` is used by `DefaultResourceLoader` for:
@@ -356,7 +367,7 @@ const { session } = await createAgentSession({
   - `skills/` under `agentDir` (for example `~/.pi/agent/skills/`)
   - `~/.agents/skills/`
 - Global prompts (`prompts/`)
-- Global context file (`AGENTS.md`)
+- Global context file (`AGENTS.md` or `CLAUDE.md`)
 - Settings (`settings.json`)
 - Custom models (`models.json`)
 - Credentials (`auth.json`)
@@ -367,32 +378,33 @@ When you pass a custom `ResourceLoader`, `cwd` and `agentDir` no longer control 
 ### Model
 
 ```typescript
-import { getModel } from "@earendil-works/pi-ai";
-import { ModelRuntime } from "@astralyn/pi";
+import { getModel } from "@earendil-works/pi-ai/compat";
+import { createAgentSession, ModelRuntime } from "@astralyn/pi";
 
 const modelRuntime = await ModelRuntime.create();
 
-// Find specific built-in model (doesn't check if API key exists)
+// Find specific built-in models (doesn't check whether API keys exist)
 const opus = getModel("anthropic", "claude-opus-4-5");
-if (!opus) throw new Error("Model not found");
+const sonnet = getModel("anthropic", "claude-sonnet-4-5");
+if (!opus || !sonnet) throw new Error("Model not found");
 
 // Find any model by provider/id, including custom models from models.json
-// (doesn't check if API key exists)
+// (doesn't check whether API keys exist)
 const customModel = modelRuntime.getModel("my-provider", "my-model");
 
-// Get only models that have valid authentication configured
+// Get only models that have configured authentication
 const available = await modelRuntime.getAvailable();
 
 const { session } = await createAgentSession({
   model: opus,
   thinkingLevel: "medium", // off, minimal, low, medium, high, xhigh, max
-  
+
   // Models for cycling (Ctrl+P in interactive mode)
   scopedModels: [
     { model: opus, thinkingLevel: "high" },
-    { model: haiku, thinkingLevel: "off" },
+    { model: sonnet, thinkingLevel: "off" },
   ],
-  
+
   modelRuntime,
 });
 ```
@@ -400,7 +412,7 @@ const { session } = await createAgentSession({
 If no model is provided:
 1. Tries to restore from session (if continuing)
 2. Uses default from settings
-3. Falls back to first available model
+3. Prefers a known provider default among available models, then falls back to the first available model
 
 To match CLI model parsing, use the exported resolver helpers:
 
@@ -452,7 +464,7 @@ for (const provider of modelRuntime.getProviders()) {
 }
 
 // Runtime API key override (not persisted to disk)
-modelRuntime.setRuntimeApiKey("anthropic", "sk-my-temp-key");
+await modelRuntime.setRuntimeApiKey("anthropic", "sk-my-temp-key");
 
 // Custom credential and model locations
 const customRuntime = await ModelRuntime.create({
@@ -465,7 +477,7 @@ const credentials = new InMemoryCredentialStore();
 const inMemoryRuntime = await ModelRuntime.create({ credentials });
 
 const { session } = await createAgentSession({
-  modelRuntime: customRuntime,
+  modelRuntime: inMemoryRuntime,
 });
 ```
 
@@ -476,9 +488,11 @@ const { session } = await createAgentSession({
 Use a `ResourceLoader` to override the system prompt:
 
 ```typescript
-import { createAgentSession, DefaultResourceLoader } from "@astralyn/pi";
+import { createAgentSession, DefaultResourceLoader, getAgentDir } from "@astralyn/pi";
 
 const loader = new DefaultResourceLoader({
+  cwd: process.cwd(),
+  agentDir: getAgentDir(),
   systemPromptOverride: () => "You are a helpful assistant.",
 });
 await loader.reload();
@@ -504,17 +518,17 @@ The `edit` tool returns `details.diff` for Pi's TUI display and `details.patch` 
 import { createAgentSession } from "@astralyn/pi";
 
 // Read-only mode
-const { session } = await createAgentSession({
+const { session: readOnlySession } = await createAgentSession({
   tools: ["read", "grep", "find", "ls"],
 });
 
 // Pick specific tools
-const { session } = await createAgentSession({
+const { session: selectedToolsSession } = await createAgentSession({
   tools: ["read", "bash", "grep"],
 });
 
 // Disable one tool while keeping the rest available
-const { session } = await createAgentSession({
+const { session: excludedToolsSession } = await createAgentSession({
   excludeTools: ["ask_question"],
 });
 ```
@@ -583,9 +597,11 @@ If you pass `tools`, include each custom or extension tool name you want enabled
 Extensions are loaded by the `ResourceLoader`. `DefaultResourceLoader` discovers extensions from `~/.pi/agent/extensions/`, `.pi/extensions/`, and settings.json extension sources.
 
 ```typescript
-import { createAgentSession, DefaultResourceLoader } from "@astralyn/pi";
+import { createAgentSession, DefaultResourceLoader, getAgentDir } from "@astralyn/pi";
 
 const loader = new DefaultResourceLoader({
+  cwd: process.cwd(),
+  agentDir: getAgentDir(),
   additionalExtensionPaths: ["/path/to/my-extension.ts"],
   extensionFactories: [
     (pi) => {
@@ -605,7 +621,7 @@ Extensions can register tools, subscribe to events, add commands, and more. See 
 **Named inline extensions:** By default, inline factories display as `<inline:1>`, `<inline:2>`, etc. in the startup Extensions list. To show a descriptive name instead, wrap the factory:
 
 ```typescript
-import type { InlineExtension } from "@astralyn/pi";
+import { DefaultResourceLoader, getAgentDir, type InlineExtension } from "@astralyn/pi";
 
 const myProvider: InlineExtension = {
   name: "my-provider",
@@ -617,8 +633,11 @@ const myProvider: InlineExtension = {
 };
 
 const loader = new DefaultResourceLoader({
+  cwd: process.cwd(),
+  agentDir: getAgentDir(),
   extensionFactories: [myProvider],
 });
+await loader.reload();
 ```
 
 This displays as `<inline:my-provider>` instead of `<inline:1>`. Bare factory functions are still accepted for backward compatibility.
@@ -626,10 +645,12 @@ This displays as `<inline:my-provider>` instead of `<inline:1>`. Bare factory fu
 **Event Bus:** Extensions can communicate via `pi.events`. Pass a shared `eventBus` to `DefaultResourceLoader` if you need to emit or listen from outside:
 
 ```typescript
-import { createEventBus, DefaultResourceLoader } from "@astralyn/pi";
+import { createEventBus, DefaultResourceLoader, getAgentDir } from "@astralyn/pi";
 
 const eventBus = createEventBus();
 const loader = new DefaultResourceLoader({
+  cwd: process.cwd(),
+  agentDir: getAgentDir(),
   eventBus,
 });
 await loader.reload();
@@ -644,7 +665,9 @@ eventBus.on("my-extension:status", (data) => console.log(data));
 ```typescript
 import {
   createAgentSession,
+  createSyntheticSourceInfo,
   DefaultResourceLoader,
+  getAgentDir,
   type Skill,
 } from "@astralyn/pi";
 
@@ -653,10 +676,13 @@ const customSkill: Skill = {
   description: "Custom instructions",
   filePath: "/path/to/SKILL.md",
   baseDir: "/path/to",
-  source: "custom",
+  sourceInfo: createSyntheticSourceInfo("/path/to/SKILL.md", { source: "sdk" }),
+  disableModelInvocation: false,
 };
 
 const loader = new DefaultResourceLoader({
+  cwd: process.cwd(),
+  agentDir: getAgentDir(),
   skillsOverride: (current) => ({
     skills: [...current.skills, customSkill],
     diagnostics: current.diagnostics,
@@ -672,9 +698,11 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 ### Context Files
 
 ```typescript
-import { createAgentSession, DefaultResourceLoader } from "@astralyn/pi";
+import { createAgentSession, DefaultResourceLoader, getAgentDir } from "@astralyn/pi";
 
 const loader = new DefaultResourceLoader({
+  cwd: process.cwd(),
+  agentDir: getAgentDir(),
   agentsFilesOverride: (current) => ({
     agentsFiles: [
       ...current.agentsFiles,
@@ -694,18 +722,23 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 ```typescript
 import {
   createAgentSession,
+  createSyntheticSourceInfo,
   DefaultResourceLoader,
+  getAgentDir,
   type PromptTemplate,
 } from "@astralyn/pi";
 
 const customCommand: PromptTemplate = {
   name: "deploy",
   description: "Deploy the application",
-  source: "(custom)",
+  filePath: "/virtual/prompts/deploy.md",
+  sourceInfo: createSyntheticSourceInfo("/virtual/prompts/deploy.md", { source: "sdk" }),
   content: "# Deploy\n\n1. Build\n2. Test\n3. Deploy",
 };
 
 const loader = new DefaultResourceLoader({
+  cwd: process.cwd(),
+  agentDir: getAgentDir(),
   promptsOverride: (current) => ({
     prompts: [...current.prompts, customCommand],
     diagnostics: current.diagnostics,
@@ -758,11 +791,11 @@ const { session: opened } = await createAgentSession({
 
 // List sessions
 const currentProjectSessions = await SessionManager.list(process.cwd());
-const allSessions = await SessionManager.listAll(process.cwd());
+const allSessions = await SessionManager.listAll();
 
 // Session replacement API for /new, /resume, /fork, /clone, and import flows.
-const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
-  const services = await createAgentSessionServices({ cwd });
+const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
+  const services = await createAgentSessionServices({ cwd, agentDir });
   return {
     ...(await createAgentSessionFromServices({
       services,
@@ -800,24 +833,28 @@ const sm = SessionManager.open("/path/to/session.jsonl");
 
 // Session listing
 const currentProjectSessions = await SessionManager.list(process.cwd());
-const allSessions = await SessionManager.listAll(process.cwd());
+const allSessions = await SessionManager.listAll();
 
 // Tree traversal
 const entries = sm.getEntries();        // All entries (excludes header)
 const tree = sm.getTree();              // Full tree structure
-const path = sm.getPath();              // Path from root to current leaf
+const path = sm.getBranch();            // Path from root to current leaf
 const leaf = sm.getLeafEntry();         // Current leaf entry
-const entry = sm.getEntry(id);          // Get entry by ID
-const children = sm.getChildren(id);    // Direct children of entry
 
-// Labels
-const label = sm.getLabel(id);          // Get label for entry
-sm.appendLabelChange(id, "checkpoint"); // Set label
+if (leaf) {
+  const entryId = leaf.id;
+  const entry = sm.getEntry(entryId);       // Get entry by ID
+  const children = sm.getChildren(entryId); // Direct children of entry
 
-// Branching
-sm.branch(entryId);                     // Move leaf to earlier entry
-sm.branchWithSummary(id, "Summary...");  // Branch with context summary
-sm.createBranchedSession(leafId);       // Extract path to new file
+  // Labels
+  const label = sm.getLabel(entryId);       // Get label for entry
+  sm.appendLabelChange(entryId, "checkpoint"); // Set label
+
+  // Branching
+  sm.branch(entryId);                       // Move leaf to earlier entry
+  sm.branchWithSummary(entryId, "Summary..."); // Branch with context summary
+  const sessionFile = sm.createBranchedSession(entryId); // Path, or undefined in memory
+}
 ```
 
 > See [examples/sdk/11-sessions.ts](../examples/sdk/11-sessions.ts) and [Session Format](session-format.md)
@@ -828,20 +865,20 @@ sm.createBranchedSession(leafId);       // Extract path to new file
 import { createAgentSession, SettingsManager, SessionManager } from "@astralyn/pi";
 
 // Default: loads from files (global + project merged)
-const { session } = await createAgentSession({
-  settingsManager: SettingsManager.create(),
+const { session: defaultSettingsSession } = await createAgentSession({
+  settingsManager: SettingsManager.create(process.cwd()),
 });
 
 // With overrides
-const settingsManager = SettingsManager.create();
+const settingsManager = SettingsManager.create(process.cwd());
 settingsManager.applyOverrides({
   compaction: { enabled: false },
   retry: { enabled: true, maxRetries: 5 },
 });
-const { session } = await createAgentSession({ settingsManager });
+const { session: customSettingsSession } = await createAgentSession({ settingsManager });
 
 // In-memory (no file I/O, for testing)
-const { session } = await createAgentSession({
+const { session: inMemorySettingsSession } = await createAgentSession({
   settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
   sessionManager: SessionManager.inMemory(),
 });
@@ -853,12 +890,12 @@ const { session } = await createAgentSession({
 ```
 
 **Static factories:**
-- `SettingsManager.create(cwd?, agentDir?)` - Load from files
+- `SettingsManager.create(cwd, agentDir?)` - Load from files
 - `SettingsManager.inMemory(settings?)` - No file I/O
 
 **Project-specific settings:**
 
-Settings load from two locations and merge:
+For a trusted project, settings load from two locations and merge:
 1. Global: `~/.pi/agent/settings.json`
 2. Project: `<cwd>/.pi/settings.json`
 
@@ -883,6 +920,7 @@ import {
   getAgentDir,
 } from "@astralyn/pi";
 
+const cwd = process.cwd();
 const loader = new DefaultResourceLoader({
   cwd,
   agentDir: getAgentDir(),
@@ -922,7 +960,7 @@ interface LoadExtensionsResult {
 ## Complete Example
 
 ```typescript
-import { getModel } from "@earendil-works/pi-ai";
+import { getModel } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import {
   createAgentSession,
@@ -938,7 +976,7 @@ const modelRuntime = await ModelRuntime.create({
   modelsPath: "/custom/agent/models.json",
 });
 if (process.env.MY_KEY) {
-  modelRuntime.setRuntimeApiKey("anthropic", process.env.MY_KEY);
+  await modelRuntime.setRuntimeApiKey("anthropic", process.env.MY_KEY);
 }
 
 // Inline tool
@@ -997,43 +1035,17 @@ await session.prompt("Get status and list files.");
 
 ## Run Modes
 
-The SDK exports run mode utilities for building custom interfaces on top of `createAgentSession()`:
+The SDK exports run mode utilities that operate on an `AgentSessionRuntime`. Start with the [session-runtime example](../examples/sdk/13-session-runtime.ts) to create the runtime and rebind session-local work after replacement.
 
 ### InteractiveMode
 
 Full TUI interactive mode with editor, chat history, and all built-in commands:
 
 ```typescript
-import {
-  type CreateAgentSessionRuntimeFactory,
-  createAgentSessionFromServices,
-  createAgentSessionRuntime,
-  createAgentSessionServices,
-  getAgentDir,
-  InteractiveMode,
-  SessionManager,
-} from "@astralyn/pi";
-
-const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
-  const services = await createAgentSessionServices({ cwd });
-  return {
-    ...(await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent })),
-    services,
-    diagnostics: services.diagnostics,
-  };
-};
-const runtime = await createAgentSessionRuntime(createRuntime, {
-  cwd: process.cwd(),
-  agentDir: getAgentDir(),
-  sessionManager: SessionManager.create(process.cwd()),
-});
+import { InteractiveMode } from "@astralyn/pi";
 
 const mode = new InteractiveMode(runtime, {
-  migratedProviders: [],
-  modelFallbackMessage: undefined,
   initialMessage: "Hello",
-  initialImages: [],
-  initialMessages: [],
 });
 
 await mode.run();
@@ -1041,34 +1053,12 @@ await mode.run();
 
 ### runPrintMode
 
-Single-shot mode: send prompts, output result, exit:
+Single-shot mode: send prompts, output the result, dispose the runtime, and return an exit code:
 
 ```typescript
-import {
-  type CreateAgentSessionRuntimeFactory,
-  createAgentSessionFromServices,
-  createAgentSessionRuntime,
-  createAgentSessionServices,
-  getAgentDir,
-  runPrintMode,
-  SessionManager,
-} from "@astralyn/pi";
+import { runPrintMode } from "@astralyn/pi";
 
-const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
-  const services = await createAgentSessionServices({ cwd });
-  return {
-    ...(await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent })),
-    services,
-    diagnostics: services.diagnostics,
-  };
-};
-const runtime = await createAgentSessionRuntime(createRuntime, {
-  cwd: process.cwd(),
-  agentDir: getAgentDir(),
-  sessionManager: SessionManager.create(process.cwd()),
-});
-
-await runPrintMode(runtime, {
+const exitCode = await runPrintMode(runtime, {
   mode: "text",
   initialMessage: "Hello",
   initialImages: [],
@@ -1078,32 +1068,10 @@ await runPrintMode(runtime, {
 
 ### runRpcMode
 
-JSON-RPC mode for subprocess integration:
+JSON-RPC mode for subprocess integration. It owns standard input/output and does not return normally:
 
 ```typescript
-import {
-  type CreateAgentSessionRuntimeFactory,
-  createAgentSessionFromServices,
-  createAgentSessionRuntime,
-  createAgentSessionServices,
-  getAgentDir,
-  runRpcMode,
-  SessionManager,
-} from "@astralyn/pi";
-
-const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
-  const services = await createAgentSessionServices({ cwd });
-  return {
-    ...(await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent })),
-    services,
-    diagnostics: services.diagnostics,
-  };
-};
-const runtime = await createAgentSessionRuntime(createRuntime, {
-  cwd: process.cwd(),
-  agentDir: getAgentDir(),
-  sessionManager: SessionManager.create(process.cwd()),
-});
+import { runRpcMode } from "@astralyn/pi";
 
 await runRpcMode(runtime);
 ```
@@ -1133,7 +1101,7 @@ RPC mode is preferred when:
 
 ## Exports
 
-The main entry point exports:
+Selected SDK exports from the main entry point include:
 
 ```typescript
 // Factory
@@ -1180,7 +1148,6 @@ type ExtensionAPI
 type ToolDefinition
 type Skill
 type PromptTemplate
-type Tool
 ```
 
 For extension types, see [extensions.md](extensions.md) for the full API.
