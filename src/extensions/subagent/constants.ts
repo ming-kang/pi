@@ -39,6 +39,7 @@ export const SINGLE_OUTPUT_LIMIT = 32 * 1024;
 export const PARALLEL_TASK_OUTPUT_LIMIT = 12 * 1024;
 export const PARALLEL_OUTPUT_LIMIT = 48 * 1024;
 export const ERROR_TEXT_LIMIT = 8 * 1024;
+export const RETRY_ERROR_TEXT_LIMIT = 160;
 export const DETAILS_OUTPUT_LIMIT = 120 * 1024;
 // Bounded per run inside DETAILS_OUTPUT_LIMIT; each activity costs up to
 // ~600 bytes, so 12 keeps an 8-run parallel batch from starving outputs.

@@ -2,6 +2,7 @@ import type { TUI } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ToolDefinition } from "../src/core/extensions/types.ts";
 import subagent from "../src/extensions/subagent/index.ts";
+import { beginSubagentRetry } from "../src/extensions/subagent/retry.ts";
 import type { SubagentParamsSchema } from "../src/extensions/subagent/schema.ts";
 import type { SubagentDetails, SubagentRunDetails } from "../src/extensions/subagent/types.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
@@ -155,6 +156,76 @@ describe("Subagent shell-driven live refresh", () => {
 		vi.advanceTimersByTime(5000);
 		expect(render(component)).toBe(settled);
 		expect(requestRender).toHaveBeenCalledTimes(settledRenderRequests);
+		component.dispose();
+	});
+
+	it("refreshes retry deadlines through the same shell clock", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+		const definition = registeredSubagentTool();
+		const retrying = runningDetails("single", 0);
+		beginSubagentRetry(retrying.runs[0]!, {
+			attempt: 1,
+			maxAttempts: 3,
+			delayMs: 8000,
+			error: "fetch failed",
+		});
+		const component = createComponent(definition, "subagent-live-retry", {
+			agent: "explorer",
+			description: "Inspect retry",
+			prompt: "Inspect silently.",
+		});
+		component.markExecutionStarted();
+		component.updateResult(
+			{ content: [{ type: "text", text: "retrying" }], details: retrying, isError: false },
+			true,
+		);
+
+		expect(render(component)).toContain("Retrying (1/3) in 8s — fetch failed");
+		vi.advanceTimersByTime(1000);
+		expect(render(component)).toContain("Retrying (1/3) in 7s — fetch failed");
+		vi.advanceTimersByTime(6000);
+		expect(render(component)).toContain("Retrying (1/3) in 1s — fetch failed");
+
+		component.setExpanded(true);
+		expect(render(component)).toContain("Retrying (1/3) in 1s — fetch failed");
+		vi.advanceTimersByTime(1000);
+		expect(render(component)).toContain("Retrying now… (1/3) — fetch failed");
+		component.dispose();
+	});
+
+	it("shows queued task retry countdowns in collapsed and expanded batches", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+		const definition = registeredSubagentTool();
+		const retrying = runningDetails("parallel", 0, 5);
+		const retryingRun = retrying.runs.at(-1)!;
+		retryingRun.status = "queued";
+		retryingRun.startedAt = undefined;
+		beginSubagentRetry(retryingRun, {
+			attempt: 1,
+			maxAttempts: 2,
+			delayMs: 8000,
+			error: "fetch failed",
+		});
+		const component = createComponent(definition, "subagent-task-retry", {
+			tasks: Array.from({ length: 5 }, (_, index) => ({
+				agent: "explorer",
+				description: `Task ${index + 1}`,
+				prompt: `Inspect task ${index + 1}.`,
+			})),
+		});
+		component.markExecutionStarted();
+		component.updateResult(
+			{ content: [{ type: "text", text: "retrying" }], details: retrying, isError: false },
+			true,
+		);
+
+		expect(render(component)).toContain("Retrying (1/2) in 8s — fetch failed");
+		vi.advanceTimersByTime(1000);
+		expect(render(component)).toContain("Retrying (1/2) in 7s — fetch failed");
+		component.setExpanded(true);
+		expect(render(component)).toContain("Retrying (1/2) in 7s — fetch failed");
 		component.dispose();
 	});
 

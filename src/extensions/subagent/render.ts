@@ -2,6 +2,7 @@ import { type Component, Container, Markdown, Spacer, Text } from "@earendil-wor
 import type { AgentToolResult, ToolRenderResultOptions } from "../../core/extensions/types.ts";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
+import { getSubagentRetryView } from "./retry.ts";
 import { statusSummary } from "./runner.ts";
 import type { SubagentParams } from "./schema.ts";
 import type { SubagentDetails, SubagentRunDetails, SubagentRunStatus } from "./types.ts";
@@ -9,6 +10,7 @@ import type { SubagentDetails, SubagentRunDetails, SubagentRunStatus } from "./t
 const SINGLE_EXCERPT_LIMIT = 200;
 const RUN_LINE_EXCERPT_LIMIT = 96;
 const RUN_ERROR_EXCERPT_LIMIT = 200;
+const RETRY_ERROR_EXCERPT_LIMIT = 160;
 const LIVE_TAIL_LIMIT = 100;
 const COLLAPSED_RUN_LIMIT = 4;
 const PROMPT_PREVIEW_LINES = 2;
@@ -156,11 +158,24 @@ const INSPECT_COMMAND_PATTERN = /\b(rg|grep|find|git (?:diff|status|log|show)|ls
 const RETRY_MARKER_PATTERN = /^Retrying\b/u;
 const STREAM_MARKERS = new Set(["Thinking…", "Writing response…"]);
 
+function retryText(run: SubagentRunDetails): string | undefined {
+	const retry = getSubagentRetryView(run);
+	if (!retry) return undefined;
+	const status =
+		retry.remainingSeconds > 0
+			? `Retrying (${retry.attempt}/${retry.maxAttempts}) in ${retry.remainingSeconds}s`
+			: `Retrying now… (${retry.attempt}/${retry.maxAttempts})`;
+	const error = excerpt(retry.error, RETRY_ERROR_EXCERPT_LIMIT);
+	return error ? `${status} — ${error}` : status;
+}
+
 // Translates raw tool traffic into what the worker is doing right now, so
 // the collapsed card reads as a phase instead of a command line. Modelled
 // on tool-type classification; the raw tool summary stays as evidence on
 // the next line.
 function runIntent(run: SubagentRunDetails): string {
+	const retry = retryText(run);
+	if (retry) return retry;
 	const current = run.currentActivity;
 	if (current && RETRY_MARKER_PATTERN.test(current)) return current;
 	const running = [...run.activities].reverse().find((activity) => activity.status === "running");
@@ -187,6 +202,7 @@ function runIntent(run: SubagentRunDetails): string {
 // The raw tool summary backs up the intent line; suppress it when it would
 // just repeat a stream/retry marker.
 function runEvidence(run: SubagentRunDetails): string | undefined {
+	if (getSubagentRetryView(run)) return undefined;
 	const current = run.currentActivity;
 	if (!current || STREAM_MARKERS.has(current) || RETRY_MARKER_PATTERN.test(current)) return undefined;
 	return current;
@@ -261,12 +277,14 @@ function runProgressText(run: SubagentRunDetails): string {
 
 function runLine(run: SubagentRunDetails, theme: Theme, index?: number): string {
 	let line = runTitle(run, theme, index);
+	const retry = retryText(run);
 	const detail =
-		run.status === "running"
+		retry ??
+		(run.status === "running"
 			? excerpt(runIntent(run), LIVE_TAIL_LIMIT)
 			: run.status === "failed" || run.status === "aborted"
 				? undefined
-				: run.finalOutput && leadingSentences(run.finalOutput, RUN_LINE_EXCERPT_LIMIT);
+				: run.finalOutput && leadingSentences(run.finalOutput, RUN_LINE_EXCERPT_LIMIT));
 	if (detail) line += theme.fg("dim", ` — ${detail}`);
 	if (run.status === "running") {
 		line += theme.fg("dim", ` · ${runProgressText(run)}`);
@@ -302,22 +320,31 @@ function selectCollapsedRuns(runs: SubagentRunDetails[], isPartial: boolean): Su
 	if (runs.length <= COLLAPSED_RUN_LIMIT) return runs;
 	if (!isPartial) return runs.slice(0, COLLAPSED_RUN_LIMIT);
 	const active = runs.filter((run) => run.status === "running" || run.status === "queued");
+	const retrying = active.filter((run) => getSubagentRetryView(run));
+	const retryingSet = new Set(retrying);
+	const otherActive = active.filter((run) => !retryingSet.has(run));
 	const settled = runs.filter((run) => run.status !== "running" && run.status !== "queued");
-	return [...active, ...settled].slice(0, COLLAPSED_RUN_LIMIT);
+	return [...retrying, ...otherActive, ...settled].slice(0, COLLAPSED_RUN_LIMIT);
 }
 
 function singleCollapsedLines(details: SubagentDetails, theme: Theme): string[] {
 	const run = details.runs[0];
 	if (!run) return [theme.fg("muted", "Initializing…")];
 	if (run.status === "running" || run.status === "queued") {
+		const retry = retryText(run);
 		const isInitializing =
-			run.status === "running" && run.usage.turns === 0 && run.usage.toolUses === 0 && run.liveText.length === 0;
+			run.status === "running" &&
+			!retry &&
+			run.usage.turns === 0 &&
+			run.usage.toolUses === 0 &&
+			run.liveText.length === 0;
 		const rawIntent =
-			run.status === "queued"
+			retry ??
+			(run.status === "queued"
 				? (run.currentActivity ?? statusWord(run.status))
 				: isInitializing
 					? "Initializing…"
-					: runIntent(run);
+					: runIntent(run));
 		const intent = excerpt(rawIntent, LIVE_TAIL_LIMIT);
 		// No status marker here: the shell's call-level dot already covers
 		// the whole card, and a single run has nothing to disambiguate.
@@ -473,6 +500,8 @@ function renderRunDetails(run: SubagentRunDetails, theme: Theme, single: boolean
 		const metrics = runMetricsText(run, !single);
 		if (metrics) container.addChild(new Text(theme.fg("dim", metrics), 0, 0));
 	}
+	const retry = retryText(run);
+	if (retry) container.addChild(new Text(theme.fg("accent", retry), 0, 0));
 	container.addChild(new Spacer(1));
 	for (const line of promptSection(run, theme)) container.addChild(new Text(line, 0, 0));
 	if (run.activities.length > 0) {

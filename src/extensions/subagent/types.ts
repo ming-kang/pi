@@ -80,6 +80,13 @@ export interface SubagentUsage {
 	contextTokens?: number;
 }
 
+export interface SubagentRetryDetails {
+	attempt: number;
+	maxAttempts: number;
+	deadline: number;
+	error: string;
+}
+
 export interface SubagentRunDetails {
 	id: string;
 	agent: string;
@@ -93,6 +100,7 @@ export interface SubagentRunDetails {
 	startedAt?: number;
 	endedAt?: number;
 	currentActivity?: string;
+	retry?: SubagentRetryDetails;
 	activities: ToolActivity[];
 	liveText: string;
 	finalOutput: string;

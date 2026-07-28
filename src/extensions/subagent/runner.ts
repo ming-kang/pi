@@ -11,11 +11,13 @@ import {
 	MAX_TASKS,
 	PARALLEL_OUTPUT_LIMIT,
 	PARALLEL_TASK_OUTPUT_LIMIT,
+	RETRY_ERROR_TEXT_LIMIT,
 	SINGLE_OUTPUT_LIMIT,
 	TASK_RETRY_BASE_DELAY_MS,
 	TASK_RETRY_LIMIT,
 } from "./constants.ts";
 import { type ParentModelContext, resolveSubagentTask } from "./resolve.ts";
+import { beginSubagentRetry, clearSubagentRetry } from "./retry.ts";
 import type { SubagentParams, SubagentTask } from "./schema.ts";
 import { runSdkTask } from "./sdk-runner.ts";
 import { loadSubagentConfig } from "./settings.ts";
@@ -151,6 +153,7 @@ export function boundSubagentDetails(details: SubagentDetails): SubagentDetails 
 			prompt: boundText(run.prompt, 1_024),
 			cwd: boundText(run.cwd, 1_024),
 			currentActivity: run.currentActivity ? boundText(run.currentActivity, 512) : undefined,
+			retry: run.retry ? { ...run.retry, error: boundText(run.retry.error, RETRY_ERROR_TEXT_LIMIT) } : undefined,
 			activities: run.activities.slice(-DETAILS_ACTIVITY_LIMIT).map((activity) => ({
 				...activity,
 				summary: boundText(activity.summary, 256),
@@ -316,16 +319,35 @@ function shouldRetryTask(run: SubagentRunDetails): boolean {
 	);
 }
 
-function resetRunForRetry(run: SubagentRunDetails, attempt: number, maxAttempts: number): void {
+function resetRunForRetry(run: SubagentRunDetails, attempt: number, maxAttempts: number, delayMs: number): void {
+	const error = run.error ?? "Subagent failed before retry.";
 	run.status = "queued";
 	run.error = undefined;
 	run.startedAt = undefined;
 	run.endedAt = undefined;
 	run.finalOutput = "";
 	run.liveText = "";
-	run.currentActivity = `Retrying (attempt ${attempt}/${maxAttempts})…`;
 	run.activities.length = 0;
 	run.usage = emptyUsage();
+	beginSubagentRetry(run, { attempt, maxAttempts, delayMs, error });
+}
+
+async function waitForTaskRetry(
+	delayMs: number,
+	options: Pick<SubagentInvocationOptions, "signal" | "registerAbort">,
+): Promise<void> {
+	const controller = new AbortController();
+	const abort = async (): Promise<void> => controller.abort();
+	const unregisterAbort = options.registerAbort?.(abort);
+	const abortListener = () => controller.abort();
+	if (options.signal?.aborted) controller.abort();
+	else options.signal?.addEventListener("abort", abortListener, { once: true });
+	try {
+		await sleep(delayMs, controller.signal);
+	} finally {
+		options.signal?.removeEventListener("abort", abortListener);
+		unregisterAbort?.();
+	}
 }
 
 async function runWithGate(
@@ -345,6 +367,7 @@ async function runWithGate(
 		}
 		const baseDelayMs = options.taskRetryBaseDelayMs ?? TASK_RETRY_BASE_DELAY_MS;
 		for (let attempt = 0; ; attempt++) {
+			clearSubagentRetry(run);
 			const result = await runSdkTask({
 				task,
 				run,
@@ -356,11 +379,13 @@ async function runWithGate(
 				registerAbort: options.registerAbort,
 			});
 			if (attempt >= TASK_RETRY_LIMIT || options.signal?.aborted || !shouldRetryTask(result)) return result;
-			resetRunForRetry(run, attempt + 1, TASK_RETRY_LIMIT);
+			const delayMs = baseDelayMs * 2 ** attempt;
+			resetRunForRetry(run, attempt + 1, TASK_RETRY_LIMIT, delayMs);
 			onProgress();
 			try {
-				await sleep(baseDelayMs * 2 ** attempt, options.signal);
+				await waitForTaskRetry(delayMs, options);
 			} catch {
+				clearSubagentRetry(run);
 				run.status = "aborted";
 				run.error = "Subagent was aborted while waiting to retry.";
 				run.endedAt = Date.now();
@@ -369,6 +394,7 @@ async function runWithGate(
 			}
 		}
 	} catch (error) {
+		clearSubagentRetry(run);
 		run.status = options.signal?.aborted ? "aborted" : "failed";
 		run.error = boundText(error instanceof Error ? error.message : String(error), ERROR_TEXT_LIMIT);
 		run.endedAt = Date.now();
@@ -438,6 +464,10 @@ function progressKey(runs: readonly SubagentRunDetails[]): string {
 				run.activities.length,
 				last?.status ?? "",
 				last?.resultSummary ?? "",
+				run.retry?.attempt ?? "",
+				run.retry?.maxAttempts ?? "",
+				run.retry?.deadline ?? "",
+				run.retry?.error ?? "",
 				run.liveText.length,
 				run.liveText.slice(-24),
 				run.finalOutput.length,

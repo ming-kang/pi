@@ -22,8 +22,8 @@ Do not add an isolated `setInterval` inside Subagent. First give the native tool
 | ----------------------------------------- | --------- | ----------- | --------------------- |
 | Plan document                             | Completed | `be6166d4` | Initial plan recorded                |
 | WP1: Tool progress/render refresh split   | Completed | `025fb307` | 4 focused files, 51 tests; check |
-| WP2: Subagent independent elapsed refresh | Completed | This commit | 4 focused files, 69 tests; check |
-| WP3: Subagent retry countdown             | Pending   | —           | —                     |
+| WP2: Subagent independent elapsed refresh | Completed | `b5436ecf` | 4 focused files, 69 tests; check |
+| WP3: Subagent retry countdown             | Completed | This commit | 7 focused files, 60 tests; check |
 | WP4: Other time/timer defects             | Pending   | —           | —                     |
 | WP5: Documentation and delta registry     | Pending   | —           | —                     |
 | Automated verification                    | Pending   | —           | —                     |
@@ -321,8 +321,30 @@ WP1-WP3 form the core fix. Each work package must nevertheless update and commit
   - 69 focused tests total
   - `npm run check`
 
+### WP3
+
+- Added optional bounded retry metadata with attempt, maximum attempts, absolute deadline, and compact error text; final model-facing result content is unchanged.
+- Provider auto-retry and task-level preflight retry now use the same deadline representation.
+- The native Subagent shell refresh drives `8s → 7s → 1s → Retrying now…` in collapsed and expanded views.
+- Queued task retries are visible in parallel cards and prioritized into the four-row collapsed window without changing stable task ordinals.
+- Retry metadata participates in progress deduplication and is removed on retry end, resumed work, success, failure, parent abort, session shutdown, and final result construction.
+- Task backoff registers its own session-shutdown aborter while the worker session is between attempts.
+- SDK abort registration now covers resource/session initialization, preventing a prompt from starting after a parent or shutdown abort during initialization.
+- Retry errors are normalized and bounded to 160 UTF-8 bytes in live and bounded details.
+- Verification passed:
+  - `test/subagent-sdk-abort.test.ts`
+  - `test/subagent-retry.test.ts`
+  - `test/subagent-live-refresh.test.ts`
+  - `test/subagent-render.test.ts`
+  - `test/subagent-task-retry.test.ts`
+  - `test/subagent-activity.test.ts`
+  - `test/subagent-runner.test.ts`
+  - 60 focused tests total
+  - `npm run check`
+
 ## Commit log
 
 - Initial plan document: `be6166d4 docs: add time-driven UI refresh plan`.
 - WP1: `025fb307 feat: add lifecycle-safe tool render refresh`.
-- WP2: `fix: refresh live Subagent elapsed time` (this commit).
+- WP2: `b5436ecf fix: refresh live Subagent elapsed time`.
+- WP3: `fix: make Subagent retry countdown live` (this commit).

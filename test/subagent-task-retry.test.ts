@@ -5,7 +5,7 @@ import type { ParentModelContext } from "../src/extensions/subagent/resolve.ts";
 import { ConcurrencyGate, runSubagentInvocation } from "../src/extensions/subagent/runner.ts";
 import type { SdkRunnerOptions } from "../src/extensions/subagent/sdk-runner.ts";
 import { runSdkTask } from "../src/extensions/subagent/sdk-runner.ts";
-import type { AgentDefinition } from "../src/extensions/subagent/types.ts";
+import type { AgentDefinition, SubagentDetails } from "../src/extensions/subagent/types.ts";
 
 vi.mock("../src/extensions/subagent/sdk-runner.ts", () => ({
 	runSdkTask: vi.fn(),
@@ -69,7 +69,14 @@ function succeedWith(output: string): (options: SdkRunnerOptions) => Promise<Sdk
 	};
 }
 
-function invoke(signal?: AbortSignal) {
+interface InvokeOptions {
+	signal?: AbortSignal;
+	taskRetryBaseDelayMs?: number;
+	onUpdate?: (details: SubagentDetails) => void;
+	registerAbort?: (abort: () => Promise<void>) => () => void;
+}
+
+function invoke(options: InvokeOptions = {}) {
 	return runSubagentInvocation({
 		params: { agent: "worker", description: "Run worker", prompt: "Do the task." },
 		parentCwd: process.cwd(),
@@ -78,9 +85,11 @@ function invoke(signal?: AbortSignal) {
 		modelRuntime: {} as ModelRuntime,
 		agentDir: process.cwd(),
 		projectTrusted: false,
-		signal,
+		signal: options.signal,
 		gate: new ConcurrencyGate(1),
-		taskRetryBaseDelayMs: 1,
+		taskRetryBaseDelayMs: options.taskRetryBaseDelayMs ?? 1,
+		onUpdate: options.onUpdate,
+		registerAbort: options.registerAbort,
 	});
 }
 
@@ -95,6 +104,61 @@ describe("subagent task-level retry", () => {
 		expect(runSdkTaskMock).toHaveBeenCalledTimes(2);
 		expect(result.isError).toBe(false);
 		expect(result.content).toBe("recovered");
+	});
+
+	it("emits bounded task retry deadlines and removes them from the final result", async () => {
+		const updates: SubagentDetails[] = [];
+		runSdkTaskMock
+			.mockImplementationOnce(failWith(`fetch failed ${"x".repeat(500)}`))
+			.mockImplementationOnce(succeedWith("recovered"));
+		const result = await invoke({ onUpdate: (details) => updates.push(details), taskRetryBaseDelayMs: 5 });
+		const retryUpdate = updates.find((details) => details.runs[0]?.retry);
+		const retry = retryUpdate?.runs[0]?.retry;
+		expect(retry).toMatchObject({ attempt: 1, maxAttempts: 2 });
+		expect(retry?.deadline).toBeGreaterThan(0);
+		expect(Buffer.byteLength(retry?.error ?? "", "utf8")).toBeLessThanOrEqual(160);
+		expect(retryUpdate?.runs[0]?.currentActivity).toBe("Retrying (1/2)…");
+		expect(result.details.runs[0]?.retry).toBeUndefined();
+		expect(result.details.runs[0]?.currentActivity).toBeUndefined();
+	});
+
+	it("clears task retry state when aborted during backoff", async () => {
+		const controller = new AbortController();
+		runSdkTaskMock.mockImplementation(failWith("fetch failed"));
+		const result = await invoke({
+			signal: controller.signal,
+			taskRetryBaseDelayMs: 8000,
+			onUpdate: (details) => {
+				if (details.runs[0]?.retry) controller.abort();
+			},
+		});
+		expect(result.details.runs[0]?.status).toBe("aborted");
+		expect(result.details.runs[0]?.retry).toBeUndefined();
+		expect(result.details.runs[0]?.currentActivity).toBeUndefined();
+	});
+
+	it("clears task retry state when session shutdown aborts the backoff", async () => {
+		let registeredAbort: (() => Promise<void>) | undefined;
+		const unregisterAbort = vi.fn();
+		runSdkTaskMock.mockImplementation(failWith("fetch failed"));
+		const result = await invoke({
+			taskRetryBaseDelayMs: 8000,
+			registerAbort: (abort) => {
+				registeredAbort = abort;
+				return unregisterAbort;
+			},
+			onUpdate: (details) => {
+				if (!details.runs[0]?.retry) return;
+				queueMicrotask(() => {
+					void registeredAbort?.();
+				});
+			},
+		});
+		expect(registeredAbort).toBeDefined();
+		expect(unregisterAbort).toHaveBeenCalledTimes(1);
+		expect(result.details.runs[0]?.status).toBe("aborted");
+		expect(result.details.runs[0]?.retry).toBeUndefined();
+		expect(result.details.runs[0]?.currentActivity).toBeUndefined();
 	});
 
 	it("stops after the retry budget is exhausted", async () => {

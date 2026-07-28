@@ -16,6 +16,7 @@ import {
 	setLiveText,
 } from "./activity.ts";
 import { ERROR_TEXT_LIMIT, LIVE_TEXT_LIMIT, SINGLE_OUTPUT_LIMIT } from "./constants.ts";
+import { beginSubagentRetry, clearSubagentRetry } from "./retry.ts";
 import type { ResolvedSubagentTask, SubagentRunDetails, ToolActivity } from "./types.ts";
 
 export interface SdkRunnerOptions {
@@ -84,6 +85,21 @@ function createThrottledEmitter(onProgress: (() => void) | undefined): Throttled
 	};
 }
 
+type AutoRetryEvent = Extract<AgentSessionEvent, { type: "auto_retry_start" | "auto_retry_end" }>;
+
+export function applySubagentAutoRetryEvent(run: SubagentRunDetails, event: AutoRetryEvent): void {
+	if (event.type === "auto_retry_start") {
+		beginSubagentRetry(run, {
+			attempt: event.attempt,
+			maxAttempts: event.maxAttempts,
+			delayMs: event.delayMs,
+			error: event.errorMessage,
+		});
+		return;
+	}
+	clearSubagentRetry(run);
+}
+
 export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRunDetails> {
 	const { task, run, modelRuntime, agentDir, projectTrusted, signal, onProgress } = options;
 	const throttled = createThrottledEmitter(onProgress);
@@ -93,17 +109,27 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 	const activeActivities = new Map<string, ToolActivity>();
 	const seenAssistantMessages = new Set<unknown>();
 	const markAbort = async (): Promise<void> => {
+		clearSubagentRetry(run);
 		run.status = "aborted";
+		run.error ??= "Subagent was aborted.";
 		if (session) await session.abort();
 	};
+	const isAborted = (): boolean => signal?.aborted === true || run.status === "aborted";
+	const abortListener = () => {
+		void markAbort().catch(() => undefined);
+	};
+	unregisterAbort = options.registerAbort?.(markAbort);
+	if (signal) signal.addEventListener("abort", abortListener, { once: true });
 
 	try {
-		if (signal?.aborted) {
+		if (isAborted()) {
+			clearSubagentRetry(run);
 			run.status = "aborted";
 			run.error = "Subagent was aborted before it started.";
 			return run;
 		}
 
+		clearSubagentRetry(run);
 		run.status = "running";
 		run.startedAt = Date.now();
 		onProgress?.();
@@ -122,6 +148,10 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 			systemPromptOverride: (base) => workerSystemPrompt(base, task),
 		});
 		await resourceLoader.reload();
+		if (isAborted()) {
+			run.error ??= "Subagent was aborted during initialization.";
+			return run;
+		}
 		const created = await createAgentSession({
 			cwd: task.cwd,
 			agentDir,
@@ -134,32 +164,28 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 			settingsManager,
 		});
 		session = created.session;
+		if (isAborted()) {
+			run.error ??= "Subagent was aborted during initialization.";
+			await session.abort();
+			return run;
+		}
 		const emitImmediate = () => onProgress?.();
 		const emitText = throttled.emit;
 		unsubscribe = session.subscribe((event: AgentSessionEvent) => {
-			if (event.type === "auto_retry_start") {
-				// Session-level auto-retry backoff: without this the UI shows a
-				// stale "Thinking…" for the whole retry window.
-				const seconds = Math.max(1, Math.round(event.delayMs / 1000));
-				run.currentActivity = `Retrying (${event.attempt}/${event.maxAttempts}) in ${seconds}s — ${boundText(
-					event.errorMessage.replace(/\s+/gu, " ").trim(),
-					160,
-				)}`;
-				emitImmediate();
-				return;
-			}
-			if (event.type === "auto_retry_end") {
-				run.currentActivity = event.success ? undefined : run.currentActivity;
+			if (event.type === "auto_retry_start" || event.type === "auto_retry_end") {
+				applySubagentAutoRetryEvent(run, event);
 				emitImmediate();
 				return;
 			}
 			if (event.type === "turn_end") {
+				clearSubagentRetry(run);
 				run.usage.turns++;
 				run.currentActivity = undefined;
 				emitImmediate();
 				return;
 			}
 			if (event.type === "message_end" && event.message.role === "assistant") {
+				clearSubagentRetry(run);
 				if (!seenAssistantMessages.has(event.message)) {
 					seenAssistantMessages.add(event.message);
 					addUsage(run.usage, event.message.usage);
@@ -169,6 +195,7 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 				return;
 			}
 			if (event.type === "message_update") {
+				clearSubagentRetry(run);
 				if (event.message.role === "assistant") run.liveText = setLiveText(assistantText(event.message));
 				if (event.assistantMessageEvent.type === "thinking_delta") run.currentActivity = "Thinking…";
 				if (event.assistantMessageEvent.type === "text_delta") run.currentActivity = "Writing response…";
@@ -176,6 +203,7 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 				return;
 			}
 			if (event.type === "tool_execution_start") {
+				clearSubagentRetry(run);
 				run.usage.toolUses++;
 				const activity: ToolActivity = {
 					id: event.toolCallId,
@@ -191,11 +219,13 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 				return;
 			}
 			if (event.type === "tool_execution_update") {
+				clearSubagentRetry(run);
 				run.currentActivity = activitySummary(event.toolName, event.args);
 				emitText();
 				return;
 			}
 			if (event.type === "tool_execution_end") {
+				clearSubagentRetry(run);
 				const activity = activeActivities.get(event.toolCallId);
 				if (activity) {
 					activity.status = event.isError ? "failed" : "succeeded";
@@ -206,16 +236,7 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 				emitImmediate();
 			}
 		});
-		const abortListener = () => {
-			void markAbort().catch(() => undefined);
-		};
-		unregisterAbort = options.registerAbort?.(markAbort);
-		if (signal) signal.addEventListener("abort", abortListener, { once: true });
-		try {
-			await session.prompt(task.prompt);
-		} finally {
-			if (signal) signal.removeEventListener("abort", abortListener);
-		}
+		await session.prompt(task.prompt);
 		const finalMessage = lastAssistantMessage(session);
 		run.finalOutput = finalAssistantText(session.messages);
 		const error = assistantError(finalMessage);
@@ -238,6 +259,7 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 		}
 		if (session) run.finalOutput = finalAssistantText(session.messages);
 	} finally {
+		if (signal) signal.removeEventListener("abort", abortListener);
 		throttled.cancel();
 		unregisterAbort?.();
 		unsubscribe?.();
@@ -245,6 +267,7 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 		run.liveText = boundText(run.liveText, LIVE_TEXT_LIMIT);
 		run.finalOutput = boundText(run.finalOutput, SINGLE_OUTPUT_LIMIT);
 		if (run.error) run.error = boundText(run.error, ERROR_TEXT_LIMIT);
+		clearSubagentRetry(run);
 		run.endedAt = Date.now();
 		onProgress?.();
 	}
