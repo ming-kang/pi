@@ -60,6 +60,7 @@ For interactive verification, use a real TTY. Check affected pending, success, e
 - Keep upstream as the `upstream` remote and synchronize against release tags, never upstream `main`.
 - Do not merge an upstream monorepo tag into this standalone branch. Extract and review only `packages/coding-agent/**`, then update the exact upstream npm dependency versions for that release.
 - When a change alters which files differ from the reviewed upstream baseline, update the delta registry in `maintainers/upstream.json` and the rationale in `maintainers/delta.md`, then verify with `npm run diff:upstream -- --check`.
+- The upstream delta is temporarily frozen: do not grow it without the documented admission record and an explicitly owner-approved, reviewed exception where required. The v0.82.1 budget begins at 70 hybrid paths and 10 narrative delta units; its ratchet and admission contract live in `maintainers/delta.md`, with ceilings recorded in `maintainers/upstream.json`.
 
 ## Documentation
 

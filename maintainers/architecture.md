@@ -81,10 +81,12 @@ The `upstream` remote still points to `earendil-works/pi`, but upstream monorepo
 
 The delta against the reviewed upstream release is a first-class object rather than tribal knowledge:
 
-- the orphan `upstream-extract` branch holds the root-mapped extraction of the reviewed tag's `packages/coding-agent` subtree, so `git diff upstream-extract` is the complete fork delta;
-- [`upstream.json`](upstream.json) registers every differing path as `localOnly`, `hybrid`, or `dropped`;
+- the orphan `upstream-extract` branch is an optional derived cache of the root-mapped tree recorded in `upstream.json`, so `git diff upstream-extract` is a convenient complete fork delta when the cache is present;
+- [`upstream.json`](upstream.json) records the canonical tag/commit/source tree, classifies owned overlays and additions, maps upstream modifications and drops to delta units, and records the current budget ceilings;
 - `npm run diff:upstream` classifies the actual delta against that registry and `--check` fails on unregistered drift or stale registrations;
-- [`delta.md`](delta.md) documents why each delta unit exists and how to re-verify it during synchronization.
+- [`delta.md`](delta.md) documents why each delta unit exists, how to re-verify it during synchronization, and the temporary no-growth admission and ratchet policy for hybrid changes.
+
+Hybrid modifications are a bounded exception to upstream alignment, not an alternate product layer. The budget and admission contract favor the Extension API or a distribution-owned adapter before direct hybrid code; they cannot authorize an architecture boundary prohibited by [`AGENTS.md`](../AGENTS.md).
 
 ## Release model
 

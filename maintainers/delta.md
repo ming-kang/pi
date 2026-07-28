@@ -1,21 +1,52 @@
 # Delta against the reviewed upstream baseline
 
-This file explains why each difference against the reviewed upstream release exists and how to re-verify it during synchronization. The authoritative per-path registry is [`upstream.json`](upstream.json); `npm run diff:upstream` verifies that registry against the actual delta. Update both when a change alters the set of differing files.
+This file owns the temporary upstream-delta admission and ratchet contract, and explains why each difference against the reviewed upstream release exists and how to re-verify it during synchronization. The authoritative per-path registry and budget ceilings are in [`upstream.json`](upstream.json); `npm run diff:upstream` verifies the registry against the actual delta. Update both when a change alters the set of differing files.
 
-Each unit lists its hybrid files (upstream files with local modifications), local files (distribution-owned), the upstream assumptions it depends on, and how to verify it after importing upstream changes.
+## Decision matrix
 
-## 1. Package identity and standalone resolution
+The lower-kebab ID is each unit's stable identity; the accompanying title is a readable description. The schema maps each upstream-modified or dropped path to one unit; the text below supplies its rationale and re-verification guidance.
+
+| ID | Unit | Primary disposition | Risk | Direction |
+| --- | --- | --- | --- | --- |
+| `dist-standalone` | Package identity and standalone resolution | Keep | medium | Retain the standalone package boundary; reassess packaging adapters with each upstream release. |
+| `dist-attribution` | Provider attribution instead of install telemetry | Isolate | low | Keep privacy behavior narrowly scoped to attribution and settings compatibility. |
+| `plat-windows-bash` | Windows bash correctness | Upstream | low | Land portable shell behavior upstream, then remove the local adjustment. |
+| `core-mid-turn-compaction` | Between-tool-batch auto-compaction | Keep | high | Retain failure-closed behavior while pursuing an upstream lifecycle exit. |
+| `ui-tool-presentation` | Native tool presentation and tool grouping | Isolate | high | Preserve native presentation; move reusable UI capability upstream rather than replacing it. |
+| `ui-bundled-themes` | Bundled themes | Keep | low | Retain distribution themes and the narrow ANSI restoration guard. |
+| `ext-bundled` | Bundled extensions | Isolate | medium | Keep extensions self-contained; remove compatibility adapters when public APIs suffice. |
+| `ui-terminal-output` | Atomic terminal writes and scrollback preservation | Isolate | high | Keep the terminal adapter isolated; write coalescing is an upstream candidate. |
+| `ui-time-lifecycle` | Time-driven interactive UI lifecycle | Upstream | medium | Retain the fixes locally while upstream lifecycle-safe timing behavior is adopted. |
+
+## Delta admission and complexity budget
+
+The upstream delta is temporarily frozen. Do not add or expand a hybrid delta merely because it is convenient: prefer the public Extension API, then a distribution-owned adapter, before modifying an upstream path. This policy does not authorize a prohibited design: never recreate a monorepo, vendor, patch, monkey-patch, or recreate an upstream dependency, add a Fork framework, import one extension's internals from another, or change a tool schema, execution protocol, or result structure for display-only work. [`AGENTS.md`](../AGENTS.md) remains authoritative for those boundaries.
+
+At the v0.82.1 review, the budget began at **70 hybrid paths** and **10 narrative delta units**. Removing the miscellaneous narrative unit ratchets the current `budget` ceiling in `upstream.json` to **70 hybrid paths** and **9 narrative delta units**. A ceiling may never rise again unless the owner explicitly approves a reviewed exception. An exception must be recorded in the affected delta unit with the owner approval, the exact ceiling change, and why removal or a lower-cost design is not currently possible. Schema v3 records this accounting; enforcement remains a follow-up, while this review record remains the contract.
+
+Before merging any new or expanded hybrid delta, add or update its unit below with all of the following:
+
+- **Justification:** why neither the Extension API nor a distribution-owned adapter can carry the behavior;
+- **Upstream assumptions:** every upstream API, lifecycle, rendering, terminal, or timing behavior on which it relies;
+- **Verification:** named automated checks and required manual checks, including real-TTY states when interactive behavior changes;
+- **Risk:** failure modes, compatibility or lifecycle impact, and affected users; and
+- **Exit/removal:** the upstream change, adapter/API capability, or local condition that permits removal, plus the condition to re-evaluate it.
+
+Compaction, native tool UI, and terminal behavior carry high-risk upstream assumptions. Time-driven UI changes require explicit lifecycle/cleanup coverage. Changes or expansions in those areas require explicit lifecycle/cleanup risk coverage and real-TTY verification in addition to their focused automated tests. Existing units are the v0.82.1 baseline record; this admission format applies to every later new or expanded hybrid delta.
+
+## dist-standalone — Package identity and standalone resolution
 
 The distribution publishes `@astralyn/pi` from a standalone repository instead of the upstream monorepo workspace.
 
-- Hybrid: `package.json`, `npm-shrinkwrap.json`, `tsconfig.build.json`, `tsconfig.examples.json`, `vitest.config.ts`, `.gitignore`, `src/config.ts`, `src/cli/startup-ui.ts`, `src/core/extensions/loader.ts`, `src/utils/version-check.ts`, `scripts/migrate-sessions.sh` (mode bit only)
-- Local: `tsconfig.json`, `tsconfig.base.json`, `biome.json`, `.husky/**`, `.npmrc`, `.gitattributes`, `LICENSE`, `.github/**`, `scripts/check-*.mjs`, `scripts/verify-package-install.mjs`, `scripts/diff-upstream.mjs`, `scripts/run-source.mjs`, `scripts/test-isolated.mjs`, `scripts/profile-node.mjs`
+- Hybrid: `CHANGELOG.md` (fork release metadata), `package.json`, `npm-shrinkwrap.json`, `tsconfig.build.json`, `tsconfig.examples.json`, `vitest.config.ts`, `.gitignore`, `src/config.ts`, `src/cli/startup-ui.ts`, `src/core/extensions/loader.ts`, `src/utils/version-check.ts`, `scripts/migrate-sessions.sh` (mode bit only)
+- Local: `tsconfig.json`, `tsconfig.base.json`, `biome.json`, `.husky/**`, `.npmrc`, `.gitattributes`, `LICENSE`, `.github/**`, `scripts/check-*.mjs`, `scripts/verify-package-install.mjs`, `scripts/diff-upstream.mjs`, `scripts/diff-upstream-core.mjs`, `scripts/run-source.mjs`, `scripts/test-isolated.mjs`, `scripts/profile-node.mjs`, `test/diff-upstream.test.mjs`
 - Dropped: `install-lock/**` (upstream lockfile-install fixture; the standalone package uses `npm-shrinkwrap.json` directly)
 - Changes: package name fallback and distribution detection use `@astralyn/pi` (`PACKAGE_NAME`, `isPrimaryDistribution()`); the extension loader resolves `pi-ai`/`pi-agent-core`/`pi-tui` through `import.meta.resolve` instead of monorepo workspace probing; the version check queries the npm registry for `PACKAGE_NAME` instead of `pi.dev/api/latest-version`.
 - Upstream assumptions: upstream keeps identity constants in `src/config.ts` and workspace resolution localized to `src/core/extensions/loader.ts`.
-- Verify: `npm run check`, `npm run verify:package-install`, `test/config.test.ts`, `test/package-command-paths.test.ts`, `test/extensions-discovery.test.ts`, `test/resource-loader.test.ts`, `test/version-check.test.ts`.
+- Verify: `npm run check`, `npm run verify:package-install -- <tarball-or-package-spec>`, `test/config.test.ts`, `test/package-command-paths.test.ts`, `test/extensions-discovery.test.ts`, `test/resource-loader.test.ts`, `test/version-check.test.ts`.
+- Exit/removal: Remove the standalone package adapters only if this distribution stops shipping a standalone `@astralyn/pi` package or upstream supplies an adopted standalone-compatible layout; re-evaluate on every upstream packaging or resolution change.
 
-## 2. Provider attribution instead of install telemetry
+## dist-attribution — Provider attribution instead of install telemetry
 
 Install reporting to `pi.dev` is removed entirely; the former telemetry switch now only controls optional provider attribution headers.
 
@@ -23,8 +54,9 @@ Install reporting to `pi.dev` is removed entirely; the former telemetry switch n
 - Changes: `isInstallTelemetryEnabled` is renamed to `isProviderAttributionEnabled`; the `enableInstallTelemetry` settings key is retained for compatibility but documented and labeled as "Provider attribution".
 - Upstream assumptions: upstream funnels install reporting through a single `reportInstallTelemetry()` helper invoked from first-run and update notification paths in `interactive-mode.ts`.
 - Verify: settings selector shows "Provider attribution"; no request to `pi.dev/api/report-install` on first run or update notice.
+- Exit/removal: Remove the local compatibility and UI wording when upstream separates provider attribution from install reporting with an adopted compatible setting; re-evaluate if either telemetry path or settings migration changes.
 
-## 3. Windows bash correctness
+## plat-windows-bash — Windows bash correctness
 
 Two Windows-specific adjustments cover shell syntax compatibility and local test portability.
 
@@ -33,17 +65,20 @@ Two Windows-specific adjustments cover shell syntax compatibility and local test
 - Changes: `rewriteCmdNulRedirects()` rewrites CMD-style `2>nul` redirects to `/dev/null` before spawning, preventing creation of a reserved-name `nul` file; the resource-loader directory-symlink test skips Windows checkouts where symlink creation is unavailable.
 - Upstream assumptions: bash execution flows through `createLocalBashOperations`, which normalizes the command immediately before spawning the resolved POSIX shell.
 - Verify: `test/bash-nul-redirect.test.ts`, `test/resource-loader.test.ts`; on Windows, run a `2>nul` command in a real session.
+- Exit/removal: Remove the command rewrite after an upstream release carries equivalent CMD redirect normalization; retain the narrowly scoped test skip only while Windows symlink capability remains unavailable, and re-evaluate both on each Windows-support update.
 
-## 4. Between-tool-batch auto-compaction
+## core-mid-turn-compaction — Between-tool-batch auto-compaction
 
 Long tool loops are checked after a completed tool batch — or before continuing with queued steering/follow-up messages — and before the next provider request; over-threshold context is compacted and the same run continues. Failures, aborts, and unsafe retained context fail closed; a voluntary extension cancel (`session_before_compact` → `{ cancel: true }`) instead lets the run continue and skips further mid-turn checks for that run. The event carries a `timing` field (`"manual" | "midTurn" | "postRun" | "prePrompt"`) so extensions can tell cancel consequences apart.
 
-- Hybrid: `src/core/agent-session.ts` (`_maybeCompactBeforeNextToolTurn()` via `prepareNextTurnWithContext`, `_runAutoCompactionWithOutcome()`, stop-after-turn and mid-turn-declined flags, stale-usage estimation, `CONTEXT_REMAINS_OVER_COMPACTION_THRESHOLD`/`NOTHING_TO_COMPACT_WITHIN_KEEP_WINDOW`), `src/core/extensions/types.ts` (`CompactionTiming`, `SessionBeforeCompactEvent.timing`), `src/core/extensions/index.ts` (re-exports `CompactionTiming`), `src/modes/interactive/interactive-mode.ts` (`turn_start` restores the working indicator; `compaction_end` can render a result and a warning together), `test/agent-session-auto-compaction-queue.test.ts` (asserts the mid-turn `timing` value), `docs/compaction.md`, `docs/extensions.md`
+- Hybrid: `src/core/agent-session.ts` (`_maybeCompactBeforeNextToolTurn()` via `prepareNextTurnWithContext`, `_runAutoCompactionWithOutcome()`, stop-after-turn and mid-turn-declined flags, stale-usage estimation, `CONTEXT_REMAINS_OVER_COMPACTION_THRESHOLD`/`NOTHING_TO_COMPACT_WITHIN_KEEP_WINDOW`), `src/core/extensions/types.ts` (`CompactionTiming`, `SessionBeforeCompactEvent.timing`), `src/core/extensions/index.ts` (re-exports `CompactionTiming`), `src/modes/interactive/interactive-mode.ts` (`turn_start` restores the working indicator; `compaction_end` can render a result and a warning together), `test/agent-session-auto-compaction-queue.test.ts` (covers queue recovery plus pre-prompt/post-run threshold behavior), `test/suite/harness.ts` (shared compaction-suite support)
 - Upstream assumptions: the stateful Agent exposes `prepareNextTurnWithContext` as a public callback and does not expose a low-level graceful turn-stop callback, so exceptional paths are represented as explicit error/aborted lifecycle boundaries.
+- Distribution-owned documentation: `docs/compaction.md`, `docs/extensions.md` document the adopted behavior; they are covered by the `docs/**` owned overlay, not the modified-path list.
 - Upstreamed: the headers-only request auth relaxation (`_getRequiredRequestAuth` accepting `headers` without `apiKey`, [#5871](https://github.com/earendil-works/pi/issues/5871)) shipped upstream in v0.82.1; the remaining delta in `_getRequiredRequestAuth`/`_getSummarizationRequestAuth` is the shared-delegation refactor and the compaction changes.
-- Verify: `test/suite/agent-session-compaction.test.ts`, `test/suite/agent-session-queue.test.ts`, `test/interactive-mode-compaction.test.ts`, `test/agent-session-concurrent.test.ts`, `test/suite/harness.ts`, `test/suite/regressions/2023-*.test.ts`, `test/suite/regressions/4167-*.test.ts`.
+- Verify: `test/agent-session-auto-compaction-queue.test.ts`, `test/suite/agent-session-compaction.test.ts`, `test/suite/agent-session-queue.test.ts`, `test/interactive-mode-compaction.test.ts`, `test/agent-session-concurrent.test.ts`, `test/suite/regressions/2023-queued-slash-command-followup.test.ts`, `test/suite/regressions/4167-thinking-toggle-pending-tool-render.test.ts`; `test/suite/harness.ts` is shared suite support, not a directly runnable test.
+- Exit/removal: Remove the local mid-turn flow when upstream provides and this distribution adopts a lifecycle-safe between-tool-batch compaction API with graceful stop semantics; re-evaluate on every upstream Agent/compaction lifecycle change and after the upstream exit lands.
 
-## 5. Native tool presentation and tool grouping
+## ui-tool-presentation — Native tool presentation and tool grouping
 
 Native tool calls use consistent `●` call and multi-line `│` result chrome, bounded collapsed output, shell-wide delayed progress, and compact grouping for consecutive explore-type tools.
 
@@ -52,15 +87,17 @@ Native tool calls use consistent `●` call and multi-line `│` result chrome, 
 - Changes: background-box shells and the JSON-dump fallback are replaced by prefix chrome; the dim result rail continues through every output line, including blank lines. Default-shell tools still running after two seconds receive a live `Running…` row, while self-rendering or purpose-built progress tools can opt out. `renderRefreshIntervalMs` independently requests bounded 250ms–60s renderer rebuilds only while a result is partial; the shell shares the shortest needed timer and disposes it on settle, abort, rebuild, session replacement, or shutdown. A shared helper reports hidden earlier/more line counts and the configured expand key with consistent punctuation and singular/plural forms. `toolGroup` is presentation-only metadata carried through a coding-agent-local `PresentableAgentTool` intersection type; `read`, `find`, `grep`, and `ls` share the `explore` group. `ToolRenderContext.result` exposes completed or partial results so grouped rows can summarize bounded semantic outcomes without replacing native chrome. Built-in renderers share path links and parameter styles; Bash previews honestly distinguish hidden command lines from width truncation; edit adds Diff statistics and bounds collapsed previews to ten lines; manual `!!` headers preserve their selected color after output updates. Compact key hints display the first configured binding with readable special-key labels instead of hard-coding defaults.
 - Upstream assumptions: tool render entry points remain `renderCall`/`renderResult` with `ToolRenderContext`; upstream execution changes must be integrated before adapting presentation; do not change tool schemas or result structures for display-only work.
 - Verify: `test/tool-execution-component.test.ts`, `test/edit-tool-no-full-redraw.test.ts`, `test/bash-tool-rendering.test.ts`, `test/keybinding-hints.test.ts`; in a real TTY check pending, success, error, collapsed, expanded, grouped, delayed-progress, large-Diff, and manual-`!!` states.
+- Exit/removal: Remove local presentation adapters only when upstream supplies adopted native render metadata and lifecycle hooks that preserve this native chrome without tool-schema or result-structure changes; re-evaluate with every upstream renderer or execution change.
 
-## 6. Bundled themes
+## ui-bundled-themes — Bundled themes
 
 - Hybrid: `src/modes/interactive/theme/theme.ts` (built-in themes load from a `BUILTIN_THEME_NAMES` list; watcher checks `getBuiltinThemes()`; foreground/background helpers restore an outer ANSI color after nested themed content resets it)
 - Local: `src/modes/interactive/theme/ice-cream-dark.json`, `src/modes/interactive/theme/ice-cream-light.json`
 - Changes: nested semantic theme spans remain correctly colored instead of allowing an inner `39m`/`49m` reset to leak the terminal default into the rest of the outer span.
 - Verify: `test/theme-picker.test.ts`, `test/theme-export.test.ts`, `test/syntax-highlight.test.ts`; `/theme` picker shows all four built-ins and nested tool hints keep one semantic color through closing punctuation.
+- Exit/removal: Remove the ANSI restoration guard if upstream adopts equivalent nested semantic-span behavior; remove individual distribution themes only when they are no longer shipped. Re-evaluate on theme-renderer or bundled-asset changes.
 
-## 7. Bundled extensions
+## ext-bundled — Bundled extensions
 
 Personal workflow features are self-contained hidden built-ins using the public Extension API. Most implementation remains local; structured selector options use narrow native selector and RPC compatibility adapters.
 
@@ -71,8 +108,9 @@ Personal workflow features are self-contained hidden built-ins using the public 
 - Changes: structured select options preserve the historical label return value while allowing interactive dialogs to show an action, a muted description, a context subtitle, and contextual cancel wording; project-trust and RPC adapters reduce those options to labels where their UIs/protocols cannot carry descriptions. This keeps existing RPC clients compatible and prevents startup trust selection from receiving an object instead of its prior string. The shared cwd encoder centralizes the existing session-directory layout without changing it. Bundled tool renderers remain self-contained but share the native shell's hierarchy: Todo batches surface bounded subjects and complete expanded items (with the owner-approved model-facing `create_many` subject list); Subagent uses sentence-aware excerpts, wrapped failure reasons, aligned expanded reports, and independent one-second elapsed/retry refresh without a duplicate generic progress row; Question exposes full expanded prompts, partial-answer outcomes, readable errors, configured footer hints, and compact schema-validation failures whose received arguments appear only when expanded; DeepWiki normalizes and bounds one-line summaries before Markdown expansion. Subagent provider and task retries share bounded absolute-deadline metadata, clear it on every terminal/abort path, and register task backoff plus SDK initialization with session-shutdown abort. Router reshapes Platform Responses payloads toward the released Codex CLI's stateless wire form, including omission of optional replayed ResponseItem identity IDs while preserving semantic reference IDs, `call_id`, and encrypted reasoning content. The extension selector uses the same configured compact key-label language as Question dialogs.
 - Upstream assumptions: `InlineExtension` registration and the Extension API surface used by these extensions stay stable; no cross-extension internal imports. Rewind additionally assumes `navigateTree`'s leaf rules (user/custom_message target → leaf = parent; other targets → leaf = target) and that `before_agent_start` fires once per `prompt()` (steering/follow-ups are consumed inside the same run).
 - Verify: `test/deepwiki-render.test.ts`, `test/question-*.test.ts`, `test/rewind-*.test.ts`, `test/router-*.test.ts`, `test/subagent-*.test.ts`, `test/todo-*.test.ts`, `test/extension-selector.test.ts`, `test/extensions-discovery.test.ts`, `test/paths.test.ts`; `/reload` and `/tree` in a real TTY for lifecycle extensions.
+- Exit/removal: Remove a compatibility adapter when the public Extension API, selector API, or RPC protocol can express its behavior without modifying an upstream path; remove each extension only when the distribution stops shipping it. Re-evaluate on every affected API or lifecycle change.
 
-## 8. Atomic terminal writes and scrollback preservation
+## ui-terminal-output — Atomic terminal writes and scrollback preservation
 
 The distribution constructs the TUI with a `CoalescingTerminal` (a `ProcessTerminal` subclass using only the public `Terminal` API) that applies two output policies to pi-tui's render stream.
 
@@ -90,8 +128,9 @@ Width- and height-change redraws keep the upstream wipe (re-wrapped/re-flowed co
 - Local: `src/utils/coalescing-terminal.ts`, `test/coalescing-terminal.test.ts`, `test/coalescing-terminal-scrollback.test.ts`
 - Upstream assumptions: `TUI` accepts any `Terminal` implementation; `ProcessTerminal` keeps `write`, `moveBy`, cursor visibility, and clear helpers overridable; `ProcessTerminal.stop()` writes its teardown sequences directly to stdout (the override flushes pending output first); `fullRender(clear)` frames start with `?2026h` + optional kitty deletes + `2J H 3J` and end with `?2026l`, with rows joined by CRLF; `agent_start`/`agent_settled` bracket each run and `TUI.addInputListener` observes user input. The scroll-in flavor additionally assumes `TUI.previousViewportTop` (TS-private but a plain runtime field) names the transcript line at the top of the visible screen and that `fullRender` writes its frame before updating that field; `readViewportTop` validates the value and falls back to the bottom-anchored repaint if either assumption breaks. If upstream folds the cursor reposition into the frame or stops wiping scrollback, the corresponding rewrite becomes a no-op.
 - Verify: `test/coalescing-terminal.test.ts`, `test/coalescing-terminal-scrollback.test.ts` (xterm-emulated: no `3J` emitted, shell history survives a content-driven full redraw, a full redraw that grows the transcript keeps every new line reachable in the buffer, final screen matches the upstream-intended state); on Windows Terminal with a CJK IME, type into the editor and confirm the candidate window stays at the caret, scroll up during a streaming response to confirm the viewport no longer jumps to the top, and Ctrl+O-expand a tool result taller than the screen to confirm its head scrolls into history instead of disappearing.
+- Exit/removal: Remove write coalescing when pi-tui makes one render pass atomic (the upstream candidate), and remove scrollback rewriting when pi-tui adopts equivalent safe preservation or exposes a public supported hook; re-evaluate on every `Terminal`/`ProcessTerminal` or full-render frame change.
 
-## 9. Time-driven interactive UI lifecycle
+## ui-time-lifecycle — Time-driven interactive UI lifecycle
 
 Interactive timers derive values from absolute wall-clock timestamps or deadlines, request repaint only while their owning component is active, and clean up on every removal path.
 
@@ -100,8 +139,4 @@ Interactive timers derive values from absolute wall-clock timestamps or deadline
 - Changes: shared countdowns schedule deadline-aligned display/expiry callbacks instead of decrementing tick counters, so event-loop stalls and sleep do not extend timeouts. Armin rain treats empty bitmap columns as settled, and chat rebuild/shutdown disposes running Armin and Daxnuts animations. `/resume` repaints relative ages once per minute while open and suppresses late async loader, rename, delete, progress, and status callbacks after disposal; both the startup picker and the generic interactive selector host dispose selector-owned timers exactly once. `/tree` schedules a one-shot repaint at the next local midnight only while label timestamps are visible and clears its midnight/empty-tree timeouts on close.
 - Upstream assumptions: selector components remain hosted through `InteractiveMode.showSelector`; session picker loading remains async and callback-driven; countdown consumers continue to express timeouts in milliseconds; Armin's rain effect uses one drop per bitmap column.
 - Verify: `test/time-driven-ui.test.ts`, `test/tree-selector.test.ts`, `test/session-selector-rename.test.ts`, `test/session-selector-path-delete.test.ts`, `test/extension-selector.test.ts`, `test/status-indicator.test.ts`; in a real TTY leave `/resume` open past a minute, cross local midnight with `/tree` label times visible, close selectors during loading, and confirm Armin animation redraws return to idle.
-
-## 10. Miscellaneous
-
-- Hybrid: `CHANGELOG.md` (distribution changelog)
-- Local: `AGENTS.md`, `README.md`, `docs/**`, `examples/**`, `maintainers/**` (distribution-owned documentation and examples; see [upstream-sync.md](upstream-sync.md) for ownership policy)
+- Exit/removal: Remove each retained local fix once upstream adopts lifecycle-safe deadline scheduling and disposal for the affected component; re-evaluate on every selector, animation, or interactive lifecycle update.

@@ -271,14 +271,10 @@ function isPublishedPath(repositoryPath) {
 
 function checkedMarkdown(markdownPath) {
 	const markdown = readFileSync(join(root, markdownPath), "utf8");
-	if (markdownPath !== "CHANGELOG.md") return maskCode(markdown);
-	const unreleasedStart = markdown.indexOf("## [Unreleased]");
-	if (unreleasedStart === -1) {
+	if (markdownPath === "CHANGELOG.md" && !markdown.includes("## [Unreleased]")) {
 		failures.push("CHANGELOG.md: missing [Unreleased] section");
-		return "";
 	}
-	const nextRelease = markdown.indexOf("\n## [", unreleasedStart + 1);
-	return maskCode(markdown.slice(unreleasedStart, nextRelease === -1 ? undefined : nextRelease));
+	return maskCode(markdown);
 }
 
 const markdownFiles = markdownRoots.flatMap((path) => collectFiles(path, (file) => file.endsWith(".md"))).sort();

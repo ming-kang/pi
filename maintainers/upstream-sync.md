@@ -11,18 +11,18 @@ upstream  earendil-works/pi monorepo
 
 `main` contains a standalone package, not an upstream monorepo checkout. Upstream tags must therefore be inspected and selectively imported; never merge an upstream tag directly into `main`, because that would recreate every workspace.
 
-## Baseline branch and delta registry
+## Canonical baseline and delta registry
 
-The local `upstream-extract` branch is the reviewed upstream baseline: an orphan commit whose tree is the root-mapped extraction of `packages/coding-agent` from the tag recorded in [`upstream.json`](upstream.json). It is never merged into `main` and never pushed as a development branch; it exists so the fork delta is a first-class Git object:
+[`upstream.json`](upstream.json)'s recorded tag, commit, source subtree, and source tree are the reviewed upstream baseline. `npm run diff:upstream` compares that canonical tree with the current worktree, including staged, unstaged, and nonignored untracked files. The local `upstream-extract` branch is an optional derived cache: an orphan commit whose tree is the root-mapped extraction of that canonical source tree. It is never merged into `main` and never pushed as a development branch; it exists so the fork delta is also easy to inspect as a Git object:
 
 ```bash
 npm run diff:upstream                        # classified per-file delta report
 npm run diff:upstream -- --check             # fail on unregistered drift or stale registrations
-node scripts/diff-upstream.mjs --update-baseline   # (re)create upstream-extract from the reviewed tag
-git diff upstream-extract HEAD -- src/       # raw source delta against the baseline
+node scripts/diff-upstream.mjs --update-baseline   # (re)create upstream-extract from the canonical tree
+git diff upstream-extract HEAD -- src/       # raw source delta against the derived cache
 ```
 
-[`upstream.json`](upstream.json) is the authoritative per-path registry. Every difference from the baseline must be classified there as `localOnly` (distribution-owned path), `hybrid` (upstream file with local modifications), or `dropped` (upstream path intentionally not shipped). `diff:upstream` verifies the registry in both directions: unregistered differences and registrations that no longer match any difference both fail `--check`. The rationale for each delta unit is documented in [`delta.md`](delta.md).
+[`upstream.json`](upstream.json) is the authoritative per-path registry. Its `owned.overlays` cover distribution-owned README, documentation, and examples; `owned.additions` covers other distribution-only paths; each delta unit records its upstream `modified` and `dropped` paths. Its `budget` records the current ratcheting ceilings. `diff:upstream` verifies the registry in both directions: unregistered differences and registrations that no longer match any difference both fail `--check`. The rationale for each delta unit and the admission contract are documented in [`delta.md`](delta.md).
 
 ## Ownership layers
 
@@ -35,7 +35,7 @@ git diff upstream-extract HEAD -- src/       # raw source delta against the base
 | Hybrid | `src/core/agent-session.ts`, native tool presentation, built-in tools, keybindings, extension registration, `package.json`, `CHANGELOG.md` | Review function by function; retain upstream lifecycle semantics and local behavior. |
 | Registry boundary | exact upstream AI, Agent core, and TUI dependencies | Upgrade together with the imported coding-agent release; never patch their installed files. |
 
-The complete hybrid file list is the `hybrid` array in [`upstream.json`](upstream.json); `npm run diff:upstream` prints it as verified against the baseline. [`delta.md`](delta.md) explains what each hybrid file changes and how to re-verify it after a synchronization.
+The complete modified-upstream file list is the `modified` arrays in [`upstream.json`](upstream.json)'s delta units; `npm run diff:upstream` prints it as verified against the baseline. [`delta.md`](delta.md) explains what each delta unit changes and how to re-verify it after a synchronization. Apply its temporary freeze, ratchet, and admission contract before adding or expanding a delta; that document owns the required justification, risk, verification, exit, and exception record rather than duplicating it in this workflow.
 
 ## Synchronization workflow
 
@@ -48,7 +48,7 @@ git tag --list 'v<upstream-minor>.*'
 git switch -c sync/upstream-<version> main
 ```
 
-Review what upstream changed since the reviewed baseline directly against the baseline branch:
+Review what upstream changed since the reviewed baseline directly against the derived cache:
 
 ```bash
 git diff --stat upstream-extract "v<version>:packages/coding-agent"
@@ -75,7 +75,7 @@ Upstream README, documentation, and examples are not files to mirror or bulk-cop
 
 Only after reviewing source, `README.md`, `docs/**`, and `examples/**` for the tag should maintainers update [`upstream.json`](upstream.json) with the reviewed tag, commit, coding-agent version, and exact runtime dependency versions. Do not advance this record as a planning marker or after a source-only import.
 
-After advancing `reviewedTag`, move the baseline branch and re-verify the delta registry:
+After advancing `baseline.tag` and `baseline.sourceTree`, regenerate the derived cache and re-verify the delta registry:
 
 ```bash
 node scripts/diff-upstream.mjs --update-baseline
@@ -84,7 +84,7 @@ npm run diff:upstream -- --check
 
 Newly adopted upstream files that gained local modifications, new distribution-owned files, and newly dropped upstream paths must be registered in `upstream.json` and explained in [`delta.md`](delta.md) before the check passes.
 
-`reviewedTag` records the upstream release whose inputs were reviewed; it is not necessarily an ancestor of `main`. This standalone branch selectively imports and rewrites content instead of merging upstream monorepo history, so Git ancestry must not be used to infer the review baseline.
+`baseline.tag` records the upstream release whose inputs were reviewed; it is not necessarily an ancestor of `main`. This standalone branch selectively imports and rewrites content instead of merging upstream monorepo history, so Git ancestry must not be used to infer the review baseline.
 
 Do not copy these upstream monorepo assumptions into the standalone repository:
 
