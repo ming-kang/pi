@@ -16,6 +16,7 @@
 
 ### Fixed
 
+- Fixed the router replaying relay-supplied generic `item_*` IDs into later stateless requests, where strict Codex gateways reject a reasoning item unless its ID begins with `rs_`. The relay now omits recognized ResponseItem variants' optional top-level identity IDs while retaining required semantic reference IDs, `call_id`, and encrypted reasoning content, matching Codex CLI 0.145's default non-Azure `store: false` request behavior.
 - Fixed nested foreground/background theme styling losing the outer color after an inner reset, and fixed manual `!!` command headers losing their dim border color after the first output update.
 - Fixed Todo batch headlines saying `1 tasks`, fixed shell-wide and Subagent duration rollover from showing raw 60–89 second values or impossible `1m 60s` timestamps, and stopped collapsed Question schema errors from dumping the full validator report and received arguments.
 - Fixed silent Subagent elapsed clocks and retry countdowns freezing between progress updates. Single and parallel cards now refresh once per second without a duplicate generic progress row; provider/task retry countdowns share bounded deadline metadata, show `Retrying now…` at zero, and abort cleanly during backoff or SDK initialization.

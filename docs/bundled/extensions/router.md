@@ -109,16 +109,17 @@ There is **no migration** from any older models-manager config. Add relays with 
 - Catalog probe expects OpenAI-style `{ data: [{ id }] }` response format.
 - Empty model list → provider is not registered (nothing appears in `/model`).
 - Body is Codex-oriented for transparent gateways; auth and URL remain Platform Responses (`sk-` + `/responses`).
+- Replayed optional top-level `ResponseItem.id` identity fields are omitted from stateless requests, matching Codex CLI 0.145's default `store: false` wire behavior. Required semantic references such as `item_reference.id`, plus `call_id` and encrypted reasoning content, remain intact.
 - Same relay + same model: tool/reasoning multi-turn matches Codex-style Responses. Switching model or provider mid-session may normalize tool-call ids more strictly (upstream allow-list); this is not worked around here.
 - Interactive `/router` requires a TUI (`ctx.hasUI`); otherwise a warning is shown and no dialog opens.
 - Catalog multi-select and thinking editor are apply-on-Ctrl+S screens; only those screens can be discarded with double Esc.
 
 ## Implementation notes
 
-**Request shape.** `stream.ts` calls `openAIResponsesApi().streamSimple` with a model configured as Platform Responses (`api: "openai-responses"`). The `onPayload` callback reshapes the body toward Pi's built-in `openai-codex-responses` format, with `store: false`, system prompt as `instructions`, `parallel_tool_calls: true`, and rejected fields such as `prompt_cache_retention` and `temperature` dropped.
+**Request shape.** `stream.ts` calls `openAIResponsesApi().streamSimple` with a model configured as Platform Responses (`api: "openai-responses"`). The `onPayload` callback reshapes the body toward Pi's built-in `openai-codex-responses` format, with `store: false`, system prompt as `instructions`, `parallel_tool_calls: true`, and rejected fields such as `prompt_cache_retention` and `temperature` dropped. Before sending, it omits each recognized ResponseItem variant's optional top-level identity `id`, matching the released Codex CLI 0.145 default for non-Azure `store: false` requests; this prevents a relay-supplied generic `item_*` id from later being validated as a reasoning (`rs_*`), message (`msg_*`), or function-call (`fc_*`) id. IDs that are required semantic references on other input variants are not removed.
 
 Session affinity headers use hyphenated form (`session-id`, `x-client-request-id`). Compat settings: `sessionAffinityFormat: "openai-nosession"`, `supportsLongCacheRetention: false`. Originator header: `codex`.
 
 **Differences from ChatGPT Codex OAuth.** Auth uses Bearer `sk-…` (not OAuth JWT), endpoint is `{baseUrl}/responses` (not `/codex/responses`), transport is SSE only (no WebSocket or zstd), and `OpenAI-Beta` is not set. These match **sk- relays**, not the official ChatGPT backend.
 
-**Multi-turn tool calls.** On a fixed relay + fixed model, tool-call ids preserve the Responses form and replay like Codex. Pi only rewrites ids across model boundaries. Staying on one model for long tool + reasoning sessions avoids id sanitization.
+**Multi-turn tool calls.** `call_id` remains the stable tool-call/result join key, while optional replay-only ResponseItem identity IDs are omitted. Encrypted reasoning content and required semantic reference IDs are still replayed, so fixed-relay, fixed-model sessions retain stateless reasoning continuity without depending on a relay's item-ID namespace. Switching models or providers can still trigger pi-ai's stricter tool-call normalization.

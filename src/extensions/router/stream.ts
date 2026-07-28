@@ -128,11 +128,9 @@ async function reshapePayloadForRelay(
 	if (instructions) base.instructions = instructions;
 	if (input !== undefined) base.input = input;
 
-	// Codex CLI's ResponseItem serialization never emits `status` on replayed
-	// message/function_call/function_call_output/reasoning items (only
-	// local_shell_call has it), and output_text content has no `annotations`.
-	// Strict Codex-schema gateways 400 on both (e.g. "input[i].status:
-	// unknown_parameter"), while pi-ai emits them per the Platform schema.
+	// Released Codex CLI defaults omit replayed ResponseItem ids from store:false
+	// requests. It also never emits `status` on the item types below, and its
+	// output_text content has no `annotations`.
 	sanitizeInputItemsForCodex(base.input);
 
 	// Fields common on Codex CLI / rejected by many transparent Codex upstreams.
@@ -171,12 +169,42 @@ async function reshapePayloadForRelay(
 }
 
 /**
- * Item types where Codex CLI's ResponseItem serialization has NO `status`
- * field (codex-rs/protocol/src/models.rs): Message, Reasoning, FunctionCall,
- * FunctionCallOutput, CustomToolCallOutput. Other item types either require
- * `status` (local_shell_call, tool_search_output, image_generation_call) or
- * accept it optionally (tool_search_call, custom_tool_call, web_search_call),
- * so we must not strip it there.
+ * Match the released Codex CLI's default stateless request preparation:
+ * optional ResponseItem identity ids are omitted from store:false requests,
+ * while semantic ids, call_id, and encrypted_content remain available for
+ * reference, tool, and reasoning continuity.
+ *
+ * These are the tagged variants handled by ResponseItem::set_id in Codex CLI
+ * 0.145. Unknown input variants must retain `id`: for example,
+ * item_reference.id and local_shell_call_output.id are required references,
+ * not optional ResponseItem identities.
+ */
+const RESPONSE_ITEM_ID_TYPES = new Set([
+	"additional_tools",
+	"message",
+	"agent_message",
+	"reasoning",
+	"local_shell_call",
+	"function_call",
+	"tool_search_call",
+	"function_call_output",
+	"custom_tool_call",
+	"custom_tool_call_output",
+	"tool_search_output",
+	"web_search_call",
+	"image_generation_call",
+	"compaction",
+	"compaction_summary",
+	"context_compaction",
+]);
+
+/**
+ * Codex ResponseItem serialization has NO `status` field on Message,
+ * Reasoning, FunctionCall, FunctionCallOutput, or CustomToolCallOutput
+ * (codex-rs/protocol/src/models.rs). Other item types either require `status`
+ * (local_shell_call, tool_search_output, image_generation_call) or accept it
+ * optionally (tool_search_call, custom_tool_call, web_search_call), so we must
+ * not strip it there.
  */
 const STATUS_LESS_ITEM_TYPES = new Set([
 	"message",
@@ -186,12 +214,16 @@ const STATUS_LESS_ITEM_TYPES = new Set([
 	"custom_tool_call_output",
 ]);
 
-function sanitizeInputItemsForCodex(input: unknown): void {
+export function sanitizeInputItemsForCodex(input: unknown): void {
 	if (!Array.isArray(input)) return;
 	for (const item of input) {
 		if (!item || typeof item !== "object" || Array.isArray(item)) continue;
 		const record = item as Record<string, unknown>;
-		if (typeof record.type === "string" && STATUS_LESS_ITEM_TYPES.has(record.type) && "status" in record) {
+		const type = typeof record.type === "string" ? record.type : undefined;
+		if (type && RESPONSE_ITEM_ID_TYPES.has(type)) {
+			delete record.id;
+		}
+		if (type && STATUS_LESS_ITEM_TYPES.has(type) && "status" in record) {
 			delete record.status;
 		}
 		if (Array.isArray(record.content)) {

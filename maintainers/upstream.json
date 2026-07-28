@@ -52,6 +52,7 @@
     "test/plan-render.test.ts",
     "test/question-*.test.ts",
     "test/rewind-*.test.ts",
+    "test/router-*.test.ts",
     "test/subagent-*.test.ts",
     "test/time-driven-ui.test.ts",
     "test/todo-*.test.ts",
