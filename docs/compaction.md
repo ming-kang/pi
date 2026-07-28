@@ -2,14 +2,11 @@
 
 LLMs have limited context windows. When conversations grow too long, pi uses compaction to summarize older content while preserving recent work. This page covers both auto-compaction and branch summarization.
 
-**Source files** ([ming-kang/pi](https://github.com/ming-kang/pi)):
-- [`src/core/compaction/compaction.ts`](https://github.com/ming-kang/pi/blob/main/src/core/compaction/compaction.ts) - Auto-compaction logic
-- [`src/core/compaction/branch-summarization.ts`](https://github.com/ming-kang/pi/blob/main/src/core/compaction/branch-summarization.ts) - Branch summarization
-- [`src/core/compaction/utils.ts`](https://github.com/ming-kang/pi/blob/main/src/core/compaction/utils.ts) - Shared utilities (file tracking, serialization)
-- [`src/core/session-manager.ts`](https://github.com/ming-kang/pi/blob/main/src/core/session-manager.ts) - Entry types (`CompactionEntry`, `BranchSummaryEntry`)
-- [`src/core/extensions/types.ts`](https://github.com/ming-kang/pi/blob/main/src/core/extensions/types.ts) - Extension event types
+## Public API
 
-For TypeScript definitions in your project, inspect `node_modules/@astralyn/pi/dist/`.
+Programmatic compaction helpers are exported by [`@astralyn/pi`](https://www.npmjs.com/package/@astralyn/pi): `compact`, `generateSummary`, `generateSummaryWithUsage`, `collectEntriesForBranchSummary`, `prepareBranchEntries`, `generateBranchSummary`, and `serializeConversation`.
+
+`CompactionEntry` and `BranchSummaryEntry` are public types; see [Session Format](session-format.md) for their persisted JSONL representation. For extension lifecycle events, see [compaction events](extensions.md#session_before_compact--session_compact) and [tree events](extensions.md#session_before_tree--session_tree).
 
 ## Overview
 
@@ -34,7 +31,7 @@ contextTokens > contextWindow - reserveTokens
 
 By default, `reserveTokens` is 16384 tokens (configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`). This leaves room for the LLM's response.
 
-During an active tool-calling run, Pi evaluates this threshold after each complete tool batch, including the newly appended tool results, and before another provider request. If compaction succeeds, Pi rebuilds the context and continues the same agent run without inserting a continuation prompt. If compaction is cancelled, fails, has no safe cut point, or leaves the estimated retained context above the threshold, Pi fails closed before queue polling or another provider request. Because the upstream stateful Agent does not expose its low-level graceful turn-stop hook, this exceptional path ends with an explicit error/aborted assistant lifecycle; the preceding `compaction_end` event contains the underlying warning or failure.
+During an active tool-calling run, Pi evaluates this threshold after each complete tool batch, including the newly appended tool results, and before another provider request. If compaction succeeds, Pi rebuilds the context and continues the same agent run without inserting a continuation prompt. A voluntary `session_before_compact` cancellation at `timing: "midTurn"` lets that run continue and suppresses further mid-turn compaction checks for the rest of the run. An abort, compaction failure, no safe cut point, or retained context that remains above the threshold fails closed before queue polling or another provider request. Cancellations at other timings likewise leave over-threshold context to fail closed before the next request. Because the upstream stateful Agent does not expose its low-level graceful turn-stop hook, a fail-closed path ends with an explicit error/aborted assistant lifecycle; the preceding `compaction_end` event contains the underlying warning or failure.
 
 This between-tool-batch trigger is separate from **split-turn compaction** below: the trigger determines *when* compaction runs, while split-turn support determines *where* a very long turn can be cut.
 
@@ -124,14 +121,14 @@ Never cut at tool results (they must stay with their tool call).
 
 ### CompactionEntry Structure
 
-Defined in [`session-manager.ts`](https://github.com/ming-kang/pi/blob/main/src/core/session-manager.ts):
+The public `CompactionEntry` type is documented in [Session Format](session-format.md):
 
 ```typescript
 interface CompactionEntry<T = unknown> {
   type: "compaction";
   id: string;
-  parentId: string;
-  timestamp: number;
+  parentId: string | null;
+  timestamp: string;
   summary: string;
   firstKeptEntryId: string;
   tokensBefore: number;
@@ -140,7 +137,7 @@ interface CompactionEntry<T = unknown> {
   details?: T;         // implementation-specific data
 }
 
-// Default compaction uses this for details (from compaction.ts):
+// Default compaction uses this for details:
 interface CompactionDetails {
   readFiles: string[];
   modifiedFiles: string[];
@@ -149,7 +146,7 @@ interface CompactionDetails {
 
 Extensions can store any JSON-serializable data in `details`. The default compaction tracks file operations, but custom extension implementations can use their own structure. Generated and extension-provided summaries store their LLM `usage` when available so session totals include summarization work.
 
-See [`prepareCompaction()`](https://github.com/ming-kang/pi/blob/main/src/core/compaction/compaction.ts) and [`compact()`](https://github.com/ming-kang/pi/blob/main/src/core/compaction/compaction.ts) for the implementation. For direct programmatic summarization, `generateSummary()` returns the summary text and `generateSummaryWithUsage()` returns `{ text, usage }`.
+Pi uses an internal preparation step before `compact()`. For direct programmatic summarization, `generateSummary()` returns the summary text and `generateSummaryWithUsage()` returns `{ text, usage }`.
 
 ## Branch Summarization
 
@@ -177,9 +174,9 @@ Entries to summarize: B, C, D
 
 After navigation with summary:
 
-         ┌─ B ─ C ─ D ─ [summary of B,C,D]
+         ┌─ B ─ C ─ D (old leaf, abandoned)
     A ───┤
-         └─ E ─ F (new leaf)
+         └─ E ─ F ─ [summary of B,C,D] (new leaf)
 ```
 
 ### Cumulative File Tracking
@@ -192,14 +189,14 @@ This means file tracking accumulates across multiple compactions or nested branc
 
 ### BranchSummaryEntry Structure
 
-Defined in [`session-manager.ts`](https://github.com/ming-kang/pi/blob/main/src/core/session-manager.ts):
+The public `BranchSummaryEntry` type is documented in [Session Format](session-format.md):
 
 ```typescript
 interface BranchSummaryEntry<T = unknown> {
   type: "branch_summary";
   id: string;
-  parentId: string;
-  timestamp: number;
+  parentId: string | null;
+  timestamp: string;
   summary: string;
   fromId: string;      // Entry we navigated from
   usage?: Usage;       // LLM usage that generated the summary
@@ -207,7 +204,7 @@ interface BranchSummaryEntry<T = unknown> {
   details?: T;         // implementation-specific data
 }
 
-// Default branch summarization uses this for details (from branch-summarization.ts):
+// Default branch summarization uses this for details:
 interface BranchSummaryDetails {
   readFiles: string[];
   modifiedFiles: string[];
@@ -216,7 +213,7 @@ interface BranchSummaryDetails {
 
 Same as compaction, extensions can store custom data in `details`.
 
-See [`collectEntriesForBranchSummary()`](https://github.com/ming-kang/pi/blob/main/src/core/compaction/branch-summarization.ts), [`prepareBranchEntries()`](https://github.com/ming-kang/pi/blob/main/src/core/compaction/branch-summarization.ts), and [`generateBranchSummary()`](https://github.com/ming-kang/pi/blob/main/src/core/compaction/branch-summarization.ts) for the implementation.
+For programmatic branch summarization, use `collectEntriesForBranchSummary()`, `prepareBranchEntries()`, and `generateBranchSummary()`.
 
 ## Summary Format
 
@@ -260,7 +257,7 @@ path/to/changed.ts
 
 ### Message Serialization
 
-Before summarization, messages are serialized to text via [`serializeConversation()`](https://github.com/ming-kang/pi/blob/main/src/core/compaction/utils.ts):
+Before summarization, the exported `serializeConversation()` function serializes messages to text:
 
 ```
 [User]: What they said
@@ -276,11 +273,11 @@ Tool results are truncated to 2000 characters during serialization. Content beyo
 
 ## Custom Summarization via Extensions
 
-Extensions can intercept and customize both compaction and branch summarization. See [`extensions/types.ts`](https://github.com/ming-kang/pi/blob/main/src/core/extensions/types.ts) for event type definitions.
+Extensions can intercept and customize both compaction and branch summarization. See [compaction events](extensions.md#session_before_compact--session_compact) and [tree events](extensions.md#session_before_tree--session_tree).
 
 ### session_before_compact
 
-Fired before auto-compaction or `/compact`. Can cancel or provide custom summary. See `SessionBeforeCompactEvent` and `CompactionPreparation` in the types file.
+Fired before auto-compaction or `/compact`. Can cancel or provide custom summary. See `SessionBeforeCompactEvent`.
 
 ```typescript
 pi.on("session_before_compact", async (event, ctx) => {
@@ -300,10 +297,10 @@ pi.on("session_before_compact", async (event, ctx) => {
   // willRetry - whether overflow recovery intends to retry if compaction produces a safe retained context
   // signal - AbortSignal (pass to LLM calls)
 
-  // Cancel. Consequences depend on timing: a "midTurn" cancel skips compaction
-  // for the rest of the run and the run continues at your risk of overflowing;
-  // other timings leave the over-threshold context to fail closed before the
-  // next provider request.
+  // A voluntary cancel at timing "midTurn" continues the current run and skips
+  // further mid-turn checks. An abort, failure, no safe cut, or unsafe retained
+  // context fails closed; at other timings, over-threshold context also fails
+  // closed before the next provider request.
   return { cancel: true };
 
   // Custom summary:
@@ -358,7 +355,7 @@ See [custom-compaction.ts](../examples/extensions/custom-compaction.ts) for a co
 
 ### session_before_tree
 
-Fired before `/tree` navigation. Always fires regardless of whether user chose to summarize. Can cancel navigation or provide custom summary.
+Fired before `/tree` navigation. Always fires regardless of whether user chose to summarize. Can cancel navigation or provide custom summary. See `SessionBeforeTreeEvent`.
 
 ```typescript
 pi.on("session_before_tree", async (event, ctx) => {
@@ -385,8 +382,6 @@ pi.on("session_before_tree", async (event, ctx) => {
   }
 });
 ```
-
-See `SessionBeforeTreeEvent` and `TreePreparation` in the types file.
 
 ## Settings
 

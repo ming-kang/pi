@@ -9,7 +9,7 @@ The package bundles two Pi themes using the native theme schema and loader:
 | `ice-cream-dark` | Cool sea-salt dark palette with warm cream tool titles. |
 | `ice-cream-light` | Light counterpart with the same semantic mapping. |
 
-Both themes are built into `@astralyn/pi`. They do not require the external `pi-config` package.
+Both themes are built into `@astralyn/pi`.
 
 ## Selecting a theme
 

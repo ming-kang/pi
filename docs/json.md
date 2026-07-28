@@ -8,25 +8,31 @@ Outputs all session events as JSON lines to stdout. Useful for integrating pi in
 
 ## Event Types
 
-Events are defined in [`AgentSessionEvent`](https://github.com/ming-kang/pi/blob/main/src/core/agent-session.ts#L102):
+Events are defined by `AgentSessionEvent`, exported from [`@astralyn/pi`](https://www.npmjs.com/package/@astralyn/pi):
 
 ```typescript
 type AgentSessionEvent =
-  | AgentEvent
+  | Exclude<AgentEvent, { type: "agent_end" }>
+  | { type: "agent_end"; messages: AgentMessage[]; willRetry: boolean }
+  | { type: "agent_settled" }
   | { type: "queue_update"; steering: readonly string[]; followUp: readonly string[] }
   | { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
+  | { type: "entry_appended"; entry: SessionEntry }
+  | { type: "session_info_changed"; name: string | undefined }
+  | { type: "thinking_level_changed"; level: ThinkingLevel }
   | { type: "compaction_end"; reason: "manual" | "threshold" | "overflow"; result: CompactionResult | undefined; aborted: boolean; willRetry: boolean; errorMessage?: string }
   | { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
   | { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
   | { type: "summarization_retry_scheduled"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
   | { type: "summarization_retry_attempt_start"; source: "branchSummary" }
   | { type: "summarization_retry_attempt_start"; source: "compaction"; reason: "manual" | "threshold" | "overflow" }
-  | { type: "summarization_retry_finished" };
+  | { type: "summarization_retry_finished" }
+  | { type: "bash_execution_update"; id?: string; delta: string };
 ```
 
 `queue_update` emits the full pending steering and follow-up queues whenever they change. `compaction_start` and `compaction_end` cover both manual and automatic compaction.
 
-Base events from [`AgentEvent`](https://github.com/earendil-works/pi/blob/v0.82.1/packages/agent/src/types.ts#L179):
+Base events retained by `AgentSessionEvent` come from `AgentEvent` in [`@earendil-works/pi-agent-core`](https://www.npmjs.com/package/@earendil-works/pi-agent-core); its `agent_end` member is replaced above:
 
 ```typescript
 type AgentEvent =
@@ -48,16 +54,16 @@ type AgentEvent =
 
 ## Message Types
 
-Base messages from [`packages/ai/src/types.ts`](https://github.com/earendil-works/pi/blob/v0.82.1/packages/ai/src/types.ts#L134):
-- `UserMessage` (line 134)
-- `AssistantMessage` (line 140)
-- `ToolResultMessage` (line 152)
+Base message types come from [`@earendil-works/pi-ai`](https://www.npmjs.com/package/@earendil-works/pi-ai):
+- `UserMessage`
+- `AssistantMessage`
+- `ToolResultMessage`
 
-Extended messages from [`src/core/messages.ts`](https://github.com/ming-kang/pi/blob/main/src/core/messages.ts#L29):
-- `BashExecutionMessage` (line 29)
-- `CustomMessage` (line 46)
-- `BranchSummaryMessage` (line 55)
-- `CompactionSummaryMessage` (line 62)
+Coding-agent-specific messages are documented in [Session Format](session-format.md):
+- `BashExecutionMessage`
+- `CustomMessage`
+- `BranchSummaryMessage`
+- `CompactionSummaryMessage`
 
 ## Output Format
 
@@ -76,7 +82,7 @@ Followed by events as they occur:
 {"type":"message_update","message":{...},"assistantMessageEvent":{"type":"text_delta","delta":"Hello",...}}
 {"type":"message_end","message":{...}}
 {"type":"turn_end","message":{...},"toolResults":[]}
-{"type":"agent_end","messages":[...]}
+{"type":"agent_end","messages":[...],"willRetry":false}
 ```
 
 ## Example

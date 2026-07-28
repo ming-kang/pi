@@ -1,6 +1,11 @@
 # Examples
 
-Example code for pi-coding-agent SDK and extensions.
+Example code for the `@astralyn/pi` SDK and extensions.
+
+## Standalone
+
+### [rpc-extension-ui.ts](rpc-extension-ui.ts)
+A lightweight RPC chat client that handles extension UI requests; pair it with [the RPC demo extension](extensions/rpc-demo.ts).
 
 ## Directories
 

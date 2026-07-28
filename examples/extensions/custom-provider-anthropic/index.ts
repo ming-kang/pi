@@ -153,7 +153,7 @@ async function refreshAnthropicToken(credentials: OAuthCredentials): Promise<OAu
 }
 
 // =============================================================================
-// Streaming Implementation (simplified from packages/ai/src/api/anthropic-messages.ts)
+// Streaming Implementation Using Public @earendil-works/pi-ai Exports
 // =============================================================================
 
 // Claude Code tool names for OAuth stealth mode
