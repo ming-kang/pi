@@ -1,83 +1,40 @@
-# Repository Contract
+# Repository contract
 
-This is a private standalone distribution of Pi's coding-agent package. It publishes `@astralyn/pi`; the executable remains `pi`. The repository does not accept external issues or pull requests.
+This is the private standalone distribution of Pi's coding-agent package. It publishes `@astralyn/pi`; its executable remains `pi`. Do not accept external issues or pull requests for this repository.
 
-## Ownership and scope
+## Non-negotiable boundaries
 
-- This repository contains only the coding-agent package. Runtime source belongs in `src/**`.
-- AI, Agent core, and TUI behavior comes from exact upstream npm dependencies: `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, and `@earendil-works/pi-tui`.
-- Do not vendor, patch, monkey-patch, or recreate those upstream packages. Upgrade their exact versions when synchronizing to a compatible upstream coding-agent release.
-- Do not reintroduce a monorepo, workspace aliases, hidden bundled dependencies, a Fork framework, feature registry, or extra publishable package.
+- The repository contains one coding-agent package; runtime source is under `src/**`.
+- Consume AI, Agent core, and TUI through the exact `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, and `@earendil-works/pi-tui` npm dependencies. Never vendor, patch, monkey-patch, or recreate them.
+- Do not recreate a monorepo, workspace aliases, hidden bundled dependencies, a Fork framework, feature registry, or another publishable package.
+- Keep native tool presentation in `src/modes/interactive/components/tool-execution.ts` and the relevant built-in renderers. Prefer Pi-native presentation; use `renderShell: "self"` only when a tool intentionally owns its complete UI.
+- Extensions are self-contained under `src/extensions/`, use the Extension API, and never import another extension's internals. Prefer small domain-neutral duplication to coupling.
+- Keep functional UI with its owning extension and use semantic theme helpers, not hard-coded colors. Display-only work must not change a tool schema, execution protocol, or result structure.
+- Bound model-facing output whenever its source can grow without limit.
 
-## Architecture boundaries
+## Implementation discipline
 
-- Native tool presentation belongs in `src/modes/interactive/components/tool-execution.ts` and the relevant built-in tool renderers.
-- Extensions remain self-contained under `src/extensions/` and use Pi's Extension API.
-- Do not import one extension's internals from another extension. Small domain-neutral duplication is preferable to coupling.
-- Pi-native tool UI is the default. Do not add custom `renderShell`, `renderCall`, or `renderResult` unless native presentation cannot express the required behavior.
-- Keep `renderShell: "self"` as the escape hatch for tools that intentionally own their complete UI.
-- Functional UI belongs to the owning extension and must use semantic theme helpers instead of hard-coded colors.
-- Do not change tool schemas, execution protocols, or result structures when the request is only about display.
-- Model-facing output must be bounded when a source can be arbitrarily large.
+- Read files completely before broad changes. Use top-level imports only; do not use dynamic imports or inline type imports. Use `.ts` relative TypeScript imports, practical types instead of `any`, and erasable TypeScript syntax only.
+- Add configurable key defaults to `KEYBINDINGS` and use the `KeybindingsManager`; never hard-code key checks.
+- Pin direct npm dependencies exactly and intentionally regenerate `npm-shrinkwrap.json` when they change.
+- Never commit credentials, provider tokens, local configuration, or machine-specific paths.
 
-## Code conventions
+## Verification and repository safety
 
-- Read files completely before wide-ranging changes.
-- Use top-level imports only; do not use dynamic imports or inline type imports.
-- Relative TypeScript imports use the `.ts` suffix.
-- Avoid `any` unless there is no practical typed alternative.
-- Use erasable TypeScript syntax only: no `enum`, `namespace`, parameter properties, or syntax requiring special runtime transforms.
-- Never hard-code key checks. Add configurable defaults to `KEYBINDINGS` and use the KeybindingsManager.
-- Keep direct npm dependencies pinned to exact versions and regenerate `npm-shrinkwrap.json` intentionally.
-- Do not commit credentials, provider tokens, local configuration, or machine-specific paths.
+- Run `npm run check` after code changes; run focused tests for changed tests or behavior, and build when exports, package metadata, TypeScript configuration, or bundled assets change. Do not run the complete suite unless requested or doing release verification.
+- On native Windows, use `npm run test:isolated` for a complete local suite. Treat focused failures as real; Ubuntu CI is authoritative for POSIX-sensitive complete-suite coverage. Verify interactive changes in a real TTY, including their affected pending, settled, collapsed, expanded, `/reload`, and `/tree` states.
+- Never use `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, `git add -A`, or `git add .`. Stage explicit paths, inspect status before committing, and do not commit without an owner-requested checkpoint or release. Use concise `feat`, `fix`, or `docs` Conventional Commit messages.
+- Keep the upstream repository as the `upstream` remote; synchronize only from its release tags, never `upstream/main`, and never merge an upstream monorepo tag into this branch. The upstream delta is frozen: changes require the approved manifest, rationale, and boundary check described in the maintainer guides.
 
-## Checks
+## Documentation and release ownership
 
-After code changes, run:
+`README.md` and `docs/**` are distribution-owned user and API documentation; `docs/bundled/**` covers shipped distribution features. `maintainers/**` is repository-only and excluded from npm. `CHANGELOG.md` records this distribution's releases under `[Unreleased]`. Do not add contribution, security-policy, governance, issue-triage, or external-tracker documents without owner approval. Only the root `@astralyn/pi` package is published.
 
-```bash
-npm run check
-```
+## Maintainer guides
 
-For a focused test:
-
-```bash
-node node_modules/vitest/dist/cli.js --run test/specific.test.ts
-```
-
-When a test changes, run it and iterate until it passes. Run `npm run build` when source exports, package metadata, TypeScript configuration, or bundled assets change. Do not run the complete test suite unless explicitly requested or performing release verification.
-
-On native Windows, run a complete local suite through `npm run test:isolated`, not a direct `vitest` invocation, so user resources and credentials cannot affect results. Even isolated Windows runs are not the release gate: POSIX permission, symlink, path/glob, signal, watcher, external-editor, and child-process tests may behave differently or require Developer Mode. Require focused tests for changed code to pass locally, and use the Ubuntu GitHub Actions run as the authoritative complete-suite result. Do not dismiss a focused failure in changed code as platform noise.
-
-For interactive verification, use a real TTY. Check affected pending, success, error, collapsed, and expanded states, plus `/reload` and `/tree` for lifecycle extensions.
-
-## Git and upstream
-
-- Never use `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, `git add -A`, or `git add .`.
-- Stage explicit paths and inspect `git status` before committing.
-- Do not commit unless the owner requests a checkpoint or release commit.
-- Use concise Conventional Commit messages with `feat`, `fix`, or `docs` types.
-- Keep upstream as the `upstream` remote and synchronize against release tags, never upstream `main`.
-- Do not merge an upstream monorepo tag into this standalone branch. Extract and review only `packages/coding-agent/**`, then update the exact upstream npm dependency versions for that release.
-- When a change alters which files differ from the reviewed upstream baseline, update the delta registry in `maintainers/upstream.json` and the rationale in `maintainers/delta.md`, then verify with `npm run diff:upstream -- --check`.
-- The upstream delta is temporarily frozen: do not grow it without the documented admission record and an explicitly owner-approved, reviewed exception where required. The v0.82.1 budget begins at 70 hybrid paths and 10 narrative delta units; its ratchet and admission contract live in `maintainers/delta.md`, with ceilings recorded in `maintainers/upstream.json`.
-
-## Documentation
-
-- `README.md` is both the repository and npm package overview.
-- `docs/**` is distribution-owned user and API documentation. Upstream release tags inform it, but it is reviewed and rewritten for behavior adopted by this distribution rather than overwritten as an upstream mirror.
-- `docs/bundled/**` documents features shipped by this distribution.
-- `maintainers/**` contains repository-only architecture, development, synchronization, and release documentation and is excluded from the npm package.
-- `CHANGELOG.md` is the runtime and release changelog; keep Fork entries under `[Unreleased]`.
-- Do not add contribution, security-policy, governance, issue-triage, or external-tracker documents unless the owner explicitly asks.
-
-## npm distribution
-
-Only the root package `@astralyn/pi` is published. Fork versions track the upstream `major.minor` line while the patch number is owned by this distribution:
-
-```text
-upstream 0.82.x -> Fork 0.82.0, 0.82.1, 0.82.2, ...
-upstream 0.83.x -> Fork 0.83.0, 0.83.1, 0.83.2, ...
-```
-
-Start at patch `0` when moving to a new upstream minor, then increment the Fork patch for every later release on that line. Tag releases as `pi-v<full-version>` so fetched upstream tags remain distinct. Follow `maintainers/release.md` when publishing.
+- [Maintainer documentation index](maintainers/README.md) — responsibilities and navigation.
+- [Architecture](maintainers/architecture.md) — package and ownership boundaries.
+- [Development](maintainers/development.md) — setup, debugging, and local verification.
+- [Upstream synchronization](maintainers/upstream-sync.md) — release-tag synchronization procedure.
+- [Delta rationale](maintainers/delta.md) and [baseline manifest](maintainers/upstream.json) — delta admission and registry ownership.
+- [Release](maintainers/release.md) — versioning and publishing procedure.

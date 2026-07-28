@@ -1,100 +1,25 @@
 # Distribution architecture
 
-## Purpose
+## Package and dependency boundary
 
-This repository is a standalone personal distribution of Pi's coding-agent package. Its goals are to:
+This repository is one standalone npm package, `@astralyn/pi`, whose executable is `pi`. It contains the coding-agent runtime, tests, distribution-owned documentation and examples, and repository-only maintainer material; it does not carry upstream workspaces or coordinate another package's release.
 
-- maintain only code that ships in `@astralyn/pi`;
-- consume AI, Agent core, and TUI from upstream npm releases;
-- keep native tool presentation, bundled workflow extensions, themes, and context-safety behavior local to this package;
-- avoid cross-workspace source changes and multi-package release coordination.
+AI, Agent core, and TUI behavior come from the exact published `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, and `@earendil-works/pi-tui` dependencies. Their source is neither copied nor locally patched. A synchronization that adopts APIs from a new coding-agent release updates the compatible exact dependency versions and the shrinkwrap together.
 
-## Package boundary
+## Runtime and extension boundary
 
-The repository root is the npm package:
+Core owns behavior that must be global: agent/session lifecycle, native tool call and result presentation, built-in renderer integration, context-safety checks, and globally configurable keybindings. Native tool UI remains the default; presentation metadata stays local to the coding agent rather than changing upstream tool contracts.
 
-```text
-src/                    coding-agent runtime
-test/                   coding-agent tests
-docs/                   distribution-owned user and API documentation
-└── bundled/            shipped distribution feature documentation
-examples/               SDK and extension examples
-maintainers/            repository-only maintainer documentation
-package.json            @astralyn/pi
-npm-shrinkwrap.json     development and published dependency lock
-```
+Built-ins are registered as hidden `InlineExtension` entries. `llama.cpp` is the upstream-aligned built-in. The seven distribution-owned workflow extensions are `deepwiki`, `question`, `rewind`, `router`, `statusline`, `subagent`, and `todo`. Each uses the public Extension API, owns its own functional UI, and remains independent of other extensions; there is no shared Fork framework or cross-extension internal API.
 
-`maintainers/**` describes repository operation and is excluded from the npm package. The shipped `docs/**` tree is owned by this distribution; upstream documentation is semantic input during synchronization, not a mirror to overwrite.
+## Configuration and assets
 
-The runtime boundary is explicit and versioned in `package.json`:
+The normal Pi configuration and session location remains `~/.pi/agent`; no distribution-specific configuration layer is introduced. Extensions keep their first-class data with normal agent data, including router and rewind state.
 
-- `@earendil-works/pi-ai`
-- `@earendil-works/pi-agent-core`
-- `@earendil-works/pi-tui`
+Native themes and interactive assets are package assets. The ice-cream themes live with the interactive themes and are copied with the other runtime assets into the published build. Theme and extension UI use semantic theme helpers so user-selected themes remain authoritative.
 
-These are exact registry dependencies. Their source is not copied into this repository and local verification resolves the same published packages that npm users install. A coding-agent synchronization that needs new upstream APIs must update all compatible dependency versions in the same change.
+## Documentation and baseline ownership
 
-Presentation-only metadata such as `toolGroup` uses coding-agent-local intersection types rather than changing `AgentTool`. The long-tool-loop compaction implementation uses the upstream stateful Agent's public `prepareNextTurnWithContext` callback for successful same-run continuation. Exceptional fail-closed paths are represented locally as explicit error/aborted lifecycle boundaries because the stateful Agent does not expose its low-level graceful turn-stop callback.
+`README.md`, `docs/**`, and `examples/**` are distribution-owned product material, informed by upstream releases but rewritten for behavior this package actually adopts. `maintainers/**` is repository-only.
 
-## Core and extension boundary
-
-Pi core changes are reserved for behavior that must be global:
-
-- native tool call/result chrome and generic renderer fallback;
-- built-in renderer integration;
-- context-safety checks such as between-tool-batch auto-compaction;
-- globally configurable keybindings required by bundled UI.
-
-Personal workflow features remain self-contained extensions:
-
-```text
-src/extensions/
-├── deepwiki/
-├── question/
-├── rewind/
-├── router/
-├── statusline/
-├── subagent/
-└── todo/
-```
-
-They are registered as hidden `InlineExtension` entries in `src/extensions/index.ts`. No shared Fork framework, feature registry, or cross-extension internal API is used.
-
-## Configuration compatibility
-
-The command remains `pi`, and settings and sessions remain under `~/.pi/agent`. Built-in extensions store their first-class data alongside the normal agent data, including:
-
-```text
-~/.pi/agent/router.json
-~/.pi/agent/rewind/
-```
-
-No separate Fork configuration layer is introduced.
-
-## Themes
-
-`ice-cream-dark` and `ice-cream-light` are native theme assets under `src/modes/interactive/theme/`. The normal package build copies all theme JSON files into `dist`.
-
-## Upstream synchronization
-
-The `upstream` remote still points to `earendil-works/pi`, but upstream monorepo tags are not merged into this standalone branch. Synchronization extracts and reviews only `packages/coding-agent/**` from an upstream release tag, maps adopted source changes to the repository root, rewrites local documentation for the adopted behavior, and updates exact registry dependency versions. See [upstream-sync.md](upstream-sync.md).
-
-The delta against the reviewed upstream release is a first-class object rather than tribal knowledge:
-
-- the orphan `upstream-extract` branch is an optional derived cache of the root-mapped tree recorded in `upstream.json`, so `git diff upstream-extract` is a convenient complete fork delta when the cache is present;
-- [`upstream.json`](upstream.json) records the canonical tag/commit/source tree, classifies owned overlays and additions, maps upstream modifications and drops to delta units, and records the current budget ceilings;
-- `npm run diff:upstream` classifies the actual delta against that registry and `--check` fails on unregistered drift or stale registrations;
-- [`delta.md`](delta.md) documents why each delta unit exists, how to re-verify it during synchronization, and the temporary no-growth admission and ratchet policy for hybrid changes.
-
-Hybrid modifications are a bounded exception to upstream alignment, not an alternate product layer. The budget and admission contract favor the Extension API or a distribution-owned adapter before direct hybrid code; they cannot authorize an architecture boundary prohibited by [`AGENTS.md`](../AGENTS.md).
-
-## Release model
-
-Only `@astralyn/pi` is published. Fork releases track the upstream `major.minor` line while using the patch number for this distribution's release sequence:
-
-```text
-upstream 0.82.x -> Fork 0.82.0, 0.82.1, 0.82.2, ...
-upstream 0.83.x -> Fork 0.83.0, 0.83.1, 0.83.2, ...
-```
-
-Tags use `pi-v<full-version>` so they do not collide with upstream `v<version>` tags. Ubuntu CI verifies the standalone package, and the manually dispatched publish workflow uploads the repository root with npm Trusted Publishing. No other package, binary release flow, model catalog, or update service is maintained here.
+[`upstream.json`](upstream.json) owns the reviewed upstream baseline identity, exact runtime dependency record, owned-path registry, delta metadata, and budget. [`delta.md`](delta.md) explains the human rationale and re-verification of those registered differences. The release-tag procedure is in [upstream-sync.md](upstream-sync.md); release versioning and publication are in [release.md](release.md).

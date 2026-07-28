@@ -1,148 +1,81 @@
 # Upstream synchronization
 
-This guide describes how to keep the standalone `@astralyn/pi` package aligned with upstream Pi. The repository contract in [`AGENTS.md`](../AGENTS.md) is authoritative; publishing is covered separately in [`release.md`](release.md).
+Synchronize this standalone package only from an upstream release tag. The repository contract in [`AGENTS.md`](../AGENTS.md) applies throughout; [release.md](release.md) starts only after synchronization is complete.
 
-## Repository model
+## Baseline authority
 
-```text
-origin    private distribution repository
-upstream  earendil-works/pi monorepo
-```
+`maintainers/upstream.json` is authoritative for the reviewed baseline. Its `baseline.tag` identifies the release reviewed, and its `baseline.sourceTree` is the canonical root-mapped coding-agent tree used by the delta tool. The tag's recorded `sourceSubtree` and `sourceTree` must agree when the tag is available.
 
-`main` contains a standalone package, not an upstream monorepo checkout. Upstream tags must therefore be inspected and selectively imported; never merge an upstream tag directly into `main`, because that would recreate every workspace.
+`upstream-extract` is an optional derived cache, not a baseline. It can make a Git-object diff convenient, but it never authorizes a comparison or a manifest update. Likewise, Git ancestry and `HEAD` do not identify the reviewed baseline. `npm run diff:upstream` always compares the current worktree—including staged changes, unstaged changes, and nonignored untracked files—against the manifest's canonical source tree.
 
-## Canonical baseline and delta registry
+## 1. Select and inspect a release tag
 
-[`upstream.json`](upstream.json)'s recorded tag, commit, source subtree, and source tree are the reviewed upstream baseline. `npm run diff:upstream` compares that canonical tree with the current worktree, including staged, unstaged, and nonignored untracked files. The local `upstream-extract` branch is an optional derived cache: an orphan commit whose tree is the root-mapped extraction of that canonical source tree. It is never merged into `main` and never pushed as a development branch; it exists so the fork delta is also easy to inspect as a Git object:
-
-```bash
-npm run diff:upstream                        # classified per-file delta report
-npm run diff:upstream -- --check             # fail on unregistered drift or stale registrations
-node scripts/diff-upstream.mjs --update-baseline   # (re)create upstream-extract from the canonical tree
-git diff upstream-extract HEAD -- src/       # raw source delta against the derived cache
-```
-
-[`upstream.json`](upstream.json) is the authoritative per-path registry. Its `owned.overlays` cover distribution-owned README, documentation, and examples; `owned.additions` covers other distribution-only paths; each delta unit records its upstream `modified` and `dropped` paths. Its `budget` records the current ratcheting ceilings. `diff:upstream` verifies the registry in both directions: unregistered differences and registrations that no longer match any difference both fail `--check`. The rationale for each delta unit and the admission contract are documented in [`delta.md`](delta.md).
-
-## Ownership layers
-
-| Layer | Typical paths | Policy |
-|---|---|---|
-| Upstream-aligned coding-agent | most of `src/**` and `test/**` | Import compatible changes from an upstream release tag. |
-| Distribution-owned product documentation | `README.md`, `docs/**`, `examples/**` | Review upstream changes as semantic input, then maintain local wording and examples for behavior this distribution adopts. Never overwrite `docs/**` as a mirror. `docs/bundled/**` covers shipped distribution features. |
-| Repository-only maintainer documentation | `AGENTS.md`, `maintainers/**` | Maintain for repository operation; exclude `maintainers/**` from npm. |
-| Distribution-owned runtime and operations | bundled personal extensions, ice-cream themes, release workflow, package identity | Preserve local design and update deliberately. |
-| Hybrid | `src/core/agent-session.ts`, native tool presentation, built-in tools, keybindings, extension registration, `package.json`, `CHANGELOG.md` | Review function by function; retain upstream lifecycle semantics and local behavior. |
-| Registry boundary | exact upstream AI, Agent core, and TUI dependencies | Upgrade together with the imported coding-agent release; never patch their installed files. |
-
-The complete modified-upstream file list is the `modified` arrays in [`upstream.json`](upstream.json)'s delta units; `npm run diff:upstream` prints it as verified against the baseline. [`delta.md`](delta.md) explains what each delta unit changes and how to re-verify it after a synchronization. Apply its temporary freeze, ratchet, and admission contract before adding or expanding a delta; that document owns the required justification, risk, verification, exit, and exception record rather than duplicating it in this workflow.
-
-## Synchronization workflow
-
-Synchronize only against upstream release tags, never upstream `main`. Start from a clean branch and fetch tags:
+Start from a clean synchronization branch, fetch upstream tags, and select a release tag rather than `upstream/main`:
 
 ```bash
 git status --short
 git fetch upstream --tags
-git tag --list 'v<upstream-minor>.*'
 git switch -c sync/upstream-<version> main
+export TARGET_TAG=v<version>
 ```
 
-Review what upstream changed since the reviewed baseline directly against the derived cache:
+Read the current manifest values and resolve both comparison trees. The target must be the coding-agent subtree tree from the selected tag; do not compare against `HEAD` or `upstream-extract`.
 
 ```bash
-git diff --stat upstream-extract "v<version>:packages/coding-agent"
-git diff upstream-extract "v<version>:packages/coding-agent" -- src/core/
+BASELINE_TREE="$(node -p "require('./maintainers/upstream.json').baseline.sourceTree")"
+SOURCE_SUBTREE="$(node -p "require('./maintainers/upstream.json').baseline.sourceSubtree")"
+TARGET_COMMIT="$(git rev-parse --verify "refs/tags/$TARGET_TAG^{commit}")"
+TARGET_TREE="$(git rev-parse --verify "$TARGET_COMMIT:$SOURCE_SUBTREE")"
+git cat-file -t "$BASELINE_TREE"
+git cat-file -t "$TARGET_TREE"
+git diff --stat "$BASELINE_TREE" "$TARGET_TREE"
+git diff "$BASELINE_TREE" "$TARGET_TREE" -- src/ test/
+git diff "$BASELINE_TREE" "$TARGET_TREE" -- README.md docs/ examples/
 ```
 
-For browsing complete files, an extraction into a temporary directory still works:
+Inspect the target tree's complete source and test changes. Also review its `README.md`, `docs/**`, and `examples/**` as semantic input: source behavior, public API changes, and examples together determine what this distribution adopts and how its own product documentation should read. Do not mirror upstream documentation or examples into this repository.
 
-```bash
-tmp="$(mktemp -d)"
-git archive v<version> packages/coding-agent | tar -x -C "$tmp"
-```
+Triage every relevant change as **adopt**, **defer**, or **not applicable**. Keep this temporary per-release triage in the synchronization branch or commit review notes, not in permanent maintainer documentation.
 
-Import upstream changes in bounded groups:
+## 2. Adopt compatible changes
 
-1. Review source and tests, paying special attention to the `hybrid` files registered in [`upstream.json`](upstream.json).
-2. Inspect that release tag's changes to its coding-agent `README.md`, `docs/**`, and `examples/**` as semantic input alongside the source changes.
-3. Adapt adopted source, package, and TypeScript changes to the standalone root rather than copying monorepo-relative paths.
-4. Rewrite affected local user/API documentation for the behavior actually adopted here, preserving distribution package names, routes, and defaults. Update `docs/bundled/**` for affected shipped distribution features and adapt local examples where needed.
-5. Set the exact `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, and `@earendil-works/pi-tui` versions published for that upstream release.
-6. Run `npm install --ignore-scripts` to refresh `npm-shrinkwrap.json`, then inspect dependency and lifecycle-script changes.
+Apply selected coding-agent changes to the standalone root, preserving upstream security, protocol, execution, and public-API semantics before local presentation or workflow behavior. Do not import monorepo assumptions such as workspaces, sibling source aliases, non-coding-agent packages, or unreleased dependency APIs. If the target behavior needs an API unavailable from the published exact runtime dependencies, choose a compatible release instead of vendoring or patching a dependency.
 
-Upstream README, documentation, and examples are not files to mirror or bulk-copy. Their changes describe intended upstream behavior; compare that intent with the source and APIs this distribution actually adopts, then rewrite local documentation so it remains accurate for `@astralyn/pi`. Local organization may intentionally differ from upstream.
+Update local tests and rewrite distribution-owned README, documentation, and examples for the behavior actually adopted. Keep bundled-feature documentation accurate when a shipped extension or native UI changes.
 
-Only after reviewing source, `README.md`, `docs/**`, and `examples/**` for the tag should maintainers update [`upstream.json`](upstream.json) with the reviewed tag, commit, coding-agent version, and exact runtime dependency versions. Do not advance this record as a planning marker or after a source-only import.
+## 3. Update exact dependencies and the shrinkwrap
 
-After advancing `baseline.tag` and `baseline.sourceTree`, regenerate the derived cache and re-verify the delta registry:
-
-```bash
-node scripts/diff-upstream.mjs --update-baseline
-npm run diff:upstream -- --check
-```
-
-Newly adopted upstream files that gained local modifications, new distribution-owned files, and newly dropped upstream paths must be registered in `upstream.json` and explained in [`delta.md`](delta.md) before the check passes.
-
-`baseline.tag` records the upstream release whose inputs were reviewed; it is not necessarily an ancestor of `main`. This standalone branch selectively imports and rewrites content instead of merging upstream monorepo history, so Git ancestry must not be used to infer the review baseline.
-
-Do not copy these upstream monorepo assumptions into the standalone repository:
-
-- workspace declarations or `packages/*` paths;
-- TypeScript or Vitest aliases to sibling source workspaces;
-- Server, storage, model-catalog, binary, or multi-package release scripts;
-- cross-package source modifications needed only by an unreleased upstream checkout.
-
-If imported coding-agent code requires an API absent from the published upstream dependencies, stop and use a later compatible release. Do not solve the mismatch by vendoring or locally forking another package.
-
-## Conflict policy
-
-When reconciling upstream changes:
-
-1. Preserve security fixes, protocol correctness, execution semantics, and public API compatibility first.
-2. Keep local behavior only where it is intentionally documented and tested.
-3. For native UI, integrate upstream execution changes before adapting presentation.
-4. Keep model-facing output bounded and avoid schema/result changes for display-only work.
-5. Prefer a small local type intersection or adapter over changing an upstream dependency API.
-
-Git may detect many imports as renames from the historical `packages/coding-agent` path. Review content, not rename percentages.
-
-## Dependency and lock maintenance
-
-All direct registry dependencies are exact. When package metadata changes:
+After choosing the adopted release and before changing the manifest, update the exact `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, and `@earendil-works/pi-tui` dependency values in `package.json` to compatible published versions. Then regenerate and review the shrinkwrap in this order:
 
 ```bash
 npm install --ignore-scripts
 npm run check:pinned-deps
 ```
 
-`npm-shrinkwrap.json` is both the development lock and the lock published with `@astralyn/pi`. Review new or changed transitive packages, platform-specific optional packages, and lifecycle scripts before accepting it. The pre-commit hook requires an explicit `PI_ALLOW_LOCKFILE_CHANGE=1` acknowledgment when committing an intentional shrinkwrap change.
+Confirm the exact runtime versions in `package.json`, the shrinkwrap root, and the installed shrinkwrap entries agree. Review all dependency, transitive, optional-platform, and lifecycle-script changes. The manifest is not a planning marker: do not advance it until the selected source, tests, product documentation, examples, exact dependencies, and shrinkwrap are all final.
 
-## Verification
+## 4. Advance the manifest last and refresh the cache
 
-At minimum:
+As the last synchronization edit, update `maintainers/upstream.json` with the selected tag, commit, coding-agent version, source subtree, resolved `TARGET_TREE`, exact runtime dependency versions, and any final ownership or delta-registry changes. When an approved delta is added or expanded, also update `maintainers/delta.md` with its durable rationale; keep exact paths and machine fields only in the manifest. The target tag's subtree tree—not a branch tip or cache tree—is the value for `baseline.sourceTree`.
+
+Only after that edit, refresh the optional cache and verify the current worktree boundary:
+
+```bash
+node scripts/diff-upstream.mjs --update-baseline
+npm run diff:upstream -- --check
+```
+
+The update command creates or moves `upstream-extract` to the manifest's root-mapped canonical tree. The check rejects unregistered drift, stale registrations, a stale cache, invalid baseline/dependency agreement, and budget mismatches.
+
+## 5. Verify and hand off
+
+Run focused tests for every changed subsystem, use a real TTY for affected interactive states, then run the package checks:
 
 ```bash
 npm run build
 npm run check
-```
-
-Run focused tests for each changed subsystem. For native transcript changes, verify pending, success, error, collapsed, and expanded states, plus `Ctrl+O`, `/reload`, and `/tree` in a real TTY. The Ubuntu CI workflow runs Build, Check, and the full test suite.
-
-Before integrating a synchronization branch:
-
-```bash
+npm run diff:upstream -- --check
 git status --short
-git diff --stat main...HEAD
-git log --oneline main..HEAD
 ```
 
-## Changelog and documentation ownership
-
-- `CHANGELOG.md` is the runtime and release changelog for `@astralyn/pi`.
-- `docs/**` is distribution-owned user/API documentation and is rewritten for adopted behavior rather than maintained as an upstream mirror.
-- `docs/bundled/**` documents features shipped by this distribution.
-- `maintainers/**` records repository-only architecture, development, synchronization, and release operations and is excluded from npm.
-- Dependency package changelogs are not copied; consult their upstream releases during synchronization.
-
-After synchronization and verification, follow the [release checklist](release.md).
+Resolve every boundary failure before handoff. The completed branch contains the adopted release-tag work; follow [release.md](release.md) only when it is ready to publish.

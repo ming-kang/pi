@@ -1,86 +1,60 @@
-# Release checklist
+# Release
 
-This repository publishes one npm package from its root: `@astralyn/pi`. It does not use the upstream multi-package, binary, source-archive, or model-catalog release flows. Upstream synchronization is documented in [upstream-sync.md](upstream-sync.md).
+This repository publishes only the root `@astralyn/pi` package. Complete any upstream release-tag synchronization first; this guide covers distribution versioning, package review, publication, and tagging.
 
-## Scope and versioning
+## Versioning and changelog
 
-Track the upstream Pi `major.minor` line and reserve the patch number for this distribution's release sequence:
+Distribution releases follow the upstream Pi `major.minor` line while this repository owns the patch sequence:
 
 ```text
 upstream <major>.<minor>.x
     -> @astralyn/pi <major>.<minor>.0, <major>.<minor>.1, <major>.<minor>.2, ...
 ```
 
-The first distribution release after moving to a new upstream minor uses patch `0`. Every later release on that line uses the next unused patch, including releases that absorb an upstream patch update. Use `pi-v<full-version>` Git tags so they remain distinct from fetched upstream `v<upstream-version>` tags.
+Use patch `0` for the first distribution release on a new upstream minor and the next unused patch for every later release on that line, including one that adopts an upstream patch update. Tag the exact release commit as `pi-v<full-version>` so it cannot collide with upstream `v<version>` tags.
 
-## Prepare the release
+`CHANGELOG.md` covers `@astralyn/pi` from `0.81.1-1` onward and records both adopted upstream behavior and distribution-local changes. Move prepared entries from `[Unreleased]` into `## [<version>] - YYYY-MM-DD`, then leave a new empty `[Unreleased]` section.
 
-1. Start from a clean `main` branch and choose the next unused distribution version.
-2. Move current `CHANGELOG.md` entries from `[Unreleased]` into one `## [<version>] - YYYY-MM-DD` section, then leave a new empty `[Unreleased]` section.
-3. Update `package.json` version.
-4. Refresh and review the authoritative shrinkwrap:
+## Prepare and verify
 
-```bash
-npm install --package-lock-only --ignore-scripts
-```
+1. Start from the intended release commit and choose the next unused version.
+2. Update the changelog and root `package.json` version.
+3. Regenerate and review the published shrinkwrap:
 
-Direct dependencies are exact. If a synchronized upstream release is still blocked by the `.npmrc` age gate, prefer waiting; use `--min-release-age=0` only after explicitly verifying the package versions, provenance, and release contents.
+   ```bash
+   npm install --package-lock-only --ignore-scripts
+   ```
 
-Confirm `package.json` and the root entry in `npm-shrinkwrap.json` carry the same `@astralyn/pi` version and that the intended exact upstream AI, Agent core, and TUI versions are locked.
+4. Confirm that `package.json` and the shrinkwrap root carry the same distribution version and that all direct dependencies remain exact.
+5. Run local release verification:
 
-## Verify
+   ```bash
+   npm run build
+   npm run check
+   npm run diff:upstream -- --check
+   npm pack --dry-run
+   ```
 
-Local development verification:
+The upstream-delta command is required local boundary verification. CI wiring for it is intentionally deferred, so workflow success does not substitute for this check until that wiring is added.
 
-```bash
-npm run build
-npm run check
-```
-
-Release verification runs on Ubuntu through GitHub Actions. The CI and publish workflows both install from `npm-shrinkwrap.json`, build, check, verify that generated files remain clean, and run the complete test suite.
-
-## Review the package
-
-After building, inspect the root package:
-
-```bash
-npm pack --dry-run
-```
-
-The tarball must contain the built `dist`, distribution-owned product documentation (including `docs/bundled/**`), examples, README, changelog, and `npm-shrinkwrap.json`. It must not contain `maintainers/**`, source workspaces, or local configuration. For stronger verification, create a real tarball, install it in a temporary directory outside the repository, and run `pi --version` and `pi --list-models`.
+Inspect the dry-run tarball. It must contain built `dist`, distribution-owned documentation and examples, README, changelog, and `npm-shrinkwrap.json`; it must not contain `maintainers/**`, source workspaces, or local configuration. For a stronger smoke test, install a real tarball outside the repository and run `pi --version` and `pi --list-models`.
 
 ## Publish and tag
 
-Publishing uses npm Trusted Publishing through GitHub Actions OIDC. Configure the package once on npm:
-
-```text
-Publisher: GitHub Actions
-Organization or user: ming-kang
-Repository: pi
-Workflow filename: publish-npm.yml
-Environment name: (blank)
-Allowed action: Allow npm publish
-```
-
-After the release commit is pushed and CI passes, trigger the workflow from an authenticated GitHub CLI session:
+Publishing uses npm Trusted Publishing through the manually dispatched GitHub Actions OIDC workflow. After the release commit is pushed and its configured CI passes, trigger publication from an authenticated GitHub CLI session:
 
 ```bash
 VERSION="$(node -p "require('./package.json').version")"
 gh workflow run publish-npm.yml --repo ming-kang/pi --ref main -f version="$VERSION"
-
 gh run list --repo ming-kang/pi --workflow publish-npm.yml --limit 1
 gh run watch <run-id> --repo ming-kang/pi --exit-status
 ```
 
-The workflow validates the requested version, repeats Ubuntu Build/Check/Test, publishes the repository root with provenance, and verifies the registry version. A normal push to `main` never publishes.
+Verify the published registry version and perform a global-install/self-update smoke test from a separate shell or after restarting Pi. Do not replace the package running the release session.
 
-After publication, verify the registry and perform a global-install/self-update smoke test from a separate shell or after restarting Pi. Do not replace the package currently running the release session.
-
-Finally tag the exact release commit:
+Finally tag and push the exact published commit:
 
 ```bash
 git tag pi-v<full-version>
 git push origin pi-v<full-version>
 ```
-
-No other package is published from this repository.

@@ -1,8 +1,8 @@
 # Development
 
-See the repository [AGENTS.md](../AGENTS.md) for the distribution contract and coding conventions.
+Follow the repository contract in [`AGENTS.md`](../AGENTS.md). This guide covers local work; release-tag adoption is in [upstream-sync.md](upstream-sync.md).
 
-## Setup
+## Setup and source execution
 
 ```bash
 git clone https://github.com/ming-kang/pi
@@ -12,73 +12,42 @@ npm run build
 npm run check
 ```
 
-The repository is the standalone `@astralyn/pi` package. AI, Agent core, and TUI are installed as exact upstream npm dependencies; no sibling workspace build is required.
+The checkout is the standalone `@astralyn/pi` package. Its AI, Agent core, and TUI dependencies are exact published npm packages, so no sibling workspace build is required.
 
-Run from source:
+Run from source with:
 
 ```bash
 npm run dev
+npm run dev -- --no-env  # source run without provider credentials
 ```
 
-Pi keeps the caller's current working directory. Use `npm run dev -- --no-env` to clear provider credentials for the source run.
+Pi keeps the caller's working directory. Use the asset-resolution helpers in `src/config.ts` rather than deriving package asset paths from `__dirname`.
 
-## Package identity
+## Debugging
 
-Distribution identity and configuration directory defaults are defined in `package.json`:
+The hidden `/debug` command writes rendered TUI lines and recent model messages to `~/.pi/agent/pi-debug.log`.
 
-```json
-{
-  "name": "@astralyn/pi",
-  "piConfig": {
-    "configDir": ".pi"
-  },
-  "bin": {
-    "pi": "dist/cli.js"
-  }
-}
-```
+## Focused verification
 
-## Path resolution
-
-Pi supports npm installation and `tsx` source execution. Always use `src/config.ts` helpers such as `getPackageDir()` and `getThemeDir()` for package assets; do not derive asset paths directly from `__dirname`.
-
-## Debug command
-
-`/debug` (hidden) writes rendered TUI lines and the latest model messages to `~/.pi/agent/pi-debug.log`.
-
-## Testing
+Run the focused test that covers changed behavior, then the normal check:
 
 ```bash
-npm run check
 node node_modules/vitest/dist/cli.js --run test/specific.test.ts
-npm run test:isolated  # complete test suite in an isolated home
+npm run check
 ```
 
-Release CI runs the full suite on Ubuntu. Interactive UI changes should also be verified in a real terminal.
+Use a real terminal for interactive changes. Verify the affected pending, settled, collapsed, and expanded states, and `/reload` or `/tree` when lifecycle extensions are involved.
 
-### Platform-specific test interpretation
+`npm run diff:upstream -- --check` is boundary verification: it compares the current worktree, including staged, unstaged, and nonignored untracked files, with the canonical upstream tree and manifest registry. Run it whenever a change might affect the upstream delta; [upstream-sync.md](upstream-sync.md) and [delta.md](delta.md) own its policy and registry procedure.
 
-For a complete local run, use `npm run test:isolated` rather than invoking Vitest directly. The wrapper starts from an empty environment with temporary home, config, cache, and credential paths; a direct run can discover the developer's real skills, settings, package-manager state, or Git configuration and produce machine-specific failures.
+## Platform interpretation
 
-Native Windows is not the release-verification platform. A complete Windows run may fail or differ in tests that assume:
+For a complete local test run, use:
 
-- POSIX `chmod`, writability, or exact `EACCES` behavior;
-- unprivileged file or directory symlink creation rather than Windows Developer Mode, elevation, or junctions;
-- POSIX path separators and glob semantics;
-- Unix signals, suspension, TTYs, `fs.watch`, external editors, or child-process quoting and exit behavior.
-
-These failures must be classified rather than silently ignored. Focused tests for changed code are still required to pass on the development platform. Use the passing Ubuntu GitHub Actions `npm test` job as the authoritative complete-suite result for release verification; Windows-only process tests and real-TTY checks are supplemental coverage because the current CI workflow has no Windows job.
-
-## Project structure
-
-```text
-src/                    runtime source
-test/                   automated tests and local test helpers
-docs/                   distribution-owned user and public API documentation
-└── bundled/            shipped distribution feature documentation
-examples/               SDK and extension examples
-maintainers/            repository-only maintainer documentation
-scripts/                package maintenance scripts
+```bash
+npm run test:isolated
 ```
 
-`maintainers/**` is excluded from the npm package.
+The isolated wrapper starts with temporary home, configuration, cache, and credential locations. A direct complete Vitest run can discover real user skills, settings, package-manager state, or Git configuration and produce machine-specific failures.
+
+Native Windows is not the authoritative complete-suite platform. POSIX permissions and `EACCES` behavior, symlink capability, path/glob handling, signals, TTYs, watchers, external editors, and child-process quoting can differ or need Developer Mode. Classify those differences rather than ignoring them, and require focused changed-code tests to pass locally. The Ubuntu GitHub Actions complete-suite result is authoritative for release verification; Windows process and real-TTY checks remain valuable supplemental coverage.
