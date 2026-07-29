@@ -2,15 +2,20 @@
 
 Biu adds `/biu`, a file-first workflow that carries one project cycle through interview, decomposition, execution, and archive. It infers the current stage from Markdown artifacts, injects only that stage's guidance into the agent prompt, and publishes a compact phase marker through `ctx.ui.setStatus()`.
 
-## Commands
+## Command
 
 | Command | Behavior |
 |---|---|
-| `/biu` | Enter or resume Biu Mode, infer the stage, and immediately start the corresponding agent turn |
-| `/biu status` | Show the inferred stage, workspace path, task counts, active or next task, and bounded diagnostics |
-| `/biu off` | Leave Biu Mode without changing workflow files |
+| `/biu` | When inactive, enter Biu Mode, infer the stage, and immediately start the corresponding agent turn; when active, open the Biu menu |
 
-Calling `/biu` again while the mode is active resumes it; it does not toggle the mode off.
+The active-mode menu uses Pi's native selection dialog:
+
+- **Continue · stage:** start a new agent turn for the freshly inferred stage.
+- **Show status:** show the workspace path, task counts, active or next task, and bounded diagnostics.
+- **Exit Biu Mode:** leave the mode without changing workflow files.
+- **Escape:** close the menu and keep Biu active.
+
+`/biu` accepts no arguments. The menu is the only status and exit surface.
 
 ## Storage
 

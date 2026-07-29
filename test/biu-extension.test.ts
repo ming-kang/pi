@@ -47,6 +47,7 @@ interface ContextHarness {
 	ctx: ExtensionCommandContext;
 	statuses: Map<string, string | undefined>;
 	notifications: Array<{ message: string; level?: string }>;
+	select: ReturnType<typeof vi.fn>;
 	setBranch: (branch: unknown[]) => void;
 	waitForIdle: ReturnType<typeof vi.fn>;
 }
@@ -79,14 +80,15 @@ function captureExtension(): ExtensionHarness {
 	};
 }
 
-function createContext(cwd: string, initialBranch: unknown[] = []): ContextHarness {
+function createContext(cwd: string, initialBranch: unknown[] = [], hasUI = true): ContextHarness {
 	let branch = initialBranch;
 	const statuses = new Map<string, string | undefined>();
 	const notifications: Array<{ message: string; level?: string }> = [];
+	const select = vi.fn(async () => undefined as string | undefined);
 	const waitForIdle = vi.fn(async () => {});
 	const ctx = {
 		cwd,
-		hasUI: true,
+		hasUI,
 		waitForIdle,
 		sessionManager: {
 			getBranch: () => branch,
@@ -97,12 +99,14 @@ function createContext(cwd: string, initialBranch: unknown[] = []): ContextHarne
 			},
 			setStatus: (key: string, text: string | undefined) => statuses.set(key, text),
 			notify: (message: string, level?: string) => notifications.push({ message, level }),
+			select,
 		},
 	} as unknown as ExtensionCommandContext;
 	return {
 		ctx,
 		statuses,
 		notifications,
+		select,
 		setBranch: (nextBranch) => {
 			branch = nextBranch;
 		},
@@ -160,10 +164,11 @@ describe("Biu extension", () => {
 		await rm(root, { force: true, recursive: true });
 	});
 
-	test("is a hidden built-in with one command and no model-facing tool", () => {
+	test("is a hidden built-in with one argument-free command and no model-facing tool", () => {
 		const harness = captureExtension();
 		expect(builtInExtensions).toContainEqual(expect.objectContaining({ name: "biu", hidden: true }));
-		expect(harness.commands.get(BIU_COMMAND_NAME)?.description).toContain("project Biu workflow");
+		expect(harness.commands.get(BIU_COMMAND_NAME)?.description).toContain("manage the project Biu workflow");
+		expect(harness.commands.get(BIU_COMMAND_NAME)?.getArgumentCompletions).toBeUndefined();
 		expect(harness.registeredToolCount).toBe(0);
 		expect([...harness.hooks.keys()]).toEqual([
 			"before_agent_start",
@@ -172,13 +177,9 @@ describe("Biu extension", () => {
 			"session_tree",
 			"session_shutdown",
 		]);
-		expect(harness.commands.get(BIU_COMMAND_NAME)?.getArgumentCompletions?.("s")).toEqual([
-			expect.objectContaining({ value: "status" }),
-		]);
-		expect(harness.commands.get(BIU_COMMAND_NAME)?.getArgumentCompletions?.("unknown")).toBeNull();
 	});
 
-	test("/biu creates the private workspace, enables once, and starts a hidden turn", async () => {
+	test("/biu enters once and a second invocation opens the menu without an implicit turn", async () => {
 		const harness = captureExtension();
 		const context = createContext(cwd);
 		const command = harness.commands.get(BIU_COMMAND_NAME);
@@ -214,15 +215,67 @@ describe("Biu extension", () => {
 
 		await command?.handler("", context.ctx);
 		expect(harness.entries).toHaveLength(1);
-		expect(harness.messages).toHaveLength(2);
+		expect(harness.messages).toHaveLength(1);
+		expect(context.select).toHaveBeenCalledOnce();
+		expect(context.select).toHaveBeenCalledWith(
+			"Biu Mode",
+			[
+				{
+					label: "Continue · interview",
+					description: "Start a new agent turn for the inferred stage",
+				},
+				{
+					label: "Show status",
+					description: "Show the workspace, task counts, and bounded diagnostics",
+				},
+				{
+					label: "Exit Biu Mode",
+					description: "Disable the mode without changing workflow files",
+				},
+			],
+			{ subtitle: "Biu · interview", cancelHint: "keep Biu Mode active" },
+		);
 	});
 
-	test("/biu off persists an explicit branch flag and removes prompt injection", async () => {
+	test("the active menu can continue the inferred stage without duplicating enabled state", async () => {
 		const harness = captureExtension();
 		const context = createContext(cwd);
 		const command = harness.commands.get(BIU_COMMAND_NAME);
 		await command?.handler("", context.ctx);
-		await command?.handler("off", context.ctx);
+		context.select.mockResolvedValueOnce("Continue · interview");
+		await command?.handler("", context.ctx);
+
+		expect(harness.entries).toHaveLength(1);
+		expect(harness.messages).toHaveLength(2);
+		expect(harness.messages.at(-1)).toEqual({
+			message: expect.objectContaining({ customType: BIU_KICKOFF_MESSAGE_TYPE, display: false }),
+			options: { triggerTurn: true },
+		});
+	});
+
+	test("the active menu shows a bounded status snapshot", async () => {
+		const harness = captureExtension();
+		const context = createContext(cwd);
+		const command = harness.commands.get(BIU_COMMAND_NAME);
+		await command?.handler("", context.ctx);
+		context.notifications.length = 0;
+		context.select.mockResolvedValueOnce("Show status");
+		await command?.handler("", context.ctx);
+
+		expect(harness.entries).toHaveLength(1);
+		expect(harness.messages).toHaveLength(1);
+		expect(context.notifications.at(-1)?.message).toContain("Biu · interview");
+		expect(context.notifications.at(-1)?.message).toContain("Workspace:");
+		expect(context.statuses.get(BIU_STATUS_KEY)).toBe("Biu · interview");
+	});
+
+	test("the active menu exits explicitly and removes prompt injection", async () => {
+		const harness = captureExtension();
+		const context = createContext(cwd);
+		const command = harness.commands.get(BIU_COMMAND_NAME);
+		await command?.handler("", context.ctx);
+		context.select.mockResolvedValueOnce("Exit Biu Mode");
+		await command?.handler("", context.ctx);
 
 		expect(harness.entries.at(-1)).toEqual({
 			customType: BIU_MODE_ENTRY_TYPE,
@@ -235,27 +288,30 @@ describe("Biu extension", () => {
 		).resolves.toBeUndefined();
 	});
 
-	test("/biu status is read-only while inactive and does not display a mode marker", async () => {
+	test("an active non-UI session reports that the menu is unavailable", async () => {
 		const harness = captureExtension();
-		const context = createContext(cwd);
-		await harness.commands.get(BIU_COMMAND_NAME)?.handler("status", context.ctx);
+		const context = createContext(cwd, [], false);
+		const command = harness.commands.get(BIU_COMMAND_NAME);
+		await command?.handler("", context.ctx);
+		await command?.handler("", context.ctx);
 
-		expect(harness.entries).toHaveLength(0);
-		expect(harness.messages).toHaveLength(0);
-		expect(context.statuses.has(BIU_STATUS_KEY)).toBe(false);
-		expect(existsSync(getBiuWorkspacePaths(cwd).root)).toBe(false);
-		expect(context.notifications.at(-1)?.message).toContain("Biu · interview");
-		expect(context.notifications.at(-1)?.message).toContain("Workspace:");
+		expect(context.select).not.toHaveBeenCalled();
+		expect(harness.entries).toHaveLength(1);
+		expect(harness.messages).toHaveLength(1);
+		expect(context.notifications.at(-1)).toEqual({
+			message: "The Biu menu requires an interactive UI.",
+			level: "warning",
+		});
 	});
 
-	test("rejects unknown command arguments before changing state", async () => {
+	test("rejects command arguments before changing state", async () => {
 		const harness = captureExtension();
 		const context = createContext(cwd);
-		await harness.commands.get(BIU_COMMAND_NAME)?.handler("start", context.ctx);
+		await harness.commands.get(BIU_COMMAND_NAME)?.handler("off", context.ctx);
 		expect(context.waitForIdle).not.toHaveBeenCalled();
 		expect(harness.entries).toHaveLength(0);
 		expect(harness.messages).toHaveLength(0);
-		expect(context.notifications).toEqual([{ message: "Usage: /biu [status|off]", level: "warning" }]);
+		expect(context.notifications).toEqual([{ message: "Usage: /biu", level: "warning" }]);
 	});
 
 	test("restores branch-aware mode and refreshes the inferred stage", async () => {
@@ -263,6 +319,10 @@ describe("Biu extension", () => {
 		const context = createContext(cwd, [modeEntry(true)]);
 		await harness.hooks.get("session_start")?.({ type: "session_start", reason: "reload" }, context.ctx);
 		expect(context.statuses.get(BIU_STATUS_KEY)).toBe("Biu · interview");
+		await harness.commands.get(BIU_COMMAND_NAME)?.handler("", context.ctx);
+		expect(context.select).toHaveBeenCalledOnce();
+		expect(harness.entries).toHaveLength(0);
+		expect(harness.messages).toHaveLength(0);
 
 		const paths = getBiuWorkspacePaths(cwd);
 		expect(existsSync(paths.tasks)).toBe(true);

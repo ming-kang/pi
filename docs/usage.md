@@ -36,7 +36,7 @@ Type `/` in the editor to open command completion. Extensions can register custo
 
 | Command | Description |
 |---------|-------------|
-| [`/biu`](bundled/extensions/biu.md) | Enter or resume the project interview, decomposition, execution, and archive workflow |
+| [`/biu`](bundled/extensions/biu.md) | Enter the project workflow or open its active-mode menu |
 | `/login`, `/logout` | Manage OAuth or API-key credentials |
 | [`/llama`](llama-cpp.md) | Download, load, and unload llama.cpp router models |
 | `/model` | Switch models |

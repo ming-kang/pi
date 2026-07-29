@@ -39,7 +39,7 @@ Useful commands:
 
 | Command | Purpose |
 |---|---|
-| `/biu` | Enter or resume a project development workflow |
+| `/biu` | Enter the project workflow or open its active-mode menu |
 | `/login` | Authenticate a provider |
 | `/model` | Select a configured model |
 | `/settings` | Change thinking, theme, queue, and transport settings |

@@ -96,6 +96,25 @@ export default function biuExtension(pi: ExtensionAPI): void {
 		});
 	}
 
+	function triggerCurrentStage(): void {
+		pi.sendMessage(
+			{
+				customType: BIU_KICKOFF_MESSAGE_TYPE,
+				content:
+					"For this turn only, continue the current Biu stage when Biu Mode instructions are active in the system prompt; otherwise ignore this message.",
+				display: false,
+			},
+			{ triggerTurn: true },
+		);
+	}
+
+	function disableMode(ctx: ExtensionContext): void {
+		enabled = false;
+		persistMode(false);
+		clearStatus(ctx);
+		ctx.ui.notify("Biu Mode disabled. Workflow files were left unchanged.", "info");
+	}
+
 	async function refresh(ctx: ExtensionContext, updateStatus = true): Promise<RefreshResult> {
 		let workspacePath = "<unavailable>";
 		try {
@@ -129,43 +148,65 @@ export default function biuExtension(pi: ExtensionAPI): void {
 		}
 	}
 
+	async function openMenu(ctx: ExtensionContext): Promise<void> {
+		if (!ctx.hasUI) {
+			ctx.ui.notify("The Biu menu requires an interactive UI.", "warning");
+			return;
+		}
+
+		const current = await refresh(ctx);
+		if (current.stale) return;
+		const snapshot = current.snapshot;
+		const continueLabel = `Continue · ${snapshot?.stage ?? "repair"}`;
+		const task = snapshot?.activeTask ?? snapshot?.nextTask;
+		const choice = await ctx.ui.select(
+			"Biu Mode",
+			[
+				{
+					label: continueLabel,
+					description: task
+						? `${bounded(task.id, 100)} · ${bounded(task.title, 120)}`
+						: "Start a new agent turn for the inferred stage",
+				},
+				{
+					label: "Show status",
+					description: "Show the workspace, task counts, and bounded diagnostics",
+				},
+				{
+					label: "Exit Biu Mode",
+					description: "Disable the mode without changing workflow files",
+				},
+			],
+			{
+				subtitle: snapshot ? plainStatus(snapshot) : "Biu · repair",
+				cancelHint: "keep Biu Mode active",
+			},
+		);
+
+		if (choice === continueLabel) {
+			triggerCurrentStage();
+			return;
+		}
+		if (choice === "Show status") {
+			if (snapshot) ctx.ui.notify(formatSnapshot(snapshot), snapshot.stage === "repair" ? "warning" : "info");
+			else if (current.error) ctx.ui.notify(`Biu scan failed: ${bounded(current.error, 500)}`, "error");
+			return;
+		}
+		if (choice === "Exit Biu Mode") disableMode(ctx);
+	}
+
 	pi.registerCommand(BIU_COMMAND_NAME, {
-		description: "Enter or resume the project Biu workflow",
-		getArgumentCompletions: (prefix) => {
-			const options = [
-				{ value: "status", label: "status", description: "Show the inferred stage and workspace" },
-				{ value: "off", label: "off", description: "Leave Biu Mode without changing workflow files" },
-			];
-			const matches = options.filter((option) => option.value.startsWith(prefix.trim().toLowerCase()));
-			return matches.length > 0 ? matches : null;
-		},
+		description: "Enter, resume, or manage the project Biu workflow",
 		handler: async (args, ctx) => {
-			const action = args.trim().toLowerCase();
-			if (action !== "" && action !== "status" && action !== "off") {
-				ctx.ui.notify("Usage: /biu [status|off]", "warning");
+			if (args.trim()) {
+				ctx.ui.notify("Usage: /biu", "warning");
 				return;
 			}
 
 			await ctx.waitForIdle();
 
-			if (action === "off") {
-				enabled = false;
-				persistMode(false);
-				clearStatus(ctx);
-				ctx.ui.notify("Biu Mode disabled. Workflow files were left unchanged.", "info");
-				return;
-			}
-
-			if (action === "status") {
-				const current = await refresh(ctx, enabled);
-				if (current.snapshot) {
-					ctx.ui.notify(
-						formatSnapshot(current.snapshot),
-						current.snapshot.stage === "repair" ? "warning" : "info",
-					);
-				} else if (current.error) {
-					ctx.ui.notify(`Biu scan failed: ${bounded(current.error, 500)}`, "error");
-				}
+			if (enabled) {
+				await openMenu(ctx);
 				return;
 			}
 
@@ -179,10 +220,8 @@ export default function biuExtension(pi: ExtensionAPI): void {
 				return;
 			}
 
-			if (!enabled) {
-				enabled = true;
-				persistMode(true);
-			}
+			enabled = true;
+			persistMode(true);
 			const current = await refresh(ctx);
 			if (current.snapshot) {
 				ctx.ui.notify(`${plainStatus(current.snapshot)}\n${bounded(current.snapshot.paths.root, 300)}`, "info");
@@ -190,15 +229,7 @@ export default function biuExtension(pi: ExtensionAPI): void {
 				ctx.ui.notify(`Biu scan failed: ${bounded(current.error, 500)}`, "error");
 			}
 
-			pi.sendMessage(
-				{
-					customType: BIU_KICKOFF_MESSAGE_TYPE,
-					content:
-						"For this turn only, continue the current Biu stage when Biu Mode instructions are active in the system prompt; otherwise ignore this message.",
-					display: false,
-				},
-				{ triggerTurn: true },
-			);
+			triggerCurrentStage();
 		},
 	});
 
