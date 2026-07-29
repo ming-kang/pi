@@ -130,6 +130,17 @@ status: ready
 - [ ] AC1: Runtime works
 `;
 
+const COMPLETED_TASK = `---
+id: TASK-runtime
+title: Complete runtime
+status: completed
+depends_on: []
+---
+
+## Covers
+- AC1
+`;
+
 describe("Biu extension", () => {
 	let root = "";
 	let cwd = "";
@@ -264,6 +275,15 @@ describe("Biu extension", () => {
 			systemPrompt?: string;
 		};
 		expect(promptResult.systemPrompt).toContain('"stage": "decompose"');
+
+		await writeFile(join(paths.tasks, "TASK-runtime.md"), COMPLETED_TASK, "utf8");
+		const archivePrompt = (await harness.hooks.get("before_agent_start")?.(
+			{ systemPrompt: "BASE" },
+			context.ctx,
+		)) as { systemPrompt?: string };
+		expect(archivePrompt.systemPrompt).toContain('"stage": "archive"');
+		expect(archivePrompt.systemPrompt).toContain("archived/YYYY-MM-DD-shortname/");
+		expect(context.statuses.get(BIU_STATUS_KEY)).toBe("Biu · archive 1/1");
 
 		context.setBranch([modeEntry(true), modeEntry(false)]);
 		await harness.hooks.get("session_tree")?.({ type: "session_tree" }, context.ctx);

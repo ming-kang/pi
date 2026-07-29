@@ -24,7 +24,7 @@ Biu state lives under the normal Pi agent directory and is grouped by working di
     ├── tasks/
     │   └── TASK-<short-name>.md
     └── archived/
-        └── YYYY-MM-DD-NN/
+        └── YYYY-MM-DD-shortname/
             ├── SPEC.md
             ├── Summary.md
             └── tasks/
@@ -53,7 +53,7 @@ The inferred stage is the default next action. An explicit user instruction may 
 - **Interview:** investigate code facts directly, ask one product decision at a time, update the draft SPEC after each substantive answer, and require explicit approval before `status: ready`.
 - **Decompose:** explore reuse opportunities, present the proposed task graph and AC mapping for approval, then write `TASK-*.md` handoffs one at a time.
 - **Execute:** continue the active task or select the first unblocked ready task, record decisions and notes incrementally, and mark it completed only after verification passes. One task is executed at a time by default.
-- **Archive:** review unfinished work, draft and confirm `Summary.md`, then move the cycle into the first unused `archived/YYYY-MM-DD-NN/` directory.
+- **Archive:** review unfinished work, draft and confirm `Summary.md`, then move the cycle into `archived/YYYY-MM-DD-shortname/`. Derive a concise, filesystem-safe shortname from the SPEC title and main outcome so archives are easy to scan. Preserve the project's language; if that name already exists, append `-02`, `-03`, and so on without modifying an older archive.
 - **Repair:** preserve content and stable ids while fixing only the reported contract violations.
 
 Biu uses Pi's normal tools. It does not replace or disable tools, register a model-facing workflow tool, intercept compaction, or maintain a second task database.

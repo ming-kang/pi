@@ -169,7 +169,7 @@ ${TASK_TEMPLATE}`,
 - Use baseline_commit when it resolves to gather a bounded git diff summary. Missing or invalid Git context becomes "none"; Biu never commits on the user's behalf.
 - Draft Summary.md in the workspace. Synthesize Implementation Decisions and Notes, group Task Results by AC, and identify deviations, unverified work, and follow-ups.
 - Explicitly ask whether important implementation decisions or newly learned domain knowledge are missing, then present the draft for user approval.
-- After approval, record head_commit when available. Move SPEC.md, Summary.md, tasks/, and temporary cycle artifacts into the first unused archived/YYYY-MM-DD-NN/ directory. Never modify existing archives.
+- After approval, record head_commit when available. Derive a concise, glanceable shortname from the SPEC title and main outcome, then move SPEC.md, Summary.md, tasks/, and temporary cycle artifacts into archived/YYYY-MM-DD-shortname/. Use a filesystem-safe shortname that preserves the project's language. Never modify an existing archive; if the name already exists, append -02, -03, and so on.
 - A forced archive with unfinished tasks must preserve their statuses and explain the remaining work under Gaps & Follow-Ups.
 
 Use this structure for Summary.md:
