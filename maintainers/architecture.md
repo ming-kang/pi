@@ -10,7 +10,7 @@ AI, Agent core, and TUI behavior come from the exact published `@earendil-works/
 
 Core owns behavior that must be global: agent/session lifecycle, native tool call and result presentation, built-in renderer integration, context-safety checks, and globally configurable keybindings. Native tool UI remains the default; presentation metadata stays local to the coding agent rather than changing upstream tool contracts.
 
-Built-ins are registered as hidden `InlineExtension` entries. `llama.cpp` is the upstream-aligned built-in. The seven distribution-owned workflow extensions are `deepwiki`, `question`, `rewind`, `router`, `statusline`, `subagent`, and `todo`. Each uses the public Extension API, owns its own functional UI, and remains independent of other extensions; there is no shared Fork framework or cross-extension internal API.
+Built-ins are registered as hidden `InlineExtension` entries. `llama.cpp` is the upstream-aligned built-in. The eight distribution-owned workflow extensions are `biu`, `deepwiki`, `question`, `rewind`, `router`, `statusline`, `subagent`, and `todo`. Each uses the public Extension API, owns its own functional UI, and remains independent of other extensions; there is no shared Fork framework or cross-extension internal API.
 
 ## Configuration and assets
 

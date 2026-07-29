@@ -61,6 +61,10 @@
           "path": "bundled/extensions/README.md"
         },
         {
+          "title": "Biu",
+          "path": "bundled/extensions/biu.md"
+        },
+        {
           "title": "DeepWiki",
           "path": "bundled/extensions/deepwiki.md"
         },

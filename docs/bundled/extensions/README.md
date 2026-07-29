@@ -7,6 +7,7 @@ They are registered as hidden built-in extensions and use the same public Extens
 | Extension | Tool or command | Documentation |
 |---|---|---|
 | `llama.cpp` | `/llama` | [llama.cpp](../../llama-cpp.md) |
+| `biu` | `/biu` | [biu.md](biu.md) |
 | `deepwiki` | `deepwiki` | [deepwiki.md](deepwiki.md) |
 | `question` | `question` | [question.md](question.md) |
 | `todo` | `todo`, `/todos` | [todo.md](todo.md) |

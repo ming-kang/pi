@@ -21,7 +21,7 @@ The package ships Pi's extensible terminal coding-agent architecture with these 
 
 - native `●` call and `│` result presentation with bounded collapsed tool output;
 - automatic compaction between completed tool batches and the next provider request;
-- bundled `llama.cpp`, `deepwiki`, `question`, `rewind`, `router`, `statusline`, `subagent`, and `todo` extensions;
+- bundled `llama.cpp`, `biu`, `deepwiki`, `question`, `rewind`, `router`, `statusline`, `subagent`, and `todo` extensions;
 - bundled `ice-cream-dark` and `ice-cream-light` themes;
 - exact registry dependencies on the upstream AI, Agent core, and TUI packages.
 
@@ -39,6 +39,7 @@ Useful commands:
 
 | Command | Purpose |
 |---|---|
+| `/biu` | Enter or resume a project development workflow |
 | `/login` | Authenticate a provider |
 | `/model` | Select a configured model |
 | `/settings` | Change thinking, theme, queue, and transport settings |

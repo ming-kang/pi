@@ -51,6 +51,7 @@ The installed package includes built-in extensions, themes, and native tool pres
 
 - [Bundled overview](bundled/README.md) - package features and how they fit together.
 - [Bundled extensions](bundled/extensions/README.md) - catalog and links to every bundled extension.
+- [Biu](bundled/extensions/biu.md) - guide a project through interview, task decomposition, execution, and archive.
 - [DeepWiki](bundled/extensions/deepwiki.md) - query indexed public GitHub repository documentation.
 - [Question](bundled/extensions/question.md) - ask structured questions through native interactive UI.
 - [Rewind](bundled/extensions/rewind.md) - create and restore project snapshots around session operations.

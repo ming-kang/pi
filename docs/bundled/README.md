@@ -9,6 +9,7 @@ The following extensions are loaded as hidden built-ins. They use the same publi
 | Extension | Tool or command | Purpose |
 |---|---|---|
 | [`llama.cpp`](../llama-cpp.md) | `/llama` | Manage models served by the local llama.cpp router |
+| [`Biu`](extensions/biu.md) | `/biu` | Guide a project through interview, task decomposition, execution, and archive |
 | `deepwiki` | `deepwiki` | Query indexed public GitHub repository documentation |
 | `question` | `question` | Ask structured questions through native interactive UI |
 | `rewind` | `/rewind` | Create and restore project snapshots around session lifecycle operations |
