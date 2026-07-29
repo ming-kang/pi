@@ -35,8 +35,8 @@ jobs:
 
       - name: Fetch recorded upstream baseline tag
         run: |
-          upstream_repository="$(node -p "require('./maintainers/upstream.json').baseline.repository")"
-          upstream_tag="$(node -p "require('./maintainers/upstream.json').baseline.tag")"
+          upstream_repository="$(node -p "require('./maintainers/upstream.json').repository")"
+          upstream_tag="$(node -p "require('./maintainers/upstream.json').tag")"
           git fetch --depth=1 --no-tags --force "https://github.com/${upstream_repository}.git" "refs/tags/${upstream_tag}:refs/tags/${upstream_tag}"
 
       - name: Install OIDC-capable npm

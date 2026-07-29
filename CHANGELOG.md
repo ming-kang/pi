@@ -12,6 +12,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 - Removed the existing bundled Plan Mode implementation, its legacy extension example, tests, and user documentation ahead of a replacement design.
 
+### Changed
+
+- Consolidated maintainer and public documentation, streamlined package link and navigation validation (`scripts/check-docs.mjs`), and simplified upstream synchronization around a recorded baseline manifest (`maintainers/upstream.json`) and worktree classifier (`scripts/diff-upstream.mjs`).
+
 ## [0.82.7] - 2026-07-28
 
 ### Added

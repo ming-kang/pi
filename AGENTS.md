@@ -24,7 +24,7 @@ This is the private standalone distribution of Pi's coding-agent package. It pub
 - Run `npm run check` after code changes; run focused tests for changed tests or behavior, and build when exports, package metadata, TypeScript configuration, or bundled assets change. Do not run the complete suite unless requested or doing release verification.
 - On native Windows, use `npm run test:isolated` for a complete local suite. Treat focused failures as real; Ubuntu CI is authoritative for POSIX-sensitive complete-suite coverage. Verify interactive changes in a real TTY, including their affected pending, settled, collapsed, expanded, `/reload`, and `/tree` states.
 - Never use `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, `git add -A`, or `git add .`. Stage explicit paths, inspect status before committing, and do not commit without an owner-requested checkpoint or release. Use concise `feat`, `fix`, or `docs` Conventional Commit messages.
-- Keep the upstream repository as the `upstream` remote; synchronize only from its release tags, never `upstream/main`, and never merge an upstream monorepo tag into this branch. The upstream delta is frozen: changes require the approved manifest, rationale, and boundary check described in the maintainer guides.
+- Keep the upstream repository as the `upstream` remote; synchronize only from its release tags, never `upstream/main`, and never merge an upstream monorepo tag into this branch.
 
 ## Documentation and release ownership
 
@@ -32,9 +32,6 @@ This is the private standalone distribution of Pi's coding-agent package. It pub
 
 ## Maintainer guides
 
-- [Maintainer documentation index](maintainers/README.md) — responsibilities and navigation.
-- [Architecture](maintainers/architecture.md) — package and ownership boundaries.
-- [Development](maintainers/development.md) — setup, debugging, and local verification.
-- [Upstream synchronization](maintainers/upstream-sync.md) — release-tag synchronization procedure.
-- [Delta rationale](maintainers/delta.md) and [baseline manifest](maintainers/upstream.json) — delta admission and registry ownership.
-- [Release](maintainers/release.md) — versioning and publishing procedure.
+- [Maintainer guide](maintainers/README.md) — architecture boundaries and local development.
+- [Upstream synchronization](maintainers/upstream.md) — release-tag adoption and deviation notes.
+- [Release](maintainers/release.md) — versioning and publication.

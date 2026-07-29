@@ -57,10 +57,6 @@
           "path": "bundled/README.md"
         },
         {
-          "title": "Bundled extensions",
-          "path": "bundled/extensions/README.md"
-        },
-        {
           "title": "Biu",
           "path": "bundled/extensions/biu.md"
         },

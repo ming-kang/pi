@@ -1,24 +1,22 @@
 # Bundled features
 
-The installed `@astralyn/pi` package includes a small set of workflows and presentation choices on top of its coding-agent behavior.
+The installed `@astralyn/pi` package includes workflow extensions, local-model support, native presentation, and themes on top of its coding-agent behavior.
 
-## Extensions
+## Extensions and local models
 
-The following extensions are loaded as hidden built-ins. They use the same public Extension API available to external extensions.
+These hidden built-ins use the same public Extension API available to external extensions. Their implementation details are internal to the package.
 
-| Extension | Tool or command | Purpose |
+| Feature | Tool or command | Purpose |
 |---|---|---|
 | [`llama.cpp`](../llama-cpp.md) | `/llama` | Manage models served by the local llama.cpp router |
-| [`Biu`](extensions/biu.md) | `/biu` | Guide a project through interview, task decomposition, execution, and archive |
-| `deepwiki` | `deepwiki` | Query indexed public GitHub repository documentation |
-| `question` | `question` | Ask structured questions through native interactive UI |
-| `rewind` | `/rewind` | Create and restore project snapshots around session lifecycle operations |
-| `router` | `/router` | Configure and probe Codex-style routing endpoints |
-| `statusline` | Footer status | Show concise extension-managed activity state |
-| `subagent` | `subagent`, `/agents` | Delegate bounded work to isolated child Pi sessions |
-| `todo` | `todo`, `/todos` | Track multi-step work with dependencies and status |
-
-See the [bundled extension catalog](extensions/README.md) for configuration and behavior details.
+| [Biu](extensions/biu.md) | `/biu` | Guide a project through interview, task decomposition, execution, and archive |
+| [DeepWiki](extensions/deepwiki.md) | `deepwiki` | Query indexed public GitHub repository documentation |
+| [Question](extensions/question.md) | `question` | Ask structured questions through native interactive UI |
+| [Rewind](extensions/rewind.md) | `/rewind`, `/tree` lifecycle | Create and restore project snapshots around session operations |
+| [Router](extensions/router.md) | `/router` | Configure and probe Codex-style routing endpoints |
+| [Statusline](extensions/statusline.md) | Footer status | Show concise extension-managed activity state |
+| [Subagent](extensions/subagent.md) | `subagent`, `/agents` | Delegate bounded work to isolated child Pi sessions |
+| [Todo](extensions/todo.md) | `todo`, `/todos` | Track multi-step work with dependencies and status |
 
 ## Context safety
 

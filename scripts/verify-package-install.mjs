@@ -102,7 +102,6 @@ try {
 		"dist/modes/interactive/theme/ice-cream-light.json",
 		"dist/modes/interactive/theme/light.json",
 		"docs/bundled/README.md",
-		"docs/bundled/extensions/README.md",
 		"docs/bundled/extensions/biu.md",
 		"docs/bundled/extensions/deepwiki.md",
 		"docs/bundled/extensions/question.md",

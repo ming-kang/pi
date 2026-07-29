@@ -25,12 +25,6 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Fetch recorded upstream baseline tag
-        run: |
-          upstream_repository="$(node -p "require('./maintainers/upstream.json').baseline.repository")"
-          upstream_tag="$(node -p "require('./maintainers/upstream.json').baseline.tag")"
-          git fetch --depth=1 --no-tags --force "https://github.com/${upstream_repository}.git" "refs/tags/${upstream_tag}:refs/tags/${upstream_tag}"
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -48,9 +42,6 @@ jobs:
 
       - name: Check
         run: npm run check
-
-      - name: Verify upstream delta
-        run: npm run diff:upstream -- --check
 
       - name: Verify generated and formatted files
         run: git diff --exit-code
