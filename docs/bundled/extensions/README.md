@@ -14,5 +14,3 @@ They are registered as hidden built-in extensions and use the same public Extens
 | `router` | `/router` | [router.md](router.md) |
 | `statusline` | Footer | [statusline.md](statusline.md) |
 | `subagent` | `subagent`, `/agents` | [subagent.md](subagent.md) |
-
-The catalog documents installed-package behavior and configuration; it does not require access to the package's internal source.

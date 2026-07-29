@@ -220,8 +220,6 @@ await session.prompt("After you're done, also check X", { streamingBehavior: "fo
 - **Extension commands** (e.g., `/mycommand`): Execute immediately, even during streaming. They manage their own LLM interaction via `pi.sendMessage()`.
 - **File-based prompt templates** (from `.md` files): Expanded to their content before sending or queueing.
 - **During streaming without `streamingBehavior`**: Throws an error. Use `steer()` or `followUp()` directly, or specify the option.
-- **`preflightResult(true)`**: Means the prompt was accepted, queued, or handled immediately.
-- **`preflightResult(false)`**: Means preflight rejected before acceptance.
 
 For explicit queueing during streaming:
 
@@ -756,15 +754,7 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 Sessions use a tree structure with `id`/`parentId` linking, enabling in-place branching.
 
 ```typescript
-import {
-  type CreateAgentSessionRuntimeFactory,
-  createAgentSession,
-  createAgentSessionFromServices,
-  createAgentSessionRuntime,
-  createAgentSessionServices,
-  getAgentDir,
-  SessionManager,
-} from "@astralyn/pi";
+import { createAgentSession, SessionManager } from "@astralyn/pi";
 
 // In-memory (no persistence)
 const { session } = await createAgentSession({
@@ -792,27 +782,11 @@ const { session: opened } = await createAgentSession({
 // List sessions
 const currentProjectSessions = await SessionManager.list(process.cwd());
 const allSessions = await SessionManager.listAll();
+```
 
-// Session replacement API for /new, /resume, /fork, /clone, and import flows.
-const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
-  const services = await createAgentSessionServices({ cwd, agentDir });
-  return {
-    ...(await createAgentSessionFromServices({
-      services,
-      sessionManager,
-      sessionStartEvent,
-    })),
-    services,
-    diagnostics: services.diagnostics,
-  };
-};
+For active-session replacement, construct `runtime` as shown in [createAgentSessionRuntime() and AgentSessionRuntime](#createagentsessionruntime-and-agentsessionruntime), then use its replacement methods:
 
-const runtime = await createAgentSessionRuntime(createRuntime, {
-  cwd: process.cwd(),
-  agentDir: getAgentDir(),
-  sessionManager: SessionManager.create(process.cwd()),
-});
-
+```typescript
 // Replace the active session with a fresh one
 await runtime.newSession();
 

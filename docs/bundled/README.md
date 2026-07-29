@@ -21,7 +21,7 @@ See the [bundled extension catalog](extensions/README.md) for configuration and 
 
 ## Context safety
 
-Long tool loops are checked after a completed tool batch and before another provider request. When the active context crosses the configured auto-compaction threshold, Pi compacts and rebuilds the context before continuing the same run. Cancellation, compaction failure, an unavailable cut point, or retained context that remains unsafe stops before another provider request.
+After a completed tool batch, Pi checks context before the next provider request. If the active context crosses the configured auto-compaction threshold, Pi compacts and rebuilds it before continuing the same run. Cancellation, compaction failure, an unavailable cut point, or retained context that remains unsafe stops the run.
 
 See [Compaction](../compaction.md).
 

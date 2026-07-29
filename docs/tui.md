@@ -798,15 +798,7 @@ PI_TUI_WRITE_LOG=/tmp/tui-ansi.log pi
 6. Implement `dispose()` for timers, subscriptions, or other owned resources.
 7. Prefer `SelectList`, `SettingsList`, and `BorderedLoader` over rebuilding their behavior.
 
-## Examples
+## Additional examples
 
-- **Selection UI:** [examples/extensions/preset.ts](../examples/extensions/preset.ts)
-- **Async with cancellation:** [examples/extensions/qna.ts](../examples/extensions/qna.ts)
-- **Settings toggles:** [examples/extensions/tools.ts](../examples/extensions/tools.ts)
-- **Status indicators:** [examples/extensions/status-line.ts](../examples/extensions/status-line.ts)
-- **Widgets:** [examples/extensions/widget-placement.ts](../examples/extensions/widget-placement.ts)
-- **Working indicator:** [examples/extensions/working-indicator.ts](../examples/extensions/working-indicator.ts)
-- **Custom footer:** [examples/extensions/custom-footer.ts](../examples/extensions/custom-footer.ts)
-- **Custom editor:** [examples/extensions/modal-editor.ts](../examples/extensions/modal-editor.ts)
 - **Game loop and disposal:** [examples/extensions/snake.ts](../examples/extensions/snake.ts)
 - **Custom tool rendering:** [examples/extensions/todo.ts](../examples/extensions/todo.ts)
