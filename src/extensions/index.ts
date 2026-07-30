@@ -1,5 +1,4 @@
 import type { InlineExtension } from "../core/extensions/types.ts";
-import biuExtension from "./biu/index.ts";
 import deepwikiExtension from "./deepwiki/index.ts";
 import llamaExtension from "./llama/index.ts";
 import questionExtension from "./question/index.ts";
@@ -11,7 +10,6 @@ import todoExtension from "./todo/index.ts";
 
 export const builtInExtensions: InlineExtension[] = [
 	{ name: "llama.cpp", factory: llamaExtension, hidden: true },
-	{ name: "biu", factory: biuExtension, hidden: true },
 	{ name: "deepwiki", factory: deepwikiExtension, hidden: true },
 	{ name: "question", factory: questionExtension, hidden: true },
 	{ name: "rewind", factory: rewindExtension, hidden: true },

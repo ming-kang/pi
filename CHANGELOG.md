@@ -4,10 +4,6 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
-### Added
-
-- Added the bundled Biu workflow extension. `/biu` stores project-scoped SPEC, TASK, and archive artifacts under `<agentDir>/biu/<project>/`, infers the current interview/decompose/execute/archive stage, restores mode state across session lifecycle events, and publishes bounded stage context plus a statusline marker. Once active, `/biu` opens a native menu for continuing, viewing status, or exiting without changing workflow files.
-
 ### Removed
 
 - Removed the existing bundled Plan Mode implementation, its legacy extension example, tests, and user documentation ahead of a replacement design.
