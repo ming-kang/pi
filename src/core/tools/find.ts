@@ -2,6 +2,7 @@ import { createInterface } from "node:readline";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Text } from "@earendil-works/pi-tui";
 import { spawn } from "child_process";
+import { minimatch } from "minimatch";
 import path from "path";
 import { type Static, Type } from "typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
@@ -226,6 +227,7 @@ export function createFindToolDefinition(
 						}
 
 						const args: string[] = ["--glob", "--color=never", "--hidden"];
+						const needsWindowsPathFilter = process.platform === "win32" && pattern.includes("/");
 
 						// fd normally ignores .gitignore outside git repos, so keep --no-require-git
 						// there. Inside repos, use fd's default git-aware behavior so parent
@@ -242,16 +244,22 @@ export function createFindToolDefinition(
 							current = parent;
 						}
 						if (!insideGitRepo) args.push("--no-require-git");
-						args.push("--max-results", String(effectiveLimit));
+						if (!needsWindowsPathFilter) args.push("--max-results", String(effectiveLimit));
 
 						// fd --glob matches against the basename unless --full-path is set; in --full-path
 						// mode it matches against the absolute candidate path, so a path-containing
 						// pattern like 'src/**/*.spec.ts' needs a leading '**/' to match anything.
 						let effectivePattern = pattern;
 						if (pattern.includes("/")) {
-							args.push("--full-path");
-							if (!pattern.startsWith("/") && !pattern.startsWith("**/") && pattern !== "**") {
-								effectivePattern = `**/${pattern}`;
+							if (needsWindowsPathFilter) {
+								// fd's Windows glob matcher does not match path separators. Ask fd for
+								// bounded streaming candidates, then apply the original POSIX-style glob below.
+								effectivePattern = "**";
+							} else {
+								args.push("--full-path");
+								if (!pattern.startsWith("/") && !pattern.startsWith("**/") && pattern !== "**") {
+									effectivePattern = `**/${pattern}`;
+								}
 							}
 						}
 						args.push("--", effectivePattern, searchPath);
@@ -276,7 +284,27 @@ export function createFindToolDefinition(
 						});
 
 						rl.on("line", (line) => {
+							if (needsWindowsPathFilter) {
+								if (lines.length >= effectiveLimit) return;
+								const normalizedLine = line.replace(/\r$/, "").trim();
+								if (!normalizedLine) return;
+								const hadTrailingSlash = normalizedLine.endsWith("/") || normalizedLine.endsWith("\\");
+								const candidate = path.isAbsolute(pattern)
+									? toPosixPath(normalizedLine)
+									: toPosixPath(path.relative(searchPath, normalizedLine));
+								const candidateWithDirectoryMarker =
+									hadTrailingSlash && !candidate.endsWith("/") ? `${candidate}/` : candidate;
+								if (
+									!minimatch(candidateWithDirectoryMarker, toPosixPath(pattern), {
+										dot: true,
+										nocase: !/[A-Z]/u.test(pattern),
+									})
+								) {
+									return;
+								}
+							}
 							lines.push(line);
+							if (needsWindowsPathFilter && lines.length >= effectiveLimit) stopChild?.();
 						});
 
 						child.on("error", (error) => {

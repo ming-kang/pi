@@ -4,6 +4,7 @@ import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { TrustSelectorComponent } from "../src/modes/interactive/components/trust-selector.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
+import { resolvePath } from "../src/utils/paths.ts";
 
 describe("TrustSelectorComponent", () => {
 	beforeAll(() => {
@@ -15,9 +16,10 @@ describe("TrustSelectorComponent", () => {
 	});
 
 	it("marks the saved trusted decision", () => {
+		const projectPath = resolvePath("/project");
 		const selector = new TrustSelectorComponent({
-			cwd: "/project",
-			savedDecision: { path: "/project", decision: true },
+			cwd: projectPath,
+			savedDecision: { path: projectPath, decision: true },
 			projectTrusted: true,
 			onSelect: () => {},
 			onCancel: () => {},
@@ -25,16 +27,17 @@ describe("TrustSelectorComponent", () => {
 
 		const output = stripAnsi(selector.render(120).join("\n"));
 
-		expect(output).toContain("Saved decision: trusted (/project)");
+		expect(output).toContain(`Saved decision: trusted (${projectPath})`);
 		expect(output).toContain("Current session: trusted");
 		expect(output).toContain("Trust ✓");
 		expect(output).not.toContain("Do not trust ✓");
 	});
 
 	it("selects a trust decision", () => {
+		const projectPath = resolvePath("/project");
 		const onSelect = vi.fn();
 		const selector = new TrustSelectorComponent({
-			cwd: "/project",
+			cwd: projectPath,
 			savedDecision: null,
 			projectTrusted: false,
 			onSelect,
@@ -43,13 +46,14 @@ describe("TrustSelectorComponent", () => {
 
 		selector.handleInput("\n");
 
-		expect(onSelect).toHaveBeenCalledWith({ trusted: true, updates: [{ path: "/project", decision: true }] });
+		expect(onSelect).toHaveBeenCalledWith({ trusted: true, updates: [{ path: projectPath, decision: true }] });
 	});
 
 	it("labels saved ancestor decisions as inherited", () => {
+		const parentPath = resolvePath("/parent");
 		const selector = new TrustSelectorComponent({
-			cwd: "/parent/project/nested",
-			savedDecision: { path: "/parent", decision: true },
+			cwd: resolvePath("/parent/project/nested"),
+			savedDecision: { path: parentPath, decision: true },
 			projectTrusted: true,
 			onSelect: () => {},
 			onCancel: () => {},
@@ -57,30 +61,32 @@ describe("TrustSelectorComponent", () => {
 
 		const output = stripAnsi(selector.render(120).join("\n"));
 
-		expect(output).toContain("Saved decision: trusted (inherited from /parent)");
+		expect(output).toContain(`Saved decision: trusted (inherited from ${parentPath})`);
 	});
 
 	it("adds a trust parent option", () => {
+		const parentPath = resolvePath("/parent");
+		const projectPath = resolvePath("/parent/project");
 		const onSelect = vi.fn();
 		const selector = new TrustSelectorComponent({
-			cwd: "/parent/project",
-			savedDecision: { path: "/parent", decision: true },
+			cwd: projectPath,
+			savedDecision: { path: parentPath, decision: true },
 			projectTrusted: true,
 			onSelect,
 			onCancel: () => {},
 		});
 
 		const output = stripAnsi(selector.render(120).join("\n"));
-		expect(output).toContain("Saved decision: trusted (inherited from /parent)");
-		expect(output).toContain("Trust parent folder (/parent) ✓");
+		expect(output).toContain(`Saved decision: trusted (inherited from ${parentPath})`);
+		expect(output).toContain(`Trust parent folder (${parentPath}) ✓`);
 
 		selector.handleInput("\n");
 
 		expect(onSelect).toHaveBeenCalledWith({
 			trusted: true,
 			updates: [
-				{ path: "/parent", decision: true },
-				{ path: "/parent/project", decision: null },
+				{ path: parentPath, decision: true },
+				{ path: projectPath, decision: null },
 			],
 		});
 	});

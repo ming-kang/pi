@@ -74,12 +74,20 @@ describe("withFileMutationQueue", () => {
 		expect(order.indexOf("b:start")).toBeLessThan(order.indexOf("a:end"));
 	});
 
-	it("uses the same queue for symlink aliases", async () => {
+	it("uses the same queue for symlink aliases", async ({ skip }) => {
 		const dir = await createTempDir();
 		const targetPath = join(dir, "target.txt");
 		const symlinkPath = join(dir, "alias.txt");
 		await writeFile(targetPath, "hello\n", "utf8");
-		await symlink(targetPath, symlinkPath);
+		try {
+			await symlink(targetPath, symlinkPath);
+		} catch (error) {
+			if (process.platform === "win32" && (error as NodeJS.ErrnoException).code === "EPERM") {
+				skip();
+				return;
+			}
+			throw error;
+		}
 
 		const order: string[] = [];
 		await Promise.all([

@@ -337,7 +337,7 @@ function streamMyProvider(
         totalTokens: 0,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
-      stopReason: "stop",
+      stopReason: "pending",
       timestamp: Date.now(),
     };
 
@@ -367,8 +367,15 @@ function streamMyProvider(
         output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
       calculateCost(model, output.usage);
 
-      output.stopReason = "stop";
-      stream.push({ type: "done", reason: "stop", message: output });
+      // The omitted provider loop must map its terminal event by replacing
+      // "pending" with "stop", "length", "toolUse", "error", or "aborted".
+      if (output.stopReason === "pending") {
+        throw new Error("Provider stream ended without a stop reason");
+      }
+      if (output.stopReason === "error" || output.stopReason === "aborted") {
+        throw new Error(output.errorMessage || "An unknown error occurred");
+      }
+      stream.push({ type: "done", reason: output.stopReason, message: output });
     } catch (error) {
       const reason = options?.signal?.aborted ? "aborted" : "error";
       output.stopReason = reason;

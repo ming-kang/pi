@@ -12,9 +12,10 @@ import { createFindToolDefinition } from "../../../src/core/tools/find.ts";
  * `--full-path`, which makes fd match only against the basename. Any pattern
  * containing a `/` therefore silently returned no matches.
  *
- * The fix switches fd into full-path mode when the pattern contains a `/`
- * and prepends `**\/` so the pattern can match against the absolute candidate
- * path that fd feeds to the matcher.
+ * On Unix, the fix switches fd into full-path mode when the pattern contains
+ * a `/` and prepends `**\/` so it can match fd's absolute candidate path. fd's
+ * Windows glob matcher does not match path separators, so Pi streams broad fd
+ * candidates there and applies the original POSIX-style glob itself.
  */
 describe("issue #3302 find returns no results for path-based glob patterns", () => {
 	let tempRoot: string;
@@ -32,11 +33,11 @@ describe("issue #3302 find returns no results for path-based glob patterns", () 
 		rmSync(tempRoot, { recursive: true, force: true });
 	});
 
-	async function runFind(pattern: string): Promise<string[]> {
+	async function runFind(pattern: string, limit?: number): Promise<string[]> {
 		const def = createFindToolDefinition(tempRoot);
 		// The find tool implementation does not touch ctx; pass a minimal stub.
 		const ctx = {} as Parameters<typeof def.execute>[4];
-		const result = (await def.execute("call-1", { pattern }, undefined, undefined, ctx)) as {
+		const result = (await def.execute("call-1", { pattern, limit }, undefined, undefined, ctx)) as {
 			content: Array<{ type: string; text?: string }>;
 		};
 		const text = result.content[0]?.text ?? "";
@@ -63,6 +64,11 @@ describe("issue #3302 find returns no results for path-based glob patterns", () 
 		const files = await runFind("**/parent/child/*");
 		expect(files.sort()).toContain("some/parent/child/file.ext");
 		expect(files.sort()).toContain("some/parent/child/test.spec.ts");
+	});
+
+	it("path-based matching honors the result limit", async () => {
+		const files = await runFind("**/*.spec.ts", 1);
+		expect(files).toHaveLength(1);
 	});
 
 	it("src/**/*.spec.ts matches nested spec file", async () => {

@@ -83,13 +83,26 @@ function createLargeTool(text: string): AgentTool {
 	};
 }
 
-function createStreamMessage(model: Model<any>, message: AssistantMessage, totalTokens: number): AssistantMessage {
+type TerminalAssistantMessage = Omit<AssistantMessage, "stopReason"> & {
+	stopReason: Exclude<AssistantMessage["stopReason"], "pending">;
+};
+
+function createStreamMessage(
+	model: Model<any>,
+	message: AssistantMessage,
+	totalTokens: number,
+): TerminalAssistantMessage {
+	const stopReason = message.stopReason === "pending" ? "error" : message.stopReason;
 	return {
 		...message,
 		api: model.api,
 		provider: model.provider,
 		model: model.id,
 		usage: createUsage(totalTokens),
+		stopReason,
+		...(message.stopReason === "pending" && !message.errorMessage
+			? { errorMessage: "Scripted response ended without a stop reason" }
+			: {}),
 	};
 }
 

@@ -48,6 +48,7 @@ Anthropic subscription auth is active for Claude Pro/Max accounts. Third-party h
 
 - Run `/login openrouter`, then select **Sign in with OpenRouter** to open the OpenRouter PKCE authorization flow
 - The authorization creates a user-controlled OpenRouter API key billed from your OpenRouter credits
+- On remote or headless machines (for example over SSH), paste the final redirect URL or authorization code into the login prompt when the browser cannot reach the loopback callback
 - `OPENROUTER_API_KEY` remains available through **Use an API key**
 
 ### Radius

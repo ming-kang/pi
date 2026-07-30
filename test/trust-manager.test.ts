@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -34,6 +34,21 @@ describe("ProjectTrustStore", () => {
 		expect(store.get(childDir)).toBe(false);
 		store.set(childDir, null);
 		expect(store.get(childDir)).toBe(true);
+	});
+
+	it.skipIf(process.platform !== "win32")("matches decisions regardless of Windows path casing", () => {
+		const store = new ProjectTrustStore(agentDir);
+		const alternateCasing = cwd
+			.replace(/project$/, "PROJECT")
+			.replace(/^([A-Z]):/, (_, drive) => `${drive.toLowerCase()}:`);
+
+		store.set(cwd, true);
+		expect(store.get(alternateCasing)).toBe(true);
+
+		store.set(alternateCasing, false);
+		expect(store.get(cwd)).toBe(false);
+		const stored = JSON.parse(readFileSync(join(agentDir, "trust.json"), "utf-8")) as Record<string, boolean>;
+		expect(Object.keys(stored)).toHaveLength(1);
 	});
 
 	it("detects trust-requiring project resources", () => {

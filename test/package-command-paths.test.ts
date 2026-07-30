@@ -10,6 +10,7 @@ import { ProjectTrustStore } from "../src/core/trust-manager.ts";
 import { main } from "../src/main.ts";
 import { ConfigSelectorComponent } from "../src/modes/interactive/components/config-selector.ts";
 import { handlePackageCommand } from "../src/package-manager-cli.ts";
+import { allowNetwork } from "./test-network-env.ts";
 
 describe("package commands", () => {
 	let tempDir: string;
@@ -51,6 +52,7 @@ describe("package commands", () => {
 	}
 
 	beforeEach(() => {
+		allowNetwork();
 		tempDir = join(tmpdir(), `pi-package-commands-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		agentDir = join(tempDir, "agent");
 		projectDir = join(tempDir, "project");
@@ -427,12 +429,12 @@ describe("package commands", () => {
 
 		selector.getResourceList().handleInput(" ");
 		expect(settingsManager.getProjectSettings().packages).toEqual([
-			{ source: "npm:pi-tools", autoload: false, extensions: ["-extensions/bar.ts"] },
+			{ source: "npm:pi-tools", autoload: false, extensions: [`-${join("extensions", "bar.ts")}`] },
 		]);
 
 		selector.getResourceList().handleInput(" ");
 		expect(settingsManager.getProjectSettings().packages).toEqual([
-			{ source: "npm:pi-tools", autoload: false, extensions: ["+extensions/bar.ts"] },
+			{ source: "npm:pi-tools", autoload: false, extensions: [`+${join("extensions", "bar.ts")}`] },
 		]);
 
 		selector.getResourceList().handleInput(" ");
@@ -597,7 +599,14 @@ else fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(args));
 
 	it("prints a pnpm metadata hint when self-update fails", async () => {
 		const globalRoot = join(tempDir, "pnpm", "global", "v11");
-		const selfPackageDir = join(globalRoot, "node_modules", "@earendil-works", "pi-coding-agent");
+		const selfPackageDir = join(
+			globalRoot,
+			".pnpm",
+			`@earendil-works+pi-coding-agent@${VERSION}`,
+			"node_modules",
+			"@earendil-works",
+			"pi-coding-agent",
+		);
 		const fakeBinDir = join(tempDir, "bin");
 		const fakePnpmPath = join(fakeBinDir, process.platform === "win32" ? "pnpm.cmd" : "pnpm");
 		mkdirSync(selfPackageDir, { recursive: true });
@@ -611,6 +620,8 @@ else fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(args));
 		chmodSync(fakePnpmPath, 0o755);
 		process.env.PATH = `${fakeBinDir}${process.env.PATH ? `${delimiter}${process.env.PATH}` : ""}`;
 		process.env.PI_PACKAGE_DIR = selfPackageDir;
+		const originalEntrypoint = process.argv[1];
+		process.argv[1] = join(selfPackageDir, "dist", "cli.js");
 		Object.defineProperty(process, "execPath", {
 			value: join(tempDir, "pnpm", "bin", "node"),
 			configurable: true,
@@ -634,6 +645,7 @@ else fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify(args));
 			expect(stderr).toContain("If pnpm reports missing package versions");
 			expect(stderr).toContain("Run `pnpm store prune` and retry `pi update --self`.");
 		} finally {
+			process.argv[1] = originalEntrypoint;
 			logSpy.mockRestore();
 			errorSpy.mockRestore();
 		}

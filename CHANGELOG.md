@@ -4,13 +4,33 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
-### Removed
+## [0.83.0] - 2026-07-30
 
-- Removed the existing bundled Plan Mode implementation, its legacy extension example, tests, and user documentation ahead of a replacement design.
+### Added
+
+- Added `pi auth print-api-key` and `pi auth print-bearer-token` for exporting a model provider's configured credential to external clients; OAuth bearer tokens refresh through the normal auth path and support a configurable minimum remaining lifetime.
+- Exposed the active session's read-only scoped model list as `ctx.scopedModels` for extensions.
+- Added inherited per-request `fetch` injection for supported text and image provider transports, plus the inherited `"pending"` stop reason for partial streaming messages and raw provider stop reasons across Anthropic, Amazon Bedrock, Google, Mistral, and OpenAI adapters.
+- Added inherited manual redirect URL and authorization-code entry to OpenRouter login for remote and headless environments, and Claude Opus 5 support through GitHub Copilot with adaptive thinking and a 1M context window.
 
 ### Changed
 
+- Followed upstream Pi `v0.83.0`, updating the exact `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, and `@earendil-works/pi-tui` runtime dependencies to `0.83.0` and TypeBox to `1.3.7`.
+- TypeBox 1.3.7 removes deprecated APIs including `Type.Base`, `Type.Awaited`, `Type.Promise`, `Type.AsyncIterator`, `Type.Iterator`, `Type.Options`, and `Value.Mutate`; extensions using them must migrate to supported APIs.
+- Changed inherited OAuth resolution to refresh tokens with less than five minutes of validity remaining instead of waiting until expiration.
 - Consolidated maintainer and public documentation, streamlined package link and navigation validation (`scripts/check-docs.mjs`), and simplified upstream synchronization around a recorded baseline manifest (`maintainers/upstream.json`) and worktree classifier (`scripts/diff-upstream.mjs`).
+
+### Fixed
+
+- Fixed startup resource listings omitting file-backed system prompts, duplicate project context in nested Git worktrees (including drive-letter case differences on Windows), and extension resource reloads losing package provenance metadata.
+- Fixed concurrent user Bash cancellation, RPC Bash bypassing `user_bash` extension handlers, active responses surviving session replacement or committed tree navigation, and duplicate interactive subscriptions during startup session switches.
+- Fixed filtered model selection retaining a stale row, failed Git installs leaving partial checkouts, llama.cpp streaming usage remaining disabled, and uppercase credential-expiry units being interpreted incorrectly.
+- Fixed inherited Qwen Token Plan reasoning controls, Z.AI output-limit parameters, configured Amazon Bedrock profile precedence, narrow-terminal image fallbacks, and OpenAI-compatible function arguments accompanied by empty custom payloads.
+- Fixed quoted external-editor commands whose executable or arguments contain spaces, path-segment `find` globs on Windows, and project trust misclassifying operating-system home skills when `HOME` points elsewhere or losing decisions when Windows path casing changes.
+
+### Removed
+
+- Removed the existing bundled Plan Mode implementation, its legacy extension example, tests, and user documentation ahead of a replacement design.
 
 ## [0.82.7] - 2026-07-28
 

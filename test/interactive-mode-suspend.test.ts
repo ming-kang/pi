@@ -21,6 +21,16 @@ function callHandleCtrlZ(context: HandleCtrlZThis): void {
 	(interactiveModePrototype as InteractiveModePrototypeWithHandleCtrlZ).handleCtrlZ.call(context);
 }
 
+function withPlatform<T>(platform: NodeJS.Platform, callback: () => T): T {
+	const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+	Object.defineProperty(process, "platform", { configurable: true, value: platform });
+	try {
+		return callback();
+	} finally {
+		if (descriptor) Object.defineProperty(process, "platform", descriptor);
+	}
+}
+
 const interactiveModePrototype = InteractiveMode.prototype as unknown;
 
 describe("InteractiveMode.handleCtrlZ", () => {
@@ -94,7 +104,7 @@ describe("InteractiveMode.handleCtrlZ", () => {
 			.mockImplementation(((_event: string, _listener: () => void) => process) as typeof process.removeListener);
 		const processKillSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 
-		callHandleCtrlZ(context);
+		withPlatform("linux", () => callHandleCtrlZ(context));
 
 		expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 2 ** 30);
 		expect(processOnSpy).toHaveBeenCalledWith("SIGINT", expect.any(Function));
@@ -138,7 +148,7 @@ describe("InteractiveMode.handleCtrlZ", () => {
 			throw suspendError;
 		});
 
-		expect(() => callHandleCtrlZ(context)).toThrow(suspendError);
+		expect(() => withPlatform("linux", () => callHandleCtrlZ(context))).toThrow(suspendError);
 		expect(ui.stop).toHaveBeenCalledTimes(1);
 		expect(setIntervalSpy).toHaveBeenCalledTimes(1);
 		expect(clearIntervalSpy).toHaveBeenCalledWith(keepAliveHandle);

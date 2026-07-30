@@ -149,6 +149,8 @@ interface Usage {
 }
 ```
 
+The exported pi-ai `StopReason` type also includes `"pending"`, but that value is reserved for partial messages in streaming events. Terminal `done` or `error` events replace it with a final completion reason before Pi persists the assistant message, so `"pending"` must never appear in session JSONL.
+
 ### Pi-Specific `AgentMessage` Roles
 
 ```typescript
