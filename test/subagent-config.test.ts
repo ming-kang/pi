@@ -148,6 +148,20 @@ describe("subagent configuration", () => {
 		expect(config).toEqual({ version: 1, profiles: { reviewer: { model: "test/sonnet", thinking: "high" } } });
 	});
 
+	it("serializes concurrent override updates without losing any profile", async () => {
+		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-concurrent-"));
+		temporaryDirectories.push(root);
+		await Promise.all([
+			updateProfileOverride("alpha", { model: "test/alpha" }, root),
+			updateProfileOverride("beta", { thinking: "high" }, root),
+		]);
+		const config = parseSubagentConfig(readFileSync(join(root, "subagent.json"), "utf8"));
+		expect(config.profiles).toEqual({
+			alpha: { model: "test/alpha" },
+			beta: { thinking: "high" },
+		});
+	});
+
 	it("resolves overrides above parent inheritance and keeps the parent session unchanged", async () => {
 		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-resolution-"));
 		temporaryDirectories.push(root);

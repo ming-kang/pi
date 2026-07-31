@@ -71,8 +71,7 @@ export class ConcurrencyGate {
 	private release(): void {
 		this.active = Math.max(0, this.active - 1);
 		while (this.waiters.length > 0) {
-			const waiter = this.waiters.shift();
-			if (!waiter) return;
+			const waiter = this.waiters.shift()!;
 			if (waiter.signal?.aborted) {
 				waiter.abortListener?.();
 				continue;
@@ -453,17 +452,18 @@ function invocationMode(params: SubagentParams): { mode: SubagentDetails["mode"]
 }
 
 // Cheap change detector: consecutive events that alter nothing user-visible
-// skip the bounded-details serialization in emitDetails entirely.
-function progressKey(runs: readonly SubagentRunDetails[]): string {
+// skip the bounded-details serialization in emitDetails entirely. Every
+// activity contributes its status, not just the last one: agent-core can end
+// parallel tool executions out of order, and a mid-list row settling then
+// would otherwise slip past the detector.
+export function progressKey(runs: readonly SubagentRunDetails[]): string {
 	return runs
 		.map((run) => {
-			const last = run.activities[run.activities.length - 1];
 			return [
 				run.status,
 				run.currentActivity ?? "",
 				run.activities.length,
-				last?.status ?? "",
-				last?.resultSummary ?? "",
+				run.activities.map((activity) => `${activity.status}:${activity.resultSummary ?? ""}`).join(","),
 				run.retry?.attempt ?? "",
 				run.retry?.maxAttempts ?? "",
 				run.retry?.deadline ?? "",
@@ -508,12 +508,12 @@ export async function runSubagentInvocation(options: SubagentInvocationOptions):
 	}
 	latestDetails = emitDetails(mode, runs, startedAt, undefined);
 	latestDetails.endedAt = Date.now();
-	const isError = isSubagentError(latestDetails);
+	// Error classification lives in the tool_result handler (index.ts), the
+	// only channel that reaches the session transcript and export.
 	return {
 		content: resultContent(latestDetails),
 		details: boundSubagentDetails(latestDetails),
 		usage: toNestedUsage(latestDetails.usage),
-		isError,
 	};
 }
 

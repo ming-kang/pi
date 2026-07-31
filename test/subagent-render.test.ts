@@ -819,4 +819,55 @@ describe("subagent rendering", () => {
 		);
 		expect(component.render(120).join("\n")).toContain("Activity · last 2 of 5");
 	});
+
+	it("truncates by code point so emoji never split into replacement glyphs", () => {
+		const output = collapsed(
+			details({
+				mode: "single",
+				runs: [run({ finalOutput: "🚀".repeat(250) })],
+			}),
+		);
+		expect(output).toContain("…");
+		expect(output).not.toContain("�");
+		expect(output).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/u);
+	});
+
+	it("preserves dunder names and exponentiation in excerpts", () => {
+		const output = collapsed(
+			details({
+				mode: "single",
+				runs: [
+					run({
+						finalOutput: "def __init__(self):\nvalue = x**2**3\n**Summary:** found it",
+					}),
+				],
+			}),
+		);
+		expect(output).toContain("__init__");
+		expect(output).toContain("x**2**3");
+		expect(output).toContain("Summary: found it");
+		expect(output).not.toContain("**Summary");
+	});
+
+	it("colors the no-details fallback by the error state", () => {
+		const renderNoDetails = (isError: boolean): string[] => {
+			const colors: string[] = [];
+			const trackingTheme = {
+				...theme,
+				fg: (color: string, text: string) => {
+					colors.push(color);
+					return text;
+				},
+			} as Theme;
+			renderSubagentResult(
+				{ content: [{ type: "text", text: "nope" }], details: undefined as unknown as SubagentDetails },
+				{ expanded: false, isPartial: false },
+				trackingTheme,
+				isError,
+			).render(120);
+			return colors;
+		};
+		expect(renderNoDetails(true)).toContain("error");
+		expect(renderNoDetails(false)).toContain("muted");
+	});
 });

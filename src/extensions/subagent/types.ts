@@ -122,5 +122,4 @@ export interface SubagentExecutionResult {
 	content: string;
 	details: SubagentDetails;
 	usage?: Usage;
-	isError: boolean;
 }

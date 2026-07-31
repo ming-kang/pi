@@ -152,7 +152,7 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 			run.error ??= "Subagent was aborted during initialization.";
 			return run;
 		}
-		const created = await createAgentSession({
+		const createPromise = createAgentSession({
 			cwd: task.cwd,
 			agentDir,
 			modelRuntime,
@@ -163,6 +163,32 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 			sessionManager: SessionManager.inMemory(task.cwd),
 			settingsManager,
 		});
+		// createAgentSession takes no signal and can hang on network work, so
+		// abort races it; a session that resolves after the race is lost is
+		// disposed instead of leaking.
+		let abortRace: Promise<never> | undefined;
+		if (signal) {
+			abortRace = new Promise<never>((_resolve, reject) => {
+				const rejectOnAbort = () => {
+					void createPromise.then(
+						(createdLate) => createdLate.session.dispose(),
+						() => {},
+					);
+					reject(new Error("Subagent session creation was aborted."));
+				};
+				if (signal.aborted) {
+					rejectOnAbort();
+					return;
+				}
+				const abortListener = () => rejectOnAbort();
+				signal.addEventListener("abort", abortListener, { once: true });
+				void createPromise.then(
+					() => signal.removeEventListener("abort", abortListener),
+					() => signal.removeEventListener("abort", abortListener),
+				);
+			});
+		}
+		const created = await (abortRace ? Promise.race([createPromise, abortRace]) : createPromise);
 		session = created.session;
 		if (isAborted()) {
 			run.error ??= "Subagent was aborted during initialization.";
@@ -232,6 +258,7 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 					activity.endedAt = Date.now();
 					activity.resultSummary = resultSummary(event.result);
 				}
+				activeActivities.delete(event.toolCallId);
 				run.currentActivity = undefined;
 				emitImmediate();
 			}

@@ -58,19 +58,25 @@ function singleAgentName(args: { agent?: string | null }): string {
 }
 
 function truncate(text: string, limit: number): string {
-	return text.length <= limit ? text : `${text.slice(0, Math.max(0, limit - 1))}…`;
+	// Count code points, not UTF-16 code units: slicing a surrogate pair in
+	// half would render as a lone replacement glyph in the terminal.
+	const chars = [...text];
+	return chars.length <= limit ? text : `${chars.slice(0, Math.max(0, limit - 1)).join("")}…`;
 }
 
 // Transcript excerpts render inside plain Text components, so markdown
 // punctuation would show up literally; strip the common inline syntax.
 function stripInlineMarkdown(text: string): string {
-	return text
-		.replace(/```[a-zA-Z0-9-]*/gu, "")
-		.replace(/`([^`]*)`/gu, "$1")
-		.replace(/\*\*([^*]+)\*\*/gu, "$1")
-		.replace(/__([^_]+)__/gu, "$1")
-		.replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
-		.replace(/^#{1,6}\s+/gmu, "");
+	return (
+		text
+			.replace(/```[a-zA-Z0-9-]*/gu, "")
+			.replace(/`([^`]*)`/gu, "$1")
+			// Demarcated bold only: `x**2**` is exponentiation and `__init__` is a
+			// dunder name, not emphasis — both must survive excerpting.
+			.replace(/(?<![A-Za-z0-9])\*\*([^*]+)\*\*(?![A-Za-z0-9])/gu, "$1")
+			.replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
+			.replace(/^#{1,6}\s+/gmu, "")
+	);
 }
 
 // Markdown tables and horizontal rules turn into symbol soup when
@@ -595,7 +601,8 @@ export function renderSubagentResult(
 	const details = result.details;
 	if (!details) {
 		const text = result.content.find((part) => part.type === "text");
-		return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
+		const label = text?.type === "text" ? text.text : "(no output)";
+		return new Text(theme.fg(isError ? "error" : "muted", label), 0, 0);
 	}
 	// The pre-resolution first paint carries no runs yet, in either mode.
 	if (details.runs.length === 0) {

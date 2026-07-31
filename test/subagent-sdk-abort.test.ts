@@ -113,12 +113,35 @@ describe("Subagent SDK initialization aborts", () => {
 		await vi.waitFor(() => expect(sdkMocks.createAgentSession).toHaveBeenCalledTimes(1));
 
 		controller.abort();
-		created.resolve({ session });
 		const result = await execution;
 		expect(result.status).toBe("aborted");
-		expect(session.abort).toHaveBeenCalledTimes(1);
+		// The abort wins the creation race: the run settles immediately and
+		// the never-assigned session never needs an abort.
+		expect(session.abort).not.toHaveBeenCalled();
 		expect(session.prompt).not.toHaveBeenCalled();
-		expect(session.dispose).toHaveBeenCalledTimes(1);
+		// The late-resolving session is disposed instead of leaking.
+		created.resolve({ session });
+		await vi.waitFor(() => expect(session.dispose).toHaveBeenCalledTimes(1));
+	});
+
+	it("settles aborted while session creation hangs instead of leaking the run", async () => {
+		sdkMocks.reload.mockResolvedValue(undefined);
+		sdkMocks.createAgentSession.mockReturnValue(new Promise<{ session: unknown }>(() => {}));
+		const controller = new AbortController();
+		const execution = runSdkTask({
+			task: task(),
+			run: run(),
+			modelRuntime: {} as ModelRuntime,
+			agentDir: process.cwd(),
+			projectTrusted: false,
+			signal: controller.signal,
+		});
+		await vi.waitFor(() => expect(sdkMocks.createAgentSession).toHaveBeenCalledTimes(1));
+
+		controller.abort();
+		const result = await execution;
+		expect(result.status).toBe("aborted");
+		expect(result.error).toContain("aborted");
 	});
 
 	it("registers session-shutdown abort while resources are still loading", async () => {

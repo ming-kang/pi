@@ -49,7 +49,6 @@ export class SearchPickerComponent<T> extends Container implements Focusable {
 		this.addChild(new Text(theme.fg("toolTitle", theme.bold(title)), 0, 0));
 		this.addChild(new Spacer(1));
 		this.searchInput = new Input();
-		this.searchInput.onSubmit = () => this.confirm();
 		this.addChild(this.searchInput);
 		this.addChild(new Spacer(1));
 		this.listContainer = new Container();

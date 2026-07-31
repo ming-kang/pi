@@ -129,24 +129,46 @@ async function configureProfile(
 	}
 }
 
-async function syncParentProviders(
+// Re-registering and re-keying providers is not idempotent (each call
+// triggers a refresh), so the sync diffs against what this runtime already
+// holds. Configs are compared structurally; function-valued fields collapse
+// to undefined in the JSON form, so a changed function identity alone does
+// not count as a change.
+export async function syncParentProviders(
 	runtime: ModelRuntime,
 	registry: ModelRegistry,
 	syncedIds: Set<string>,
+	syncedApiKeys: Map<string, string>,
 ): Promise<void> {
 	const nextIds = new Set(registry.getRegisteredProviderIds());
 	for (const id of syncedIds) {
-		if (!nextIds.has(id)) runtime.unregisterProvider(id);
+		if (!nextIds.has(id)) {
+			runtime.unregisterProvider(id);
+			if (syncedApiKeys.has(id)) {
+				await runtime.removeRuntimeApiKey(id);
+				syncedApiKeys.delete(id);
+			}
+		}
 	}
 	for (const id of nextIds) {
 		const native = registry.getRegisteredNativeProvider(id);
-		if (native) runtime.registerNativeProvider(native);
-		else {
+		if (native) {
+			if (runtime.getRegisteredNativeProvider(id) !== native) runtime.registerNativeProvider(native);
+		} else {
 			const config = registry.getRegisteredProviderConfig(id);
-			if (config) runtime.registerProvider(id, config);
+			if (config && JSON.stringify(runtime.getRegisteredProviderConfig(id)) !== JSON.stringify(config)) {
+				runtime.registerProvider(id, config);
+			}
 		}
 		const auth = await registry.getProviderAuth(id);
-		if (auth?.auth.apiKey) await runtime.setRuntimeApiKey(id, auth.auth.apiKey, { allowNetwork: false });
+		const apiKey = auth?.auth.apiKey;
+		if (apiKey && syncedApiKeys.get(id) !== apiKey) {
+			await runtime.setRuntimeApiKey(id, apiKey, { allowNetwork: false });
+			syncedApiKeys.set(id, apiKey);
+		} else if (!apiKey && syncedApiKeys.has(id)) {
+			await runtime.removeRuntimeApiKey(id);
+			syncedApiKeys.delete(id);
+		}
 	}
 	syncedIds.clear();
 	for (const id of nextIds) syncedIds.add(id);
@@ -203,6 +225,7 @@ export default function subagent(pi: ExtensionAPI): void {
 	const gate = new ConcurrencyGate();
 	const activeAborters = new Set<() => Promise<void>>();
 	const syncedProviderIds = new Set<string>();
+	const syncedProviderApiKeys = new Map<string, string>();
 	let modelRuntimePromise: Promise<ModelRuntime> | undefined;
 
 	const getModelRuntime = async (ctx: ExtensionContext): Promise<ModelRuntime> => {
@@ -221,7 +244,7 @@ export default function subagent(pi: ExtensionAPI): void {
 			modelRuntimePromise = created;
 		}
 		const runtime = await modelRuntimePromise;
-		await syncParentProviders(runtime, ctx.modelRegistry, syncedProviderIds);
+		await syncParentProviders(runtime, ctx.modelRegistry, syncedProviderIds, syncedProviderApiKeys);
 		return runtime;
 	};
 

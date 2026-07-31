@@ -4,9 +4,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import type { ParentModelContext } from "../src/extensions/subagent/resolve.ts";
-import { ConcurrencyGate, runSubagentInvocation, statusSummary } from "../src/extensions/subagent/runner.ts";
+import {
+	ConcurrencyGate,
+	isSubagentError,
+	progressKey,
+	runSubagentInvocation,
+	statusSummary,
+} from "../src/extensions/subagent/runner.ts";
 import type { SubagentParams } from "../src/extensions/subagent/schema.ts";
-import type { AgentDefinition, SubagentDetails } from "../src/extensions/subagent/types.ts";
+import type {
+	AgentDefinition,
+	SubagentDetails,
+	SubagentRunDetails,
+	SubagentRunStatus,
+	ToolActivity,
+} from "../src/extensions/subagent/types.ts";
 
 const agent: AgentDefinition = {
 	name: "worker",
@@ -27,6 +39,24 @@ function createParentContext(model: Model<Api>): ParentModelContext {
 			getAvailable: () => [model],
 			hasConfiguredAuth: () => true,
 		},
+	};
+}
+
+function baseRun(status: SubagentRunStatus, activities: ToolActivity[] = []): SubagentRunDetails {
+	return {
+		id: "subagent-1",
+		agent: "worker",
+		agentSource: "user",
+		description: "Task",
+		prompt: "Prompt",
+		cwd: "",
+		model: "test/model",
+		thinking: "low",
+		status,
+		activities,
+		liveText: "",
+		finalOutput: "",
+		usage: { turns: 0, toolUses: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 },
 	};
 }
 
@@ -62,7 +92,6 @@ describe("subagent SDK runner", () => {
 			gate: new ConcurrencyGate(1),
 			onUpdate: (details) => updates.push(details.status),
 		});
-		expect(result.isError).toBe(false);
 		expect(result.content).toBe("single result");
 		expect(result.details.status).toBe("completed");
 		expect(result.details.runs[0]?.usage.totalTokens).toBeGreaterThan(0);
@@ -144,7 +173,6 @@ describe("subagent SDK runner", () => {
 			projectTrusted: false,
 			gate: new ConcurrencyGate(1),
 		});
-		expect(result.isError).toBe(false);
 		expect(result.content).toBe("(Subagent completed but returned no output.)");
 	});
 
@@ -191,7 +219,6 @@ describe("subagent SDK runner", () => {
 			projectTrusted: false,
 			gate: new ConcurrencyGate(1),
 		});
-		expect(result.isError).toBe(false);
 		expect(result.details.status).toBe("completed");
 		expect(result.content).toContain("task result");
 	});
@@ -262,5 +289,27 @@ describe("subagent SDK runner", () => {
 		controller.abort();
 		await expect(queued).rejects.toThrow("queued");
 		release();
+	});
+
+	it("detects mid-list activity changes from out-of-order tool ends", () => {
+		const activity = (status: ToolActivity["status"]): ToolActivity => ({
+			id: "read-1",
+			toolName: "read",
+			summary: "read a.ts",
+			status,
+			startedAt: 0,
+		});
+		// Tool B settles before tool A: the last activity is unchanged, but
+		// the settled row is mid-list and must still invalidate the renderer.
+		const before = baseRun("running", [activity("running"), activity("succeeded")]);
+		const after = baseRun("running", [activity("succeeded"), activity("succeeded")]);
+		expect(progressKey([before])).not.toBe(progressKey([after]));
+	});
+
+	it("classifies full failures as errors but partial batches as results", () => {
+		expect(isSubagentError({ status: "failed", runs: [baseRun("failed")] })).toBe(true);
+		expect(isSubagentError({ status: "failed", runs: [baseRun("completed"), baseRun("failed")] })).toBe(false);
+		expect(isSubagentError({ status: "aborted", runs: [baseRun("aborted")] })).toBe(true);
+		expect(isSubagentError({ status: "completed", runs: [baseRun("completed")] })).toBe(false);
 	});
 });

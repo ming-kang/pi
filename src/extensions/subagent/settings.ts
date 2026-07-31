@@ -85,24 +85,29 @@ export async function loadSubagentConfig(agentDir = getAgentDir()): Promise<Suba
 	}
 }
 
-export async function saveSubagentConfig(config: SubagentConfigFile, agentDir = getAgentDir()): Promise<void> {
-	const filePath = getSubagentConfigPath(agentDir);
+// Queue-free write body: read-modify-write callers (updateProfileOverride,
+// resetProfileOverrides) run their whole transaction inside the queue, so
+// saveSubagentConfig must not queue the same path again — that would deadlock.
+async function writeSubagentConfigFile(filePath: string, config: SubagentConfigFile): Promise<void> {
 	const payload = `${JSON.stringify({ version: SUBAGENT_CONFIG_VERSION, profiles: config.profiles }, null, 2)}\n`;
 	await mkdir(dirname(filePath), { recursive: true });
-	await withFileMutationQueue(filePath, async () => {
-		const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+	const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+	try {
+		await writeFile(tempPath, payload, { encoding: "utf8", mode: 0o600 });
+		await rename(tempPath, filePath);
+	} catch (error) {
 		try {
-			await writeFile(tempPath, payload, { encoding: "utf8", mode: 0o600 });
-			await rename(tempPath, filePath);
-		} catch (error) {
-			try {
-				await unlink(tempPath);
-			} catch {
-				// Ignore cleanup errors and preserve the original failure.
-			}
-			throw error;
+			await unlink(tempPath);
+		} catch {
+			// Ignore cleanup errors and preserve the original failure.
 		}
-	});
+		throw error;
+	}
+}
+
+export async function saveSubagentConfig(config: SubagentConfigFile, agentDir = getAgentDir()): Promise<void> {
+	const filePath = getSubagentConfigPath(agentDir);
+	await withFileMutationQueue(filePath, () => writeSubagentConfigFile(filePath, config));
 }
 
 // Only keys present in the patch change; a key set to undefined clears
@@ -112,23 +117,29 @@ export async function updateProfileOverride(
 	patch: Partial<SubagentProfileOverride>,
 	agentDir = getAgentDir(),
 ): Promise<SubagentConfigFile> {
-	const config = await loadSubagentConfig(agentDir);
-	const current = config.profiles[profile] ?? {};
-	const next: SubagentProfileOverride = { ...current };
-	if ("model" in patch) {
-		if (patch.model === undefined) delete next.model;
-		else next.model = patch.model;
-	}
-	if ("thinking" in patch) {
-		if (patch.thinking === undefined) delete next.thinking;
-		else next.thinking = patch.thinking;
-	}
-	if (Object.keys(next).length === 0) delete config.profiles[profile];
-	else config.profiles[profile] = next;
-	await saveSubagentConfig(config, agentDir);
-	return config;
+	const filePath = getSubagentConfigPath(agentDir);
+	// Load and write run inside one queue slot so concurrent updates to
+	// different profiles cannot overwrite each other.
+	return withFileMutationQueue(filePath, async () => {
+		const config = await loadSubagentConfig(agentDir);
+		const current = config.profiles[profile] ?? {};
+		const next: SubagentProfileOverride = { ...current };
+		if ("model" in patch) {
+			if (patch.model === undefined) delete next.model;
+			else next.model = patch.model;
+		}
+		if ("thinking" in patch) {
+			if (patch.thinking === undefined) delete next.thinking;
+			else next.thinking = patch.thinking;
+		}
+		if (Object.keys(next).length === 0) delete config.profiles[profile];
+		else config.profiles[profile] = next;
+		await writeSubagentConfigFile(filePath, config);
+		return config;
+	});
 }
 
 export async function resetProfileOverrides(agentDir = getAgentDir()): Promise<void> {
-	await saveSubagentConfig(emptySubagentConfig(), agentDir);
+	const filePath = getSubagentConfigPath(agentDir);
+	await withFileMutationQueue(filePath, () => writeSubagentConfigFile(filePath, emptySubagentConfig()));
 }

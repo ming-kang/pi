@@ -102,7 +102,6 @@ describe("subagent task-level retry", () => {
 		runSdkTaskMock.mockImplementationOnce(failWith("fetch failed")).mockImplementationOnce(succeedWith("recovered"));
 		const result = await invoke();
 		expect(runSdkTaskMock).toHaveBeenCalledTimes(2);
-		expect(result.isError).toBe(false);
 		expect(result.content).toBe("recovered");
 	});
 
@@ -166,7 +165,6 @@ describe("subagent task-level retry", () => {
 		const result = await invoke();
 		// Initial attempt plus TASK_RETRY_LIMIT retries.
 		expect(runSdkTaskMock).toHaveBeenCalledTimes(3);
-		expect(result.isError).toBe(true);
 		expect(result.details.runs[0]?.status).toBe("failed");
 	});
 
@@ -174,7 +172,7 @@ describe("subagent task-level retry", () => {
 		runSdkTaskMock.mockImplementation(failWith("insufficient_quota: billing hard limit reached"));
 		const result = await invoke();
 		expect(runSdkTaskMock).toHaveBeenCalledTimes(1);
-		expect(result.isError).toBe(true);
+		expect(result.details.runs[0]?.status).toBe("failed");
 	});
 
 	it("does not mark a parallel batch as an error while any task succeeded", async () => {
@@ -198,7 +196,6 @@ describe("subagent task-level retry", () => {
 			taskRetryBaseDelayMs: 1,
 		});
 		expect(result.details.status).toBe("failed");
-		expect(result.isError).toBe(false);
 		expect(result.content).toContain("good result");
 		expect(result.content).toContain("insufficient_quota");
 	});
@@ -221,7 +218,6 @@ describe("subagent task-level retry", () => {
 			gate: new ConcurrencyGate(1),
 			taskRetryBaseDelayMs: 1,
 		});
-		expect(result.isError).toBe(true);
 		expect(result.details.status).toBe("failed");
 	});
 
@@ -237,6 +233,6 @@ describe("subagent task-level retry", () => {
 		});
 		const result = await invoke();
 		expect(runSdkTaskMock).toHaveBeenCalledTimes(1);
-		expect(result.isError).toBe(true);
+		expect(result.details.runs[0]?.status).toBe("failed");
 	});
 });
