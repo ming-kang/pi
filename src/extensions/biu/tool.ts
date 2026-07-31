@@ -83,7 +83,7 @@ export const BiuToolParamsSchema = Type.Object({
 	status: Type.Optional(
 		StringEnum(BIU_TASK_STATUSES, {
 			description:
-				'task update only: "ready" (not started), "in_progress" (one task at a time by default), or "completed" (only after verification passes).',
+				'task only: new tasks always start "ready" (pass "ready" on add only when the caller requires a value); on update use "ready", "in_progress", or "completed".',
 		}),
 	),
 	dependsOn: Type.Optional(
@@ -115,6 +115,65 @@ export const BiuToolParamsSchema = Type.Object({
 });
 
 export type BiuToolParams = Static<typeof BiuToolParamsSchema>;
+
+function isBiuAction(value: unknown): value is BiuAction {
+	return value === "get" || value === "spec" || value === "task" || value === "stage" || value === "archive";
+}
+
+function copyDefined(source: Record<string, unknown>, target: Record<string, unknown>, key: string): void {
+	if (source[key] !== undefined) target[key] = source[key];
+}
+
+function copyNonEmptyString(source: Record<string, unknown>, target: Record<string, unknown>, key: string): void {
+	const value = source[key];
+	if (value === undefined || (typeof value === "string" && !value.trim())) return;
+	target[key] = value;
+}
+
+/**
+ * Project the provider-facing flat schema onto the fields used by one action.
+ * Some tool-schema adapters materialize optional fields with neutral defaults;
+ * removing unrelated values here keeps them from changing workflow state.
+ */
+export function normalizeBiuParams(input: unknown): BiuToolParams {
+	if (!input || typeof input !== "object" || Array.isArray(input)) return input as BiuToolParams;
+	const source = input as Record<string, unknown>;
+	if (!isBiuAction(source.action)) return input as BiuToolParams;
+
+	const target: Record<string, unknown> = { action: source.action };
+	if (source.action === "get") return target as BiuToolParams;
+
+	if (source.action === "spec") {
+		copyDefined(source, target, "specStatus");
+		copyNonEmptyString(source, target, "title");
+		copyNonEmptyString(source, target, "baselineCommit");
+		return target as BiuToolParams;
+	}
+
+	if (source.action === "stage") {
+		copyDefined(source, target, "to");
+		return target as BiuToolParams;
+	}
+
+	if (source.action === "archive") {
+		copyNonEmptyString(source, target, "shortname");
+		copyDefined(source, target, "confirmIncomplete");
+		return target as BiuToolParams;
+	}
+
+	copyDefined(source, target, "op");
+	copyNonEmptyString(source, target, "id");
+	if (source.op === "add") {
+		copyNonEmptyString(source, target, "taskTitle");
+		copyDefined(source, target, "dependsOn");
+		if (source.status !== undefined && source.status !== "ready") target.status = source.status;
+	} else if (source.op === "update") {
+		copyNonEmptyString(source, target, "taskTitle");
+		copyDefined(source, target, "status");
+		copyDefined(source, target, "dependsOn");
+	}
+	return target as BiuToolParams;
+}
 
 export interface BiuToolDetails {
 	schemaVersion: typeof BIU_DETAILS_SCHEMA_VERSION;
@@ -190,8 +249,8 @@ function applyTaskAction(state: BiuState, params: BiuToolParams): string {
 		}
 		const title = requireParam(params.taskTitle, 'Adding a task requires "taskTitle".').trim();
 		if (!title) throw new Error("Task title cannot be empty.");
-		if (params.status !== undefined) {
-			throw new Error('New tasks always start as "ready"; omit "status" on add.');
+		if (params.status !== undefined && params.status !== "ready") {
+			throw new Error('New tasks always start as "ready"; omit "status" or pass "ready" on add.');
 		}
 		const dependsOn = validateDependsOn(state, id, params.dependsOn ?? []);
 		state.tasks.push({ id, title, status: "ready", dependsOn });
@@ -266,6 +325,7 @@ export function createBiuTool(options: BiuToolOptions): ToolDefinition<typeof Bi
 		description:
 			'Biu workflow state. Call with action "get" to load the current stage, task list, workspace paths, and stage instructions. Use the other actions to record state changes: "spec" for SPEC metadata, "task" for task entries, "stage" to move between stages, "archive" to close a confirmed cycle. This tool is the only way to change Biu workflow state; Markdown files carry content only.',
 		parameters: BiuToolParamsSchema,
+		prepareArguments: normalizeBiuParams,
 		executionMode: "sequential",
 
 		async execute(

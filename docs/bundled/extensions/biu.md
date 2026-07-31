@@ -1,8 +1,8 @@
 # Biu — project development workflow
 
-Biu is a structured development workflow modeled after a mode toggle: `/biu` switches Biu Mode on, and inside the mode `/biu` opens the management menu. One project cycle moves through four stages — **interview** (clarify requirements into `SPEC.md`), **decompose** (break the ready SPEC into task handoffs), **execute** (implement tasks one at a time), and **archive** (summarize and close the cycle).
+Biu is a simple, structured development workflow for the interactive TUI: `/biu` switches Biu Mode on, and inside the mode `/biu` opens its menu. One project cycle moves through four stages — **interview** (clarify requirements into `SPEC.md`), **decompose** (break the ready SPEC into task handoffs), **execute** (implement tasks one at a time), and **archive** (summarize and close the cycle).
 
-Workflow state lives in a small JSON file and changes only through the `biu` tool; the Markdown artifacts carry content only. Nothing is inferred by parsing Markdown.
+Workflow state lives in a small JSON file and changes only through the `biu` tool; the Markdown artifacts carry content only. Nothing is inferred by parsing Markdown, and users do not manually navigate the internal stage machine.
 
 ## Command
 
@@ -12,14 +12,14 @@ Workflow state lives in a small JSON file and changes only through the `biu` too
 
 `/biu` accepts no arguments. Turning the mode on with no prior cycle leaves the workflow at the interview stage — describe what you want to build in your next message and the interview starts from there. With an existing cycle, the mode resumes at the recorded stage.
 
-The menu offers:
+The menu keeps only the actions needed to operate the workflow:
 
 - **Continue · stage** — send a kickoff message (collapsed to one line; expandable with the standard expand key) that starts a turn continuing the current stage.
-- **Show status** — workspace path, SPEC status, and task counts.
-- **Switch stage…** — move the workflow to another stage. Forward moves are validated; backward moves are free.
 - **Exit Biu Mode** — turn the mode off. Workflow files are kept.
 
-While the mode is on, the footer shows a compact marker such as `Biu · execute 2/5`.
+A subtitle summarizes the current stage without another action, for example `execute · 2/5 done · active TASK-api`. While the mode is on, the footer keeps the shorter marker `Biu · execute 2/5`.
+
+Biu Mode is TUI-only. RPC, JSON, and print sessions do not enable it, activate its tool, inject its resident prompt, or open its menu. Opening the same branch later in the TUI restores its recorded enabled flag.
 
 ## Storage
 
@@ -56,17 +56,17 @@ The tool is added to the active tool set while the mode is on and removed when i
 | `stage` | Move between stages; forward moves are validated (decompose needs a ready SPEC, execute needs registered tasks) |
 | `archive` | Move `SPEC.md`, `Summary.md`, and `tasks/` into `archived/YYYY-MM-DD-<shortname>/` and reset the cycle; on failure the already-moved files are rolled back |
 
-Validation lives in the tool, not in Markdown parsing: task ids use the portable `TASK-` form, dependencies must resolve and stay acyclic, new tasks start `ready`, and archiving with unfinished tasks requires an explicit confirmation flag after the user's decision. Acceptance-criteria coverage is checked by the model during decompose, not enforced mechanically.
+Validation lives in the tool, not in Markdown parsing: task ids use the portable `TASK-` form, dependencies must resolve and stay acyclic, new tasks start `ready`, and archiving with unfinished tasks requires an explicit confirmation flag after the user's decision. Tool arguments are projected to the selected action before validation so API adapters that materialize unrelated optional fields cannot change workflow state; a required `status: "ready"` on task creation is treated as the same ready-by-default request. Acceptance-criteria coverage is checked by the model during decompose, not enforced mechanically.
 
 ## Prompting
 
 Only a short resident block is injected into the system prompt while the mode is on (current stage plus a pointer to the `biu` tool). The full stage playbook — interview rules, decomposition checks, execution discipline, archive steps, and the SPEC/TASK/Summary templates — is returned by `get` on demand, so long conversations stay grounded without repeating instructions every turn.
 
-Stage changes are conversational: the model advances (or retreats) via the `stage` action after the user agrees, and the menu offers the same transition as a manual fallback.
+Stage changes are conversational: the model advances or retreats through the validated `stage` action after the user agrees. If requirements change, tell the model to return to the appropriate stage rather than manipulating workflow state through the menu.
 
 ## Lifecycle
 
-The enabled flag is stored as a branch-aware custom session entry. `session_start` and `session_tree` replay the latest flag, so `/reload`, resume, fork, and tree navigation restore the mode and the tool's visibility. The statusline refreshes after each `biu` tool call rather than by rescanning files every turn.
+The enabled flag is stored as a branch-aware custom session entry. In the TUI, `session_start` and `session_tree` replay the latest flag, so `/reload`, resume, fork, and tree navigation restore the mode and the tool's visibility. Non-TUI sessions leave that flag untouched but keep Biu inactive. The statusline refreshes after each `biu` tool call rather than by rescanning files every turn.
 
 Biu artifacts are project-global rather than conversation-branch snapshots: navigating `/tree` changes the enabled flag with the branch, but workflow files do not roll back.
 

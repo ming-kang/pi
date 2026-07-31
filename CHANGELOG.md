@@ -6,15 +6,17 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Added
 
-- Added the bundled Biu extension: `/biu` toggles a Plan-Mode-style development workflow (interview → decompose → execute → archive) whose state lives in a per-project `biu.json` and changes only through the new `biu` tool; inside the mode, `/biu` opens a menu with continue, status, stage switching, and exit. Stage playbooks are loaded on demand via the tool instead of being injected every turn.
+- Added the bundled TUI-only Biu extension: `/biu` toggles a simple development workflow (interview → decompose → execute → archive) whose state lives in a per-project `biu.json` and changes only through the new `biu` tool; inside the mode, `/biu` opens a compact menu with a one-line status, continue, and exit. Stage playbooks are loaded on demand via the tool instead of being injected every turn.
 
 ### Fixed
 
 - Fixed Biu archiving leaving the cycle half-moved when a file move failed mid-archive: already-moved files now roll back, and an incomplete rollback reports where the recovery data is instead of failing silently.
 - Fixed Biu archive rollback failing on Windows when the state write failed after all files were moved: the fresh empty tasks/ directory no longer blocks the move-back, because it is recreated only after the state reset succeeds.
 - Fixed Biu refusing to lose leftover cycle files: when biu.json is missing but SPEC.md or task files are still present, a fresh workspace is no longer created over them.
-- Fixed Biu accepting hand-edited `biu.json` files with dependency cycles or self-dependencies, and new tasks accepting an explicit `status` despite the documented ready-by-default contract.
+- Fixed Biu accepting hand-edited `biu.json` files with dependency cycles or self-dependencies, and new tasks accepting non-ready initial statuses despite the ready-by-default contract.
 - Fixed the Biu task id schema permitting longer ids than the `TASK-` plus 1-80 format, and Biu Mode in a directory without a cycle now starts a fresh workspace instead of reporting a state error.
+- Fixed Biu tool calls failing through API adapters that materialize optional flat-schema fields: arguments are now projected to the selected action, and task creation tolerates a semantically neutral required `status: "ready"` while still rejecting other initial statuses.
+- Fixed Biu opening a blocking, information-poor selector in RPC mode; the workflow is now explicitly interactive-TUI-only and stays inactive without overwriting the branch flag in RPC, JSON, and print sessions.
 
 ## [0.83.0] - 2026-07-30
 

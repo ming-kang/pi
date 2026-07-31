@@ -20,17 +20,13 @@ import {
 } from "./prompts.ts";
 import { renderBiuCall, renderBiuKickoffMessage, renderBiuResult } from "./render.ts";
 import {
-	BIU_STAGES,
 	type BiuStage,
 	type BiuState,
 	ensureBiuWorkspace,
 	findActiveTask,
 	findNextTask,
-	getBiuPaths,
-	getStageTransitionError,
 	getTaskCounts,
 	loadBiuState,
-	saveBiuState,
 } from "./state.ts";
 import { BIU_TOOL_NAME, createBiuTool } from "./tool.ts";
 
@@ -39,6 +35,8 @@ export const BIU_MODE_ENTRY_TYPE = "biu-mode";
 export const BIU_KICKOFF_MESSAGE_TYPE = "biu-kickoff";
 export const BIU_STATUS_KEY = "biu";
 export const BIU_MODE_SCHEMA_VERSION = 1;
+
+const BIU_TUI_ONLY_MESSAGE = "Biu Mode is available only in interactive TUI mode.";
 
 interface BiuModeEntryData {
 	schemaVersion: number;
@@ -82,17 +80,23 @@ function describeFocusLine(state: BiuState): string | undefined {
 	return undefined;
 }
 
-function formatDetailedStatus(state: BiuState, workspace: string): string {
+function formatMenuStatus(state: BiuState): string {
 	const counts = getTaskCounts(state);
-	const lines = [
-		formatBiuStatusLine(state),
-		`Workspace: ${workspace}`,
-		`SPEC: ${state.spec.status}${state.spec.title ? ` · ${truncate(state.spec.title, 80)}` : ""}`,
-		`Tasks: ${counts.total} total · ${counts.ready} ready · ${counts.inProgress} in progress · ${counts.completed} completed`,
-	];
-	const focus = describeFocusLine(state);
-	if (focus) lines.push(focus);
-	return lines.join("\n");
+	if (state.stage === "interview") return `interview · SPEC ${state.spec.status}`;
+	if (state.stage === "decompose") {
+		return `decompose · SPEC ${state.spec.status} · ${counts.total} ${counts.total === 1 ? "task" : "tasks"}`;
+	}
+
+	const parts = [state.stage, `${counts.completed}/${counts.total} done`];
+	if (state.stage === "execute") {
+		const active = findActiveTask(state);
+		if (active) parts.push(`active ${truncate(active.id, 32)}`);
+		else {
+			const next = findNextTask(state);
+			if (next) parts.push(`next ${truncate(next.id, 32)}`);
+		}
+	}
+	return parts.join(" · ");
 }
 
 export default function biuExtension(pi: ExtensionAPI): void {
@@ -111,6 +115,7 @@ export default function biuExtension(pi: ExtensionAPI): void {
 	}
 
 	function setStatus(ctx: ExtensionContext, state: BiuState | undefined, error?: string): void {
+		if (ctx.mode !== "tui") return;
 		if (!enabled) {
 			ctx.ui.setStatus(BIU_STATUS_KEY, undefined);
 			return;
@@ -141,7 +146,7 @@ export default function biuExtension(pi: ExtensionAPI): void {
 		enabled = false;
 		persistMode(false);
 		syncActiveTools();
-		ctx.ui.setStatus(BIU_STATUS_KEY, undefined);
+		setStatus(ctx, undefined);
 		ctx.ui.notify("Biu Mode off. Workflow files were kept.", "info");
 	}
 
@@ -157,39 +162,9 @@ export default function biuExtension(pi: ExtensionAPI): void {
 		);
 	}
 
-	async function switchStageFromMenu(ctx: ExtensionCommandContext, state: BiuState): Promise<void> {
-		const options = BIU_STAGES.map((stage) => ({
-			label: stage === state.stage ? `${stage} (current)` : stage,
-			description:
-				stage === "interview"
-					? "Clarify requirements into SPEC.md"
-					: stage === "decompose"
-						? "Break the ready SPEC into task handoffs"
-						: stage === "execute"
-							? "Implement tasks one at a time"
-							: "Summarize and close the cycle",
-		}));
-		const choice = await ctx.ui.select("Switch Biu stage", options, {
-			subtitle: formatBiuStatusLine(state),
-			cancelHint: "keep the current stage",
-		});
-		if (!choice) return;
-		const target = choice.replace(" (current)", "") as BiuStage;
-		const error = getStageTransitionError(state, target);
-		if (error) {
-			ctx.ui.notify(error, "warning");
-			return;
-		}
-		state.stage = target;
-		state.updatedAt = new Date().toISOString();
-		await saveBiuState(ctx.cwd, state);
-		setStatus(ctx, state);
-		ctx.ui.notify(`Biu stage switched to ${target}.`, "info");
-	}
-
 	async function openMenu(ctx: ExtensionCommandContext): Promise<void> {
-		if (!ctx.hasUI) {
-			ctx.ui.notify("The Biu menu requires an interactive UI.", "warning");
+		if (ctx.mode !== "tui") {
+			ctx.ui.notify(BIU_TUI_ONLY_MESSAGE, "warning");
 			return;
 		}
 
@@ -214,19 +189,13 @@ export default function biuExtension(pi: ExtensionAPI): void {
 			"Biu Mode",
 			[
 				{ label: continueLabel, description: focus ?? "Start a new turn continuing the current stage" },
-				{ label: "Show status", description: "Workspace path, SPEC status, and task counts" },
-				{ label: "Switch stage…", description: "Move the workflow to another stage" },
 				{ label: "Exit Biu Mode", description: "Turn the mode off; workflow files are kept" },
 			],
-			{ subtitle: formatBiuStatusLine(state), cancelHint: "keep Biu Mode active" },
+			{ subtitle: formatMenuStatus(state), cancelHint: "keep Biu Mode active" },
 		);
 
 		if (choice === continueLabel) {
 			sendKickoff(state);
-		} else if (choice === "Show status") {
-			ctx.ui.notify(formatDetailedStatus(state, getBiuPaths(ctx.cwd).root), "info");
-		} else if (choice === "Switch stage…") {
-			await switchStageFromMenu(ctx, state);
 		} else if (choice === "Exit Biu Mode") {
 			disableMode(ctx);
 		}
@@ -234,6 +203,11 @@ export default function biuExtension(pi: ExtensionAPI): void {
 
 	async function syncFromBranch(ctx: ExtensionContext): Promise<void> {
 		try {
+			if (ctx.mode !== "tui") {
+				enabled = false;
+				syncActiveTools();
+				return;
+			}
 			enabled = replayBiuMode(ctx.sessionManager.getBranch());
 			syncActiveTools();
 			if (enabled) await refreshStatusFromDisk(ctx);
@@ -255,6 +229,10 @@ export default function biuExtension(pi: ExtensionAPI): void {
 	pi.registerCommand(BIU_COMMAND_NAME, {
 		description: "Toggle Biu Mode; inside the mode, open the Biu menu",
 		handler: async (args, ctx) => {
+			if (ctx.mode !== "tui") {
+				ctx.ui.notify(BIU_TUI_ONLY_MESSAGE, "warning");
+				return;
+			}
 			if (args.trim()) {
 				ctx.ui.notify("Usage: /biu (no arguments)", "warning");
 				return;
@@ -299,7 +277,7 @@ export default function biuExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		if (!enabled) return;
+		if (!enabled || ctx.mode !== "tui") return;
 		let block: string;
 		try {
 			const state = await loadBiuState(ctx.cwd);
@@ -312,7 +290,7 @@ export default function biuExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_execution_end", async (event, ctx) => {
-		if (event.toolName !== BIU_TOOL_NAME || event.isError || !enabled) return;
+		if (event.toolName !== BIU_TOOL_NAME || event.isError || !enabled || ctx.mode !== "tui") return;
 		await refreshStatusFromDisk(ctx);
 	});
 
@@ -326,6 +304,7 @@ export default function biuExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		enabled = false;
+		if (ctx.mode !== "tui") return;
 		try {
 			ctx.ui.setStatus(BIU_STATUS_KEY, undefined);
 		} catch (error) {

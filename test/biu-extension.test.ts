@@ -8,6 +8,7 @@ import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
 	ExtensionContext,
+	ExtensionMode,
 	ToolDefinition,
 } from "../src/core/extensions/types.ts";
 import biu, {
@@ -24,6 +25,7 @@ import {
 	type BiuToolDetails,
 	type BiuToolParams,
 	BiuToolParamsSchema,
+	normalizeBiuParams,
 } from "../src/extensions/biu/tool.ts";
 import { builtInExtensions } from "../src/extensions/index.ts";
 
@@ -86,14 +88,15 @@ interface ContextHarness {
 	setBranch: (branch: unknown[]) => void;
 }
 
-function createContext(cwd: string, initialBranch: unknown[] = [], hasUI = true): ContextHarness {
+function createContext(cwd: string, initialBranch: unknown[] = [], mode: ExtensionMode = "tui"): ContextHarness {
 	let branch = initialBranch;
 	const statuses = new Map<string, string | undefined>();
 	const notifications: Array<{ message: string; level?: string }> = [];
 	const select = vi.fn(async () => undefined as string | undefined);
 	const ctx = {
 		cwd,
-		hasUI,
+		mode,
+		hasUI: mode === "tui" || mode === "rpc",
 		waitForIdle: vi.fn(async () => {}),
 		sessionManager: { getBranch: () => branch },
 		ui: {
@@ -135,7 +138,8 @@ async function runTool(
 ): Promise<{ text: string; details: BiuToolDetails }> {
 	const tool = harness.tool;
 	if (!tool) throw new Error("biu tool not registered");
-	const result = await tool.execute("call-1", params as BiuToolParams, undefined, undefined, ctx);
+	const prepared = tool.prepareArguments?.(params) ?? (params as BiuToolParams);
+	const result = await tool.execute("call-1", prepared, undefined, undefined, ctx);
 	const text = result.content
 		.map((part: { type: string; text?: string }) => (part.type === "text" ? (part.text ?? "") : ""))
 		.join("\n");
@@ -217,6 +221,56 @@ describe("biu mode lifecycle", () => {
 		expect(context.statuses.get(BIU_STATUS_KEY)).toContain("interview");
 	});
 
+	test("non-TUI commands do not enable Biu Mode", async () => {
+		for (const mode of ["rpc", "json", "print"] as const) {
+			const modeCwd = join(cwd, mode);
+			await mkdir(modeCwd, { recursive: true });
+			const harness = captureExtension(["read"]);
+			const context = createContext(modeCwd, [], mode);
+
+			await runCommand(harness, context.ctx);
+
+			expect(context.notifications[0]?.message).toMatch(/interactive TUI/);
+			expect(context.select).not.toHaveBeenCalled();
+			expect(harness.entries).toHaveLength(0);
+			expect(harness.activeTools).not.toContain(BIU_TOOL_NAME);
+			expect(existsSync(getBiuPaths(modeCwd, agentDir).stateFile)).toBe(false);
+		}
+	});
+
+	test("non-TUI replay pauses Biu without status or prompt injection", async () => {
+		const harness = captureExtension(["read", BIU_TOOL_NAME]);
+		const context = createContext(cwd, [modeEntry(true)], "rpc");
+
+		await harness.hooks.get("session_start")?.({ type: "session_start", reason: "resume" }, context.ctx);
+
+		expect(harness.activeTools).not.toContain(BIU_TOOL_NAME);
+		expect(context.statuses.has(BIU_STATUS_KEY)).toBe(false);
+		expect(
+			await harness.hooks.get("before_agent_start")?.(
+				{ type: "before_agent_start", systemPrompt: "base" },
+				context.ctx,
+			),
+		).toBeUndefined();
+		expect(harness.entries).toHaveLength(0);
+	});
+
+	test("returning to TUI restores the preserved branch flag", async () => {
+		const harness = captureExtension(["read"]);
+		const initial = createContext(cwd);
+		await runCommand(harness, initial.ctx);
+
+		const rpcContext = createContext(cwd, [modeEntry(true)], "rpc");
+		await harness.hooks.get("session_tree")?.({ type: "session_tree" }, rpcContext.ctx);
+		expect(harness.activeTools).not.toContain(BIU_TOOL_NAME);
+
+		const tuiContext = createContext(cwd, [modeEntry(true)]);
+		await harness.hooks.get("session_tree")?.({ type: "session_tree" }, tuiContext.ctx);
+		expect(harness.activeTools).toContain(BIU_TOOL_NAME);
+		expect(tuiContext.statuses.get(BIU_STATUS_KEY)).toContain("interview");
+		expect(harness.entries).toHaveLength(1);
+	});
+
 	test("replayBiuMode picks the latest flag", () => {
 		expect(replayBiuMode([])).toBe(false);
 		expect(replayBiuMode([modeEntry(true)])).toBe(true);
@@ -267,6 +321,49 @@ describe("biu menu", () => {
 		return { harness, context };
 	}
 
+	test("menu shows a compact status and only continue and exit", async () => {
+		const harness = captureExtension(["read"]);
+		const context = createContext(cwd);
+		await runCommand(harness, context.ctx);
+		await runCommand(harness, context.ctx);
+
+		expect(context.select).toHaveBeenCalledTimes(1);
+		const [title, options, settings] = context.select.mock.calls[0] ?? [];
+		expect(title).toBe("Biu Mode");
+		expect(options).toEqual([
+			{ label: "Continue · interview", description: "Start a new turn continuing the current stage" },
+			{ label: "Exit Biu Mode", description: "Turn the mode off; workflow files are kept" },
+		]);
+		expect(settings).toEqual({ subtitle: "interview · SPEC draft", cancelHint: "keep Biu Mode active" });
+	});
+
+	test("execute menu status includes progress and active task", async () => {
+		const harness = captureExtension(["read"]);
+		const context = createContext(cwd);
+		await runCommand(harness, context.ctx);
+		await runTool(harness, context.ctx, { action: "spec", title: "Menu status", specStatus: "ready" });
+		await runTool(harness, context.ctx, { action: "stage", to: "decompose" });
+		await runTool(harness, context.ctx, {
+			action: "task",
+			op: "add",
+			id: "TASK-menu",
+			taskTitle: "Update menu",
+		});
+		await runTool(harness, context.ctx, { action: "stage", to: "execute" });
+		await runTool(harness, context.ctx, {
+			action: "task",
+			op: "update",
+			id: "TASK-menu",
+			status: "in_progress",
+		});
+
+		await runCommand(harness, context.ctx);
+
+		const [, options, settings] = context.select.mock.calls[0] ?? [];
+		expect(settings?.subtitle).toBe("execute · 0/1 done · active TASK-menu");
+		expect(options?.[0]?.description).toBe("Active: TASK-menu · Update menu");
+	});
+
 	test("Continue sends a visible kickoff message that triggers a turn", async () => {
 		const { harness } = await openMenuWith("Continue · interview");
 		expect(harness.messages).toHaveLength(1);
@@ -283,25 +380,6 @@ describe("biu menu", () => {
 		expect(harness.activeTools).not.toContain(BIU_TOOL_NAME);
 		expect(context.statuses.get(BIU_STATUS_KEY)).toBeUndefined();
 		expect(existsSync(getBiuPaths(cwd, agentDir).stateFile)).toBe(true);
-	});
-
-	test("Switch stage validates forward transitions", async () => {
-		const harness = captureExtension(["read"]);
-		const context = createContext(cwd);
-		await runCommand(harness, context.ctx);
-		context.select.mockResolvedValueOnce("Switch stage…").mockResolvedValueOnce("decompose");
-		await runCommand(harness, context.ctx);
-		expect(context.notifications.at(-1)?.message).toMatch(/not ready/);
-		expect((await loadBiuState(cwd, agentDir))?.stage).toBe("interview");
-	});
-
-	test("menu without UI only notifies", async () => {
-		const harness = captureExtension(["read"]);
-		const enableContext = createContext(cwd);
-		await runCommand(harness, enableContext.ctx);
-		const context = createContext(cwd, [], false);
-		await runCommand(harness, context.ctx);
-		expect(context.notifications[0]?.message).toMatch(/interactive UI/);
 	});
 });
 
@@ -324,6 +402,65 @@ describe("biu tool", () => {
 		const dependsOnSchema = BiuToolParamsSchema.properties.dependsOn as { items?: { maxLength?: number } };
 		expect(idSchema.maxLength).toBe(85);
 		expect(dependsOnSchema.items?.maxLength).toBe(85);
+	});
+
+	test("normalizes provider-filled arguments by action", () => {
+		const defaults = {
+			specStatus: "draft",
+			title: "",
+			baselineCommit: "",
+			op: "add",
+			id: "",
+			taskTitle: "",
+			status: "ready",
+			dependsOn: [],
+			to: "interview",
+			shortname: "",
+			confirmIncomplete: false,
+		};
+
+		expect(normalizeBiuParams({ action: "get", ...defaults })).toEqual({ action: "get" });
+		expect(
+			normalizeBiuParams({
+				action: "spec",
+				...defaults,
+				specStatus: "ready",
+				title: "OAuth",
+				baselineCommit: "abc123",
+			}),
+		).toEqual({ action: "spec", specStatus: "ready", title: "OAuth", baselineCommit: "abc123" });
+		expect(
+			normalizeBiuParams({
+				action: "task",
+				...defaults,
+				op: "add",
+				id: "TASK-api",
+				taskTitle: "API",
+			}),
+		).toEqual({ action: "task", op: "add", id: "TASK-api", taskTitle: "API", dependsOn: [] });
+		expect(
+			normalizeBiuParams({
+				action: "task",
+				...defaults,
+				op: "update",
+				id: "TASK-api",
+				status: "in_progress",
+			}),
+		).toEqual({ action: "task", op: "update", id: "TASK-api", status: "in_progress", dependsOn: [] });
+		expect(normalizeBiuParams({ action: "task", ...defaults, op: "remove", id: "TASK-api" })).toEqual({
+			action: "task",
+			op: "remove",
+			id: "TASK-api",
+		});
+		expect(normalizeBiuParams({ action: "stage", ...defaults, to: "execute" })).toEqual({
+			action: "stage",
+			to: "execute",
+		});
+		expect(normalizeBiuParams({ action: "archive", ...defaults, shortname: "oauth" })).toEqual({
+			action: "archive",
+			shortname: "oauth",
+			confirmIncomplete: false,
+		});
 	});
 
 	test("get returns the snapshot and the current stage playbook", async () => {
@@ -377,6 +514,29 @@ describe("biu tool", () => {
 		expect(context.statuses.get(BIU_STATUS_KEY)).toContain("execute 0/2");
 	});
 
+	test("provider-filled task add accepts the neutral ready status", async () => {
+		const { harness, context } = await enabledHarness();
+		const result = await runTool(harness, context.ctx, {
+			action: "task",
+			specStatus: "draft",
+			title: "",
+			baselineCommit: "",
+			op: "add",
+			id: "TASK-provider",
+			taskTitle: "Provider-compatible task",
+			status: "ready",
+			dependsOn: [],
+			to: "interview",
+			shortname: "",
+			confirmIncomplete: false,
+		});
+
+		expect(result.text).toContain("TASK-provider added");
+		expect((await loadBiuState(cwd, agentDir))?.tasks).toEqual([
+			{ id: "TASK-provider", title: "Provider-compatible task", status: "ready", dependsOn: [] },
+		]);
+	});
+
 	test("validates task operations", async () => {
 		const { harness, context } = await enabledHarness();
 		await runTool(harness, context.ctx, { action: "task", op: "add", id: "TASK-a", taskTitle: "a" });
@@ -395,8 +555,23 @@ describe("biu tool", () => {
 			runTool(harness, context.ctx, { action: "task", op: "add", id: "bad id", taskTitle: "x" }),
 		).rejects.toThrow(/Invalid task id/);
 		await expect(
-			runTool(harness, context.ctx, { action: "task", op: "add", id: "TASK-c", taskTitle: "c", status: "ready" }),
-		).rejects.toThrow(/omit "status"/);
+			runTool(harness, context.ctx, {
+				action: "task",
+				op: "add",
+				id: "TASK-c",
+				taskTitle: "c",
+				status: "in_progress",
+			}),
+		).rejects.toThrow(/always start as "ready"/);
+		await expect(
+			runTool(harness, context.ctx, {
+				action: "task",
+				op: "add",
+				id: "TASK-c",
+				taskTitle: "c",
+				status: "completed",
+			}),
+		).rejects.toThrow(/always start as "ready"/);
 		await expect(
 			runTool(harness, context.ctx, { action: "task", op: "update", id: "TASK-a", dependsOn: ["TASK-b"] }),
 		).rejects.toThrow(/cycle/);
