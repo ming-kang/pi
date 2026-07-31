@@ -64,15 +64,40 @@ function truncate(text: string, limit: number): string {
 	return chars.length <= limit ? text : `${chars.slice(0, Math.max(0, limit - 1)).join("")}…`;
 }
 
+const DUNDER_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+const CODE_OPERATOR_SUFFIX_PATTERN = /(?:={1,3}|!={1,2}|<=?|>=?|:=|[-+*/%&|^]=?)$/u;
+const CODE_OPERATOR_PREFIX_PATTERN = /^(?:={1,3}|!={1,2}|<=?|>=?|:=|[-+*/%&|^]=?)/u;
+const CODE_KEYWORD_SUFFIX_PATTERN = /\b(?:return|yield|raise|del|global|nonlocal|import|from|as)\s*$/u;
+
+// Double underscores are ambiguous: Markdown uses them for strong emphasis,
+// while code uses them for dunder identifiers. Preserve identifier-shaped
+// spans in clear code contexts and strip the remaining emphasis markers.
+function stripUnderscoreStrong(text: string): string {
+	return text.replace(/__([^_\n]+)__/gu, (match: string, content: string, offset: number) => {
+		const before = text[offset - 1] ?? "";
+		const after = text[offset + match.length] ?? "";
+		const pairedCodeDelimiter =
+			(before === "`" && after === "`") || (before === '"' && after === '"') || (before === "'" && after === "'");
+		const codeAdjacent = before === "." || after === "(" || after === "." || after === "[";
+		const trimmedBefore = text.slice(0, offset).trimEnd();
+		const trimmedAfter = text.slice(offset + match.length).trimStart();
+		const operatorAdjacent =
+			CODE_OPERATOR_SUFFIX_PATTERN.test(trimmedBefore) || CODE_OPERATOR_PREFIX_PATTERN.test(trimmedAfter);
+		const keywordAdjacent = CODE_KEYWORD_SUFFIX_PATTERN.test(trimmedBefore);
+		return DUNDER_IDENTIFIER_PATTERN.test(content) &&
+			(pairedCodeDelimiter || codeAdjacent || operatorAdjacent || keywordAdjacent)
+			? match
+			: content;
+	});
+}
+
 // Transcript excerpts render inside plain Text components, so markdown
 // punctuation would show up literally; strip the common inline syntax.
 function stripInlineMarkdown(text: string): string {
 	return (
-		text
-			.replace(/```[a-zA-Z0-9-]*/gu, "")
+		stripUnderscoreStrong(text.replace(/```[a-zA-Z0-9-]*/gu, ""))
 			.replace(/`([^`]*)`/gu, "$1")
-			// Demarcated bold only: `x**2**` is exponentiation and `__init__` is a
-			// dunder name, not emphasis — both must survive excerpting.
+			// Demarcated bold only: `x**2**` is exponentiation, not emphasis.
 			.replace(/(?<![A-Za-z0-9])\*\*([^*]+)\*\*(?![A-Za-z0-9])/gu, "$1")
 			.replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
 			.replace(/^#{1,6}\s+/gmu, "")

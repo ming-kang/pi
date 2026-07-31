@@ -108,10 +108,12 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 	let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
 	const activeActivities = new Map<string, ToolActivity>();
 	const seenAssistantMessages = new Set<unknown>();
+	const initializationAbortController = new AbortController();
 	const markAbort = async (): Promise<void> => {
 		clearSubagentRetry(run);
 		run.status = "aborted";
 		run.error ??= "Subagent was aborted.";
+		initializationAbortController.abort();
 		if (session) await session.abort();
 	};
 	const isAborted = (): boolean => signal?.aborted === true || run.status === "aborted";
@@ -163,32 +165,44 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 			sessionManager: SessionManager.inMemory(task.cwd),
 			settingsManager,
 		});
-		// createAgentSession takes no signal and can hang on network work, so
-		// abort races it; a session that resolves after the race is lost is
-		// disposed instead of leaking.
-		let abortRace: Promise<never> | undefined;
-		if (signal) {
-			abortRace = new Promise<never>((_resolve, reject) => {
-				const rejectOnAbort = () => {
-					void createPromise.then(
-						(createdLate) => createdLate.session.dispose(),
-						() => {},
-					);
-					reject(new Error("Subagent session creation was aborted."));
-				};
-				if (signal.aborted) {
-					rejectOnAbort();
-					return;
-				}
-				const abortListener = () => rejectOnAbort();
-				signal.addEventListener("abort", abortListener, { once: true });
-				void createPromise.then(
-					() => signal.removeEventListener("abort", abortListener),
-					() => signal.removeEventListener("abort", abortListener),
-				);
-			});
+		// createAgentSession takes no signal and can hang on network work. Race
+		// both parent-signal and registered shutdown cancellation against it;
+		// only the winning branch owns disposal of the resulting session.
+		const initializationSignal = initializationAbortController.signal;
+		let creationAbortListener: (() => void) | undefined;
+		const abortedOutcome = new Promise<{ kind: "aborted" }>((resolve) => {
+			const resolveAborted = () => resolve({ kind: "aborted" });
+			if (initializationSignal.aborted) {
+				resolveAborted();
+				return;
+			}
+			creationAbortListener = resolveAborted;
+			initializationSignal.addEventListener("abort", resolveAborted, { once: true });
+		});
+		const outcome = await Promise.race([
+			createPromise.then((created) => ({ kind: "created" as const, created })),
+			abortedOutcome,
+		]).finally(() => {
+			if (creationAbortListener) initializationSignal.removeEventListener("abort", creationAbortListener);
+		});
+		if (outcome.kind === "aborted") {
+			// The creation promise cannot be cancelled. Dispose its session if it
+			// eventually resolves, but keep background cleanup from surfacing an
+			// unhandled rejection after this run has already settled.
+			void createPromise.then(
+				(createdLate) => {
+					try {
+						createdLate.session.dispose();
+					} catch {
+						// The aborted run has no remaining channel for cleanup errors.
+					}
+				},
+				() => {},
+			);
+			run.error ??= "Subagent was aborted during initialization.";
+			return run;
 		}
-		const created = await (abortRace ? Promise.race([createPromise, abortRace]) : createPromise);
+		const created = outcome.created;
 		session = created.session;
 		if (isAborted()) {
 			run.error ??= "Subagent was aborted during initialization.";

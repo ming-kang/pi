@@ -832,21 +832,30 @@ describe("subagent rendering", () => {
 		expect(output).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/u);
 	});
 
-	it("preserves dunder names and exponentiation in excerpts", () => {
+	it("preserves code syntax while stripping bold markup in excerpts", () => {
 		const output = collapsed(
 			details({
 				mode: "single",
 				runs: [
 					run({
-						finalOutput: "def __init__(self):\nvalue = x**2**3\n**Summary:** found it",
+						finalOutput:
+							'def __init__(self):\nvalue = x**2**3\npath = __file__\nif __name__ == "__main__": return __doc__\n**Summary:** found it\n__bold__ and __WARNING:__',
 					}),
 				],
 			}),
 		);
 		expect(output).toContain("__init__");
+		expect(output).toContain("__file__");
+		expect(output).toContain("__name__");
+		expect(output).toContain('"__main__"');
+		expect(output).toContain("__doc__");
 		expect(output).toContain("x**2**3");
 		expect(output).toContain("Summary: found it");
+		expect(output).toContain("bold and");
+		expect(output).toContain("WARNING:");
 		expect(output).not.toContain("**Summary");
+		expect(output).not.toContain("__bold__");
+		expect(output).not.toContain("__WARNING");
 	});
 
 	it("colors the no-details fallback by the error state", () => {

@@ -129,25 +129,56 @@ async function configureProfile(
 	}
 }
 
-// Re-registering and re-keying providers is not idempotent (each call
-// triggers a refresh), so the sync diffs against what this runtime already
-// holds. Configs are compared structurally; function-valued fields collapse
-// to undefined in the JSON form, so a changed function identity alone does
-// not count as a change.
-export async function syncParentProviders(
+// Parent tool calls execute in parallel by default, so every sync targeting
+// the same child runtime must observe and update the tracking state in order.
+const providerSyncQueues = new WeakMap<ModelRuntime, Promise<void>>();
+
+// Provider configs are mostly JSON data, but stream, refresh, and OAuth hooks
+// are functions whose identity is behaviorally significant. Compare enumerable
+// values recursively so callback-only re-registrations propagate as well.
+function providerConfigValuesEqual(
+	left: unknown,
+	right: unknown,
+	seen = new WeakMap<object, WeakSet<object>>(),
+): boolean {
+	if (Object.is(left, right)) return true;
+	if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) return false;
+	if (Array.isArray(left) !== Array.isArray(right)) return false;
+	if (Array.isArray(left) && left.length !== (right as unknown[]).length) return false;
+
+	const comparedRights = seen.get(left);
+	if (comparedRights?.has(right)) return true;
+	if (comparedRights) comparedRights.add(right);
+	else seen.set(left, new WeakSet([right]));
+
+	const leftRecord = left as Record<string, unknown>;
+	const rightRecord = right as Record<string, unknown>;
+	const leftKeys = Object.keys(leftRecord).sort();
+	const rightKeys = Object.keys(rightRecord).sort();
+	if (leftKeys.length !== rightKeys.length) return false;
+	for (let index = 0; index < leftKeys.length; index++) {
+		const key = leftKeys[index];
+		if (key === undefined || key !== rightKeys[index]) return false;
+		if (!providerConfigValuesEqual(leftRecord[key], rightRecord[key], seen)) return false;
+	}
+	return true;
+}
+
+async function syncParentProvidersNow(
 	runtime: ModelRuntime,
 	registry: ModelRegistry,
 	syncedIds: Set<string>,
 	syncedApiKeys: Map<string, string>,
 ): Promise<void> {
 	const nextIds = new Set(registry.getRegisteredProviderIds());
-	for (const id of syncedIds) {
+	for (const id of [...syncedIds]) {
 		if (!nextIds.has(id)) {
 			runtime.unregisterProvider(id);
 			if (syncedApiKeys.has(id)) {
 				await runtime.removeRuntimeApiKey(id);
 				syncedApiKeys.delete(id);
 			}
+			syncedIds.delete(id);
 		}
 	}
 	for (const id of nextIds) {
@@ -156,10 +187,14 @@ export async function syncParentProviders(
 			if (runtime.getRegisteredNativeProvider(id) !== native) runtime.registerNativeProvider(native);
 		} else {
 			const config = registry.getRegisteredProviderConfig(id);
-			if (config && JSON.stringify(runtime.getRegisteredProviderConfig(id)) !== JSON.stringify(config)) {
+			if (config && !providerConfigValuesEqual(runtime.getRegisteredProviderConfig(id), config)) {
 				runtime.registerProvider(id, config);
 			}
 		}
+		// Record the provider as soon as its registration is known to be in the
+		// child runtime. If auth lookup then fails, a later removal can still
+		// clean up this partially synchronized provider.
+		syncedIds.add(id);
 		const auth = await registry.getProviderAuth(id);
 		const apiKey = auth?.auth.apiKey;
 		if (apiKey && syncedApiKeys.get(id) !== apiKey) {
@@ -170,8 +205,24 @@ export async function syncParentProviders(
 			syncedApiKeys.delete(id);
 		}
 	}
-	syncedIds.clear();
-	for (const id of nextIds) syncedIds.add(id);
+}
+
+export async function syncParentProviders(
+	runtime: ModelRuntime,
+	registry: ModelRegistry,
+	syncedIds: Set<string>,
+	syncedApiKeys: Map<string, string>,
+): Promise<void> {
+	const previous = providerSyncQueues.get(runtime) ?? Promise.resolve();
+	const current = previous
+		.catch(() => undefined)
+		.then(() => syncParentProvidersNow(runtime, registry, syncedIds, syncedApiKeys));
+	providerSyncQueues.set(runtime, current);
+	try {
+		await current;
+	} finally {
+		if (providerSyncQueues.get(runtime) === current) providerSyncQueues.delete(runtime);
+	}
 }
 
 async function showAgentsCommand(ctx: ExtensionCommandContext, parentThinking: string): Promise<void> {

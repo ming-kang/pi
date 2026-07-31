@@ -144,6 +144,54 @@ describe("Subagent SDK initialization aborts", () => {
 		expect(result.error).toContain("aborted");
 	});
 
+	it("settles a hanging creation through the registered shutdown abort", async () => {
+		sdkMocks.reload.mockResolvedValue(undefined);
+		sdkMocks.createAgentSession.mockReturnValue(new Promise<{ session: unknown }>(() => {}));
+		let registeredAbort: (() => Promise<void>) | undefined;
+		const unregisterAbort = vi.fn();
+		const execution = runSdkTask({
+			task: task(),
+			run: run(),
+			modelRuntime: {} as ModelRuntime,
+			agentDir: process.cwd(),
+			projectTrusted: false,
+			registerAbort: (abort) => {
+				registeredAbort = abort;
+				return unregisterAbort;
+			},
+		});
+		await vi.waitFor(() => expect(sdkMocks.createAgentSession).toHaveBeenCalledTimes(1));
+
+		await registeredAbort?.();
+		const result = await execution;
+		expect(result.status).toBe("aborted");
+		expect(unregisterAbort).toHaveBeenCalledTimes(1);
+	});
+
+	it("disposes exactly once when creation resolves immediately before abort", async () => {
+		sdkMocks.reload.mockResolvedValue(undefined);
+		const created = deferred<{ session: ReturnType<typeof fakeSession> }>();
+		sdkMocks.createAgentSession.mockReturnValue(created.promise);
+		const session = fakeSession();
+		const controller = new AbortController();
+		const execution = runSdkTask({
+			task: task(),
+			run: run(),
+			modelRuntime: {} as ModelRuntime,
+			agentDir: process.cwd(),
+			projectTrusted: false,
+			signal: controller.signal,
+		});
+		await vi.waitFor(() => expect(sdkMocks.createAgentSession).toHaveBeenCalledTimes(1));
+
+		created.resolve({ session });
+		controller.abort();
+		const result = await execution;
+		expect(result.status).toBe("aborted");
+		expect(session.prompt).not.toHaveBeenCalled();
+		expect(session.dispose).toHaveBeenCalledTimes(1);
+	});
+
 	it("registers session-shutdown abort while resources are still loading", async () => {
 		const loading = deferred<void>();
 		sdkMocks.reload.mockReturnValue(loading.promise);
