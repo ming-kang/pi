@@ -105,13 +105,19 @@ describe("biu state persistence", () => {
 		expect(second.state.stage).toBe("execute");
 	});
 
-	test("ensureBiuWorkspace refuses to create a fresh state over leftover SPEC.md", async () => {
+	test("ensureBiuWorkspace refuses to create a fresh state over leftover cycle files", async () => {
 		await ensureBiuWorkspace(cwd, agentDir);
 		const paths = getBiuPaths(cwd, agentDir);
 		await writeFile(paths.specFile, "# SPEC: leftover\n", "utf8");
 		await rm(paths.stateFile);
-		await expect(ensureBiuWorkspace(cwd, agentDir)).rejects.toThrow(/still exists/);
+		await expect(ensureBiuWorkspace(cwd, agentDir)).rejects.toThrow(/leftover cycle files remain/);
 		expect(existsSync(paths.specFile)).toBe(true);
+		expect(existsSync(paths.stateFile)).toBe(false);
+
+		await rm(paths.specFile);
+		await writeFile(join(paths.tasksDir, "TASK-a.md"), "# TASK-a\n", "utf8");
+		await expect(ensureBiuWorkspace(cwd, agentDir)).rejects.toThrow(/leftover cycle files remain/);
+		expect(existsSync(join(paths.tasksDir, "TASK-a.md"))).toBe(true);
 		expect(existsSync(paths.stateFile)).toBe(false);
 	});
 });
@@ -319,7 +325,12 @@ describe("archiveBiuCycle", () => {
 		// move-back on Windows.
 		await mkdir(`${paths.stateFile}.${process.pid}.tmp`);
 		const now = new Date("2026-07-31T12:00:00Z");
-		await expect(archiveBiuCycle(cwd, "cycle", agentDir, now)).rejects.toThrow();
+		const failure = await archiveBiuCycle(cwd, "cycle", agentDir, now).then(
+			() => undefined,
+			(error: unknown) => error as Error,
+		);
+		expect(failure?.message).toMatch(/EISDIR|EPERM|EACCES/);
+		expect(failure?.message).not.toMatch(/Rollback incomplete/);
 		expect(existsSync(paths.specFile)).toBe(true);
 		expect(existsSync(paths.summaryFile)).toBe(true);
 		expect(existsSync(join(paths.tasksDir, "TASK-a.md"))).toBe(true);

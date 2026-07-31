@@ -233,9 +233,14 @@ export async function ensureBiuWorkspace(
 	await Promise.all([mkdir(paths.tasksDir, { recursive: true }), mkdir(paths.archivedDir, { recursive: true })]);
 	const existing = await loadBiuState(cwd, agentDir);
 	if (existing) return { paths, state: existing, created: false };
-	if (await pathExists(paths.specFile)) {
+	const leftover = (await pathExists(paths.specFile))
+		? paths.specFile
+		: (await readdir(paths.tasksDir)).length > 0
+			? paths.tasksDir
+			: undefined;
+	if (leftover) {
 		throw new Error(
-			`biu.json is missing but ${paths.specFile} still exists. Restore biu.json from a backup, or remove or archive the leftover cycle files before starting a new cycle.`,
+			`biu.json is missing but leftover cycle files remain at ${leftover}. Restore biu.json from a backup, or remove or archive the leftover cycle files before starting a new cycle.`,
 		);
 	}
 	const state = createInitialBiuState();
