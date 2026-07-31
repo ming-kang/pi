@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -19,7 +19,12 @@ import biu, {
 	replayBiuMode,
 } from "../src/extensions/biu/index.ts";
 import { getBiuPaths, loadBiuState } from "../src/extensions/biu/state.ts";
-import { BIU_TOOL_NAME, type BiuToolDetails, type BiuToolParams } from "../src/extensions/biu/tool.ts";
+import {
+	BIU_TOOL_NAME,
+	type BiuToolDetails,
+	type BiuToolParams,
+	BiuToolParamsSchema,
+} from "../src/extensions/biu/tool.ts";
 import { builtInExtensions } from "../src/extensions/index.ts";
 
 interface RegisteredCommand {
@@ -233,6 +238,22 @@ describe("biu mode lifecycle", () => {
 		expect(result.systemPrompt).toContain("Biu Mode is active");
 		expect(result.systemPrompt).toContain("interview");
 	});
+
+	test("before_agent_start suggests a fresh workspace when biu.json is missing", async () => {
+		const harness = captureExtension(["read"]);
+		const context = createContext(cwd);
+		await runCommand(harness, context.ctx);
+
+		const otherCwd = join(cwd, "elsewhere");
+		await mkdir(otherCwd, { recursive: true });
+		const otherContext = createContext(otherCwd);
+		const result = (await harness.hooks.get("before_agent_start")?.(
+			{ type: "before_agent_start", systemPrompt: "base" },
+			otherContext.ctx,
+		)) as { systemPrompt: string };
+		expect(result.systemPrompt).toContain("no Biu cycle");
+		expect(result.systemPrompt).not.toContain("could not be read");
+	});
 });
 
 describe("biu menu", () => {
@@ -295,6 +316,13 @@ describe("biu tool", () => {
 		const harness = captureExtension(["read"]);
 		const context = createContext(cwd);
 		await expect(runTool(harness, context.ctx, { action: "get" })).rejects.toThrow(/not active/);
+	});
+
+	test("task id and dependency schema bounds match the id format", () => {
+		const idSchema = BiuToolParamsSchema.properties.id as { maxLength?: number };
+		const dependsOnSchema = BiuToolParamsSchema.properties.dependsOn as { items?: { maxLength?: number } };
+		expect(idSchema.maxLength).toBe(85);
+		expect(dependsOnSchema.items?.maxLength).toBe(85);
 	});
 
 	test("get returns the snapshot and the current stage playbook", async () => {
@@ -365,6 +393,9 @@ describe("biu tool", () => {
 		await expect(
 			runTool(harness, context.ctx, { action: "task", op: "add", id: "bad id", taskTitle: "x" }),
 		).rejects.toThrow(/Invalid task id/);
+		await expect(
+			runTool(harness, context.ctx, { action: "task", op: "add", id: "TASK-c", taskTitle: "c", status: "ready" }),
+		).rejects.toThrow(/omit "status"/);
 		await expect(
 			runTool(harness, context.ctx, { action: "task", op: "update", id: "TASK-a", dependsOn: ["TASK-b"] }),
 		).rejects.toThrow(/cycle/);

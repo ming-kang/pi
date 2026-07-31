@@ -5,7 +5,7 @@
  * stage playbook; the mutating actions are the only write path into biu.json.
  * Markdown content (SPEC.md, TASK files, Summary.md) is written by the model
  * with the normal file tools; this tool never touches Markdown except for the
- * atomic archive move.
+ * archive move (which rolls back on failure).
  */
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
@@ -69,7 +69,7 @@ export const BiuToolParamsSchema = Type.Object({
 	),
 	id: Type.Optional(
 		Type.String({
-			maxLength: 100,
+			maxLength: 85,
 			description:
 				'task only: task id in the form "TASK-" plus 1-80 ASCII letters, digits, dots, underscores, or hyphens. Must match the tasks/<id>.md filename.',
 		}),
@@ -87,7 +87,7 @@ export const BiuToolParamsSchema = Type.Object({
 		}),
 	),
 	dependsOn: Type.Optional(
-		Type.Array(Type.String({ maxLength: 100 }), {
+		Type.Array(Type.String({ maxLength: 85 }), {
 			maxItems: 50,
 			description:
 				"task only: ids of tasks that must complete before this one. Replaces the full list on update; must resolve to existing tasks and stay acyclic.",
@@ -101,7 +101,7 @@ export const BiuToolParamsSchema = Type.Object({
 	),
 	shortname: Type.Optional(
 		Type.String({
-			maxLength: BIU_MAX_SHORTNAME_LENGTH * 2,
+			maxLength: BIU_MAX_SHORTNAME_LENGTH,
 			description:
 				"archive only: concise, filesystem-safe archive name derived from the SPEC title and main outcome, preserving the project's language.",
 		}),
@@ -190,7 +190,7 @@ function applyTaskAction(state: BiuState, params: BiuToolParams): string {
 		}
 		const title = requireParam(params.taskTitle, 'Adding a task requires "taskTitle".').trim();
 		if (!title) throw new Error("Task title cannot be empty.");
-		if (params.status !== undefined && params.status !== "ready") {
+		if (params.status !== undefined) {
 			throw new Error('New tasks always start as "ready"; omit "status" on add.');
 		}
 		const dependsOn = validateDependsOn(state, id, params.dependsOn ?? []);
@@ -246,7 +246,7 @@ function validateDependsOn(state: BiuState, id: string, dependsOn: string[]): st
 	const unique = [...new Set(dependsOn.map((dep) => dep.trim()))];
 	for (const dep of unique) {
 		if (dep === id) throw new Error(`Task ${id} cannot depend on itself.`);
-		if (!state.tasks.some((task) => task.id === dep) && dep !== id) {
+		if (!state.tasks.some((task) => task.id === dep)) {
 			throw new Error(
 				`Dependency ${JSON.stringify(dep)} does not match any registered task. Add tasks in dependency order.`,
 			);

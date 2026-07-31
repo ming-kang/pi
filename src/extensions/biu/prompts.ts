@@ -146,7 +146,7 @@ ${BIU_TASK_TEMPLATE}`,
 - When the recorded baselineCommit resolves in the project repository, use a bounded git diff summary as context. Treat missing or unresolvable baselines as "no diff available"; never commit on the user's behalf.
 - Draft Summary.md at the supplied path: synthesize each task's Implementation Decisions and Notes, group Task Results by AC, and call out deviations, unverified work, and follow-ups. Ask explicitly whether important decisions or newly learned domain knowledge are missing from the files.
 - Present the draft for user approval and adjust until confirmed.
-- After approval, call the biu tool ("archive" action) with a concise, filesystem-safe shortname derived from the SPEC title and main outcome, preserving the project's language. The tool moves SPEC.md, Summary.md, and tasks/ into archived/YYYY-MM-DD-<shortname>/ atomically and resets the cycle. Archiving with unfinished tasks additionally requires confirmIncomplete: true after the user's explicit choice.
+- After approval, call the biu tool ("archive" action) with a concise, filesystem-safe shortname derived from the SPEC title and main outcome, preserving the project's language. The tool moves SPEC.md, Summary.md, and tasks/ into archived/YYYY-MM-DD-<shortname>/ and resets the cycle, rolling back already-moved files on failure. Archiving with unfinished tasks additionally requires confirmIncomplete: true after the user's explicit choice.
 - If Gaps & Follow-Ups is non-empty, remind the user the next cycle can pick those up.
 
 Summary.md structure:
@@ -211,6 +211,12 @@ Before doing workflow work in this turn, call the biu tool with action "get" to 
 export function buildBiuStateErrorPrompt(message: string): string {
 	return `Biu Mode is active, but the workflow state file could not be read: ${message}
 Do not modify Biu artifacts blindly. Report the problem to the user and help restore a valid biu.json before continuing the workflow.`;
+}
+
+/** Resident block when Biu Mode is on but the current working directory has no cycle yet. */
+export function buildBiuFreshWorkspacePrompt(): string {
+	return `Biu Mode is active, but no Biu cycle exists for the current working directory yet.
+Call the biu tool with action "get" to create the workspace and start a new interview. Any previous cycle lives in another directory's Biu workspace and is untouched.`;
 }
 
 /** Content of the kickoff message sent when the user picks "Continue" from the /biu menu. */

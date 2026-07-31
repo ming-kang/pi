@@ -12,6 +12,7 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "../../core/extensions/types.ts";
 import { isStaleExtensionContextError } from "../../core/extensions/types.ts";
 import {
+	buildBiuFreshWorkspacePrompt,
 	buildBiuKickoffContent,
 	buildBiuResidentPrompt,
 	buildBiuStateErrorPrompt,
@@ -302,9 +303,7 @@ export default function biuExtension(pi: ExtensionAPI): void {
 		let block: string;
 		try {
 			const state = await loadBiuState(ctx.cwd);
-			block = state
-				? buildBiuResidentPrompt(state)
-				: buildBiuStateErrorPrompt("biu.json is missing. Re-run /biu or restore the file.");
+			block = state ? buildBiuResidentPrompt(state) : buildBiuFreshWorkspacePrompt();
 		} catch (error) {
 			if (isStaleExtensionContextError(error)) return;
 			block = buildBiuStateErrorPrompt(error instanceof Error ? error.message : String(error));

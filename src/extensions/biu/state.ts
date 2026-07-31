@@ -166,6 +166,15 @@ export function validateBiuState(value: unknown): BiuState {
 			}
 		}
 	}
+	for (const task of tasks) {
+		if (task.dependsOn.includes(task.id)) {
+			throw new Error(`biu.json tasks: ${task.id} depends on itself`);
+		}
+	}
+	const cycleNode = findCycleNode(tasks);
+	if (cycleNode) {
+		throw new Error(`biu.json tasks: dependency cycle involving ${JSON.stringify(cycleNode)}`);
+	}
 
 	return {
 		version: BIU_STATE_VERSION,
@@ -247,26 +256,47 @@ export function findNextTask(state: BiuState): BiuTask | undefined {
 }
 
 /**
+ * Find a task participating in a dependency cycle, or undefined when the
+ * graph is acyclic. `override` replaces one task's edges with a candidate
+ * set, for cycle checks on proposed writes; `start` limits the walk to the
+ * given task and its reachable subgraph (matching the old wouldCreateCycle
+ * semantics), while omitting it walks the whole graph.
+ */
+export function findCycleNode(
+	tasks: BiuTask[],
+	override?: { id: string; dependsOn: string[] },
+	start?: string,
+): string | undefined {
+	const edges = new Map<string, string[]>(tasks.map((task) => [task.id, task.dependsOn]));
+	if (override) edges.set(override.id, override.dependsOn);
+	const visiting = new Set<string>();
+	const done = new Set<string>();
+	const visit = (id: string): string | undefined => {
+		if (done.has(id)) return undefined;
+		if (visiting.has(id)) return id;
+		visiting.add(id);
+		for (const dep of edges.get(id) ?? []) {
+			const cycle = visit(dep);
+			if (cycle) return cycle;
+		}
+		visiting.delete(id);
+		done.add(id);
+		return undefined;
+	};
+	const starts = start !== undefined ? [start] : tasks.map((task) => task.id);
+	for (const id of starts) {
+		const cycle = visit(id);
+		if (cycle) return cycle;
+	}
+	return undefined;
+}
+
+/**
  * Check whether assigning `dependsOn` to `taskId` would create a dependency
  * cycle, using the other tasks' current edges.
  */
 export function wouldCreateCycle(tasks: BiuTask[], taskId: string, dependsOn: string[]): boolean {
-	const edges = new Map<string, string[]>(tasks.map((task) => [task.id, task.dependsOn]));
-	edges.set(taskId, dependsOn);
-	const visiting = new Set<string>();
-	const done = new Set<string>();
-	const visit = (id: string): boolean => {
-		if (done.has(id)) return false;
-		if (visiting.has(id)) return true;
-		visiting.add(id);
-		for (const dep of edges.get(id) ?? []) {
-			if (visit(dep)) return true;
-		}
-		visiting.delete(id);
-		done.add(id);
-		return false;
-	};
-	return visit(taskId);
+	return findCycleNode(tasks, { id: taskId, dependsOn }, taskId) !== undefined;
 }
 
 /**
@@ -305,6 +335,9 @@ async function pathExists(path: string): Promise<boolean> {
 	}
 }
 
+/** Move one file or directory, returning false when the source does not exist. */
+export type BiuMoveFile = (from: string, to: string) => Promise<boolean>;
+
 async function moveIfExists(from: string, to: string): Promise<boolean> {
 	if (!(await pathExists(from))) return false;
 	await rename(from, to);
@@ -318,16 +351,22 @@ export interface BiuArchiveResult {
 }
 
 /**
- * Atomically close the current cycle: move SPEC.md, Summary.md, and tasks/
- * into archived/YYYY-MM-DD-<shortname>/ and reset biu.json to a fresh cycle.
- * Requires SPEC.md and Summary.md to exist so an empty or unfinished draft is
- * never archived silently.
+ * Close the current cycle: move SPEC.md, Summary.md, and tasks/ into
+ * archived/YYYY-MM-DD-<shortname>/ and reset biu.json to a fresh cycle. If
+ * any move or the state reset fails, already-moved files are rolled back so
+ * the cycle is never left half-archived; when a rollback itself fails, the
+ * recovery data stays in the archive directory and the error says where.
+ * Requires SPEC.md and Summary.md to exist so an empty or unfinished draft
+ * is never archived silently.
+ *
+ * `move` is injectable for tests; rollback always uses the real move.
  */
 export async function archiveBiuCycle(
 	cwd: string,
 	shortname: string,
 	agentDir: string = getAgentDir(),
 	now: Date = new Date(),
+	move: BiuMoveFile = moveIfExists,
 ): Promise<BiuArchiveResult> {
 	const paths = getBiuPaths(cwd, agentDir);
 	const safeName = sanitizeShortname(shortname);
@@ -355,12 +394,55 @@ export async function archiveBiuCycle(
 	const archivedPath = join(paths.archivedDir, archiveName);
 	await mkdir(archivedPath, { recursive: false });
 
-	await moveIfExists(paths.specFile, join(archivedPath, BIU_SPEC_FILE_NAME));
-	await moveIfExists(paths.summaryFile, join(archivedPath, BIU_SUMMARY_FILE_NAME));
-	await moveIfExists(paths.tasksDir, join(archivedPath, BIU_TASKS_DIRECTORY_NAME));
-	await mkdir(paths.tasksDir, { recursive: true });
+	const moves: Array<{ from: string; to: string }> = [
+		{ from: paths.specFile, to: join(archivedPath, BIU_SPEC_FILE_NAME) },
+		{ from: paths.summaryFile, to: join(archivedPath, BIU_SUMMARY_FILE_NAME) },
+		{ from: paths.tasksDir, to: join(archivedPath, BIU_TASKS_DIRECTORY_NAME) },
+	];
+	const moved: Array<{ from: string; to: string }> = [];
+	try {
+		for (const entry of moves) {
+			if (await move(entry.from, entry.to)) moved.push(entry);
+		}
+		await mkdir(paths.tasksDir, { recursive: true });
+		const state = createInitialBiuState(now);
+		await saveBiuState(cwd, state, agentDir);
+		return { archivedPath, archiveName, state };
+	} catch (error) {
+		throw await rollbackArchive(error, archivedPath, moved);
+	}
+}
 
-	const state = createInitialBiuState(now);
-	await saveBiuState(cwd, state, agentDir);
-	return { archivedPath, archiveName, state };
+/** Reverse the already-moved files and clean the archive directory; throws a chained error. */
+async function rollbackArchive(
+	error: unknown,
+	archivedPath: string,
+	moved: Array<{ from: string; to: string }>,
+): Promise<Error> {
+	const rollbackErrors: string[] = [];
+	let rollbackClean = true;
+	for (const entry of [...moved].reverse()) {
+		try {
+			await moveIfExists(entry.to, entry.from);
+		} catch (rollbackError) {
+			rollbackClean = false;
+			rollbackErrors.push(`moving ${entry.to} back failed: ${describeError(rollbackError)}`);
+		}
+	}
+	if (rollbackClean) {
+		try {
+			await rm(archivedPath, { recursive: true, force: true });
+		} catch (rollbackError) {
+			rollbackErrors.push(`cleaning ${archivedPath} failed: ${describeError(rollbackError)}`);
+		}
+	}
+	const detail =
+		rollbackErrors.length > 0
+			? ` Rollback incomplete, recovery data left in ${archivedPath}: ${rollbackErrors.join("; ")}`
+			: "";
+	return new Error(`${describeError(error)}${detail}`);
+}
+
+function describeError(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }

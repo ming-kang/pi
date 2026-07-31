@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
@@ -7,6 +7,7 @@ import {
 	archiveBiuCycle,
 	BIU_MAX_TASKS,
 	BIU_STATE_VERSION,
+	type BiuMoveFile,
 	type BiuState,
 	createInitialBiuState,
 	ensureBiuWorkspace,
@@ -140,6 +141,25 @@ describe("validateBiuState", () => {
 		}));
 		expect(() => validateBiuState({ ...createInitialBiuState(), tasks })).toThrow(/maximum/);
 	});
+
+	test("rejects self-dependencies and dependency cycles on load", () => {
+		const base = createInitialBiuState();
+		expect(() =>
+			validateBiuState({
+				...base,
+				tasks: [{ id: "TASK-a", title: "a", status: "ready", dependsOn: ["TASK-a"] }],
+			}),
+		).toThrow(/depends on itself/);
+		expect(() =>
+			validateBiuState({
+				...base,
+				tasks: [
+					{ id: "TASK-a", title: "a", status: "ready", dependsOn: ["TASK-b"] },
+					{ id: "TASK-b", title: "b", status: "ready", dependsOn: ["TASK-a"] },
+				],
+			}),
+		).toThrow(/cycle involving "TASK-a"/);
+	});
 });
 
 describe("task helpers", () => {
@@ -260,5 +280,24 @@ describe("archiveBiuCycle", () => {
 		expect(result.archiveName).toBe("2026-07-31-a-b-c-d-e-f-g-h-i");
 		await seedCycle();
 		await expect(archiveBiuCycle(cwd, "///***", agentDir, now)).rejects.toThrow(/empty after sanitization/);
+	});
+
+	test("rolls back already-moved files when a move fails mid-archive", async () => {
+		await seedCycle();
+		let calls = 0;
+		const failingMove: BiuMoveFile = async (from, to) => {
+			calls++;
+			if (calls === 3) throw new Error("simulated move failure");
+			await rename(from, to);
+			return true;
+		};
+		const now = new Date("2026-07-31T12:00:00Z");
+		await expect(archiveBiuCycle(cwd, "cycle", agentDir, now, failingMove)).rejects.toThrow(/simulated move failure/);
+		const paths = getBiuPaths(cwd, agentDir);
+		expect(existsSync(paths.specFile)).toBe(true);
+		expect(existsSync(paths.summaryFile)).toBe(true);
+		expect(existsSync(join(paths.tasksDir, "TASK-a.md"))).toBe(true);
+		expect((await loadBiuState(cwd, agentDir))?.stage).toBe("archive");
+		expect(await readdir(paths.archivedDir)).toHaveLength(0);
 	});
 });

@@ -54,7 +54,7 @@ The tool is added to the active tool set while the mode is on and removed when i
 | `spec` | Update SPEC metadata: title, baseline commit, `draft`/`ready` status |
 | `task` | Add, update, or remove a task entry (id, title, status, dependencies) |
 | `stage` | Move between stages; forward moves are validated (decompose needs a ready SPEC, execute needs registered tasks) |
-| `archive` | Atomically move `SPEC.md`, `Summary.md`, and `tasks/` into `archived/YYYY-MM-DD-<shortname>/` and reset the cycle |
+| `archive` | Move `SPEC.md`, `Summary.md`, and `tasks/` into `archived/YYYY-MM-DD-<shortname>/` and reset the cycle; on failure the already-moved files are rolled back |
 
 Validation lives in the tool, not in Markdown parsing: task ids use the portable `TASK-` form, dependencies must resolve and stay acyclic, new tasks start `ready`, and archiving with unfinished tasks requires an explicit confirmation flag after the user's decision. Acceptance-criteria coverage is checked by the model during decompose, not enforced mechanically.
 
