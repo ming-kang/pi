@@ -219,7 +219,12 @@ export async function saveBiuState(cwd: string, state: BiuState, agentDir: strin
 	}
 }
 
-/** Create workspace directories and biu.json when missing. Returns the current state. */
+/**
+ * Create workspace directories and biu.json when missing. Returns the current
+ * state. Refuses to create a fresh state when biu.json is missing but cycle
+ * files are still present, so a deleted state file never leads to silently
+ * overwriting leftover SPEC.md or task files.
+ */
 export async function ensureBiuWorkspace(
 	cwd: string,
 	agentDir: string = getAgentDir(),
@@ -228,6 +233,11 @@ export async function ensureBiuWorkspace(
 	await Promise.all([mkdir(paths.tasksDir, { recursive: true }), mkdir(paths.archivedDir, { recursive: true })]);
 	const existing = await loadBiuState(cwd, agentDir);
 	if (existing) return { paths, state: existing, created: false };
+	if (await pathExists(paths.specFile)) {
+		throw new Error(
+			`biu.json is missing but ${paths.specFile} still exists. Restore biu.json from a backup, or remove or archive the leftover cycle files before starting a new cycle.`,
+		);
+	}
 	const state = createInitialBiuState();
 	await saveBiuState(cwd, state, agentDir);
 	return { paths, state, created: true };
@@ -335,9 +345,10 @@ async function pathExists(path: string): Promise<boolean> {
 	}
 }
 
-/** Move one file or directory, returning false when the source does not exist. */
+/** Signature for archive file moves; injectable for tests. */
 export type BiuMoveFile = (from: string, to: string) => Promise<boolean>;
 
+/** Move one file or directory, returning false when the source does not exist. */
 async function moveIfExists(from: string, to: string): Promise<boolean> {
 	if (!(await pathExists(from))) return false;
 	await rename(from, to);
@@ -400,47 +411,57 @@ export async function archiveBiuCycle(
 		{ from: paths.tasksDir, to: join(archivedPath, BIU_TASKS_DIRECTORY_NAME) },
 	];
 	const moved: Array<{ from: string; to: string }> = [];
+	let state: BiuState;
 	try {
 		for (const entry of moves) {
 			if (await move(entry.from, entry.to)) moved.push(entry);
 		}
-		await mkdir(paths.tasksDir, { recursive: true });
-		const state = createInitialBiuState(now);
+		state = createInitialBiuState(now);
 		await saveBiuState(cwd, state, agentDir);
-		return { archivedPath, archiveName, state };
 	} catch (error) {
 		throw await rollbackArchive(error, archivedPath, moved);
 	}
+	// Recreate the empty tasks/ directory for the fresh cycle. Best-effort and
+	// deliberately outside the rollback scope: the state is already reset, so
+	// rolling back here would contradict it, and the next ensureBiuWorkspace
+	// call recreates the directory anyway.
+	await mkdir(paths.tasksDir, { recursive: true }).catch(() => {});
+	return { archivedPath, archiveName, state };
 }
 
-/** Reverse the already-moved files and clean the archive directory; throws a chained error. */
+/**
+ * Reverse the already-moved files and clean the archive directory. Returns
+ * the original error unchanged when the rollback fully succeeded, otherwise
+ * a chained error whose message says exactly what remains inconsistent.
+ */
 async function rollbackArchive(
 	error: unknown,
 	archivedPath: string,
 	moved: Array<{ from: string; to: string }>,
 ): Promise<Error> {
-	const rollbackErrors: string[] = [];
-	let rollbackClean = true;
+	const restoreErrors: string[] = [];
 	for (const entry of [...moved].reverse()) {
 		try {
 			await moveIfExists(entry.to, entry.from);
-		} catch (rollbackError) {
-			rollbackClean = false;
-			rollbackErrors.push(`moving ${entry.to} back failed: ${describeError(rollbackError)}`);
+		} catch (restoreError) {
+			restoreErrors.push(`moving ${entry.to} back failed: ${describeError(restoreError)}`);
 		}
 	}
-	if (rollbackClean) {
-		try {
-			await rm(archivedPath, { recursive: true, force: true });
-		} catch (rollbackError) {
-			rollbackErrors.push(`cleaning ${archivedPath} failed: ${describeError(rollbackError)}`);
-		}
+	if (restoreErrors.length > 0) {
+		return new Error(
+			`${describeError(error)} Rollback incomplete, recovery data left in ${archivedPath}: ${restoreErrors.join("; ")}`,
+			{ cause: error },
+		);
 	}
-	const detail =
-		rollbackErrors.length > 0
-			? ` Rollback incomplete, recovery data left in ${archivedPath}: ${rollbackErrors.join("; ")}`
-			: "";
-	return new Error(`${describeError(error)}${detail}`);
+	try {
+		await rm(archivedPath, { recursive: true, force: true });
+	} catch (cleanupError) {
+		return new Error(
+			`${describeError(error)} Rollback succeeded, but removing the empty ${archivedPath} directory failed: ${describeError(cleanupError)}`,
+			{ cause: error },
+		);
+	}
+	return error instanceof Error ? error : new Error(describeError(error), { cause: error });
 }
 
 function describeError(error: unknown): string {

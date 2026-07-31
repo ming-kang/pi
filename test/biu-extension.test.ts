@@ -251,8 +251,9 @@ describe("biu mode lifecycle", () => {
 			{ type: "before_agent_start", systemPrompt: "base" },
 			otherContext.ctx,
 		)) as { systemPrompt: string };
-		expect(result.systemPrompt).toContain("no Biu cycle");
+		expect(result.systemPrompt).toContain("no biu.json");
 		expect(result.systemPrompt).not.toContain("could not be read");
+		expect(result.systemPrompt).not.toContain("another directory");
 	});
 });
 

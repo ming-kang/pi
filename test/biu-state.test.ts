@@ -104,6 +104,16 @@ describe("biu state persistence", () => {
 		expect(second.created).toBe(false);
 		expect(second.state.stage).toBe("execute");
 	});
+
+	test("ensureBiuWorkspace refuses to create a fresh state over leftover SPEC.md", async () => {
+		await ensureBiuWorkspace(cwd, agentDir);
+		const paths = getBiuPaths(cwd, agentDir);
+		await writeFile(paths.specFile, "# SPEC: leftover\n", "utf8");
+		await rm(paths.stateFile);
+		await expect(ensureBiuWorkspace(cwd, agentDir)).rejects.toThrow(/still exists/);
+		expect(existsSync(paths.specFile)).toBe(true);
+		expect(existsSync(paths.stateFile)).toBe(false);
+	});
 });
 
 describe("validateBiuState", () => {
@@ -294,6 +304,22 @@ describe("archiveBiuCycle", () => {
 		const now = new Date("2026-07-31T12:00:00Z");
 		await expect(archiveBiuCycle(cwd, "cycle", agentDir, now, failingMove)).rejects.toThrow(/simulated move failure/);
 		const paths = getBiuPaths(cwd, agentDir);
+		expect(existsSync(paths.specFile)).toBe(true);
+		expect(existsSync(paths.summaryFile)).toBe(true);
+		expect(existsSync(join(paths.tasksDir, "TASK-a.md"))).toBe(true);
+		expect((await loadBiuState(cwd, agentDir))?.stage).toBe("archive");
+		expect(await readdir(paths.archivedDir)).toHaveLength(0);
+	});
+
+	test("rolls back when the state write fails after all files moved", async () => {
+		await seedCycle();
+		const paths = getBiuPaths(cwd, agentDir);
+		// Occupy the temp-file path so saveBiuState's writeFile fails after the
+		// moves; the recreated empty tasks/ directory must not block the
+		// move-back on Windows.
+		await mkdir(`${paths.stateFile}.${process.pid}.tmp`);
+		const now = new Date("2026-07-31T12:00:00Z");
+		await expect(archiveBiuCycle(cwd, "cycle", agentDir, now)).rejects.toThrow();
 		expect(existsSync(paths.specFile)).toBe(true);
 		expect(existsSync(paths.summaryFile)).toBe(true);
 		expect(existsSync(join(paths.tasksDir, "TASK-a.md"))).toBe(true);

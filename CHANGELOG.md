@@ -11,6 +11,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 ### Fixed
 
 - Fixed Biu archiving leaving the cycle half-moved when a file move failed mid-archive: already-moved files now roll back, and an incomplete rollback reports where the recovery data is instead of failing silently.
+- Fixed Biu archive rollback failing on Windows when the state write failed after all files were moved: the fresh empty tasks/ directory no longer blocks the move-back, because it is recreated only after the state reset succeeds.
+- Fixed Biu refusing to lose leftover cycle files: when biu.json is missing but SPEC.md is still present, a fresh workspace is no longer created over it.
 - Fixed Biu accepting hand-edited `biu.json` files with dependency cycles or self-dependencies, and new tasks accepting an explicit `status` despite the documented ready-by-default contract.
 - Fixed the Biu task id schema permitting longer ids than the `TASK-` plus 1-80 format, and Biu Mode in a directory without a cycle now starts a fresh workspace instead of reporting a state error.
 

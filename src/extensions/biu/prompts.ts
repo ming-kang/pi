@@ -215,8 +215,8 @@ Do not modify Biu artifacts blindly. Report the problem to the user and help res
 
 /** Resident block when Biu Mode is on but the current working directory has no cycle yet. */
 export function buildBiuFreshWorkspacePrompt(): string {
-	return `Biu Mode is active, but no Biu cycle exists for the current working directory yet.
-Call the biu tool with action "get" to create the workspace and start a new interview. Any previous cycle lives in another directory's Biu workspace and is untouched.`;
+	return `Biu Mode is active, but no biu.json exists for the current working directory yet.
+Call the biu tool with action "get" to create the workspace and start a new interview. If leftover cycle files are present without biu.json, the tool refuses to overwrite them and explains how to recover.`;
 }
 
 /** Content of the kickoff message sent when the user picks "Continue" from the /biu menu. */
