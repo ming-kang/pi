@@ -19,16 +19,7 @@ import {
 	formatBiuStatusLine,
 } from "./prompts.ts";
 import { renderBiuCall, renderBiuKickoffMessage, renderBiuResult } from "./render.ts";
-import {
-	type BiuStage,
-	type BiuState,
-	ensureBiuWorkspace,
-	findActiveTask,
-	findNextTask,
-	getBiuFocus,
-	getTaskCounts,
-	loadBiuState,
-} from "./state.ts";
+import { type BiuStage, type BiuState, ensureBiuWorkspace, getBiuFocus, getTaskCounts, loadBiuState } from "./state.ts";
 import { BIU_TOOL_NAME, createBiuTool } from "./tool.ts";
 
 export const BIU_COMMAND_NAME = "biu";
@@ -90,12 +81,9 @@ function formatMenuStatus(state: BiuState): string {
 
 	const parts = [state.stage, `${counts.completed}/${counts.total} done`];
 	if (state.stage === "execute") {
-		const active = findActiveTask(state);
-		if (active) parts.push(`active ${truncate(active.id, 32)}`);
-		else {
-			const next = findNextTask(state);
-			if (next) parts.push(`next ${truncate(next.id, 32)}`);
-		}
+		const focus = getBiuFocus(state);
+		if (focus.kind === "active") parts.push(`active ${truncate(focus.task.id, 32)}`);
+		else if (focus.kind === "next") parts.push(`next ${truncate(focus.task.id, 32)}`);
 	}
 	return parts.join(" · ");
 }

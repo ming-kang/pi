@@ -21,8 +21,7 @@ import {
 	BIU_TASK_STATUSES,
 	type BiuState,
 	ensureBiuWorkspace,
-	findActiveTask,
-	findNextTask,
+	getBiuFocus,
 	getStageTransitionError,
 	getTaskCounts,
 	isValidTaskId,
@@ -200,8 +199,8 @@ function summarizeTasks(state: BiuState): string {
 		`${counts.inProgress} in progress`,
 		`${counts.completed} completed`,
 	];
-	const focus = findActiveTask(state) ?? findNextTask(state);
-	if (focus) parts.push(`focus ${focus.id}`);
+	const focus = getBiuFocus(state);
+	if (focus.kind === "active" || focus.kind === "next") parts.push(`focus ${focus.task.id}`);
 	return parts.join(" · ");
 }
 
