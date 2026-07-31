@@ -179,7 +179,6 @@ export interface BiuToolDetails {
 	schemaVersion: typeof BIU_DETAILS_SCHEMA_VERSION;
 	action: BiuAction;
 	statusLine: string;
-	state: BiuState;
 	archivedPath?: string;
 }
 
@@ -395,7 +394,6 @@ function buildResult(
 		schemaVersion: BIU_DETAILS_SCHEMA_VERSION,
 		action,
 		statusLine: formatBiuStatusLine(state),
-		state: structuredClone(state),
 	};
 	if (archivedPath !== undefined) details.archivedPath = archivedPath;
 	return { content: [{ type: "text", text }], details };

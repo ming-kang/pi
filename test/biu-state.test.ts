@@ -13,6 +13,7 @@ import {
 	ensureBiuWorkspace,
 	findActiveTask,
 	findNextTask,
+	getBiuFocus,
 	getBiuPaths,
 	getStageTransitionError,
 	getTaskCounts,
@@ -203,6 +204,29 @@ describe("task helpers", () => {
 		]);
 		expect(findActiveTask(state)?.id).toBe("TASK-b");
 		expect(getTaskCounts(state)).toEqual({ total: 2, ready: 1, inProgress: 1, completed: 0 });
+	});
+
+	test("getBiuFocus covers all four focus kinds", () => {
+		const none = stateWithTasks([]);
+		expect(getBiuFocus(none)).toEqual({ kind: "none" });
+
+		const active = stateWithTasks([
+			{ id: "TASK-a", title: "a", status: "in_progress", dependsOn: [] },
+			{ id: "TASK-b", title: "b", status: "ready", dependsOn: [] },
+		]);
+		expect(getBiuFocus(active)).toEqual({ kind: "active", task: active.tasks[0] });
+
+		const next = stateWithTasks([
+			{ id: "TASK-a", title: "a", status: "completed", dependsOn: [] },
+			{ id: "TASK-b", title: "b", status: "ready", dependsOn: ["TASK-a"] },
+		]);
+		expect(getBiuFocus(next)).toEqual({ kind: "next", task: next.tasks[1] });
+
+		const allDone = stateWithTasks([
+			{ id: "TASK-a", title: "a", status: "completed", dependsOn: [] },
+			{ id: "TASK-b", title: "b", status: "completed", dependsOn: [] },
+		]);
+		expect(getBiuFocus(allDone)).toEqual({ kind: "allDone" });
 	});
 
 	test("wouldCreateCycle detects direct and transitive cycles", () => {

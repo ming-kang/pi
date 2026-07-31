@@ -610,8 +610,9 @@ describe("biu tool", () => {
 			confirmIncomplete: true,
 		});
 		expect(result.details.archivedPath).toBeDefined();
-		expect(result.details.state.stage).toBe("interview");
-		expect(result.details.state.tasks).toEqual([]);
+		const archivedState = await loadBiuState(cwd, agentDir);
+		expect(archivedState?.stage).toBe("interview");
+		expect(archivedState?.tasks).toEqual([]);
 		expect(existsSync(paths.specFile)).toBe(false);
 	});
 });

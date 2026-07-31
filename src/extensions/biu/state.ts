@@ -270,6 +270,24 @@ export function findNextTask(state: BiuState): BiuTask | undefined {
 	);
 }
 
+export type BiuFocus =
+	| { kind: "active"; task: BiuTask }
+	| { kind: "next"; task: BiuTask }
+	| { kind: "allDone" }
+	| { kind: "none" };
+
+/** What the workflow should work on next, as a single structured decision. */
+export function getBiuFocus(state: BiuState): BiuFocus {
+	const active = findActiveTask(state);
+	if (active) return { kind: "active", task: active };
+	const next = findNextTask(state);
+	if (next) return { kind: "next", task: next };
+	if (state.tasks.length > 0 && state.tasks.every((task) => task.status === "completed")) {
+		return { kind: "allDone" };
+	}
+	return { kind: "none" };
+}
+
 /**
  * Find a task participating in a dependency cycle, or undefined when the
  * graph is acyclic. `override` replaces one task's edges with a candidate

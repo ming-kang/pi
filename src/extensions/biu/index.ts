@@ -25,6 +25,7 @@ import {
 	ensureBiuWorkspace,
 	findActiveTask,
 	findNextTask,
+	getBiuFocus,
 	getTaskCounts,
 	loadBiuState,
 } from "./state.ts";
@@ -73,10 +74,10 @@ function truncate(text: string, maxLength: number): string {
 }
 
 function describeFocusLine(state: BiuState): string | undefined {
-	const active = findActiveTask(state);
-	if (active) return `Active: ${active.id} · ${truncate(active.title, 80)}`;
-	const next = findNextTask(state);
-	if (next) return `Next: ${next.id} · ${truncate(next.title, 80)}`;
+	const focus = getBiuFocus(state);
+	if (focus.kind === "active") return `Active: ${focus.task.id} · ${truncate(focus.task.title, 80)}`;
+	if (focus.kind === "next") return `Next: ${focus.task.id} · ${truncate(focus.task.title, 80)}`;
+	if (focus.kind === "allDone") return "All tasks are completed.";
 	return undefined;
 }
 
