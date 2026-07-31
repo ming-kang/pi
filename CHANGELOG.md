@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Added the bundled Biu extension: `/biu` toggles a Plan-Mode-style development workflow (interview → decompose → execute → archive) whose state lives in a per-project `biu.json` and changes only through the new `biu` tool; inside the mode, `/biu` opens a menu with continue, status, stage switching, and exit. Stage playbooks are loaded on demand via the tool instead of being injected every turn.
+
 ## [0.83.0] - 2026-07-30
 
 ### Added
