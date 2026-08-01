@@ -9,7 +9,7 @@ These hidden built-ins use the same public Extension API available to external e
 | Feature | Tool or command | Purpose |
 |---|---|---|
 | [`llama.cpp`](../llama-cpp.md) | `/llama` | Manage models served by the local llama.cpp router |
-| [Biu](extensions/biu.md) | `biu`, `/biu` | Carry a project cycle through interview, decomposition, execution, and archive |
+| [Biu](extensions/biu.md) | `/biu`, `biu://` paths | Carry a project cycle through plan, optional decomposition, execution, and archive |
 | [DeepWiki](extensions/deepwiki.md) | `deepwiki` | Query indexed public GitHub repository documentation |
 | [Question](extensions/question.md) | `question` | Ask structured questions through native interactive UI |
 | [Rewind](extensions/rewind.md) | `/rewind`, `/tree` lifecycle | Create and restore project snapshots around session operations |

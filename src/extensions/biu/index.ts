@@ -1,34 +1,56 @@
 /**
- * biu — a structured development workflow (interview -> decompose -> execute
- * -> archive) modeled after Plan Mode.
+ * biu — a structured development workflow (plan -> optional decompose ->
+ * execute -> archive) modeled after Plan Mode.
  *
  * /biu toggles Biu Mode on; inside the mode, /biu opens the management menu.
- * Workflow state lives in biu.json under the Pi agent directory and changes
- * only through the `biu` tool; the tool is added to the active tool set while
- * the mode is on and removed when it is off. Only a short resident block is
- * injected into the system prompt each turn — stage playbooks are pulled on
- * demand via the tool's "get" action.
+ * Workflow state lives in the frontmatter of the workspace Markdown files
+ * under the Pi agent directory; the extension only derives a read-only
+ * snapshot from them. The model addresses those files through the biu://
+ * scheme, which a tool_call hook resolves to the real workspace paths, so
+ * read/write/edit/grep/find/ls work on them with short, stable paths.
+ * Archiving a cycle is deterministic and menu-driven, never model-driven.
  */
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "../../core/extensions/types.ts";
+import { sep } from "node:path";
+import { Container, Text } from "@earendil-works/pi-tui";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+	MessageRenderOptions,
+} from "../../core/extensions/types.ts";
 import { isStaleExtensionContextError } from "../../core/extensions/types.ts";
+import type { CustomMessage } from "../../core/messages.ts";
+import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
+import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import {
-	buildBiuFreshWorkspacePrompt,
 	buildBiuKickoffContent,
 	buildBiuResidentPrompt,
-	buildBiuStateErrorPrompt,
+	buildBiuWorkspaceErrorPrompt,
+	describeBiuFocus,
 	formatBiuStatusLine,
 } from "./prompts.ts";
-import { renderBiuCall, renderBiuKickoffMessage, renderBiuResult } from "./render.ts";
-import { type BiuStage, type BiuState, ensureBiuWorkspace, getBiuFocus, getTaskCounts, loadBiuState } from "./state.ts";
-import { BIU_TOOL_NAME, createBiuTool } from "./tool.ts";
+import {
+	archiveBiuCycle,
+	type BiuSnapshot,
+	type BiuStage,
+	ensureBiuWorkspace,
+	getBiuPaths,
+	isBiuUri,
+	loadBiuSnapshot,
+	resolveBiuUri,
+	sanitizeShortname,
+} from "./workspace.ts";
 
 export const BIU_COMMAND_NAME = "biu";
 export const BIU_MODE_ENTRY_TYPE = "biu-mode";
 export const BIU_KICKOFF_MESSAGE_TYPE = "biu-kickoff";
 export const BIU_STATUS_KEY = "biu";
-export const BIU_MODE_SCHEMA_VERSION = 1;
+export const BIU_MODE_SCHEMA_VERSION = 2;
 
 const BIU_TUI_ONLY_MESSAGE = "Biu Mode is available only in interactive TUI mode.";
+
+/** Core tools whose `path` argument understands the biu:// scheme. */
+const BIU_PATH_TOOLS = new Set(["read", "write", "edit", "grep", "find", "ls"]);
 
 interface BiuModeEntryData {
 	schemaVersion: number;
@@ -43,7 +65,7 @@ export interface BiuKickoffDetails {
 function isBiuModeEntryData(value: unknown): value is BiuModeEntryData {
 	if (!value || typeof value !== "object") return false;
 	const record = value as Record<string, unknown>;
-	return record.schemaVersion === BIU_MODE_SCHEMA_VERSION && typeof record.enabled === "boolean";
+	return typeof record.schemaVersion === "number" && typeof record.enabled === "boolean";
 }
 
 /** Replay the latest Biu Mode flag from a session branch. */
@@ -64,28 +86,29 @@ function truncate(text: string, maxLength: number): string {
 	return inline.length <= maxLength ? inline : `${inline.slice(0, maxLength - 1)}…`;
 }
 
-function describeFocusLine(state: BiuState): string | undefined {
-	const focus = getBiuFocus(state);
-	if (focus.kind === "active") return `Active: ${focus.task.id} · ${truncate(focus.task.title, 80)}`;
-	if (focus.kind === "next") return `Next: ${focus.task.id} · ${truncate(focus.task.title, 80)}`;
-	if (focus.kind === "allDone") return "All tasks are completed.";
-	return undefined;
+function isInsideWorkspace(absolutePath: string, root: string): boolean {
+	return absolutePath === root || absolutePath.startsWith(`${root}${sep}`);
 }
 
-function formatMenuStatus(state: BiuState): string {
-	const counts = getTaskCounts(state);
-	if (state.stage === "interview") return `interview · SPEC ${state.spec.status}`;
-	if (state.stage === "decompose") {
-		return `decompose · SPEC ${state.spec.status} · ${counts.total} ${counts.total === 1 ? "task" : "tasks"}`;
-	}
+function expandHint(theme: Theme): string {
+	return `${theme.fg("muted", " (")}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+}
 
-	const parts = [state.stage, `${counts.completed}/${counts.total} done`];
-	if (state.stage === "execute") {
-		const focus = getBiuFocus(state);
-		if (focus.kind === "active") parts.push(`active ${truncate(focus.task.id, 32)}`);
-		else if (focus.kind === "next") parts.push(`next ${truncate(focus.task.id, 32)}`);
+export function renderBiuKickoffMessage(
+	message: CustomMessage<BiuKickoffDetails>,
+	options: MessageRenderOptions,
+	theme: Theme,
+) {
+	const content = typeof message.content === "string" ? message.content : "";
+	const stage = message.details?.stage;
+	const summary = `Biu · continue${stage ? ` ${stage}` : ""}`;
+	if (!options.expanded) {
+		return new Text(`${theme.fg("accent", theme.bold(summary))}${expandHint(theme)}`, options.outputPad, 0);
 	}
-	return parts.join(" · ");
+	const container = new Container();
+	container.addChild(new Text(theme.fg("accent", theme.bold(summary)), options.outputPad, 0));
+	container.addChild(new Text(theme.fg("muted", content), options.outputPad, 0));
+	return container;
 }
 
 export default function biuExtension(pi: ExtensionAPI): void {
@@ -95,32 +118,23 @@ export default function biuExtension(pi: ExtensionAPI): void {
 		pi.appendEntry(BIU_MODE_ENTRY_TYPE, { schemaVersion: BIU_MODE_SCHEMA_VERSION, enabled: nextEnabled });
 	}
 
-	/** Keep the biu tool visible to the model only while Biu Mode is on. */
-	function syncActiveTools(): void {
-		const active = pi.getActiveTools();
-		const hasTool = active.includes(BIU_TOOL_NAME);
-		if (enabled && !hasTool) pi.setActiveTools([...active, BIU_TOOL_NAME]);
-		else if (!enabled && hasTool) pi.setActiveTools(active.filter((name) => name !== BIU_TOOL_NAME));
-	}
-
-	function setStatus(ctx: ExtensionContext, state: BiuState | undefined, error?: string): void {
+	function setStatus(ctx: ExtensionContext, snapshot: BiuSnapshot | undefined, error?: string): void {
 		if (ctx.mode !== "tui") return;
 		if (!enabled) {
 			ctx.ui.setStatus(BIU_STATUS_KEY, undefined);
 			return;
 		}
-		if (state) {
-			const color = state.stage === "archive" ? "success" : "accent";
-			ctx.ui.setStatus(BIU_STATUS_KEY, ctx.ui.theme.fg(color, formatBiuStatusLine(state)));
+		if (snapshot) {
+			const color = snapshot.problems.length > 0 ? "warning" : snapshot.stage === "archive" ? "success" : "accent";
+			ctx.ui.setStatus(BIU_STATUS_KEY, ctx.ui.theme.fg(color, formatBiuStatusLine(snapshot)));
 		} else {
-			ctx.ui.setStatus(BIU_STATUS_KEY, ctx.ui.theme.fg("warning", error ? "Biu · state error" : "Biu"));
+			ctx.ui.setStatus(BIU_STATUS_KEY, ctx.ui.theme.fg("warning", error ? "Biu · workspace error" : "Biu"));
 		}
 	}
 
 	async function refreshStatusFromDisk(ctx: ExtensionContext): Promise<void> {
 		try {
-			const state = await loadBiuState(ctx.cwd);
-			setStatus(ctx, state);
+			setStatus(ctx, await loadBiuSnapshot(ctx.cwd));
 		} catch (error) {
 			if (isStaleExtensionContextError(error)) return;
 			try {
@@ -134,21 +148,59 @@ export default function biuExtension(pi: ExtensionAPI): void {
 	function disableMode(ctx: ExtensionContext): void {
 		enabled = false;
 		persistMode(false);
-		syncActiveTools();
 		setStatus(ctx, undefined);
 		ctx.ui.notify("Biu Mode off. Workflow files were kept.", "info");
 	}
 
-	function sendKickoff(state: BiuState): void {
+	function sendKickoff(snapshot: BiuSnapshot): void {
 		pi.sendMessage(
 			{
 				customType: BIU_KICKOFF_MESSAGE_TYPE,
-				content: buildBiuKickoffContent(state),
+				content: buildBiuKickoffContent(snapshot),
 				display: true,
-				details: { schemaVersion: BIU_MODE_SCHEMA_VERSION, stage: state.stage } satisfies BiuKickoffDetails,
+				details: { schemaVersion: BIU_MODE_SCHEMA_VERSION, stage: snapshot.stage } satisfies BiuKickoffDetails,
 			},
 			{ triggerTurn: true },
 		);
+	}
+
+	/** Menu-driven, deterministic cycle close: confirm, name, move, report. */
+	async function archiveFromMenu(ctx: ExtensionCommandContext, snapshot: BiuSnapshot): Promise<void> {
+		if (!snapshot.spec.exists || !snapshot.summaryExists) {
+			ctx.ui.notify(
+				"Archiving needs both biu://SPEC.md and a confirmed biu://Summary.md. Ask the agent to draft the summary first (archive stage).",
+				"warning",
+			);
+			return;
+		}
+		const unfinished = snapshot.tasks.filter((task) => task.status !== "completed");
+		if (unfinished.length > 0) {
+			const proceed = await ctx.ui.confirm(
+				"Archive with unfinished tasks?",
+				`${unfinished.length} task(s) are not completed: ${truncate(unfinished.map((task) => task.id).join(", "), 200)}`,
+			);
+			if (!proceed) return;
+		}
+		let shortname = snapshot.spec.title ? sanitizeShortname(snapshot.spec.title) : "";
+		if (!shortname) {
+			const answer = await ctx.ui.input("Archive name", "short, filesystem-safe name for the archived cycle");
+			if (!answer?.trim()) {
+				ctx.ui.notify("Archive cancelled: no name given.", "info");
+				return;
+			}
+			shortname = answer.trim();
+		}
+		try {
+			const result = await archiveBiuCycle(ctx.cwd, shortname);
+			await refreshStatusFromDisk(ctx);
+			ctx.ui.notify(`Cycle archived to ${result.archivedPath}. A fresh cycle starts at the plan stage.`, "info");
+		} catch (error) {
+			if (isStaleExtensionContextError(error)) return;
+			ctx.ui.notify(
+				`Archive failed: ${truncate(error instanceof Error ? error.message : String(error), 300)}`,
+				"error",
+			);
+		}
 	}
 
 	async function openMenu(ctx: ExtensionCommandContext): Promise<void> {
@@ -157,34 +209,39 @@ export default function biuExtension(pi: ExtensionAPI): void {
 			return;
 		}
 
-		let state: BiuState | undefined;
+		let snapshot: BiuSnapshot;
 		try {
-			state = (await ensureBiuWorkspace(ctx.cwd)).state;
+			await ensureBiuWorkspace(ctx.cwd);
+			snapshot = await loadBiuSnapshot(ctx.cwd);
 		} catch (error) {
 			if (isStaleExtensionContextError(error)) return;
 			const message = error instanceof Error ? error.message : String(error);
 			const choice = await ctx.ui.select("Biu Mode", ["Exit Biu Mode"], {
-				subtitle: truncate(`State error: ${message}`, 120),
+				subtitle: truncate(`Workspace error: ${message}`, 120),
 				cancelHint: "keep Biu Mode active",
 			});
 			if (choice === "Exit Biu Mode") disableMode(ctx);
 			return;
 		}
-		setStatus(ctx, state);
+		setStatus(ctx, snapshot);
 
-		const focus = describeFocusLine(state);
-		const continueLabel = `Continue · ${state.stage}`;
+		const subtitleParts = [formatBiuStatusLine(snapshot)];
+		if (snapshot.problems.length > 0) subtitleParts.push(`${snapshot.problems.length} problem(s)`);
+		const continueLabel = `Continue · ${snapshot.stage}`;
 		const choice = await ctx.ui.select(
 			"Biu Mode",
 			[
-				{ label: continueLabel, description: focus ?? "Start a new turn continuing the current stage" },
+				{ label: continueLabel, description: truncate(describeBiuFocus(snapshot), 80) },
+				{ label: "Archive cycle", description: "Move SPEC.md, Summary.md, and tasks/ into archived/" },
 				{ label: "Exit Biu Mode", description: "Turn the mode off; workflow files are kept" },
 			],
-			{ subtitle: formatMenuStatus(state), cancelHint: "keep Biu Mode active" },
+			{ subtitle: subtitleParts.join(" · "), cancelHint: "keep Biu Mode active" },
 		);
 
 		if (choice === continueLabel) {
-			sendKickoff(state);
+			sendKickoff(snapshot);
+		} else if (choice === "Archive cycle") {
+			await archiveFromMenu(ctx, snapshot);
 		} else if (choice === "Exit Biu Mode") {
 			disableMode(ctx);
 		}
@@ -194,24 +251,15 @@ export default function biuExtension(pi: ExtensionAPI): void {
 		try {
 			if (ctx.mode !== "tui") {
 				enabled = false;
-				syncActiveTools();
 				return;
 			}
 			enabled = replayBiuMode(ctx.sessionManager.getBranch());
-			syncActiveTools();
 			if (enabled) await refreshStatusFromDisk(ctx);
 			else ctx.ui.setStatus(BIU_STATUS_KEY, undefined);
 		} catch (error) {
 			if (!isStaleExtensionContextError(error)) throw error;
 		}
 	}
-
-	const tool = createBiuTool({ isEnabled: () => enabled });
-	pi.registerTool({
-		...tool,
-		renderCall: (args, theme) => renderBiuCall(args, theme),
-		renderResult: (result, options, theme, context) => renderBiuResult(result, options, theme, context),
-	});
 
 	pi.registerMessageRenderer<BiuKickoffDetails>(BIU_KICKOFF_MESSAGE_TYPE, renderBiuKickoffMessage);
 
@@ -234,9 +282,10 @@ export default function biuExtension(pi: ExtensionAPI): void {
 				return;
 			}
 
-			let workspace: Awaited<ReturnType<typeof ensureBiuWorkspace>>;
+			let snapshot: BiuSnapshot;
 			try {
-				workspace = await ensureBiuWorkspace(ctx.cwd);
+				await ensureBiuWorkspace(ctx.cwd);
+				snapshot = await loadBiuSnapshot(ctx.cwd);
 			} catch (error) {
 				if (isStaleExtensionContextError(error)) return;
 				ctx.ui.notify(
@@ -248,39 +297,58 @@ export default function biuExtension(pi: ExtensionAPI): void {
 
 			enabled = true;
 			persistMode(true);
-			syncActiveTools();
-			setStatus(ctx, workspace.state);
+			setStatus(ctx, snapshot);
 
-			const fresh =
-				workspace.state.stage === "interview" && workspace.state.tasks.length === 0 && !workspace.state.spec.title;
+			const fresh = !snapshot.spec.exists && snapshot.tasks.length === 0 && !snapshot.summaryExists;
 			if (fresh) {
-				ctx.ui.notify("Biu Mode on · interview — describe what you want to build to start the interview.", "info");
+				ctx.ui.notify("Biu Mode on · plan — describe what you want to build to start the interview.", "info");
 			} else {
-				const focus = describeFocusLine(workspace.state);
 				ctx.ui.notify(
-					`Biu Mode on · ${formatBiuStatusLine(workspace.state)}${focus ? `\n${focus}` : ""}\nUse /biu for the menu.`,
+					`Biu Mode on · ${formatBiuStatusLine(snapshot).replace(/^Biu · /, "")}\n${describeBiuFocus(snapshot)}\nUse /biu for the menu.`,
 					"info",
 				);
 			}
 		},
 	});
 
+	// Resolve biu:// paths for the core file tools. Always active: the scheme is
+	// deterministic and harmless outside Biu Mode, and rewriting only happens on
+	// explicit biu:// arguments. The session keeps the model's original biu://
+	// arguments; only execution sees the resolved absolute path.
+	pi.on("tool_call", (event, ctx) => {
+		if (!BIU_PATH_TOOLS.has(event.toolName)) return;
+		const input = event.input as { path?: unknown };
+		if (typeof input.path !== "string" || !isBiuUri(input.path)) return;
+		const resolution = resolveBiuUri(input.path, ctx.cwd);
+		if (!resolution.ok) return { block: true, reason: resolution.reason };
+		input.path = resolution.path;
+	});
+
+	// Frontmatter edits through write/edit are the only workflow state changes;
+	// refresh the statusline whenever one lands inside the workspace.
+	pi.on("tool_result", async (event, ctx) => {
+		if (!enabled || ctx.mode !== "tui" || event.isError) return;
+		if (event.toolName !== "write" && event.toolName !== "edit") return;
+		const input = event.input as { path?: unknown };
+		if (typeof input.path !== "string") return;
+		try {
+			if (!isInsideWorkspace(input.path, getBiuPaths(ctx.cwd).root)) return;
+			await refreshStatusFromDisk(ctx);
+		} catch (error) {
+			if (!isStaleExtensionContextError(error)) throw error;
+		}
+	});
+
 	pi.on("before_agent_start", async (event, ctx) => {
 		if (!enabled || ctx.mode !== "tui") return;
 		let block: string;
 		try {
-			const state = await loadBiuState(ctx.cwd);
-			block = state ? buildBiuResidentPrompt(state) : buildBiuFreshWorkspacePrompt();
+			block = buildBiuResidentPrompt(await loadBiuSnapshot(ctx.cwd));
 		} catch (error) {
 			if (isStaleExtensionContextError(error)) return;
-			block = buildBiuStateErrorPrompt(error instanceof Error ? error.message : String(error));
+			block = buildBiuWorkspaceErrorPrompt(error instanceof Error ? error.message : String(error));
 		}
 		return { systemPrompt: `${event.systemPrompt}\n\n${block}` };
-	});
-
-	pi.on("tool_execution_end", async (event, ctx) => {
-		if (event.toolName !== BIU_TOOL_NAME || event.isError || !enabled || ctx.mode !== "tui") return;
-		await refreshStatusFromDisk(ctx);
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
