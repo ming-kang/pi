@@ -5,7 +5,7 @@
  *   Line 1: Model (provider) · effort          ~cwd · branch
  *   Line 2: CTX used/window                    ↑in ↓out R W CH $cost
  *
- * Extension statuses sit in the middle of line 2 when space permits.
+ * Extension statuses are pinned to the center of line 2 when space permits.
  * Pi does not expose auto-compaction state to custom footer factories, so the
  * native `(auto)` marker cannot be reproduced without depending on private APIs.
  */
@@ -284,8 +284,11 @@ function layoutLeftRight(left: string, right: string, width: number, theme: Them
 }
 
 /**
- * Line 2 zones: CTX left, optional extension status in the middle gap, usage right.
- * Drops middle first when space is tight; caller should pass progressively smaller rights.
+ * Line 2 zones: CTX left, extension status pinned to the line center, usage
+ * right. The status anchors to the absolute center of the line so it does not
+ * drift as the usage cluster grows; when the side zones collide with the
+ * center anchor, the free space is balanced instead. Drops the status first
+ * when space is tight; caller should pass progressively smaller rights.
  */
 function layoutSecondaryLine(
 	contextText: string,
@@ -295,12 +298,10 @@ function layoutSecondaryLine(
 	theme: Theme,
 ): string {
 	const ellipsis = theme.fg("dim", "...");
-	if (!usageText && !statusText) return truncateToWidth(contextText, width, ellipsis);
-
-	const rightText = usageText || statusText;
-	const middleText = usageText && statusText ? statusText : "";
-
-	if (!middleText) return layoutLeftRight(contextText, rightText, width, theme);
+	if (!statusText) {
+		if (!usageText) return truncateToWidth(contextText, width, ellipsis);
+		return layoutLeftRight(contextText, usageText, width, theme);
+	}
 
 	const contextWidth = visibleWidth(contextText);
 	const usageWidth = visibleWidth(usageText);
@@ -308,6 +309,12 @@ function layoutSecondaryLine(
 	const needed = contextWidth + usageWidth + statusWidth + MIN_GAP * 2;
 
 	if (needed <= width) {
+		const centerStart = Math.floor((width - statusWidth) / 2);
+		const centeredLeftPad = centerStart - contextWidth;
+		const centeredRightPad = width - centerStart - statusWidth - usageWidth;
+		if (centeredLeftPad >= MIN_GAP && centeredRightPad >= MIN_GAP) {
+			return `${contextText}${" ".repeat(centeredLeftPad)}${statusText}${" ".repeat(centeredRightPad)}${usageText}`;
+		}
 		const free = width - contextWidth - usageWidth - statusWidth;
 		const leftPad = Math.floor(free / 2);
 		const rightPad = free - leftPad;
@@ -371,7 +378,7 @@ function fitSecondaryLine(options: {
 	const { contextText, statusText, usageCandidates, width, theme } = options;
 
 	if (usageCandidates.length === 0) {
-		return layoutLeftRight(contextText, statusText, width, theme);
+		return layoutSecondaryLine(contextText, statusText, "", width, theme);
 	}
 
 	for (const usageText of usageCandidates) {
