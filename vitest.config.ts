@@ -21,10 +21,6 @@ export default defineConfig({
 		},
 	},
 	resolve: {
-		alias: [
-			{ find: /^@astralyn\/pi$/, replacement: sourceIndex },
-			{ find: /^@earendil-works\/pi-coding-agent$/, replacement: sourceIndex },
-			{ find: /^@mariozechner\/pi-coding-agent$/, replacement: sourceIndex },
-		],
+		alias: [{ find: /^@astralyn\/pi$/, replacement: sourceIndex }],
 	},
 });
