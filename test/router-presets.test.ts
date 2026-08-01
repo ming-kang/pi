@@ -52,13 +52,16 @@ describe("router GPT thinking policy", () => {
 			thinkingLevelMap: { low: null, medium: "medium", high: null },
 		});
 
-		expect(resolved.thinkingLevelMap).toMatchObject({
+		expect(resolved.thinkingLevelMap).toEqual({
 			off: null,
 			minimal: null,
 			low: null,
 			medium: "medium",
 			high: null,
+			xhigh: "xhigh",
+			max: "max",
 		});
+		expect(summarizeThinkingMap({ low: null })).toBe("medium, high, xhigh, max · hide low");
 	});
 
 	it("summarizes only the five router levels", () => {
@@ -83,6 +86,8 @@ describe("router GPT thinking policy", () => {
 		expect(next.low).toBeNull();
 		expect(next.off).toBeNull();
 		expect(next.minimal).toBeNull();
+		expect(next.xhigh).toBe("xhigh");
+		expect(next.max).toBe("max");
 
 		const reopened = toggleThinkingLevel(next, "low");
 		expect(reopened.low).toBe("low");

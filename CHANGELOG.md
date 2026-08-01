@@ -10,6 +10,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Fixed
 
+- Fixed Router allowing the active session model or its relay to be disabled or removed, leaving stale model state; catalog selection now keeps the current model selected and removal asks the user to switch models first.
+- Fixed partial Router thinking maps omitting `xhigh` and `max` at runtime while the UI reported them enabled; omitted levels now inherit the five-level GPT Gateway defaults while explicit `null` choices remain hidden.
 - Fixed Biu archiving leaving the cycle half-moved when a file move failed mid-archive: already-moved files now roll back, and an incomplete rollback reports where the recovery data is instead of failing silently.
 - Fixed Biu archive rollback failing on Windows when the state write failed after all files were moved: the fresh empty tasks/ directory no longer blocks the move-back, because it is recreated only after the state reset succeeds.
 - Fixed Biu refusing to lose leftover cycle files: when biu.json is missing but SPEC.md or task files are still present, a fresh workspace is no longer created over them.

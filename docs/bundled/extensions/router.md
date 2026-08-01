@@ -28,7 +28,7 @@ API relays                  ← relays first; add / reload at bottom
 
 Edits **auto-save** to `router.json` and re-register the provider. Text fields save when confirmed; model and thinking toggles save immediately. There is no Save or Apply step, and Back never discards a completed change.
 
-Model search follows Pi's `/model` behavior: the search field is always visible, typing fuzzy-filters results, arrows wrap around the list, Enter opens the highlighted item, and Esc goes back. Catalog checkboxes use Space to toggle live; Enter or Esc returns to the model list.
+Model search follows Pi's `/model` behavior: the search field is always visible, typing fuzzy-filters results, arrows wrap around the list, Enter opens the highlighted item, and Esc goes back. Catalog checkboxes use Space to toggle live; Enter or Esc returns to the model list. The model currently used by the session is protected and must be changed with `/model` before it can be disabled or removed.
 
 ### Add flow
 
@@ -56,7 +56,7 @@ Relay → **Models** → pick a model:
 
 - **Display name** — optional label (e.g. `Luna`). Leave empty to show the id. Saved on input confirmation.
 - **Thinking levels** — router models expose only `low`, `medium`, `high`, `xhigh`, and `max`. All five start enabled; toggle any one to hide or re-enable it. `off` and `minimal` are never shown.
-- **Remove model** — confirms and immediately removes the model from the relay.
+- **Remove model** — confirms and immediately removes the model from the relay. The model currently used by the session must be changed with `/model` first.
 
 ---
 
@@ -101,7 +101,7 @@ Relay → **Models** → pick a model:
 }
 ```
 
-There is **no migration** from any older models-manager config, and Pi updates do not overwrite `~/.pi/agent/router.json`. Existing router thinking maps are not automatically rewritten. Legacy `off` / `minimal` entries are ignored at runtime and remain hidden; newly added models use the five-level GPT Gateway defaults.
+There is **no migration** from any older models-manager config, and Pi updates do not overwrite `~/.pi/agent/router.json`. Existing router thinking maps are not automatically rewritten. At runtime, omitted thinking levels are filled from the five-level GPT Gateway defaults while explicit `null` values remain hidden. Legacy `off` / `minimal` entries are ignored at runtime and remain hidden; newly added models use the same five-level defaults.
 
 ---
 
@@ -116,6 +116,7 @@ There is **no migration** from any older models-manager config, and Pi updates d
 - Interactive `/router` requires a TUI (`ctx.hasUI`); otherwise a warning is shown and no dialog opens.
 - Router models are GPT Gateway models: only `low`, `medium`, `high`, `xhigh`, and `max` are exposed. `off` and `minimal` are disabled.
 - Catalog selection and thinking changes are live and auto-saved; Esc only returns to the previous screen.
+- The active model and its provider cannot be disabled or removed; switch with `/model` first.
 - If a catalog does not return an already configured model, the model remains listed as unavailable instead of being silently removed.
 - A catalog probe does not send an unresolved environment or command-based key anonymously; it explains the local key problem and offers manual model entry.
 

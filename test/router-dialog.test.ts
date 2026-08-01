@@ -80,6 +80,32 @@ describe("router dialogs", () => {
 		expect(results).toEqual([{ kind: "close", selectedIds: ["gpt-4"] }]);
 	});
 
+	it("keeps protected current models selected", () => {
+		const changes: string[][] = [];
+		const blocked: string[] = [];
+		const keybindings = new KeybindingsManager();
+		const component = createModelChecklist({
+			title: "Select models",
+			models: [{ id: "gpt-5" }, { id: "gpt-4" }],
+			initiallySelected: new Set(["gpt-5", "gpt-4"]),
+			protectedIds: new Set(["gpt-5"]),
+			onChange: (ids) => changes.push(ids),
+			onProtectedToggle: (id) => blocked.push(id),
+		})(createFakeTui(), theme, keybindings, () => {}) as Container & {
+			handleInput: (data: string) => void;
+		};
+
+		component.handleInput(SPACE);
+		expect(blocked).toEqual(["gpt-5"]);
+		expect(changes).toEqual([]);
+		component.handleInput(DOWN);
+		component.handleInput(SPACE);
+		expect(changes).toEqual([["gpt-5"]]);
+		component.handleInput("\x18");
+		expect(blocked).toEqual(["gpt-5", "gpt-5"]);
+		expect(changes).toEqual([["gpt-5"]]);
+	});
+
 	it("shows only the five GPT Gateway thinking levels and toggles live", () => {
 		const changes: Array<Record<string, string | null | undefined>> = [];
 		const results: unknown[] = [];

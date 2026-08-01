@@ -14,7 +14,7 @@ import { DynamicBorder } from "../../modes/interactive/components/dynamic-border
 import { keyHint, rawKeyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { ROUTER_THINKING_LEVELS, type ThinkingLevel, truncate } from "./constants.ts";
-import { toggleThinkingLevel } from "./presets.ts";
+import { resolveRouterThinkingMap, toggleThinkingLevel } from "./presets.ts";
 import type { ThinkingLevelMap } from "./types.ts";
 
 export interface SelectItem<T extends string = string> {
@@ -163,7 +163,10 @@ export function createModelChecklist(opts: {
 	subtitle?: string;
 	models: ReadonlyArray<ModelChecklistItem>;
 	initiallySelected?: ReadonlySet<string>;
+	/** Models that must remain selected while the checklist is open. */
+	protectedIds?: ReadonlySet<string>;
 	onChange?: (selectedIds: string[]) => void;
+	onProtectedToggle?: (id: string) => void;
 }): (
 	tui: TUI,
 	theme: Theme,
@@ -175,6 +178,7 @@ export function createModelChecklist(opts: {
 			id: model.id,
 			label: model.name && model.name !== model.id ? `${model.id} · ${model.name}` : model.id,
 			unavailable: model.unavailable ?? false,
+			protected: opts.protectedIds?.has(model.id) ?? false,
 			searchText: `${model.id} ${model.name ?? ""} ${model.unavailable ? "not returned unavailable" : ""}`,
 		}));
 		const selected = new Set(opts.initiallySelected ?? []);
@@ -195,6 +199,8 @@ export function createModelChecklist(opts: {
 		};
 
 		const notifyChange = () => opts.onChange?.([...selected]);
+		const selectionChanged = (before: ReadonlySet<string>): boolean =>
+			before.size !== selected.size || [...before].some((id) => !selected.has(id));
 
 		const refresh = () => {
 			const rows = filtered();
@@ -212,7 +218,8 @@ export function createModelChecklist(opts: {
 				const prefix = active ? theme.fg("accent", "→ ") : "  ";
 				const label = theme.fg(active ? "accent" : "text", item.label);
 				const availability = item.unavailable ? theme.fg("warning", "  (not returned)") : "";
-				list.addChild(new TruncatedText(`${prefix}${mark} ${label}${availability}`, 1, 0));
+				const current = item.protected ? theme.fg("success", "  (current)") : "";
+				list.addChild(new TruncatedText(`${prefix}${mark} ${label}${availability}${current}`, 1, 0));
 			}
 			if (rows.length === 0) {
 				list.addChild(new Text(theme.fg("muted", "  No matching models"), 1, 0));
@@ -259,6 +266,10 @@ export function createModelChecklist(opts: {
 			if (keybindings.matches(data, "app.list.toggle")) {
 				const item = rows[selectedIndex];
 				if (item) {
+					if (item.protected) {
+						opts.onProtectedToggle?.(item.id);
+						return;
+					}
 					if (selected.has(item.id)) selected.delete(item.id);
 					else selected.add(item.id);
 					notifyChange();
@@ -267,14 +278,24 @@ export function createModelChecklist(opts: {
 				return;
 			}
 			if (keybindings.matches(data, "app.models.enableAll")) {
+				const before = new Set(selected);
 				for (const item of rows) selected.add(item.id);
-				notifyChange();
+				if (selectionChanged(before)) notifyChange();
 				refresh();
 				return;
 			}
 			if (keybindings.matches(data, "app.models.clearAll")) {
-				for (const item of rows) selected.delete(item.id);
-				notifyChange();
+				const before = new Set(selected);
+				let protectedId: string | undefined;
+				for (const item of rows) {
+					if (item.protected) {
+						protectedId ??= item.id;
+						continue;
+					}
+					selected.delete(item.id);
+				}
+				if (protectedId) opts.onProtectedToggle?.(protectedId);
+				if (selectionChanged(before)) notifyChange();
 				refresh();
 				return;
 			}
@@ -324,7 +345,7 @@ export function createThinkingMapEditor(opts: {
 ) => Container {
 	return (tui, theme, keybindings, done) => {
 		const levels = [...(opts.levels ?? ROUTER_THINKING_LEVELS)];
-		let working: ThinkingLevelMap = { ...opts.map, off: null, minimal: null };
+		let working: ThinkingLevelMap = resolveRouterThinkingMap(opts.map);
 		let index = 0;
 		const list = new Container();
 		const footer = new Text("", 1, 0);

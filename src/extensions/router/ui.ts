@@ -15,7 +15,13 @@ import {
 	createThinkingMapEditor,
 	type ModelChecklistItem,
 } from "./dialog.ts";
-import { createDefaultModelConfig, displayModelLabel, resolveModelConfig, summarizeThinkingMap } from "./presets.ts";
+import {
+	createDefaultModelConfig,
+	displayModelLabel,
+	resolveModelConfig,
+	resolveRouterThinkingMap,
+	summarizeThinkingMap,
+} from "./presets.ts";
 import { probeRelayModels } from "./probe.ts";
 import { applyRouterFile, registerOneRelay, unregisterOneRelay } from "./register.ts";
 import { loadRouterFile, removeRelay, upsertRelay } from "./store.ts";
@@ -67,6 +73,14 @@ class RelayAutoSaver {
 			await this.ctx.modelRegistry.refresh();
 		}
 	}
+}
+
+export function isCurrentRouterModel(
+	current: { provider: string; id: string } | undefined,
+	relayId: string,
+	modelId: string,
+): boolean {
+	return current?.provider === relayId && current.id === modelId;
 }
 
 export async function runRouterCommand(args: string, ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<void> {
@@ -294,6 +308,10 @@ async function editRelayFlow(ctx: ExtensionCommandContext, pi: ExtensionAPI, ini
 		}
 
 		if (choice === "remove") {
+			if (ctx.model?.provider === relay.id) {
+				ctx.ui.notify(`Switch away from relay "${relay.id}" before removing it.`, "warning");
+				continue;
+			}
 			const ok = await ctx.ui.confirm(`Remove relay "${relay.id}"?`, "Models will disappear from /model.");
 			if (!ok) continue;
 			await removeRelay(relay.id);
@@ -433,6 +451,10 @@ async function editModelFlow(
 		}
 
 		if (action === "remove") {
+			if (isCurrentRouterModel(ctx.model, relay.id, model.id)) {
+				ctx.ui.notify(`Switch away from model "${model.id}" before removing it.`, "warning");
+				continue;
+			}
 			const ok = await ctx.ui.confirm(
 				`Remove model "${model.id}"?`,
 				"Its display name and thinking settings will be removed.",
@@ -451,7 +473,7 @@ async function editThinkingMapNative(
 	map: RelayModelConfig["thinkingLevelMap"],
 	onChange: (map: RelayModelConfig["thinkingLevelMap"]) => void,
 ): Promise<void> {
-	let working = { ...(map ?? {}), off: null, minimal: null };
+	let working = resolveRouterThinkingMap(map);
 	while (true) {
 		const choice = await selectNative(ctx, "Toggle thinking level", [
 			...ROUTER_THINKING_LEVELS.map((level) => ({
@@ -541,9 +563,16 @@ async function fetchAndSelectModels(ctx: ExtensionCommandContext, pi: ExtensionA
 
 	const catalog = mergeCatalogWithConfigured(relay.models, result.models);
 	const initiallySelected = new Set(relay.models.map((model) => model.id));
+	const activeModelId = ctx.model?.provider === relay.id ? ctx.model.id : undefined;
+	const currentModelId = activeModelId && initiallySelected.has(activeModelId) ? activeModelId : undefined;
+	const protectedIds = currentModelId ? new Set([currentModelId]) : undefined;
 	const preserved = new Map(relay.models.map((model) => [model.id, structuredClone(model)]));
 	const saver = new RelayAutoSaver(ctx, pi, relay);
 	const applySelection = (selectedIds: string[]) => {
+		if (currentModelId && !selectedIds.includes(currentModelId)) {
+			ctx.ui.notify(`Switch away from model "${currentModelId}" before disabling it.`, "warning");
+			return;
+		}
 		relay.models = selectedIds.map((id) => {
 			const previous = preserved.get(id);
 			if (previous) return structuredClone(previous);
@@ -561,7 +590,9 @@ async function fetchAndSelectModels(ctx: ExtensionCommandContext, pi: ExtensionA
 				subtitle: "Space toggles immediately · Enter/Esc returns",
 				models: catalog,
 				initiallySelected,
+				protectedIds,
 				onChange: applySelection,
+				onProtectedToggle: (id) => ctx.ui.notify(`Switch away from model "${id}" before disabling it.`, "warning"),
 			}),
 		);
 		if (choice.kind === "close") applySelectionIfChanged(relay, choice.selectedIds, applySelection);

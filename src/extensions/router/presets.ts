@@ -83,7 +83,14 @@ export function normalizeThinkingMap(map: ThinkingLevelMap | undefined): Thinkin
 
 /** Apply the router-wide GPT policy without mutating the stored object. */
 export function resolveRouterThinkingMap(map: ThinkingLevelMap | undefined): ThinkingLevelMap {
-	const result = normalizeThinkingMap(map ?? DEFAULT_THINKING_LEVEL_MAP);
+	const result = normalizeThinkingMap(DEFAULT_THINKING_LEVEL_MAP);
+	if (map) {
+		for (const level of THINKING_LEVELS) {
+			if (!Object.hasOwn(map, level)) continue;
+			const value = map[level];
+			if (value !== undefined) result[level] = value;
+		}
+	}
 	result.off = null;
 	result.minimal = null;
 	return result;
@@ -104,7 +111,7 @@ export function summarizeThinkingMap(map: ThinkingLevelMap | undefined): string 
 }
 
 export function toggleThinkingLevel(map: ThinkingLevelMap, level: ThinkingLevel): ThinkingLevelMap {
-	const next: ThinkingLevelMap = { ...map, off: null, minimal: null };
+	const next = resolveRouterThinkingMap(map);
 	if (!ROUTER_THINKING_LEVELS.includes(level as (typeof ROUTER_THINKING_LEVELS)[number])) return next;
 	next[level] = next[level] === null ? level : null;
 	return next;
