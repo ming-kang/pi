@@ -22,23 +22,24 @@ Providers are registered at extension load via `pi.registerProvider` (config for
 ```
 API relays                  ← relays first; add / reload at bottom
  └─ Relay · {id}            ← models · base URL · API key · remove
-     └─ Models              ← Fetch catalog + one row per configured model
-         └─ {model id}      ← display name · thinking levels
+     └─ Models              ← searchable model list + fetch / manual add
+         └─ {model id}      ← display name · thinking levels · remove
 ```
 
-Edits **auto-save** to `router.json` and re-register the provider. There is no separate Save step — Back never discards committed field or model changes.
+Edits **auto-save** to `router.json` and re-register the provider. Text fields save when confirmed; model and thinking toggles save immediately. There is no Save or Apply step, and Back never discards a completed change.
 
-Nested multi-select (catalog) and the thinking-level editor require **Ctrl+S to apply** that screen's working set. If you press Esc with unsaved toggles, the footer warns once; pressing Esc again discards that screen only.
+Model search follows Pi's `/model` behavior: the search field is always visible, typing fuzzy-filters results, arrows wrap around the list, Enter opens the highlighted item, and Esc goes back. Catalog checkboxes use Space to toggle live; Enter or Esc returns to the model list.
 
 ### Add flow
 
 1. **Name** — provider id (e.g. `my-relay`); appears as `my-relay/gpt-5.6-sol` in `/model`
 2. **Base URL** — usually ends with `/v1`
 3. **API key** — literal `sk-…` or `$ENV_VAR`
-4. **Fetch models** — `GET {baseUrl}/models`
-5. **Select** — Space to toggle, Ctrl+S to apply (TUI); the relay is then written immediately
+4. The relay connection is written immediately, even before models are fetched.
+5. **Fetch models** — `GET {baseUrl}/models`
+6. **Select** — Space toggles each model immediately. If fetching fails, retry or add model ids manually.
 
-Each selected model gets these defaults:
+A failed or cancelled catalog fetch does not lose the relay. Each selected model gets these defaults:
 
 | Field | Default |
 |:-:|:-:|
@@ -47,14 +48,15 @@ Each selected model gets these defaults:
 | `input` | `text` + `image` |
 | `contextWindow` | 272000 |
 | `maxTokens` | 128000 |
-| `thinkingLevelMap` | off…medium hidden; high / xhigh / max on |
+| `thinkingLevelMap` | `off` / `minimal` hidden; `low` / `medium` / `high` / `xhigh` / `max` enabled |
 
 ### Customize models
 
 Relay → **Models** → pick a model:
 
-- **Display name** — optional label (e.g. `Luna`). Leave empty to show the id. Saved on confirm.
-- **Thinking levels** — toggle each Pi level between **on** and **hidden** (`null`). Ctrl+S applies, then auto-saves the relay.
+- **Display name** — optional label (e.g. `Luna`). Leave empty to show the id. Saved on input confirmation.
+- **Thinking levels** — router models expose only `low`, `medium`, `high`, `xhigh`, and `max`. All five start enabled; toggle any one to hide or re-enable it. `off` and `minimal` are never shown.
+- **Remove model** — confirms and immediately removes the model from the relay.
 
 ---
 
@@ -78,8 +80,8 @@ Relay → **Models** → pick a model:
           "thinkingLevelMap": {
             "off": null,
             "minimal": null,
-            "low": null,
-            "medium": null,
+            "low": "low",
+            "medium": "medium",
             "high": "high",
             "xhigh": "xhigh",
             "max": "max"
@@ -99,7 +101,7 @@ Relay → **Models** → pick a model:
 }
 ```
 
-There is **no migration** from any older models-manager config. Add relays with `/router add` (or edit `router.json` and run `/router reload`).
+There is **no migration** from any older models-manager config, and Pi updates do not overwrite `~/.pi/agent/router.json`. Existing router thinking maps are not automatically rewritten. Legacy `off` / `minimal` entries are ignored at runtime and remain hidden; newly added models use the five-level GPT Gateway defaults.
 
 ---
 
@@ -112,7 +114,10 @@ There is **no migration** from any older models-manager config. Add relays with 
 - Replayed optional top-level `ResponseItem.id` identity fields are omitted from stateless requests, matching Codex CLI 0.145's default `store: false` wire behavior. Required semantic references such as `item_reference.id`, plus `call_id` and encrypted reasoning content, remain intact.
 - Same relay + same model: tool/reasoning multi-turn matches Codex-style Responses. Switching model or provider mid-session may normalize tool-call ids more strictly (upstream allow-list); this is not worked around here.
 - Interactive `/router` requires a TUI (`ctx.hasUI`); otherwise a warning is shown and no dialog opens.
-- Catalog multi-select and thinking editor are apply-on-Ctrl+S screens; only those screens can be discarded with double Esc.
+- Router models are GPT Gateway models: only `low`, `medium`, `high`, `xhigh`, and `max` are exposed. `off` and `minimal` are disabled.
+- Catalog selection and thinking changes are live and auto-saved; Esc only returns to the previous screen.
+- If a catalog does not return an already configured model, the model remains listed as unavailable instead of being silently removed.
+- A catalog probe does not send an unresolved environment or command-based key anonymously; it explains the local key problem and offers manual model entry.
 
 ## Implementation notes
 

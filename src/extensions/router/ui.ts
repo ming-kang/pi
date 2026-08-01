@@ -1,19 +1,73 @@
 /**
  * /router interactive flows: list, add, edit, fetch, thinking map.
  *
- * Relay edits auto-save to router.json (no separate Save step). Nested multi-select
- * and thinking editors require Ctrl+S to apply, and warn on Esc when dirty.
+ * Relay edits are live: confirmed inputs and every toggle persist immediately.
+ * Searchable pickers follow Pi's native /model interaction pattern.
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "../../core/extensions/types.ts";
 import { BorderedLoader } from "../../modes/interactive/components/bordered-loader.ts";
-import { formatError, isValidRelayId, NO_UI_WARNING, truncate } from "./constants.ts";
-import { createModelChecklist, createSearchableSelector, createThinkingMapEditor } from "./dialog.ts";
+import { getModelSelectorSearchText } from "../../modes/interactive/model-search.ts";
+import { formatError, isValidRelayId, NO_UI_WARNING, ROUTER_THINKING_LEVELS, truncate } from "./constants.ts";
+import {
+	createModelChecklist,
+	createSearchableSelector,
+	createThinkingMapEditor,
+	type ModelChecklistItem,
+} from "./dialog.ts";
 import { createDefaultModelConfig, displayModelLabel, resolveModelConfig, summarizeThinkingMap } from "./presets.ts";
 import { probeRelayModels } from "./probe.ts";
 import { applyRouterFile, registerOneRelay, unregisterOneRelay } from "./register.ts";
 import { loadRouterFile, removeRelay, upsertRelay } from "./store.ts";
 import type { RelayConfig, RelayModelConfig } from "./types.ts";
+
+/**
+ * Serialize live relay mutations without forcing a model-registry refresh for
+ * every checkbox press. Provider registration follows each snapshot; the
+ * registry is refreshed once when the editor closes.
+ */
+class RelayAutoSaver {
+	private chain: Promise<void> = Promise.resolve();
+	private error: unknown;
+	private needsRefresh = false;
+	private readonly ctx: ExtensionCommandContext;
+	private readonly pi: ExtensionAPI;
+	private readonly relay: RelayConfig;
+
+	constructor(ctx: ExtensionCommandContext, pi: ExtensionAPI, relay: RelayConfig) {
+		this.ctx = ctx;
+		this.pi = pi;
+		this.relay = relay;
+	}
+
+	save(): void {
+		const snapshot = structuredClone(this.relay);
+		this.needsRefresh = true;
+		this.chain = this.chain
+			.catch(() => {})
+			.then(async () => {
+				await upsertRelay(snapshot);
+				registerOneRelay(this.pi, snapshot);
+				this.error = undefined;
+			})
+			.catch((error: unknown) => {
+				this.error = error;
+			});
+	}
+
+	async flush(): Promise<void> {
+		await this.chain;
+		if (this.error !== undefined) {
+			const error = this.error;
+			this.error = undefined;
+			throw error;
+		}
+		if (this.needsRefresh) {
+			this.needsRefresh = false;
+			await this.ctx.modelRegistry.refresh();
+		}
+	}
+}
 
 export async function runRouterCommand(args: string, ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<void> {
 	if (!ctx.hasUI) {
@@ -85,7 +139,7 @@ async function openMainMenu(ctx: ExtensionCommandContext, pi: ExtensionAPI, init
 							items,
 							initialValue: cursor,
 							initialQuery: query,
-							maxVisible: 12,
+							maxVisible: 10,
 						}),
 					)
 				: await selectNative(
@@ -162,23 +216,13 @@ async function addRelayFlow(ctx: ExtensionCommandContext, pi: ExtensionAPI): Pro
 		models: [],
 	};
 
-	const models = await fetchAndSelectModels(ctx, relay, new Set());
-	if (models === undefined) {
-		const keep = await ctx.ui.confirm(
-			"Save relay without models?",
-			"You can fetch models later from the relay editor. Changes auto-save after that.",
-		);
-		if (!keep) return undefined;
-	} else {
-		relay.models = models;
+	// Connection fields are committed before the network step so cancelling or
+	// failing catalog discovery never loses the relay the user just entered.
+	await persistRelay(ctx, pi, relay);
+	await fetchAndSelectModels(ctx, pi, relay);
+	if (relay.models.length === 0) {
+		ctx.ui.notify(`Relay "${relay.id}" has no models yet.`, "warning");
 	}
-
-	await persistRelay(ctx, pi, relay, {
-		notify:
-			relay.models.length > 0
-				? `Saved "${relay.id}" with ${relay.models.length} model(s).`
-				: `Saved "${relay.id}" (no models yet).`,
-	});
 	return relay.id;
 }
 
@@ -208,7 +252,7 @@ async function editRelayFlow(ctx: ExtensionCommandContext, pi: ExtensionAPI, ini
 			{ value: "baseUrl", label: "Base URL", description: relay.baseUrl },
 			{ value: "apiKey", label: "API key", description: maskKey(relay.apiKey) },
 			{ value: "remove", label: "Remove relay", description: "Delete from router.json" },
-			{ value: "back", label: "Back", description: "All edits already saved" },
+			{ value: "back", label: "Back", description: "Return to relays" },
 		]);
 		if (choice === undefined || choice === "back") return;
 
@@ -226,7 +270,7 @@ async function editRelayFlow(ctx: ExtensionCommandContext, pi: ExtensionAPI, ini
 			const normalized = next.trim().replace(/\/+$/, "");
 			if (normalized === relay.baseUrl) continue;
 			relay.baseUrl = normalized;
-			await persistRelay(ctx, pi, relay, { notify: `Saved base URL for "${relay.id}".` });
+			await persistRelay(ctx, pi, relay);
 			continue;
 		}
 
@@ -238,7 +282,7 @@ async function editRelayFlow(ctx: ExtensionCommandContext, pi: ExtensionAPI, ini
 			const trimmed = next.trim();
 			if (trimmed === relay.apiKey) continue;
 			relay.apiKey = trimmed;
-			await persistRelay(ctx, pi, relay, { notify: `Saved API key for "${relay.id}".` });
+			await persistRelay(ctx, pi, relay);
 			continue;
 		}
 
@@ -262,43 +306,59 @@ async function editRelayFlow(ctx: ExtensionCommandContext, pi: ExtensionAPI, ini
 }
 
 /**
- * Models screen: flat list of configured models + fetch. Selecting a model opens
- * its editor (name / thinking). No extra "customize vs list" intermediate menu.
+ * Models screen: searchable configured models plus fetch/manual-add actions.
+ * Selecting a model opens its editor (name / thinking / remove).
  */
 async function manageModelsFlow(ctx: ExtensionCommandContext, pi: ExtensionAPI, relay: RelayConfig): Promise<void> {
+	let cursor: string | undefined;
 	while (true) {
-		const empty = relay.models.length === 0;
-		const items: Array<{ value: string; label: string; description?: string }> = [
-			{
-				value: "action:fetch",
-				label: "Fetch catalog",
-				description: empty
-					? "GET /models · multi-select · auto-saves"
-					: "Refresh from server (keeps name/thinking for kept ids)",
-			},
+		const items: Array<{ value: string; label: string; description?: string; searchText?: string }> = [
 			...relay.models.map((model) => {
 				const resolved = resolveModelConfig(model);
 				const label = displayModelLabel(resolved);
 				const thinking = summarizeThinkingMap(resolved.thinkingLevelMap);
+				const current = ctx.model?.provider === relay.id && ctx.model.id === model.id ? " ✓" : "";
 				return {
 					value: `model:${model.id}`,
-					label: model.id,
+					label: `${model.id}${current}`,
 					description: label !== model.id ? `${label} · ${thinking}` : thinking,
+					searchText: `${getModelSelectorSearchText({ id: model.id, provider: relay.id, name: resolved.name })} ${thinking}`,
 				};
 			}),
-			{ value: "action:back", label: "Back", description: "Return to relay" },
+			{
+				value: "action:fetch",
+				label: "Fetch catalog",
+				description:
+					relay.models.length === 0
+						? "GET /models · select models"
+						: "Refresh from server · keeps selected customizations",
+				searchText: "fetch catalog refresh models server",
+			},
+			{
+				value: "action:manual",
+				label: "Add models manually",
+				description: "Comma- or newline-separated model ids",
+				searchText: "add manual custom model ids",
+			},
+			{ value: "action:back", label: "Back", description: "Return to relay", searchText: "back return" },
 		];
 
-		const choice = await selectNative(ctx, `Relay · ${relay.id} · models`, items);
+		const currentValue = `model:${ctx.model?.id}`;
+		const initialValue = cursor ?? (ctx.model?.provider === relay.id ? currentValue : undefined);
+		const choice = await selectNative(ctx, `Relay · ${relay.id} · models`, items, { initialValue });
 		if (choice === undefined || choice === "action:back") return;
+		cursor = choice;
 
 		if (choice === "action:fetch") {
-			const selected = await fetchAndSelectModels(ctx, relay, new Set(relay.models.map((m) => m.id)));
-			if (!selected) continue;
-			relay.models = mergeModelSelection(relay.models, selected);
-			await persistRelay(ctx, pi, relay, {
-				notify: `Saved "${relay.id}" · ${relay.models.length} model(s).`,
-			});
+			await fetchAndSelectModels(ctx, pi, relay);
+			continue;
+		}
+
+		if (choice === "action:manual") {
+			const additions = await manualModelEntry(ctx);
+			if (!additions) continue;
+			relay.models = mergeAddedModels(relay.models, additions);
+			await persistRelay(ctx, pi, relay);
 			continue;
 		}
 
@@ -311,7 +371,7 @@ async function manageModelsFlow(ctx: ExtensionCommandContext, pi: ExtensionAPI, 
 	}
 }
 
-/** Single-model editor: display name + thinking. Auto-saves each applied change. */
+/** Single-model editor: display name + thinking. Every confirmed change is live. */
 async function editModelFlow(
 	ctx: ExtensionCommandContext,
 	pi: ExtensionAPI,
@@ -328,7 +388,8 @@ async function editModelFlow(
 				label: "Thinking levels",
 				description: summarizeThinkingMap(resolved.thinkingLevelMap),
 			},
-			{ value: "back", label: "Back", description: "Edits auto-save when applied" },
+			{ value: "remove", label: "Remove model", description: "Delete this model from the relay" },
+			{ value: "back", label: "Back", description: "Return to models" },
 		]);
 		if (action === undefined || action === "back") return;
 
@@ -341,30 +402,46 @@ async function editModelFlow(
 			if (nextName === prevName) continue;
 			if (nextName) model.name = nextName;
 			else delete model.name;
-			await persistRelay(ctx, pi, relay, {
-				notify: model.name
-					? `Saved display name "${model.name}" for ${model.id}.`
-					: `Cleared display name for ${model.id}; /model shows id.`,
-			});
+			await persistRelay(ctx, pi, relay);
 			continue;
 		}
 
 		if (action === "thinking") {
-			const nextMap =
-				ctx.mode === "tui"
-					? await ctx.ui.custom(
-							createThinkingMapEditor({
-								title: `Thinking · ${relay.id} / ${model.id}`,
-								map: resolved.thinkingLevelMap,
-							}),
-						)
-					: await editThinkingMapNative(ctx, resolved.thinkingLevelMap);
-			if (!nextMap) continue;
-			model.thinkingLevelMap = nextMap;
-			model.reasoning = true;
-			await persistRelay(ctx, pi, relay, {
-				notify: `Saved thinking levels for ${model.id}.`,
-			});
+			const saver = new RelayAutoSaver(ctx, pi, relay);
+			if (ctx.mode === "tui") {
+				await ctx.ui.custom(
+					createThinkingMapEditor({
+						title: `Thinking · ${relay.id} / ${model.id}`,
+						map: resolved.thinkingLevelMap,
+						levels: ROUTER_THINKING_LEVELS,
+						onChange: (nextMap) => {
+							model.thinkingLevelMap = nextMap;
+							model.reasoning = true;
+							saver.save();
+						},
+					}),
+				);
+			} else {
+				await editThinkingMapNative(ctx, resolved.thinkingLevelMap, (nextMap) => {
+					model.thinkingLevelMap = nextMap;
+					model.reasoning = true;
+					saver.save();
+				});
+			}
+			await saver.flush();
+			continue;
+		}
+
+		if (action === "remove") {
+			const ok = await ctx.ui.confirm(
+				`Remove model "${model.id}"?`,
+				"Its display name and thinking settings will be removed.",
+			);
+			if (!ok) continue;
+			relay.models = relay.models.filter((entry) => entry.id !== model.id);
+			await persistRelay(ctx, pi, relay);
+			ctx.ui.notify(`Removed model "${model.id}".`, "info");
+			return;
 		}
 	}
 }
@@ -372,115 +449,144 @@ async function editModelFlow(
 async function editThinkingMapNative(
 	ctx: ExtensionCommandContext,
 	map: RelayModelConfig["thinkingLevelMap"],
-): Promise<RelayModelConfig["thinkingLevelMap"] | undefined> {
-	const working = { ...(map ?? {}) };
+	onChange: (map: RelayModelConfig["thinkingLevelMap"]) => void,
+): Promise<void> {
+	let working = { ...(map ?? {}), off: null, minimal: null };
 	while (true) {
 		const choice = await selectNative(ctx, "Toggle thinking level", [
-			...(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const).map((level) => ({
+			...ROUTER_THINKING_LEVELS.map((level) => ({
 				value: level,
 				label: level,
 				description:
 					working[level] === null ? "hidden" : working[level] === undefined ? "default" : String(working[level]),
 			})),
-			{ value: "done", label: "Apply" },
-			{ value: "cancel", label: "Cancel" },
+			{ value: "back", label: "Back", description: "Changes are live" },
 		]);
-		if (choice === undefined || choice === "cancel") return undefined;
-		if (choice === "done") return working;
-		if (working[choice] === null) working[choice] = choice === "off" ? "none" : choice;
-		else working[choice] = null;
+		if (choice === undefined || choice === "back") return;
+		if (!ROUTER_THINKING_LEVELS.includes(choice as (typeof ROUTER_THINKING_LEVELS)[number])) continue;
+		const level = choice as (typeof ROUTER_THINKING_LEVELS)[number];
+		working = {
+			...working,
+			[level]: working[level] === null ? level : null,
+			off: null,
+			minimal: null,
+		};
+		onChange({ ...working });
 	}
 }
 
-async function fetchAndSelectModels(
-	ctx: ExtensionCommandContext,
-	relay: Pick<RelayConfig, "id" | "baseUrl" | "apiKey">,
-	initiallySelected: ReadonlySet<string>,
-): Promise<RelayModelConfig[] | undefined> {
-	const probeOptions = {
-		baseUrl: relay.baseUrl,
-		apiKey: literalKey(relay.apiKey),
-	};
+async function fetchAndSelectModels(ctx: ExtensionCommandContext, pi: ExtensionAPI, relay: RelayConfig): Promise<void> {
+	const key = resolveProbeApiKey(relay.apiKey);
+	if (key.error) {
+		ctx.ui.notify(key.error, "warning");
+		await recoverWithManualModels(ctx, pi, relay);
+		return;
+	}
 
 	let result: Awaited<ReturnType<typeof probeRelayModels>> | undefined;
-	if (ctx.mode === "tui") {
-		result = await ctx.ui.custom<Awaited<ReturnType<typeof probeRelayModels>> | undefined>(
-			(tui, theme, _kb, done) => {
-				const loader = new BorderedLoader(tui, theme, `Fetching models · ${relay.id}`, {
-					cancellable: true,
-				});
-				let settled = false;
-				const finish = (value: Awaited<ReturnType<typeof probeRelayModels>> | undefined) => {
-					if (settled) return;
-					settled = true;
-					loader.dispose();
-					done(value);
-				};
-				loader.onAbort = () => finish(undefined);
-				void probeRelayModels({ ...probeOptions, signal: loader.signal })
-					.then(finish)
-					.catch((error) => finish({ ok: false, error: formatError(error) }));
-				return loader;
-			},
-		);
-	} else {
-		ctx.ui.notify(`Fetching models from ${relay.baseUrl}…`, "info");
-		result = await probeRelayModels(probeOptions);
-	}
+	while (true) {
+		const probeOptions = { baseUrl: relay.baseUrl, apiKey: key.value };
+		if (ctx.mode === "tui") {
+			result = await ctx.ui.custom<Awaited<ReturnType<typeof probeRelayModels>> | undefined>(
+				(tui, theme, _kb, done) => {
+					const loader = new BorderedLoader(tui, theme, `Fetching models · ${relay.id}`, {
+						cancellable: true,
+					});
+					let settled = false;
+					const finish = (value: Awaited<ReturnType<typeof probeRelayModels>> | undefined) => {
+						if (settled) return;
+						settled = true;
+						loader.dispose();
+						done(value);
+					};
+					loader.onAbort = () => finish(undefined);
+					void probeRelayModels({ ...probeOptions, signal: loader.signal })
+						.then(finish)
+						.catch((error) => finish({ ok: false, error: formatError(error) }));
+					return loader;
+				},
+			);
+		} else {
+			ctx.ui.notify(`Fetching models from ${relay.baseUrl}…`, "info");
+			result = await probeRelayModels(probeOptions);
+		}
 
-	if (result === undefined) return undefined;
-	if (!result.ok) {
+		if (result === undefined) return;
+		if (result.ok && result.models.length === 0) {
+			ctx.ui.notify("Server returned an empty model list.", "warning");
+			const recovery = await selectNative(ctx, `Catalog empty · ${relay.id}`, [
+				{ value: "retry", label: "Retry", description: "Fetch /models again" },
+				{ value: "manual", label: "Add models manually", description: "Enter model ids without a catalog" },
+				{ value: "back", label: "Back", description: "Return to relay settings" },
+			]);
+			if (recovery === "retry") continue;
+			if (recovery === "manual") await recoverWithManualModels(ctx, pi, relay);
+			return;
+		}
+		if (result.ok) break;
+
 		ctx.ui.notify(`Fetch failed: ${result.error}`, "error");
-		const manual = await ctx.ui.confirm("Add model IDs manually?", "Comma-separated ids.");
-		if (!manual) return undefined;
-		return manualModelEntry(ctx);
-	}
-	if (result.models.length === 0) {
-		ctx.ui.notify("Server returned an empty model list.", "warning");
-		return manualModelEntry(ctx);
-	}
-	if (result.truncated) {
-		ctx.ui.notify("Catalog truncated to 2,000 models.", "warning");
+		const recovery = await selectNative(ctx, `Catalog unavailable · ${relay.id}`, [
+			{ value: "retry", label: "Retry", description: "Fetch /models again" },
+			{ value: "manual", label: "Add models manually", description: "Enter model ids without a catalog" },
+			{ value: "back", label: "Back", description: "Return to relay settings" },
+		]);
+		if (recovery === "retry") continue;
+		if (recovery === "manual") await recoverWithManualModels(ctx, pi, relay);
+		return;
 	}
 
-	let selectedIds: string[];
+	if (!result || !result.ok) return;
+	if (result.truncated) ctx.ui.notify("Catalog truncated to 2,000 models.", "warning");
+
+	const catalog = mergeCatalogWithConfigured(relay.models, result.models);
+	const initiallySelected = new Set(relay.models.map((model) => model.id));
+	const preserved = new Map(relay.models.map((model) => [model.id, structuredClone(model)]));
+	const saver = new RelayAutoSaver(ctx, pi, relay);
+	const applySelection = (selectedIds: string[]) => {
+		relay.models = selectedIds.map((id) => {
+			const previous = preserved.get(id);
+			if (previous) return structuredClone(previous);
+			const next = createDefaultModelConfig(id);
+			preserved.set(id, next);
+			return structuredClone(next);
+		});
+		saver.save();
+	};
+
 	if (ctx.mode === "tui") {
 		const choice = await ctx.ui.custom(
 			createModelChecklist({
 				title: `Select models · ${relay.id}`,
-				subtitle: "Space toggle · Ctrl+S apply · Esc warns if unsaved",
-				models: result.models,
+				subtitle: "Space toggles immediately · Enter/Esc returns",
+				models: catalog,
 				initiallySelected,
+				onChange: applySelection,
 			}),
 		);
-		if (choice.kind === "cancel") return undefined;
-		selectedIds = choice.selectedIds;
+		if (choice.kind === "close") applySelectionIfChanged(relay, choice.selectedIds, applySelection);
 	} else {
 		const ok = await ctx.ui.confirm(
 			`Import ${result.models.length} models?`,
-			"Non-TUI mode imports the full catalog. Prefer the terminal UI to multi-select.",
+			"Non-TUI mode imports the full catalog.",
 		);
-		if (!ok) return undefined;
-		selectedIds = result.models.map((model) => model.id);
+		if (ok) applySelection([...new Set([...initiallySelected, ...result.models.map((model) => model.id)])]);
 	}
-
-	if (selectedIds.length === 0) {
-		ctx.ui.notify("No models selected.", "warning");
-		return undefined;
-	}
-
-	// Do not import remote catalog names — leave name empty so /model shows the id
-	// unless the user sets a custom display name later.
-	return selectedIds.map((id) => createDefaultModelConfig(id));
+	await saver.flush();
+	if (relay.models.length === 0) ctx.ui.notify(`No models enabled for "${relay.id}".`, "warning");
 }
 
 async function manualModelEntry(ctx: ExtensionCommandContext): Promise<RelayModelConfig[] | undefined> {
 	const value = await ctx.ui.input("Model IDs (comma-separated)", "gpt-5.6-sol, gpt-5.6-luna");
 	if (value === undefined) return undefined;
-	const ids = value
-		.split(/[,\r\n]+/)
-		.map((id) => id.trim())
-		.filter(Boolean);
+	const ids = [
+		...new Set(
+			value
+				.split(/[,\r\n]+/)
+				.map((id) => id.trim())
+				.filter(Boolean),
+		),
+	];
 	if (ids.length === 0) {
 		ctx.ui.notify("Enter at least one model id.", "warning");
 		return undefined;
@@ -488,37 +594,67 @@ async function manualModelEntry(ctx: ExtensionCommandContext): Promise<RelayMode
 	return ids.map((id) => createDefaultModelConfig(id));
 }
 
-/** Keep prior customizations when re-selecting overlapping ids. */
-function mergeModelSelection(previous: RelayModelConfig[], selected: RelayModelConfig[]): RelayModelConfig[] {
-	const prior = new Map(previous.map((model) => [model.id, model]));
-	return selected.map((model) => {
-		const old = prior.get(model.id);
-		if (!old) return model;
-		const merged: RelayModelConfig = {
-			...model,
-			reasoning: old.reasoning ?? model.reasoning,
-			input: old.input ?? model.input,
-			contextWindow: old.contextWindow ?? model.contextWindow,
-			maxTokens: old.maxTokens ?? model.maxTokens,
-			thinkingLevelMap: old.thinkingLevelMap ?? model.thinkingLevelMap,
-		};
-		// Preserve a user-set display name; never invent one on re-fetch.
-		if (old.name?.trim() && old.name.trim() !== old.id) merged.name = old.name.trim();
-		else delete merged.name;
-		return merged;
-	});
-}
-
-async function persistRelay(
+async function recoverWithManualModels(
 	ctx: ExtensionCommandContext,
 	pi: ExtensionAPI,
 	relay: RelayConfig,
-	opts?: { notify?: string },
 ): Promise<void> {
+	const additions = await manualModelEntry(ctx);
+	if (!additions) return;
+	relay.models = mergeAddedModels(relay.models, additions);
+	await persistRelay(ctx, pi, relay);
+}
+
+function mergeAddedModels(previous: RelayModelConfig[], additions: RelayModelConfig[]): RelayModelConfig[] {
+	const result = previous.map((model) => structuredClone(model));
+	const ids = new Set(result.map((model) => model.id));
+	for (const model of additions) {
+		if (ids.has(model.id)) continue;
+		ids.add(model.id);
+		result.push(model);
+	}
+	return result;
+}
+
+function mergeCatalogWithConfigured(
+	configured: ReadonlyArray<RelayModelConfig>,
+	catalog: ReadonlyArray<{ id: string; name?: string }>,
+): ModelChecklistItem[] {
+	const items = new Map<string, ModelChecklistItem>();
+	const configuredById = new Map(configured.map((model) => [model.id, model]));
+	for (const model of catalog) {
+		const previous = configuredById.get(model.id);
+		items.set(model.id, {
+			id: model.id,
+			name: previous?.name ?? model.name,
+		});
+	}
+	for (const model of configured) {
+		if (!items.has(model.id)) {
+			items.set(model.id, {
+				id: model.id,
+				name: model.name ?? model.id,
+				unavailable: true,
+			});
+		}
+	}
+	return [...items.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function applySelectionIfChanged(
+	relay: RelayConfig,
+	selectedIds: ReadonlyArray<string>,
+	apply: (ids: string[]) => void,
+): void {
+	const current = new Set(relay.models.map((model) => model.id));
+	if (current.size === selectedIds.length && selectedIds.every((id) => current.has(id))) return;
+	apply([...selectedIds]);
+}
+
+async function persistRelay(ctx: ExtensionCommandContext, pi: ExtensionAPI, relay: RelayConfig): Promise<void> {
 	await upsertRelay(relay);
 	registerOneRelay(pi, relay);
 	await ctx.modelRegistry.refresh();
-	if (opts?.notify) ctx.ui.notify(opts.notify, "info");
 }
 
 async function promptText(
@@ -542,14 +678,17 @@ async function promptText(
 async function selectNative<T extends string>(
 	ctx: ExtensionCommandContext,
 	title: string,
-	items: ReadonlyArray<{ value: T; label: string; description?: string }>,
+	items: ReadonlyArray<{ value: T; label: string; description?: string; searchText?: string }>,
+	opts?: { initialValue?: T; initialQuery?: string; maxVisible?: number },
 ): Promise<T | undefined> {
 	if (ctx.mode === "tui") {
 		return ctx.ui.custom(
 			createSearchableSelector({
 				title,
 				items,
-				maxVisible: Math.min(12, Math.max(1, items.length)),
+				initialValue: opts?.initialValue,
+				initialQuery: opts?.initialQuery,
+				maxVisible: opts?.maxVisible ?? Math.min(10, Math.max(1, items.length)),
 			}),
 		);
 	}
@@ -565,14 +704,22 @@ function maskKey(key: string): string {
 	return `${key.slice(0, 4)}…${key.slice(-4)}`;
 }
 
-/** Best-effort key for catalog fetch (full resolution still goes through Pi at request time). */
-function literalKey(apiKey: string): string | undefined {
+/** Resolve only keys that can be safely used by the catalog probe. */
+export function resolveProbeApiKey(apiKey: string): { value?: string; error?: string } {
 	const trimmed = apiKey.trim();
-	if (!trimmed || trimmed.startsWith("!")) return undefined;
+	if (!trimmed) return {};
+	if (trimmed.startsWith("!")) {
+		return { error: "This API key uses a !command and cannot be resolved for catalog probing." };
+	}
 	const envOnly = trimmed.match(/^\$([A-Za-z_][A-Za-z0-9_]*)$/);
-	if (envOnly) return process.env[envOnly[1]!];
 	const braced = trimmed.match(/^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/);
-	if (braced) return process.env[braced[1]!];
-	if (trimmed.includes("$")) return undefined;
-	return trimmed;
+	const envName = envOnly?.[1] ?? braced?.[1];
+	if (envName) {
+		const value = process.env[envName]?.trim();
+		return value ? { value } : { error: `Environment variable $${envName} is not set.` };
+	}
+	if (trimmed.includes("$")) {
+		return { error: "This API key contains interpolation and cannot be resolved for catalog probing." };
+	}
+	return { value: trimmed };
 }

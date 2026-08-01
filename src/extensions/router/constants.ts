@@ -15,8 +15,12 @@ export const DEFAULTS = {
 	originator: "codex",
 } as const;
 
+/** Thinking levels understood by Pi and the relay config format. */
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+/** Thinking levels exposed by every router model (GPT Gateway policy). */
+export const ROUTER_THINKING_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 export const NO_UI_WARNING = "/router requires an interactive UI.";
 

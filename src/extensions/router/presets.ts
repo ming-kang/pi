@@ -6,15 +6,18 @@
  * Display name (`name`) is optional: omit it to show the model id in /model.
  */
 
-import { DEFAULTS, THINKING_LEVELS, type ThinkingLevel } from "./constants.ts";
+import { DEFAULTS, ROUTER_THINKING_LEVELS, THINKING_LEVELS, type ThinkingLevel } from "./constants.ts";
 import type { RelayModelConfig, ThinkingLevelMap } from "./types.ts";
 
-/** High/xhigh/max only — off…medium hidden. */
+/**
+ * GPT Gateway defaults: off/minimal are never exposed; all five supported
+ * router levels start enabled and can be disabled individually.
+ */
 export const DEFAULT_THINKING_LEVEL_MAP: ThinkingLevelMap = {
 	off: null,
 	minimal: null,
-	low: null,
-	medium: null,
+	low: "low",
+	medium: "medium",
 	high: "high",
 	xhigh: "xhigh",
 	max: "max",
@@ -60,7 +63,10 @@ export function resolveModelConfig(entry: RelayModelConfig): {
 		input: entry.input ?? base.input!,
 		contextWindow: entry.contextWindow ?? base.contextWindow!,
 		maxTokens: entry.maxTokens ?? base.maxTokens!,
-		thinkingLevelMap: normalizeThinkingMap(entry.thinkingLevelMap ?? base.thinkingLevelMap),
+		// Apply the GPT Gateway policy in memory without rewriting legacy router.json
+		// files. Legacy off/minimal values therefore become unavailable at runtime,
+		// while explicit choices for the five visible levels remain intact.
+		thinkingLevelMap: resolveRouterThinkingMap(entry.thinkingLevelMap ?? base.thinkingLevelMap),
 	};
 }
 
@@ -75,11 +81,19 @@ export function normalizeThinkingMap(map: ThinkingLevelMap | undefined): Thinkin
 	return result;
 }
 
+/** Apply the router-wide GPT policy without mutating the stored object. */
+export function resolveRouterThinkingMap(map: ThinkingLevelMap | undefined): ThinkingLevelMap {
+	const result = normalizeThinkingMap(map ?? DEFAULT_THINKING_LEVEL_MAP);
+	result.off = null;
+	result.minimal = null;
+	return result;
+}
+
 export function summarizeThinkingMap(map: ThinkingLevelMap | undefined): string {
-	const resolved = normalizeThinkingMap(map ?? DEFAULT_THINKING_LEVEL_MAP);
+	const resolved = resolveRouterThinkingMap(map);
 	const enabled: string[] = [];
 	const hidden: string[] = [];
-	for (const level of THINKING_LEVELS) {
+	for (const level of ROUTER_THINKING_LEVELS) {
 		const value = resolved[level];
 		if (value === null) hidden.push(level);
 		else if (value === undefined) enabled.push(level);
@@ -90,13 +104,9 @@ export function summarizeThinkingMap(map: ThinkingLevelMap | undefined): string 
 }
 
 export function toggleThinkingLevel(map: ThinkingLevelMap, level: ThinkingLevel): ThinkingLevelMap {
-	const next = { ...map };
-	if (next[level] === null) {
-		if (level === "off") next[level] = undefined;
-		else next[level] = level;
-	} else {
-		next[level] = null;
-	}
+	const next: ThinkingLevelMap = { ...map, off: null, minimal: null };
+	if (!ROUTER_THINKING_LEVELS.includes(level as (typeof ROUTER_THINKING_LEVELS)[number])) return next;
+	next[level] = next[level] === null ? level : null;
 	return next;
 }
 

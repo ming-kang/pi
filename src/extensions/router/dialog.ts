@@ -13,7 +13,8 @@ import {
 import { DynamicBorder } from "../../modes/interactive/components/dynamic-border.ts";
 import { keyHint, rawKeyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
-import { THINKING_LEVELS, type ThinkingLevel, truncate } from "./constants.ts";
+import { ROUTER_THINKING_LEVELS, type ThinkingLevel, truncate } from "./constants.ts";
+import { toggleThinkingLevel } from "./presets.ts";
 import type { ThinkingLevelMap } from "./types.ts";
 
 export interface SelectItem<T extends string = string> {
@@ -42,7 +43,6 @@ export function createSearchableSelector<T extends string>(opts: {
 		const maxVisible = Math.max(1, opts.maxVisible ?? 10);
 		const input = new Input();
 		if (opts.initialQuery) input.setValue(opts.initialQuery);
-		const search = new Container();
 		const list = new Container();
 		const footer = new Text("", 1, 0);
 		const container = new Container() as Container & {
@@ -51,11 +51,6 @@ export function createSearchableSelector<T extends string>(opts: {
 		};
 
 		const refresh = () => {
-			search.clear();
-			if (input.getValue()) {
-				search.addChild(input);
-				search.addChild(new Spacer(1));
-			}
 			list.clear();
 			const start = Math.max(
 				0,
@@ -80,7 +75,7 @@ export function createSearchableSelector<T extends string>(opts: {
 				rawKeyHint("type", "filter"),
 				rawKeyHint("↑↓", "navigate"),
 				keyHint("tui.select.confirm", "select"),
-				keyHint("tui.select.cancel", input.getValue() ? "clear filter" : "back"),
+				keyHint("tui.select.cancel", "back"),
 			];
 			footer.setText(hints.join("  "));
 			container.invalidate();
@@ -105,7 +100,10 @@ export function createSearchableSelector<T extends string>(opts: {
 		container.addChild(new TruncatedText(theme.fg("accent", theme.bold(opts.title)), 1, 0));
 		if (opts.subtitle) container.addChild(new TruncatedText(theme.fg("muted", opts.subtitle), 1, 0));
 		container.addChild(new Spacer(1));
-		container.addChild(search);
+		// Keep the search row mounted even when empty, matching /model and
+		// preventing the list from jumping when the first character is typed.
+		container.addChild(input);
+		container.addChild(new Spacer(1));
 		container.addChild(list);
 		container.addChild(new Spacer(1));
 		container.addChild(footer);
@@ -140,11 +138,6 @@ export function createSearchableSelector<T extends string>(opts: {
 				return;
 			}
 			if (keybindings.matches(data, "tui.select.cancel")) {
-				if (input.getValue()) {
-					input.setValue("");
-					applyFilter("");
-					return;
-				}
 				done(undefined);
 				return;
 			}
@@ -159,34 +152,35 @@ export function createSearchableSelector<T extends string>(opts: {
 	};
 }
 
-function sameIdSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
-	if (a.size !== b.size) return false;
-	for (const id of a) if (!b.has(id)) return false;
-	return true;
+export interface ModelChecklistItem {
+	id: string;
+	name?: string;
+	unavailable?: boolean;
 }
 
 export function createModelChecklist(opts: {
 	title: string;
 	subtitle?: string;
-	models: ReadonlyArray<{ id: string; name?: string }>;
+	models: ReadonlyArray<ModelChecklistItem>;
 	initiallySelected?: ReadonlySet<string>;
+	onChange?: (selectedIds: string[]) => void;
 }): (
 	tui: TUI,
 	theme: Theme,
 	keybindings: KeybindingsManager,
-	done: (result: { kind: "save"; selectedIds: string[] } | { kind: "cancel" }) => void,
+	done: (result: { kind: "close"; selectedIds: string[] }) => void,
 ) => Container {
 	return (tui, theme, keybindings, done) => {
 		const items = opts.models.map((model) => ({
 			id: model.id,
 			label: model.name && model.name !== model.id ? `${model.id} · ${model.name}` : model.id,
+			unavailable: model.unavailable ?? false,
+			searchText: `${model.id} ${model.name ?? ""} ${model.unavailable ? "not returned unavailable" : ""}`,
 		}));
-		const initialSelected = new Set(opts.initiallySelected ?? []);
-		const selected = new Set(initialSelected);
+		const selected = new Set(opts.initiallySelected ?? []);
 		let filter = "";
 		let selectedIndex = 0;
-		let discardArmed = false;
-		const maxVisible = 12;
+		const maxVisible = 10;
 		const input = new Input();
 		const list = new Container();
 		const footer = new Text("", 1, 0);
@@ -195,13 +189,12 @@ export function createModelChecklist(opts: {
 			focused: boolean;
 		};
 
-		const isDirty = () => !sameIdSet(selected, initialSelected);
-
 		const filtered = () => {
-			const q = filter.trim().toLowerCase();
-			if (!q) return items;
-			return items.filter((item) => item.id.toLowerCase().includes(q) || item.label.toLowerCase().includes(q));
+			const query = filter.trim();
+			return query ? fuzzyFilter(items, query, (item) => item.searchText) : items;
 		};
+
+		const notifyChange = () => opts.onChange?.([...selected]);
 
 		const refresh = () => {
 			const rows = filtered();
@@ -218,40 +211,27 @@ export function createModelChecklist(opts: {
 				const mark = selected.has(item.id) ? theme.fg("success", "[x]") : theme.fg("muted", "[ ]");
 				const prefix = active ? theme.fg("accent", "→ ") : "  ";
 				const label = theme.fg(active ? "accent" : "text", item.label);
-				list.addChild(new TruncatedText(`${prefix}${mark} ${label}`, 1, 0));
+				const availability = item.unavailable ? theme.fg("warning", "  (not returned)") : "";
+				list.addChild(new TruncatedText(`${prefix}${mark} ${label}${availability}`, 1, 0));
 			}
 			if (rows.length === 0) {
 				list.addChild(new Text(theme.fg("muted", "  No matching models"), 1, 0));
+			} else if (start > 0 || end < rows.length) {
+				list.addChild(new Text(theme.fg("muted", `  (${selectedIndex + 1}/${rows.length})`), 1, 0));
 			}
 
-			const statusParts = [`${selected.size} selected`, `${rows.length} shown`];
-			if (isDirty()) statusParts.push(theme.fg("warning", "unsaved"));
-			const statusLine = theme.fg("muted", statusParts.join(" · "));
-
-			let hints: string[];
-			if (discardArmed && isDirty()) {
-				hints = [
-					theme.fg("warning", "Unsaved selection — Esc again discards"),
-					keyHint("app.models.save", "apply"),
-				];
-			} else {
-				hints = [
-					keyHint("app.list.toggle", "toggle"),
-					keyHint("app.models.enableAll", "all"),
-					keyHint("app.models.clearAll", "none"),
-					keyHint("app.models.save", "apply"),
-					rawKeyHint("type", "filter"),
-					keyHint("tui.select.cancel", filter ? "clear" : isDirty() ? "warn discard" : "cancel"),
-				];
-			}
+			const statusLine = theme.fg("muted", `${selected.size} selected · ${rows.length} shown`);
+			const hints = [
+				keyHint("app.list.toggle", "toggle"),
+				keyHint("app.models.enableAll", "all"),
+				keyHint("app.models.clearAll", "none"),
+				rawKeyHint("type", "filter"),
+				keyHint("tui.select.confirm", "done"),
+				keyHint("tui.select.cancel", "back"),
+			];
 			footer.setText(`${statusLine}\n${hints.join("  ")}`);
 			container.invalidate();
 			tui.requestRender();
-		};
-
-		const markChanged = () => {
-			discardArmed = false;
-			refresh();
 		};
 
 		container.addChild(new DynamicBorder((text) => theme.fg("border", text)));
@@ -281,28 +261,26 @@ export function createModelChecklist(opts: {
 				if (item) {
 					if (selected.has(item.id)) selected.delete(item.id);
 					else selected.add(item.id);
-					markChanged();
+					notifyChange();
+					refresh();
 				}
 				return;
 			}
 			if (keybindings.matches(data, "app.models.enableAll")) {
 				for (const item of rows) selected.add(item.id);
-				markChanged();
+				notifyChange();
+				refresh();
 				return;
 			}
 			if (keybindings.matches(data, "app.models.clearAll")) {
 				for (const item of rows) selected.delete(item.id);
-				markChanged();
-				return;
-			}
-			if (keybindings.matches(data, "app.models.save")) {
-				done({ kind: "save", selectedIds: [...selected] });
+				notifyChange();
+				refresh();
 				return;
 			}
 			if (keybindings.matches(data, "tui.select.up")) {
 				if (rows.length > 0) {
 					selectedIndex = selectedIndex === 0 ? rows.length - 1 : selectedIndex - 1;
-					discardArmed = false;
 					refresh();
 				}
 				return;
@@ -310,26 +288,12 @@ export function createModelChecklist(opts: {
 			if (keybindings.matches(data, "tui.select.down")) {
 				if (rows.length > 0) {
 					selectedIndex = selectedIndex === rows.length - 1 ? 0 : selectedIndex + 1;
-					discardArmed = false;
 					refresh();
 				}
 				return;
 			}
-			if (keybindings.matches(data, "tui.select.cancel")) {
-				if (filter) {
-					filter = "";
-					input.setValue("");
-					selectedIndex = 0;
-					discardArmed = false;
-					refresh();
-					return;
-				}
-				if (isDirty() && !discardArmed) {
-					discardArmed = true;
-					refresh();
-					return;
-				}
-				done({ kind: "cancel" });
+			if (keybindings.matches(data, "tui.select.confirm") || keybindings.matches(data, "tui.select.cancel")) {
+				done({ kind: "close", selectedIds: [...selected] });
 				return;
 			}
 			const before = input.getValue();
@@ -338,7 +302,6 @@ export function createModelChecklist(opts: {
 			if (after !== before) {
 				filter = after;
 				selectedIndex = 0;
-				discardArmed = false;
 				refresh();
 			}
 		};
@@ -348,18 +311,11 @@ export function createModelChecklist(opts: {
 	};
 }
 
-function thinkingMapsEqual(a: ThinkingLevelMap, b: ThinkingLevelMap): boolean {
-	for (const level of THINKING_LEVELS) {
-		const av = Object.hasOwn(a, level) ? a[level] : undefined;
-		const bv = Object.hasOwn(b, level) ? b[level] : undefined;
-		if (av !== bv) return false;
-	}
-	return true;
-}
-
 export function createThinkingMapEditor(opts: {
 	title: string;
 	map: ThinkingLevelMap;
+	levels?: ReadonlyArray<ThinkingLevel>;
+	onChange?: (map: ThinkingLevelMap) => void;
 }): (
 	tui: TUI,
 	theme: Theme,
@@ -367,18 +323,15 @@ export function createThinkingMapEditor(opts: {
 	done: (result: ThinkingLevelMap | undefined) => void,
 ) => Container {
 	return (tui, theme, keybindings, done) => {
-		const initial: ThinkingLevelMap = { ...opts.map };
-		const working: ThinkingLevelMap = { ...opts.map };
+		const levels = [...(opts.levels ?? ROUTER_THINKING_LEVELS)];
+		let working: ThinkingLevelMap = { ...opts.map, off: null, minimal: null };
 		let index = 0;
-		let discardArmed = false;
 		const list = new Container();
 		const footer = new Text("", 1, 0);
 		const container = new Container() as Container & {
 			handleInput: (data: string) => void;
 			focused: boolean;
 		};
-
-		const isDirty = () => !thinkingMapsEqual(working, initial);
 
 		const status = (level: ThinkingLevel): string => {
 			const value = working[level];
@@ -389,8 +342,8 @@ export function createThinkingMapEditor(opts: {
 
 		const refresh = () => {
 			list.clear();
-			for (let i = 0; i < THINKING_LEVELS.length; i++) {
-				const level = THINKING_LEVELS[i]!;
+			for (let i = 0; i < levels.length; i++) {
+				const level = levels[i]!;
 				const active = i === index;
 				const prefix = active ? theme.fg("accent", "→ ") : "  ";
 				const label = theme.fg(active ? "accent" : "text", level.padEnd(8));
@@ -399,32 +352,20 @@ export function createThinkingMapEditor(opts: {
 				list.addChild(new Text(`${prefix}${label} ${theme.fg(color, st)}`, 1, 0));
 			}
 
-			const statusLine = isDirty() ? theme.fg("warning", "Unsaved changes") : theme.fg("muted", "No changes yet");
-
-			let hints: string[];
-			if (discardArmed && isDirty()) {
-				hints = [theme.fg("warning", "Esc again discards"), keyHint("app.models.save", "apply")];
-			} else {
-				hints = [
-					keyHint("app.list.toggle", "toggle on/hidden"),
-					keyHint("tui.select.confirm", "toggle on/hidden"),
-					keyHint("app.models.save", "apply"),
-					keyHint("tui.select.cancel", isDirty() ? "warn discard" : "back"),
-				];
-			}
-			footer.setText(`${statusLine}\n${hints.join("  ")}`);
+			const hints = [
+				keyHint("app.list.toggle", "toggle"),
+				keyHint("tui.select.confirm", "toggle"),
+				keyHint("tui.select.cancel", "back"),
+			];
+			footer.setText(`${theme.fg("muted", `${levels.length} levels available`)}\n${hints.join("  ")}`);
 			container.invalidate();
 			tui.requestRender();
 		};
 
 		const toggle = () => {
-			const level = THINKING_LEVELS[index]!;
-			if (working[level] === null) {
-				working[level] = level === "off" ? "none" : level;
-			} else {
-				working[level] = null;
-			}
-			discardArmed = false;
+			const level = levels[index]!;
+			working = toggleThinkingLevel(working, level);
+			opts.onChange?.({ ...working });
 			refresh();
 		};
 
@@ -446,14 +387,12 @@ export function createThinkingMapEditor(opts: {
 
 		container.handleInput = (data: string) => {
 			if (keybindings.matches(data, "tui.select.up")) {
-				index = index === 0 ? THINKING_LEVELS.length - 1 : index - 1;
-				discardArmed = false;
+				index = index === 0 ? levels.length - 1 : index - 1;
 				refresh();
 				return;
 			}
 			if (keybindings.matches(data, "tui.select.down")) {
-				index = index === THINKING_LEVELS.length - 1 ? 0 : index + 1;
-				discardArmed = false;
+				index = index === levels.length - 1 ? 0 : index + 1;
 				refresh();
 				return;
 			}
@@ -461,16 +400,7 @@ export function createThinkingMapEditor(opts: {
 				toggle();
 				return;
 			}
-			if (keybindings.matches(data, "app.models.save")) {
-				done({ ...working });
-				return;
-			}
 			if (keybindings.matches(data, "tui.select.cancel")) {
-				if (isDirty() && !discardArmed) {
-					discardArmed = true;
-					refresh();
-					return;
-				}
 				done(undefined);
 			}
 		};
