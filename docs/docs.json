@@ -40,12 +40,12 @@
           "path": "keybindings.md"
         },
         {
-          "title": "Sessions",
-          "path": "sessions.md"
-        },
-        {
           "title": "Compaction",
           "path": "compaction.md"
+        },
+        {
+          "title": "Development",
+          "path": "development.md"
         }
       ]
     },
