@@ -2343,7 +2343,9 @@ export class InteractiveMode {
 		message: string,
 		opts?: ExtensionUIDialogOptions,
 	): Promise<boolean> {
-		const result = await this.showExtensionSelector(`${title}\n${message}`, ["Yes", "No"], opts);
+		// The message is context, not a heading: render it as the selector's muted
+		// subtitle instead of folding it into the accent-bold title.
+		const result = await this.showExtensionSelector(title, ["Yes", "No"], { ...opts, subtitle: message });
 		return result === "Yes";
 	}
 

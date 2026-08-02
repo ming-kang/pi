@@ -284,7 +284,13 @@ export class ToolExecutionComponent extends Container {
 
 	private wrapCall(component: Component): Component {
 		const color = this.isPartial ? "warning" : this.result?.isError ? "error" : "success";
-		return new ToolChromeComponent(component, `${theme.fg(color, "●")} `);
+		// Continuation lines share the result rail so the whole block reads as one
+		// unit hanging off the dot instead of an indented island above a lone rail.
+		const rail = theme.fg("dim", "│ ");
+		return new ToolChromeComponent(component, `${theme.fg(color, "●")} `, {
+			continuationPrefix: rail,
+			blankLinePrefix: theme.fg("dim", "│"),
+		});
 	}
 
 	private wrapResult(component: Component): Component {

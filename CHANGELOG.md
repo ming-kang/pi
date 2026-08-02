@@ -10,8 +10,13 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - Added a user approval gate for the Biu SPEC: marking `biu://SPEC.md` as `ready` opens a confirmation dialog, and declining blocks the write and returns the feedback to the model as the tool result, mirroring Plan Mode's approve/reject loop.
 - Added the `execution: direct|tasks` frontmatter field to the Biu SPEC: the plan stage records the agreed execution path before approval, and the execute stage loads a single-purpose playbook (direct implementation, decomposition, or an undecided fallback for older SPECs) instead of re-asking how to proceed.
 
+### Changed
+
+- Changed tool call chrome so multi-line call previews continue the dim `│` rail from the status dot: args, blank lines, and the result now read as one connected block instead of an indented island above a lone rail.
+
 ### Fixed
 
+- Fixed extension confirm dialogs folding the message into the accent-bold title; the message now renders as a muted subtitle under the title.
 - Fixed Router allowing the active session model or its relay to be disabled or removed, leaving stale model state; catalog selection now keeps the current model selected and removal asks the user to switch models first.
 - Fixed partial Router thinking maps omitting `xhigh` and `max` at runtime while the UI reported them enabled; omitted levels now inherit the five-level GPT Gateway defaults while explicit `null` choices remain hidden.
 - Fixed Biu archiving leaving the cycle half-moved when a file move failed mid-archive: already-moved files now roll back, and an incomplete rollback reports where the recovery data is instead of failing silently.
