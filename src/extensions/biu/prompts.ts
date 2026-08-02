@@ -22,6 +22,7 @@ Core rules:
 export const BIU_SPEC_TEMPLATE = `---
 title: <short title>
 status: draft
+execution: direct
 baseline_commit: <sha or "none">
 ---
 
@@ -128,24 +129,50 @@ const PLAN_PLAYBOOK = `Current stage: plan — turn a vague idea into a clear, a
 - After the first substantive exchange, create biu://SPEC.md as a rough skeleton and update it immediately after every answer. Do not batch knowledge in conversation memory.
 - Ask exactly one decision at a time. State why it matters, recommend an answer, and give the trade-offs of choosing differently.
 - Push into edge cases and failure states, but scale interview depth to ambiguity rather than feature size. When the SPEC is solid, stop — do not pad with questions.
+- Scale the SPEC to the work: Goal, Scope, and Acceptance Criteria are always required; delete sections that do not apply instead of leaving placeholders. A small task's SPEC can be under a screen.
 - Record the title and the current Git commit in the frontmatter early (baseline_commit; use "none" without Git).
-- Keep status: draft throughout the interview. Set status: ready only when Open Questions has no unchecked items, every acceptance criterion is testable, and the user has explicitly approved the final SPEC.
-- Once the SPEC is ready, ask the user how to proceed: decompose into task files first (worthwhile when the SPEC spans several independently verifiable chunks) or implement directly against the SPEC (faster for small, focused SPECs).
+- Before attempting status: ready, recommend an execution path and record it in the frontmatter as execution: direct or execution: tasks, confirming the choice with the user. Default to direct. Choose tasks only when the work splits into independently verifiable chunks with dependencies worth tracking, or will span multiple sessions. Task files cost maintenance — do not decompose small, focused work.
+- Keep status: draft throughout the interview. Setting status: ready triggers an approval dialog shown to the user; the write only succeeds if they approve. If it is rejected, their feedback appears in the tool result — revise the SPEC accordingly and try again. Only attempt this when Open Questions has no unchecked items and every acceptance criterion is testable.
 
 SPEC.md structure:
 
 ${BIU_SPEC_TEMPLATE}`;
 
-const EXECUTE_DIRECT_PLAYBOOK = `Current stage: execute — the SPEC is ready and no tasks exist yet.
+const EXECUTION_SWITCH_RULE = `- If execution reveals this path was wrong (e.g. the work turned out larger or smaller than planned), update execution in the biu://SPEC.md frontmatter and explain why — switching paths is moving backward, which is always allowed.`;
 
-Two ways forward; agree on one with the user before writing code:
+const DECOMPOSE_PLAYBOOK = `Current stage: execute — the SPEC is ready with execution: tasks; write the task files before touching project code.
 
-Decompose first (worthwhile for complex SPECs):
+- Explore the project to map the SPEC to code reality before deciding task boundaries. Reuse-first: prefer extending existing functions and patterns, referenced by file path.
+- Present the high-level breakdown for approval: per task its objective, dependencies, covered AC ids, critical files, reuse targets, and risks. Every acceptance criterion must be covered by at least one task.
+- After approval, write one biu://tasks/TASK-<short-name>.md per task using the template below, in dependency order. depends_on lists other task file names without the .md extension. Write each task's Verify section for its change type and cover edge cases, not just the happy path. Each task needs a single clear objective, specific enough for another agent to execute without extra context.
+${EXECUTION_SWITCH_RULE}
+
+TASK file structure:
+
+${BIU_TASK_TEMPLATE}`;
+
+const DIRECT_PLAYBOOK = `Current stage: execute — the SPEC is ready with execution: direct; implement against it without task files.
+
+- Implement against the SPEC's acceptance criteria, staying within its recorded decisions.
+- Record significant implementation choices and discoveries in an "## Execution Notes" section appended to biu://SPEC.md while they are fresh.
+- Verify each acceptance criterion, including edge and error cases, and report results honestly.
+${EXECUTION_SWITCH_RULE}
+- When the work is verified and the user agrees to close the cycle, write biu://Summary.md using the structure below; the archive guidance then takes over.
+
+Summary.md structure:
+
+${BIU_SUMMARY_TEMPLATE}`;
+
+const EXECUTE_UNDECIDED_PLAYBOOK = `Current stage: execute — the SPEC is ready, no tasks exist, and no execution path is recorded in the frontmatter yet.
+
+Agree on one path with the user, record it in the biu://SPEC.md frontmatter as execution: tasks or execution: direct, and only then continue:
+
+Decompose first (execution: tasks — worthwhile for complex SPECs):
 - Explore the project to map the SPEC to code reality before deciding task boundaries. Reuse-first: prefer extending existing functions and patterns, referenced by file path.
 - Present the high-level breakdown for approval: per task its objective, dependencies, covered AC ids, critical files, reuse targets, and risks. Every acceptance criterion must be covered by at least one task.
 - After approval, write one biu://tasks/TASK-<short-name>.md per task using the template below, in dependency order. depends_on lists other task file names without the .md extension. Write each task's Verify section for its change type and cover edge cases, not just the happy path. Each task needs a single clear objective, specific enough for another agent to execute without extra context.
 
-Direct execution (faster for small, focused SPECs):
+Direct execution (execution: direct — faster for small, focused SPECs):
 - Implement against the SPEC's acceptance criteria, staying within its recorded decisions.
 - Record significant implementation choices and discoveries in an "## Execution Notes" section appended to biu://SPEC.md while they are fresh.
 - Verify each acceptance criterion, including edge and error cases, and report results honestly.
@@ -213,7 +240,10 @@ export function buildBiuSnapshotBlock(snapshot: BiuSnapshot): string {
 function getBiuPlaybook(snapshot: BiuSnapshot): string {
 	if (snapshot.stage === "plan") return PLAN_PLAYBOOK;
 	if (snapshot.stage === "archive") return ARCHIVE_PLAYBOOK;
-	return snapshot.counts.total > 0 ? EXECUTE_TASKS_PLAYBOOK : EXECUTE_DIRECT_PLAYBOOK;
+	if (snapshot.counts.total > 0) return EXECUTE_TASKS_PLAYBOOK;
+	if (snapshot.spec.execution === "tasks") return DECOMPOSE_PLAYBOOK;
+	if (snapshot.spec.execution === "direct") return DIRECT_PLAYBOOK;
+	return EXECUTE_UNDECIDED_PLAYBOOK;
 }
 
 /** The full Biu block injected into the system prompt each turn while the mode is on. */

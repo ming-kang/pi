@@ -10,6 +10,7 @@
  * read/write/edit/grep/find/ls work on them with short, stable paths.
  * Archiving a cycle is deterministic and menu-driven, never model-driven.
  */
+import { readFile } from "node:fs/promises";
 import { sep } from "node:path";
 import { Container, Text } from "@earendil-works/pi-tui";
 import type {
@@ -33,6 +34,7 @@ import {
 	archiveBiuCycle,
 	type BiuSnapshot,
 	type BiuStage,
+	detectSpecReadyTransition,
 	ensureBiuWorkspace,
 	getBiuPaths,
 	isBiuUri,
@@ -315,13 +317,41 @@ export default function biuExtension(pi: ExtensionAPI): void {
 	// deterministic and harmless outside Biu Mode, and rewriting only happens on
 	// explicit biu:// arguments. The session keeps the model's original biu://
 	// arguments; only execution sees the resolved absolute path.
-	pi.on("tool_call", (event, ctx) => {
+	pi.on("tool_call", async (event, ctx) => {
 		if (!BIU_PATH_TOOLS.has(event.toolName)) return;
 		const input = event.input as { path?: unknown };
-		if (typeof input.path !== "string" || !isBiuUri(input.path)) return;
-		const resolution = resolveBiuUri(input.path, ctx.cwd);
-		if (!resolution.ok) return { block: true, reason: resolution.reason };
-		input.path = resolution.path;
+		if (typeof input.path !== "string") return;
+		if (isBiuUri(input.path)) {
+			const resolution = resolveBiuUri(input.path, ctx.cwd);
+			if (!resolution.ok) return { block: true, reason: resolution.reason };
+			input.path = resolution.path;
+		}
+
+		// Approval gate: flipping the SPEC's frontmatter status to ready needs the
+		// user's explicit sign-off (the Biu analogue of ExitPlanMode approval).
+		// The gate is a guardrail, not a sandbox: on any internal failure it steps
+		// aside and lets the write proceed.
+		if (!enabled || ctx.mode !== "tui") return;
+		if (event.toolName !== "write" && event.toolName !== "edit") return;
+		try {
+			if (input.path !== getBiuPaths(ctx.cwd).specFile) return;
+			const current = await readFile(input.path, "utf8").catch(() => null);
+			if (!detectSpecReadyTransition(current, event.toolName, event.input as Record<string, unknown>)) return;
+			const approved = await ctx.ui.confirm(
+				"Approve SPEC?",
+				"The agent wants to mark biu://SPEC.md as ready. Approving moves the cycle to the execute stage.",
+			);
+			if (approved) return;
+			const feedback = await ctx.ui.input("Feedback", "why it was declined (sent to the agent)");
+			const feedbackNote = feedback?.trim() ? ` Feedback: ${feedback.trim()}.` : "";
+			return {
+				block: true,
+				reason: `The user declined to approve the SPEC as ready.${feedbackNote} Revise biu://SPEC.md accordingly, keep status: draft, and ask again when ready.`,
+			};
+		} catch {
+			// A gate failure must never block a legitimate write.
+			return;
+		}
 	});
 
 	// Frontmatter edits through write/edit are the only workflow state changes;

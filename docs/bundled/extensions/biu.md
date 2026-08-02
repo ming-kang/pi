@@ -29,7 +29,7 @@ Biu artifacts live under the normal Pi agent directory, grouped by working direc
 ```text
 ~/.pi/agent/biu/
 └── --encoded-working-directory--/
-    ├── SPEC.md                    # frontmatter: title, status, baseline_commit
+    ├── SPEC.md                    # frontmatter: title, status, execution, baseline_commit
     ├── Summary.md                 # frontmatter: title, head_commit; temporary while archiving
     ├── tasks/
     │   └── TASK-<short-name>.md   # frontmatter: title, status, depends_on
@@ -46,9 +46,9 @@ The model never sees or uses these real paths. A `tool_call` hook rewrites `biu:
 
 ## Prompting
 
-While the mode is on, the full Biu block is injected into the system prompt each turn: the `biu://` conventions, a JSON snapshot of the workspace (derived stage, SPEC metadata, task statuses and focus, detected problems), and the playbook for the derived stage, including the relevant Markdown templates. There is nothing to fetch on demand — the workspace files are the state, and the snapshot always reflects them.
+While the mode is on, the full Biu block is injected into the system prompt each turn: the `biu://` conventions, a JSON snapshot of the workspace (derived stage, SPEC metadata, task statuses and focus, detected problems), and the playbook for the derived stage, including the relevant Markdown templates. At the execute stage the playbook follows the SPEC's `execution` field — `direct` implements straight against the SPEC, `tasks` decomposes into task files first, and a SPEC without the field falls back to a combined playbook that asks to record the choice. There is nothing to fetch on demand — the workspace files are the state, and the snapshot always reflects them.
 
-Stage transitions are file edits: marking the SPEC `ready` (after explicit user approval) leaves plan, writing task files opts into decomposition, task frontmatter tracks execution, and writing `Summary.md` (or completing every task) enters archive. Moving backward — for example reopening the SPEC as `draft` when execution reveals a gap — is just another frontmatter edit.
+Stage transitions are file edits, with one guarded exception: flipping the SPEC's `status` to `ready` opens an approval dialog. Approving lets the write land and the cycle move on to execute; declining blocks the write and hands your feedback to the model as the tool result, so it revises the SPEC and asks again. During planning the model also records the agreed execution path in the frontmatter (`execution: direct` by default; `tasks` when the work splits into independently verifiable chunks). Writing task files opts into decomposition, task frontmatter tracks execution, and writing `Summary.md` (or completing every task) enters archive. Moving backward — for example reopening the SPEC as `draft` when execution reveals a gap, or switching `execution` when the size estimate was wrong — is just another frontmatter edit.
 
 ## Lifecycle
 

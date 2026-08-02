@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
 	archiveBiuCycle,
 	BIU_MAX_SNAPSHOT_TASKS,
+	detectSpecReadyTransition,
 	getBiuFocus,
 	getBiuPaths,
 	isBiuUri,
@@ -110,7 +111,13 @@ describe("loadBiuSnapshot", () => {
 	test("empty workspace derives the plan stage", async () => {
 		const snapshot = await loadBiuSnapshot(cwd, agentDir);
 		expect(snapshot.stage).toBe("plan");
-		expect(snapshot.spec).toEqual({ exists: false, status: "unknown", title: null, baselineCommit: null });
+		expect(snapshot.spec).toEqual({
+			exists: false,
+			status: "unknown",
+			title: null,
+			baselineCommit: null,
+			execution: null,
+		});
 		expect(snapshot.summaryExists).toBe(false);
 		expect(snapshot.tasks).toEqual([]);
 		expect(snapshot.focus).toEqual({ kind: "none" });
@@ -121,8 +128,28 @@ describe("loadBiuSnapshot", () => {
 		await writeWorkspaceFile("SPEC.md", specContent("draft"));
 		const snapshot = await loadBiuSnapshot(cwd, agentDir);
 		expect(snapshot.stage).toBe("plan");
-		expect(snapshot.spec).toEqual({ exists: true, status: "draft", title: "OAuth login", baselineCommit: "abc123" });
+		expect(snapshot.spec).toEqual({
+			exists: true,
+			status: "draft",
+			title: "OAuth login",
+			baselineCommit: "abc123",
+			execution: null,
+		});
 		expect(snapshot.problems).toEqual([]);
+	});
+
+	test("parses the execution frontmatter field", async () => {
+		await writeWorkspaceFile("SPEC.md", "---\ntitle: T\nstatus: draft\nexecution: tasks\n---\n\n# SPEC\n");
+		const snapshot = await loadBiuSnapshot(cwd, agentDir);
+		expect(snapshot.spec.execution).toBe("tasks");
+		expect(snapshot.problems).toEqual([]);
+	});
+
+	test("invalid execution degrades to null with a problem", async () => {
+		await writeWorkspaceFile("SPEC.md", "---\ntitle: T\nstatus: draft\nexecution: parallel\n---\n\n# SPEC\n");
+		const snapshot = await loadBiuSnapshot(cwd, agentDir);
+		expect(snapshot.spec.execution).toBeNull();
+		expect(snapshot.problems.some((problem) => problem.includes('"execution"'))).toBe(true);
 	});
 
 	test("ready SPEC without tasks derives execute", async () => {
@@ -204,6 +231,74 @@ describe("getBiuFocus", () => {
 			{ id: "TASK-b", title: "b", status: "ready", dependsOn: ["TASK-a"] },
 		]);
 		expect(focus).toEqual({ kind: "none" });
+	});
+});
+
+describe("detectSpecReadyTransition", () => {
+	const draft = specContent("draft");
+	const ready = specContent("ready");
+
+	test("write creating the SPEC as ready is a transition", () => {
+		expect(detectSpecReadyTransition(null, "write", { content: ready })).toBe(true);
+	});
+
+	test("write flipping draft to ready is a transition", () => {
+		expect(detectSpecReadyTransition(draft, "write", { content: ready })).toBe(true);
+	});
+
+	test("write keeping draft is not a transition", () => {
+		expect(detectSpecReadyTransition(draft, "write", { content: draft })).toBe(false);
+	});
+
+	test("already-ready SPEC never triggers, even when rewritten as ready", () => {
+		expect(detectSpecReadyTransition(ready, "write", { content: ready })).toBe(false);
+		expect(detectSpecReadyTransition(ready, "edit", { edits: [{ oldText: "OAuth login", newText: "OAuth" }] })).toBe(
+			false,
+		);
+	});
+
+	test("quoted yaml status counts as ready", () => {
+		const quoted = '---\ntitle: T\nstatus: "ready"\n---\n\n# SPEC\n';
+		expect(detectSpecReadyTransition(draft, "write", { content: quoted })).toBe(true);
+	});
+
+	test("edit flipping status to ready is a transition", () => {
+		expect(
+			detectSpecReadyTransition(draft, "edit", { edits: [{ oldText: "status: draft", newText: "status: ready" }] }),
+		).toBe(true);
+	});
+
+	test("edit accepts the legacy top-level oldText/newText shape", () => {
+		expect(detectSpecReadyTransition(draft, "edit", { oldText: "status: draft", newText: "status: ready" })).toBe(
+			true,
+		);
+	});
+
+	test("edit not touching status is not a transition", () => {
+		expect(detectSpecReadyTransition(draft, "edit", { edits: [{ oldText: "OAuth login", newText: "OAuth" }] })).toBe(
+			false,
+		);
+	});
+
+	test("unmatched oldText skips the gate", () => {
+		expect(
+			detectSpecReadyTransition(draft, "edit", { edits: [{ oldText: "does-not-exist", newText: "status: ready" }] }),
+		).toBe(false);
+	});
+
+	test("edit against a missing SPEC skips the gate", () => {
+		expect(
+			detectSpecReadyTransition(null, "edit", { edits: [{ oldText: "status: draft", newText: "status: ready" }] }),
+		).toBe(false);
+	});
+
+	test("invalid new frontmatter is not a transition", () => {
+		expect(detectSpecReadyTransition(draft, "write", { content: "---\nstatus: [broken\n---\n" })).toBe(false);
+		expect(detectSpecReadyTransition(draft, "write", { content: 42 })).toBe(false);
+	});
+
+	test("invalid current frontmatter still detects a ready write", () => {
+		expect(detectSpecReadyTransition("---\nstatus: [broken\n---\n", "write", { content: ready })).toBe(true);
 	});
 });
 

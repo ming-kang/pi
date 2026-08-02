@@ -265,7 +265,31 @@ describe("biu mode lifecycle", () => {
 			context.ctx,
 		)) as { systemPrompt: string };
 		expect(result.systemPrompt).toContain("Current stage: execute");
-		expect(result.systemPrompt).toContain("no tasks exist yet");
+		expect(result.systemPrompt).toContain("no execution path is recorded");
+	});
+
+	test("execute playbook follows the execution frontmatter field", async () => {
+		const cases = [
+			{ execution: "direct", marker: "implement against it without task files" },
+			{ execution: "tasks", marker: "write the task files before touching project code" },
+		];
+		for (const { execution, marker } of cases) {
+			const caseCwd = join(cwd, execution);
+			await mkdir(caseCwd, { recursive: true });
+			await seedWorkspace(caseCwd, {
+				"SPEC.md": `---\ntitle: T\nstatus: ready\nexecution: ${execution}\nbaseline_commit: abc\n---\n\n# SPEC\n`,
+			});
+			const harness = captureExtension();
+			const context = createContext(caseCwd);
+			await runCommand(harness, context.ctx);
+
+			const result = (await harness.hooks.get("before_agent_start")?.(
+				{ type: "before_agent_start", systemPrompt: "base" },
+				context.ctx,
+			)) as { systemPrompt: string };
+			expect(result.systemPrompt).toContain("Current stage: execute");
+			expect(result.systemPrompt).toContain(marker);
+		}
 	});
 });
 
@@ -337,6 +361,109 @@ describe("biu:// path resolution", () => {
 			context.ctx,
 		);
 		expect(context.statuses.get(BIU_STATUS_KEY)).toBe("Biu · plan (draft)");
+	});
+});
+
+describe("spec ready approval gate", () => {
+	async function callWrite(
+		harness: ExtensionHarness,
+		context: ContextHarness,
+		input: Record<string, unknown>,
+		toolName = "write",
+	): Promise<unknown> {
+		return harness.hooks.get("tool_call")?.({ type: "tool_call", toolName, input }, context.ctx);
+	}
+
+	test("flipping the SPEC to ready asks for approval and proceeds when approved", async () => {
+		await seedWorkspace(cwd, { "SPEC.md": specContent("draft") });
+		const harness = captureExtension();
+		const context = createContext(cwd);
+		await runCommand(harness, context.ctx);
+
+		context.confirm.mockResolvedValueOnce(true);
+		const result = await callWrite(harness, context, { path: "biu://SPEC.md", content: specContent("ready") });
+
+		expect(result).toBeUndefined();
+		expect(context.confirm).toHaveBeenCalledTimes(1);
+		expect(context.confirm.mock.calls[0]?.[0]).toBe("Approve SPEC?");
+		expect(context.input).not.toHaveBeenCalled();
+	});
+
+	test("rejection blocks the write and carries the feedback", async () => {
+		await seedWorkspace(cwd, { "SPEC.md": specContent("draft") });
+		const harness = captureExtension();
+		const context = createContext(cwd);
+		await runCommand(harness, context.ctx);
+
+		context.confirm.mockResolvedValueOnce(false);
+		context.input.mockResolvedValueOnce("AC2 is not testable yet");
+		const result = (await callWrite(harness, context, {
+			path: "biu://SPEC.md",
+			content: specContent("ready"),
+		})) as { block?: boolean; reason?: string };
+
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain("declined");
+		expect(result?.reason).toContain("AC2 is not testable yet");
+		expect(result?.reason).toContain("status: draft");
+	});
+
+	test("rejection without feedback still blocks with guidance", async () => {
+		await seedWorkspace(cwd, { "SPEC.md": specContent("draft") });
+		const harness = captureExtension();
+		const context = createContext(cwd);
+		await runCommand(harness, context.ctx);
+
+		context.confirm.mockResolvedValueOnce(false);
+		const result = (await callWrite(harness, context, {
+			path: "biu://SPEC.md",
+			content: specContent("ready"),
+		})) as { block?: boolean; reason?: string };
+
+		expect(result?.block).toBe(true);
+		expect(result?.reason).not.toContain("Feedback:");
+	});
+
+	test("edit-based transitions trigger the gate too", async () => {
+		await seedWorkspace(cwd, { "SPEC.md": specContent("draft") });
+		const harness = captureExtension();
+		const context = createContext(cwd);
+		await runCommand(harness, context.ctx);
+
+		context.confirm.mockResolvedValueOnce(true);
+		const result = await callWrite(
+			harness,
+			context,
+			{ path: "biu://SPEC.md", edits: [{ oldText: "status: draft", newText: "status: ready" }] },
+			"edit",
+		);
+
+		expect(result).toBeUndefined();
+		expect(context.confirm).toHaveBeenCalledTimes(1);
+	});
+
+	test("no dialog when Biu Mode is off", async () => {
+		await seedWorkspace(cwd, { "SPEC.md": specContent("draft") });
+		const harness = captureExtension();
+		const context = createContext(cwd);
+
+		const result = await callWrite(harness, context, { path: "biu://SPEC.md", content: specContent("ready") });
+
+		expect(result).toBeUndefined();
+		expect(context.confirm).not.toHaveBeenCalled();
+	});
+
+	test("no dialog for non-SPEC files or non-transition writes", async () => {
+		await seedWorkspace(cwd, { "SPEC.md": specContent("ready") });
+		const harness = captureExtension();
+		const context = createContext(cwd);
+		await runCommand(harness, context.ctx);
+
+		await callWrite(harness, context, { path: "biu://tasks/TASK-a.md", content: specContent("ready") });
+		await callWrite(harness, context, { path: "biu://SPEC.md", content: specContent("ready", "Renamed") });
+		await callWrite(harness, context, { path: "src/index.ts", content: "status: ready" });
+
+		expect(context.confirm).not.toHaveBeenCalled();
 	});
 });
 

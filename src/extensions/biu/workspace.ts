@@ -10,6 +10,7 @@
 import { mkdir, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir } from "../../config.ts";
+import { applyEditsToNormalizedContent, type Edit, normalizeToLF } from "../../core/tools/edit-diff.ts";
 import { parseFrontmatter } from "../../utils/frontmatter.ts";
 import { cwdToSafeDirName, resolvePath } from "../../utils/paths.ts";
 
@@ -30,6 +31,9 @@ export type BiuTaskStatus = (typeof BIU_TASK_STATUSES)[number];
 
 export const BIU_SPEC_STATUSES = ["draft", "ready"] as const;
 export type BiuSpecStatus = (typeof BIU_SPEC_STATUSES)[number];
+
+export const BIU_EXECUTION_MODES = ["direct", "tasks"] as const;
+export type BiuExecutionMode = (typeof BIU_EXECUTION_MODES)[number];
 
 export interface BiuPaths {
 	root: string;
@@ -90,12 +94,68 @@ export function toBiuUri(...segments: string[]): string {
 	return `${BIU_URI_SCHEME}${segments.join("/")}`;
 }
 
+/** Whether the content's frontmatter says status: ready. Parse failures count as not ready. */
+function isSpecContentReady(content: string): boolean {
+	try {
+		return parseFrontmatter(content).frontmatter.status === "ready";
+	} catch {
+		return false;
+	}
+}
+
+/** Normalize edit-tool input into Edit[], accepting the legacy top-level oldText/newText shape. */
+function toSpecEdits(input: Record<string, unknown>): Edit[] {
+	const edits: Edit[] = [];
+	if (Array.isArray(input.edits)) {
+		for (const entry of input.edits) {
+			if (!entry || typeof entry !== "object") continue;
+			const candidate = entry as Record<string, unknown>;
+			if (typeof candidate.oldText === "string" && typeof candidate.newText === "string") {
+				edits.push({ oldText: candidate.oldText, newText: candidate.newText });
+			}
+		}
+	}
+	if (typeof input.oldText === "string" && typeof input.newText === "string") {
+		edits.push({ oldText: input.oldText, newText: input.newText });
+	}
+	return edits;
+}
+
+/**
+ * Whether a write/edit tool call would flip the SPEC's frontmatter status from
+ * non-ready to ready — the transition that requires user approval. Edits are
+ * simulated with the edit tool's own replacement semantics. Any failure
+ * (unmatched oldText, invalid YAML) returns false: the gate steps aside and
+ * lets the real tool report the error.
+ */
+export function detectSpecReadyTransition(
+	currentContent: string | null,
+	toolName: "write" | "edit",
+	input: Record<string, unknown>,
+): boolean {
+	if (currentContent !== null && isSpecContentReady(currentContent)) return false;
+	if (toolName === "write") {
+		return typeof input.content === "string" && isSpecContentReady(input.content);
+	}
+	if (currentContent === null) return false;
+	const edits = toSpecEdits(input);
+	if (edits.length === 0) return false;
+	try {
+		const { newContent } = applyEditsToNormalizedContent(normalizeToLF(currentContent), edits, BIU_SPEC_FILE_NAME);
+		return isSpecContentReady(newContent);
+	} catch {
+		return false;
+	}
+}
+
 export interface BiuSpecInfo {
 	exists: boolean;
 	/** "unknown" when the file exists but frontmatter is missing or invalid. */
 	status: BiuSpecStatus | "unknown";
 	title: string | null;
 	baselineCommit: string | null;
+	/** Execution path chosen in the plan stage; null when absent or invalid. */
+	execution: BiuExecutionMode | null;
 }
 
 export interface BiuTaskInfo {
@@ -171,7 +231,7 @@ async function readSpecInfo(specFile: string, problems: string[]): Promise<BiuSp
 		raw = await readFile(specFile, "utf8");
 	} catch (error) {
 		if (!isMissingFileError(error)) problems.push(`${BIU_SPEC_FILE_NAME}: ${describeError(error)}`);
-		return { exists: false, status: "unknown", title: null, baselineCommit: null };
+		return { exists: false, status: "unknown", title: null, baselineCommit: null, execution: null };
 	}
 	try {
 		const { frontmatter } = parseFrontmatter(raw);
@@ -179,15 +239,27 @@ async function readSpecInfo(specFile: string, problems: string[]): Promise<BiuSp
 		if (status === "unknown") {
 			problems.push(`${BIU_SPEC_FILE_NAME}: frontmatter "status" must be one of ${BIU_SPEC_STATUSES.join(", ")}.`);
 		}
+		let execution: BiuExecutionMode | null = null;
+		if (frontmatter.execution !== undefined) {
+			const parsed = parseStatus(frontmatter.execution, BIU_EXECUTION_MODES);
+			if (parsed === "unknown") {
+				problems.push(
+					`${BIU_SPEC_FILE_NAME}: frontmatter "execution" must be one of ${BIU_EXECUTION_MODES.join(", ")}.`,
+				);
+			} else {
+				execution = parsed;
+			}
+		}
 		return {
 			exists: true,
 			status,
 			title: asTrimmedString(frontmatter.title),
 			baselineCommit: asTrimmedString(frontmatter.baseline_commit),
+			execution,
 		};
 	} catch (error) {
 		problems.push(`${BIU_SPEC_FILE_NAME}: invalid frontmatter (${describeError(error)})`);
-		return { exists: true, status: "unknown", title: null, baselineCommit: null };
+		return { exists: true, status: "unknown", title: null, baselineCommit: null, execution: null };
 	}
 }
 

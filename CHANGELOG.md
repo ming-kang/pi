@@ -6,7 +6,9 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Added
 
-- Added the bundled TUI-only Biu extension: `/biu` toggles a simple development workflow (interview → decompose → execute → archive) whose state lives in a per-project `biu.json` and changes only through the new `biu` tool; inside the mode, `/biu` opens a compact menu with a one-line status, continue, and exit. Stage playbooks are loaded on demand via the tool instead of being injected every turn.
+- Added the bundled TUI-only Biu extension: `/biu` toggles a simple development workflow (plan → optional decompose → execute → archive) whose state lives in the frontmatter of private workspace Markdown files addressed through the `biu://` scheme; inside the mode, `/biu` opens a compact menu with continue, deterministic archiving, and exit. Each turn injects the stage playbook together with a read-only workspace snapshot.
+- Added a user approval gate for the Biu SPEC: marking `biu://SPEC.md` as `ready` opens a confirmation dialog, and declining blocks the write and returns the feedback to the model as the tool result, mirroring Plan Mode's approve/reject loop.
+- Added the `execution: direct|tasks` frontmatter field to the Biu SPEC: the plan stage records the agreed execution path before approval, and the execute stage loads a single-purpose playbook (direct implementation, decomposition, or an undecided fallback for older SPECs) instead of re-asking how to proceed.
 
 ### Fixed
 
