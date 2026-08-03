@@ -40,7 +40,7 @@ Biu artifacts live under the normal Pi agent directory, grouped by working direc
             └── tasks/
 ```
 
-`PI_CODING_AGENT_DIR` is respected. Biu never creates, reads, or migrates a project-local `.biu` directory, and it does not modify `.gitignore`.
+`PI_CODING_AGENT_DIR` is respected.
 
 The model never sees or uses these real paths. A `tool_call` hook rewrites `biu://` paths — `biu://SPEC.md`, `biu://tasks/TASK-api.md`, `biu://Summary.md` — to the workspace of the current working directory before `read`, `write`, `edit`, `grep`, `find`, and `ls` execute. The session records keep the original `biu://` arguments, so the transcript and TUI show the short stable paths while execution uses the resolved ones. Paths that escape the workspace (`..` segments, rooted paths) are blocked. The scheme resolves regardless of whether Biu Mode is on; the mode only controls prompting, the statusline, and the menu.
 

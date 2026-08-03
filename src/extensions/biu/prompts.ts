@@ -16,7 +16,6 @@ Core rules:
 - The <biu_snapshot> block reflects the workspace at the start of the turn. After you edit files, your edits are newer than the snapshot.
 - Investigate code, tests, and documentation directly before asking the user anything answerable from the project. Ask the user only about product intent, preferences, scope boundaries, or risk tolerance.
 - Moving backward is always allowed: for example, reopen the SPEC by setting status: draft when execution reveals a gap.
-- Biu artifacts are private working state. Do not add them to Git and do not modify .gitignore for them.
 - Work in the user's language. Keep user-facing replies concise while keeping the workflow files complete.`;
 
 export const BIU_SPEC_TEMPLATE = `---
