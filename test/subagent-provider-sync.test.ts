@@ -27,7 +27,9 @@ describe("subagent parent provider sync", () => {
 		const source = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
 		const faux = fauxProvider({ provider: `sync-source-${Date.now()}-${Math.random()}` });
 		source.registerNativeProvider(faux.provider);
-		await source.setRuntimeApiKey(faux.provider.id, "key-1", { allowNetwork: false });
+		// pi-ai 0.84 AuthOperationOptions carries only signal; setRuntimeApiKey's
+		// credential sync hardcodes allowNetwork: false, so the test stays offline.
+		await source.setRuntimeApiKey(faux.provider.id, "key-1");
 
 		const target = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
 		const registerNative = vi.spyOn(target, "registerNativeProvider");

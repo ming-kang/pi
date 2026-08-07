@@ -14,7 +14,13 @@ if (!installSpec) {
 
 const sourcePackage = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const expectedVersion = expectedVersionArgument ?? sourcePackage.version;
-const expectedRuntimePackages = ["@earendil-works/pi-ai", "@earendil-works/pi-agent-core", "@earendil-works/pi-tui"];
+const expectedRuntimePackages = [
+	"@earendil-works/pi-ai",
+	"@earendil-works/pi-agent-core",
+	"@earendil-works/pi-client",
+	"@earendil-works/pi-protocol",
+	"@earendil-works/pi-tui",
+];
 const installPath = resolve(process.cwd(), installSpec);
 const resolvedInstallSpec = existsSync(installPath) ? installPath : installSpec;
 const installDirectory = mkdtempSync(join(tmpdir(), "astralyn-pi-package-smoke-"));
@@ -69,6 +75,16 @@ try {
 	assertEqual(installedPackage.version, expectedVersion, "installed package version");
 	assertEqual(installedPackage.bin?.pi, "dist/cli.js", "installed pi binary target");
 	assertEqual(installedPackage.exports?.["./rpc-entry"]?.import, "./dist/rpc-entry.js", "installed RPC export target");
+	assertEqual(
+		installedPackage.exports?.["./client"]?.types,
+		"./dist/client/index.d.ts",
+		"installed client types target",
+	);
+	assertEqual(
+		installedPackage.exports?.["./client"]?.import,
+		"./dist/client/index.js",
+		"installed client export target",
+	);
 
 	for (const packageName of expectedRuntimePackages) {
 		const expectedDependencyVersion = installedPackage.dependencies?.[packageName];
@@ -83,6 +99,8 @@ try {
 		"LICENSE",
 		"README.md",
 		"dist/cli.js",
+		"dist/client/index.d.ts",
+		"dist/client/index.js",
 		"dist/index.d.ts",
 		"dist/index.js",
 		"dist/rpc-entry.js",
@@ -158,6 +176,18 @@ try {
 		windowsVerbatimArguments: process.platform === "win32",
 	}).trim();
 	assertEqual(cliVersion, expectedVersion, "CLI version");
+
+	const listModelsArguments =
+		process.platform === "win32" ? ["/d", "/s", "/c", `""${installedBinPath}" --list-models"`] : ["--list-models"];
+	const listedModels = execFileSync(cliCommand, listModelsArguments, {
+		cwd: installDirectory,
+		encoding: "utf8",
+		env: smokeEnvironment,
+		windowsVerbatimArguments: process.platform === "win32",
+	}).trim();
+	if (!listedModels) {
+		throw new Error("CLI --list-models returned no output.");
+	}
 
 	execFileSync(
 		process.execPath,

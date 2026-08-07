@@ -20,7 +20,10 @@ import type {
 	OverlayHandle,
 	OverlayOptions,
 	SlashCommand,
+	Terminal,
+	TuiMainScreenRenderState,
 } from "@earendil-works/pi-tui";
+import * as TuiLayouts from "@earendil-works/pi-tui";
 import {
 	CombinedAutocompleteProvider,
 	type Component,
@@ -28,11 +31,14 @@ import {
 	fuzzyFilter,
 	Markdown,
 	matchesKey,
+	ProcessTerminal,
 	Spacer,
 	setKeybindings,
 	Text,
 	TruncatedText,
-	TUI,
+	type TUI,
+	TuiAltScreen,
+	TuiMainScreen,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import chalk from "chalk";
@@ -67,6 +73,7 @@ import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
+	MarkdownTransformer,
 	ProjectTrustContext,
 	SelectOption,
 	WorkingIndicatorOptions,
@@ -78,13 +85,14 @@ import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import {
 	defaultModelPerProvider,
 	findExactModelReferenceMatch,
-	resolveModelScope,
-	resolveModelScopeWithDiagnostics,
+	resolveModelScopeFromModels,
 } from "../../core/model-resolver.ts";
+import { CredentialSynchronizationError } from "../../core/model-runtime.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
+import type { TuiMode } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
@@ -95,6 +103,7 @@ import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
 import { CoalescingTerminal } from "../../utils/coalescing-terminal.ts";
 import { parseGitUrl } from "../../utils/git.ts";
+import { openBrowser } from "../../utils/open-browser.ts";
 import { getCwdRelativePath } from "../../utils/paths.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
@@ -117,6 +126,7 @@ import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { FooterComponent, formatTokens } from "./components/footer.ts";
 import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
+import { createMermaidMarkdownTransformer } from "./components/mermaid.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
 import {
 	type AuthSelectorProvider,
@@ -317,15 +327,70 @@ export interface InteractiveModeOptions {
 	initialMessages?: string[];
 	/** Force verbose startup (overrides quietStartup setting) */
 	verbose?: boolean;
+	/** TUI layout mode. */
+	tuiMode?: TuiMode;
+}
+
+interface InteractiveTuiOptions {
+	tuiMode: TuiMode;
+	showHardwareCursor: boolean;
+	logDirectory: string;
+	terminal?: Terminal;
+}
+
+/** Composition root for selecting the interactive terminal renderer. */
+export function createInteractiveTui(options: InteractiveTuiOptions): TuiMainScreen | TuiAltScreen {
+	const terminal = options.terminal ?? new ProcessTerminal();
+	if (options.tuiMode === "fullscreen") {
+		return new TuiAltScreen(terminal, options.showHardwareCursor, options.logDirectory, { openUrl: openBrowser });
+	}
+	return new TuiMainScreen(terminal, options.showHardwareCursor, options.logDirectory);
+}
+
+/** Stable reference for components while InteractiveMode replaces the active renderer. */
+export function createInteractiveTuiReference(getTui: () => TUI): TUI {
+	return new Proxy({} as TUI, {
+		get: (_target, property) => {
+			const tui = getTui();
+			const value = Reflect.get(tui, property, tui);
+			if (typeof value !== "function") return value;
+			return (...args: unknown[]) => {
+				const tui = getTui();
+				const method = Reflect.get(tui, property, tui);
+				if (typeof method !== "function") throw new TypeError(`TUI property ${String(property)} is not callable`);
+				return Reflect.apply(method, tui, args);
+			};
+		},
+		set: (_target, property, value) => {
+			const tui = getTui();
+			return Reflect.set(tui, property, value, tui);
+		},
+		has: (_target, property) => Reflect.has(getTui(), property),
+		getPrototypeOf: () => Reflect.getPrototypeOf(getTui()),
+	});
 }
 
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
+	private renderer: TuiMainScreen | TuiAltScreen;
 	private ui: TUI;
 	private coalescingTerminal: CoalescingTerminal;
+	// Input listeners live on the TUI renderer instance, which switchTuiMode
+	// replaces; this pair tracks the scrollback-preservation listener so it
+	// can be unsubscribed from the outgoing renderer and re-registered on the
+	// incoming one without duplicates.
+	private readonly scrollbackPreservationInputHandler = () => {
+		if (!this.agentRunActive) this.coalescingTerminal.setScrollbackPreservation(false);
+		return undefined;
+	};
+	private scrollbackPreservationInputUnsubscribe: (() => void) | undefined;
 	private agentRunActive = false;
+	private mainScreenRenderState: TuiMainScreenRenderState | undefined;
 	private loadedResourcesContainer: Container;
 	private chatContainer: Container;
+	private documentContainer: Container;
+	private transcriptScrollView: TuiLayouts.ScrollView | undefined;
+	private fullscreenLayoutRoot: Component | undefined;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
 	private defaultEditor: CustomEditor;
@@ -335,7 +400,10 @@ export class InteractiveMode {
 	private autocompleteProviderWrappers: AutocompleteProviderFactory[] = [];
 	private fdPath: string | undefined;
 	private editorContainer: Container;
+	private activeSelectorToken?: object;
+	private activeSelectorDispose?: () => void;
 	private footer: FooterComponent;
+	private footerContainer: Container;
 	private footerDataProvider: FooterDataProvider;
 	// Stored so the same manager can be injected into custom editors, selectors, and extension UI.
 	private keybindings: KeybindingsManager;
@@ -344,8 +412,6 @@ export class InteractiveMode {
 	private onInputCallback?: (text: string) => void;
 	private pendingUserInputs: string[] = [];
 	private activeStatusIndicator: StatusIndicator | undefined = undefined;
-	private activeSelector: (Component & { dispose?: () => void }) | null = null;
-	private activeSelectorCleanup: (() => void) | null = null;
 	private readonly idleStatus = new IdleStatus();
 	private workingMessage: string | undefined = undefined;
 	private workingVisible = true;
@@ -377,6 +443,10 @@ export class InteractiveMode {
 	// Thinking block visibility state
 	private hideThinkingBlock = false;
 	private outputPad = 1;
+	private readonly mermaidMarkdownTransformer: MarkdownTransformer = createMermaidMarkdownTransformer({
+		getMode: () => this.settingsManager.getMermaidRenderingMode(),
+		theme,
+	});
 
 	// Skill commands: command name -> skill file path
 	private skillCommands = new Map<string, string>();
@@ -410,7 +480,10 @@ export class InteractiveMode {
 	private extensionSelector: ExtensionSelectorComponent | undefined = undefined;
 	private extensionInput: ExtensionInputComponent | undefined = undefined;
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
-	private extensionTerminalInputUnsubscribers = new Set<() => void>();
+	private extensionTerminalInputSubscriptions = new Set<{
+		handler: (data: string) => { consume?: boolean; data?: string } | undefined;
+		unsubscribe: () => void;
+	}>();
 
 	// Extension widgets (components rendered above/below the editor)
 	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
@@ -450,7 +523,8 @@ export class InteractiveMode {
 
 	constructor(runtimeHost: AgentSessionRuntime, options: InteractiveModeOptions = {}) {
 		this.runtimeHost = runtimeHost;
-		this.options = options;
+		const tuiMode = options.tuiMode ?? this.settingsManager.getTuiMode();
+		this.options = { ...options, tuiMode };
 		this.autoTrustOnReloadCwd = options.autoTrustOnReloadCwd;
 		this.runtimeHost.setBeforeSessionInvalidate(() => {
 			this.resetExtensionUI();
@@ -461,7 +535,13 @@ export class InteractiveMode {
 		this.version = VERSION;
 		const terminal = new CoalescingTerminal();
 		this.coalescingTerminal = terminal;
-		this.ui = new TUI(terminal, this.settingsManager.getShowHardwareCursor(), getAgentDir());
+		this.renderer = createInteractiveTui({
+			tuiMode,
+			showHardwareCursor: this.settingsManager.getShowHardwareCursor(),
+			logDirectory: getAgentDir(),
+			terminal,
+		});
+		this.ui = createInteractiveTuiReference(() => this.renderer);
 		// Lets full-redraw rewrites scroll grown content into scrollback
 		// instead of dropping the lines pushed above the screen.
 		// previousViewportTop is TS-private but a plain runtime field, and
@@ -475,14 +555,17 @@ export class InteractiveMode {
 		// next input after the run settles: post-run reflow frames must not
 		// yank a reader who is still scrolled up, but once the user acts they
 		// are back at the bottom and upstream's clean wipe-and-replay wins.
-		this.ui.addInputListener(() => {
-			if (!this.agentRunActive) this.coalescingTerminal.setScrollbackPreservation(false);
-			return undefined;
-		});
+		// The listener is registered on the initial renderer and rebound by
+		// switchTuiMode whenever the renderer is replaced.
+		this.scrollbackPreservationInputUnsubscribe = this.ui.addInputListener(this.scrollbackPreservationInputHandler);
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 		this.headerContainer = new Container();
 		this.loadedResourcesContainer = new Container();
 		this.chatContainer = new Container();
+		this.documentContainer = new Container();
+		this.documentContainer.addChild(this.headerContainer);
+		this.documentContainer.addChild(this.loadedResourcesContainer);
+		this.documentContainer.addChild(this.chatContainer);
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new Container();
 		this.widgetContainerAbove = new Container();
@@ -501,6 +584,8 @@ export class InteractiveMode {
 		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
 		this.footer = new FooterComponent(this.session, this.footerDataProvider);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
+		this.footerContainer = new Container();
+		this.footerContainer.addChild(this.footer);
 
 		// Load hide thinking block setting
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
@@ -574,12 +659,11 @@ export class InteractiveMode {
 
 		const modelCommand = slashCommands.find((command) => command.name === "model");
 		if (modelCommand) {
-			modelCommand.getArgumentCompletions = async (prefix: string): Promise<AutocompleteItem[] | null> => {
-				// Get available models (scoped or from registry)
+			modelCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
 				const models =
 					this.session.scopedModels.length > 0
 						? this.session.scopedModels.map((s) => s.model)
-						: await this.session.modelRuntime.getAvailable();
+						: this.session.modelRuntime.getAvailableSnapshot();
 
 				if (models.length === 0) return null;
 
@@ -698,6 +782,76 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new DynamicBorder());
 	}
 
+	private mountInteractiveTui(tui: TuiMainScreen | TuiAltScreen, components: readonly Component[]): void {
+		for (const component of components) tui.addChild(component);
+		if (TuiLayouts.isViewportTUI(tui)) {
+			if (!this.fullscreenLayoutRoot) throw new Error("Fullscreen layout is not initialized");
+			tui.setLayoutRoot(this.fullscreenLayoutRoot);
+		}
+	}
+
+	private stopInteractiveTui(): void {
+		if (this.renderer.mode === "fullscreen") {
+			while (this.renderer.hasOverlayEntries) this.renderer.hideOverlay();
+			this.switchTuiMode("regular", false, false);
+			this.renderer.renderNow();
+		}
+		this.ui.stop();
+	}
+
+	private switchTuiMode(mode: TuiMode, restoreProgress = true, startRenderer = true): boolean {
+		const previousUi = this.renderer;
+		if (mode === previousUi.mode) return true;
+		if (previousUi.hasOverlayEntries) return false;
+
+		const components = [...previousUi.children];
+		const focus = previousUi.getFocusedComponent();
+		const terminal = previousUi.terminal;
+		const showHardwareCursor = previousUi.getShowHardwareCursor();
+		const clearOnShrink = previousUi.getClearOnShrink();
+		const onDebug = previousUi.onDebug;
+		if (previousUi instanceof TuiMainScreen) {
+			this.mainScreenRenderState = previousUi.captureRenderState();
+		}
+
+		previousUi.stop({ preserveScreen: true });
+		previousUi.setFocus(null);
+		previousUi.clear();
+		if (TuiLayouts.isViewportTUI(previousUi)) previousUi.setLayoutRoot(undefined);
+
+		const nextUi = createInteractiveTui({
+			tuiMode: mode,
+			showHardwareCursor,
+			logDirectory: getAgentDir(),
+			terminal,
+		});
+		nextUi.setClearOnShrink(clearOnShrink);
+		nextUi.onDebug = onDebug;
+		if (nextUi instanceof TuiMainScreen && this.mainScreenRenderState) {
+			nextUi.restoreRenderState(this.mainScreenRenderState);
+		}
+		this.renderer = nextUi;
+		// Renderers own their input-listener sets; move the preservation
+		// listener onto the incoming renderer before anything else touches it.
+		this.rebindScrollbackPreservationInputListener();
+		this.options.tuiMode = mode;
+		this.mountInteractiveTui(nextUi, components);
+		nextUi.invalidate();
+		nextUi.setFocus(focus);
+		if (!startRenderer) return true;
+		nextUi.start();
+		this.themeController.rebindTui();
+		this.rebindExtensionTerminalInputListeners();
+		if (
+			restoreProgress &&
+			this.settingsManager.getShowTerminalProgress() &&
+			(this.session.isStreaming || this.session.isCompacting)
+		) {
+			terminal.setProgress(true);
+		}
+		return true;
+	}
+
 	async init(): Promise<void> {
 		if (this.isInitialized) return;
 
@@ -726,19 +880,36 @@ export class InteractiveMode {
 			console.log(theme.fg("dim", `Model scope: ${modelList}${cycleHint}`));
 		}
 
-		// Add header container as first child. Populate it after applying theme settings.
-		// Keep loaded resources before chat so restored session messages never precede them.
-		this.ui.addChild(this.headerContainer);
-		this.ui.addChild(this.loadedResourcesContainer);
-
-		this.ui.addChild(this.chatContainer);
-		this.ui.addChild(this.pendingMessagesContainer);
-		this.ui.addChild(this.statusContainer);
+		// Keep one component tree and remount it when changing renderers.
 		this.renderWidgets(); // Initialize with default spacer
-		this.ui.addChild(this.widgetContainerAbove);
-		this.ui.addChild(this.editorContainer);
-		this.ui.addChild(this.widgetContainerBelow);
-		this.ui.addChild(this.footer);
+		this.transcriptScrollView = new TuiLayouts.ScrollView(this.documentContainer, {
+			follow: "end",
+			primary: true,
+			overscroll: "chain",
+			scrollbar: this.settingsManager.getFullscreenScrollbar(),
+			scrollbarStyle: (text) => theme.bg("scrollbarThumb", text),
+		});
+		const dock = new TuiLayouts.VStack([
+			{ component: this.pendingMessagesContainer, shrink: 1, minSize: 0 },
+			{ component: this.statusContainer, shrink: 1, minSize: 0 },
+			{ component: this.widgetContainerAbove, shrink: 1, minSize: 0 },
+			{ component: this.editorContainer, shrink: 1, minSize: 3 },
+			{ component: this.widgetContainerBelow, shrink: 1, minSize: 0 },
+			{ component: this.footerContainer, shrink: 1, minSize: 1 },
+		]);
+		this.fullscreenLayoutRoot = new TuiLayouts.VStack([
+			{ component: this.transcriptScrollView, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+			{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
+		]);
+		this.mountInteractiveTui(this.renderer, [
+			this.documentContainer,
+			this.pendingMessagesContainer,
+			this.statusContainer,
+			this.widgetContainerAbove,
+			this.editorContainer,
+			this.widgetContainerBelow,
+			this.footerContainer,
+		]);
 		this.ui.setFocus(this.editor);
 
 		this.setupKeyHandlers();
@@ -855,10 +1026,13 @@ export class InteractiveMode {
 		await this.init();
 
 		if (!process.env.PI_OFFLINE) {
+			const controller = new AbortController();
+			const timeout = setTimeout(() => controller.abort(), 15_000);
 			void this.session.modelRuntime
-				.refresh()
+				.refresh({ signal: controller.signal })
 				.then(() => this.updateAvailableProviderCount())
-				.catch(() => {});
+				.catch(() => {})
+				.finally(() => clearTimeout(timeout));
 		}
 
 		// Start version check asynchronously
@@ -1676,6 +1850,7 @@ export class InteractiveMode {
 						return { cancelled: true };
 					}
 
+					this.coalescingTerminal.passNextFullRedraw();
 					this.clearChat();
 					this.renderInitialMessages();
 					if (result.editorText && !this.editor.getText().trim()) {
@@ -1712,8 +1887,13 @@ export class InteractiveMode {
 		this.showStartupNoticesIfNeeded();
 	}
 
+	private applyFullscreenScrollbarSetting(): void {
+		this.transcriptScrollView?.setScrollbar(this.settingsManager.getFullscreenScrollbar());
+	}
+
 	private applyRuntimeSettings(): void {
 		configureHttpDispatcher(this.settingsManager.getHttpIdleTimeoutMs());
+		this.applyFullscreenScrollbarSetting();
 		this.footer.setSession(this.session);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.footerDataProvider.setCwd(this.sessionManager.getCwd());
@@ -1796,6 +1976,10 @@ export class InteractiveMode {
 	}
 
 	private renderCurrentSessionState(): void {
+		// Resuming, forking, or starting a new session rebuilds the transcript
+		// at the user's request; the rebuild's full redraw keeps the clean
+		// wipe-and-replay even if preservation is still windowed on.
+		this.coalescingTerminal.passNextFullRedraw();
 		this.loadedResourcesContainer.clear();
 		this.clearChat();
 		this.pendingMessagesContainer.clear();
@@ -1852,6 +2036,10 @@ export class InteractiveMode {
 		}
 
 		this.chatContainer.addChild(component);
+	}
+
+	private getMarkdownTransformers(): MarkdownTransformer[] {
+		return [this.mermaidMarkdownTransformer, ...this.session.extensionRunner.getMarkdownTransformers()];
 	}
 
 	/**
@@ -1936,7 +2124,7 @@ export class InteractiveMode {
 		this.activeStatusIndicator?.dispose();
 		this.activeStatusIndicator = undefined;
 		this.statusContainer.clear();
-		if (hadActiveStatusIndicator && this.ui.getClearOnShrink()) {
+		if (hadActiveStatusIndicator && this.options.tuiMode === "regular" && this.ui.getClearOnShrink()) {
 			this.statusContainer.addChild(this.idleStatus);
 		}
 	}
@@ -2120,21 +2308,15 @@ export class InteractiveMode {
 			this.customFooter.dispose();
 		}
 
-		// Remove current footer from UI
-		if (this.customFooter) {
-			this.ui.removeChild(this.customFooter);
-		} else {
-			this.ui.removeChild(this.footer);
-		}
-
+		this.footerContainer.clear();
 		if (factory) {
 			// Create and add custom footer, passing the data provider
 			this.customFooter = factory(this.ui, theme, this.footerDataProvider);
-			this.ui.addChild(this.customFooter);
+			this.footerContainer.addChild(this.customFooter);
 		} else {
 			// Restore built-in footer
 			this.customFooter = undefined;
-			this.ui.addChild(this.footer);
+			this.footerContainer.addChild(this.footer);
 		}
 
 		this.ui.requestRender();
@@ -2187,19 +2369,29 @@ export class InteractiveMode {
 	private addExtensionTerminalInputListener(
 		handler: (data: string) => { consume?: boolean; data?: string } | undefined,
 	): () => void {
-		const unsubscribe = this.ui.addInputListener(handler);
-		this.extensionTerminalInputUnsubscribers.add(unsubscribe);
+		const subscription = { handler, unsubscribe: this.ui.addInputListener(handler) };
+		this.extensionTerminalInputSubscriptions.add(subscription);
 		return () => {
-			unsubscribe();
-			this.extensionTerminalInputUnsubscribers.delete(unsubscribe);
+			subscription.unsubscribe();
+			this.extensionTerminalInputSubscriptions.delete(subscription);
 		};
 	}
 
-	private clearExtensionTerminalInputListeners(): void {
-		for (const unsubscribe of this.extensionTerminalInputUnsubscribers) {
-			unsubscribe();
+	private rebindScrollbackPreservationInputListener(): void {
+		this.scrollbackPreservationInputUnsubscribe?.();
+		this.scrollbackPreservationInputUnsubscribe = this.ui.addInputListener(this.scrollbackPreservationInputHandler);
+	}
+
+	private rebindExtensionTerminalInputListeners(): void {
+		for (const subscription of this.extensionTerminalInputSubscriptions) {
+			subscription.unsubscribe();
+			subscription.unsubscribe = this.ui.addInputListener(subscription.handler);
 		}
-		this.extensionTerminalInputUnsubscribers.clear();
+	}
+
+	private clearExtensionTerminalInputListeners(): void {
+		for (const subscription of this.extensionTerminalInputSubscriptions) subscription.unsubscribe();
+		this.extensionTerminalInputSubscriptions.clear();
 	}
 
 	/**
@@ -2316,6 +2508,7 @@ export class InteractiveMode {
 				},
 			);
 
+			this.disposeActiveSelector();
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.extensionSelector);
 			this.ui.setFocus(this.extensionSelector);
@@ -2393,6 +2586,7 @@ export class InteractiveMode {
 				{ tui: this.ui, timeout: opts?.timeout },
 			);
 
+			this.disposeActiveSelector();
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.extensionInput);
 			this.ui.setFocus(this.extensionInput);
@@ -2434,6 +2628,7 @@ export class InteractiveMode {
 				this.settingsManager.getExternalEditorCommand(),
 			);
 
+			this.disposeActiveSelector();
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.extensionEditor);
 			this.ui.setFocus(this.extensionEditor);
@@ -2462,6 +2657,7 @@ export class InteractiveMode {
 		// Save text from current editor before switching
 		const currentText = this.editor.getText();
 
+		this.disposeActiveSelector();
 		this.editorContainer.clear();
 
 		if (factory) {
@@ -2481,6 +2677,9 @@ export class InteractiveMode {
 			}
 			if (newEditor.setPaddingX !== undefined) {
 				newEditor.setPaddingX(this.defaultEditor.getPaddingX());
+			}
+			if (newEditor.setAutocompleteMaxVisible !== undefined) {
+				newEditor.setAutocompleteMaxVisible(this.defaultEditor.getAutocompleteMaxVisible());
 			}
 
 			// Set autocomplete if supported
@@ -2600,6 +2799,7 @@ export class InteractiveMode {
 						// Expose handle to caller for visibility control
 						options?.onHandle?.(handle);
 					} else {
+						this.disposeActiveSelector();
 						this.editorContainer.clear();
 						this.editorContainer.addChild(component);
 						this.ui.setFocus(component);
@@ -2684,7 +2884,7 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.tools.expand", () => this.toggleToolOutputExpansion());
 		this.defaultEditor.onAction("app.thinking.toggle", () => this.toggleThinkingBlockVisibility());
 		this.defaultEditor.onAction("app.editor.external", () => void this.handleOpenExternalEditor());
-		this.defaultEditor.onAction("app.message.copy", () => void this.handleCopyCommand());
+		this.defaultEditor.onAction("app.message.copy", () => void this.handleCopyCommand({ flashConfirmation: true }));
 		this.defaultEditor.onAction("app.message.followUp", () => this.handleFollowUp());
 		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
 		this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
@@ -3018,10 +3218,11 @@ export class InteractiveMode {
 						this.getMarkdownThemeWithSettings(),
 						this.hiddenThinkingLabel,
 						this.outputPad,
+						this.getMarkdownTransformers(),
 					);
 					this.streamingMessage = event.message;
 					this.chatContainer.addChild(this.streamingComponent);
-					this.streamingComponent.updateContent(this.streamingMessage);
+					this.streamingComponent.updateContent(this.streamingMessage, true);
 					this.ui.requestRender();
 				}
 				break;
@@ -3029,7 +3230,7 @@ export class InteractiveMode {
 			case "message_update":
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
-					this.streamingComponent.updateContent(this.streamingMessage);
+					this.streamingComponent.updateContent(this.streamingMessage, true);
 
 					for (const content of this.streamingMessage.content) {
 						if (content.type === "toolCall") {
@@ -3066,7 +3267,7 @@ export class InteractiveMode {
 								: "Operation aborted";
 						this.streamingMessage.errorMessage = errorMessage;
 					}
-					this.streamingComponent.updateContent(this.streamingMessage);
+					this.streamingComponent.updateContent(this.streamingMessage, false);
 
 					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
 						if (!errorMessage) {
@@ -3387,6 +3588,7 @@ export class InteractiveMode {
 								skillBlock.userMessage,
 								this.getMarkdownThemeWithSettings(),
 								this.outputPad,
+								this.getMarkdownTransformers(),
 							);
 							this.chatContainer.addChild(userComponent);
 						}
@@ -3395,6 +3597,7 @@ export class InteractiveMode {
 							textContent,
 							this.getMarkdownThemeWithSettings(),
 							this.outputPad,
+							this.getMarkdownTransformers(),
 						);
 						this.chatContainer.addChild(userComponent);
 					}
@@ -3411,6 +3614,7 @@ export class InteractiveMode {
 					this.getMarkdownThemeWithSettings(),
 					this.hiddenThinkingLabel,
 					this.outputPad,
+					this.getMarkdownTransformers(),
 				);
 				this.chatContainer.addChild(assistantComponent);
 				break;
@@ -3886,6 +4090,8 @@ export class InteractiveMode {
 	}
 
 	private setToolsExpanded(expanded: boolean): void {
+		if (expanded === this.toolOutputExpanded) return;
+
 		this.toolOutputExpanded = expanded;
 		// An explicit toggle prefers upstream's clean wipe-and-replay even
 		// mid-run: the user just pressed the key, so they are interacting at
@@ -3955,7 +4161,7 @@ export class InteractiveMode {
 
 	showError(errorMessage: string): void {
 		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(theme.fg("error", `Error: ${errorMessage}`), 1, 0));
+		this.chatContainer.addChild(new Text(theme.fg("error", `Error: ${errorMessage}`), this.outputPad, 0));
 		this.ui.requestRender();
 	}
 
@@ -4194,56 +4400,52 @@ export class InteractiveMode {
 	// Selectors
 	// =========================================================================
 
+	private disposeActiveSelector(): void {
+		const dispose = this.activeSelectorDispose;
+		this.activeSelectorToken = undefined;
+		this.activeSelectorDispose = undefined;
+		dispose?.();
+	}
+
 	/**
 	 * Shows a selector component in place of the editor.
 	 * @param create Factory that receives a `done` callback and returns the component and focus target
 	 */
 	private showSelector(
-		create: (done: () => void) => { component: Component & { dispose?: () => void }; focus: Component },
+		create: (done: () => void) => { component: Component; focus: Component; dispose?: () => void },
 	): void {
-		this.activeSelectorCleanup?.();
-		this.activeSelectorCleanup = null;
-		this.activeSelector = null;
-
-		let selector: (Component & { dispose?: () => void }) | undefined;
+		const token = {};
+		let dispose: (() => void) | undefined;
 		let disposed = false;
-		let closed = false;
-		const dispose = () => {
-			if (disposed || !selector) return;
+		const disposeOnce = () => {
+			if (disposed) return;
 			disposed = true;
-			selector.dispose?.();
+			dispose?.();
 		};
 		const done = () => {
-			if (closed) return;
-			closed = true;
-			dispose();
-			if (!selector || this.activeSelector === selector) {
-				this.activeSelector = null;
-				this.activeSelectorCleanup = null;
-				this.editorContainer.clear();
-				this.editorContainer.addChild(this.editor);
-				this.ui.setFocus(this.editor);
-			}
+			disposeOnce();
+			if (this.activeSelectorToken !== token) return;
+			this.activeSelectorToken = undefined;
+			this.activeSelectorDispose = undefined;
+			this.editorContainer.clear();
+			this.editorContainer.addChild(this.editor);
+			this.ui.setFocus(this.editor);
 		};
-
 		const created = create(done);
-		selector = created.component;
-		if (closed) {
-			dispose();
-			return;
-		}
-
-		this.activeSelector = selector;
-		this.activeSelectorCleanup = dispose;
+		dispose = created.dispose;
+		this.disposeActiveSelector();
+		this.activeSelectorToken = token;
+		this.activeSelectorDispose = disposeOnce;
 		this.editorContainer.clear();
-		this.editorContainer.addChild(selector);
+		this.editorContainer.addChild(created.component);
 		this.ui.setFocus(created.focus);
 		this.ui.requestRender();
 	}
 
 	private showSettingsSelector(): void {
 		this.showSelector((done) => {
-			const selector = new SettingsSelectorComponent(
+			let selector: SettingsSelectorComponent | undefined;
+			selector = new SettingsSelectorComponent(
 				{
 					autoCompact: this.session.autoCompactionEnabled,
 					showImages: this.settingsManager.getShowImages(),
@@ -4261,6 +4463,7 @@ export class InteractiveMode {
 					terminalTheme: this.themeController.getTerminalTheme(),
 					availableThemes: getAvailableThemes(),
 					hideThinkingBlock: this.hideThinkingBlock,
+					mermaidRenderingMode: this.settingsManager.getMermaidRenderingMode(),
 					collapseChangelog: this.settingsManager.getCollapseChangelog(),
 					enableInstallTelemetry: this.settingsManager.getEnableInstallTelemetry(),
 					doubleEscapeAction: this.settingsManager.getDoubleEscapeAction(),
@@ -4274,6 +4477,8 @@ export class InteractiveMode {
 					quietStartup: this.settingsManager.getQuietStartup(),
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
+					tuiMode: this.ui.mode,
+					fullscreenScrollbar: this.settingsManager.getFullscreenScrollbar(),
 					warnings: this.settingsManager.getWarnings(),
 				},
 				{
@@ -4342,6 +4547,11 @@ export class InteractiveMode {
 						}
 						this.clearChat();
 						this.rebuildChatFromMessages();
+					},
+					onMermaidRenderingModeChange: (mode) => {
+						this.settingsManager.setMermaidRenderingMode(mode);
+						this.chatContainer.invalidate();
+						this.ui.requestRender();
 					},
 					onShowCacheMissNoticesChange: (shown) => {
 						this.settingsManager.setShowCacheMissNotices(shown);
@@ -4414,6 +4624,20 @@ export class InteractiveMode {
 					onShowTerminalProgressChange: (enabled) => {
 						this.settingsManager.setShowTerminalProgress(enabled);
 					},
+					onTuiModeChange: (mode) => {
+						if (!this.switchTuiMode(mode)) {
+							selector?.getSettingsList().updateValue("tui-mode", this.ui.mode);
+							this.showStatus("Close active overlays before changing TUI mode");
+							return;
+						}
+						this.settingsManager.setTuiMode(mode);
+						if (!this.activeStatusIndicator) this.statusContainer.clear();
+						this.showStatus(`TUI mode: ${mode}`);
+					},
+					onFullscreenScrollbarChange: (mode) => {
+						this.settingsManager.setFullscreenScrollbar(mode);
+						this.applyFullscreenScrollbarSetting();
+					},
 					onWarningsChange: (warnings) => {
 						this.settingsManager.setWarnings(warnings);
 					},
@@ -4452,21 +4676,37 @@ export class InteractiveMode {
 	}
 
 	private async findExactModelMatch(searchTerm: string): Promise<Model<any> | undefined> {
-		const models = await this.getModelCandidates();
-		return findExactModelReferenceMatch(searchTerm, models);
-	}
+		const cachedModels =
+			this.session.scopedModels.length > 0
+				? this.session.scopedModels.map((scoped) => scoped.model)
+				: [...this.session.modelRuntime.getAvailableSnapshot()];
+		const cachedMatch = findExactModelReferenceMatch(searchTerm, cachedModels);
+		if (cachedMatch || this.session.scopedModels.length > 0) return cachedMatch;
 
-	private async getModelCandidates(): Promise<Model<any>[]> {
-		if (this.session.scopedModels.length > 0) {
-			return this.session.scopedModels.map((scoped) => scoped.model);
-		}
-
+		this.showStatus("Refreshing model catalogs…");
+		const controller = new AbortController();
+		let timedOut = false;
+		const timeout = setTimeout(() => {
+			timedOut = true;
+			controller.abort();
+		}, 15_000);
 		try {
-			await this.session.modelRuntime.refresh();
-			return [...(await this.session.modelRuntime.getAvailable())];
-		} catch {
-			return [];
+			const result = await this.session.modelRuntime.refresh({ signal: controller.signal });
+			if (result.aborted && timedOut) {
+				this.showWarning("Model refresh timed out; searching cached models.");
+			} else if (result.errors.size > 0) {
+				this.showWarning(`Could not refresh ${[...result.errors.keys()].join(", ")}; searching cached models.`);
+			}
+		} catch (error) {
+			this.showWarning(
+				timedOut
+					? "Model refresh timed out; searching cached models."
+					: `Could not refresh model catalogs: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		} finally {
+			clearTimeout(timeout);
 		}
+		return findExactModelReferenceMatch(searchTerm, [...this.session.modelRuntime.getAvailableSnapshot()]);
 	}
 
 	/** Update the footer's available provider count from the current snapshot without refreshing catalogs. */
@@ -4588,86 +4828,75 @@ export class InteractiveMode {
 				},
 				initialSearchInput,
 			);
-			return { component: selector, focus: selector };
+			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
 	}
 
-	private async showModelsSelector(): Promise<void> {
-		// Get all available models
-		await this.session.modelRuntime.refresh();
-		const allModels = [...(await this.session.modelRuntime.getAvailable())];
-		const allModelIds = new Set(allModels.map((model) => `${model.provider}/${model.id}`));
+	private showModelsSelector(): void {
+		let availableModels = [...this.session.modelRuntime.getAvailableSnapshot()];
+		let availableModelIds = new Set(availableModels.map((model) => `${model.provider}/${model.id}`));
 		const configuredPatterns = this.settingsManager.getEnabledModels();
 		const sessionScopedModels = this.session.scopedModels;
+		const configuredEnabledIds = (models: readonly Model<any>[]): string[] | null => {
+			if (!configuredPatterns?.length) return null;
+			const resolved = resolveModelScopeFromModels(configuredPatterns, models);
+			const ids = resolved.scopedModels.map((scoped) => `${scoped.model.provider}/${scoped.model.id}`);
+			for (const diagnostic of resolved.diagnostics) {
+				if (diagnostic.code === "no-match" && !ids.includes(diagnostic.pattern)) ids.push(diagnostic.pattern);
+			}
+			return ids;
+		};
 
-		if (allModels.length === 0 && !configuredPatterns?.length && sessionScopedModels.length === 0) {
-			this.showStatus("No models available");
-			return;
-		}
+		let currentEnabledIds =
+			sessionScopedModels.length > 0
+				? sessionScopedModels.map((scoped) => `${scoped.model.provider}/${scoped.model.id}`)
+				: configuredEnabledIds(availableModels);
+		let selectionChanged = false;
 
-		const configuredScope = configuredPatterns?.length
-			? await resolveModelScopeWithDiagnostics(configuredPatterns, this.session.modelRuntime)
-			: undefined;
-
-		// Check if session has scoped models (from previous session-only changes or CLI --models)
-		const hasSessionScope = sessionScopedModels.length > 0;
-
-		// Build enabled model IDs from session state or settings
-		let currentEnabledIds: string[] | null = null;
-
-		if (hasSessionScope) {
-			// Use current session's scoped models
-			currentEnabledIds = sessionScopedModels.map((scoped) => `${scoped.model.provider}/${scoped.model.id}`);
-		} else if (configuredScope) {
-			currentEnabledIds = configuredScope.scopedModels.map(
-				(scoped) => `${scoped.model.provider}/${scoped.model.id}`,
-			);
-		}
-
-		for (const diagnostic of configuredScope?.diagnostics ?? []) {
-			if (diagnostic.code !== "no-match") continue;
-			currentEnabledIds ??= [];
-			if (!currentEnabledIds.includes(diagnostic.pattern)) currentEnabledIds.push(diagnostic.pattern);
-		}
-
-		// Helper to update session's scoped models (session-only, no persist)
-		const updateSessionModels = async (enabledIds: string[] | null) => {
+		const updateSessionModels = (enabledIds: string[] | null): void => {
 			currentEnabledIds = enabledIds === null ? null : [...enabledIds];
-			const hasEnabledAvailableModel = enabledIds?.some((id) => allModelIds.has(id)) ?? false;
+			const hasEnabledAvailableModel = enabledIds?.some((id) => availableModelIds.has(id)) ?? false;
 			const allAvailableModelsEnabled =
-				enabledIds !== null && [...allModelIds].every((id) => enabledIds.includes(id));
+				enabledIds !== null && [...availableModelIds].every((id) => enabledIds.includes(id));
 			if (enabledIds && hasEnabledAvailableModel && !allAvailableModelsEnabled) {
-				const newScopedModels = await resolveModelScope(enabledIds, this.session.modelRuntime);
+				const newScopedModels = resolveModelScopeFromModels(enabledIds, availableModels).scopedModels;
 				this.session.setScopedModels(
-					newScopedModels.map((sm) => ({
-						model: sm.model,
-						thinkingLevel: sm.thinkingLevel,
+					newScopedModels.map((scoped) => ({
+						model: scoped.model,
+						thinkingLevel: scoped.thinkingLevel,
 					})),
 				);
 			} else {
-				// All enabled or none enabled = no filter
 				this.session.setScopedModels([]);
 			}
-			await this.updateAvailableProviderCount();
+			this.updateAvailableProviderCount();
 			this.ui.requestRender();
 		};
 
 		this.showSelector((done) => {
+			let disposed = false;
+			let timedOut = false;
+			const controller = new AbortController();
+			const timeout = setTimeout(() => {
+				timedOut = true;
+				controller.abort();
+			}, 15_000);
 			const selector = new ScopedModelsSelectorComponent(
 				{
-					allModels,
+					allModels: availableModels,
 					enabledModelIds: currentEnabledIds,
+					refreshStatus: "Refreshing model catalogs…",
 				},
 				{
-					onChange: async (enabledIds) => {
-						await updateSessionModels(enabledIds);
+					onChange: (enabledIds) => {
+						selectionChanged = true;
+						updateSessionModels(enabledIds);
 					},
 					onPersist: (enabledIds) => {
-						// Persist to settings
 						const allEnabled =
 							enabledIds !== null &&
-							enabledIds.length === allModels.length &&
-							enabledIds.every((id) => allModelIds.has(id));
+							enabledIds.length === availableModels.length &&
+							enabledIds.every((id) => availableModelIds.has(id));
 						const newPatterns = enabledIds === null || allEnabled ? undefined : enabledIds;
 						this.settingsManager.setEnabledModels(newPatterns ? [...newPatterns] : undefined);
 						this.showStatus("Model selection saved to settings");
@@ -4678,7 +4907,51 @@ export class InteractiveMode {
 					},
 				},
 			);
-			return { component: selector, focus: selector };
+			void this.session.modelRuntime
+				.refresh({ signal: controller.signal })
+				.then((result) => {
+					if (disposed) return;
+					availableModels = [...this.session.modelRuntime.getAvailableSnapshot()];
+					availableModelIds = new Set(availableModels.map((model) => `${model.provider}/${model.id}`));
+					if (!selectionChanged && sessionScopedModels.length === 0) {
+						currentEnabledIds = configuredEnabledIds(availableModels);
+						selector.updateModels(availableModels, currentEnabledIds);
+					} else {
+						selector.updateModels(availableModels);
+					}
+					if (currentEnabledIds !== null) updateSessionModels(currentEnabledIds);
+					if (result.aborted && timedOut) {
+						selector.setRefreshStatus("Model refresh timed out; showing cached models.", "warning");
+					} else if (result.errors.size > 0) {
+						selector.setRefreshStatus(
+							`Could not refresh ${[...result.errors.keys()].join(", ")}; showing cached models.`,
+							"warning",
+						);
+					} else {
+						selector.setRefreshStatus("Model catalogs refreshed.", "success");
+					}
+					this.ui.requestRender();
+				})
+				.catch((error: unknown) => {
+					if (disposed) return;
+					selector.setRefreshStatus(
+						timedOut
+							? "Model refresh timed out; showing cached models."
+							: `Could not refresh model catalogs: ${error instanceof Error ? error.message : String(error)}`,
+						"warning",
+					);
+					this.ui.requestRender();
+				})
+				.finally(() => clearTimeout(timeout));
+			return {
+				component: selector,
+				focus: selector,
+				dispose: () => {
+					disposed = true;
+					clearTimeout(timeout);
+					controller.abort();
+				},
+			};
 		});
 	}
 
@@ -4838,6 +5111,9 @@ export class InteractiveMode {
 							return;
 						}
 
+						// User-committed tree navigation rebuilds the transcript; its
+						// full redraw bypasses scrollback preservation.
+						this.coalescingTerminal.passNextFullRedraw();
 						// Update UI
 						this.clearChat();
 						this.renderInitialMessages();
@@ -4991,7 +5267,7 @@ export class InteractiveMode {
 	}
 
 	private async getLogoutProviderOptions(): Promise<AuthSelectorProvider[]> {
-		return (await this.session.modelRuntime.listCredentials())
+		return (await this.session.modelRuntime.listCredentials({ signal: AbortSignal.timeout(15_000) }))
 			.map(({ providerId, type }) => ({
 				id: providerId,
 				name: this.session.modelRuntime.getProvider(providerId)?.name ?? providerId,
@@ -5015,7 +5291,6 @@ export class InteractiveMode {
 	}
 
 	private async handleLoginCommand(providerRef?: string): Promise<void> {
-		await this.session.modelRuntime.getAvailable();
 		if (!providerRef) {
 			this.showLoginAuthTypeSelector();
 			return;
@@ -5155,7 +5430,13 @@ export class InteractiveMode {
 			return;
 		}
 
-		const providerOptions = await this.getLogoutProviderOptions();
+		let providerOptions: AuthSelectorProvider[];
+		try {
+			providerOptions = await this.getLogoutProviderOptions();
+		} catch (error) {
+			this.showError(`Could not read stored credentials: ${error instanceof Error ? error.message : String(error)}`);
+			return;
+		}
 		if (providerOptions.length === 0) {
 			this.showStatus(
 				"No stored credentials to remove. /logout only removes credentials saved by /login; environment variables and models.json config are unchanged.",
@@ -5176,7 +5457,9 @@ export class InteractiveMode {
 					}
 
 					try {
-						await this.session.modelRuntime.logout(providerOption.id);
+						await this.session.modelRuntime.logout(providerOption.id, {
+							signal: AbortSignal.timeout(15_000),
+						});
 						await this.updateAvailableProviderCount();
 						const message =
 							providerOption.authType === "oauth"
@@ -5184,7 +5467,12 @@ export class InteractiveMode {
 								: `Removed stored API key for ${providerOption.name}. Environment variables and models.json config are unchanged.`;
 						this.showStatus(message);
 					} catch (error: unknown) {
-						this.showError(`Logout failed: ${error instanceof Error ? error.message : String(error)}`);
+						const message = error instanceof Error ? error.message : String(error);
+						this.showError(
+							error instanceof CredentialSynchronizationError
+								? `Credentials removed for ${providerOption.name}, but local model state could not be synchronized: ${message}`
+								: `Logout failed: ${message}`,
+						);
 					}
 				},
 				() => {
@@ -5202,14 +5490,12 @@ export class InteractiveMode {
 		authType: "oauth" | "api_key",
 		previousModel: Model<any> | undefined,
 	): Promise<void> {
-		await this.session.modelRuntime.getAvailable();
-
 		const actionLabel = authType === "oauth" ? `Logged in to ${providerName}` : `Saved API key for ${providerName}`;
 
 		let selectedModel: Model<any> | undefined;
 		let selectionError: string | undefined;
 		if (isUnknownModel(previousModel)) {
-			const availableModels = await this.session.modelRuntime.getAvailable();
+			const availableModels = this.session.modelRuntime.getAvailableSnapshot();
 			const providerModels = availableModels.filter((model) => model.provider === providerId);
 			if (!hasDefaultModelProvider(providerId)) {
 				selectionError = `${actionLabel}, but no default model is configured for provider "${providerId}". Use /model to select a model.`;
@@ -5247,6 +5533,27 @@ export class InteractiveMode {
 				void this.maybeWarnAboutAnthropicSubscriptionAuth();
 			}
 		}
+
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 15_000);
+		void this.session.modelRuntime
+			.refresh({ providers: [providerId], signal: controller.signal })
+			.then((result) => {
+				if (result.aborted) {
+					this.showWarning(`${actionLabel}, but its model catalog refresh timed out; using cached models.`);
+				} else if (result.errors.size > 0) {
+					this.showWarning(`${actionLabel}, but its model catalog could not be refreshed; using cached models.`);
+				}
+				this.updateAvailableProviderCount();
+				this.footer.invalidate();
+				this.ui.requestRender();
+			})
+			.catch((error: unknown) => {
+				this.showWarning(
+					`${actionLabel}, but its model catalog could not be refreshed: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			})
+			.finally(() => clearTimeout(timeout));
 	}
 
 	private showAmbientAuthDialog(providerOption: AuthSelectorProvider): void {
@@ -5311,7 +5618,11 @@ export class InteractiveMode {
 		} catch (error: unknown) {
 			restoreEditor();
 			const errorMsg = error instanceof Error ? error.message : String(error);
-			if (errorMsg !== "Login cancelled") {
+			if (error instanceof CredentialSynchronizationError) {
+				this.showError(
+					`Saved API key for ${providerName}, but local model state could not be synchronized: ${errorMsg}`,
+				);
+			} else if (errorMsg !== "Login cancelled") {
 				this.showError(`Failed to save API key for ${providerName}: ${errorMsg}`);
 			}
 		}
@@ -5421,7 +5732,11 @@ export class InteractiveMode {
 		} catch (error: unknown) {
 			restoreEditor();
 			const errorMsg = error instanceof Error ? error.message : String(error);
-			if (errorMsg !== "Login cancelled") {
+			if (error instanceof CredentialSynchronizationError) {
+				this.showError(
+					`Logged in to ${providerName}, but local model state could not be synchronized: ${errorMsg}`,
+				);
+			} else if (errorMsg !== "Login cancelled") {
 				this.showError(`Failed to login to ${providerName}: ${errorMsg}`);
 			}
 		}
@@ -5479,6 +5794,10 @@ export class InteractiveMode {
 			}
 			this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 			this.outputPad = this.settingsManager.getOutputPad();
+			// The user asked for this rebuild; its full redraw keeps the
+			// upstream wipe-and-replay even if preservation is still windowed
+			// on from the previous run.
+			this.coalescingTerminal.passNextFullRedraw();
 			this.rebuildChatFromMessages();
 			chatRestoredBeforeSessionStart = true;
 		};
@@ -5486,7 +5805,6 @@ export class InteractiveMode {
 		try {
 			await this.session.reload({ beforeSessionStart: restoreChatBeforeSessionStart });
 			restoreChatBeforeSessionStart();
-			configureHttpDispatcher(this.settingsManager.getHttpIdleTimeoutMs());
 			this.keybindings.reload();
 			const activeHeader = this.customHeader ?? this.builtInHeader;
 			if (isExpandable(activeHeader)) {
@@ -5494,20 +5812,7 @@ export class InteractiveMode {
 			}
 			setRegisteredThemes(this.session.resourceLoader.getThemes().themes);
 			await this.themeController.applyFromSettings();
-			const editorPaddingX = this.settingsManager.getEditorPaddingX();
-			const autocompleteMaxVisible = this.settingsManager.getAutocompleteMaxVisible();
-			this.defaultEditor.setPaddingX(editorPaddingX);
-			this.defaultEditor.setAutocompleteMaxVisible(autocompleteMaxVisible);
-			if (this.editor !== this.defaultEditor) {
-				this.editor.setPaddingX?.(editorPaddingX);
-				this.editor.setAutocompleteMaxVisible?.(autocompleteMaxVisible);
-			}
-			this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
-			const clearOnShrink = this.settingsManager.getClearOnShrink();
-			this.ui.setClearOnShrink(clearOnShrink);
-			if (!clearOnShrink && !this.activeStatusIndicator) {
-				this.statusContainer.clear();
-			}
+			this.applyRuntimeSettings();
 			this.setupAutocompleteProvider();
 			const runner = this.session.extensionRunner;
 			this.setupExtensionShortcuts(runner);
@@ -5718,7 +6023,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private async handleCopyCommand(): Promise<void> {
+	private async handleCopyCommand(options: { flashConfirmation?: boolean } = {}): Promise<void> {
 		const text = this.session.getLastAssistantText();
 		if (!text) {
 			this.showError("No agent messages to copy yet.");
@@ -5727,7 +6032,11 @@ export class InteractiveMode {
 
 		try {
 			await copyToClipboard(text);
-			this.showStatus("Copied last agent message to clipboard");
+			if (options.flashConfirmation && this.ui instanceof TuiAltScreen) {
+				this.ui.flash("Copied!");
+			} else {
+				this.showStatus("Copied last agent message to clipboard");
+			}
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
 		}
@@ -6142,15 +6451,15 @@ export class InteractiveMode {
 	}
 
 	stop(): void {
-		this.activeSelectorCleanup?.();
-		this.activeSelectorCleanup = null;
-		this.activeSelector = null;
+		this.disposeActiveSelector();
 		if (this.settingsManager.getShowTerminalProgress()) {
 			this.ui.terminal.setProgress(false);
 		}
 		this.clearStatusIndicator();
 		this.themeController.disableAutoSync();
 		this.clearExtensionTerminalInputListeners();
+		this.scrollbackPreservationInputUnsubscribe?.();
+		this.scrollbackPreservationInputUnsubscribe = undefined;
 		this.clearPendingTools();
 		this.disposeChatToolComponents();
 		this.footer.dispose();
@@ -6159,7 +6468,7 @@ export class InteractiveMode {
 			this.unsubscribe();
 		}
 		if (this.isInitialized) {
-			this.ui.stop();
+			this.stopInteractiveTui();
 			this.isInitialized = false;
 		}
 		this.unregisterSignalHandlers();

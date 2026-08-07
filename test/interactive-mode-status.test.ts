@@ -6,7 +6,8 @@ import {
 	type Component,
 	Container,
 	type Focusable,
-	TUI,
+	type TUI,
+	TuiMainScreen,
 } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import type { AutocompleteProviderFactory } from "../src/core/extensions/types.ts";
@@ -218,7 +219,7 @@ describe("InteractiveMode.showExtensionCustom", () => {
 
 	test("overlay custom UI reclaims input after non-overlay custom UI closes", async () => {
 		const terminal = new VirtualTerminal(80, 24);
-		const ui = new TUI(terminal);
+		const ui: TUI = new TuiMainScreen(terminal);
 		const editorContainer = new Container();
 		const editor = new TestFocusableComponent("EDITOR");
 		const palette = new TestFocusableComponent("PALETTE");
@@ -235,6 +236,7 @@ describe("InteractiveMode.showExtensionCustom", () => {
 			editorContainer,
 			keybindings: {},
 			ui,
+			disposeActiveSelector: vi.fn(),
 		};
 		const showExtensionCustom = <T>(
 			factory: (tui: TUI, theme: unknown, keybindings: unknown, done: (result: T) => void) => Component,
@@ -388,7 +390,7 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 		type FakeInteractiveMode = {
 			session: {
 				scopedModels: Array<{ model: TestModel }>;
-				modelRuntime: { getAvailable: () => TestModel[] };
+				modelRuntime: { getAvailableSnapshot: () => TestModel[] };
 				promptTemplates: [];
 				extensionRunner: { getRegisteredCommands: () => [] };
 				resourceLoader: { getSkills: () => { skills: [] } };
@@ -411,7 +413,7 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 		const fakeThis: FakeInteractiveMode = {
 			session: {
 				scopedModels: [],
-				modelRuntime: { getAvailable: () => models },
+				modelRuntime: { getAvailableSnapshot: () => models },
 				promptTemplates: [],
 				extensionRunner: { getRegisteredCommands: () => [] },
 				resourceLoader: { getSkills: () => ({ skills: [] }) },
@@ -438,7 +440,7 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 		type FakeInteractiveMode = {
 			session: {
 				scopedModels: [];
-				modelRuntime: { getAvailable: () => [] };
+				modelRuntime: { getAvailableSnapshot: () => [] };
 				promptTemplates: [];
 				extensionRunner: { getRegisteredCommands: () => [] };
 				resourceLoader: { getSkills: () => { skills: [] } };
@@ -458,7 +460,7 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 		const fakeThis: FakeInteractiveMode = {
 			session: {
 				scopedModels: [],
-				modelRuntime: { getAvailable: () => [] },
+				modelRuntime: { getAvailableSnapshot: () => [] },
 				promptTemplates: [],
 				extensionRunner: { getRegisteredCommands: () => [] },
 				resourceLoader: { getSkills: () => ({ skills: [] }) },

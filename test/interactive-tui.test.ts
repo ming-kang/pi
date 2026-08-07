@@ -1,0 +1,394 @@
+import type { Component, Terminal, TUI } from "@earendil-works/pi-tui";
+import { Container, isViewportTUI, Text } from "@earendil-works/pi-tui";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TuiMode } from "../src/core/settings-manager.ts";
+import {
+	createInteractiveTui,
+	createInteractiveTuiReference,
+	InteractiveMode,
+} from "../src/modes/interactive/interactive-mode.ts";
+import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { VirtualTerminal } from "./helpers/virtual-terminal.ts";
+
+const clipboardMocks = vi.hoisted(() => ({
+	copyToClipboard: vi.fn<(text: string) => Promise<void>>(),
+	readClipboardText: vi.fn<() => Promise<string | null>>(),
+}));
+
+vi.mock("../src/utils/clipboard.ts", () => clipboardMocks);
+
+class RecordingTerminal extends VirtualTerminal implements Terminal {
+	readonly writes: string[] = [];
+	startCount = 0;
+	stopCount = 0;
+
+	override start(onInput: (data: string) => void, onResize: () => void): void {
+		this.startCount += 1;
+		super.start(onInput, onResize);
+	}
+
+	override write(data: string): void {
+		this.writes.push(data);
+		super.write(data);
+	}
+
+	override stop(): void {
+		this.stopCount += 1;
+		super.stop();
+	}
+}
+
+describe("createInteractiveTui", () => {
+	it("selects the alternate-screen renderer only when requested", async () => {
+		const mainTerminal = new RecordingTerminal();
+		const mainTui = createInteractiveTui({
+			tuiMode: "regular",
+			showHardwareCursor: false,
+			logDirectory: "/tmp",
+			terminal: mainTerminal,
+		});
+		expect(mainTui.mode).toBe("regular");
+		expect(isViewportTUI(mainTui)).toBe(false);
+		mainTui.start();
+		await mainTerminal.waitForRender();
+		expect(mainTerminal.writes.some((write) => write.includes("\x1b[?1049h"))).toBe(false);
+		mainTui.stop();
+
+		const altTerminal = new RecordingTerminal();
+		const altTui = createInteractiveTui({
+			tuiMode: "fullscreen",
+			showHardwareCursor: false,
+			logDirectory: "/tmp",
+			terminal: altTerminal,
+		});
+		expect(altTui.mode).toBe("fullscreen");
+		expect(isViewportTUI(altTui)).toBe(true);
+		altTui.start();
+		await altTerminal.waitForRender();
+		expect(altTerminal.writes.some((write) => write.includes("\x1b[?1049h"))).toBe(true);
+		altTui.stop();
+	});
+
+	it("replaces the renderer while preserving components and focus", async () => {
+		const terminal = new RecordingTerminal(40, 8);
+		const renderer = createInteractiveTui({
+			tuiMode: "regular",
+			showHardwareCursor: false,
+			logDirectory: "/tmp",
+			terminal,
+		});
+		let stableUi: TUI;
+		const invalidatedModes: TuiMode[] = [];
+		const component: Component & { focused: boolean } = {
+			focused: false,
+			render: () => ["content"],
+			invalidate: () => invalidatedModes.push(stableUi.mode),
+		};
+		renderer.addChild(component);
+		renderer.setFocus(component);
+
+		type SwitchContext = {
+			renderer: ReturnType<typeof createInteractiveTui>;
+			ui: TUI;
+			fullscreenLayoutRoot: Component;
+			options: { tuiMode?: TuiMode };
+			themeController: { rebindTui: () => void };
+			extensionTerminalInputSubscriptions: Set<never>;
+			scrollbackPreservationInputHandler: () => undefined;
+			scrollbackPreservationInputUnsubscribe?: () => void;
+		};
+		const context = Object.assign(Object.create(InteractiveMode.prototype), {
+			renderer,
+			ui: undefined as unknown as TUI,
+			fullscreenLayoutRoot: component,
+			options: { tuiMode: "regular" as TuiMode },
+			themeController: { rebindTui: () => {} },
+			extensionTerminalInputSubscriptions: new Set<never>(),
+			scrollbackPreservationInputHandler: () => undefined,
+			scrollbackPreservationInputUnsubscribe: undefined,
+		}) as SwitchContext;
+		stableUi = createInteractiveTuiReference(() => context.renderer);
+		context.ui = stableUi;
+		const { stopInteractiveTui, switchTuiMode } = InteractiveMode.prototype as unknown as {
+			stopInteractiveTui(this: SwitchContext): void;
+			switchTuiMode(this: SwitchContext, mode: TuiMode, restoreProgress?: boolean): boolean;
+		};
+
+		renderer.start();
+		await terminal.waitForRender();
+		expect(switchTuiMode.call(context, "fullscreen", false)).toBe(true);
+		await terminal.waitForRender();
+
+		expect(stableUi.mode).toBe("fullscreen");
+		expect(context.renderer.children).toEqual([component]);
+		expect(context.renderer.getFocusedComponent()).toBe(component);
+		expect(component.focused).toBe(true);
+		expect(invalidatedModes).toEqual(["fullscreen"]);
+		expect([terminal.startCount, terminal.stopCount]).toEqual([2, 1]);
+
+		stopInteractiveTui.call(context);
+
+		expect(stableUi.mode).toBe("regular");
+		expect([terminal.startCount, terminal.stopCount]).toEqual([2, 3]);
+	});
+
+	it("rebinds the scrollback-preservation input listener across renderer switches", async () => {
+		const terminal = new RecordingTerminal(40, 8);
+		const renderer = createInteractiveTui({
+			tuiMode: "regular",
+			showHardwareCursor: false,
+			logDirectory: "/tmp",
+			terminal,
+		});
+		const setScrollbackPreservation = vi.fn<(enabled: boolean) => void>();
+		type PreservationSwitchContext = {
+			renderer: ReturnType<typeof createInteractiveTui>;
+			ui: TUI;
+			fullscreenLayoutRoot: Component;
+			options: { tuiMode?: TuiMode };
+			themeController: { rebindTui: () => void };
+			extensionTerminalInputSubscriptions: Set<never>;
+			agentRunActive: boolean;
+			coalescingTerminal: {
+				setScrollbackPreservation: ReturnType<typeof vi.fn<(enabled: boolean) => void>>;
+				passNextFullRedraw: ReturnType<typeof vi.fn>;
+			};
+			scrollbackPreservationInputHandler: () => undefined;
+			scrollbackPreservationInputUnsubscribe?: () => void;
+		};
+		const context = Object.assign(Object.create(InteractiveMode.prototype), {
+			renderer,
+			ui: undefined as unknown as TUI,
+			fullscreenLayoutRoot: { render: () => [], invalidate: () => {} },
+			options: { tuiMode: "regular" as TuiMode },
+			themeController: { rebindTui: () => {} },
+			extensionTerminalInputSubscriptions: new Set<never>(),
+			agentRunActive: false,
+			coalescingTerminal: { setScrollbackPreservation, passNextFullRedraw: vi.fn() },
+			scrollbackPreservationInputHandler: () => {
+				if (!context.agentRunActive) context.coalescingTerminal.setScrollbackPreservation(false);
+				return undefined;
+			},
+			scrollbackPreservationInputUnsubscribe: undefined,
+		}) as PreservationSwitchContext;
+		context.ui = createInteractiveTuiReference(() => context.renderer);
+		// Simulate the constructor's registration on the initial renderer.
+		context.scrollbackPreservationInputUnsubscribe = context.ui.addInputListener(
+			context.scrollbackPreservationInputHandler,
+		);
+		const { switchTuiMode } = InteractiveMode.prototype as unknown as {
+			switchTuiMode(this: PreservationSwitchContext, mode: TuiMode, restoreProgress?: boolean): boolean;
+		};
+
+		renderer.start();
+		await terminal.waitForRender();
+		// Idle input on the initial renderer disables preservation.
+		terminal.sendInput("a");
+		expect(setScrollbackPreservation).toHaveBeenCalledWith(false);
+
+		expect(switchTuiMode.call(context, "fullscreen", false)).toBe(true);
+		await terminal.waitForRender();
+
+		// The outgoing renderer's registration is gone; the incoming renderer
+		// holds exactly one (TuiAltScreen adds its own viewport listener, so
+		// count occurrences of the preservation handler rather than total size).
+		const oldListeners = (renderer as unknown as { inputListeners: Set<unknown> }).inputListeners;
+		expect(oldListeners.has(context.scrollbackPreservationInputHandler)).toBe(false);
+		const countPreservationListeners = (listeners: Set<unknown>) =>
+			Array.from(listeners).filter((l) => l === context.scrollbackPreservationInputHandler).length;
+		const fullscreenListeners = (context.renderer as unknown as { inputListeners: Set<unknown> }).inputListeners;
+		expect(countPreservationListeners(fullscreenListeners)).toBe(1);
+
+		// Input after the switch still reaches the preservation listener.
+		terminal.sendInput("b");
+		expect(setScrollbackPreservation).toHaveBeenCalledTimes(2);
+
+		// Switching back rebinds onto the new regular renderer, again exactly once.
+		expect(switchTuiMode.call(context, "regular", false)).toBe(true);
+		await terminal.waitForRender();
+		expect(fullscreenListeners.has(context.scrollbackPreservationInputHandler)).toBe(false);
+		const regularListeners = (context.renderer as unknown as { inputListeners: Set<unknown> }).inputListeners;
+		expect(countPreservationListeners(regularListeners)).toBe(1);
+		terminal.sendInput("c");
+		expect(setScrollbackPreservation).toHaveBeenCalledTimes(3);
+
+		context.ui.stop();
+	});
+});
+
+type CopyCommandContext = {
+	session: { getLastAssistantText: () => string | undefined };
+	ui: ReturnType<typeof createInteractiveTui>;
+	showStatus: (message: string) => void;
+	showError: (message: string) => void;
+};
+
+type CopyCommandOptions = { flashConfirmation?: boolean };
+
+type CopyCommandPrototype = {
+	handleCopyCommand(this: CopyCommandContext, options?: CopyCommandOptions): Promise<void>;
+};
+
+const copyCommandPrototype = InteractiveMode.prototype as unknown as CopyCommandPrototype;
+
+describe("InteractiveMode copy confirmation", () => {
+	beforeEach(() => {
+		clipboardMocks.copyToClipboard.mockReset();
+		clipboardMocks.copyToClipboard.mockResolvedValue(undefined);
+	});
+
+	it("flashes Copied! for the copy shortcut in fullscreen mode", async () => {
+		const terminal = new RecordingTerminal(40, 4);
+		const ui = createInteractiveTui({
+			tuiMode: "fullscreen",
+			showHardwareCursor: false,
+			logDirectory: "/tmp",
+			terminal,
+		});
+		const showStatus = vi.fn();
+		const showError = vi.fn();
+		const context: CopyCommandContext = {
+			session: { getLastAssistantText: () => "assistant response" },
+			ui,
+			showStatus,
+			showError,
+		};
+
+		ui.start();
+		try {
+			await terminal.waitForRender();
+			await copyCommandPrototype.handleCopyCommand.call(context, { flashConfirmation: true });
+			await terminal.waitForRender();
+
+			expect(clipboardMocks.copyToClipboard).toHaveBeenCalledWith("assistant response");
+			expect(showStatus).not.toHaveBeenCalled();
+			expect(showError).not.toHaveBeenCalled();
+			expect(terminal.getViewport().some((line) => line.includes("Copied!"))).toBe(true);
+		} finally {
+			ui.stop();
+		}
+	});
+
+	it("keeps the status-line confirmation for the copy shortcut in regular mode", async () => {
+		const ui = createInteractiveTui({
+			tuiMode: "regular",
+			showHardwareCursor: false,
+			logDirectory: "/tmp",
+			terminal: new RecordingTerminal(),
+		});
+		const showStatus = vi.fn();
+		const showError = vi.fn();
+		const context: CopyCommandContext = {
+			session: { getLastAssistantText: () => "assistant response" },
+			ui,
+			showStatus,
+			showError,
+		};
+
+		await copyCommandPrototype.handleCopyCommand.call(context, { flashConfirmation: true });
+
+		expect(showStatus).toHaveBeenCalledWith("Copied last agent message to clipboard");
+		expect(showError).not.toHaveBeenCalled();
+	});
+});
+
+type ClearStatusContext = {
+	activeStatusIndicator: { kind: "working"; dispose: () => void } | undefined;
+	statusContainer: Container;
+	options: { tuiMode?: TuiMode };
+	ui: { getClearOnShrink: () => boolean };
+	idleStatus: Component;
+};
+
+type InteractiveModePrototype = {
+	clearStatusIndicator(this: ClearStatusContext, kind?: "working"): void;
+};
+
+const interactiveModePrototype = InteractiveMode.prototype as unknown as InteractiveModePrototype;
+
+describe("clear-on-shrink status spacing", () => {
+	it("reserves status height only on the main-screen renderer", () => {
+		for (const [tuiMode, expectedChildren] of [
+			["regular", 1],
+			["fullscreen", 0],
+		] as const) {
+			const dispose = vi.fn();
+			const context: ClearStatusContext = {
+				activeStatusIndicator: { kind: "working", dispose },
+				statusContainer: new Container(),
+				options: { tuiMode },
+				ui: { getClearOnShrink: () => true },
+				idleStatus: new Text("", 0, 0),
+			};
+
+			interactiveModePrototype.clearStatusIndicator.call(context);
+
+			expect(dispose).toHaveBeenCalledOnce();
+			expect(context.statusContainer.children).toHaveLength(expectedChildren);
+		}
+	});
+});
+
+describe("InteractiveMode user-requested rebuilds bypass scrollback preservation", () => {
+	beforeAll(() => {
+		// The reload box renders theme-colored text during handleReloadCommand.
+		initTheme("dark");
+	});
+
+	it("arms passNextFullRedraw when a session rebuild replaces the transcript", () => {
+		const passNextFullRedraw = vi.fn();
+		const renderInitialMessages = vi.fn();
+		const fakeThis = Object.assign(Object.create(InteractiveMode.prototype), {
+			coalescingTerminal: { passNextFullRedraw },
+			loadedResourcesContainer: new Container(),
+			chatContainer: new Container(),
+			pendingMessagesContainer: new Container(),
+			pendingTools: new Map(),
+			renderInitialMessages,
+		});
+
+		(InteractiveMode.prototype as any).renderCurrentSessionState.call(fakeThis);
+
+		expect(passNextFullRedraw).toHaveBeenCalledTimes(1);
+		expect(renderInitialMessages).toHaveBeenCalledTimes(1);
+	});
+
+	it("arms passNextFullRedraw for the /reload transcript rebuild", async () => {
+		const passNextFullRedraw = vi.fn();
+		const rebuildChatFromMessages = vi.fn();
+		const sessionReload = vi.fn(async (options?: { beforeSessionStart?: () => void | Promise<void> }) => {
+			await options?.beforeSessionStart?.();
+		});
+		const fakeThis: any = {
+			session: {
+				isStreaming: false,
+				isCompacting: false,
+				reload: sessionReload,
+				resourceLoader: { getThemes: () => ({ themes: [] }) },
+				modelRuntime: { getError: () => undefined },
+				extensionRunner: {},
+			},
+			settingsManager: { getHideThinkingBlock: () => false, getOutputPad: () => 1 },
+			coalescingTerminal: { passNextFullRedraw },
+			rebuildChatFromMessages,
+			resetExtensionUI: () => {},
+			editorContainer: new Container(),
+			ui: { setFocus: vi.fn(), requestRender: vi.fn() },
+			editor: { render: () => [], invalidate: () => {} },
+			keybindings: { reload: vi.fn() },
+			themeController: { applyFromSettings: async () => {} },
+			applyRuntimeSettings: () => {},
+			setupAutocompleteProvider: () => {},
+			setupExtensionShortcuts: () => {},
+			showLoadedResources: () => {},
+			maybeSaveImplicitProjectTrustAfterReload: () => undefined,
+			showStatus: () => {},
+		};
+
+		await (InteractiveMode.prototype as any).handleReloadCommand.call(fakeThis);
+
+		expect(sessionReload).toHaveBeenCalledTimes(1);
+		expect(passNextFullRedraw).toHaveBeenCalledTimes(1);
+		expect(rebuildChatFromMessages).toHaveBeenCalledTimes(1);
+	});
+});

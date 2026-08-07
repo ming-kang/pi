@@ -949,17 +949,15 @@ Emitted when a message begins and completes. The `message` field contains an `Ag
 
 ### message_update (Streaming)
 
-Emitted during streaming of assistant messages. Contains both the partial message and a streaming delta event.
+Emitted during streaming of assistant messages. Contains a delta event without a cumulative message snapshot.
 
 ```json
 {
   "type": "message_update",
-  "message": {...},
   "assistantMessageEvent": {
     "type": "text_delta",
     "contentIndex": 0,
-    "delta": "Hello ",
-    "partial": {...}
+    "delta": "Hello "
   }
 }
 ```
@@ -968,7 +966,6 @@ The `assistantMessageEvent` field contains one of these delta types:
 
 | Type | Description |
 |------|-------------|
-| `start` | Message generation started |
 | `text_start` | Text content block started |
 | `text_delta` | Text content chunk |
 | `text_end` | Text content block ended |
@@ -978,16 +975,20 @@ The `assistantMessageEvent` field contains one of these delta types:
 | `toolcall_start` | Tool call started |
 | `toolcall_delta` | Tool call arguments chunk |
 | `toolcall_end` | Tool call ended (includes full `toolCall` object) |
-| `done` | Message complete (reason: `"stop"`, `"length"`, `"toolUse"`) |
-| `error` | Error occurred (reason: `"aborted"`, `"error"`) |
 
 Example streaming a text response:
 ```json
-{"type":"message_update","message":{...},"assistantMessageEvent":{"type":"text_start","contentIndex":0,"partial":{...}}}
-{"type":"message_update","message":{...},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hello","partial":{...}}}
-{"type":"message_update","message":{...},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":" world","partial":{...}}}
-{"type":"message_update","message":{...},"assistantMessageEvent":{"type":"text_end","contentIndex":0,"content":"Hello world","partial":{...}}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_start","contentIndex":0}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hello"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":" world"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_end","contentIndex":0,"content":"Hello world"}}
 ```
+
+`message_update` intentionally omits the former cumulative `message` field and
+`assistantMessageEvent.partial`. Clients that need a live partial message must assemble it
+from `message_start` and subsequent events using `contentIndex`. Treat `message_end.message`
+as authoritative. For tool calls, buffer `toolcall_delta.delta`; `toolcall_end.toolCall`
+contains the completed call.
 
 ### bash_execution_update
 

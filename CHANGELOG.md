@@ -4,18 +4,39 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.84.0] - 2026-08-07
+
 ### Added
 
+- Added inherited fullscreen TUI mode with a sticky editor/footer, independently scrollable transcript, runtime mode switching, draggable configurable scrollbars, stacked notifications, fullscreen navigation bindings, and opt-in `Ctrl+P`/`Ctrl+N` prompt-history navigation.
+- Added inherited Mermaid diagrams and terminal-friendly Unicode LaTeX rendering for interactive Markdown, plus chainable display-only `pi.registerMarkdownTransformer()` extension hooks.
+- Added per-directory `AGENTS.override.md` context files, arbitrary OpenAI-compatible `samplingParams`, opt-in vLLM thinking-token budgets, finish-reason inference for compatible streams, and built-in Baseten provider support.
+- Added experimental remote-session APIs through the new `@astralyn/pi/client` export, backed by the exact `@earendil-works/pi-client` and `@earendil-works/pi-protocol` dependencies, plus `CredentialSynchronizationError` for committed credential changes whose local model-state synchronization fails.
 - Added the bundled TUI-only Biu extension: `/biu` toggles a simple development workflow (plan → optional decompose → execute → archive) whose state lives in the frontmatter of private workspace Markdown files addressed through the `biu://` scheme; inside the mode, `/biu` opens a compact menu with continue, deterministic archiving, and exit. Each turn injects the stage playbook together with a read-only workspace snapshot.
 - Added a user approval gate for the Biu SPEC: marking `biu://SPEC.md` as `ready` opens a confirmation dialog, and declining blocks the write and returns the feedback to the model as the tool result, mirroring Plan Mode's approve/reject loop.
 - Added the `execution: direct|tasks` frontmatter field to the Biu SPEC: the plan stage records the agreed execution path before approval, and the execute stage loads a single-purpose playbook (direct implementation, decomposition, or an undecided fallback for older SPECs) instead of re-asking how to proceed.
 
 ### Changed
 
+- Followed upstream Pi `v0.84.0`, updating the exact `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, and `@earendil-works/pi-tui` runtime dependencies to `0.84.0`; added exact `@earendil-works/pi-client` and `@earendil-works/pi-protocol` `0.84.0` dependencies, Mermaid rendering, and Undici 8.9.0.
 - Changed tool call chrome so multi-line call previews continue the dim `│` rail from the status dot: args, blank lines, and the result now read as one connected block instead of an indented island above a lone rail.
+
+### Breaking Changes
+
+- Changed JSON and RPC `message_update` events to carry only `assistantMessageEvent` deltas. The cumulative `message` and `assistantMessageEvent.partial` fields were removed; clients must assemble deltas between `message_start` and the authoritative `message_end`.
+- Renamed the inherited pi-ai `ModelsStreamTransforms` interface to `ModelsRequestTransforms`, reflecting that header transforms apply to all authenticated provider requests.
+- Changed model/provider extension contracts: `ModelRegistry.refresh()` now accepts `ModelsRefreshOptions` and returns `ModelsRefreshResult`; returned provider headers preserve `null` deletion markers; `ModelRuntime.setRuntimeApiKey()` accepts auth cancellation options; OAuth `refreshToken` receives an `AbortSignal`; and native provider refreshes publish through `context.stored` and generation-checked `context.publish()`.
+- Adopted pi-agent-core's v4 lane-based session APIs and promoted v2 `AgentHarness` APIs to the default export, replacing the inherited legacy experimental and repository contracts.
 
 ### Fixed
 
+- Fixed credential and catalog concurrency stalls: OAuth refreshes release storage locks, forced availability refreshes can bypass stalled passes, concurrent stores avoid lock convoys and lost updates, and login, `/model`, and `/scoped-models` use cached state without waiting indefinitely for remote catalogs.
+- Fixed Windows file-tool paths from Git Bash, MSYS, Cygwin, and WSL, path-containing `find` globs, and root-level `find` result relativization.
+- Fixed manual and automatic compaction races, queued prompts during `/compact`, truncated responses that should compact and retry, and credential-resolved GitHub Copilot endpoints in compaction and extension model calls.
+- Fixed oversized tool-result images bypassing resizing, malformed package manifests crashing startup, symlinked session discovery, Git package dependency recovery, and transient management HTTP requests lacking bounded retries.
+- Fixed fullscreen terminal shutdown, image rendering and transcript performance, copy feedback, settings search input, editor navigation, and custom-editor autocomplete limits.
+- Fixed inherited provider and transport behavior across Anthropic, Google, OpenAI Codex, GitHub Copilot, Fireworks, Groq, Bedrock, and OpenAI-compatible gateways, plus terminal width, color, image, mouse, and Windows keyboard handling.
+- Updated Undici to 8.9.0 and pinned `brace-expansion` 5.0.9 to address their published security advisories, including GHSA-rgw5-rvv9-x895.
 - Fixed extension confirm dialogs folding the message into the accent-bold title; the message now renders as a muted subtitle under the title.
 - Fixed Router allowing the active session model or its relay to be disabled or removed, leaving stale model state; catalog selection now keeps the current model selected and removal asks the user to switch models first.
 - Fixed partial Router thinking maps omitting `xhigh` and `max` at runtime while the UI reported them enabled; omitted levels now inherit the five-level GPT Gateway defaults while explicit `null` choices remain hidden.

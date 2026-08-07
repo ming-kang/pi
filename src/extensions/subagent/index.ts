@@ -198,7 +198,9 @@ async function syncParentProvidersNow(
 		const auth = await registry.getProviderAuth(id);
 		const apiKey = auth?.auth.apiKey;
 		if (apiKey && syncedApiKeys.get(id) !== apiKey) {
-			await runtime.setRuntimeApiKey(id, apiKey, { allowNetwork: false });
+			// pi-ai 0.84 AuthOperationOptions carries only signal; the runtime's
+			// credential sync hardcodes allowNetwork: false.
+			await runtime.setRuntimeApiKey(id, apiKey);
 			syncedApiKeys.set(id, apiKey);
 		} else if (!apiKey && syncedApiKeys.has(id)) {
 			await runtime.removeRuntimeApiKey(id);

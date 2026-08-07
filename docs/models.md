@@ -244,6 +244,7 @@ A `models` entry supplies a complete custom model definition with useful default
 | `input` | No | `["text"]` | Supported input kinds: `text` and `image`. |
 | `contextWindow` | No | `128000` | Context window in tokens. |
 | `maxTokens` | No | `16384` | Maximum generated tokens. |
+| `samplingParams` | No | omitted | Free-form sampling parameters merged verbatim into every request body; see [Sampling Parameters](#sampling-parameters). |
 | `cost` | No | all rates `0` | Per-million-token rates and optional request-wide price tiers. |
 | `headers` | No | omitted | Model-specific request headers; see [Custom Headers](#custom-headers). |
 | `compat` | No | provider `compat` | Compatibility refinements merged with provider defaults. |
@@ -272,6 +273,23 @@ When `cost` is supplied on a `models` entry, it must contain all four base rates
 }
 ```
 
+### Sampling Parameters
+
+`samplingParams` is a free-form object merged verbatim into every request body for the model, after the fields pi sets itself, so its keys win. Use it to send sampling parameters pi does not model — including server-specific ones like llama.cpp's `min_p` or vLLM's `top_k`:
+
+```json
+{
+  "id": "deepseek-v4-flash",
+  "samplingParams": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 0,
+    "min_p": 0.0
+  }
+}
+```
+
+Only OpenAI-compatible APIs apply it (`openai-completions`, `openai-responses`, `azure-openai-responses`); other APIs ignore it. Keys override pi's named request fields (for example a `temperature` key here beats the request-level temperature), so prefer it as the single source of sampling truth for a model. In `modelOverrides`, `samplingParams` merges per key with the base model's value.
 ### Thinking Level Map
 
 `thinkingLevelMap` uses these Pi levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. It only affects a model with `reasoning: true`; a non-reasoning model exposes `off` only.
@@ -369,9 +387,7 @@ The built-in models remain. A new custom `id` is added, while a matching ID is r
 }
 ```
 
-An override supports `name`, `reasoning`, `thinkingLevelMap`, `input`, `cost`, `contextWindow`, `maxTokens`, `headers`, and `compat`. Its `cost` base rates are individually optional and retain omitted values; a supplied `tiers` array replaces the existing array. Thinking maps merge by level. `compat` merges by field, and its `openRouterRouting`, `vercelGatewayRouting`, and `chatTemplateKwargs` objects merge by key.
-
-If an override and a `models` entry use the same ID, the override still changes the final model. For headers only, the `models` entry wins on a duplicate header name as described in [Custom Headers](#custom-headers). Overrides also apply to matching extension-registered models; see [Custom Providers: Composition, Updates, and Removal](custom-provider.md#composition-updates-and-removal).
+An override supports `name`, `reasoning`, `thinkingLevelMap`, `input`, `cost`, `contextWindow`, `maxTokens`, `samplingParams` (merged per key), `headers`, and `compat`. Its `cost` base rates are individually optional and retain omitted values; a supplied `tiers` array replaces the existing array. Thinking maps merge by level. `compat` merges by field, and its `openRouterRouting`, `vercelGatewayRouting`, and `chatTemplateKwargs` objects merge by key.
 
 Direct OpenAI GPT-5.6 Sol, Terra, and Luna default to a `272000` context window so requests remain within OpenAI's short-context pricing tier. To use the 1.05M context window, override each model you use:
 
@@ -450,6 +466,7 @@ For `api: "openai-completions"`, Pi auto-detects many defaults from the provider
 | `supportsDeveloperRole` | Uses `developer` rather than `system` for reasoning models. Default: URL-detected. |
 | `supportsReasoningEffort` | Accepts `reasoning_effort` when the selected thinking format uses it. Default: URL-detected. |
 | `supportsUsageInStreaming` | Accepts `stream_options: { "include_usage": true }`. Default: `true`. |
+| `supportsFinishReason` | Whether streamed responses include `finish_reason`. When `false`, Pi infers `stop` or `toolUse` when the stream ends. Default: `true`. |
 | `maxTokensField` | Selects `max_completion_tokens` or `max_tokens`. Default: URL-detected. |
 | `requiresToolResultName` | Requires `name` on tool-result messages. Default: URL-detected. |
 | `requiresAssistantAfterToolResult` | Requires an assistant message before a user message following tool results. Default: URL-detected. |
@@ -457,6 +474,7 @@ For `api: "openai-completions"`, Pi auto-detects many defaults from the provider
 | `requiresReasoningContentOnAssistantMessages` | Includes empty `reasoning_content` on replayed assistant messages when reasoning is enabled. Default: URL-detected. |
 | `thinkingFormat` | One of `openai`, `openrouter`, `deepseek`, `together`, `zai`, `qwen`, `chat-template`, `qwen-chat-template`, `string-thinking`, or `ant-ling`. Default: `openai` unless URL detection selects a known provider format. |
 | `chatTemplateKwargs` | `chat_template_kwargs` for `thinkingFormat: "chat-template"`. Values may be strings, numbers, booleans, `null`, or `{ "$var": "thinking.enabled" | "thinking.effort", "omitWhenOff"?: true }`. |
+| `chatTemplateArgs` | `chat_template_args` for `thinkingFormat: "baseten"`. Values may be strings, numbers, booleans, `null`, or `{ "$var": "thinking.enabled" | "thinking.effort", "omitWhenOff"?: true }`. |
 | `zaiToolStream` | Sends top-level `tool_stream: true` when tools are present. Default: `false`; use only for Z.AI-compatible endpoints that require it. |
 | `cacheControlFormat` | `anthropic` applies Anthropic-style `cache_control` markers to the system prompt, last tool definition, and final text content when caching is enabled. |
 | `sendSessionAffinityHeaders` | Sends session-affinity headers from the session ID when caching is enabled. Default: `false`. |

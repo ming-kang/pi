@@ -114,9 +114,14 @@ describe("ArminComponent rain", () => {
 describe("InteractiveMode selector lifecycle", () => {
 	test("disposes replaced and completed selectors exactly once", () => {
 		const editor = { render: () => ["editor"], invalidate: () => {} };
+		const disposeActiveSelector = Reflect.get(InteractiveMode.prototype, "disposeActiveSelector") as (this: {
+			activeSelectorToken?: object;
+			activeSelectorDispose?: () => void;
+		}) => void;
 		const fakeThis = {
-			activeSelector: null,
-			activeSelectorCleanup: null,
+			activeSelectorToken: undefined as object | undefined,
+			activeSelectorDispose: undefined as (() => void) | undefined,
+			disposeActiveSelector,
 			editor,
 			editorContainer: new Container(),
 			ui: { requestRender: vi.fn(), setFocus: vi.fn() },
@@ -132,15 +137,16 @@ describe("InteractiveMode selector lifecycle", () => {
 
 		showSelector.call(fakeThis, (done) => {
 			finishFirst = done;
-			return { component: first, focus: first };
+			return { component: first, focus: first, dispose: first.dispose };
 		});
 		showSelector.call(fakeThis, (done) => {
 			finishSecond = done;
-			return { component: second, focus: second };
+			return { component: second, focus: second, dispose: second.dispose };
 		});
 
 		expect(first.dispose).toHaveBeenCalledTimes(1);
 		finishFirst();
+		expect(first.dispose).toHaveBeenCalledTimes(1);
 		expect(fakeThis.editorContainer.children).toEqual([second]);
 
 		finishSecond();

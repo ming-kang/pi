@@ -8,7 +8,20 @@ Outputs all session events as JSON lines to stdout. Useful for integrating pi in
 
 ## Event Types
 
-Events are defined by `AgentSessionEvent`, exported from [`@astralyn/pi`](https://www.npmjs.com/package/@astralyn/pi):
+Wire events use `JsonAgentSessionEvent`, exported from [`@astralyn/pi`](https://www.npmjs.com/package/@astralyn/pi). It matches `AgentSessionEvent` except that streaming message updates omit cumulative snapshots:
+
+```typescript
+type WithoutPartial<T> = T extends { partial: unknown } ? Omit<T, "partial"> : T;
+
+type JsonAgentSessionEvent =
+  | Exclude<AgentSessionEvent, { type: "message_update" }>
+  | {
+      type: "message_update";
+      assistantMessageEvent: WithoutPartial<AssistantMessageEvent>;
+    };
+```
+
+Session events are defined by `AgentSessionEvent`:
 
 ```typescript
 type AgentSessionEvent =
@@ -28,6 +41,7 @@ type AgentSessionEvent =
   | { type: "summarization_retry_attempt_start"; source: "compaction"; reason: "manual" | "threshold" | "overflow" }
   | { type: "summarization_retry_finished" }
   | { type: "bash_execution_update"; id?: string; delta: string };
+```
 ```
 
 `queue_update` emits the full pending steering and follow-up queues whenever they change. `compaction_start` and `compaction_end` cover both manual and automatic compaction.
@@ -79,11 +93,16 @@ Followed by events as they occur:
 {"type":"agent_start"}
 {"type":"turn_start"}
 {"type":"message_start","message":{"role":"assistant","content":[],...}}
-{"type":"message_update","message":{...},"assistantMessageEvent":{"type":"text_delta","delta":"Hello",...}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hello"}}
 {"type":"message_end","message":{...}}
 {"type":"turn_end","message":{...},"toolResults":[]}
 {"type":"agent_end","messages":[...],"willRetry":false}
 ```
+
+`message_update` records are delta-only. They omit both the cumulative `message` field and
+`assistantMessageEvent.partial` to keep stream size linear. Use `contentIndex` and `delta`
+to assemble live text, thinking, or tool-call arguments if needed. `message_end` contains
+the final authoritative message.
 
 ## Example
 

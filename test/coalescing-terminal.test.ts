@@ -72,6 +72,40 @@ describe("CoalescingTerminal", () => {
 		expect(chunks).toEqual([]);
 		terminal.stop();
 	});
+
+	it("restores the process-exit flush listener on start() without duplicates", () => {
+		const terminal = new CoalescingTerminal();
+		const baseline = process.listenerCount("exit");
+
+		// The constructor already registered; a start() right after it (the
+		// first TUI start) must not double-register.
+		terminal.start(
+			() => {},
+			() => {},
+		);
+		expect(process.listenerCount("exit")).toBe(baseline);
+
+		// stop() removes the flush; start() must restore it exactly once.
+		terminal.stop();
+		expect(process.listenerCount("exit")).toBe(baseline - 1);
+		terminal.start(
+			() => {},
+			() => {},
+		);
+		expect(process.listenerCount("exit")).toBe(baseline);
+
+		// Repeated start/stop cycles (renderer switches share one terminal)
+		// keep the count exact.
+		terminal.stop();
+		expect(process.listenerCount("exit")).toBe(baseline - 1);
+		terminal.start(
+			() => {},
+			() => {},
+		);
+		expect(process.listenerCount("exit")).toBe(baseline);
+		terminal.stop();
+		expect(process.listenerCount("exit")).toBe(baseline - 1);
+	});
 });
 
 const SYNC_START = "\x1b[?2026h";

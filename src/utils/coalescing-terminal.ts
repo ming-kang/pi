@@ -119,6 +119,18 @@ export class CoalescingTerminal extends ProcessTerminal {
 		process.on("exit", this.flushOnExit);
 	}
 
+	override start(onInput: (data: string) => void, onResize: () => void): void {
+		// stop() removes the exit flush, and renderer switches stop and start
+		// the shared terminal each time; restore it so a synchronous
+		// process.exit() during this lifecycle still flushes pending frames.
+		// remove-then-add keeps exactly one registration even when start()
+		// runs right after construction (constructor already registered) or
+		// across repeated start/stop cycles.
+		process.removeListener("exit", this.flushOnExit);
+		process.on("exit", this.flushOnExit);
+		super.start(onInput, onResize);
+	}
+
 	override write(data: string): void {
 		if (data.length === 0) return;
 		this.pending += this.preserveScrollback(data);

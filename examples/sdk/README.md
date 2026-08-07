@@ -75,6 +75,7 @@ const { session: readOnlySession } = await createAgentSession({
   tools: ["read", "grep", "find", "ls"],
   sessionManager: SessionManager.inMemory(),
 });
+await modelRuntime.setRuntimeApiKey("anthropic", process.env.MY_KEY!);
 
 // Override settings without file I/O.
 const settingsManager = SettingsManager.inMemory({

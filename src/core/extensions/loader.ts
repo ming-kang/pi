@@ -29,6 +29,7 @@ import { resolvePath } from "../../utils/paths.ts";
 import { createEventBus, type EventBus } from "../event-bus.ts";
 import type { ExecOptions } from "../exec.ts";
 import { execCommand } from "../exec.ts";
+import { readPiManifest } from "../pi-manifest.ts";
 import { createSyntheticSourceInfo } from "../source-info.ts";
 import { time } from "../timings.ts";
 import {
@@ -38,6 +39,7 @@ import {
 	type ExtensionFactory,
 	type ExtensionRuntime,
 	type LoadExtensionsResult,
+	type MarkdownTransformer,
 	type MessageRenderer,
 	type ProviderConfig,
 	type RegisteredCommand,
@@ -74,8 +76,10 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 
 const require = createRequire(import.meta.url);
 
+const isTypeScriptSourceRuntime = !isBunBinary && path.extname(fileURLToPath(import.meta.url)) === ".ts";
+
 /**
- * Get aliases for jiti (used in Node.js/development mode).
+ * Get aliases for jiti (used in built Node.js mode).
  * In Bun binary mode, virtualModules is used instead.
  */
 let _aliases: Record<string, string> | null = null;
@@ -163,6 +167,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		throw new Error("Extension runtime not initialized. Action methods cannot be called during extension loading.");
 	};
 	const state: { staleMessage?: string } = {};
+	const eventBusUnsubscribers = new Set<() => void>();
 	const assertActive = () => {
 		if (state.staleMessage) {
 			throw new Error(state.staleMessage);
@@ -190,7 +195,21 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		pendingNativeProviderRegistrations: [],
 		assertActive,
 		invalidate: (message) => {
-			state.staleMessage ??= message ?? STALE_EXTENSION_CONTEXT_MESSAGE;
+			if (state.staleMessage) return;
+			state.staleMessage = message ?? STALE_EXTENSION_CONTEXT_MESSAGE;
+			for (const unsubscribe of eventBusUnsubscribers) unsubscribe();
+			eventBusUnsubscribers.clear();
+		},
+		trackEventBusSubscription: (unsubscribe) => {
+			let active = true;
+			const trackedUnsubscribe = () => {
+				if (!active) return;
+				active = false;
+				eventBusUnsubscribers.delete(trackedUnsubscribe);
+				unsubscribe();
+			};
+			eventBusUnsubscribers.add(trackedUnsubscribe);
+			return trackedUnsubscribe;
 		},
 		// Pre-bind: queue registrations so bindCore() can flush them once the
 		// model registry is available. bindCore() replaces both with direct calls.
@@ -274,6 +293,11 @@ function createExtensionAPI(
 		registerMessageRenderer<T>(customType: string, renderer: MessageRenderer<T>): void {
 			runtime.assertActive();
 			extension.messageRenderers.set(customType, renderer as MessageRenderer);
+		},
+
+		registerMarkdownTransformer(transformer: MarkdownTransformer): void {
+			runtime.assertActive();
+			extension.markdownTransformer = transformer;
 		},
 
 		registerEntryRenderer<T>(customType: string, renderer: EntryRenderer<T>): void {
@@ -375,7 +399,16 @@ function createExtensionAPI(
 			runtime.unregisterProvider(name, extension.path);
 		},
 
-		events: eventBus,
+		events: {
+			emit(channel, data) {
+				runtime.assertActive();
+				eventBus.emit(channel, data);
+			},
+			on(channel, handler) {
+				runtime.assertActive();
+				return runtime.trackEventBusSubscription(eventBus.on(channel, handler));
+			},
+		},
 	} as ExtensionAPI;
 
 	return api;
@@ -399,10 +432,13 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
 
 	const jiti = createJiti(import.meta.url, {
 		moduleCache: false,
-		// In Bun binary: use virtualModules for bundled packages (no filesystem resolution)
-		// Also disable tryNative so jiti handles ALL imports (not just the entry point)
-		// In Node.js/dev: use aliases to resolve to node_modules paths
-		...(isBunBinary ? { virtualModules: VIRTUAL_MODULES, tryNative: false } : { alias: getAliases() }),
+		// Bun uses modules embedded in the executable. Source TypeScript reuses the
+		// host-resolved modules and root tsconfig paths. Built Node uses dist aliases.
+		...(isBunBinary
+			? { virtualModules: VIRTUAL_MODULES, tryNative: false }
+			: isTypeScriptSourceRuntime
+				? { virtualModules: VIRTUAL_MODULES, tsconfigPaths: true }
+				: { alias: getAliases() }),
 	});
 
 	const module = await jiti.import(extensionPath, { default: true });
@@ -545,26 +581,6 @@ export async function loadExtensionsCached(
 	runtime?: ExtensionRuntime,
 ): Promise<LoadExtensionsResult> {
 	return loadExtensionsInternal(paths, cwd, eventBus, runtime, true);
-}
-
-interface PiManifest {
-	extensions?: string[];
-	themes?: string[];
-	skills?: string[];
-	prompts?: string[];
-}
-
-function readPiManifest(packageJsonPath: string): PiManifest | null {
-	try {
-		const content = fs.readFileSync(packageJsonPath, "utf-8");
-		const pkg = JSON.parse(content);
-		if (pkg.pi && typeof pkg.pi === "object") {
-			return pkg.pi as PiManifest;
-		}
-		return null;
-	} catch {
-		return null;
-	}
 }
 
 function isExtensionFile(name: string): boolean {

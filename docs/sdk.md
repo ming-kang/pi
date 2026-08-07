@@ -179,6 +179,33 @@ session = runtime.session;
 unsubscribe = session.subscribe(() => {});
 ```
 
+### Experimental Remote Sessions
+
+The `@astralyn/pi/client` subpath provides a lifecycle controller and transcript reducers for applications that connect to a remote Pi server. Transport and protocol primitives come from the exact `@earendil-works/pi-client` and `@earendil-works/pi-protocol` dependencies.
+
+```typescript
+import { PiClient } from "@earendil-works/pi-client";
+import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
+import { RemoteSession } from "@astralyn/pi/client";
+
+await using client = await PiClient.connect({
+  transportFactory: createUnixTransportFactory({ path: "/tmp/pi.sock" }),
+});
+await using session = await RemoteSession.create(client, {
+  cwd: "/workspace/project",
+});
+
+const unsubscribe = session.subscribe(({ lifecycle, snapshot, transcript }) => {
+  console.log(lifecycle.status, snapshot?.phase, transcript.length);
+});
+await session.submit("Inspect this project");
+unsubscribe();
+```
+
+Use `RemoteSession.open(client, sessionId)` to acquire an existing session. The controller serializes open/create/submit/model/thinking operations, selects prompt versus steering behavior from the remote phase, supports abort and reconnect, and releases its exclusive session lease on disposal. `createTranscriptState()`, `applyTranscriptSnapshot()`, `applyTranscriptProgress()`, and `selectTranscript()` are also exported for lower-level clients that manage transcript state directly.
+
+This API is experimental. Match client and server protocol versions, bound transport queues and frame sizes, authenticate the transport, and treat peers as untrusted.
+
 ### Prompting and Message Queueing
 
 `PromptOptions` controls prompt expansion, queueing behavior while streaming, and prompt preflight notifications:
@@ -478,6 +505,24 @@ const { session } = await createAgentSession({
   modelRuntime: inMemoryRuntime,
 });
 ```
+
+`login()`, `logout()`, `setRuntimeApiKey()`, and `removeRuntimeApiKey()` resolve after the affected provider's cached/built-in catalog, composition, and availability snapshot are locally consistent. They do not wait for remote catalog freshness. If credentials were committed but local synchronization fails, they reject with the exported `CredentialSynchronizationError`; inspect its `providerId`, `operation`, `credential`, and `cause` fields instead of retrying the credential mutation blindly.
+
+Public model/auth operations and `ModelRuntime.create({ signal })` accept optional abort signals and are unbounded when omitted. SDK applications own deadline policy for remote catalog freshness:
+
+```typescript
+const signal = AbortSignal.timeout(15_000);
+const result = await modelRuntime.refresh({
+  providers: ["anthropic"],
+  signal,
+});
+if (result.aborted) console.warn("Catalog refresh timed out; using cached models");
+for (const [providerId, error] of result.errors) {
+  console.warn(`Could not refresh ${providerId}:`, error);
+}
+```
+
+A failed or timed-out network refresh does not undo a successful credential operation. `refresh()` starts a new provider generation, so it does not wait behind an older stalled refresh and stale generations cannot publish afterward.
 
 > See [examples/sdk/09-api-keys-and-oauth.ts](../examples/sdk/09-api-keys-and-oauth.ts)
 
@@ -1086,6 +1131,7 @@ AgentSessionRuntime
 // Auth and Models
 ModelRuntime // implements pi-ai Models and owns credential storage
 ModelRegistry // synchronous extension compatibility facade
+CredentialSynchronizationError
 resolveCliModel
 resolveModelScopeWithDiagnostics
 

@@ -1,4 +1,4 @@
-import { Text, TUI } from "@earendil-works/pi-tui";
+import { Text, TuiMainScreen } from "@earendil-works/pi-tui";
 import xterm from "@xterm/headless";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CoalescingTerminal } from "../src/utils/coalescing-terminal.ts";
@@ -47,7 +47,7 @@ describe("CoalescingTerminal scrollback preservation (e2e)", () => {
 		const terminal = new SizedTerminal();
 		// 模拟 agent run 进行中(交互模式在 agent_start 时开启保护窗口)
 		terminal.setScrollbackPreservation(true);
-		const tui = new TUI(terminal, false);
+		const tui = new TuiMainScreen(terminal, false);
 		const texts: InstanceType<typeof Text>[] = [];
 		for (let i = 0; i < 30; i++) {
 			const t = new Text(`line ${i}`, 0, 0);
@@ -129,7 +129,7 @@ describe("CoalescingTerminal scrollback preservation (e2e)", () => {
 		const terminal = new SizedTerminal();
 		// 模拟 agent run 进行中(交互模式在 agent_start 时开启保护窗口)
 		terminal.setScrollbackPreservation(true);
-		const tui = new TUI(terminal, false);
+		const tui = new TuiMainScreen(terminal, false);
 		// 交互模式同款接线:让改写路径知道屏幕顶行对应 transcript 第几行
 		terminal.setViewportTopProvider(
 			() => (tui as unknown as { previousViewportTop?: unknown }).previousViewportTop as number | undefined,

@@ -228,8 +228,8 @@ async function login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> 
   return exchangeAuthorizationCode(code, callbacks.signal);
 }
 
-async function refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
-  return refreshAuthorization(credentials.refresh);
+async function refreshToken(credentials: OAuthCredentials, signal: AbortSignal): Promise<OAuthCredentials> {
+  return refreshAuthorization(credentials.refresh, signal);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -479,3 +479,124 @@ At minimum, cover:
 - one interactive request with the selected provider, including a tool call if the provider claims tool support.
 
 The two example extensions above cover the two main test seams: direct custom event production and delegation to Pi AI's public streaming APIs.
+
+## Config Reference
+
+```typescript
+interface ProviderConfig {
+  /** Display name for the provider in UI such as /login. */
+  name?: string;
+
+  /** API endpoint URL. Required when defining models. */
+  baseUrl?: string;
+
+  /** API key literal, env interpolation ($ENV_VAR or ${ENV_VAR}), or !command. Required when defining models (unless oauth). */
+  apiKey?: string;
+
+  /** API type for streaming. Required at provider or model level when defining models. */
+  api?: Api;
+
+  /** Custom streaming implementation for non-standard APIs. */
+  streamSimple?: (
+    model: Model<Api>,
+    context: Context,
+    options?: SimpleStreamOptions
+  ) => AssistantMessageEventStream;
+
+  /** Custom headers to include in requests. Values use the same resolution syntax as apiKey. */
+  headers?: Record<string, string>;
+
+  /** If true, adds Authorization: Bearer header with the resolved API key. */
+  authHeader?: boolean;
+
+  /** Models to register. If provided, replaces all existing models for this provider. */
+  models?: ProviderModelConfig[];
+
+  /** OAuth provider for /login support. */
+  oauth?: {
+    name: string;
+    login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials>;
+    refreshToken(credentials: OAuthCredentials, signal: AbortSignal): Promise<OAuthCredentials>;
+    getApiKey(credentials: OAuthCredentials): string;
+  };
+}
+```
+
+## Model Definition Reference
+
+```typescript
+interface ProviderModelConfig {
+  /** Model ID (e.g., "claude-sonnet-4-20250514"). */
+  id: string;
+
+  /** Display name (e.g., "Claude 4 Sonnet"). */
+  name: string;
+
+  /** API type override for this specific model. */
+  api?: Api;
+
+  /** API endpoint URL override for this specific model. */
+  baseUrl?: string;
+
+  /** Whether the model supports extended thinking. */
+  reasoning: boolean;
+
+  /** Maps pi thinking levels to provider/model-specific values; null marks a level unsupported. */
+  thinkingLevelMap?: Partial<Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max", string | null>>;
+
+  /** Supported input types. */
+  input: ("text" | "image")[];
+
+  /** Cost per million tokens (for usage tracking). */
+  cost: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+  };
+
+  /** Maximum context window size in tokens. */
+  contextWindow: number;
+
+  /** Maximum output tokens. */
+  maxTokens: number;
+
+  /** Custom headers for this specific model. */
+  headers?: Record<string, string>;
+
+  /** Compatibility settings for the selected API. */
+  compat?: {
+    // openai-completions
+    supportsStore?: boolean;
+    supportsDeveloperRole?: boolean;
+    supportsReasoningEffort?: boolean;
+    supportsUsageInStreaming?: boolean;
+    supportsFinishReason?: boolean;
+    supportsStrictMode?: boolean;
+    supportsOpenAIGrammarTools?: boolean; // openai-completions/openai-responses; false falls back to normal function tools
+    maxTokensField?: "max_completion_tokens" | "max_tokens";
+    requiresToolResultName?: boolean;
+    requiresAssistantAfterToolResult?: boolean;
+    requiresThinkingAsText?: boolean;
+    requiresReasoningContentOnAssistantMessages?: boolean;
+    thinkingFormat?: "openai" | "openrouter" | "deepseek" | "together" | "baseten" | "zai" | "qwen" | "chat-template" | "qwen-chat-template" | "string-thinking" | "ant-ling";
+    chatTemplateKwargs?: Record<string, string | number | boolean | null | { "$var": "thinking.enabled" | "thinking.effort"; omitWhenOff?: boolean }>;
+    chatTemplateArgs?: Record<string, string | number | boolean | null | { "$var": "thinking.enabled" | "thinking.effort"; omitWhenOff?: boolean }>;
+    cacheControlFormat?: "anthropic";
+    sessionAffinityFormat?: "openai" | "openai-nosession" | "openrouter";
+    sendSessionAffinityHeaders?: boolean;
+
+    // anthropic-messages
+    supportsEagerToolInputStreaming?: boolean;
+    supportsLongCacheRetention?: boolean;
+    sendSessionAffinityHeaders?: boolean;
+    supportsCacheControlOnTools?: boolean;
+    forceAdaptiveThinking?: boolean;
+    allowEmptySignature?: boolean;
+    supportsStrictTools?: boolean;
+  };
+}
+```
+
+`openrouter` sends `reasoning: { effort }`. `deepseek` sends `thinking: { type: "enabled" | "disabled" }` and `reasoning_effort` when enabled. `together` sends `reasoning: { enabled }` and also `reasoning_effort` when `supportsReasoningEffort` is enabled. `qwen` is for DashScope-style top-level `enable_thinking`. Use `qwen-chat-template` for local Qwen-compatible servers that read `chat_template_kwargs.enable_thinking` and need `preserve_thinking`. Use `chat-template` for configurable `chat_template_kwargs`, for example DeepSeek V3.x behind vLLM with `chatTemplateKwargs: { "thinking": { "$var": "thinking.enabled" } }`. Use `thinkingFormat: "baseten"` with `chatTemplateArgs` when the provider expects toggle values under `chat_template_args` and optionally supports top-level `reasoning_effort`.
+`cacheControlFormat: "anthropic"` applies Anthropic-style `cache_control` markers to the system prompt, last tool definition, and last user, assistant, or tool-result text content.

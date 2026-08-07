@@ -105,6 +105,7 @@ type ReloadCommandContext = {
 		getShowHardwareCursor: () => boolean;
 		getClearOnShrink: () => boolean;
 	};
+	coalescingTerminal: { passNextFullRedraw: () => void };
 	keybindings: { reload: () => void };
 	customHeader?: unknown;
 	builtInHeader?: unknown;
@@ -178,6 +179,7 @@ function createReloadCommandContext(overrides: ReloadCommandContextOverrides = {
 			getClearOnShrink: () => false,
 			...overrides.settingsManager,
 		},
+		coalescingTerminal: { passNextFullRedraw: () => {} },
 		keybindings: { reload: () => {}, ...overrides.keybindings },
 		editorContainer: { clear: () => {}, addChild: () => {}, ...overrides.editorContainer },
 		ui: {
