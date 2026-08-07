@@ -94,8 +94,6 @@ describe("createInteractiveTui", () => {
 			options: { tuiMode?: TuiMode };
 			themeController: { rebindTui: () => void };
 			extensionTerminalInputSubscriptions: Set<never>;
-			scrollbackPreservationInputHandler: () => undefined;
-			scrollbackPreservationInputUnsubscribe?: () => void;
 		};
 		const context = Object.assign(Object.create(InteractiveMode.prototype), {
 			renderer,
@@ -104,8 +102,6 @@ describe("createInteractiveTui", () => {
 			options: { tuiMode: "regular" as TuiMode },
 			themeController: { rebindTui: () => {} },
 			extensionTerminalInputSubscriptions: new Set<never>(),
-			scrollbackPreservationInputHandler: () => undefined,
-			scrollbackPreservationInputUnsubscribe: undefined,
 		}) as SwitchContext;
 		stableUi = createInteractiveTuiReference(() => context.renderer);
 		context.ui = stableUi;
@@ -130,89 +126,6 @@ describe("createInteractiveTui", () => {
 
 		expect(stableUi.mode).toBe("regular");
 		expect([terminal.startCount, terminal.stopCount]).toEqual([2, 3]);
-	});
-
-	it("rebinds the scrollback-preservation input listener across renderer switches", async () => {
-		const terminal = new RecordingTerminal(40, 8);
-		const renderer = createInteractiveTui({
-			tuiMode: "regular",
-			showHardwareCursor: false,
-			logDirectory: "/tmp",
-			terminal,
-		});
-		const setScrollbackPreservation = vi.fn<(enabled: boolean) => void>();
-		type PreservationSwitchContext = {
-			renderer: ReturnType<typeof createInteractiveTui>;
-			ui: TUI;
-			fullscreenLayoutRoot: Component;
-			options: { tuiMode?: TuiMode };
-			themeController: { rebindTui: () => void };
-			extensionTerminalInputSubscriptions: Set<never>;
-			agentRunActive: boolean;
-			coalescingTerminal: {
-				setScrollbackPreservation: ReturnType<typeof vi.fn<(enabled: boolean) => void>>;
-				passNextFullRedraw: ReturnType<typeof vi.fn>;
-			};
-			scrollbackPreservationInputHandler: () => undefined;
-			scrollbackPreservationInputUnsubscribe?: () => void;
-		};
-		const context = Object.assign(Object.create(InteractiveMode.prototype), {
-			renderer,
-			ui: undefined as unknown as TUI,
-			fullscreenLayoutRoot: { render: () => [], invalidate: () => {} },
-			options: { tuiMode: "regular" as TuiMode },
-			themeController: { rebindTui: () => {} },
-			extensionTerminalInputSubscriptions: new Set<never>(),
-			agentRunActive: false,
-			coalescingTerminal: { setScrollbackPreservation, passNextFullRedraw: vi.fn() },
-			scrollbackPreservationInputHandler: () => {
-				if (!context.agentRunActive) context.coalescingTerminal.setScrollbackPreservation(false);
-				return undefined;
-			},
-			scrollbackPreservationInputUnsubscribe: undefined,
-		}) as PreservationSwitchContext;
-		context.ui = createInteractiveTuiReference(() => context.renderer);
-		// Simulate the constructor's registration on the initial renderer.
-		context.scrollbackPreservationInputUnsubscribe = context.ui.addInputListener(
-			context.scrollbackPreservationInputHandler,
-		);
-		const { switchTuiMode } = InteractiveMode.prototype as unknown as {
-			switchTuiMode(this: PreservationSwitchContext, mode: TuiMode, restoreProgress?: boolean): boolean;
-		};
-
-		renderer.start();
-		await terminal.waitForRender();
-		// Idle input on the initial renderer disables preservation.
-		terminal.sendInput("a");
-		expect(setScrollbackPreservation).toHaveBeenCalledWith(false);
-
-		expect(switchTuiMode.call(context, "fullscreen", false)).toBe(true);
-		await terminal.waitForRender();
-
-		// The outgoing renderer's registration is gone; the incoming renderer
-		// holds exactly one (TuiAltScreen adds its own viewport listener, so
-		// count occurrences of the preservation handler rather than total size).
-		const oldListeners = (renderer as unknown as { inputListeners: Set<unknown> }).inputListeners;
-		expect(oldListeners.has(context.scrollbackPreservationInputHandler)).toBe(false);
-		const countPreservationListeners = (listeners: Set<unknown>) =>
-			Array.from(listeners).filter((l) => l === context.scrollbackPreservationInputHandler).length;
-		const fullscreenListeners = (context.renderer as unknown as { inputListeners: Set<unknown> }).inputListeners;
-		expect(countPreservationListeners(fullscreenListeners)).toBe(1);
-
-		// Input after the switch still reaches the preservation listener.
-		terminal.sendInput("b");
-		expect(setScrollbackPreservation).toHaveBeenCalledTimes(2);
-
-		// Switching back rebinds onto the new regular renderer, again exactly once.
-		expect(switchTuiMode.call(context, "regular", false)).toBe(true);
-		await terminal.waitForRender();
-		expect(fullscreenListeners.has(context.scrollbackPreservationInputHandler)).toBe(false);
-		const regularListeners = (context.renderer as unknown as { inputListeners: Set<unknown> }).inputListeners;
-		expect(countPreservationListeners(regularListeners)).toBe(1);
-		terminal.sendInput("c");
-		expect(setScrollbackPreservation).toHaveBeenCalledTimes(3);
-
-		context.ui.stop();
 	});
 });
 

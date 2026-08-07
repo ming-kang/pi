@@ -39,14 +39,16 @@ describe("CoalescingTerminal scrollback preservation (e2e)", () => {
 
 	it("keeps scrollback and screen state consistent across a content-driven full redraw", async () => {
 		const emulator = new xterm.Terminal({ cols: COLS, rows: ROWS, allowProposedApi: true, scrollback: 1000 });
-		// 预置"shell 历史",模拟 Pi 启动前终端里已有的内容
+		// Seed "shell history" to simulate content already in the terminal
+		// before pi starts.
 		for (let i = 0; i < 5; i++) {
 			await writeToXterm(emulator, `shell-history-${i}\r\n`);
 		}
 
 		const terminal = new SizedTerminal();
-		// 模拟 agent run 进行中(交互模式在 agent_start 时开启保护窗口)
-		terminal.setScrollbackPreservation(true);
+		// Simulate an agent run in progress (interactive mode opens the
+		// preservation window at agent_start).
+		terminal.setAgentRunActive(true);
 		const tui = new TuiMainScreen(terminal, false);
 		const texts: InstanceType<typeof Text>[] = [];
 		for (let i = 0; i < 30; i++) {
@@ -57,19 +59,22 @@ describe("CoalescingTerminal scrollback preservation (e2e)", () => {
 		tui.start();
 		await wait(50);
 
-		// 1) 触发内容驱动的全量重绘:改一行视口上方的内容 (30 行, 视口=最后 10 行)
+		// 1) Trigger a content-driven full redraw: change a line above the
+		// viewport (30 lines, viewport = the last 10).
 		texts[5].setText("line 5 CHANGED");
 		tui.requestRender();
 		await wait(50);
 
-		// 2) 连续多次全量重绘不得让缓冲区无界增长(Ctrl+O 展开 + 流式的场景)
+		// 2) Repeated full redraws must not grow the buffer without bound
+		// (the Ctrl+O expansion + streaming scenario).
 		for (let k = 0; k < 5; k++) {
 			texts[6 + k].setText(`line ${6 + k} CHANGED ${k}`);
 			tui.requestRender();
 			await wait(40);
 		}
 
-		// 3) 之后的差分渲染必须仍然坐标正确:改视口内的一行 + 追加一行
+		// 3) Differential renders afterwards must still land on the right
+		// coordinates: change a line inside the viewport + append one.
 		texts[25].setText("line 25 UPDATED");
 		tui.requestRender();
 		await wait(50);
@@ -80,18 +85,19 @@ describe("CoalescingTerminal scrollback preservation (e2e)", () => {
 		const output = captured.join("");
 		tui.stop();
 
-		// 断言 A: 输出流中不含清 scrollback 的 3J,也不含 ED 2
-		// (conhost/Windows Terminal 会把 2J 实现为"把屏幕推入 scrollback",
-		// 没有 3J 兜底时每次重绘都会堆一屏副本)
+		// Assertion A: the output stream contains neither the
+		// scrollback-clearing 3J nor ED 2 (conhost/Windows Terminal implement
+		// 2J by pushing the screen into scrollback, so without the 3J wipe
+		// every redraw would stack another screenful of duplicates).
 		expect(output).not.toContain("\x1b[3J");
 		expect(output).not.toContain("\x1b[2J");
-		// 确认全量重绘确实发生过(否则测试场景无效)
+		// Confirm full redraws actually happened (otherwise the scenario is void).
 		expect(tui.fullRedraws).toBeGreaterThanOrEqual(6);
 
-		// 回放到 xterm 仿真终端
+		// Replay into the xterm emulator.
 		await writeToXterm(emulator, output);
 
-		// 断言 B: 预置的 shell 历史仍在缓冲区里
+		// Assertion B: the seeded shell history is still in the buffer.
 		const buf = emulator.buffer.active;
 		const all: string[] = [];
 		for (let i = 0; i < buf.length; i++) {
@@ -102,7 +108,8 @@ describe("CoalescingTerminal scrollback preservation (e2e)", () => {
 			expect(joined).toContain(`shell-history-${i}`);
 		}
 
-		// 断言 C: 最终可见屏幕与 TUI 认为的内容(上游语义的屏幕终态)一致
+		// Assertion C: the final visible screen matches what the TUI believes
+		// it rendered (the upstream-semantics final screen state).
 		const contentLines = (tui as unknown as { previousLines: string[] }).previousLines;
 		const expected = contentLines.slice(-ROWS).map((l) => l.replace(/\x1b\[[0-9;]*m|\x1b\]8;;\x07/g, ""));
 		const viewportStart = buf.length - ROWS;
@@ -111,12 +118,13 @@ describe("CoalescingTerminal scrollback preservation (e2e)", () => {
 			screen.push(buf.getLine(viewportStart + i)?.translateToString(true) ?? "");
 		}
 		expect(screen.map((s) => s.trimEnd())).toEqual(expected.map((s) => s.trimEnd()));
-		// 变更确实生效在屏幕上
+		// The changes actually landed on screen.
 		expect(screen.join("\n")).toContain("line 25 UPDATED");
 		expect(screen.join("\n")).toContain("line 30 appended");
 
-		// 断言 D: 缓冲区大小有界 —— 5 行 shell 历史 + 31 行内容 + 少量余量,
-		// 多次全量重绘不得堆积重复副本
+		// Assertion D: the buffer stays bounded — 5 lines of shell history +
+		// 31 content lines + a small margin; repeated full redraws must not
+		// stack duplicate copies.
 		expect(buf.length).toBeLessThanOrEqual(5 + 31 + ROWS);
 	});
 
@@ -127,13 +135,15 @@ describe("CoalescingTerminal scrollback preservation (e2e)", () => {
 		}
 
 		const terminal = new SizedTerminal();
-		// 模拟 agent run 进行中(交互模式在 agent_start 时开启保护窗口)
-		terminal.setScrollbackPreservation(true);
+		// Simulate an agent run in progress (interactive mode opens the
+		// preservation window at agent_start).
+		terminal.setAgentRunActive(true);
 		const tui = new TuiMainScreen(terminal, false);
-		// 交互模式同款接线:让改写路径知道屏幕顶行对应 transcript 第几行
-		terminal.setViewportTopProvider(
-			() => (tui as unknown as { previousViewportTop?: unknown }).previousViewportTop as number | undefined,
-		);
+		// Same wiring as interactive mode: read which transcript line the top
+		// screen row sits at through the public captureRenderState() (pi-tui
+		// writes the frame before updating its bookkeeping, so this observes
+		// the pre-frame value).
+		terminal.setViewportTopProvider(() => tui.captureRenderState().previousViewportTop);
 		const texts: InstanceType<typeof Text>[] = [];
 		for (let i = 0; i < 30; i++) {
 			const t = new Text(`line ${i}`, 0, 0);
@@ -143,10 +153,13 @@ describe("CoalescingTerminal scrollback preservation (e2e)", () => {
 		tui.start();
 		await wait(50);
 
-		// 模拟 Ctrl+O:展开是全局切换 —— 视口上方某处也变了一行(比如更早
-		// 卡片的 hint 行),迫使 pi-tui 走 fullRender;同时视口内(30 行中的
-		// 第 22 行,视口=20..29)的卡片长高 15 行,把自身头部顶出屏幕上沿。
-		// 回归场景:头部这些行以前既不上屏也不进 scrollback,凭空消失。
+		// Simulate Ctrl+O: expansion is a global toggle — a line above the
+		// viewport changes too (e.g. an earlier card's hint line), forcing
+		// pi-tui down the fullRender path; meanwhile a card inside the
+		// viewport (line 22 of 30, viewport = 20..29) grows by 15 lines,
+		// pushing its own header past the top edge of the screen. Regression
+		// scenario: those header lines used to land neither on screen nor in
+		// scrollback — they simply vanished.
 		texts[5].setText("line 5 (toggled)");
 		const details = Array.from({ length: 15 }, (_, k) => `DETAIL-${k}`);
 		texts[22].setText(["line 22 EXPANDED", ...details].join("\n"));
@@ -156,7 +169,7 @@ describe("CoalescingTerminal scrollback preservation (e2e)", () => {
 		const output = captured.join("");
 		tui.stop();
 
-		// 重绘不得清 scrollback
+		// Redraws must not clear scrollback.
 		expect(output).not.toContain("\x1b[3J");
 		expect(output).not.toContain("\x1b[2J");
 		expect(tui.fullRedraws).toBeGreaterThanOrEqual(2);
@@ -169,20 +182,23 @@ describe("CoalescingTerminal scrollback preservation (e2e)", () => {
 		}
 		const joined = all.join("\n");
 
-		// shell 历史仍在
+		// The shell history is still there.
 		for (let i = 0; i < 3; i++) {
 			expect(joined).toContain(`shell-history-${i}`);
 		}
-		// 展开的每一行都必须可达(屏幕或 scrollback),包括被顶出屏幕的头部
+		// Every expanded line must be reachable (on screen or in scrollback),
+		// including the header pushed past the top of the screen.
 		expect(joined).toContain("line 22 EXPANDED");
 		for (const detail of details) {
 			expect(joined).toContain(detail);
 		}
-		// 已接受的权衡:屏幕上沿之上、深居 scrollback 的那处变更保持旧渲染
-		// (scrollback 不可改写),但内容仍在、不会消失
+		// Accepted trade-off: the change that sits above the screen, deep in
+		// scrollback, keeps its old rendering (scrollback cannot be
+		// rewritten) — but the content survives instead of vanishing.
 		expect(joined).not.toContain("line 5 (toggled)");
 		expect(joined).toContain("line 5");
-		// 最终可见屏幕与上游语义的终态一致(transcript 的最后 ROWS 行)
+		// The final visible screen matches the upstream-semantics final state
+		// (the last ROWS lines of the transcript).
 		const contentLines = (tui as unknown as { previousLines: string[] }).previousLines;
 		const expected = contentLines.slice(-ROWS).map((l) => l.replace(/\x1b\[[0-9;]*m|\x1b\]8;;\x07/g, ""));
 		const viewportStart = buf.length - ROWS;
@@ -191,7 +207,8 @@ describe("CoalescingTerminal scrollback preservation (e2e)", () => {
 			screen.push(buf.getLine(viewportStart + i)?.translateToString(true) ?? "");
 		}
 		expect(screen.map((s) => s.trimEnd())).toEqual(expected.map((s) => s.trimEnd()));
-		// 缓冲区有界:3 行 shell 历史 + 45 行新 transcript + 余量,无重复副本
+		// Bounded buffer: 3 lines of shell history + 45 lines of new
+		// transcript + margin, with no duplicate copies.
 		expect(buf.length).toBeLessThanOrEqual(3 + 45 + ROWS);
 	});
 });

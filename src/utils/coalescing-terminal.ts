@@ -32,10 +32,12 @@ const KITTY_APC_PREFIX = "\x1b_G";
  * Windows Terminal — yanks a scrolled-up reader to the top of the buffer on
  * every reflow (upstream #6502, #5576, #6050; rejected upstream fix #4204).
  *
- * Preservation is therefore windowed, not permanent: the host enables it via
- * setScrollbackPreservation while an agent run is mutating the transcript
- * (and keeps it on until the user's next input after the run settles, since
- * they may still be scrolled up reading), and leaves it off otherwise. An
+ * Preservation is therefore windowed, not permanent: the host marks agent
+ * runs via setAgentRunActive, which turns preservation on at run start and
+ * keeps it on until the user's next input after the run settles, since they
+ * may still be scrolled up reading. The input half of the window is observed
+ * directly on this terminal's own input path, so it needs no TUI listener
+ * and survives renderer switches (which reuse this terminal) untouched. An
  * idle-session full redraw — Ctrl+O toggles, mode switches — passes through
  * with upstream's wipe-and-replay, whose result is byte-perfect: scrollback
  * becomes the clean new transcript. Mid-run user toggles can arm
@@ -71,6 +73,7 @@ export class CoalescingTerminal extends ProcessTerminal {
 	private viewportTopProvider: (() => number | undefined) | undefined;
 	private preserve = false;
 	private passArmed = false;
+	private agentRunActive = false;
 	private flushOnExit = () => this.flush();
 
 	/**
@@ -81,9 +84,25 @@ export class CoalescingTerminal extends ProcessTerminal {
 	 * input after it settles. Outside that window every full redraw passes
 	 * through with upstream's wipe-and-replay, whose result is byte-perfect:
 	 * scrollback becomes the clean new transcript. Default: disabled.
+	 * setAgentRunActive drives this for the normal agent-run window; this
+	 * primitive remains for direct control in tests.
 	 */
 	setScrollbackPreservation(enabled: boolean): void {
 		this.preserve = enabled;
+	}
+
+	/**
+	 * Open or close the agent-run half of the preservation window. Opening
+	 * (agent_start) turns preservation on. Closing (agent_settled) leaves
+	 * preservation on: trailing reflow frames may land after the run while
+	 * the reader is still scrolled up. The window then closes on the user's
+	 * next input, observed in start()'s input wrapper — once the user acts
+	 * they are back at the bottom, and upstream's clean wipe-and-replay wins
+	 * again until the next run.
+	 */
+	setAgentRunActive(active: boolean): void {
+		this.agentRunActive = active;
+		if (active) this.preserve = true;
 	}
 
 	/**
@@ -128,7 +147,15 @@ export class CoalescingTerminal extends ProcessTerminal {
 		// across repeated start/stop cycles.
 		process.removeListener("exit", this.flushOnExit);
 		process.on("exit", this.flushOnExit);
-		super.start(onInput, onResize);
+		// User input outside an active run closes the preservation window
+		// (see setAgentRunActive). Observing input here instead of on a TUI
+		// input listener keeps the window logic in one place and renderer
+		// switches — which stop and restart this shared terminal — rewrap
+		// the new handler automatically.
+		super.start((data) => {
+			if (!this.agentRunActive) this.preserve = false;
+			onInput(data);
+		}, onResize);
 	}
 
 	override write(data: string): void {

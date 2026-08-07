@@ -375,16 +375,6 @@ export class InteractiveMode {
 	private renderer: TuiMainScreen | TuiAltScreen;
 	private ui: TUI;
 	private coalescingTerminal: CoalescingTerminal;
-	// Input listeners live on the TUI renderer instance, which switchTuiMode
-	// replaces; this pair tracks the scrollback-preservation listener so it
-	// can be unsubscribed from the outgoing renderer and re-registered on the
-	// incoming one without duplicates.
-	private readonly scrollbackPreservationInputHandler = () => {
-		if (!this.agentRunActive) this.coalescingTerminal.setScrollbackPreservation(false);
-		return undefined;
-	};
-	private scrollbackPreservationInputUnsubscribe: (() => void) | undefined;
-	private agentRunActive = false;
 	private mainScreenRenderState: TuiMainScreenRenderState | undefined;
 	private loadedResourcesContainer: Container;
 	private chatContainer: Container;
@@ -543,21 +533,15 @@ export class InteractiveMode {
 		});
 		this.ui = createInteractiveTuiReference(() => this.renderer);
 		// Lets full-redraw rewrites scroll grown content into scrollback
-		// instead of dropping the lines pushed above the screen.
-		// previousViewportTop is TS-private but a plain runtime field, and
-		// pi-tui writes each full-redraw frame before updating it, so the
-		// wrapper observes the pre-frame value; if either assumption breaks,
-		// readViewportTop falls back to the bottom-anchored repaint.
-		terminal.setViewportTopProvider(
-			() => (this.ui as unknown as { previousViewportTop?: unknown }).previousViewportTop as number | undefined,
+		// instead of dropping the lines pushed above the screen. The render
+		// state comes from pi-tui's public captureRenderState(); pi-tui
+		// writes each full-redraw frame before updating its bookkeeping, so
+		// the wrapper observes the pre-frame viewport top. Fullscreen
+		// renderers return undefined (their frames do not match the rewrite
+		// shape anyway), falling back to the bottom-anchored repaint.
+		terminal.setViewportTopProvider(() =>
+			this.renderer instanceof TuiMainScreen ? this.renderer.captureRenderState().previousViewportTop : undefined,
 		);
-		// Scrollback preservation stays on from agent_start until the user's
-		// next input after the run settles: post-run reflow frames must not
-		// yank a reader who is still scrolled up, but once the user acts they
-		// are back at the bottom and upstream's clean wipe-and-replay wins.
-		// The listener is registered on the initial renderer and rebound by
-		// switchTuiMode whenever the renderer is replaced.
-		this.scrollbackPreservationInputUnsubscribe = this.ui.addInputListener(this.scrollbackPreservationInputHandler);
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 		this.headerContainer = new Container();
 		this.loadedResourcesContainer = new Container();
@@ -831,9 +815,6 @@ export class InteractiveMode {
 			nextUi.restoreRenderState(this.mainScreenRenderState);
 		}
 		this.renderer = nextUi;
-		// Renderers own their input-listener sets; move the preservation
-		// listener onto the incoming renderer before anything else touches it.
-		this.rebindScrollbackPreservationInputListener();
 		this.options.tuiMode = mode;
 		this.mountInteractiveTui(nextUi, components);
 		nextUi.invalidate();
@@ -2377,11 +2358,6 @@ export class InteractiveMode {
 		};
 	}
 
-	private rebindScrollbackPreservationInputListener(): void {
-		this.scrollbackPreservationInputUnsubscribe?.();
-		this.scrollbackPreservationInputUnsubscribe = this.ui.addInputListener(this.scrollbackPreservationInputHandler);
-	}
-
 	private rebindExtensionTerminalInputListeners(): void {
 		for (const subscription of this.extensionTerminalInputSubscriptions) {
 			subscription.unsubscribe();
@@ -3136,8 +3112,9 @@ export class InteractiveMode {
 
 		switch (event.type) {
 			case "agent_start":
-				this.agentRunActive = true;
-				this.coalescingTerminal.setScrollbackPreservation(true);
+				// Opens the scrollback-preservation window; the terminal
+				// closes it on the user's next input after the run settles.
+				this.coalescingTerminal.setAgentRunActive(true);
 				this.clearPendingTools();
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
@@ -3348,7 +3325,7 @@ export class InteractiveMode {
 				// Preservation itself stays on until the next user input; the
 				// run's trailing reflow frames may land after this event while
 				// the reader is still scrolled up.
-				this.agentRunActive = false;
+				this.coalescingTerminal.setAgentRunActive(false);
 				await this.checkShutdownRequested();
 				break;
 
@@ -6458,8 +6435,6 @@ export class InteractiveMode {
 		this.clearStatusIndicator();
 		this.themeController.disableAutoSync();
 		this.clearExtensionTerminalInputListeners();
-		this.scrollbackPreservationInputUnsubscribe?.();
-		this.scrollbackPreservationInputUnsubscribe = undefined;
 		this.clearPendingTools();
 		this.disposeChatToolComponents();
 		this.footer.dispose();

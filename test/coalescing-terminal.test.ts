@@ -1,3 +1,4 @@
+import { ProcessTerminal } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CoalescingTerminal } from "../src/utils/coalescing-terminal.ts";
 
@@ -379,6 +380,111 @@ describe("CoalescingTerminal scrollback preservation", () => {
 		terminal.write(frame);
 		await flushMicrotasks();
 		expect(chunks[1]).toBe(frame);
+		terminal.stop();
+	});
+});
+
+describe("CoalescingTerminal preservation window", () => {
+	let chunks: string[];
+	let stdoutSpy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(() => {
+		chunks = [];
+		stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(((data: string | Uint8Array) => {
+			chunks.push(typeof data === "string" ? data : Buffer.from(data).toString("utf8"));
+			return true;
+		}) as typeof process.stdout.write);
+	});
+
+	afterEach(() => {
+		stdoutSpy.mockRestore();
+	});
+
+	const REWRITTEN_AB = `${SYNC_START}\x1b[H\x1b[2Ka\r\n\x1b[2Kb\x1b[J${SYNC_END}`;
+
+	/**
+	 * Start the terminal with ProcessTerminal.start mocked out so no real
+	 * stdin/raw-mode state is touched, and capture the exact input handler
+	 * the stdin pipeline would invoke — CoalescingTerminal's wrapper around
+	 * the renderer's handler.
+	 */
+	function startCapturingInput(terminal: SizedTerminal, onInput: (data: string) => void = () => {}) {
+		let captured: ((data: string) => void) | undefined;
+		const startSpy = vi.spyOn(ProcessTerminal.prototype, "start").mockImplementation(function (
+			this: ProcessTerminal,
+			handler: (data: string) => void,
+		) {
+			captured = handler;
+		});
+		terminal.start(onInput, () => {});
+		startSpy.mockRestore();
+		if (!captured) throw new Error("start() did not register an input handler");
+		return captured;
+	}
+
+	it("opens the window on run start and rewrites full redraws", async () => {
+		const terminal = new SizedTerminal();
+		terminal.setAgentRunActive(true);
+		terminal.write(fullRedrawFrame(["a", "b"]));
+		await flushMicrotasks();
+		expect(chunks).toEqual([REWRITTEN_AB]);
+		terminal.stop();
+	});
+
+	it("holds the window open across input while the run is active", async () => {
+		const terminal = new SizedTerminal();
+		terminal.setAgentRunActive(true);
+		const sendInput = startCapturingInput(terminal);
+		sendInput("k");
+		terminal.write(fullRedrawFrame(["a", "b"]));
+		await flushMicrotasks();
+		expect(chunks).toEqual([REWRITTEN_AB]);
+		terminal.stop();
+	});
+
+	it("closes the window on the first input after the run settles", async () => {
+		const terminal = new SizedTerminal();
+		terminal.setAgentRunActive(true);
+		const sendInput = startCapturingInput(terminal);
+		terminal.setAgentRunActive(false);
+		// Trailing reflow frames before any input are still rewritten: the
+		// reader may be scrolled up after the run settles.
+		terminal.write(fullRedrawFrame(["a", "b"]));
+		await flushMicrotasks();
+		expect(chunks[0]).toBe(REWRITTEN_AB);
+		sendInput("k");
+		const frame = fullRedrawFrame(["c", "d"]);
+		terminal.write(frame);
+		await flushMicrotasks();
+		expect(chunks[1]).toBe(frame);
+		terminal.stop();
+	});
+
+	it("forwards input to the renderer handler unchanged", () => {
+		const terminal = new SizedTerminal();
+		const received: string[] = [];
+		const sendInput = startCapturingInput(terminal, (data) => received.push(data));
+		sendInput("a");
+		sendInput("\x1b[13;2u");
+		expect(received).toEqual(["a", "\x1b[13;2u"]);
+		terminal.stop();
+	});
+
+	it("keeps the window wiring across stop/start cycles (renderer switches)", async () => {
+		const terminal = new SizedTerminal();
+		terminal.setAgentRunActive(true);
+		startCapturingInput(terminal);
+		// A renderer switch stops the shared terminal and starts it again
+		// with the new renderer's input handler; the wrapper must rewrap.
+		terminal.stop();
+		const sendInput = startCapturingInput(terminal);
+		terminal.setAgentRunActive(false);
+		sendInput("k");
+		chunks.length = 0;
+		const frame = fullRedrawFrame(["c", "d"]);
+		terminal.write(frame);
+		await flushMicrotasks();
+		expect(chunks).toEqual([frame]);
 		terminal.stop();
 	});
 });
