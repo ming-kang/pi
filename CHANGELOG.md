@@ -4,6 +4,28 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.84.1] - 2026-08-07
+
+### Added
+
+- Added `pi auth check` for provider/model credential preflight with optional JSON output and credential emission; the existing `pi auth print-api-key` and `pi auth print-bearer-token` commands now share the unified `pi auth` parser while keeping case-insensitive `--min-expiry` duration units.
+- Added inherited Qwen Token Plan Individual as a built-in provider with its documented subscription model catalog and the shared international `QWEN_TOKEN_PLAN_API_KEY`.
+- Added `terminate` support to blocked extension `tool_call` events so all-terminating batches can skip the automatic follow-up model call.
+- Added the inherited coding-agent harness factory (`src/server/create-harness.ts`) composing built-in tool prompt contributions for server-side embedding.
+- Added inherited fullscreen double-click word, triple-click paragraph, and granularity-aware drag selection, unbound half-page transcript scrolling actions, and right-click clipboard paste on Windows.
+
+### Changed
+
+- Followed upstream Pi `v0.84.1`, updating the exact `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-tui`, `@earendil-works/pi-client`, and `@earendil-works/pi-protocol` runtime dependencies to `0.84.1`.
+- Changed the scrollback-preservation window to live entirely in the coalescing terminal: the viewport top is read through pi-tui's public `captureRenderState()` instead of a private field, and the user-input half of the window is observed on the shared terminal's input path instead of per-renderer TUI listeners.
+- Softened the inherited bash tool's `PI_*` environment guideline to reduce unnecessary inspection commands, and reduced worst-case automatic terminal theme detection delay from 200 ms to 100 ms.
+
+### Fixed
+
+- Fixed inherited extension TUI method wrappers recursing indefinitely when delegating to the original method.
+- Fixed inherited `Agent.reset()` clearing transcript and runtime state during active runs; it now rejects until the agent is idle.
+- Fixed inherited LaTeX relation, multiplication, and named-operator spacing, matrix composition with stacked fractions, operator limits, and adjacent matrices, and reduced fullscreen mouse event volume under tmux, Zellij, and GNU Screen.
+
 ## [0.84.0] - 2026-08-07
 
 ### Added
