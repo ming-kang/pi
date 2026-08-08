@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -18,6 +18,8 @@ interface Node {
 	parentId: string | null;
 	type: string;
 	message?: { role: string };
+	customType?: string;
+	data?: unknown;
 }
 
 type Hook = (event: unknown, ctx: ExtensionContext) => Promise<unknown> | unknown;
@@ -60,10 +62,13 @@ describe("rewind run lifecycle", () => {
 		};
 		ctx = {
 			cwd,
-			hasUI: false,
+			hasUI: true,
 			mode: "json",
 			sessionManager,
-			ui: { notify: () => undefined },
+			ui: {
+				select: async () => "Yes, restore files",
+				notify: () => undefined,
+			},
 		} as unknown as ExtensionContext;
 	});
 
@@ -99,6 +104,40 @@ describe("rewind run lifecycle", () => {
 		expect(readdirSync(backupDir)).toHaveLength(1);
 	});
 
+	test("restores through the /tree hooks and rebuilds after session reload", async () => {
+		const first = makeHarness();
+		await first.hooks.get("session_start")?.({ reason: "new" }, ctx);
+		await first.hooks.get("before_agent_start")?.({ prompt: "edit" }, ctx);
+		await first.hooks.get("agent_start")?.({}, ctx);
+		branch.push({ id: "u1", parentId: "root", type: "message", message: { role: "user" } });
+		leafId = "u1";
+		await first.hooks.get("tool_call")?.({ toolName: "edit", input: { path: "f.txt" } }, ctx);
+		writeFileSync(f, "normal", "utf8");
+		await first.hooks.get("agent_settled")?.({}, ctx);
+		expect(first.appended).toHaveLength(1);
+		const snapshotEntry = {
+			id: "snap1",
+			parentId: "u1",
+			type: "custom",
+			customType: first.appended[0]!.customType,
+			data: first.appended[0]!.data,
+		};
+		branch.push({ id: "a1", parentId: "u1", type: "message", message: { role: "assistant" } }, snapshotEntry);
+		leafId = "snap1";
+
+		writeFileSync(f, "external", "utf8");
+		await first.hooks.get("session_before_tree")?.({ preparation: { targetId: "u1" } }, ctx);
+		await first.hooks.get("session_tree")?.({}, ctx);
+		expect(readFileSync(f, "utf8")).toBe("before");
+
+		await first.hooks.get("session_shutdown")?.({}, ctx);
+		writeFileSync(f, "external-again", "utf8");
+		const reloaded = makeHarness();
+		await reloaded.hooks.get("session_start")?.({ reason: "resume" }, ctx);
+		await reloaded.hooks.get("session_before_tree")?.({ preparation: { targetId: "u1" } }, ctx);
+		await reloaded.hooks.get("session_tree")?.({}, ctx);
+		expect(readFileSync(f, "utf8")).toBe("before");
+	});
 	test("does not let a custom run inherit eligibility from an interrupted run", async () => {
 		const harness = makeHarness();
 		await harness.hooks.get("session_start")?.({ reason: "new" }, ctx);
