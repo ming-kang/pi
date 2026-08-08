@@ -4,6 +4,15 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed bundled rewind `/tree` restoration selecting a later retained snapshot after the exact target had been evicted. Rewind now fails closed when the target state or its backup data is unavailable, reports unavailable files separately, and restores each file through a same-directory temporary file and atomic rename so failed copies do not truncate the worktree.
+- Fixed rewind accepting incomplete or invalid snapshot data, including unsafe tracking paths, malformed backup names, invalid versions, and corrupt backup blobs. New backup blobs persist optional SHA-256 digests and are verified during change planning, restoration, and fork migration; legacy snapshots without digests remain readable without the same integrity guarantee.
+- Fixed rewind file-change detection missing same-size external replacements with preserved or older mtimes. Bounded files now use byte comparisons, while oversized files use bounded metadata fingerprints and cached streamed SHA-256 verification.
+- Fixed rewind lifecycle and retention issues that could persist frames from custom-triggered or interrupted runs, leak unreferenced backup blobs, or accept malformed retention values. Only runs with a complete `before_agent_start` → `agent_start` lifecycle can persist snapshots; retention input is restricted to whole days from 0 through 3650, and configuration writes are durable and atomic.
+- Fixed fork/resume backup migration and garbage collection for sessions with underscores, custom session roots, temporarily unreadable headers, stale destination blobs, and large backup sets. Migration now follows recorded session lineage, deduplicates work, and caps I/O; incomplete GC scans no longer delete orphan candidates.
+- Fixed rewind snapshot reconstruction after `/reload` and `/tree` navigation so persisted custom entries rebuild the correct in-memory index and preserve exact user/turn anchoring semantics.
+
 ## [0.84.1] - 2026-08-07
 
 ### Added
