@@ -145,7 +145,6 @@ try {
 	for (const forbiddenPath of [
 		"dist/extensions/plan",
 		"docs/bundled/extensions/plan.md",
-		"examples/extensions/plan-mode",
 		"maintainers",
 		"node_modules/.package-lock.json",
 		"packages",

@@ -43,12 +43,14 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 | `minimal-mode.ts` | Override built-in tool rendering for minimal display (only tool calls, no output in collapsed mode) |
 | `truncated-tool.ts` | Wraps ripgrep with proper output truncation (50KB/2000 lines) |
 | `ssh.ts` | Delegate all tools to a remote machine via SSH using pluggable operations |
+| `subagent/` | Delegate tasks to specialized subagents with isolated context windows |
 
 ### Commands & UI
 
 | Extension | Description |
 |-----------|-------------|
 | `preset.ts` | Named presets for model, thinking level, tools, and instructions via `--preset` flag and `/preset` command |
+| `plan-mode/` | Claude Code-style plan mode for read-only exploration with `/plan` command and step tracking |
 | `tools.ts` | Interactive `/tools` command to enable/disable tools with session persistence |
 | `handoff.ts` | Transfer context to a new focused session via `/handoff <goal>` |
 | `commands.ts` | Lists available slash commands, optionally filtered by source |
