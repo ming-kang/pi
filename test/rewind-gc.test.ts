@@ -44,6 +44,14 @@ describe("rewind session discovery", () => {
 		expect(sessionInfoFromFile(file)?.parentSession).toBe("parent_session.jsonl");
 	});
 
+	test("protects a matching backup when a session header is temporarily unreadable", () => {
+		const id = "my_session_123";
+		const file = join(customSessionsRoot, `2026-01-01_${id}.jsonl`);
+		writeFileSync(file, "not-json\n", "utf8");
+		mkdirSync(join(backupsRoot, id), { recursive: true });
+		expect(activeSessionIds()).toContain(id);
+	});
+
 	test("scans both flat custom roots and the default nested layout", () => {
 		const nested = join(sessionsRoot, "encoded-cwd", "nested.jsonl");
 		const flat = join(customSessionsRoot, "flat.jsonl");

@@ -43,6 +43,8 @@ const MAX_SNAPSHOTS = 100;
 const MAX_CONTENT_BYTES = 25 * 1024 * 1024;
 /** Cap concurrent backup/compare/restore IO so long tracked sets don't thrash handles. */
 const IO_CONCURRENCY = 16;
+/** Limit fork/resume blob migration so large histories do not fan out thousands of copies. */
+const MIGRATION_CONCURRENCY = 16;
 /** Cap bytes loaded for coarse restore line stats (confirm dialog only). */
 const MAX_DIFF_BYTES = 1_048_576;
 /** Streaming compare chunk size (avoids buffering whole files up to MAX_CONTENT_BYTES). */
@@ -97,6 +99,8 @@ export interface FileHistoryState {
 	latestByTracking: Map<string, FileBackup>;
 	/** Metadata fingerprint for oversized-file fast paths. */
 	lastSeen: Map<string, SeenStats>;
+	/** Digest cache for immutable backup blobs, keyed by blob name. */
+	backupDigests: Map<string, string>;
 	/** The current turn's working frame (built across the turn, persisted at endTurn). */
 	pending: FileHistorySnapshot | null;
 	/** Paths that failed capture for the current frame; retries can clear them. */
@@ -127,6 +131,7 @@ function freshState(): FileHistoryState {
 		trackedFiles: new Set(),
 		latestByTracking: new Map(),
 		lastSeen: new Map(),
+		backupDigests: new Map(),
 		pending: null,
 		pendingFailures: new Set(),
 		dirty: false,
@@ -370,6 +375,7 @@ async function originChanged(
 	name: string,
 	hint?: Stats,
 	currentHash?: string,
+	backupHash?: string,
 ): Promise<boolean> {
 	const backupPath = backupPathFor(sid, name);
 	const orig = hint ?? (await statOrNull(filePath).catch(() => null));
@@ -384,7 +390,7 @@ async function originChanged(
 	if (orig.size > MAX_CONTENT_BYTES) {
 		try {
 			const actualHash = currentHash ?? (await fileDigest(filePath));
-			return actualHash !== (await fileDigest(backupPath));
+			return actualHash !== (backupHash ?? (await fileDigest(backupPath)));
 		} catch {
 			return true;
 		}
@@ -511,24 +517,42 @@ export async function beginTurn(sid: string): Promise<void> {
 				return;
 			}
 			const seen = state.lastSeen.get(tracking);
+			const isLarge = st.size > MAX_CONTENT_BYTES;
 			let currentHash: string | undefined;
-			if (latest?.backupName !== null && st.size > MAX_CONTENT_BYTES) {
-				currentHash = await fileDigest(filePath);
-				if (
-					latest &&
-					seen &&
-					seen.contentHash === currentHash &&
-					sameSeen(seen, st) &&
-					(await statOrNull(backupPathFor(sid, latest.backupName)).catch(() => null))?.isFile()
-				) {
+			let comparedLarge = false;
+			if (latest && latest.backupName !== null && isLarge) {
+				const backupPath = backupPathFor(sid, latest.backupName);
+				const backupExists = (await statOrNull(backupPath).catch(() => null))?.isFile() === true;
+				if (seen?.contentHash && sameSeen(seen, st) && backupExists) {
+					// The immutable blob and the complete metadata fingerprint are
+					// unchanged; do not stream a multi-gigabyte worktree file every turn.
 					backups[tracking] = latest;
 					return;
+				}
+				if (backupExists) {
+					currentHash = await fileDigest(filePath);
+					const backupHash = state.backupDigests.get(latest.backupName) ?? (await fileDigest(backupPath));
+					state.backupDigests.set(latest.backupName, backupHash);
+					comparedLarge = true;
+					if (currentHash === backupHash) {
+						backups[tracking] = latest;
+						state.lastSeen.set(tracking, seenFromStats(st, currentHash));
+						return;
+					}
 				}
 			}
 			if (
 				latest &&
 				latest.backupName !== null &&
-				!(await originChanged(sid, filePath, latest.backupName, st, currentHash))
+				!comparedLarge &&
+				!(await originChanged(
+					sid,
+					filePath,
+					latest.backupName,
+					st,
+					currentHash,
+					state.backupDigests.get(latest.backupName),
+				))
 			) {
 				backups[tracking] = latest; // unchanged -> reuse
 				state.lastSeen.set(tracking, seenFromStats(st, currentHash));
@@ -537,7 +561,10 @@ export async function beginTurn(sid: string): Promise<void> {
 			const created = await createBackup(sid, filePath, tracking, nextVersion, st);
 			backups[tracking] = created;
 			state.latestByTracking.set(tracking, created);
-			if (st.size > MAX_CONTENT_BYTES && !currentHash) currentHash = await fileDigest(filePath);
+			if (isLarge && !currentHash) currentHash = await fileDigest(filePath);
+			if (created.backupName !== null && currentHash) {
+				state.backupDigests.set(created.backupName, currentHash);
+			}
 			state.lastSeen.set(tracking, seenFromStats(st, currentHash));
 			dirty = true;
 		} catch {
@@ -614,6 +641,27 @@ export function trackEdit(sid: string, absPath: string): void {
 	}
 }
 
+/** Discard an unpersisted working frame and remove blobs it introduced. */
+function discardWorkingFrame(sid: string, state: FileHistoryState, pending: FileHistorySnapshot): void {
+	const live = new Set<string>();
+	for (const snapshot of state.snapshots) {
+		for (const backup of Object.values(snapshot.trackedFileBackups)) {
+			if (backup.backupName && isSafeBackupName(backup.backupName)) live.add(backup.backupName);
+		}
+	}
+	for (const [tracking, backup] of Object.entries(pending.trackedFileBackups)) {
+		state.lastSeen.delete(tracking);
+		if (!backup.backupName || live.has(backup.backupName) || !isSafeBackupName(backup.backupName)) continue;
+		state.backupDigests.delete(backup.backupName);
+		try {
+			unlinkSync(backupPathFor(sid, backup.backupName));
+		} catch {
+			// Best effort; session GC can reclaim an unreferenced blob later.
+		}
+	}
+	state.latestByTracking = rebuildLatestIndex(state.snapshots);
+}
+
 /**
  * Finalize the turn. Returns the snapshot to persist (caller appendEntry's it),
  * or null when nothing changed this turn. Pushes finalized frames into the
@@ -633,6 +681,7 @@ export function endTurn(
 	state.pending = null;
 	state.pendingFailures.clear();
 	if (!pending || !pendingComplete || !state.dirty) {
+		if (pending && state.dirty) discardWorkingFrame(sid, state, pending);
 		state.dirty = false;
 		return null;
 	}
@@ -640,7 +689,10 @@ export function endTurn(
 	// No resolvable anchor (e.g. a custom-triggered run that appended no user
 	// entry): discard the frame. Pushing it into the ring without persisting it
 	// would diverge memory from the JSONL, and /tree could never match it anyway.
-	if (!userEntryId) return null;
+	if (!userEntryId) {
+		discardWorkingFrame(sid, state, pending);
+		return null;
+	}
 	const frame: FileHistorySnapshot = { ...pending, userEntryId, turnId, prompt, timestamp };
 	state.snapshots.push(frame);
 	if (state.snapshots.length > maxSnapshots) {
@@ -681,6 +733,8 @@ async function pruneDroppedBlobs(
 		}
 	}
 	if (doomed.size === 0) return;
+	const state = getState(sid);
+	for (const name of doomed) state.backupDigests.delete(name);
 	await Promise.allSettled(Array.from(doomed, (name) => unlink(backupPathFor(sid, name))));
 }
 
@@ -709,9 +763,17 @@ export async function collectChangePlan(sid: string, target: FileHistorySnapshot
 			if (name === null) {
 				return (await statOrNull(filePath)) ? { path: filePath, kind: "changed" as const } : null;
 			}
-			const backup = await statOrNull(backupPathFor(sid, name)).catch(() => null);
+			const backupPath = backupPathFor(sid, name);
+			const backup = await statOrNull(backupPath).catch(() => null);
 			if (!backup?.isFile()) return { path: filePath, kind: "unavailable" as const };
-			return (await originChanged(sid, filePath, name)) ? { path: filePath, kind: "changed" as const } : null;
+			let backupHash = state.backupDigests.get(name);
+			if (backup.size > MAX_CONTENT_BYTES && !backupHash) {
+				backupHash = await fileDigest(backupPath);
+				state.backupDigests.set(name, backupHash);
+			}
+			return (await originChanged(sid, filePath, name, undefined, undefined, backupHash))
+				? { path: filePath, kind: "changed" as const }
+				: null;
 		} catch {
 			return { path: filePath, kind: "unavailable" as const };
 		}
@@ -902,11 +964,17 @@ export async function applySnapshotDetailed(
 					return null;
 				}
 			}
-			const backup = await statOrNull(backupPathFor(sid, name)).catch(() => null);
+			const backupPath = backupPathFor(sid, name);
+			const backup = await statOrNull(backupPath).catch(() => null);
 			if (!backup?.isFile()) return { path: filePath, kind: "unavailable" as const };
+			let backupHash = state.backupDigests.get(name);
+			if (!only && backup.size > MAX_CONTENT_BYTES && !backupHash) {
+				backupHash = await fileDigest(backupPath);
+				state.backupDigests.set(name, backupHash);
+			}
 			// onlyPaths already proved different at confirm time; the restore still
 			// verifies that the blob exists and reports a concurrent disappearance.
-			if (only || (await originChanged(sid, filePath, name))) {
+			if (only || (await originChanged(sid, filePath, name, undefined, undefined, backupHash))) {
 				if (!(await restoreBackup(sid, filePath, name))) {
 					return { path: filePath, kind: "unavailable" as const };
 				}
@@ -972,6 +1040,7 @@ export function restoreStateFromSnapshots(
 		trackedFiles,
 		latestByTracking: rebuildLatestIndex(retained),
 		lastSeen: new Map(),
+		backupDigests: new Map(),
 		pending: null,
 		pendingFailures: new Set(),
 		dirty: false,
@@ -1002,34 +1071,46 @@ export async function migrateBackupsFromSession(
 	if (!prevSid || prevSid === sid) return;
 	const destDir = backupsDir(sid);
 	await mkdir(destDir, { recursive: true });
-	await Promise.allSettled(
-		snapshots.flatMap((snap) =>
-			Object.values(snap.trackedFileBackups)
-				.filter((b): b is FileBackup & { backupName: string } => isSafeBackupName(b.backupName))
-				.map(async ({ backupName: name }) => {
-					const from = join(backupsDir(prevSid), name);
-					const to = join(destDir, name);
-					const source = await statOrNull(from).catch(() => null);
-					if (!source?.isFile()) {
-						// A stale destination cannot be trusted when the authoritative parent
-						// blob is gone; remove it so future restores fail closed.
-						await unlink(to).catch(() => undefined);
-						return;
-					}
+	const names = new Set<string>();
+	for (const snap of snapshots) {
+		for (const backup of Object.values(snap.trackedFileBackups)) {
+			if (isSafeBackupName(backup.backupName)) names.add(backup.backupName);
+		}
+	}
+	await mapPool(Array.from(names), MIGRATION_CONCURRENCY, async (name) => {
+		const from = join(backupsDir(prevSid), name);
+		const to = join(destDir, name);
+		try {
+			const source = await statOrNull(from).catch(() => null);
+			if (!source?.isFile()) {
+				// A stale destination cannot be trusted when the authoritative parent
+				// blob is gone; remove it so future restores fail closed.
+				await unlink(to).catch(() => undefined);
+				return;
+			}
+			try {
+				await link(from, to);
+			} catch (e) {
+				const code = (e as { code?: string }).code;
+				if (code === "EEXIST") {
+					let equal = false;
 					try {
-						await link(from, to);
-					} catch (e) {
-						const code = (e as { code?: string }).code;
-						if (code === "EEXIST" && (await backupFilesEqual(from, to))) return;
-						try {
-							await copyFileAtomic(from, to, source.mode);
-						} catch {
-							// A failed migration must not leave a stale or partial destination
-							// blob that later looks restorable.
-							await unlink(to).catch(() => undefined);
-						}
+						equal = await backupFilesEqual(from, to);
+					} catch {
+						// Fall through to an atomic source copy when comparison is inconclusive.
 					}
-				}),
-		),
-	);
+					if (equal) return;
+				}
+				try {
+					await copyFileAtomic(from, to, source.mode);
+				} catch {
+					// A failed migration must not leave a stale or partial destination
+					// blob that later looks restorable.
+					await unlink(to).catch(() => undefined);
+				}
+			}
+		} catch {
+			await unlink(to).catch(() => undefined);
+		}
+	});
 }

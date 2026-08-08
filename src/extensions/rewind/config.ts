@@ -1,11 +1,21 @@
 /**
  * config.ts — load/save the rewind extension's settings at
- * <rewindDir>/config.json. Tolerant parse, atomic-ish write, sensible defaults
+ * <rewindDir>/config.json. Tolerant parse, atomic write, sensible defaults
  * so a missing/corrupt file never breaks the session.
  *
  * Settings are user-editable via the /rewind menu (menu.ts).
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	closeSync,
+	existsSync,
+	fsyncSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	renameSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname } from "node:path";
 
 import { rewindConfigPath } from "./paths.ts";
@@ -25,6 +35,9 @@ export const DEFAULT_CONFIG: RewindConfig = {
 	maxSnapshots: 100,
 };
 
+export const MAX_RETENTION_DAYS = 3650;
+export const MAX_SNAPSHOTS = 1000;
+
 /** In-process cache so lifecycle hooks do not re-read config.json every turn. */
 let cached: RewindConfig | null = null;
 
@@ -38,8 +51,8 @@ function normalize(raw: unknown): RewindConfig {
 	const r = raw as Partial<RewindConfig>;
 	return {
 		enabled: typeof r.enabled === "boolean" ? r.enabled : DEFAULT_CONFIG.enabled,
-		retentionDays: clampInt(r.retentionDays, 0, 3650, DEFAULT_CONFIG.retentionDays),
-		maxSnapshots: clampInt(r.maxSnapshots, 1, 1000, DEFAULT_CONFIG.maxSnapshots),
+		retentionDays: clampInt(r.retentionDays, 0, MAX_RETENTION_DAYS, DEFAULT_CONFIG.retentionDays),
+		maxSnapshots: clampInt(r.maxSnapshots, 1, MAX_SNAPSHOTS, DEFAULT_CONFIG.maxSnapshots),
 	};
 }
 
@@ -65,16 +78,39 @@ export function reloadRewindConfig(): RewindConfig {
 	return cached;
 }
 
+/** Parse the menu's custom retention field without accepting numeric prefixes or fractions. */
+export function parseRetentionDays(value: string): number | undefined {
+	const trimmed = value.trim();
+	if (!/^(?:0|[1-9][0-9]*)$/.test(trimmed)) return undefined;
+	const days = Number(trimmed);
+	return Number.isSafeInteger(days) && days <= MAX_RETENTION_DAYS ? days : undefined;
+}
+
+let configWriteSequence = 0;
+
 /** Persist and update the in-memory cache so the next turn sees the change. */
 export function saveRewindConfig(config: RewindConfig): boolean {
 	const next = normalize(config);
 	const configPath = rewindConfigPath();
+	const temporary = `${configPath}.${process.pid}.${++configWriteSequence}.tmp`;
 	try {
 		mkdirSync(dirname(configPath), { recursive: true });
-		writeFileSync(configPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+		writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+		const fd = openSync(temporary, "r+");
+		try {
+			fsyncSync(fd);
+		} finally {
+			closeSync(fd);
+		}
+		renameSync(temporary, configPath);
 		cached = next;
 		return true;
 	} catch {
+		try {
+			unlinkSync(temporary);
+		} catch {
+			// best-effort cleanup
+		}
 		return false;
 	}
 }

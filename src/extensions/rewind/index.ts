@@ -87,6 +87,10 @@ const pendingTreeRestore = new Map<string, PendingTreeRestore | null>(); // /tre
 // Leaf id before the current run started (null = branch root). agent_settled
 // scans forward from here for the run's FIRST user entry — the frame's anchor.
 const anchorScanStart = new Map<string, string | null>();
+// A prepared marker is consumed by agent_start; only that active run may
+// finalize. This prevents a custom-triggered run inheriting stale frame state.
+const frameRunPrepared = new Set<string>();
+const frameRunEligible = new Set<string>();
 
 // ---- helpers --------------------------------------------------------------
 
@@ -154,6 +158,9 @@ export default function rewind(pi: ExtensionAPI): void {
 		if (!sid) return;
 		registerSession(sid, ctx.cwd);
 		registerSessionsRoot(ctx.sessionManager.getSessionDir());
+		frameRunPrepared.delete(sid);
+		frameRunEligible.delete(sid);
+		pendingPrompt.delete(sid);
 
 		const snapshots = rebuildSnapshots(ctx);
 
@@ -215,10 +222,13 @@ export default function rewind(pi: ExtensionAPI): void {
 		config = loadRewindConfig();
 		const sid = ctx.sessionManager.getSessionId();
 		if (!sid) return;
+		frameRunPrepared.delete(sid);
+		frameRunEligible.delete(sid);
 		// The run's user entry is appended after this hook; the frame's anchor is
 		// the first user entry that appears past this leaf.
 		markAnchorScanStart(sid, ctx);
 		if (!config.enabled) return;
+		frameRunPrepared.add(sid);
 		pendingPrompt.set(sid, event.prompt ?? "");
 		try {
 			await beginTurn(sid);
@@ -227,12 +237,34 @@ export default function rewind(pi: ExtensionAPI): void {
 		}
 	});
 
+	// agent_start consumes the preparation marker. Custom-triggered runs still
+	// emit this event, so a stale eligible flag from an interrupted prior run
+	// cannot be inherited by them.
+	pi.on("agent_start", (_event, ctx) => {
+		const sid = ctx.sessionManager.getSessionId();
+		if (!sid) return;
+		const prepared = frameRunPrepared.has(sid);
+		frameRunPrepared.delete(sid);
+		if (config.enabled && prepared) frameRunEligible.add(sid);
+		else frameRunEligible.delete(sid);
+	});
+
 	// agent_settled: finalize + persist after Pi will not auto-continue (retry /
 	// compact-retry / follow-up). agent_end alone is too early for that.
 	pi.on("agent_settled", async (_event, ctx) => {
-		if (!config.enabled) return;
 		const sid = ctx.sessionManager.getSessionId();
 		if (!sid) return;
+		const eligible = frameRunEligible.has(sid);
+		frameRunPrepared.delete(sid);
+		frameRunEligible.delete(sid);
+		if (!config.enabled || !eligible) {
+			// Custom-triggered runs may bypass before_agent_start. Clear any tool-hook
+			// state without inventing a tree anchor.
+			endTurn(sid, "", "", "", new Date().toISOString(), config.maxSnapshots);
+			pendingPrompt.delete(sid);
+			markAnchorScanStart(sid, ctx);
+			return;
+		}
 		// Anchor = the run's FIRST appended user entry (whose start the frame
 		// recorded). Steering/follow-up messages consumed in the same run append
 		// later user entries and must not steal the anchor. Unresolvable (scan
@@ -247,8 +279,6 @@ export default function rewind(pi: ExtensionAPI): void {
 		if (frame) {
 			pi.appendEntry(SNAPSHOT_ENTRY_TYPE, frame);
 		}
-		// Next run may start without before_agent_start (custom-triggered): scan
-		// from the settled leaf (past this run's entries + the snapshot entry).
 		markAnchorScanStart(sid, ctx);
 	});
 
@@ -345,6 +375,8 @@ export default function rewind(pi: ExtensionAPI): void {
 		pendingTreeRestore.delete(sid);
 		pendingPrompt.delete(sid);
 		anchorScanStart.delete(sid);
+		frameRunPrepared.delete(sid);
+		frameRunEligible.delete(sid);
 	});
 
 	// /rewind: settings + storage menu (time-travel itself is via /tree).

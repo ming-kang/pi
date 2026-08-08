@@ -13,7 +13,8 @@ Per turn: `before_agent_start` opens a snapshot frame (re-recording every tracke
 file at its turn-start state, reusing the latest backup when unchanged);
 `tool_call(edit|write)` backs up each newly edited file *before* it lands;
 `agent_settled` persists the frame to the session JSONL as a `pi-rewind-snapshot`
-custom entry **only when files changed**. The frame anchors to the **first** user
+custom entry **only when files changed** and the run passed the normal
+`before_agent_start` → `agent_start` lifecycle. The frame anchors to the **first** user
 entry the run appended — the message whose start the frame recorded; steering and
 follow-up messages consumed inside the same run append later user entries and do
 not steal the anchor (a run that appends no user entry, e.g. custom-triggered,
@@ -53,8 +54,9 @@ rebuilt from them on `session_start`.
   rewinding deletes them.
 - **Forks** hard-link retained parent-session backup blobs into the new session
   (falling back to copy), so rewind keeps working without duplicating storage.
-  Resuming a fork can retry migration from the fork's recorded parent; a normal
-  resume never borrows blobs from the unrelated session being left.
+  Migration deduplicates blob names and is concurrency-capped. Resuming a fork
+  can retry migration from the fork's recorded parent; a normal resume never
+  borrows blobs from the unrelated session being left.
 
 ## Storage & cleanup
 
@@ -65,7 +67,9 @@ rebuilt from them on `session_start`.
 - **Auto-clean:** at `session_start`, backup directories older than
   `retentionDays` (default **30**, set in `/rewind`) are reclaimed, plus an
   **orphan sweep** of directories whose session id has no session JSONL (crashed
-  sessions). The GC is time-boxed and deletion-capped so it never slows startup.
+  sessions). Session discovery is bounded and skips orphan deletion when the
+  scan is incomplete. The GC is time-boxed and deletion-capped so it never
+  slows startup.
 - The former `pi-config` storage layout is **not** read or migrated by this
   engine. Remove any old `~/.pi/agent/pi-config/` data manually if it is no
   longer needed.
@@ -86,10 +90,14 @@ rebuilt from them on `session_start`.
   backups without claiming they were restored.
 - **Change detection.** Bounded files are byte-compared against the latest
   backup, so same-size files with preserved or older mtimes are detected.
-  Oversized files use a streamed SHA-256 digest to avoid repeated full copies;
-  uncertainty still fails closed as changed.
-- **Config is memory-cached.** `config.json` is re-read on `session_start` and updated in memory when `/rewind` saves.
-- **Restore path is single-scan.** The `/tree` confirm pass caches changed absolute paths; IO is concurrency-capped (16).
+  Oversized files use a streamed SHA-256 digest when their metadata changes and
+  cache immutable backup digests; an unchanged metadata fingerprint avoids
+  rereading a multi-gigabyte worktree file. Uncertainty still fails closed as
+  changed.
+- **Config is memory-cached.** `config.json` is re-read on `session_start` and updated in memory when `/rewind` saves. Writes use a temporary file, `fsync`, and same-directory rename.
+- **Config input.** Custom retention values must be whole days from 0 to 3650;
+  malformed prefixes and fractions are rejected.
+- **Restore path is single-scan.** The `/tree` confirm pass caches changed absolute paths; IO is concurrency-capped (16). Unpersisted working-frame blobs are removed when a frame is discarded.
 
 
 Architecture informed by oh-my-pi (GPL-3.0) and Claude Code's file-history; independent implementation.

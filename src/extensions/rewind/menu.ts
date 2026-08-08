@@ -10,7 +10,7 @@
  */
 import type { ExtensionCommandContext } from "../../core/extensions/types.ts";
 
-import { loadRewindConfig, saveRewindConfig } from "./config.ts";
+import { loadRewindConfig, parseRetentionDays, saveRewindConfig } from "./config.ts";
 import { listSessions, removeSession, runGc } from "./gc.ts";
 import { formatSize } from "./text.ts";
 
@@ -39,8 +39,11 @@ export async function runRewindMenu(ctx: ExtensionCommandContext): Promise<void>
 		if (!pick) return;
 
 		if (pick === enabledLabel) {
-			saveRewindConfig({ ...cfg, enabled: !cfg.enabled });
-			ctx.ui.notify(`Rewind ${cfg.enabled ? "disabled" : "enabled"}.`, "info");
+			const saved = saveRewindConfig({ ...cfg, enabled: !cfg.enabled });
+			ctx.ui.notify(
+				saved ? `Rewind ${cfg.enabled ? "disabled" : "enabled"}.` : "Could not save rewind settings.",
+				saved ? "info" : "error",
+			);
 		} else if (pick === retentionLabel) {
 			await pickRetention(ctx);
 		} else if (pick === storageLabel) {
@@ -60,19 +63,26 @@ async function pickRetention(ctx: ExtensionCommandContext): Promise<void> {
 	} else if (pick === "Custom...") {
 		const value = await ctx.ui.input("Days to keep backups (0 = forever)");
 		if (value === undefined) return;
-		const n = Number.parseInt(value.trim(), 10);
-		if (!Number.isFinite(n) || n < 0) {
-			ctx.ui.notify("Invalid number of days.", "warning");
+		const parsed = parseRetentionDays(value);
+		if (parsed === undefined) {
+			ctx.ui.notify("Invalid number of days (use an integer from 0 to 3650).", "warning");
 			return;
 		}
-		days = n;
+		days = parsed;
 	} else {
 		days = Number.parseInt(pick, 10);
 	}
 
 	const cfg = loadRewindConfig();
-	saveRewindConfig({ ...cfg, retentionDays: days });
-	ctx.ui.notify(days > 0 ? `Backups now kept for ${days} days.` : "Backups kept forever.", "info");
+	const saved = saveRewindConfig({ ...cfg, retentionDays: days });
+	ctx.ui.notify(
+		saved
+			? days > 0
+				? `Backups now kept for ${days} days.`
+				: "Backups kept forever."
+			: "Could not save rewind settings.",
+		saved ? "info" : "error",
+	);
 }
 
 async function storageMenu(ctx: ExtensionCommandContext, sid: string | undefined): Promise<void> {

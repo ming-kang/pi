@@ -22,6 +22,8 @@ const ORPHAN_GRACE_MS = 1 * DAY_MS;
 const GC_TIME_BUDGET_MS = 1500;
 const GC_MAX_DELETIONS = 50;
 const SESSION_HEADER_MAX_BYTES = 1 * 1024 * 1024;
+const ACTIVE_SCAN_BUDGET_MS = 500;
+const ACTIVE_SCAN_MAX_FILES = 10_000;
 
 export interface SessionStorage {
 	sessionId: string;
@@ -144,19 +146,50 @@ function dirSize(dir: string): number {
 	return bytes;
 }
 
-function addSessionFile(ids: Set<string>, file: string): void {
+function addSessionFile(ids: Set<string>, file: string, knownSessionIds: readonly string[]): void {
 	if (!/\.jsonl$/i.test(file)) return;
 	const info = sessionInfoFromFile(file);
-	if (info) ids.add(info.id);
+	if (info) {
+		ids.add(info.id);
+		return;
+	}
+	// If a file is temporarily unreadable, protect a backup whose full legal id
+	// is unambiguously present in its filename rather than reaping it as orphan.
+	const name = basename(file).replace(/\.jsonl$/i, "");
+	const candidates = knownSessionIds.filter((id) => name.endsWith(`_${id}`)).sort((a, b) => b.length - a.length);
+	if (candidates[0]) ids.add(candidates[0]);
+}
+
+interface ActiveSessionScan {
+	ids: Set<string>;
+	complete: boolean;
 }
 
 /**
- * Session ids that still have a session JSONL under every known session root.
- * Supports the default encoded-cwd layout and custom flat --session-dir roots.
+ * Bounded active-session discovery. If the scan is incomplete, callers must
+ * disable orphan deletion rather than guessing about unvisited session files.
  */
-export function activeSessionIds(): Set<string> {
+function scanActiveSessionIds(): ActiveSessionScan {
 	const ids = new Set<string>();
-	for (const root of sessionsRootDirs()) {
+	const knownSessionIds = backupDirNames();
+	const started = Date.now();
+	let scannedFiles = 0;
+	let complete = true;
+
+	const shouldStop = (): boolean =>
+		Date.now() - started >= ACTIVE_SCAN_BUDGET_MS || scannedFiles >= ACTIVE_SCAN_MAX_FILES;
+	const scanFile = (file: string): boolean => {
+		if (shouldStop()) return false;
+		scannedFiles++;
+		addSessionFile(ids, file, knownSessionIds);
+		return true;
+	};
+
+	scan: for (const root of sessionsRootDirs()) {
+		if (shouldStop()) {
+			complete = false;
+			break;
+		}
 		let entries: Dirent[];
 		try {
 			entries = readdirSync(root, { withFileTypes: true });
@@ -164,9 +197,16 @@ export function activeSessionIds(): Set<string> {
 			continue;
 		}
 		for (const entry of entries) {
+			if (shouldStop()) {
+				complete = false;
+				break scan;
+			}
 			const path = join(root, entry.name);
 			if (entry.isFile()) {
-				addSessionFile(ids, path);
+				if (!scanFile(path)) {
+					complete = false;
+					break scan;
+				}
 				continue;
 			}
 			if (!entry.isDirectory()) continue;
@@ -177,16 +217,26 @@ export function activeSessionIds(): Set<string> {
 				continue;
 			}
 			for (const file of files) {
-				if (file.isFile()) addSessionFile(ids, join(path, file.name));
+				if (!file.isFile()) continue;
+				if (!scanFile(join(path, file.name))) {
+					complete = false;
+					break scan;
+				}
 			}
 		}
 	}
-	return ids;
+	return { ids, complete };
+}
+
+/** Session ids that still have a session JSONL under every known session root. */
+export function activeSessionIds(): Set<string> {
+	return scanActiveSessionIds().ids;
 }
 
 /** Inventory of on-disk backup storage (for the /rewind storage menu). */
 export function listSessions(currentSessionId?: string): SessionStorage[] {
-	const active = activeSessionIds();
+	const scan = scanActiveSessionIds();
+	const active = scan.ids;
 	const out: SessionStorage[] = [];
 	for (const sessionId of backupDirNames()) {
 		const dir = backupsDir(sessionId);
@@ -201,7 +251,7 @@ export function listSessions(currentSessionId?: string): SessionStorage[] {
 			dir,
 			bytes: dirSize(dir),
 			mtimeMs,
-			orphan: sessionId !== currentSessionId && !active.has(sessionId),
+			orphan: scan.complete && sessionId !== currentSessionId && !active.has(sessionId),
 		});
 	}
 	return out.sort((a, b) => b.mtimeMs - a.mtimeMs);
@@ -228,7 +278,8 @@ export function runGc(retentionDays: number, currentSessionId?: string): GcResul
 	const start = Date.now();
 	const ageCutoff = retentionDays > 0 ? start - retentionDays * DAY_MS : -Infinity;
 	const orphanCutoff = start - ORPHAN_GRACE_MS;
-	const active = activeSessionIds();
+	const scan = scanActiveSessionIds();
+	const active = scan.ids;
 	let removed = 0;
 	let reclaimedBytes = 0;
 
@@ -243,7 +294,7 @@ export function runGc(retentionDays: number, currentSessionId?: string): GcResul
 			continue;
 		}
 		const aged = mtimeMs < ageCutoff;
-		const orphan = !active.has(sessionId) && mtimeMs < orphanCutoff;
+		const orphan = scan.complete && !active.has(sessionId) && mtimeMs < orphanCutoff;
 		if (!aged && !orphan) continue;
 		const bytes = removeSession(sessionId);
 		if (bytes !== null) {
