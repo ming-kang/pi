@@ -24,10 +24,12 @@ turn — `agent_end` can fire while Pi still continues. Requires **Pi ≥ 0.80.4
 would not finalize. Entries survive `/reload` and compaction; the index is
 rebuilt from them on `session_start`.
 
-- **Scope (deliberate trade-off):** rewind covers edits made through Pi's built-in
-  `edit` and `write` tools. Files written by `bash` (redirects, codegen, `mv`) or
-  edited by hand outside Pi are **not** tracked — same boundary as Claude Code's
-  file-history. Rewind undoes *Pi's edits*, not arbitrary filesystem state.
+- **Scope (deliberate trade-off):** rewind creates checkpoints for edits made
+  through Pi's built-in `edit` and `write` tools. Files written by `bash`
+  (redirects, codegen, `mv`) or edited by hand outside Pi are not independently
+  checkpointed. If Pi later starts another run, however, the current contents
+  are captured as that run's turn-start state. Rewind undoes *Pi's edits*, not
+  arbitrary filesystem history.
 - **Time-travel is via `/tree`.** Navigating to a node whose recorded state
   differs from the work tree prompts to restore, listing the affected files
   (cwd-relative, up to 8 then *"+N more"*) under *"Restore 3 files to this
@@ -49,9 +51,10 @@ rebuilt from them on `session_start`.
     10 minutes, which may belong to sessions running in another Pi process).
 - **New files** created by `write` are tracked with a "did not exist" marker, so
   rewinding deletes them.
-- **Resume/fork** hard-links the prior session's backup blobs into the new
-  session (falling back to copy), so rewind keeps working without duplicating
-  storage.
+- **Forks** hard-link retained parent-session backup blobs into the new session
+  (falling back to copy), so rewind keeps working without duplicating storage.
+  Resuming a fork can retry migration from the fork's recorded parent; a normal
+  resume never borrows blobs from the unrelated session being left.
 
 ## Storage & cleanup
 
@@ -70,15 +73,21 @@ rebuilt from them on `session_start`.
 ## Limits
 
 - Covers edits made through Pi's built-in `edit` and `write` tools only. Files written by `bash` or edited outside Pi are not tracked.
-- A backup failure is swallowed — the edit proceeds without checkpointing rather than blocking the tool.
+- A backup failure is swallowed — the edit proceeds without checkpointing that
+  incomplete frame rather than blocking the tool.
 - `/rewind` on its own does not restore files. Restoration uses `/tree` — navigate to a turn and confirm the prompt.
 - Restore is coarse: only files that differ are rewritten, but line totals are a bag-of-lines estimate (capped at 1 MB per file), not a full Myers diff.
 
 ## Implementation notes
 
 - **Never blocks the edit.** Backup runs before the write lands; a backup failure is swallowed so the session never stalls.
-- **Restore safety.** `applySnapshot` only rewrites files that differ and degrades gracefully on unreadable backups.
-- **Change detection.** A file is re-backed-up only when its stat or content differs from the latest backup. Content comparison streams in 64 KiB chunks instead of buffering whole files up to the 25 MB cap.
+- **Restore safety.** `applySnapshot` only rewrites files that differ, copies
+  through a same-directory temporary file, and reports unreadable or missing
+  backups without claiming they were restored.
+- **Change detection.** Bounded files are byte-compared against the latest
+  backup, so same-size files with preserved or older mtimes are detected.
+  Oversized files use a streamed SHA-256 digest to avoid repeated full copies;
+  uncertainty still fails closed as changed.
 - **Config is memory-cached.** `config.json` is re-read on `session_start` and updated in memory when `/rewind` saves.
 - **Restore path is single-scan.** The `/tree` confirm pass caches changed absolute paths; IO is concurrency-capped (16).
 

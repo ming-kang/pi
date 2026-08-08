@@ -101,6 +101,13 @@ describe("rewind engine", () => {
 		expect(await collectChanges(sid, frame1!)).toEqual([]);
 	});
 
+	test("a failed pre-edit backup discards the incomplete frame", async () => {
+		await beginTurn(sid);
+		expect(() => trackEdit(sid, cwd)).toThrow();
+		expect(endTurn(sid, "u1", "u1", "", new Date().toISOString())).toBeNull();
+		expect(getSnapshots(sid)).toHaveLength(0);
+	});
+
 	test("empty anchor discards the frame instead of keeping it memory-only", async () => {
 		writeFileSync(join(cwd, "g.txt"), "before", "utf8");
 		const frame = await runTurn("", [{ file: "g.txt", content: "after" }]);
@@ -212,11 +219,37 @@ describe("rewind engine", () => {
 		const missingSid = `${sid}-missing-parent`;
 		const missingForkDir = join(backupsRoot, missingSid);
 		mkdirSync(missingForkDir, { recursive: true });
-		writeFileSync(join(missingForkDir, "dead@v1"), "stale", "utf8");
+		const deadBlob = "0000000000000000@v1";
+		writeFileSync(join(missingForkDir, deadBlob), "stale", "utf8");
 		await migrateBackupsFromSession(sid, missingSid, [
-			{ ...frame!, trackedFileBackups: { "shared.txt": { backupName: "dead@v1", version: 1 } } },
+			{ ...frame!, trackedFileBackups: { "shared.txt": { backupName: deadBlob, version: 1 } } },
 		]);
-		expect(existsSync(join(missingForkDir, "dead@v1"))).toBe(false);
+		expect(existsSync(join(missingForkDir, deadBlob))).toBe(false);
+	});
+
+	test("oversized tracked files use a metadata fingerprint after their first backup", async () => {
+		const f = join(cwd, "large.bin");
+		writeFileSync(f, "a", "utf8");
+		const large = "x".repeat(25 * 1024 * 1024 + 1);
+		expect(await runTurn("u1", [{ file: "large.bin", content: large }])).not.toBeNull();
+		expect(await runTurn("u2", [])).not.toBeNull();
+		expect(await runTurn("u3", [])).toBeNull();
+	});
+
+	test("beginTurn re-backs up a same-size external replacement with an older mtime", async () => {
+		const f = join(cwd, "begin-mtime.txt");
+		writeFileSync(f, "AAAA", "utf8");
+		const first = await runTurn("u1", [{ file: "begin-mtime.txt", content: "BBBB" }]);
+		expect(first).not.toBeNull();
+
+		writeFileSync(f, "CCCC", "utf8");
+		const past = new Date(Date.now() - 60 * 60 * 1000);
+		utimesSync(f, past, past);
+		const second = await runTurn("u2", []);
+		expect(second).not.toBeNull();
+		const blob = second!.trackedFileBackups["begin-mtime.txt"]?.backupName;
+		expect(blob).toMatch(/@v2$/);
+		expect(readFileSync(join(backupsRoot, sid, blob!), "utf8")).toBe("CCCC");
 	});
 
 	test("restore-side change detection is not fooled by an mtime-preserving content swap", async () => {

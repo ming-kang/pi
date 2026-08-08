@@ -3,23 +3,25 @@
  *
  * Ported from Claude Code's cleanupOldFileHistoryBackups (src/utils/cleanup.ts):
  * each session's backup directory is reaped when its mtime ages past the
- * retention window. We add an orphan sweep — a backup dir whose session id has no
- * corresponding session JSONL (e.g. a crashed/aborted session) is reclaimed after
- * a short grace period.
+ * retention window. We add an orphan sweep — a backup dir whose session id has
+ * no corresponding session JSONL (e.g. a crashed/aborted session) is reclaimed
+ * after a short grace period.
  *
  * runGc() is called opportunistically at session_start; it is time-boxed and
  * caps deletions per run so it can never slow startup. listSessions()/removeSession()
  * back the /rewind storage menu.
  */
-import { readdirSync, rmSync, statSync } from "node:fs";
+import { closeSync, type Dirent, existsSync, openSync, readdirSync, readSync, rmSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
-import { backupsDir, backupsRootDir, sessionsRootDir } from "./storage.ts";
+import { backupsDir, backupsRootDir, isSafeSessionId, sessionsRootDirs } from "./storage.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ORPHAN_GRACE_MS = 1 * DAY_MS;
 const GC_TIME_BUDGET_MS = 1500;
 const GC_MAX_DELETIONS = 50;
+const SESSION_HEADER_MAX_BYTES = 1 * 1024 * 1024;
 
 export interface SessionStorage {
 	sessionId: string;
@@ -34,25 +36,90 @@ export interface GcResult {
 	reclaimedBytes: number;
 }
 
+export interface SessionFileInfo {
+	id: string;
+	parentSession?: string;
+}
+
+/** Read the first session header without loading the complete JSONL file. */
+function readSessionHeaderInfo(file: string): SessionFileInfo | undefined {
+	let fd: number | undefined;
+	const decoder = new StringDecoder("utf8");
+	let scanned = 0;
+	let pending = "";
+	try {
+		fd = openSync(file, "r");
+		const parseLine = (line: string): SessionFileInfo | null | undefined => {
+			const trimmed = line.trim();
+			if (!trimmed) return undefined; // keep scanning blank prefixes
+			let value: { type?: unknown; id?: unknown; parentSession?: unknown };
+			try {
+				value = JSON.parse(trimmed) as typeof value;
+			} catch {
+				return undefined; // match SessionManager's malformed-line tolerance
+			}
+			if (value.type !== "session") return null; // first valid non-header ends discovery
+			if (typeof value.id !== "string" || !isSafeSessionId(value.id)) return null;
+			return {
+				id: value.id,
+				...(typeof value.parentSession === "string" && value.parentSession
+					? { parentSession: value.parentSession }
+					: {}),
+			};
+		};
+
+		const consume = (text: string): SessionFileInfo | null | undefined => {
+			pending += text;
+			for (;;) {
+				const newline = pending.indexOf("\n");
+				if (newline < 0) return undefined;
+				const line = pending.slice(0, newline);
+				pending = pending.slice(newline + 1);
+				const result = parseLine(line);
+				if (result !== undefined) return result;
+			}
+		};
+
+		while (scanned < SESSION_HEADER_MAX_BYTES) {
+			const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, SESSION_HEADER_MAX_BYTES - scanned));
+			const bytes = readSync(fd, buffer, 0, buffer.length, null);
+			if (bytes === 0) break;
+			scanned += bytes;
+			const result = consume(decoder.write(buffer.subarray(0, bytes)));
+			if (result !== undefined) return result ?? undefined;
+		}
+		pending += decoder.end();
+		return parseLine(pending) ?? undefined;
+	} catch {
+		return undefined;
+	} finally {
+		if (fd !== undefined) closeSync(fd);
+	}
+}
+
 /**
- * Extract a session id from a session JSONL path/filename (`..._<id>.jsonl`).
- * Format-agnostic (no hardcoded id shape) so it stays correct if Pi changes its
- * session-id format. Shared with the integration layer (index.ts) so the two
- * parsers can't drift — a stricter parser here could miss active sessions and
- * wrongly reap their backups as orphans.
+ * Read a session's authoritative id/parent from its header. For a nonexistent
+ * path, retain a filename fallback for legacy callers and tests.
  */
-export function sessionIdFromFile(file: string): string | undefined {
-	const b = basename(file).replace(/\.jsonl$/i, "");
-	const us = b.lastIndexOf("_");
-	const id = us >= 0 ? b.slice(us + 1) : b;
-	return id || undefined;
+export function sessionInfoFromFile(file: string, allowFilenameFallback = true): SessionFileInfo | undefined {
+	if (existsSync(file)) return readSessionHeaderInfo(file);
+	if (!allowFilenameFallback) return undefined;
+	const name = basename(file).replace(/\.jsonl$/i, "");
+	const us = name.lastIndexOf("_");
+	const id = us >= 0 ? name.slice(us + 1) : name;
+	return isSafeSessionId(id) ? { id } : undefined;
+}
+
+/** Extract a session id, preferring the JSONL header over the filename shape. */
+export function sessionIdFromFile(file: string, allowFilenameFallback = true): string | undefined {
+	return sessionInfoFromFile(file, allowFilenameFallback)?.id;
 }
 
 /** Backup session directories on disk (one per session id). */
 function backupDirNames(): string[] {
 	try {
 		return readdirSync(backupsRootDir(), { withFileTypes: true })
-			.filter((d) => d.isDirectory())
+			.filter((d) => d.isDirectory() && isSafeSessionId(d.name))
 			.map((d) => d.name);
 	} catch {
 		return []; // root doesn't exist yet
@@ -77,32 +144,41 @@ function dirSize(dir: string): number {
 	return bytes;
 }
 
+function addSessionFile(ids: Set<string>, file: string): void {
+	if (!/\.jsonl$/i.test(file)) return;
+	const info = sessionInfoFromFile(file);
+	if (info) ids.add(info.id);
+}
+
 /**
- * Session ids that still have a session JSONL under <agentDir>/sessions/.
- * Files are named `<ISO>_<sessionId>.jsonl`, nested one level under an
- * encoded-cwd directory.
+ * Session ids that still have a session JSONL under every known session root.
+ * Supports the default encoded-cwd layout and custom flat --session-dir roots.
  */
 export function activeSessionIds(): Set<string> {
 	const ids = new Set<string>();
-	const root = sessionsRootDir();
-	let projectDirs: string[];
-	try {
-		projectDirs = readdirSync(root, { withFileTypes: true })
-			.filter((d) => d.isDirectory())
-			.map((d) => join(root, d.name));
-	} catch {
-		return ids;
-	}
-	for (const pd of projectDirs) {
-		let files: string[];
+	for (const root of sessionsRootDirs()) {
+		let entries: Dirent[];
 		try {
-			files = readdirSync(pd);
+			entries = readdirSync(root, { withFileTypes: true });
 		} catch {
 			continue;
 		}
-		for (const f of files) {
-			const id = sessionIdFromFile(f);
-			if (id) ids.add(id);
+		for (const entry of entries) {
+			const path = join(root, entry.name);
+			if (entry.isFile()) {
+				addSessionFile(ids, path);
+				continue;
+			}
+			if (!entry.isDirectory()) continue;
+			let files: Dirent[];
+			try {
+				files = readdirSync(path, { withFileTypes: true });
+			} catch {
+				continue;
+			}
+			for (const file of files) {
+				if (file.isFile()) addSessionFile(ids, join(path, file.name));
+			}
 		}
 	}
 	return ids;
@@ -133,6 +209,7 @@ export function listSessions(currentSessionId?: string): SessionStorage[] {
 
 /** Remove one session's backup directory. Returns bytes reclaimed, or null on failure. */
 export function removeSession(sessionId: string): number | null {
+	if (!isSafeSessionId(sessionId)) return null;
 	const dir = backupsDir(sessionId);
 	try {
 		const bytes = dirSize(dir);

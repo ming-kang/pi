@@ -12,9 +12,10 @@
  * Per turn:
  *   - beginTurn()  (before_agent_start): open a working frame and re-record every
  *     already-tracked file at its current (turn-start) state, reusing the latest
- *     backup when unchanged (worktree lastSeen → mtime/size/content), creating a
- *     new version when not. lastSeen skips backup-blob IO when the worktree has
- *     not moved since the last confirm; content compare streams in 64 KiB chunks.
+ *     backup when unchanged (content compare for bounded files; metadata
+ *     fingerprint for oversized files), creating a new version when not.
+ *     Content comparison streams in 64 KiB chunks and treats uncertainty as
+ *     changed.
  *   - trackEdit()  (tool_call edit|write, before the write): back up a *newly*
  *     edited file at its pre-edit state into the working frame (null marker when
  *     the target does not exist yet, so rewind deletes the created file).
@@ -33,7 +34,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, mkdirSync, renameSync, type Stats, statSync, unlinkSync } from "node:fs";
 import { chmod, copyFile, link, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import type { FileBackup, FileHistorySnapshot } from "./snapshot.ts";
+import { type FileBackup, type FileHistorySnapshot, isSafeBackupName } from "./snapshot.ts";
 import { backupsDir } from "./storage.ts";
 
 /** Cap on retained snapshots per session (matches CC's MAX_SNAPSHOTS). */
@@ -47,19 +48,38 @@ const MAX_DIFF_BYTES = 1_048_576;
 /** Streaming compare chunk size (avoids buffering whole files up to MAX_CONTENT_BYTES). */
 const COMPARE_CHUNK_BYTES = 64 * 1024;
 
-/** Worktree identity recorded when we last backed up / confirmed a tracking path. */
+/** Metadata fingerprint used only to avoid re-reading oversized files. */
 interface SeenStats {
 	mtimeMs: number;
+	ctimeMs: number;
 	size: number;
 	mode: number;
+	ino: number;
+	dev: number;
+	contentHash?: string;
 }
 
-function seenFromStats(st: Stats): SeenStats {
-	return { mtimeMs: st.mtimeMs, size: st.size, mode: st.mode };
+function seenFromStats(st: Stats, contentHash?: string): SeenStats {
+	return {
+		mtimeMs: st.mtimeMs,
+		ctimeMs: st.ctimeMs,
+		size: st.size,
+		mode: st.mode,
+		ino: st.ino,
+		dev: st.dev,
+		...(contentHash ? { contentHash } : {}),
+	};
 }
 
 function sameSeen(a: SeenStats, b: Stats): boolean {
-	return a.mtimeMs === b.mtimeMs && a.size === b.size && a.mode === b.mode;
+	return (
+		a.mtimeMs === b.mtimeMs &&
+		a.ctimeMs === b.ctimeMs &&
+		a.size === b.size &&
+		a.mode === b.mode &&
+		a.ino === b.ino &&
+		a.dev === b.dev
+	);
 }
 
 export interface FileHistoryState {
@@ -75,14 +95,12 @@ export interface FileHistoryState {
 	trackedFiles: Set<string>;
 	/** Latest backup per tracking path (finalized + in-progress pending versions). */
 	latestByTracking: Map<string, FileBackup>;
-	/**
-	 * Worktree mtime/size/mode at the last backup or unchanged confirmation.
-	 * beginTurn uses this to skip backup-blob stats/content when the worktree
-	 * has not moved since we last recorded it (still stats the worktree once).
-	 */
+	/** Metadata fingerprint for oversized-file fast paths. */
 	lastSeen: Map<string, SeenStats>;
 	/** The current turn's working frame (built across the turn, persisted at endTurn). */
 	pending: FileHistorySnapshot | null;
+	/** Paths that failed capture for the current frame; retries can clear them. */
+	pendingFailures: Set<string>;
 	/** Whether the pending frame differs from the last finalized frame. */
 	dirty: boolean;
 	/** Monotonic activity counter (incremented on every finalized frame). */
@@ -110,6 +128,7 @@ function freshState(): FileHistoryState {
 		latestByTracking: new Map(),
 		lastSeen: new Map(),
 		pending: null,
+		pendingFailures: new Set(),
 		dirty: false,
 		seq: 0,
 	};
@@ -245,7 +264,12 @@ function backupName(tracking: string, version: number): string {
 	return `${h}@v${version}`;
 }
 
+function emptyBackupMap(): Record<string, FileBackup> {
+	return Object.create(null) as Record<string, FileBackup>;
+}
+
 function backupPathFor(sid: string, name: string): string {
+	if (!isSafeBackupName(name)) throw new Error("Invalid rewind backup name");
 	return join(backupsDir(sid), name);
 }
 
@@ -256,8 +280,8 @@ function latestBackupOf(state: FileHistoryState, tracking: string): FileBackup |
 /** First-ever recorded backup for a file (used when rewinding before it was tracked). */
 function firstBackupName(state: FileHistoryState, tracking: string): string | null | undefined {
 	for (const snap of state.snapshots) {
-		const b = snap.trackedFileBackups[tracking];
-		if (b && b.version === 1) return b.backupName;
+		const b = Object.hasOwn(snap.trackedFileBackups, tracking) ? snap.trackedFileBackups[tracking] : undefined;
+		if (b && b.version === 1 && (b.backupName === null || isSafeBackupName(b.backupName))) return b.backupName;
 	}
 	return undefined;
 }
@@ -268,8 +292,11 @@ function backupNameForTarget(
 	target: FileHistorySnapshot,
 	tracking: string,
 ): string | null | undefined {
-	const tb = target.trackedFileBackups[tracking];
-	if (tb) return tb.backupName;
+	if (Object.hasOwn(target.trackedFileBackups, tracking)) {
+		const tb = target.trackedFileBackups[tracking];
+		if (tb.backupName === null || isSafeBackupName(tb.backupName)) return tb.backupName;
+		return undefined;
+	}
 	return firstBackupName(state, tracking);
 }
 
@@ -319,28 +346,49 @@ async function filesEqualChunked(aPath: string, bPath: string, size: number): Pr
 }
 
 /** True when the on-disk file differs from its backup blob. */
+/** Stream a file into a SHA-256 digest without buffering its contents. */
+async function fileDigest(filePath: string): Promise<string> {
+	const handle = await open(filePath, "r");
+	const hash = createHash("sha256");
+	try {
+		const buffer = Buffer.allocUnsafe(COMPARE_CHUNK_BYTES);
+		for (;;) {
+			const result = await handle.read(buffer, 0, buffer.length, null);
+			if (result.bytesRead === 0) break;
+			hash.update(buffer.subarray(0, result.bytesRead));
+		}
+		return hash.digest("hex");
+	} finally {
+		await handle.close();
+	}
+}
+
+/** True when the on-disk file differs from its backup blob. */
 async function originChanged(
 	sid: string,
 	filePath: string,
 	name: string,
-	opts?: { hint?: Stats; trustMtime?: boolean },
+	hint?: Stats,
+	currentHash?: string,
 ): Promise<boolean> {
 	const backupPath = backupPathFor(sid, name);
-	const orig = opts?.hint ?? (await statOrNull(filePath).catch(() => null));
+	const orig = hint ?? (await statOrNull(filePath).catch(() => null));
 	const back = await statOrNull(backupPath).catch(() => null);
 
 	// One exists, one missing -> changed.
 	if ((orig === null) !== (back === null)) return true;
 	if (orig === null || back === null) return false;
 	if (orig.mode !== back.mode || orig.size !== back.size) return true;
-	// Original untouched since the backup was written -> unchanged (skip content
-	// read). Trusted only on the beginTurn path (worst case there: one redundant
-	// version). Restore-side change detection must not be fooled by a same-size
-	// content swap that carries an older mtime (archive extraction, touch -d).
-	if (opts?.trustMtime && orig.mtimeMs < back.mtimeMs) return false;
-	// Memory guard: don't load huge files just to byte-compare; assume changed and
-	// let createBackup stream a new version instead (copyFile never buffers whole files).
-	if (orig.size > MAX_CONTENT_BYTES) return true;
+	// Always compare content for bounded files. mtime/size/mode alone can be
+	// preserved by archive extraction, copy -p, or an external replacement.
+	if (orig.size > MAX_CONTENT_BYTES) {
+		try {
+			const actualHash = currentHash ?? (await fileDigest(filePath));
+			return actualHash !== (await fileDigest(backupPath));
+		} catch {
+			return true;
+		}
+	}
 	try {
 		return !(await filesEqualChunked(filePath, backupPath, orig.size));
 	} catch {
@@ -384,7 +432,7 @@ async function createBackup(
  * of whether the host awaits the hook before running the tool.
  *
  * `known` reuses a pre-stat from the caller (`null` = known ENOENT) so trackEdit
- * can record lastSeen without a second statSync on the critical path.
+ * can avoid a second statSync on the critical path.
  */
 function createBackupSync(
 	sid: string,
@@ -436,8 +484,9 @@ async function restoreBackup(sid: string, filePath: string, name: string): Promi
 export async function beginTurn(sid: string): Promise<void> {
 	const state = getState(sid);
 	const cwd = cwdFor(sid);
-	const backups: Record<string, FileBackup> = {};
+	const backups: Record<string, FileBackup> = Object.create(null) as Record<string, FileBackup>;
 	let dirty = false;
+	state.pendingFailures.clear();
 
 	await mapPool(Array.from(state.trackedFiles), IO_CONCURRENCY, async (tracking) => {
 		try {
@@ -461,30 +510,40 @@ export async function beginTurn(sid: string): Promise<void> {
 				dirty = true;
 				return;
 			}
-			// Worktree identity unchanged since last backup/confirm → reuse without
-			// opening the backup blob (still paid one worktree stat above).
 			const seen = state.lastSeen.get(tracking);
-			if (latest && latest.backupName !== null && seen && sameSeen(seen, st)) {
-				backups[tracking] = latest;
-				return;
+			let currentHash: string | undefined;
+			if (latest?.backupName !== null && st.size > MAX_CONTENT_BYTES) {
+				currentHash = await fileDigest(filePath);
+				if (
+					latest &&
+					seen &&
+					seen.contentHash === currentHash &&
+					sameSeen(seen, st) &&
+					(await statOrNull(backupPathFor(sid, latest.backupName)).catch(() => null))?.isFile()
+				) {
+					backups[tracking] = latest;
+					return;
+				}
 			}
 			if (
 				latest &&
 				latest.backupName !== null &&
-				!(await originChanged(sid, filePath, latest.backupName, { hint: st, trustMtime: true }))
+				!(await originChanged(sid, filePath, latest.backupName, st, currentHash))
 			) {
 				backups[tracking] = latest; // unchanged -> reuse
-				state.lastSeen.set(tracking, seenFromStats(st));
+				state.lastSeen.set(tracking, seenFromStats(st, currentHash));
 				return;
 			}
 			const created = await createBackup(sid, filePath, tracking, nextVersion, st);
 			backups[tracking] = created;
 			state.latestByTracking.set(tracking, created);
-			// Record the pre-backup worktree identity (copyFile does not change it).
-			state.lastSeen.set(tracking, seenFromStats(st));
+			if (st.size > MAX_CONTENT_BYTES && !currentHash) currentHash = await fileDigest(filePath);
+			state.lastSeen.set(tracking, seenFromStats(st, currentHash));
 			dirty = true;
 		} catch {
-			// skip this file; never break the turn
+			// Do not persist a partial frame: its omitted path would otherwise fall
+			// back to an older backup and restore the wrong pre-turn state.
+			state.pendingFailures.add(tracking);
 		}
 	});
 
@@ -518,27 +577,41 @@ export function trackEdit(sid: string, absPath: string): void {
 	const tracking = canonicalTracking(state, shorten(absPath, cwd));
 
 	if (!state.pending) {
-		state.pending = { v: 1, userEntryId: "", turnId: "", prompt: "", trackedFileBackups: {}, timestamp: "" };
+		state.pending = {
+			v: 1,
+			userEntryId: "",
+			turnId: "",
+			prompt: "",
+			trackedFileBackups: emptyBackupMap(),
+			timestamp: "",
+		};
+		state.pendingFailures.clear();
 	}
-	if (state.pending.trackedFileBackups[tracking]) return; // already captured this turn
+	if (Object.hasOwn(state.pending.trackedFileBackups, tracking)) return; // already captured this turn
 
-	const latest = latestBackupOf(state, tracking);
-	const version = latest ? latest.version + 1 : 1;
-	const filePath = expand(tracking, cwd);
-	// One pre-edit stat: drives the backup and lastSeen (null = new-file marker).
-	let preEdit: Stats | null = null;
 	try {
-		preEdit = statSync(filePath);
-	} catch (e) {
-		if (!isENOENT(e)) throw e;
+		const latest = latestBackupOf(state, tracking);
+		const version = latest ? latest.version + 1 : 1;
+		const filePath = expand(tracking, cwd);
+		// One pre-edit stat: drives the backup (null = new-file marker).
+		let preEdit: Stats | null = null;
+		try {
+			preEdit = statSync(filePath);
+		} catch (e) {
+			if (!isENOENT(e)) throw e;
+		}
+		const backup = createBackupSync(sid, filePath, tracking, version, preEdit);
+		state.pending.trackedFileBackups[tracking] = backup;
+		state.pendingFailures.delete(tracking);
+		state.trackedFiles.add(tracking);
+		state.latestByTracking.set(tracking, backup);
+		if (preEdit) state.lastSeen.set(tracking, seenFromStats(preEdit));
+		else state.lastSeen.delete(tracking);
+		state.dirty = true;
+	} catch (error) {
+		state.pendingFailures.add(tracking);
+		throw error;
 	}
-	const backup = createBackupSync(sid, filePath, tracking, version, preEdit);
-	state.pending.trackedFileBackups[tracking] = backup;
-	state.trackedFiles.add(tracking);
-	state.latestByTracking.set(tracking, backup);
-	if (preEdit) state.lastSeen.set(tracking, seenFromStats(preEdit));
-	else state.lastSeen.delete(tracking);
-	state.dirty = true;
 }
 
 /**
@@ -556,8 +629,10 @@ export function endTurn(
 ): FileHistorySnapshot | null {
 	const state = getState(sid);
 	const pending = state.pending;
+	const pendingComplete = state.pendingFailures.size === 0;
 	state.pending = null;
-	if (!pending || !state.dirty) {
+	state.pendingFailures.clear();
+	if (!pending || !pendingComplete || !state.dirty) {
 		state.dirty = false;
 		return null;
 	}
@@ -596,13 +671,13 @@ async function pruneDroppedBlobs(
 	const live = new Set<string>();
 	for (const snap of retained) {
 		for (const b of Object.values(snap.trackedFileBackups)) {
-			if (b.backupName) live.add(b.backupName);
+			if (b.backupName && isSafeBackupName(b.backupName)) live.add(b.backupName);
 		}
 	}
 	const doomed = new Set<string>();
 	for (const snap of dropped) {
 		for (const b of Object.values(snap.trackedFileBackups)) {
-			if (b.backupName && !live.has(b.backupName)) doomed.add(b.backupName);
+			if (b.backupName && isSafeBackupName(b.backupName) && !live.has(b.backupName)) doomed.add(b.backupName);
 		}
 	}
 	if (doomed.size === 0) return;
@@ -835,8 +910,7 @@ export async function applySnapshotDetailed(
 				if (!(await restoreBackup(sid, filePath, name))) {
 					return { path: filePath, kind: "unavailable" as const };
 				}
-				// Drop stale lastSeen: worktree now matches the target blob, not the
-				// latest backup identity beginTurn compares against.
+				// Drop the pre-restore fingerprint; the worktree now matches the target blob.
 				state.lastSeen.delete(tracking);
 				return { path: filePath, kind: "changed" as const };
 			}
@@ -897,10 +971,9 @@ export function restoreStateFromSnapshots(
 		droppedSnapshotAnchors: dropped.map((snapshot) => snapshot.userEntryId).filter(Boolean),
 		trackedFiles,
 		latestByTracking: rebuildLatestIndex(retained),
-		// lastSeen is process-local; after reload we re-establish it on the first
-		// beginTurn via originChanged / createBackup.
 		lastSeen: new Map(),
 		pending: null,
+		pendingFailures: new Set(),
 		dirty: false,
 		seq: retained.length,
 	});
@@ -932,7 +1005,7 @@ export async function migrateBackupsFromSession(
 	await Promise.allSettled(
 		snapshots.flatMap((snap) =>
 			Object.values(snap.trackedFileBackups)
-				.filter((b): b is FileBackup & { backupName: string } => b.backupName !== null)
+				.filter((b): b is FileBackup & { backupName: string } => isSafeBackupName(b.backupName))
 				.map(async ({ backupName: name }) => {
 					const from = join(backupsDir(prevSid), name);
 					const to = join(destDir, name);

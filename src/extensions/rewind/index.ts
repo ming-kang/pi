@@ -51,7 +51,7 @@ import {
 	restoreStateFromSnapshots,
 	trackEdit,
 } from "./engine.ts";
-import { runGc, sessionIdFromFile } from "./gc.ts";
+import { runGc, sessionIdFromFile, sessionInfoFromFile } from "./gc.ts";
 import { runRewindMenu } from "./menu.ts";
 import { rewindBackupsRoot, sessionsDirectory } from "./paths.ts";
 import {
@@ -62,7 +62,7 @@ import {
 	snapshotForEntry,
 } from "./restore.ts";
 import { type FileHistorySnapshot, isSnapshot, SNAPSHOT_ENTRY_TYPE } from "./snapshot.ts";
-import { configureStorage } from "./storage.ts";
+import { configureStorage, registerSessionsRoot } from "./storage.ts";
 import { truncateText } from "./text.ts";
 import { editWriteTargetPath, resolveToolPath } from "./tool-path.ts";
 
@@ -153,6 +153,7 @@ export default function rewind(pi: ExtensionAPI): void {
 		const sid = ctx.sessionManager.getSessionId();
 		if (!sid) return;
 		registerSession(sid, ctx.cwd);
+		registerSessionsRoot(ctx.sessionManager.getSessionDir());
 
 		const snapshots = rebuildSnapshots(ctx);
 
@@ -160,8 +161,18 @@ export default function rewind(pi: ExtensionAPI): void {
 		// prunes over-cap blobs from THIS session's directory (fire-and-forget),
 		// and linking only the retained frames first keeps the two steps disjoint
 		// — no race, and dropped frames' blobs are never linked at all.
-		if (event.reason === "fork" && event.previousSessionFile) {
-			const prevSid = sessionIdFromFile(event.previousSessionFile);
+		let migrationSourceFile: string | undefined;
+		if (event.reason === "fork") {
+			migrationSourceFile = event.previousSessionFile;
+		} else if (event.reason === "resume") {
+			// A resume target may itself be a fork whose initial migration failed.
+			// Repair only from the target header's recorded parent, never from the
+			// unrelated session we are leaving.
+			const targetFile = ctx.sessionManager.getSessionFile();
+			migrationSourceFile = targetFile ? sessionInfoFromFile(targetFile)?.parentSession : undefined;
+		}
+		if (migrationSourceFile) {
+			const prevSid = sessionIdFromFile(migrationSourceFile, false);
 			if (prevSid) {
 				try {
 					await migrateBackupsFromSession(prevSid, sid, capSnapshots(snapshots, config.maxSnapshots));
