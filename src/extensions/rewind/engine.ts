@@ -30,8 +30,8 @@
  * Backups live at <rewindBackupsDir(sessionId)>/<sha256(relpath)[:16]>@v<n>.
  */
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, mkdirSync, type Stats, statSync } from "node:fs";
-import { chmod, copyFile, link, mkdir, open, readFile, stat, unlink } from "node:fs/promises";
+import { chmodSync, copyFileSync, mkdirSync, renameSync, type Stats, statSync, unlinkSync } from "node:fs";
+import { chmod, copyFile, link, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { FileBackup, FileHistorySnapshot } from "./snapshot.ts";
 import { backupsDir } from "./storage.ts";
@@ -63,8 +63,14 @@ function sameSeen(a: SeenStats, b: Stats): boolean {
 }
 
 export interface FileHistoryState {
-	/** Finalized + persisted frames, oldest first. */
+	/** Finalized + persisted frames whose blobs are still retained, oldest first. */
 	snapshots: FileHistorySnapshot[];
+	/**
+	 * Anchors from the chronological prefix evicted by maxSnapshots. Keeping the
+	 * tiny metadata lets /tree distinguish "no frame was ever written" from "the
+	 * exact frame existed but is no longer restorable" and fail closed.
+	 */
+	droppedSnapshotAnchors: string[];
 	/** All tracking-paths ever edited this session. */
 	trackedFiles: Set<string>;
 	/** Latest backup per tracking path (finalized + in-progress pending versions). */
@@ -99,6 +105,7 @@ const cwds = new Map<string, string>();
 function freshState(): FileHistoryState {
 	return {
 		snapshots: [],
+		droppedSnapshotAnchors: [],
 		trackedFiles: new Set(),
 		latestByTracking: new Map(),
 		lastSeen: new Map(),
@@ -160,11 +167,65 @@ export function getSnapshots(sid: string): FileHistorySnapshot[] {
 	return states.get(sid)?.snapshots ?? [];
 }
 
+/** Chronological anchors whose frames were evicted and can no longer restore. */
+export function getDroppedSnapshotAnchors(sid: string): readonly string[] {
+	return states.get(sid)?.droppedSnapshotAnchors ?? [];
+}
+
 function cwdFor(sid: string): string {
 	return cwds.get(sid) ?? process.cwd();
 }
 
 // ---- path helpers ---------------------------------------------------------
+
+let tempCopySequence = 0;
+
+function temporaryCopyPath(destination: string): string {
+	tempCopySequence = (tempCopySequence + 1) % 1_000_000_000;
+	return `${destination}.pi-rewind-${process.pid}-${tempCopySequence}.tmp`;
+}
+
+/** Copy via a same-directory temporary file so a failed copy never truncates the target. */
+async function copyFileAtomic(source: string, destination: string, mode?: number): Promise<void> {
+	await mkdir(dirname(destination), { recursive: true });
+	const temporary = temporaryCopyPath(destination);
+	try {
+		await copyFile(source, temporary);
+		if (mode !== undefined) {
+			try {
+				await chmod(temporary, mode);
+			} catch {
+				// best-effort (e.g. Windows); content is what matters
+			}
+		}
+		await rename(temporary, destination);
+	} finally {
+		await unlink(temporary).catch(() => undefined);
+	}
+}
+
+/** Synchronous counterpart used before edit/write tools execute. */
+function copyFileAtomicSync(source: string, destination: string, mode?: number): void {
+	mkdirSync(dirname(destination), { recursive: true });
+	const temporary = temporaryCopyPath(destination);
+	try {
+		copyFileSync(source, temporary);
+		if (mode !== undefined) {
+			try {
+				chmodSync(temporary, mode);
+			} catch {
+				// best-effort
+			}
+		}
+		renameSync(temporary, destination);
+	} finally {
+		try {
+			unlinkSync(temporary);
+		} catch {
+			// already renamed or never created
+		}
+	}
+}
 
 /** Use the cwd-relative path as the tracking key when inside cwd (shorter, portable). */
 function shorten(absPath: string, cwd: string): string {
@@ -311,18 +372,8 @@ async function createBackup(
 	}
 	const name = backupName(tracking, version);
 	const dest = backupPathFor(sid, name);
-	try {
-		await copyFile(filePath, dest);
-	} catch (e) {
-		if (!isENOENT(e)) throw e;
-		await mkdir(dirname(dest), { recursive: true });
-		await copyFile(filePath, dest);
-	}
-	try {
-		await chmod(dest, src.mode);
-	} catch {
-		// best-effort (e.g. Windows); content is what matters
-	}
+	const mode = src.mode;
+	await copyFileAtomic(filePath, dest, mode);
 	return { backupName: name, version };
 }
 
@@ -356,44 +407,26 @@ function createBackupSync(
 	}
 	const name = backupName(tracking, version);
 	const dest = backupPathFor(sid, name);
-	try {
-		copyFileSync(filePath, dest);
-	} catch (e) {
-		if (!isENOENT(e)) throw e;
-		mkdirSync(dirname(dest), { recursive: true });
-		copyFileSync(filePath, dest);
-	}
-	try {
-		chmodSync(dest, src.mode);
-	} catch {
-		// best-effort
-	}
+	copyFileAtomicSync(filePath, dest, src.mode);
 	return { backupName: name, version };
 }
 
-async function restoreBackup(sid: string, filePath: string, name: string): Promise<void> {
+async function restoreBackup(sid: string, filePath: string, name: string): Promise<boolean> {
 	const backupPath = backupPathFor(sid, name);
 	let back: Stats;
 	try {
 		back = await stat(backupPath);
 	} catch {
-		return; // backup vanished; leave the file untouched
+		return false; // backup vanished; leave the file untouched and report unavailable
 	}
+	if (!back.isFile()) return false;
 	try {
-		await copyFile(backupPath, filePath);
-	} catch (e) {
-		if (!isENOENT(e)) throw e;
-		await mkdir(dirname(filePath), { recursive: true });
-		await copyFile(backupPath, filePath);
-	}
-	try {
-		await chmod(filePath, back.mode);
+		await copyFileAtomic(backupPath, filePath, back.mode);
 	} catch {
-		// best-effort
+		return false;
 	}
+	return true;
 }
-
-// ---- per-turn lifecycle ---------------------------------------------------
 
 /**
  * Open the working frame for a turn and re-record every tracked file at its
@@ -538,6 +571,9 @@ export function endTurn(
 	if (state.snapshots.length > maxSnapshots) {
 		const dropped = state.snapshots.slice(0, state.snapshots.length - maxSnapshots);
 		state.snapshots = state.snapshots.slice(-maxSnapshots);
+		for (const snapshot of dropped) {
+			if (snapshot.userEntryId) state.droppedSnapshotAnchors.push(snapshot.userEntryId);
+		}
 		void pruneDroppedBlobs(sid, dropped, state.snapshots);
 	}
 	state.seq++;
@@ -575,30 +611,49 @@ async function pruneDroppedBlobs(
 
 // ---- rewind ---------------------------------------------------------------
 
+export interface SnapshotChangePlan {
+	/** Paths that differ and have enough backup data to restore safely. */
+	changedPaths: string[];
+	/** Paths whose target state cannot be resolved or whose blob is unavailable. */
+	unavailablePaths: string[];
+}
+
 /**
- * Absolute paths that restoring to `target` would change on disk (empty =
- * nothing to do). Same walk applySnapshot performs, without writing — the
- * caller can both count and preview the files from one pass. Concurrent with
- * IO_CONCURRENCY; result order matches trackedFiles insertion order.
+ * Build a fail-closed restore plan. Missing target metadata or blob files are
+ * reported separately and never enter the set offered for restoration.
  */
-export async function collectChanges(sid: string, target: FileHistorySnapshot): Promise<string[]> {
+export async function collectChangePlan(sid: string, target: FileHistorySnapshot): Promise<SnapshotChangePlan> {
 	const state = getState(sid);
 	const cwd = cwdFor(sid);
 	const trackings = Array.from(state.trackedFiles);
 	const results = await mapPool(trackings, IO_CONCURRENCY, async (tracking) => {
+		const filePath = expand(tracking, cwd);
 		try {
-			const filePath = expand(tracking, cwd);
 			const name = backupNameForTarget(state, target, tracking);
-			if (name === undefined) return null;
+			if (name === undefined) return { path: filePath, kind: "unavailable" as const };
 			if (name === null) {
-				return (await statOrNull(filePath)) ? filePath : null;
+				return (await statOrNull(filePath)) ? { path: filePath, kind: "changed" as const } : null;
 			}
-			return (await originChanged(sid, filePath, name)) ? filePath : null;
+			const backup = await statOrNull(backupPathFor(sid, name)).catch(() => null);
+			if (!backup?.isFile()) return { path: filePath, kind: "unavailable" as const };
+			return (await originChanged(sid, filePath, name)) ? { path: filePath, kind: "changed" as const } : null;
 		} catch {
-			return null;
+			return { path: filePath, kind: "unavailable" as const };
 		}
 	});
-	return results.filter((p): p is string => p !== null);
+	const changedPaths: string[] = [];
+	const unavailablePaths: string[] = [];
+	for (const result of results) {
+		if (!result) continue;
+		if (result.kind === "changed") changedPaths.push(result.path);
+		else unavailablePaths.push(result.path);
+	}
+	return { changedPaths, unavailablePaths };
+}
+
+/** Absolute paths that differ and have an available target backup. */
+export async function collectChanges(sid: string, target: FileHistorySnapshot): Promise<string[]> {
+	return (await collectChangePlan(sid, target)).changedPaths;
 }
 
 export interface CoarseDiffStats {
@@ -735,16 +790,19 @@ function lineFrequency(text: string): Map<string, number> {
 	return map;
 }
 
-/**
- * Restore the work tree to `target`. Returns the list of changed file paths.
- * Pass `onlyPaths` (from a prior collectChanges) to skip a second originChanged
- * pass and only touch those absolute paths.
- */
-export async function applySnapshot(
+export interface ApplySnapshotResult {
+	/** Paths actually restored or deleted. */
+	changedPaths: string[];
+	/** Selected paths left untouched because their target could not be restored. */
+	unavailablePaths: string[];
+}
+
+/** Restore with explicit partial-failure reporting for the interactive UI. */
+export async function applySnapshotDetailed(
 	sid: string,
 	target: FileHistorySnapshot,
 	opts?: ApplySnapshotOptions,
-): Promise<string[]> {
+): Promise<ApplySnapshotResult> {
 	const state = getState(sid);
 	const cwd = cwdFor(sid);
 	const only = opts?.onlyPaths;
@@ -754,38 +812,59 @@ export async function applySnapshot(
 	});
 
 	const results = await mapPool(trackings, IO_CONCURRENCY, async (tracking) => {
+		const filePath = expand(tracking, cwd);
 		try {
-			const filePath = expand(tracking, cwd);
 			const name = backupNameForTarget(state, target, tracking);
-			if (name === undefined) return null; // can't resolve -> leave file alone
+			if (name === undefined) return { path: filePath, kind: "unavailable" as const };
 			if (name === null) {
 				try {
 					await unlink(filePath);
 					// Worktree no longer matches any recorded identity.
 					state.lastSeen.delete(tracking);
-					return filePath;
+					return { path: filePath, kind: "changed" as const };
 				} catch (e) {
 					if (!isENOENT(e)) throw e;
 					return null;
 				}
 			}
-			// onlyPaths already proven different at confirm time — skip re-compare.
+			const backup = await statOrNull(backupPathFor(sid, name)).catch(() => null);
+			if (!backup?.isFile()) return { path: filePath, kind: "unavailable" as const };
+			// onlyPaths already proved different at confirm time; the restore still
+			// verifies that the blob exists and reports a concurrent disappearance.
 			if (only || (await originChanged(sid, filePath, name))) {
-				await restoreBackup(sid, filePath, name);
+				if (!(await restoreBackup(sid, filePath, name))) {
+					return { path: filePath, kind: "unavailable" as const };
+				}
 				// Drop stale lastSeen: worktree now matches the target blob, not the
 				// latest backup identity beginTurn compares against.
 				state.lastSeen.delete(tracking);
-				return filePath;
+				return { path: filePath, kind: "changed" as const };
 			}
 			return null;
 		} catch {
-			return null;
+			return { path: filePath, kind: "unavailable" as const };
 		}
 	});
-	return results.filter((p): p is string => p !== null);
+	const changedPaths: string[] = [];
+	const unavailablePaths: string[] = [];
+	for (const result of results) {
+		if (!result) continue;
+		if (result.kind === "changed") changedPaths.push(result.path);
+		else unavailablePaths.push(result.path);
+	}
+	return { changedPaths, unavailablePaths };
 }
 
-// ---- persistence rebuild + resume migration -------------------------------
+/** Restore the work tree and return only paths actually changed. */
+export async function applySnapshot(
+	sid: string,
+	target: FileHistorySnapshot,
+	opts?: ApplySnapshotOptions,
+): Promise<string[]> {
+	return (await applySnapshotDetailed(sid, target, opts)).changedPaths;
+}
+
+// ---- persistence rebuild + fork migration -------------------------------
 
 /** The trailing window of `snapshots` retained under the cap (endTurn's ring). */
 export function capSnapshots(snapshots: FileHistorySnapshot[], maxSnapshots = MAX_SNAPSHOTS): FileHistorySnapshot[] {
@@ -805,8 +884,9 @@ export function restoreStateFromSnapshots(
 	// frames only (older frames are unreachable for rewind anyway); blobs only
 	// those frames referenced are pruned best-effort, mirroring endTurn.
 	const retained = capSnapshots(snapshots, maxSnapshots);
-	if (retained.length < snapshots.length) {
-		void pruneDroppedBlobs(sid, snapshots.slice(0, snapshots.length - retained.length), retained);
+	const dropped = snapshots.slice(0, snapshots.length - retained.length);
+	if (dropped.length > 0) {
+		void pruneDroppedBlobs(sid, dropped, retained);
 	}
 	const trackedFiles = new Set<string>();
 	for (const snap of retained) {
@@ -814,6 +894,7 @@ export function restoreStateFromSnapshots(
 	}
 	states.set(sid, {
 		snapshots: [...retained],
+		droppedSnapshotAnchors: dropped.map((snapshot) => snapshot.userEntryId).filter(Boolean),
 		trackedFiles,
 		latestByTracking: rebuildLatestIndex(retained),
 		// lastSeen is process-local; after reload we re-establish it on the first
@@ -825,10 +906,20 @@ export function restoreStateFromSnapshots(
 	});
 }
 
+async function backupFilesEqual(aPath: string, bPath: string): Promise<boolean> {
+	try {
+		const [a, b] = await Promise.all([stat(aPath), stat(bPath)]);
+		if (!a.isFile() || !b.isFile() || a.mode !== b.mode || a.size !== b.size) return false;
+		return await filesEqualChunked(aPath, bPath, a.size);
+	} catch {
+		return false;
+	}
+}
+
 /**
- * Hard-link this session's backup blobs from a previous session's directory
- * (resume/fork carries the conversation + its snapshot index, but the blobs live
- * under the old session id). Falls back to copy. No-op when ids match.
+ * Hard-link a fork's retained backup blobs from its parent session. Falls back
+ * to copy across devices. An existing destination is content-checked; a stale
+ * collision is replaced from the authoritative parent instead of being trusted.
  */
 export async function migrateBackupsFromSession(
 	prevSid: string,
@@ -845,15 +936,24 @@ export async function migrateBackupsFromSession(
 				.map(async ({ backupName: name }) => {
 					const from = join(backupsDir(prevSid), name);
 					const to = join(destDir, name);
+					const source = await statOrNull(from).catch(() => null);
+					if (!source?.isFile()) {
+						// A stale destination cannot be trusted when the authoritative parent
+						// blob is gone; remove it so future restores fail closed.
+						await unlink(to).catch(() => undefined);
+						return;
+					}
 					try {
 						await link(from, to);
 					} catch (e) {
 						const code = (e as { code?: string }).code;
-						if (code === "EEXIST") return;
+						if (code === "EEXIST" && (await backupFilesEqual(from, to))) return;
 						try {
-							await copyFile(from, to);
+							await copyFileAtomic(from, to, source.mode);
 						} catch {
-							// best-effort; a missing blob just means that version can't restore
+							// A failed migration must not leave a stale or partial destination
+							// blob that later looks restorable.
+							await unlink(to).catch(() => undefined);
 						}
 					}
 				}),

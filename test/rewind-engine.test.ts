@@ -9,6 +9,7 @@ import {
 	readdirSync,
 	readFileSync,
 	rmSync,
+	unlinkSync,
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
@@ -18,12 +19,16 @@ import { afterAll, beforeEach, describe, expect, test } from "vitest";
 
 import {
 	applySnapshot,
+	applySnapshotDetailed,
 	beginTurn,
 	capSnapshots,
+	collectChangePlan,
 	collectChanges,
 	disposeSession,
 	endTurn,
+	getDroppedSnapshotAnchors,
 	getSnapshots,
+	migrateBackupsFromSession,
 	registerSession,
 	restoreStateFromSnapshots,
 	trackEdit,
@@ -137,6 +142,10 @@ describe("rewind engine", () => {
 		disposeSession(sid);
 		restoreStateFromSnapshots(sid, cwd, frames, 2);
 		expect(getSnapshots(sid).map((s) => s.userEntryId)).toEqual(["u2", "u3"]);
+
+		disposeSession(sid);
+		restoreStateFromSnapshots(sid, cwd, frames, 1);
+		expect(getDroppedSnapshotAnchors(sid)).toEqual(["u1", "u2"]);
 	});
 
 	test("frames dropped from the ring release blobs no retained frame references", async () => {
@@ -165,6 +174,49 @@ describe("rewind engine", () => {
 		// Prune is fire-and-forget; wait until only live blobs remain.
 		const dir = join(backupsRoot, sid);
 		await waitFor(() => readdirSync(dir).every((name) => live.has(name)));
+	});
+
+	test("missing blobs are excluded from restore plans and never reported as restored", async () => {
+		const f = join(cwd, "missing.txt");
+		writeFileSync(f, "before", "utf8");
+		const frame = await runTurn("u1", [{ file: "missing.txt", content: "after" }]);
+		expect(frame).not.toBeNull();
+		const blob = frame!.trackedFileBackups["missing.txt"]?.backupName;
+		expect(blob).toBeTypeOf("string");
+		rmSync(join(backupsRoot, sid, blob!), { force: true });
+
+		const plan = await collectChangePlan(sid, frame!);
+		expect(plan).toEqual({ changedPaths: [], unavailablePaths: [f] });
+		const result = await applySnapshotDetailed(sid, frame!, { onlyPaths: new Set([f]) });
+		expect(result).toEqual({ changedPaths: [], unavailablePaths: [f] });
+		expect(readFileSync(f, "utf8")).toBe("after");
+		unlinkSync(f);
+		expect(await applySnapshotDetailed(sid, frame!)).toEqual({ changedPaths: [], unavailablePaths: [f] });
+	});
+
+	test("fork migration replaces a stale same-name destination blob", async () => {
+		const f = join(cwd, "shared.txt");
+		writeFileSync(f, "parent", "utf8");
+		const frame = await runTurn("u1", [{ file: "shared.txt", content: "edited" }]);
+		expect(frame).not.toBeNull();
+		const blob = frame!.trackedFileBackups["shared.txt"]?.backupName;
+		expect(blob).toBeTypeOf("string");
+
+		const forkSid = `${sid}-fork`;
+		const forkDir = join(backupsRoot, forkSid);
+		mkdirSync(forkDir, { recursive: true });
+		writeFileSync(join(forkDir, blob!), "wrong!", "utf8");
+		await migrateBackupsFromSession(sid, forkSid, [frame!]);
+		expect(readFileSync(join(forkDir, blob!), "utf8")).toBe("parent");
+
+		const missingSid = `${sid}-missing-parent`;
+		const missingForkDir = join(backupsRoot, missingSid);
+		mkdirSync(missingForkDir, { recursive: true });
+		writeFileSync(join(missingForkDir, "dead@v1"), "stale", "utf8");
+		await migrateBackupsFromSession(sid, missingSid, [
+			{ ...frame!, trackedFileBackups: { "shared.txt": { backupName: "dead@v1", version: 1 } } },
+		]);
+		expect(existsSync(join(missingForkDir, "dead@v1"))).toBe(false);
 	});
 
 	test("restore-side change detection is not fooled by an mtime-preserving content swap", async () => {

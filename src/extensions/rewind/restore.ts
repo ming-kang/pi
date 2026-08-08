@@ -19,10 +19,13 @@
  */
 import {
 	type ApplySnapshotOptions,
-	applySnapshot,
+	type ApplySnapshotResult,
+	applySnapshotDetailed,
 	type CoarseDiffStats,
 	collectChangeDiffStats,
+	collectChangePlan,
 	collectChanges,
+	type SnapshotChangePlan,
 } from "./engine.ts";
 import type { FileHistorySnapshot } from "./snapshot.ts";
 
@@ -60,9 +63,16 @@ function isDescendantOf(view: EntryTreeView, id: string, ancestorId: string): bo
  */
 function snapshotAfterEntry(
 	snapshots: FileHistorySnapshot[],
+	droppedSnapshotAnchors: readonly string[],
 	view: EntryTreeView,
 	entryId: string,
 ): FileHistorySnapshot | undefined {
+	// Dropped frames are the chronological prefix of `snapshots`. If one is the
+	// first candidate on this branch, skipping ahead to a retained descendant
+	// would restore a later state than the selected conversation point.
+	for (const anchor of droppedSnapshotAnchors) {
+		if (anchor && isDescendantOf(view, anchor, entryId)) return undefined;
+	}
 	for (const snap of snapshots) {
 		if (!snap.userEntryId) continue;
 		if (isDescendantOf(view, snap.userEntryId, entryId)) return snap;
@@ -79,6 +89,7 @@ export function snapshotForEntry(
 	snapshots: FileHistorySnapshot[],
 	view: EntryTreeView,
 	targetId: string,
+	droppedSnapshotAnchors: readonly string[] = [],
 ): FileHistorySnapshot | undefined {
 	const target = view.getEntry(targetId);
 	if (!target) return undefined;
@@ -91,17 +102,26 @@ export function snapshotForEntry(
 			if (snap.userEntryId === targetId) exact = snap;
 		}
 		if (exact) return exact;
+		// An exact frame existed but its blob window was evicted. This is not a
+		// sparse no-change turn, so a later retained descendant is not equivalent.
+		if (droppedSnapshotAnchors.includes(targetId)) return undefined;
 		// No frame for this turn (it recorded no changes): the state before it
-		// equals the state after its parent.
-		return target.parentId === null ? undefined : snapshotAfterEntry(snapshots, view, target.parentId);
+		// equals the state after its parent, unless that next frame was evicted.
+		return target.parentId === null
+			? undefined
+			: snapshotAfterEntry(snapshots, droppedSnapshotAnchors, view, target.parentId);
 	}
 
-	return snapshotAfterEntry(snapshots, view, targetId);
+	return snapshotAfterEntry(snapshots, droppedSnapshotAnchors, view, targetId);
+}
+
+export function snapshotChangePlan(sessionId: string, snapshot: FileHistorySnapshot): Promise<SnapshotChangePlan> {
+	return collectChangePlan(sessionId, snapshot);
 }
 
 /**
- * Absolute file paths restoring to this snapshot would change on disk (empty =
- * none). Callers use the length for the count and the paths for the preview.
+ * Absolute file paths restoring to this snapshot would change (unavailable
+ * blobs are omitted; snapshotChangePlan exposes them to the interactive UI).
  */
 export function snapshotChangedPaths(sessionId: string, snapshot: FileHistorySnapshot): Promise<string[]> {
 	return collectChanges(sessionId, snapshot);
@@ -127,6 +147,6 @@ export async function restoreToSnapshot(
 	sessionId: string,
 	snapshot: FileHistorySnapshot,
 	opts?: ApplySnapshotOptions,
-): Promise<string[]> {
-	return applySnapshot(sessionId, snapshot, opts);
+): Promise<ApplySnapshotResult> {
+	return applySnapshotDetailed(sessionId, snapshot, opts);
 }

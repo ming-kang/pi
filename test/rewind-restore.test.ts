@@ -80,6 +80,28 @@ describe("snapshotForEntry", () => {
 		expect(snapshotForEntry(sparse, view, "u2")?.userEntryId).toBe("u3");
 	});
 
+	test("user target whose exact frame was evicted does not use a later retained frame", () => {
+		expect(snapshotForEntry([snap("u3")], view, "u2", ["u1", "u2"])).toBeUndefined();
+	});
+
+	test("non-user target does not skip an evicted next-turn frame", () => {
+		// a1's accurate post-turn state is u2. Once u2 is evicted, u3 is too late.
+		expect(snapshotForEntry([snap("u3")], view, "a1", ["u1", "u2"])).toBeUndefined();
+	});
+
+	test("an evicted frame on another branch does not block a retained descendant", () => {
+		const branched = makeView([
+			{ id: "u1", parentId: null, anchor: true },
+			{ id: "a1", parentId: "u1" },
+			{ id: "old", parentId: "a1", anchor: true },
+			{ id: "old-a", parentId: "old" },
+			{ id: "new", parentId: "a1", anchor: true },
+			{ id: "new-a", parentId: "new" },
+			{ id: "next", parentId: "new-a", anchor: true },
+		]);
+		expect(snapshotForEntry([snap("next")], branched, "new-a", ["old"])?.userEntryId).toBe("next");
+	});
+
 	test("root user target with no frame -> undefined", () => {
 		expect(snapshotForEntry([snap("u3")], view, "u1")).toBeUndefined();
 	});

@@ -17,8 +17,8 @@
  * The frame anchors to the FIRST user entry the run appended (tracked via
  * anchorScanStart + anchor.ts) — the entry whose start the frame recorded;
  * steering/follow-up messages append later user entries that must not steal
- * the anchor. On session_start the index is rebuilt from those entries;
- * resume/fork hard-links the prior session's blobs.
+ * the anchor. On session_start the index is rebuilt from those entries; a fork
+ * hard-links its retained parent-session blobs.
  *
  * Time-travel is fused into /tree: navigating to a node whose turn changed files
  * offers to sync the work tree to that point (session_before_tree/session_tree).
@@ -44,6 +44,7 @@ import {
 	capSnapshots,
 	disposeSession,
 	endTurn,
+	getDroppedSnapshotAnchors,
 	getSnapshots,
 	migrateBackupsFromSession,
 	registerSession,
@@ -57,7 +58,7 @@ import {
 	type EntryTreeView,
 	restoreToSnapshot,
 	snapshotChangeDiffStats,
-	snapshotChangedPaths,
+	snapshotChangePlan,
 	snapshotForEntry,
 } from "./restore.ts";
 import { type FileHistorySnapshot, isSnapshot, SNAPSHOT_ENTRY_TYPE } from "./snapshot.ts";
@@ -146,7 +147,7 @@ function formatRestorePreview(changedPaths: string[], cwd: string): string {
 // ---- extension entry ------------------------------------------------------
 
 export default function rewind(pi: ExtensionAPI): void {
-	// session_start: rebuild the index, migrate fork/resume blobs, reclaim storage.
+	// session_start: rebuild the index, migrate fork blobs, reclaim storage.
 	pi.on("session_start", async (event, ctx) => {
 		config = reloadRewindConfig();
 		const sid = ctx.sessionManager.getSessionId();
@@ -159,7 +160,7 @@ export default function rewind(pi: ExtensionAPI): void {
 		// prunes over-cap blobs from THIS session's directory (fire-and-forget),
 		// and linking only the retained frames first keeps the two steps disjoint
 		// — no race, and dropped frames' blobs are never linked at all.
-		if ((event.reason === "resume" || event.reason === "fork") && event.previousSessionFile) {
+		if (event.reason === "fork" && event.previousSessionFile) {
 			const prevSid = sessionIdFromFile(event.previousSessionFile);
 			if (prevSid) {
 				try {
@@ -247,10 +248,24 @@ export default function rewind(pi: ExtensionAPI): void {
 		pendingTreeRestore.set(sid, null);
 		if (!config.enabled) return;
 
-		const target = snapshotForEntry(getSnapshots(sid), sessionTreeView(ctx), event.preparation.targetId);
+		const target = snapshotForEntry(
+			getSnapshots(sid),
+			sessionTreeView(ctx),
+			event.preparation.targetId,
+			getDroppedSnapshotAnchors(sid),
+		);
 		if (!target) return;
-		const changed = await snapshotChangedPaths(sid, target);
-		if (changed.length === 0) return; // silent nav, like native /tree
+		const plan = await snapshotChangePlan(sid, target);
+		const changed = plan.changedPaths;
+		if (changed.length === 0) {
+			if (plan.unavailablePaths.length > 0 && ctx.hasUI) {
+				ctx.ui.notify(
+					`Cannot restore ${plan.unavailablePaths.length} file${plan.unavailablePaths.length === 1 ? "" : "s"}: required rewind data is unavailable. Conversation navigation will continue.`,
+					"warning",
+				);
+			}
+			return;
+		}
 		// Lifecycle handler: silent-return without UI. (hasUI is the guard for
 		// ctx.ui.*; checking ctx.mode here would wrongly proceed when a TUI
 		// session has no usable UI.)
@@ -266,8 +281,12 @@ export default function rewind(pi: ExtensionAPI): void {
 		} catch {
 			// Coarse stats are best-effort; still offer path preview.
 		}
+		const unavailableNote =
+			plan.unavailablePaths.length > 0
+				? `\n  ${plan.unavailablePaths.length} additional file${plan.unavailablePaths.length === 1 ? " is" : "s are"} unavailable and will be left untouched.`
+				: "";
 		const choice = await ctx.ui.select(
-			`Restore ${n} file${n === 1 ? "" : "s"} to this point?${lineStats}\n${formatRestorePreview(changed, ctx.cwd)}\n  (covers edit/write changes only; files changed via bash are not tracked)`,
+			`Restore ${n} file${n === 1 ? "" : "s"} to this point?${lineStats}\n${formatRestorePreview(changed, ctx.cwd)}${unavailableNote}\n  (covers edit/write changes only; files changed via bash are not tracked)`,
 			["Yes, restore files", "No, conversation only"],
 		);
 		if (choice?.startsWith("Yes")) {
@@ -287,13 +306,19 @@ export default function rewind(pi: ExtensionAPI): void {
 		pendingTreeRestore.set(sid, null);
 		if (!pending) return;
 		try {
-			const changed = await restoreToSnapshot(sid, pending.snapshot, {
+			const result = await restoreToSnapshot(sid, pending.snapshot, {
 				onlyPaths: new Set(pending.changedPaths),
 			});
-			if (changed.length > 0) {
+			if (result.changedPaths.length > 0) {
 				ctx.ui.notify(
-					`Restored ${changed.length} file${changed.length === 1 ? "" : "s"} to this checkpoint.`,
+					`Restored ${result.changedPaths.length} file${result.changedPaths.length === 1 ? "" : "s"} to this checkpoint.`,
 					"info",
+				);
+			}
+			if (result.unavailablePaths.length > 0) {
+				ctx.ui.notify(
+					`Could not restore ${result.unavailablePaths.length} file${result.unavailablePaths.length === 1 ? "" : "s"}; unavailable paths were left untouched.`,
+					"warning",
 				);
 			}
 		} catch (e) {
