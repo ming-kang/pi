@@ -201,6 +201,33 @@ describe("rewind engine", () => {
 		expect(await applySnapshotDetailed(sid, frame!)).toEqual({ changedPaths: [], unavailablePaths: [f] });
 	});
 
+	test("corrupt blobs are unavailable and never overwrite the worktree", async () => {
+		const f = join(cwd, "corrupt.txt");
+		writeFileSync(f, "before", "utf8");
+		const frame = await runTurn("u1", [{ file: "corrupt.txt", content: "after" }]);
+		expect(frame).not.toBeNull();
+		const blob = frame!.trackedFileBackups["corrupt.txt"]?.backupName;
+		expect(blob).toBeTypeOf("string");
+		writeFileSync(join(backupsRoot, sid, blob!), "CORRUPTED", "utf8");
+
+		expect(await collectChangePlan(sid, frame!)).toEqual({ changedPaths: [], unavailablePaths: [f] });
+		expect(await applySnapshotDetailed(sid, frame!)).toEqual({ changedPaths: [], unavailablePaths: [f] });
+		expect(readFileSync(f, "utf8")).toBe("after");
+	});
+
+	test("fork migration rejects a parent blob whose checksum does not match", async () => {
+		const f = join(cwd, "corrupt-parent.txt");
+		writeFileSync(f, "before", "utf8");
+		const frame = await runTurn("u1", [{ file: "corrupt-parent.txt", content: "after" }]);
+		expect(frame).not.toBeNull();
+		const blob = frame!.trackedFileBackups["corrupt-parent.txt"]?.backupName;
+		expect(blob).toBeTypeOf("string");
+		writeFileSync(join(backupsRoot, sid, blob!), "bad", "utf8");
+		const forkSid = `${sid}-checksum-fork`;
+		await migrateBackupsFromSession(sid, forkSid, [frame!]);
+		expect(existsSync(join(backupsRoot, forkSid, blob!))).toBe(false);
+	});
+
 	test("fork migration replaces a stale same-name destination blob", async () => {
 		const f = join(cwd, "shared.txt");
 		writeFileSync(f, "parent", "utf8");

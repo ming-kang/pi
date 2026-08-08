@@ -86,14 +86,17 @@ rebuilt from them on `session_start`.
 
 - **Never blocks the edit.** Backup runs before the write lands; a backup failure is swallowed so the session never stalls.
 - **Restore safety.** `applySnapshot` only rewrites files that differ, copies
-  through a same-directory temporary file, and reports unreadable or missing
-  backups without claiming they were restored.
+  through a same-directory temporary file, verifies the persisted SHA-256 when
+  available, and reports unreadable, missing, or corrupt backups without claiming
+  they were restored.
 - **Change detection.** Bounded files are byte-compared against the latest
   backup, so same-size files with preserved or older mtimes are detected.
   Oversized files use a streamed SHA-256 digest when their metadata changes and
   cache immutable backup digests; an unchanged metadata fingerprint avoids
-  rereading a multi-gigabyte worktree file. Uncertainty still fails closed as
-  changed.
+  rereading a multi-gigabyte worktree file. New blobs persist their SHA-256;
+  corrupt blobs fail closed. Legacy snapshots without a digest remain readable
+  but cannot provide the same integrity guarantee. Uncertainty still fails
+  closed as changed.
 - **Config is memory-cached.** `config.json` is re-read on `session_start` and updated in memory when `/rewind` saves. Writes use a temporary file, `fsync`, and same-directory rename.
 - **Config input.** Custom retention values must be whole days from 0 to 3650;
   malformed prefixes and fractions are rejected.

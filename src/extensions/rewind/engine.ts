@@ -31,7 +31,18 @@
  * Backups live at <rewindBackupsDir(sessionId)>/<sha256(relpath)[:16]>@v<n>.
  */
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, mkdirSync, renameSync, type Stats, statSync, unlinkSync } from "node:fs";
+import {
+	chmodSync,
+	closeSync,
+	mkdirSync,
+	openSync,
+	readSync,
+	renameSync,
+	type Stats,
+	statSync,
+	unlinkSync,
+	writeSync,
+} from "node:fs";
 import { chmod, copyFile, link, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { type FileBackup, type FileHistorySnapshot, isSafeBackupName } from "./snapshot.ts";
@@ -101,6 +112,8 @@ export interface FileHistoryState {
 	lastSeen: Map<string, SeenStats>;
 	/** Digest cache for immutable backup blobs, keyed by blob name. */
 	backupDigests: Map<string, string>;
+	/** Metadata fingerprint paired with each cached blob digest. */
+	backupSeen: Map<string, SeenStats>;
 	/** The current turn's working frame (built across the turn, persisted at endTurn). */
 	pending: FileHistorySnapshot | null;
 	/** Paths that failed capture for the current frame; retries can clear them. */
@@ -132,6 +145,7 @@ function freshState(): FileHistoryState {
 		latestByTracking: new Map(),
 		lastSeen: new Map(),
 		backupDigests: new Map(),
+		backupSeen: new Map(),
 		pending: null,
 		pendingFailures: new Set(),
 		dirty: false,
@@ -209,31 +223,65 @@ function temporaryCopyPath(destination: string): string {
 	return `${destination}.pi-rewind-${process.pid}-${tempCopySequence}.tmp`;
 }
 
-/** Copy via a same-directory temporary file so a failed copy never truncates the target. */
-async function copyFileAtomic(source: string, destination: string, mode?: number): Promise<void> {
+interface AtomicCopyOptions {
+	mode?: number;
+	computeSha256?: boolean;
+	expectedSha256?: string;
+}
+
+/** Copy via a same-directory temporary file so a failed or corrupt copy never truncates the target. */
+async function copyFileAtomic(
+	source: string,
+	destination: string,
+	options: AtomicCopyOptions = {},
+): Promise<string | undefined> {
 	await mkdir(dirname(destination), { recursive: true });
 	const temporary = temporaryCopyPath(destination);
 	try {
 		await copyFile(source, temporary);
-		if (mode !== undefined) {
+		if (options.mode !== undefined) {
 			try {
-				await chmod(temporary, mode);
+				await chmod(temporary, options.mode);
 			} catch {
 				// best-effort (e.g. Windows); content is what matters
 			}
 		}
+		const digest =
+			options.computeSha256 || options.expectedSha256 !== undefined ? await fileDigest(temporary) : undefined;
+		if (options.expectedSha256 !== undefined && digest !== options.expectedSha256) {
+			throw new Error("Rewind backup integrity check failed");
+		}
 		await rename(temporary, destination);
+		return digest;
 	} finally {
 		await unlink(temporary).catch(() => undefined);
 	}
 }
 
-/** Synchronous counterpart used before edit/write tools execute. */
-function copyFileAtomicSync(source: string, destination: string, mode?: number): void {
+/** Synchronous one-pass counterpart used before edit/write tools execute. */
+function copyFileAtomicSync(source: string, destination: string, mode?: number): string {
 	mkdirSync(dirname(destination), { recursive: true });
 	const temporary = temporaryCopyPath(destination);
+	let sourceFd: number | undefined;
+	let destinationFd: number | undefined;
 	try {
-		copyFileSync(source, temporary);
+		sourceFd = openSync(source, "r");
+		destinationFd = openSync(temporary, "w");
+		const hash = createHash("sha256");
+		const buffer = Buffer.allocUnsafe(COMPARE_CHUNK_BYTES);
+		for (;;) {
+			const bytesRead = readSync(sourceFd, buffer, 0, buffer.length, null);
+			if (bytesRead === 0) break;
+			hash.update(buffer.subarray(0, bytesRead));
+			let written = 0;
+			while (written < bytesRead) {
+				written += writeSync(destinationFd, buffer, written, bytesRead - written);
+			}
+		}
+		closeSync(sourceFd);
+		sourceFd = undefined;
+		closeSync(destinationFd);
+		destinationFd = undefined;
 		if (mode !== undefined) {
 			try {
 				chmodSync(temporary, mode);
@@ -242,7 +290,10 @@ function copyFileAtomicSync(source: string, destination: string, mode?: number):
 			}
 		}
 		renameSync(temporary, destination);
+		return hash.digest("hex");
 	} finally {
+		if (sourceFd !== undefined) closeSync(sourceFd);
+		if (destinationFd !== undefined) closeSync(destinationFd);
 		try {
 			unlinkSync(temporary);
 		} catch {
@@ -283,26 +334,28 @@ function latestBackupOf(state: FileHistoryState, tracking: string): FileBackup |
 }
 
 /** First-ever recorded backup for a file (used when rewinding before it was tracked). */
-function firstBackupName(state: FileHistoryState, tracking: string): string | null | undefined {
+function firstBackup(state: FileHistoryState, tracking: string): FileBackup | undefined {
 	for (const snap of state.snapshots) {
-		const b = Object.hasOwn(snap.trackedFileBackups, tracking) ? snap.trackedFileBackups[tracking] : undefined;
-		if (b && b.version === 1 && (b.backupName === null || isSafeBackupName(b.backupName))) return b.backupName;
+		const backup = Object.hasOwn(snap.trackedFileBackups, tracking) ? snap.trackedFileBackups[tracking] : undefined;
+		if (backup && backup.version === 1 && (backup.backupName === null || isSafeBackupName(backup.backupName))) {
+			return backup;
+		}
 	}
 	return undefined;
 }
 
-/** Resolve the backup blob name for `tracking` at `target` (null = did not exist). */
-function backupNameForTarget(
+/** Resolve the backup metadata for `tracking` at `target`. */
+function backupForTarget(
 	state: FileHistoryState,
 	target: FileHistorySnapshot,
 	tracking: string,
-): string | null | undefined {
+): FileBackup | undefined {
 	if (Object.hasOwn(target.trackedFileBackups, tracking)) {
-		const tb = target.trackedFileBackups[tracking];
-		if (tb.backupName === null || isSafeBackupName(tb.backupName)) return tb.backupName;
+		const backup = target.trackedFileBackups[tracking];
+		if (backup.backupName === null || isSafeBackupName(backup.backupName)) return backup;
 		return undefined;
 	}
-	return firstBackupName(state, tracking);
+	return firstBackup(state, tracking);
 }
 
 // ---- change detection (ported fileHistory.ts compareStatsAndContent;
@@ -427,8 +480,9 @@ async function createBackup(
 	const name = backupName(tracking, version);
 	const dest = backupPathFor(sid, name);
 	const mode = src.mode;
-	await copyFileAtomic(filePath, dest, mode);
-	return { backupName: name, version };
+	const digest = await copyFileAtomic(filePath, dest, { mode, computeSha256: true });
+	if (!digest) throw new Error("Rewind backup digest was not produced");
+	return { backupName: name, version, sha256: digest };
 }
 
 /**
@@ -461,12 +515,13 @@ function createBackupSync(
 	}
 	const name = backupName(tracking, version);
 	const dest = backupPathFor(sid, name);
-	copyFileAtomicSync(filePath, dest, src.mode);
-	return { backupName: name, version };
+	const digest = copyFileAtomicSync(filePath, dest, src.mode);
+	return { backupName: name, version, sha256: digest };
 }
 
-async function restoreBackup(sid: string, filePath: string, name: string): Promise<boolean> {
-	const backupPath = backupPathFor(sid, name);
+async function restoreBackup(sid: string, filePath: string, backup: FileBackup): Promise<boolean> {
+	if (backup.backupName === null) return false;
+	const backupPath = backupPathFor(sid, backup.backupName);
 	let back: Stats;
 	try {
 		back = await stat(backupPath);
@@ -475,11 +530,36 @@ async function restoreBackup(sid: string, filePath: string, name: string): Promi
 	}
 	if (!back.isFile()) return false;
 	try {
-		await copyFileAtomic(backupPath, filePath, back.mode);
+		await copyFileAtomic(backupPath, filePath, { mode: back.mode, expectedSha256: backup.sha256 });
 	} catch {
 		return false;
 	}
 	return true;
+}
+
+async function verifyBackupIntegrity(state: FileHistoryState, sid: string, backup: FileBackup): Promise<Stats | null> {
+	if (backup.backupName === null) return null;
+	const backupPath = backupPathFor(sid, backup.backupName);
+	const stats = await statOrNull(backupPath).catch(() => null);
+	if (!stats?.isFile()) return null;
+	if (!backup.sha256) return stats; // legacy snapshots predate integrity metadata
+	const cachedStats = state.backupSeen.get(backup.backupName);
+	if (state.backupDigests.get(backup.backupName) === backup.sha256 && cachedStats && sameSeen(cachedStats, stats)) {
+		return stats;
+	}
+	try {
+		const actual = await fileDigest(backupPath);
+		if (actual !== backup.sha256) {
+			state.backupDigests.delete(backup.backupName);
+			state.backupSeen.delete(backup.backupName);
+			return null;
+		}
+		state.backupDigests.set(backup.backupName, actual);
+		state.backupSeen.set(backup.backupName, seenFromStats(stats));
+		return stats;
+	} catch {
+		return null;
+	}
 }
 
 /**
@@ -498,6 +578,10 @@ export async function beginTurn(sid: string): Promise<void> {
 		try {
 			const filePath = expand(tracking, cwd);
 			const latest = latestBackupOf(state, tracking);
+			let usableLatest = latest;
+			if (latest && latest.backupName !== null && !(await verifyBackupIntegrity(state, sid, latest))) {
+				usableLatest = undefined;
+			}
 			const nextVersion = latest ? latest.version + 1 : 1;
 			const st = await statOrNull(filePath);
 			if (!st) {
@@ -506,8 +590,8 @@ export async function beginTurn(sid: string): Promise<void> {
 				// tracked file is deleted, defeating the "skip unchanged turns" check
 				// and flushing real checkpoints out of the capped ring.
 				state.lastSeen.delete(tracking);
-				if (latest && latest.backupName === null) {
-					backups[tracking] = latest;
+				if (usableLatest && usableLatest.backupName === null) {
+					backups[tracking] = usableLatest;
 					return;
 				}
 				const absent: FileBackup = { backupName: null, version: nextVersion };
@@ -520,41 +604,41 @@ export async function beginTurn(sid: string): Promise<void> {
 			const isLarge = st.size > MAX_CONTENT_BYTES;
 			let currentHash: string | undefined;
 			let comparedLarge = false;
-			if (latest && latest.backupName !== null && isLarge) {
-				const backupPath = backupPathFor(sid, latest.backupName);
+			if (usableLatest && usableLatest.backupName !== null && isLarge) {
+				const backupPath = backupPathFor(sid, usableLatest.backupName);
 				const backupExists = (await statOrNull(backupPath).catch(() => null))?.isFile() === true;
 				if (seen?.contentHash && sameSeen(seen, st) && backupExists) {
 					// The immutable blob and the complete metadata fingerprint are
 					// unchanged; do not stream a multi-gigabyte worktree file every turn.
-					backups[tracking] = latest;
+					backups[tracking] = usableLatest;
 					return;
 				}
 				if (backupExists) {
 					currentHash = await fileDigest(filePath);
-					const backupHash = state.backupDigests.get(latest.backupName) ?? (await fileDigest(backupPath));
-					state.backupDigests.set(latest.backupName, backupHash);
+					const backupHash = state.backupDigests.get(usableLatest.backupName) ?? (await fileDigest(backupPath));
+					state.backupDigests.set(usableLatest.backupName, backupHash);
 					comparedLarge = true;
 					if (currentHash === backupHash) {
-						backups[tracking] = latest;
+						backups[tracking] = usableLatest;
 						state.lastSeen.set(tracking, seenFromStats(st, currentHash));
 						return;
 					}
 				}
 			}
 			if (
-				latest &&
-				latest.backupName !== null &&
+				usableLatest &&
+				usableLatest.backupName !== null &&
 				!comparedLarge &&
 				!(await originChanged(
 					sid,
 					filePath,
-					latest.backupName,
+					usableLatest.backupName,
 					st,
 					currentHash,
-					state.backupDigests.get(latest.backupName),
+					state.backupDigests.get(usableLatest.backupName),
 				))
 			) {
-				backups[tracking] = latest; // unchanged -> reuse
+				backups[tracking] = usableLatest; // unchanged -> reuse
 				state.lastSeen.set(tracking, seenFromStats(st, currentHash));
 				return;
 			}
@@ -562,8 +646,10 @@ export async function beginTurn(sid: string): Promise<void> {
 			backups[tracking] = created;
 			state.latestByTracking.set(tracking, created);
 			if (isLarge && !currentHash) currentHash = await fileDigest(filePath);
-			if (created.backupName !== null && currentHash) {
-				state.backupDigests.set(created.backupName, currentHash);
+			if (created.backupName !== null && created.sha256) {
+				state.backupDigests.set(created.backupName, created.sha256);
+				const backupStats = await statOrNull(backupPathFor(sid, created.backupName));
+				if (backupStats?.isFile()) state.backupSeen.set(created.backupName, seenFromStats(backupStats));
 			}
 			state.lastSeen.set(tracking, seenFromStats(st, currentHash));
 			dirty = true;
@@ -632,6 +718,14 @@ export function trackEdit(sid: string, absPath: string): void {
 		state.pendingFailures.delete(tracking);
 		state.trackedFiles.add(tracking);
 		state.latestByTracking.set(tracking, backup);
+		if (backup.backupName !== null && backup.sha256) {
+			state.backupDigests.set(backup.backupName, backup.sha256);
+			try {
+				state.backupSeen.set(backup.backupName, seenFromStats(statSync(backupPathFor(sid, backup.backupName))));
+			} catch {
+				// The blob will be checked lazily before it is reused.
+			}
+		}
 		if (preEdit) state.lastSeen.set(tracking, seenFromStats(preEdit));
 		else state.lastSeen.delete(tracking);
 		state.dirty = true;
@@ -653,6 +747,7 @@ function discardWorkingFrame(sid: string, state: FileHistoryState, pending: File
 		state.lastSeen.delete(tracking);
 		if (!backup.backupName || live.has(backup.backupName) || !isSafeBackupName(backup.backupName)) continue;
 		state.backupDigests.delete(backup.backupName);
+		state.backupSeen.delete(backup.backupName);
 		try {
 			unlinkSync(backupPathFor(sid, backup.backupName));
 		} catch {
@@ -734,7 +829,10 @@ async function pruneDroppedBlobs(
 	}
 	if (doomed.size === 0) return;
 	const state = getState(sid);
-	for (const name of doomed) state.backupDigests.delete(name);
+	for (const name of doomed) {
+		state.backupDigests.delete(name);
+		state.backupSeen.delete(name);
+	}
 	await Promise.allSettled(Array.from(doomed, (name) => unlink(backupPathFor(sid, name))));
 }
 
@@ -758,20 +856,16 @@ export async function collectChangePlan(sid: string, target: FileHistorySnapshot
 	const results = await mapPool(trackings, IO_CONCURRENCY, async (tracking) => {
 		const filePath = expand(tracking, cwd);
 		try {
-			const name = backupNameForTarget(state, target, tracking);
-			if (name === undefined) return { path: filePath, kind: "unavailable" as const };
-			if (name === null) {
+			const backup = backupForTarget(state, target, tracking);
+			if (backup === undefined) return { path: filePath, kind: "unavailable" as const };
+			if (backup.backupName === null) {
 				return (await statOrNull(filePath)) ? { path: filePath, kind: "changed" as const } : null;
 			}
-			const backupPath = backupPathFor(sid, name);
-			const backup = await statOrNull(backupPath).catch(() => null);
-			if (!backup?.isFile()) return { path: filePath, kind: "unavailable" as const };
-			let backupHash = state.backupDigests.get(name);
-			if (backup.size > MAX_CONTENT_BYTES && !backupHash) {
-				backupHash = await fileDigest(backupPath);
-				state.backupDigests.set(name, backupHash);
+			if (!(await verifyBackupIntegrity(state, sid, backup))) {
+				return { path: filePath, kind: "unavailable" as const };
 			}
-			return (await originChanged(sid, filePath, name, undefined, undefined, backupHash))
+			const backupHash = state.backupDigests.get(backup.backupName);
+			return (await originChanged(sid, filePath, backup.backupName, undefined, undefined, backupHash))
 				? { path: filePath, kind: "changed" as const }
 				: null;
 		} catch {
@@ -830,9 +924,9 @@ export async function collectChangeDiffStats(
 		try {
 			const tracking = trackingByAbs.get(filePath);
 			if (!tracking) return { insertions: 0, deletions: 0 };
-			const name = backupNameForTarget(state, target, tracking);
-			if (name === undefined) return { insertions: 0, deletions: 0 };
-			return await coarseLineDelta(sid, filePath, name);
+			const backup = backupForTarget(state, target, tracking);
+			if (!backup || backup.backupName === null) return { insertions: 0, deletions: 0 };
+			return await coarseLineDelta(sid, filePath, backup.backupName);
 		} catch {
 			return { insertions: 0, deletions: 0 };
 		}
@@ -951,9 +1045,9 @@ export async function applySnapshotDetailed(
 	const results = await mapPool(trackings, IO_CONCURRENCY, async (tracking) => {
 		const filePath = expand(tracking, cwd);
 		try {
-			const name = backupNameForTarget(state, target, tracking);
-			if (name === undefined) return { path: filePath, kind: "unavailable" as const };
-			if (name === null) {
+			const backup = backupForTarget(state, target, tracking);
+			if (backup === undefined) return { path: filePath, kind: "unavailable" as const };
+			if (backup.backupName === null) {
 				try {
 					await unlink(filePath);
 					// Worktree no longer matches any recorded identity.
@@ -964,18 +1058,14 @@ export async function applySnapshotDetailed(
 					return null;
 				}
 			}
-			const backupPath = backupPathFor(sid, name);
-			const backup = await statOrNull(backupPath).catch(() => null);
-			if (!backup?.isFile()) return { path: filePath, kind: "unavailable" as const };
-			let backupHash = state.backupDigests.get(name);
-			if (!only && backup.size > MAX_CONTENT_BYTES && !backupHash) {
-				backupHash = await fileDigest(backupPath);
-				state.backupDigests.set(name, backupHash);
+			if (!(await verifyBackupIntegrity(state, sid, backup))) {
+				return { path: filePath, kind: "unavailable" as const };
 			}
+			const backupHash = state.backupDigests.get(backup.backupName);
 			// onlyPaths already proved different at confirm time; the restore still
 			// verifies that the blob exists and reports a concurrent disappearance.
-			if (only || (await originChanged(sid, filePath, name, undefined, undefined, backupHash))) {
-				if (!(await restoreBackup(sid, filePath, name))) {
+			if (only || (await originChanged(sid, filePath, backup.backupName, undefined, undefined, backupHash))) {
+				if (!(await restoreBackup(sid, filePath, backup))) {
 					return { path: filePath, kind: "unavailable" as const };
 				}
 				// Drop the pre-restore fingerprint; the worktree now matches the target blob.
@@ -1041,6 +1131,7 @@ export function restoreStateFromSnapshots(
 		latestByTracking: rebuildLatestIndex(retained),
 		lastSeen: new Map(),
 		backupDigests: new Map(),
+		backupSeen: new Map(),
 		pending: null,
 		pendingFailures: new Set(),
 		dirty: false,
@@ -1072,9 +1163,20 @@ export async function migrateBackupsFromSession(
 	const destDir = backupsDir(sid);
 	await mkdir(destDir, { recursive: true });
 	const names = new Set<string>();
+	const expectedDigests = new Map<string, string>();
+	const conflictingDigests = new Set<string>();
 	for (const snap of snapshots) {
 		for (const backup of Object.values(snap.trackedFileBackups)) {
-			if (isSafeBackupName(backup.backupName)) names.add(backup.backupName);
+			if (!isSafeBackupName(backup.backupName)) continue;
+			names.add(backup.backupName);
+			if (!backup.sha256 || conflictingDigests.has(backup.backupName)) continue;
+			const previous = expectedDigests.get(backup.backupName);
+			if (previous && previous !== backup.sha256) {
+				expectedDigests.delete(backup.backupName);
+				conflictingDigests.add(backup.backupName);
+			} else {
+				expectedDigests.set(backup.backupName, backup.sha256);
+			}
 		}
 	}
 	await mapPool(Array.from(names), MIGRATION_CONCURRENCY, async (name) => {
@@ -1087,6 +1189,22 @@ export async function migrateBackupsFromSession(
 				// blob is gone; remove it so future restores fail closed.
 				await unlink(to).catch(() => undefined);
 				return;
+			}
+			const expectedSha256 = expectedDigests.get(name);
+			if (conflictingDigests.has(name)) {
+				await unlink(to).catch(() => undefined);
+				return;
+			}
+			if (expectedSha256) {
+				try {
+					if ((await fileDigest(from)) !== expectedSha256) {
+						await unlink(to).catch(() => undefined);
+						return;
+					}
+				} catch {
+					await unlink(to).catch(() => undefined);
+					return;
+				}
 			}
 			try {
 				await link(from, to);
@@ -1102,7 +1220,7 @@ export async function migrateBackupsFromSession(
 					if (equal) return;
 				}
 				try {
-					await copyFileAtomic(from, to, source.mode);
+					await copyFileAtomic(from, to, { mode: source.mode, expectedSha256 });
 				} catch {
 					// A failed migration must not leave a stale or partial destination
 					// blob that later looks restorable.

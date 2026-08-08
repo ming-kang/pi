@@ -9,7 +9,11 @@ const valid = {
 	prompt: "prompt",
 	timestamp: "",
 	trackedFileBackups: {
-		"src/file.ts": { backupName: "0123456789abcdef@v1", version: 1 },
+		"src/file.ts": {
+			backupName: "0123456789abcdef@v1",
+			version: 1,
+			sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		},
 	},
 };
 
@@ -27,6 +31,26 @@ describe("rewind snapshot validation", () => {
 		[
 			"invalid version",
 			{ ...valid, trackedFileBackups: { file: { backupName: "0123456789abcdef@v0", version: 0 } } },
+		],
+		[
+			"invalid digest",
+			{
+				...valid,
+				trackedFileBackups: { file: { backupName: "0123456789abcdef@v1", version: 1, sha256: "bad" } },
+			},
+		],
+		[
+			"digest on absent marker",
+			{
+				...valid,
+				trackedFileBackups: {
+					file: {
+						backupName: null,
+						version: 1,
+						sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+					},
+				},
+			},
 		],
 		["nul tracking path", { ...valid, trackedFileBackups: { "bad\0path": { backupName: null, version: 1 } } }],
 		["relative traversal path", { ...valid, trackedFileBackups: { "../victim": { backupName: null, version: 1 } } }],
