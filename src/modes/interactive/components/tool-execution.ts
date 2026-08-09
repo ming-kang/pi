@@ -1,19 +1,10 @@
-import {
-	type Component,
-	Container,
-	getCapabilities,
-	Image,
-	Spacer,
-	Text,
-	type TUI,
-	truncateToWidth,
-} from "@earendil-works/pi-tui";
+import { type Component, Container, getCapabilities, Image, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
 import type { AgentToolResult, ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.ts";
 import { createAllToolDefinitions, type ToolName } from "../../../core/tools/index.ts";
-import { collapsedLinesHint, getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
+import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
 import { convertToPng } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
-import { truncateToVisualLines } from "./visual-truncate.ts";
+import { FallbackResultComponent, formatElapsed, formatFallbackArgs, ToolChromeComponent } from "./tool-chrome.ts";
 
 export interface ToolExecutionOptions {
 	showImages?: boolean;
@@ -32,95 +23,8 @@ interface PendingImageConversion {
 	sourceMimeType: string;
 }
 
-const TOOL_CHROME_WIDTH = 2;
-const FALLBACK_ARGS_WIDTH = 120;
-const FALLBACK_RESULT_LINES = 10;
 const PROGRESS_THRESHOLD_MS = 2000;
 const PROGRESS_REFRESH_INTERVAL_MS = 1000;
-
-function formatElapsed(ms: number): string {
-	const roundedTenths = Math.round(ms / 100) / 10;
-	if (roundedTenths < 60) return `${roundedTenths.toFixed(1)}s`;
-	const roundedSeconds = Math.round(ms / 1000);
-	return `${Math.floor(roundedSeconds / 60)}m ${roundedSeconds % 60}s`;
-}
-
-class ToolChromeComponent implements Component {
-	private component: Component;
-	private prefix: string;
-	private continuationPrefix: string;
-	private blankLinePrefix: string;
-	private trimLeadingBlankLines: boolean;
-
-	constructor(
-		component: Component,
-		prefix: string,
-		options: { trimLeadingBlankLines?: boolean; continuationPrefix?: string; blankLinePrefix?: string } = {},
-	) {
-		this.component = component;
-		this.prefix = prefix;
-		this.continuationPrefix = options.continuationPrefix ?? "  ";
-		this.blankLinePrefix = options.blankLinePrefix ?? "";
-		this.trimLeadingBlankLines = options.trimLeadingBlankLines ?? false;
-	}
-
-	render(width: number): string[] {
-		const renderedLines = this.component.render(Math.max(1, width - TOOL_CHROME_WIDTH));
-		let start = 0;
-		if (this.trimLeadingBlankLines) {
-			while (renderedLines[start] === "") start++;
-		}
-		const lines = renderedLines.slice(start);
-		if (lines.length === 0) return [];
-		return lines.map((line, index) => {
-			if (index === 0) return `${this.prefix}${line}`;
-			return line ? `${this.continuationPrefix}${line}` : this.blankLinePrefix;
-		});
-	}
-
-	invalidate(): void {
-		this.component.invalidate();
-	}
-}
-
-class FallbackResultComponent implements Component {
-	private output: string;
-	private expanded: boolean;
-
-	constructor(output: string, expanded: boolean) {
-		this.output = output;
-		this.expanded = expanded;
-	}
-
-	render(width: number): string[] {
-		const styledOutput = theme.fg("toolOutput", this.output);
-		if (this.expanded) return new Text(styledOutput, 0, 0).render(width);
-
-		const preview = truncateToVisualLines(styledOutput, FALLBACK_RESULT_LINES, width);
-		if (preview.skippedCount <= 0) return preview.visualLines;
-		const hint = collapsedLinesHint(theme, preview.skippedCount, "earlier");
-		return [truncateToWidth(hint, width, "…"), ...preview.visualLines];
-	}
-
-	invalidate(): void {}
-}
-
-function formatFallbackArgs(args: unknown): string {
-	if (!args || typeof args !== "object") return "";
-	const entries = Object.entries(args);
-	if (entries.length === 0) return "";
-	const summary = entries
-		.map(([key, value]) => {
-			try {
-				return `${key}=${JSON.stringify(value) ?? String(value)}`;
-			} catch {
-				return `${key}=${String(value)}`;
-			}
-		})
-		.join(" ")
-		.replace(/\s+/g, " ");
-	return truncateToWidth(summary, FALLBACK_ARGS_WIDTH, "...");
-}
 
 export class ToolExecutionComponent extends Container {
 	private contentContainer: Container;
