@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.84.2] - 2026-08-09
+
 ### Removed
 
 - Removed the bundled rewind extension, including per-edit backups, the `/rewind` settings command, and `/tree` work-tree restoration. Existing `~/.pi/agent/rewind/` data is no longer read and can be removed manually; historical `pi-rewind-snapshot` session entries remain inert.
