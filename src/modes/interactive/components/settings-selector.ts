@@ -632,7 +632,7 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "tui-mode",
 				label: "TUI mode",
-				description: "Interface layout; fullscreen mode is experimental",
+				description: "Interface layout; regular mode renders inline in the terminal scrollback",
 				currentValue: config.tuiMode,
 				values: ["regular", "fullscreen"],
 			},

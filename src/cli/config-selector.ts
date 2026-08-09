@@ -2,11 +2,10 @@
  * TUI config selector for `pi config` command
  */
 
-import { type TUI, TuiMainScreen } from "@earendil-works/pi-tui";
+import { ProcessTerminal, type TUI, TuiMainScreen } from "@earendil-works/pi-tui";
 import type { SettingsManager } from "../core/settings-manager.ts";
 import { ConfigSelectorComponent, type ScopedResolvedPaths } from "../modes/interactive/components/config-selector.ts";
 import { initTheme, stopThemeWatcher } from "../modes/interactive/theme/theme.ts";
-import { CoalescingTerminal } from "../utils/coalescing-terminal.ts";
 
 export interface ConfigSelectorOptions {
 	resolvedPaths: ScopedResolvedPaths;
@@ -23,7 +22,7 @@ export async function selectConfig(options: ConfigSelectorOptions): Promise<void
 	initTheme(options.settingsManager.getTheme(), true);
 
 	return new Promise((resolve) => {
-		const ui: TUI = new TuiMainScreen(new CoalescingTerminal(), undefined, options.agentDir);
+		const ui: TUI = new TuiMainScreen(new ProcessTerminal(), undefined, options.agentDir);
 		let resolved = false;
 
 		const selector = new ConfigSelectorComponent(

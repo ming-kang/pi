@@ -136,14 +136,12 @@ describe("InteractiveMode.setToolsExpanded", () => {
 			loadedResourcesContainer: { children: [loadedResourcesChild] },
 			chatContainer: { children: [chatChild] },
 			ui: { requestRender: vi.fn() },
-			coalescingTerminal: { passNextFullRedraw: vi.fn() },
 			showStatus: vi.fn(),
 		};
 
 		(InteractiveMode as any).prototype.setToolsExpanded.call(fakeThis, true);
 
 		expect(fakeThis.toolOutputExpanded).toBe(true);
-		expect(fakeThis.coalescingTerminal.passNextFullRedraw).toHaveBeenCalledTimes(1);
 		expect(header.setExpanded).toHaveBeenCalledWith(true);
 		expect(loadedResourcesChild.setExpanded).toHaveBeenCalledWith(true);
 		expect(chatChild.setExpanded).toHaveBeenCalledWith(true);

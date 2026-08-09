@@ -101,7 +101,6 @@ import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
-import { CoalescingTerminal } from "../../utils/coalescing-terminal.ts";
 import { parseGitUrl } from "../../utils/git.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
 import { getCwdRelativePath } from "../../utils/paths.ts";
@@ -386,7 +385,6 @@ export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
 	private renderer: TuiMainScreen | TuiAltScreen;
 	private ui: TUI;
-	private coalescingTerminal: CoalescingTerminal;
 	private mainScreenRenderState: TuiMainScreenRenderState | undefined;
 	private loadedResourcesContainer: Container;
 	private chatContainer: Container;
@@ -538,26 +536,13 @@ export class InteractiveMode {
 			await this.rebindCurrentSession({ renderBeforeBind: true });
 		});
 		this.version = VERSION;
-		const terminal = new CoalescingTerminal();
-		this.coalescingTerminal = terminal;
 		this.renderer = createInteractiveTui({
 			tuiMode,
 			showHardwareCursor: this.settingsManager.getShowHardwareCursor(),
 			logDirectory: getAgentDir(),
-			terminal,
 			onRightClickPaste: this.onRightClickPaste,
 		});
 		this.ui = createInteractiveTuiReference(() => this.renderer);
-		// Lets full-redraw rewrites scroll grown content into scrollback
-		// instead of dropping the lines pushed above the screen. The render
-		// state comes from pi-tui's public captureRenderState(); pi-tui
-		// writes each full-redraw frame before updating its bookkeeping, so
-		// the wrapper observes the pre-frame viewport top. Fullscreen
-		// renderers return undefined (their frames do not match the rewrite
-		// shape anyway), falling back to the bottom-anchored repaint.
-		terminal.setViewportTopProvider(() =>
-			this.renderer instanceof TuiMainScreen ? this.renderer.captureRenderState().previousViewportTop : undefined,
-		);
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 		this.headerContainer = new Container();
 		this.loadedResourcesContainer = new Container();
@@ -1848,7 +1833,6 @@ export class InteractiveMode {
 						return { cancelled: true };
 					}
 
-					this.coalescingTerminal.passNextFullRedraw();
 					this.clearChat();
 					this.renderInitialMessages();
 					if (result.editorText && !this.editor.getText().trim()) {
@@ -1974,10 +1958,6 @@ export class InteractiveMode {
 	}
 
 	private renderCurrentSessionState(): void {
-		// Resuming, forking, or starting a new session rebuilds the transcript
-		// at the user's request; the rebuild's full redraw keeps the clean
-		// wipe-and-replay even if preservation is still windowed on.
-		this.coalescingTerminal.passNextFullRedraw();
 		this.loadedResourcesContainer.clear();
 		this.clearChat();
 		this.pendingMessagesContainer.clear();
@@ -3143,9 +3123,6 @@ export class InteractiveMode {
 
 		switch (event.type) {
 			case "agent_start":
-				// Opens the scrollback-preservation window; the terminal
-				// closes it on the user's next input after the run settles.
-				this.coalescingTerminal.setAgentRunActive(true);
 				this.clearPendingTools();
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
@@ -3353,10 +3330,6 @@ export class InteractiveMode {
 				break;
 
 			case "agent_settled":
-				// Preservation itself stays on until the next user input; the
-				// run's trailing reflow frames may land after this event while
-				// the reader is still scrolled up.
-				this.coalescingTerminal.setAgentRunActive(false);
 				await this.checkShutdownRequested();
 				break;
 
@@ -4101,11 +4074,6 @@ export class InteractiveMode {
 		if (expanded === this.toolOutputExpanded) return;
 
 		this.toolOutputExpanded = expanded;
-		// An explicit toggle prefers upstream's clean wipe-and-replay even
-		// mid-run: the user just pressed the key, so they are interacting at
-		// the bottom, and a full replay leaves scrollback as the exact new
-		// transcript instead of preservation's stale seams.
-		this.coalescingTerminal.passNextFullRedraw();
 		const activeHeader = this.customHeader ?? this.builtInHeader;
 		if (isExpandable(activeHeader)) {
 			activeHeader.setExpanded(expanded);
@@ -4123,8 +4091,6 @@ export class InteractiveMode {
 	private toggleThinkingBlockVisibility(): void {
 		this.hideThinkingBlock = !this.hideThinkingBlock;
 		this.settingsManager.setHideThinkingBlock(this.hideThinkingBlock);
-		// Same reasoning as setToolsExpanded.
-		this.coalescingTerminal.passNextFullRedraw();
 
 		// Rebuild chat from session messages
 		this.clearChat();
@@ -5119,9 +5085,6 @@ export class InteractiveMode {
 							return;
 						}
 
-						// User-committed tree navigation rebuilds the transcript; its
-						// full redraw bypasses scrollback preservation.
-						this.coalescingTerminal.passNextFullRedraw();
 						// Update UI
 						this.clearChat();
 						this.renderInitialMessages();
@@ -5802,10 +5765,6 @@ export class InteractiveMode {
 			}
 			this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 			this.outputPad = this.settingsManager.getOutputPad();
-			// The user asked for this rebuild; its full redraw keeps the
-			// upstream wipe-and-replay even if preservation is still windowed
-			// on from the previous run.
-			this.coalescingTerminal.passNextFullRedraw();
 			this.rebuildChatFromMessages();
 			chatRestoredBeforeSessionStart = true;
 		};

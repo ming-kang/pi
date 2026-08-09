@@ -263,17 +263,15 @@ describe("clear-on-shrink status spacing", () => {
 	});
 });
 
-describe("InteractiveMode user-requested rebuilds bypass scrollback preservation", () => {
+describe("InteractiveMode user-requested transcript rebuilds", () => {
 	beforeAll(() => {
 		// The reload box renders theme-colored text during handleReloadCommand.
 		initTheme("dark");
 	});
 
-	it("arms passNextFullRedraw when a session rebuild replaces the transcript", () => {
-		const passNextFullRedraw = vi.fn();
+	it("rebuilds the transcript when a session rebuild replaces it", () => {
 		const renderInitialMessages = vi.fn();
 		const fakeThis = Object.assign(Object.create(InteractiveMode.prototype), {
-			coalescingTerminal: { passNextFullRedraw },
 			loadedResourcesContainer: new Container(),
 			chatContainer: new Container(),
 			pendingMessagesContainer: new Container(),
@@ -283,12 +281,10 @@ describe("InteractiveMode user-requested rebuilds bypass scrollback preservation
 
 		(InteractiveMode.prototype as any).renderCurrentSessionState.call(fakeThis);
 
-		expect(passNextFullRedraw).toHaveBeenCalledTimes(1);
 		expect(renderInitialMessages).toHaveBeenCalledTimes(1);
 	});
 
-	it("arms passNextFullRedraw for the /reload transcript rebuild", async () => {
-		const passNextFullRedraw = vi.fn();
+	it("rebuilds the transcript for the /reload command", async () => {
 		const rebuildChatFromMessages = vi.fn();
 		const sessionReload = vi.fn(async (options?: { beforeSessionStart?: () => void | Promise<void> }) => {
 			await options?.beforeSessionStart?.();
@@ -303,7 +299,6 @@ describe("InteractiveMode user-requested rebuilds bypass scrollback preservation
 				extensionRunner: {},
 			},
 			settingsManager: { getHideThinkingBlock: () => false, getOutputPad: () => 1 },
-			coalescingTerminal: { passNextFullRedraw },
 			rebuildChatFromMessages,
 			resetExtensionUI: () => {},
 			editorContainer: new Container(),
@@ -322,7 +317,6 @@ describe("InteractiveMode user-requested rebuilds bypass scrollback preservation
 		await (InteractiveMode.prototype as any).handleReloadCommand.call(fakeThis);
 
 		expect(sessionReload).toHaveBeenCalledTimes(1);
-		expect(passNextFullRedraw).toHaveBeenCalledTimes(1);
 		expect(rebuildChatFromMessages).toHaveBeenCalledTimes(1);
 	});
 });

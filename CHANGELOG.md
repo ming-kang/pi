@@ -4,6 +4,14 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Changed the default interactive TUI mode from `regular` to `fullscreen`. The regular inline mode remains available through `tuiMode` in settings or `--tui-mode regular`.
+
+### Removed
+
+- Removed the coalescing terminal render patch (atomic write batching for IME stability and scrollback preservation across content-driven full redraws). Fullscreen mode renders in the alternate screen and does not need it; regular mode returns to upstream rendering behavior, including IME candidate-window movement and scroll-to-bottom on full redraws.
+
 ## [0.84.2] - 2026-08-09
 
 ### Removed
