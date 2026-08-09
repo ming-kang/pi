@@ -110,17 +110,27 @@ describe("ToolExecutionComponent parity", () => {
 		expect(requestRender).toHaveBeenCalledTimes(1);
 	});
 
-	test("refreshes own-progress renderers without adding generic progress", () => {
+	test("refreshes self-scheduled renderers without adding generic progress", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
 		const requestRender = vi.fn();
 		let resultRenderCount = 0;
 		const toolDefinition: ToolDefinition = {
 			...createBaseToolDefinition(),
-			rendersOwnProgress: true,
-			renderRefreshIntervalMs: 1000,
-			renderResult: () => {
+			renderResult: (_result, options, _theme, context) => {
 				resultRenderCount++;
+				const state: { refreshTimer?: ReturnType<typeof setTimeout> } = context.state;
+				if (options.isPartial) {
+					if (state.refreshTimer === undefined) {
+						state.refreshTimer = setTimeout(() => {
+							state.refreshTimer = undefined;
+							context.invalidate();
+						}, 1000);
+					}
+				} else if (state.refreshTimer !== undefined) {
+					clearTimeout(state.refreshTimer);
+					state.refreshTimer = undefined;
+				}
 				return new Text(`elapsed ${Date.now()}ms`, 0, 0);
 			},
 		};
@@ -153,17 +163,22 @@ describe("ToolExecutionComponent parity", () => {
 		expect(requestRender).toHaveBeenCalledTimes(finalRenderRequests);
 	});
 
-	test("clamps custom refresh intervals and disposes grouped tools idempotently", () => {
+	test("disposes grouped tools idempotently and stops self-scheduled refreshes", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
 		const requestRender = vi.fn();
 		let resultRenderCount = 0;
 		const toolDefinition: ToolDefinition = {
 			...createBaseToolDefinition(),
-			rendersOwnProgress: true,
-			renderRefreshIntervalMs: 1,
-			renderResult: () => {
+			renderResult: (_result, _options, _theme, context) => {
 				resultRenderCount++;
+				const state: { refreshTimer?: ReturnType<typeof setTimeout> } = context.state;
+				if (state.refreshTimer === undefined) {
+					state.refreshTimer = setTimeout(() => {
+						state.refreshTimer = undefined;
+						context.invalidate();
+					}, 1000);
+				}
 				return new Text("live", 0, 0);
 			},
 		};
@@ -180,9 +195,7 @@ describe("ToolExecutionComponent parity", () => {
 		component.updateResult({ content: [], details: {}, isError: false }, true);
 		const initialRenderCount = resultRenderCount;
 
-		vi.advanceTimersByTime(249);
-		expect(resultRenderCount).toBe(initialRenderCount);
-		vi.advanceTimersByTime(1);
+		vi.advanceTimersByTime(1000);
 		expect(resultRenderCount).toBe(initialRenderCount + 1);
 
 		const group = new ToolGroupComponent("custom", [component]);

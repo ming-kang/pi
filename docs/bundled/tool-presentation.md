@@ -12,9 +12,9 @@ The `@astralyn/pi` package uses Pi's native tool transcript presentation rather 
 │ final result line
 ```
 
-The dim result rail continues through every visual line; an empty output line renders as a bare `│`. Calls keep their status in the leading dot: warning while pending or running, green after success, and red after failure. For default-shell tools that are still running after two seconds, the shell adds a live result row such as `Running… (2.1s)` and removes it when the call settles. Tools with purpose-built progress UI can opt out through `rendersOwnProgress`; tools using `renderShell: "self"` continue to own their entire presentation.
+The dim result rail continues through every visual line; an empty output line renders as a bare `│`. Calls keep their status in the leading dot: warning while pending or running, green after success, and red after failure. For bash commands that are still running after two seconds, the shell adds a live result row such as `Running… (2.1s)` and removes it when the call settles. Other tools with live progress render it themselves; tools using `renderShell: "self"` continue to own their entire presentation.
 
-Time-driven renderers use `renderRefreshIntervalMs` separately from `rendersOwnProgress`. The former periodically rebuilds call/result components only during the partial lifecycle; the latter only hides the generic `Running…` row. The native shell shares the shortest needed interval, constrains explicit intervals to 250ms–60s, and stops refreshing on final result, abort, disposal, session replacement, chat rebuild, or shutdown. Renderers compute elapsed/countdown values from absolute timestamps or deadlines, so a delayed repaint never changes the underlying wall-clock meaning.
+Time-driven renderers schedule their own repaints: while a result is partial they arm a timer in renderer state and call the render context's `invalidate()`, clearing the timer on the first settled render. Renderers compute elapsed/countdown values from absolute timestamps or deadlines, so a delayed repaint never changes the underlying wall-clock meaning.
 
 ## Implementation boundary
 

@@ -36,14 +36,7 @@ const TOOL_CHROME_WIDTH = 2;
 const FALLBACK_ARGS_WIDTH = 120;
 const FALLBACK_RESULT_LINES = 10;
 const PROGRESS_THRESHOLD_MS = 2000;
-const DEFAULT_PROGRESS_REFRESH_INTERVAL_MS = 1000;
-const MIN_RENDER_REFRESH_INTERVAL_MS = 250;
-const MAX_RENDER_REFRESH_INTERVAL_MS = 60_000;
-
-function normalizeRenderRefreshInterval(intervalMs: number | undefined): number | undefined {
-	if (intervalMs === undefined || !Number.isFinite(intervalMs) || intervalMs <= 0) return undefined;
-	return Math.min(MAX_RENDER_REFRESH_INTERVAL_MS, Math.max(MIN_RENDER_REFRESH_INTERVAL_MS, Math.round(intervalMs)));
-}
+const PROGRESS_REFRESH_INTERVAL_MS = 1000;
 
 function formatElapsed(ms: number): string {
 	const roundedTenths = Math.round(ms / 100) / 10;
@@ -226,26 +219,8 @@ export class ToolExecutionComponent extends Container {
 		return this.toolDefinition.renderShell ?? this.builtInToolDefinition.renderShell ?? "default";
 	}
 
-	private getRendersOwnProgress(): boolean {
-		return this.toolDefinition?.rendersOwnProgress ?? this.builtInToolDefinition?.rendersOwnProgress ?? false;
-	}
-
 	private shouldRenderGenericProgress(): boolean {
-		return !this.getRendersOwnProgress() && this.getRenderShell() !== "self";
-	}
-
-	private getExplicitRenderRefreshInterval(): number | undefined {
-		const intervalMs =
-			this.toolDefinition?.renderRefreshIntervalMs ?? this.builtInToolDefinition?.renderRefreshIntervalMs;
-		return normalizeRenderRefreshInterval(intervalMs);
-	}
-
-	private getActiveRenderRefreshInterval(): number | undefined {
-		const explicitInterval = this.getExplicitRenderRefreshInterval();
-		if (!this.shouldRenderGenericProgress()) return explicitInterval;
-		return explicitInterval === undefined
-			? DEFAULT_PROGRESS_REFRESH_INTERVAL_MS
-			: Math.min(DEFAULT_PROGRESS_REFRESH_INTERVAL_MS, explicitInterval);
+		return this.toolName === "bash" && this.getRenderShell() !== "self";
 	}
 
 	private getRenderContext(lastComponent: Component | undefined, toolGroupSummary = false): ToolRenderContext {
@@ -318,12 +293,11 @@ export class ToolExecutionComponent extends Container {
 	markExecutionStarted(): void {
 		if (this.disposed) return;
 		this.executionStarted = true;
-		if (this.progressStartedAt === undefined && this.shouldRenderGenericProgress()) {
-			this.progressStartedAt = Date.now();
-		}
-		if (this.refreshTimer === undefined) {
-			const intervalMs = this.getActiveRenderRefreshInterval();
-			if (intervalMs !== undefined) {
+		if (this.shouldRenderGenericProgress()) {
+			if (this.progressStartedAt === undefined) {
+				this.progressStartedAt = Date.now();
+			}
+			if (this.refreshTimer === undefined) {
 				this.refreshTimer = setInterval(() => {
 					if (this.disposed || !this.isPartial) {
 						this.clearRefreshTimer();
@@ -331,7 +305,7 @@ export class ToolExecutionComponent extends Container {
 					}
 					this.invalidate();
 					this.ui.requestRender();
-				}, intervalMs);
+				}, PROGRESS_REFRESH_INTERVAL_MS);
 				this.refreshTimer.unref?.();
 			}
 		}

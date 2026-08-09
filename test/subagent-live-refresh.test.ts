@@ -113,8 +113,6 @@ describe("Subagent shell-driven live refresh", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
 		const definition = registeredSubagentTool();
-		expect(definition.rendersOwnProgress).toBe(true);
-		expect(definition.renderRefreshIntervalMs).toBe(1000);
 		const requestRender = vi.fn();
 		const component = createComponent(
 			definition,

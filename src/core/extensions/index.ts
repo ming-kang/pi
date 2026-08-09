@@ -75,7 +75,6 @@ export type {
 	ExtensionMode,
 	// Runtime
 	ExtensionRuntime,
-	ExtensionSelectDialogOptions,
 	ExtensionShortcut,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,

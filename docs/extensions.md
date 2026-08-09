@@ -1996,10 +1996,6 @@ pi.registerTool({
   },
 
   // Optional: Custom rendering
-  // rendersOwnProgress suppresses only the shell's generic Running… row.
-  rendersOwnProgress: true,
-  // While the result is partial, rebuild renderCall/renderResult every second.
-  renderRefreshIntervalMs: 1000,
   renderCall(args, theme, context) { ... },
   renderResult(result, options, theme, context) { ... },
 });
@@ -2253,12 +2249,7 @@ By default, tool output is wrapped in Pi's native call/result shell, which owns 
 
 Set `renderShell: "self"` when the tool should render its own shell instead of using the native shell. This is useful for tools that need complete control over framing or background behavior, for example large previews that must stay visually stable after the tool settles.
 
-Two independent options control live presentation:
-
-- `rendersOwnProgress: true` suppresses only the native shell's generic `Running… (Ns)` row. It does not schedule renderer updates.
-- `renderRefreshIntervalMs` periodically rebuilds `renderCall` and `renderResult` while the tool result is partial. It does not suppress generic progress.
-
-Use both when a tool renders its own elapsed time, retry countdown, or similar progress UI. Refresh intervals are rounded and constrained to 250–60,000ms. The shell may rebuild sooner when another native concern needs it, so the configured interval is the maximum refresh gap rather than an exclusive cadence. Refresh stops when the result settles or the row is disposed.
+For live progress UI (elapsed time, retry countdowns), schedule repaints from the renderer itself: store a timer handle in `context.state`, arm a `setTimeout` that calls `context.invalidate()` while `options.isPartial` is true, and clear it on the first settled render. `context.invalidate()` is a no-op after the row is disposed, so a trailing timeout is harmless.
 
 Derive displayed time from an absolute timestamp or deadline (`Date.now()`), not by decrementing a counter on every refresh. A refresh is only a repaint opportunity; event-loop stalls and machine sleep must not extend a wall-clock timeout.
 
@@ -2368,8 +2359,7 @@ Custom editors and `ctx.ui.custom()` components receive `keybindings: Keybinding
 - Use `Text` with padding `(0, 0)`. The native shell handles padding.
 - Use `\n` for multi-line content.
 - Handle `isPartial` for streaming progress.
-- Use `renderRefreshIntervalMs` only for values that must change without a new partial result, and compute those values from absolute time.
-- Set `rendersOwnProgress` separately when the renderer replaces the native `Running…` row.
+- For time-driven renderers, self-schedule repaints with `context.state` timers and `context.invalidate()`, and compute displayed values from absolute time.
 - Support `expanded` for detail on demand.
 - Keep default view compact.
 - Read `context.args` in `renderResult` instead of copying args into `context.state`.
@@ -2542,17 +2532,10 @@ const choice = await ctx.ui.select("Pick one:", ["A", "B", "C"]);
 
 // Options can carry a muted description line, so the action and its
 // trade-off can be scanned separately. select() still resolves to the label.
-const action = await ctx.ui.select(
-  "Approve?",
-  [
-    { label: "Start executing", description: "keep full context" },
-    { label: "Compact, then execute", description: "best for long tasks" },
-  ],
-  {
-    subtitle: "Context now 29% full",   // muted line under the title
-    cancelHint: "go back",              // Describe what Esc actually does
-  },
-);
+const action = await ctx.ui.select("Approve?", [
+  { label: "Start executing", description: "keep full context" },
+  { label: "Compact, then execute", description: "best for long tasks" },
+]);
 
 // Confirm dialog
 const ok = await ctx.ui.confirm("Delete?", "This cannot be undone");

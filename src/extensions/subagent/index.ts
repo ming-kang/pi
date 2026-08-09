@@ -8,6 +8,7 @@ import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
 	ExtensionContext,
+	ToolRenderContext,
 } from "../../core/extensions/types.ts";
 import type { ModelRegistry } from "../../core/model-registry.ts";
 import { ModelRuntime } from "../../core/model-runtime.ts";
@@ -24,6 +25,30 @@ import type { AgentDefinition, AgentDiscoveryResult, SubagentDetails, SubagentPr
 
 function formatParentModel(model: { provider: string; id: string } | undefined): string {
 	return model ? `${model.provider}/${model.id}` : "none";
+}
+
+interface SubagentRenderState {
+	refreshTimer?: ReturnType<typeof setTimeout>;
+}
+
+// Re-render live elapsed time and activity tails once per second while the
+// result is still partial; the first settled render clears the timer.
+function scheduleLiveRefresh(context: ToolRenderContext<SubagentRenderState>, isPartial: boolean): void {
+	const state = context.state;
+	if (isPartial) {
+		if (state.refreshTimer === undefined) {
+			state.refreshTimer = setTimeout(() => {
+				state.refreshTimer = undefined;
+				context.invalidate();
+			}, 1000);
+			state.refreshTimer.unref?.();
+		}
+		return;
+	}
+	if (state.refreshTimer !== undefined) {
+		clearTimeout(state.refreshTimer);
+		state.refreshTimer = undefined;
+	}
 }
 
 // Settings resolve in two layers: a saved override wins, otherwise the
@@ -302,12 +327,10 @@ export default function subagent(pi: ExtensionAPI): void {
 	};
 
 	const registerSubagentTool = (discovery: AgentDiscoveryResult): void => {
-		pi.registerTool<typeof SubagentParamsSchema, SubagentDetails>({
+		pi.registerTool<typeof SubagentParamsSchema, SubagentDetails, SubagentRenderState>({
 			name: SUBAGENT_TOOL_NAME,
 			label: SUBAGENT_TOOL_LABEL,
 			description: subagentToolDescription(discovery),
-			rendersOwnProgress: true,
-			renderRefreshIntervalMs: 1000,
 			promptSnippet: "Delegate focused research, review, or implementation tasks to isolated subagents",
 			promptGuidelines: [
 				"Use subagent when a bounded task benefits from isolated context or parallel investigation; choose a profile and write its briefing using the tool description.",
@@ -365,6 +388,7 @@ export default function subagent(pi: ExtensionAPI): void {
 				return renderSubagentCall(args, theme);
 			},
 			renderResult(result, options, theme, context) {
+				scheduleLiveRefresh(context, options.isPartial);
 				return renderSubagentResult(result, options, theme, context.isError);
 			},
 		});

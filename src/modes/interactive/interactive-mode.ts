@@ -69,7 +69,6 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 	ExtensionRunner,
-	ExtensionSelectDialogOptions,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
@@ -2445,7 +2444,7 @@ export class InteractiveMode {
 	private showExtensionSelector(
 		title: string,
 		options: ReadonlyArray<string | SelectOption>,
-		opts?: ExtensionSelectDialogOptions,
+		opts?: ExtensionUIDialogOptions & { subtitle?: string },
 	): Promise<string | undefined> {
 		return new Promise((resolve) => {
 			if (opts?.signal?.aborted) {
@@ -2476,7 +2475,6 @@ export class InteractiveMode {
 					tui: this.ui,
 					timeout: opts?.timeout,
 					subtitle: opts?.subtitle,
-					cancelHint: opts?.cancelHint,
 					onToggleToolsExpanded: () => this.toggleToolOutputExpansion(),
 				},
 			);

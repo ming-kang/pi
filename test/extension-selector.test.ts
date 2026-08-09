@@ -127,27 +127,4 @@ describe("ExtensionSelectorComponent", () => {
 		);
 		expect(selector.render(24).every((line) => visibleWidth(line) <= 24)).toBe(true);
 	});
-
-	it("uses the cancel hint wording when dismissing is not destructive", () => {
-		const withDefault = new ExtensionSelectorComponent(
-			"Approve?",
-			["A"],
-			() => {},
-			() => {},
-		);
-		expect(render(withDefault)).toContain("cancel");
-
-		const withOverride = new ExtensionSelectorComponent(
-			"Approve?",
-			["A"],
-			() => {},
-			() => {},
-			{
-				cancelHint: "go back",
-			},
-		);
-		const output = render(withOverride);
-		expect(output).toContain("go back");
-		expect(output).not.toContain("cancel");
-	});
 });

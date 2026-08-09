@@ -164,11 +164,15 @@ export function renderDeepWikiResult(
 	options: ToolRenderResultOptions,
 	theme: Theme,
 	isError: boolean,
+	elapsedMs?: number,
 ): Component {
 	if (options.isPartial) {
 		const repo = typeof result.details?.repoName === "string" ? singleLine(result.details.repoName) : "";
 		const label = repo ? `Querying ${repo}...` : "Querying...";
-		return new Text(theme.fg("warning", label), 0, 0);
+		// Slow network calls earn a visible elapsed count; sub-2s stays quiet.
+		const suffix =
+			elapsedMs !== undefined && elapsedMs >= 2000 ? theme.fg("muted", ` (${Math.round(elapsedMs / 1000)}s)`) : "";
+		return new Text(`${theme.fg("warning", label)}${suffix}`, 0, 0);
 	}
 
 	const text = firstText(result);

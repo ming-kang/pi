@@ -16,8 +16,6 @@ export interface ExtensionSelectorOptions {
 	onToggleToolsExpanded?: () => void;
 	/** Muted line under the title, for context that is not itself a choice. */
 	subtitle?: string;
-	/** Overrides the "cancel" wording in the key hints when Esc has a more specific meaning. */
-	cancelHint?: string;
 }
 
 /** Normalize the string shorthand so rendering only deals with one shape. */
@@ -77,7 +75,7 @@ export class ExtensionSelectorComponent extends Container {
 		const hints = [
 			navigationKeys ? rawKeyHint(navigationKeys, "navigate") : "",
 			confirmKey ? rawKeyHint(confirmKey, "select") : "",
-			cancelKey ? rawKeyHint(cancelKey, opts?.cancelHint ?? "cancel") : "",
+			cancelKey ? rawKeyHint(cancelKey, "cancel") : "",
 		].filter(Boolean);
 		this.addChild(new Text(hints.join(theme.fg("muted", " • ")), 1, 0));
 		this.addChild(new Spacer(1));

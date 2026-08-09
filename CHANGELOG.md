@@ -11,6 +11,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 ### Removed
 
 - Removed the coalescing terminal render patch (atomic write batching for IME stability and scrollback preservation across content-driven full redraws). Fullscreen mode renders in the alternate screen and does not need it; regular mode returns to upstream rendering behavior, including IME candidate-window movement and scroll-to-bottom on full redraws.
+- Removed the `rendersOwnProgress` and `renderRefreshIntervalMs` tool definition fields and the `cancelHint`/`subtitle` select dialog options from the Extension API. The generic `Running… (Ns)` row now only covers bash; time-driven tool renderers self-schedule repaints through `context.state` timers and `context.invalidate()`, and the bundled DeepWiki tool shows its own query elapsed time.
 
 ## [0.84.2] - 2026-08-09
 
