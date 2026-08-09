@@ -76,6 +76,7 @@ function createTestRepo({ sourceDependencies = runtimeDependencies } = {}) {
 	manifest.commit = commit;
 	manifest.sourceTree = sourceTree;
 	writeJson(join(root, "maintainers", "upstream.json"), manifest);
+	writeJson(join(root, "maintainers", "deltas.json"), { deltas: [] });
 
 	writeJson(join(root, "npm-shrinkwrap.json"), {
 		lockfileVersion: 3,
@@ -191,9 +192,22 @@ describe("diff-upstream worktree collection and CLI execution", () => {
 		expect(result.stdout).toContain("D drop.txt");
 		expect(result.stdout).not.toContain("ignored.txt");
 
+		// M/D deviations without ledger entries fail the check gate.
+		const unregistered = invoke(repo.root, ["--check"]);
+		expect(unregistered.code).toBe(1);
+		expect(unregistered.stderr).toContain("unregistered upstream deviation: M mod.txt");
+		expect(unregistered.stderr).toContain("unregistered upstream deviation: D drop.txt");
+
+		writeJson(join(repo.root, "maintainers", "deltas.json"), {
+			deltas: [
+				{ path: "drop.txt", category: "distribution", intent: "Dropped file", tests: [], status: "verified" },
+				{ path: "mod.txt", category: "ui", intent: "Modified file", tests: [], status: "unverified" },
+			],
+		});
 		const checkResult = invoke(repo.root, ["--check"]);
 		expect(checkResult.code).toBe(0);
 		expect(checkResult.stdout).toContain("Verified 4 worktree differences against v1.2.3");
+		expect(checkResult.stdout).toContain("2 registered deltas (1 unverified)");
 	});
 
 	test("verifies tag and tree integrity and falls back gracefully if tag is missing locally", () => {
@@ -217,5 +231,101 @@ describe("diff-upstream worktree collection and CLI execution", () => {
 		const result = invoke(repo.root, ["--invalid"]);
 		expect(result.code).toBe(2);
 		expect(result.stderr).toContain("Usage:");
+	});
+});
+
+describe("diff-upstream deviation ledger", () => {
+	test("annotates registered deviations and supports directory-prefix entries", () => {
+		const repo = createTestRepo();
+		writeFileSync(join(repo.root, "mod.txt"), "modified content\n");
+		mkdirSync(join(repo.root, "docs"));
+		writeFileSync(join(repo.root, "docs", "extra.md"), "doc\n");
+		git(repo.root, "add", "-A");
+		git(repo.root, "commit", "-m", "local docs baseline");
+		// Rewrite an upstream-tracked path inside the prefix by re-creating the
+		// baseline diff: docs/extra.md is an addition, so only mod.txt is M.
+		writeJson(join(repo.root, "maintainers", "deltas.json"), {
+			deltas: [{ path: "mod.txt", category: "windows-compat", intent: "Rewrites the file", tests: [], status: "verified" }],
+		});
+
+		const report = invoke(repo.root);
+		expect(report.code).toBe(0);
+		expect(report.stdout).toContain("M mod.txt  [windows-compat, verified] Rewrites the file");
+		expect(report.stdout).toContain("1 registered deltas (0 unverified)");
+	});
+
+	test("prefix entries cover whole directories and stale entries fail the check", () => {
+		const repo = createTestRepo();
+		mkdirSync(join(repo.root, "sub"));
+		// No deviation matches the prefix, so the entry is stale.
+		writeJson(join(repo.root, "maintainers", "deltas.json"), {
+			deltas: [{ path: "sub/", category: "distribution", intent: "Distribution area", tests: [], status: "verified" }],
+		});
+		const stale = invoke(repo.root, ["--check"]);
+		expect(stale.code).toBe(1);
+		expect(stale.stderr).toContain("stale delta entry");
+
+		// A modified file under the prefix is covered by the prefix entry.
+		writeFileSync(join(repo.root, "mod.txt"), "changed\n");
+		writeJson(join(repo.root, "maintainers", "deltas.json"), {
+			deltas: [{ path: "mod.txt", category: "bugfix", intent: "Covered", tests: [], status: "verified" }],
+		});
+		const covered = invoke(repo.root, ["--check"]);
+		expect(covered.code).toBe(0);
+
+		const reportStale = invoke(repo.root);
+		expect(reportStale.code).toBe(0);
+	});
+
+	test("rejects schema violations: unknown category, missing intent, duplicates, missing tests, unsorted", () => {
+		const repo = createTestRepo();
+		writeFileSync(join(repo.root, "mod.txt"), "changed\n");
+
+		const cases = [
+			[{ path: "mod.txt", category: "nope", intent: "x", tests: [], status: "verified" }, "category must be one of"],
+			[{ path: "mod.txt", category: "ui", intent: "", tests: [], status: "verified" }, "intent must be a non-empty string"],
+			[{ path: "mod.txt", category: "ui", intent: "x", tests: ["test/missing.test.ts"], status: "verified" }, "does not exist"],
+			[{ path: "mod.txt", category: "ui", intent: "x", tests: [], status: "maybe" }, "status must be one of"],
+			[{ path: "mod.txt", category: "ui", intent: "x", tests: [], status: "verified", extra: 1 }, 'unexpected key "extra"'],
+		];
+		for (const [entry, expected] of cases) {
+			writeJson(join(repo.root, "maintainers", "deltas.json"), { deltas: [entry] });
+			const result = invoke(repo.root, ["--check"]);
+			expect(result.code).toBe(1);
+			expect(result.stderr).toContain(expected);
+		}
+
+		writeJson(join(repo.root, "maintainers", "deltas.json"), {
+			deltas: [
+				{ path: "mod.txt", category: "ui", intent: "x", tests: [], status: "verified" },
+				{ path: "mod.txt", category: "ui", intent: "x", tests: [], status: "verified" },
+			],
+		});
+		const duplicate = invoke(repo.root, ["--check"]);
+		expect(duplicate.code).toBe(1);
+		expect(duplicate.stderr).toContain("duplicate path");
+
+		writeJson(join(repo.root, "maintainers", "deltas.json"), {
+			deltas: [
+				{ path: "zzz.txt", category: "ui", intent: "x", tests: [], status: "verified" },
+				{ path: "mod.txt", category: "ui", intent: "x", tests: [], status: "verified" },
+			],
+		});
+		const unsorted = invoke(repo.root, ["--check"]);
+		expect(unsorted.code).toBe(1);
+		expect(unsorted.stderr).toContain("sorted by path");
+	});
+
+	test("missing ledger keeps the report usable but fails the check", () => {
+		const repo = createTestRepo();
+		rmSync(join(repo.root, "maintainers", "deltas.json"));
+
+		const report = invoke(repo.root);
+		expect(report.code).toBe(0);
+		expect(report.stderr).toContain("maintainers/deltas.json is missing");
+
+		const check = invoke(repo.root, ["--check"]);
+		expect(check.code).toBe(1);
+		expect(check.stderr).toContain("maintainers/deltas.json is missing");
 	});
 });

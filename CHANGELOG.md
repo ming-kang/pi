@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Added `maintainers/deltas.json`, a per-path deviation ledger covering every modified or dropped upstream file with category, intent, covering tests, and verification status. `npm run diff:upstream` annotates its report from the ledger and `--check` now fails on unregistered deviations and stale entries.
+
 ### Changed
 
 - Changed the default interactive TUI mode from `regular` to `fullscreen`. The regular inline mode remains available through `tuiMode` in settings or `--tui-mode regular`.

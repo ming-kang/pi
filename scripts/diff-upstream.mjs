@@ -1,21 +1,25 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { prerelease, satisfies, valid, validRange } from "semver";
 
 const runtimeDependencyNames = ["@earendil-works/pi-agent-core", "@earendil-works/pi-ai", "@earendil-works/pi-tui"];
 const manifestKeys = ["repository", "tag", "commit", "sourceSubtree", "sourceTree"];
+const deltaKeys = ["path", "category", "intent", "tests", "status"];
+const deltaCategories = ["ui", "bugfix", "extension-support", "distribution", "windows-compat"];
+const deltaStatuses = ["verified", "unverified"];
 
 const usage = `Usage: node scripts/diff-upstream.mjs [--check]
 
 Compares the current worktree against the recorded upstream baseline
-in maintainers/upstream.json.
+in maintainers/upstream.json, annotated with the per-path deviation
+ledger in maintainers/deltas.json.
 
   (no flag)  print the deterministic full classification report
-  --check    verify baseline & dependencies and print concise count summary`;
+  --check    verify baseline, dependencies, and ledger coverage and print a concise count summary`;
 
 function isPlainObject(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -82,6 +86,93 @@ export function validateManifest(manifest) {
 	}
 
 	return failures;
+}
+
+function isValidDeltaPath(value) {
+	return (
+		isNonEmptyString(value) &&
+		!value.startsWith("/") &&
+		!value.includes("\\") &&
+		value === posix.normalize(value) &&
+		!value.split("/").some((part) => part === "" || part === "." || part === "..")
+	);
+}
+
+/**
+ * Validate maintainers/deltas.json. Entries with a trailing "/" register a
+ * whole directory prefix; all other entries register one exact file.
+ */
+export function validateDeltas(deltas, root, failures) {
+	if (!isPlainObject(deltas) || !Array.isArray(deltas.deltas) || Object.keys(deltas).length !== 1) {
+		failures.push('maintainers/deltas.json must be an object with a single "deltas" array');
+		return [];
+	}
+	const entries = [];
+	const seenPaths = new Set();
+	for (const [index, entry] of deltas.deltas.entries()) {
+		const location = `maintainers/deltas.json entry ${index}`;
+		if (!isPlainObject(entry)) {
+			failures.push(`${location} must be an object`);
+			continue;
+		}
+		for (const key of deltaKeys) {
+			if (!Object.hasOwn(entry, key)) failures.push(`${location} is missing required key "${key}"`);
+		}
+		for (const key of Object.keys(entry)) {
+			if (!deltaKeys.includes(key)) failures.push(`${location} has unexpected key "${key}"`);
+		}
+		const isPrefix = typeof entry.path === "string" && entry.path.endsWith("/");
+		const normalizedPath = isPrefix ? entry.path.slice(0, -1) : entry.path;
+		if (!isValidDeltaPath(normalizedPath)) {
+			failures.push(`${location} path must be a normalized repository-relative POSIX path`);
+			continue;
+		}
+		if (seenPaths.has(entry.path)) {
+			failures.push(`maintainers/deltas.json has a duplicate path "${entry.path}"`);
+		}
+		seenPaths.add(entry.path);
+		if (!deltaCategories.includes(entry.category)) {
+			failures.push(`${location} category must be one of: ${deltaCategories.join(", ")}`);
+		}
+		if (!isNonEmptyString(entry.intent)) {
+			failures.push(`${location} intent must be a non-empty string`);
+		}
+		if (!deltaStatuses.includes(entry.status)) {
+			failures.push(`${location} status must be one of: ${deltaStatuses.join(", ")}`);
+		}
+		if (!Array.isArray(entry.tests) || entry.tests.some((test) => !isNonEmptyString(test))) {
+			failures.push(`${location} tests must be an array of repository-relative paths`);
+		} else {
+			for (const test of entry.tests) {
+				if (!existsSync(join(root, test))) {
+					failures.push(`${location} references a test path that does not exist: ${test}`);
+				}
+			}
+		}
+		entries.push(entry);
+	}
+	const paths = entries.map((entry) => entry.path);
+	const sorted = [...paths].sort();
+	if (paths.some((path, index) => path !== sorted[index])) {
+		failures.push("maintainers/deltas.json entries must be sorted by path");
+	}
+	return entries;
+}
+
+/** Match an entry: an exact path wins over the longest registered directory prefix. */
+export function findDelta(deltaEntries, path) {
+	let prefixMatch;
+	for (const entry of deltaEntries) {
+		if (entry.path === path) return entry;
+		if (
+			entry.path.endsWith("/") &&
+			path.startsWith(entry.path) &&
+			(prefixMatch === undefined || entry.path.length > prefixMatch.path.length)
+		) {
+			prefixMatch = entry;
+		}
+	}
+	return prefixMatch;
 }
 
 export function createGit(root) {
@@ -350,15 +441,54 @@ export function runDiffUpstream({
 	const additions = entries.filter((e) => e.status === "A");
 	const dropped = entries.filter((e) => e.status === "D");
 
+	// The ledger must cover every modified or dropped upstream path (M/T/D).
+	// Additions are distribution-local and listed without registration.
+	const deltasPath = join(root, "maintainers", "deltas.json");
+	const ledgerFailures = [];
+	let deltaEntries = [];
+	if (existsSync(deltasPath)) {
+		const deltasJson = readJsonFile(deltasPath, "maintainers/deltas.json", ledgerFailures);
+		if (deltasJson !== undefined) {
+			deltaEntries = validateDeltas(deltasJson, root, ledgerFailures);
+		}
+	} else {
+		ledgerFailures.push("maintainers/deltas.json is missing; register upstream deviations there");
+	}
+
+	const ledgerScope = [...modified, ...dropped];
+	const unregistered = ledgerScope.filter((entry) => findDelta(deltaEntries, entry.path) === undefined);
+	const scopePaths = new Set(ledgerScope.map((entry) => entry.path));
+	const stale = deltaEntries.filter((entry) =>
+		entry.path.endsWith("/")
+			? !ledgerScope.some((scoped) => scoped.path.startsWith(entry.path))
+			: !scopePaths.has(entry.path),
+	);
+	const unverifiedCount = deltaEntries.filter((entry) => entry.status === "unverified").length;
+
 	for (const w of warnings) writeLine(stderr, `warning: ${w}`);
 
 	if (isCheck) {
+		for (const f of ledgerFailures) writeLine(stderr, `  - ${f}`);
+		for (const entry of unregistered) {
+			writeLine(stderr, `  - unregistered upstream deviation: ${entry.status} ${entry.path}`);
+		}
+		for (const entry of stale) {
+			writeLine(stderr, `  - stale delta entry (no matching worktree deviation): ${entry.path}`);
+		}
 		writeLine(
 			stdout,
-			`Verified ${entries.length} worktree differences against ${manifest.tag}: ${modified.length} modified upstream (M/T), ${additions.length} distribution-local additions (A), ${dropped.length} dropped upstream (D).`,
+			`Verified ${entries.length} worktree differences against ${manifest.tag}: ${modified.length} modified upstream (M/T), ${additions.length} distribution-local additions (A), ${dropped.length} dropped upstream (D), ${deltaEntries.length} registered deltas (${unverifiedCount} unverified).`,
 		);
-		return 0;
+		return ledgerFailures.length > 0 || unregistered.length > 0 || stale.length > 0 ? 1 : 0;
 	}
+
+	for (const f of ledgerFailures) writeLine(stderr, `warning: ${f}`);
+
+	const annotate = (entry) => {
+		const delta = findDelta(deltaEntries, entry.path);
+		if (!delta) return `  ${entry.status} ${entry.path}`;
+		return `  ${entry.status} ${entry.path}  [${delta.category}, ${delta.status}] ${delta.intent}`;
+	};
 
 	writeLine(
 		stdout,
@@ -373,19 +503,36 @@ export function runDiffUpstream({
 	writeLine(stdout, `  ${String(modified.length).padStart(4)} modified upstream files (M/T)`);
 	writeLine(stdout, `  ${String(additions.length).padStart(4)} distribution-local additions (A)`);
 	writeLine(stdout, `  ${String(dropped.length).padStart(4)} dropped upstream files (D)`);
+	writeLine(stdout, `  ${String(deltaEntries.length).padStart(4)} registered deltas (${unverifiedCount} unverified)`);
 
 	const groups = [
-		["Modified upstream files (M/T)", modified],
-		["Distribution-local additions (A)", additions],
-		["Dropped upstream files (D)", dropped],
+		["Modified upstream files (M/T)", modified, annotate],
+		["Distribution-local additions (A)", additions, (entry) => `  ${entry.status} ${entry.path}`],
+		["Dropped upstream files (D)", dropped, annotate],
 	];
 
-	for (const [title, groupEntries] of groups) {
+	for (const [title, groupEntries, format] of groups) {
 		if (groupEntries.length === 0) continue;
 		writeLine(stdout, "");
 		writeLine(stdout, `${title}:`);
 		for (const entry of groupEntries) {
+			writeLine(stdout, format(entry));
+		}
+	}
+
+	if (unregistered.length > 0) {
+		writeLine(stdout, "");
+		writeLine(stdout, "Unregistered upstream deviations (add to maintainers/deltas.json):");
+		for (const entry of unregistered) {
 			writeLine(stdout, `  ${entry.status} ${entry.path}`);
+		}
+	}
+
+	if (stale.length > 0) {
+		writeLine(stdout, "");
+		writeLine(stdout, "Stale delta entries (registered path no longer deviates):");
+		for (const entry of stale) {
+			writeLine(stdout, `  ${entry.path}`);
 		}
 	}
 

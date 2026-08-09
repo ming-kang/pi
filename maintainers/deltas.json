@@ -1,0 +1,396 @@
+{
+	"deltas": [
+		{
+			"path": ".gitignore",
+			"category": "distribution",
+			"intent": "Ignores fork-local build and tooling artifacts",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "CHANGELOG.md",
+			"category": "distribution",
+			"intent": "Distribution-owned release history starting at 0.81.1-1",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "README.md",
+			"category": "distribution",
+			"intent": "Distribution-owned readme for the standalone @astralyn/pi package",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "docs/",
+			"category": "distribution",
+			"intent": "Distribution-owned user documentation, including bundled feature pages",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "examples/",
+			"category": "distribution",
+			"intent": "Import paths renamed to @astralyn/pi and monorepo path references removed",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "install-lock/",
+			"category": "distribution",
+			"intent": "Upstream npm-install lockfile workspace is not shipped by this distribution",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "npm-shrinkwrap.json",
+			"category": "distribution",
+			"intent": "Exact pinned dependency lockfile for the standalone package",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "package.json",
+			"category": "distribution",
+			"intent": "Standalone @astralyn/pi package manifest with exact runtime dependencies",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "scripts/migrate-sessions.sh",
+			"category": "distribution",
+			"intent": "Obsolete upstream session migration script removed",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/cli/args.ts",
+			"category": "distribution",
+			"intent": "Fullscreen-default help text; upstream plan-mode example dropped",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/cli/auth-command.ts",
+			"category": "bugfix",
+			"intent": "Parses uppercase --min-expiry duration units instead of treating them as hours",
+			"tests": ["test/credential-print.test.ts"],
+			"status": "unverified"
+		},
+		{
+			"path": "src/cli/project-trust.ts",
+			"category": "extension-support",
+			"intent": "Normalizes SelectOption entries to labels for startup selectors",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/cli/session-picker.ts",
+			"category": "bugfix",
+			"intent": "Single finish path disposes the selector before resolving",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/cli/startup-ui.ts",
+			"category": "distribution",
+			"intent": "First-time-setup gate compares runtime metadata against config.ts distribution constants",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/config.ts",
+			"category": "distribution",
+			"intent": "Fork distribution constants: package name, disabled install telemetry, changelog hint",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/core/agent-session.ts",
+			"category": "bugfix",
+			"intent": "Auto-compaction delegated to CompactionController: mid-turn checks, fail-closed stop, overflow recovery",
+			"tests": ["test/suite/agent-session-compaction.test.ts", "test/agent-session-auto-compaction-queue.test.ts"],
+			"status": "verified"
+		},
+		{
+			"path": "src/core/extensions/index.ts",
+			"category": "extension-support",
+			"intent": "Re-exports CompactionTiming, SelectOption, and stale-extension-context helpers",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/core/extensions/loader.ts",
+			"category": "distribution",
+			"intent": "Standalone package aliases via DISTRIBUTION_PACKAGE_NAME; no monorepo workspace resolution",
+			"tests": ["test/extensions-discovery.test.ts"],
+			"status": "verified"
+		},
+		{
+			"path": "src/core/extensions/types.ts",
+			"category": "extension-support",
+			"intent": "SelectOption descriptions, toolGroup/toolGroupSummary/result render context, CompactionTiming, stale-context helpers",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/core/keybindings.ts",
+			"category": "ui",
+			"intent": "Adds the configurable app.list.toggle binding for list selection",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/core/resource-loader.ts",
+			"category": "windows-compat",
+			"intent": "relative()-based path equality for context-file shadowing across drive-letter case and separators",
+			"tests": ["test/resource-loader.test.ts"],
+			"status": "unverified"
+		},
+		{
+			"path": "src/core/session-manager.ts",
+			"category": "bugfix",
+			"intent": "Uses the shared cwdToSafeDirName helper instead of a local duplicate",
+			"tests": ["test/paths.test.ts"],
+			"status": "verified"
+		},
+		{
+			"path": "src/core/settings-manager.ts",
+			"category": "distribution",
+			"intent": "Default tuiMode is fullscreen; keep when syncing upstream",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/core/tools/bash.ts",
+			"category": "ui",
+			"intent": "Syntax-highlighted collapsed command line and shared hints; calls rewriteCmdNulRedirects before spawning",
+			"tests": ["test/bash-tool-rendering.test.ts", "test/bash-nul-redirect.test.ts"],
+			"status": "verified"
+		},
+		{
+			"path": "src/core/tools/edit.ts",
+			"category": "ui",
+			"intent": "Native chrome with diff stat and bounded collapsed diff body",
+			"tests": ["test/edit-tool-no-full-redraw.test.ts"],
+			"status": "verified"
+		},
+		{
+			"path": "src/core/tools/find.ts",
+			"category": "windows-compat",
+			"intent": "minimatch fallback for path-segment globs that Windows fd does not match; explore toolGroup",
+			"tests": ["test/suite/regressions/3302-find-path-glob.test.ts"],
+			"status": "unverified"
+		},
+		{
+			"path": "src/core/tools/grep.ts",
+			"category": "ui",
+			"intent": "Call-line flag badges, shared path/hint rendering, explore toolGroup",
+			"tests": ["test/tools.test.ts"],
+			"status": "verified"
+		},
+		{
+			"path": "src/core/tools/ls.ts",
+			"category": "ui",
+			"intent": "Shared collapsed-lines hint and explore toolGroup",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/core/tools/read.ts",
+			"category": "ui",
+			"intent": "Shared collapsed-lines hint, muted range colors, explore toolGroup, group-summary rendering",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/core/tools/render-utils.ts",
+			"category": "ui",
+			"intent": "Shared collapsedLinesHint helper consumed by all built-in tool renderers",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/core/tools/tool-definition-wrapper.ts",
+			"category": "extension-support",
+			"intent": "Propagates toolGroup through tool wrapping and tightens generics",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/core/tools/write.ts",
+			"category": "ui",
+			"intent": "Shared collapsed-lines hint with total count",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/core/trust-manager.ts",
+			"category": "windows-compat",
+			"intent": "Path identity across drive-letter case and junctions; dual HOME sources for global-resource checks",
+			"tests": ["test/trust-manager.test.ts"],
+			"status": "unverified"
+		},
+		{
+			"path": "src/extensions/index.ts",
+			"category": "extension-support",
+			"intent": "Registers the bundled hidden extensions (llama, deepwiki, question, router, statusline, subagent, todo)",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/migrations.ts",
+			"category": "bugfix",
+			"intent": "Uses the shared cwdToSafeDirName helper instead of a local duplicate",
+			"tests": ["test/paths.test.ts"],
+			"status": "verified"
+		},
+		{
+			"path": "src/modes/interactive/components/armin.ts",
+			"category": "bugfix",
+			"intent": "Animation timer unref and negative-row guard so the easter egg cannot block shutdown",
+			"tests": ["test/time-driven-ui.test.ts"],
+			"status": "verified"
+		},
+		{
+			"path": "src/modes/interactive/components/bash-execution.ts",
+			"category": "bugfix",
+			"intent": "Consistent header color on redraw for excluded-context commands",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/modes/interactive/components/countdown-timer.ts",
+			"category": "bugfix",
+			"intent": "Deadline-driven ticks with unref and idempotent dispose instead of a drifting interval",
+			"tests": ["test/time-driven-ui.test.ts"],
+			"status": "verified"
+		},
+		{
+			"path": "src/modes/interactive/components/extension-selector.ts",
+			"category": "extension-support",
+			"intent": "SelectOption description lines and subtitle under the title",
+			"tests": ["test/extension-selector.test.ts"],
+			"status": "verified"
+		},
+		{
+			"path": "src/modes/interactive/components/index.ts",
+			"category": "ui",
+			"intent": "Exports ToolGroupComponent",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/modes/interactive/components/keybinding-hints.ts",
+			"category": "ui",
+			"intent": "Platform-aware key labels for hints shared by native and bundled renderers",
+			"tests": ["test/keybinding-hints.test.ts"],
+			"status": "verified"
+		},
+		{
+			"path": "src/modes/interactive/components/session-selector.ts",
+			"category": "bugfix",
+			"intent": "Disposed guards on async callbacks, unref timers, and live relative timestamps",
+			"tests": ["test/session-selector-path-delete.test.ts"],
+			"status": "verified"
+		},
+		{
+			"path": "src/modes/interactive/components/settings-selector.ts",
+			"category": "distribution",
+			"intent": "Provider-attribution wording for the telemetry setting; fullscreen-default mode description",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/modes/interactive/components/tool-execution.ts",
+			"category": "ui",
+			"intent": "Dot/rail chrome assembly, tool grouping, bash progress row, image-conversion race fix, dispose lifecycle",
+			"tests": ["test/tool-execution-component.test.ts"],
+			"status": "verified"
+		},
+		{
+			"path": "src/modes/interactive/components/tree-selector.ts",
+			"category": "bugfix",
+			"intent": "Midnight refresh for relative dates and disposable timers",
+			"tests": ["test/tree-selector.test.ts"],
+			"status": "verified"
+		},
+		{
+			"path": "src/modes/interactive/external-editor.ts",
+			"category": "windows-compat",
+			"intent": "Quote-aware editor command parsing via cross-spawn without a shell",
+			"tests": ["test/external-editor.test.ts"],
+			"status": "unverified"
+		},
+		{
+			"path": "src/modes/interactive/interactive-mode.ts",
+			"category": "ui",
+			"intent": "Tool grouping and dispose lifecycle, selector subtitle plumbing, distribution constants for telemetry and update hints",
+			"tests": ["test/interactive-tui.test.ts"],
+			"status": "verified"
+		},
+		{
+			"path": "src/modes/interactive/theme/theme.ts",
+			"category": "ui",
+			"intent": "Nested color restoration in fg/bg and bundled ice-cream themes",
+			"tests": ["test/theme-picker.test.ts"],
+			"status": "verified"
+		},
+		{
+			"path": "src/modes/rpc/rpc-mode.ts",
+			"category": "extension-support",
+			"intent": "Maps SelectOption entries back to plain labels to keep the wire protocol unchanged",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "src/utils/paths.ts",
+			"category": "bugfix",
+			"intent": "Shared cwdToSafeDirName encoder for session-directory names",
+			"tests": ["test/paths.test.ts"],
+			"status": "verified"
+		},
+		{
+			"path": "src/utils/shell.ts",
+			"category": "windows-compat",
+			"intent": "Rewrites CMD-style nul redirects to /dev/null so POSIX shells cannot create undeletable nul files (commit 9f064aa17)",
+			"tests": ["test/bash-nul-redirect.test.ts"],
+			"status": "verified"
+		},
+		{
+			"path": "src/utils/version-check.ts",
+			"category": "distribution",
+			"intent": "Version checks query the npm registry instead of the upstream pi.dev API",
+			"tests": ["test/version-check.test.ts"],
+			"status": "verified"
+		},
+		{
+			"path": "test/",
+			"category": "distribution",
+			"intent": "Tests track the standalone layout and the registered src deviations",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "tsconfig.build.json",
+			"category": "distribution",
+			"intent": "Standalone repository build configuration",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "tsconfig.examples.json",
+			"category": "distribution",
+			"intent": "Standalone repository examples typecheck configuration",
+			"tests": [],
+			"status": "verified"
+		},
+		{
+			"path": "vitest.config.ts",
+			"category": "distribution",
+			"intent": "Standalone repository test configuration",
+			"tests": [],
+			"status": "verified"
+		}
+	]
+}
