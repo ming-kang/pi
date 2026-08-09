@@ -12,6 +12,16 @@ import { SettingsManager } from "../src/core/settings-manager.ts";
 import { createModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
 import { createTestResourceLoader } from "./utilities.ts";
 
+type CompactionInternals = {
+	checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<boolean>;
+	_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
+};
+
+/** Auto-compaction lives on the session's CompactionController. */
+function compactionInternals(session: unknown): CompactionInternals {
+	return (session as { _compaction: unknown })._compaction as CompactionInternals;
+}
+
 describe("AgentSession auto-compaction queue resume", () => {
 	let session: AgentSession;
 	let sessionManager: SessionManager;
@@ -121,11 +131,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
 
-		const runAutoCompaction = (
-			session as unknown as {
-				_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
-			}
-		)._runAutoCompaction.bind(session);
+		const runAutoCompaction = compactionInternals(session)._runAutoCompaction.bind(compactionInternals(session));
 
 		await expect(runAutoCompaction("threshold", false)).resolves.toBe(true);
 
@@ -154,13 +160,8 @@ describe("AgentSession auto-compaction queue resume", () => {
 		};
 
 		const runAutoCompactionSpy = vi
-			.spyOn(
-				session as unknown as {
-					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
-				},
-				"_runAutoCompaction",
-			)
-			.mockResolvedValue();
+			.spyOn(compactionInternals(session), "_runAutoCompaction")
+			.mockResolvedValue(false);
 
 		const events: Array<{ type: string; reason: string; errorMessage?: string }> = [];
 		session.subscribe((event) => {
@@ -169,11 +170,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			}
 		});
 
-		const checkCompaction = (
-			session as unknown as {
-				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
-			}
-		)._checkCompaction.bind(session);
+		const checkCompaction = compactionInternals(session).checkCompaction.bind(compactionInternals(session));
 
 		await checkCompaction(overflowMessage);
 		await checkCompaction({ ...overflowMessage, timestamp: Date.now() + 1 });
@@ -225,19 +222,10 @@ describe("AgentSession auto-compaction queue resume", () => {
 		});
 
 		const runAutoCompactionSpy = vi
-			.spyOn(
-				session as unknown as {
-					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
-				},
-				"_runAutoCompaction",
-			)
-			.mockResolvedValue();
+			.spyOn(compactionInternals(session), "_runAutoCompaction")
+			.mockResolvedValue(false);
 
-		const checkCompaction = (
-			session as unknown as {
-				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
-			}
-		)._checkCompaction.bind(session);
+		const checkCompaction = compactionInternals(session).checkCompaction.bind(compactionInternals(session));
 
 		await checkCompaction(staleAssistant, false);
 
@@ -298,19 +286,10 @@ describe("AgentSession auto-compaction queue resume", () => {
 		];
 
 		const runAutoCompactionSpy = vi
-			.spyOn(
-				session as unknown as {
-					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
-				},
-				"_runAutoCompaction",
-			)
-			.mockResolvedValue();
+			.spyOn(compactionInternals(session), "_runAutoCompaction")
+			.mockResolvedValue(false);
 
-		const checkCompaction = (
-			session as unknown as {
-				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
-			}
-		)._checkCompaction.bind(session);
+		const checkCompaction = compactionInternals(session).checkCompaction.bind(compactionInternals(session));
 
 		await checkCompaction(errorAssistant);
 
@@ -346,19 +325,10 @@ describe("AgentSession auto-compaction queue resume", () => {
 		];
 
 		const runAutoCompactionSpy = vi
-			.spyOn(
-				session as unknown as {
-					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
-				},
-				"_runAutoCompaction",
-			)
-			.mockResolvedValue();
+			.spyOn(compactionInternals(session), "_runAutoCompaction")
+			.mockResolvedValue(false);
 
-		const checkCompaction = (
-			session as unknown as {
-				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
-			}
-		)._checkCompaction.bind(session);
+		const checkCompaction = compactionInternals(session).checkCompaction.bind(compactionInternals(session));
 
 		await checkCompaction(errorAssistant);
 
@@ -427,19 +397,10 @@ describe("AgentSession auto-compaction queue resume", () => {
 		];
 
 		const runAutoCompactionSpy = vi
-			.spyOn(
-				session as unknown as {
-					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
-				},
-				"_runAutoCompaction",
-			)
-			.mockResolvedValue();
+			.spyOn(compactionInternals(session), "_runAutoCompaction")
+			.mockResolvedValue(false);
 
-		const checkCompaction = (
-			session as unknown as {
-				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
-			}
-		)._checkCompaction.bind(session);
+		const checkCompaction = compactionInternals(session).checkCompaction.bind(compactionInternals(session));
 
 		await checkCompaction(errorAssistant);
 

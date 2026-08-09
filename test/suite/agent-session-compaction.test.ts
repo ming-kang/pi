@@ -11,10 +11,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { estimateTokens } from "../../src/core/compaction/index.ts";
 import { createHarness, getMessageText, getUserTexts, type Harness } from "./harness.ts";
 
-type SessionWithCompactionInternals = {
-	_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<boolean>;
+type SessionCompactionInternals = {
+	checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<boolean>;
 	_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
 };
+
+/** Auto-compaction lives on the session's CompactionController. */
+function compactionInternals(session: unknown): SessionCompactionInternals {
+	return (session as { _compaction: unknown })._compaction as SessionCompactionInternals;
+}
 
 function createUsage(totalTokens: number) {
 	return {
@@ -310,7 +315,7 @@ describe("AgentSession compaction characterization", () => {
 		harnesses.push(harness);
 		seedCompactableSession(harness);
 		const getStreamCallCount = useSummaryStreamFn(harness, "auto summary from custom stream");
-		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+		const sessionInternals = compactionInternals(harness.session);
 
 		await sessionInternals._runAutoCompaction("threshold", false);
 
@@ -339,7 +344,7 @@ describe("AgentSession compaction characterization", () => {
 			await authReleased;
 			return undefined;
 		});
-		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+		const sessionInternals = compactionInternals(harness.session);
 
 		const compaction = sessionInternals._runAutoCompaction("threshold", false);
 		await authStarted;
@@ -495,7 +500,7 @@ describe("AgentSession compaction characterization", () => {
 			timestamp: Date.now(),
 		});
 
-		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+		const sessionInternals = compactionInternals(harness.session);
 
 		await expect(sessionInternals._runAutoCompaction("threshold", false)).resolves.toBe(true);
 	});
@@ -503,7 +508,7 @@ describe("AgentSession compaction characterization", () => {
 	it("does not retry overflow recovery more than once", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
-		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+		const sessionInternals = compactionInternals(harness.session);
 		const overflowMessage = createAssistant(harness, {
 			stopReason: "error",
 			errorMessage: "prompt is too long",
@@ -517,8 +522,8 @@ describe("AgentSession compaction characterization", () => {
 			}
 		});
 
-		await sessionInternals._checkCompaction(overflowMessage);
-		await sessionInternals._checkCompaction({ ...overflowMessage, timestamp: Date.now() + 1 });
+		await sessionInternals.checkCompaction(overflowMessage);
+		await sessionInternals.checkCompaction({ ...overflowMessage, timestamp: Date.now() + 1 });
 
 		expect(runAutoCompactionSpy).toHaveBeenCalledTimes(1);
 		expect(compactionErrors).toContain(
@@ -579,7 +584,7 @@ describe("AgentSession compaction characterization", () => {
 			timestamp: now - 1_000,
 		});
 		harness.session.agent.state.messages = harness.sessionManager.buildSessionContext().messages;
-		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+		const sessionInternals = compactionInternals(harness.session);
 
 		const shouldContinue = await sessionInternals._runAutoCompaction("overflow", true);
 
@@ -628,7 +633,7 @@ describe("AgentSession compaction characterization", () => {
 	it("ignores stale pre-compaction assistant usage on pre-prompt checks", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
-		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+		const sessionInternals = compactionInternals(harness.session);
 		const staleTimestamp = Date.now() - 10_000;
 		const staleAssistant = createAssistant(harness, {
 			stopReason: "stop",
@@ -658,7 +663,7 @@ describe("AgentSession compaction characterization", () => {
 
 		const runAutoCompactionSpy = vi.spyOn(sessionInternals, "_runAutoCompaction").mockResolvedValue(false);
 
-		await sessionInternals._checkCompaction(staleAssistant, false);
+		await sessionInternals.checkCompaction(staleAssistant, false);
 
 		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
 	});
@@ -666,7 +671,7 @@ describe("AgentSession compaction characterization", () => {
 	it("triggers threshold compaction for error messages using the last successful usage", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
-		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+		const sessionInternals = compactionInternals(harness.session);
 		const successfulAssistant = createAssistant(harness, {
 			stopReason: "stop",
 			totalTokens: 190_000,
@@ -686,7 +691,7 @@ describe("AgentSession compaction characterization", () => {
 
 		const runAutoCompactionSpy = vi.spyOn(sessionInternals, "_runAutoCompaction").mockResolvedValue(false);
 
-		await sessionInternals._checkCompaction(errorAssistant);
+		await sessionInternals.checkCompaction(errorAssistant);
 
 		expect(runAutoCompactionSpy).toHaveBeenCalledWith("threshold", false, "postRun");
 	});
@@ -694,7 +699,7 @@ describe("AgentSession compaction characterization", () => {
 	it("does not trigger threshold compaction for error messages when no prior usage exists", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
-		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+		const sessionInternals = compactionInternals(harness.session);
 		const errorAssistant = createAssistant(harness, {
 			stopReason: "error",
 			errorMessage: "529 overloaded",
@@ -707,7 +712,7 @@ describe("AgentSession compaction characterization", () => {
 
 		const runAutoCompactionSpy = vi.spyOn(sessionInternals, "_runAutoCompaction").mockResolvedValue(false);
 
-		await sessionInternals._checkCompaction(errorAssistant);
+		await sessionInternals.checkCompaction(errorAssistant);
 
 		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
 	});
@@ -715,7 +720,7 @@ describe("AgentSession compaction characterization", () => {
 	it("does not trigger threshold compaction when only kept pre-compaction usage exists", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
-		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+		const sessionInternals = compactionInternals(harness.session);
 		const preCompactionTimestamp = Date.now() - 10_000;
 		const keptAssistant = createAssistant(harness, {
 			stopReason: "stop",
@@ -752,7 +757,7 @@ describe("AgentSession compaction characterization", () => {
 
 		const runAutoCompactionSpy = vi.spyOn(sessionInternals, "_runAutoCompaction").mockResolvedValue(false);
 
-		await sessionInternals._checkCompaction(errorAssistant);
+		await sessionInternals.checkCompaction(errorAssistant);
 
 		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
 	});
@@ -766,15 +771,15 @@ describe("AgentSession compaction characterization", () => {
 		const disabledHarness = await createHarness({ settings: { compaction: { enabled: false } } });
 		harnesses.push(disabledHarness);
 
-		const belowThresholdInternals = belowThresholdHarness.session as unknown as SessionWithCompactionInternals;
-		const disabledInternals = disabledHarness.session as unknown as SessionWithCompactionInternals;
+		const belowThresholdInternals = compactionInternals(belowThresholdHarness.session);
+		const disabledInternals = compactionInternals(disabledHarness.session);
 		const belowThresholdSpy = vi.spyOn(belowThresholdInternals, "_runAutoCompaction").mockResolvedValue(false);
 		const disabledSpy = vi.spyOn(disabledInternals, "_runAutoCompaction").mockResolvedValue(false);
 
-		await belowThresholdInternals._checkCompaction(
+		await belowThresholdInternals.checkCompaction(
 			createAssistant(belowThresholdHarness, { stopReason: "stop", totalTokens: 1_000, timestamp: Date.now() }),
 		);
-		await disabledInternals._checkCompaction(
+		await disabledInternals.checkCompaction(
 			createAssistant(disabledHarness, { stopReason: "stop", totalTokens: 1_000_000, timestamp: Date.now() }),
 		);
 

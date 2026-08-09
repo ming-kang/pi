@@ -7,6 +7,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 ### Changed
 
 - Changed the default interactive TUI mode from `regular` to `fullscreen`. The regular inline mode remains available through `tuiMode` in settings or `--tui-mode regular`.
+- Extracted automatic compaction (mid-turn, post-run, and pre-prompt threshold checks, overflow compact-and-retry recovery, and the fail-closed stop) from `AgentSession` into a dedicated `CompactionController`. Behavior is unchanged; manual `/compact` stays in `AgentSession`.
 
 ### Removed
 
