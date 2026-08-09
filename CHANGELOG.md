@@ -7,6 +7,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 ### Removed
 
 - Removed the bundled rewind extension, including per-edit backups, the `/rewind` settings command, and `/tree` work-tree restoration. Existing `~/.pi/agent/rewind/` data is no longer read and can be removed manually; historical `pi-rewind-snapshot` session entries remain inert.
+- Removed the bundled Biu extension, including the `/biu` workflow command, `biu://` path resolution for the core file tools, and the SPEC approval gate. Existing `~/.pi/agent/biu/` workspace data is no longer read and can be removed manually; historical `biu-mode` session entries stay inert and `biu-kickoff` messages fall back to the default custom-message rendering.
 
 ## [0.84.1] - 2026-08-07
 

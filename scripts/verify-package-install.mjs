@@ -105,7 +105,6 @@ try {
 		"dist/index.js",
 		"dist/rpc-entry.js",
 		"dist/core/export-html/template.html",
-		"dist/extensions/biu/index.js",
 		"dist/extensions/deepwiki/index.js",
 		"dist/extensions/llama/index.js",
 		"dist/extensions/question/index.js",
@@ -119,7 +118,6 @@ try {
 		"dist/modes/interactive/theme/ice-cream-light.json",
 		"dist/modes/interactive/theme/light.json",
 		"docs/bundled/README.md",
-		"docs/bundled/extensions/biu.md",
 		"docs/bundled/extensions/deepwiki.md",
 		"docs/bundled/extensions/question.md",
 		"docs/bundled/extensions/router.md",
@@ -141,8 +139,10 @@ try {
 		}
 	}
 	for (const forbiddenPath of [
+		"dist/extensions/biu",
 		"dist/extensions/plan",
 		"dist/extensions/rewind",
+		"docs/bundled/extensions/biu.md",
 		"docs/bundled/extensions/plan.md",
 		"docs/bundled/extensions/rewind.md",
 		"maintainers",
