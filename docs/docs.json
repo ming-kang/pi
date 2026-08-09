@@ -69,10 +69,6 @@
           "path": "bundled/extensions/question.md"
         },
         {
-          "title": "Rewind",
-          "path": "bundled/extensions/rewind.md"
-        },
-        {
           "title": "Router",
           "path": "bundled/extensions/router.md"
         },

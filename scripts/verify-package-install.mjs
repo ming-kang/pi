@@ -109,7 +109,6 @@ try {
 		"dist/extensions/deepwiki/index.js",
 		"dist/extensions/llama/index.js",
 		"dist/extensions/question/index.js",
-		"dist/extensions/rewind/index.js",
 		"dist/extensions/router/index.js",
 		"dist/extensions/statusline/index.js",
 		"dist/extensions/subagent/index.js",
@@ -123,7 +122,6 @@ try {
 		"docs/bundled/extensions/biu.md",
 		"docs/bundled/extensions/deepwiki.md",
 		"docs/bundled/extensions/question.md",
-		"docs/bundled/extensions/rewind.md",
 		"docs/bundled/extensions/router.md",
 		"docs/bundled/extensions/statusline.md",
 		"docs/bundled/extensions/subagent.md",
@@ -144,7 +142,9 @@ try {
 	}
 	for (const forbiddenPath of [
 		"dist/extensions/plan",
+		"dist/extensions/rewind",
 		"docs/bundled/extensions/plan.md",
+		"docs/bundled/extensions/rewind.md",
 		"maintainers",
 		"node_modules/.package-lock.json",
 		"packages",

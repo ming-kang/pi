@@ -117,11 +117,11 @@ export interface MutationResult {
 }
 
 // ---- per-session state ------------------------------------------------------
-// Keyed by session id like rewind's engine state: one Pi process can host more
-// than one session over its lifetime (resume, /tree branch switches), and a
-// module-level singleton would leak one session's list into another. Tool
-// renderers get no ctx, so the active session is a module-level pointer kept
-// current by execute and the lifecycle handlers (which do have ctx).
+// Keyed by session id: one Pi process can host more than one session over its
+// lifetime (resume, /tree branch switches), and a module-level singleton would
+// leak one session's list into another. Tool renderers get no ctx, so the
+// active session is a module-level pointer kept current by execute and the
+// lifecycle handlers (which do have ctx).
 const states = new Map<string, TodoState>();
 let activeSid = "";
 

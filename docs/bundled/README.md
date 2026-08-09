@@ -12,7 +12,6 @@ These hidden built-ins use the same public Extension API available to external e
 | [Biu](extensions/biu.md) | `/biu`, `biu://` paths | Carry a project cycle through plan, optional decomposition, execution, and archive |
 | [DeepWiki](extensions/deepwiki.md) | `deepwiki` | Query indexed public GitHub repository documentation |
 | [Question](extensions/question.md) | `question` | Ask structured questions through native interactive UI |
-| [Rewind](extensions/rewind.md) | `/rewind`, `/tree` lifecycle | Create and restore project snapshots around session operations |
 | [Router](extensions/router.md) | `/router` | Configure and probe Codex-style routing endpoints |
 | [Statusline](extensions/statusline.md) | Footer status | Show concise extension-managed activity state |
 | [Subagent](extensions/subagent.md) | `subagent`, `/agents` | Delegate bounded work to isolated child Pi sessions |
