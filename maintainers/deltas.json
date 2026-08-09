@@ -73,9 +73,9 @@
 		{
 			"path": "src/cli/auth-command.ts",
 			"category": "bugfix",
-			"intent": "Parses uppercase --min-expiry duration units instead of treating them as hours",
+			"intent": "Parses uppercase --min-expiry duration units: upstream regex matches case-insensitively but the unit ternary compares lowercase only, so 30M is billed as 30 hours",
 			"tests": ["test/credential-print.test.ts"],
-			"status": "unverified"
+			"status": "verified"
 		},
 		{
 			"path": "src/cli/project-trust.ts",
@@ -143,9 +143,9 @@
 		{
 			"path": "src/core/resource-loader.ts",
 			"category": "windows-compat",
-			"intent": "relative()-based path equality for context-file shadowing across drive-letter case and separators",
+			"intent": "relative()-based path equality for context-file shadowing; startsWith/=== provably fail across drive-letter case (realpathSync keeps input case) while win32 relative() compares case-insensitively",
 			"tests": ["test/resource-loader.test.ts"],
-			"status": "unverified"
+			"status": "verified"
 		},
 		{
 			"path": "src/core/session-manager.ts",
@@ -178,9 +178,9 @@
 		{
 			"path": "src/core/tools/find.ts",
 			"category": "windows-compat",
-			"intent": "minimatch fallback for path-segment globs that Windows fd does not match; explore toolGroup",
+			"intent": "minimatch fallback for path-segment globs: fd 10.4.2 --full-path on Windows matches zero results for any pattern containing / (posix or backslash form); explore toolGroup",
 			"tests": ["test/suite/regressions/3302-find-path-glob.test.ts"],
-			"status": "unverified"
+			"status": "verified"
 		},
 		{
 			"path": "src/core/tools/grep.ts",
@@ -227,9 +227,9 @@
 		{
 			"path": "src/core/trust-manager.ts",
 			"category": "windows-compat",
-			"intent": "Path identity across drive-letter case and junctions; dual HOME sources for global-resource checks",
+			"intent": "Trust-key identity across drive-letter case (realpathSync keeps input case, so C:/c: cwd spellings produce distinct keys for the same dir) via lowercased drive + dev:ino stat comparison; dual HOME sources for global-resource checks",
 			"tests": ["test/trust-manager.test.ts"],
-			"status": "unverified"
+			"status": "verified"
 		},
 		{
 			"path": "src/extensions/index.ts",
@@ -318,9 +318,9 @@
 		{
 			"path": "src/modes/interactive/external-editor.ts",
 			"category": "windows-compat",
-			"intent": "Quote-aware editor command parsing via cross-spawn without a shell",
+			"intent": "Quote-aware editor command parsing via cross-spawn without a shell; upstream shell:true concatenates the unquoted temp file path, so a TEMP containing spaces splits it into multiple argv entries",
 			"tests": ["test/external-editor.test.ts"],
-			"status": "unverified"
+			"status": "verified"
 		},
 		{
 			"path": "src/modes/interactive/interactive-mode.ts",
