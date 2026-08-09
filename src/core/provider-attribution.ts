@@ -1,6 +1,6 @@
 import type { Api, Model, ProviderHeaders } from "@earendil-works/pi-ai";
 import type { SettingsManager } from "./settings-manager.ts";
-import { isProviderAttributionEnabled } from "./telemetry.ts";
+import { isInstallTelemetryEnabled } from "./telemetry.ts";
 
 const OPENROUTER_HOST = "openrouter.ai";
 const NVIDIA_NIM_HOST = "integrate.api.nvidia.com";
@@ -37,7 +37,7 @@ function getDefaultAttributionHeaders(
 	model: Model<Api>,
 	settingsManager: SettingsManager,
 ): Record<string, string> | undefined {
-	if (!isProviderAttributionEnabled(settingsManager)) {
+	if (!isInstallTelemetryEnabled(settingsManager)) {
 		return undefined;
 	}
 

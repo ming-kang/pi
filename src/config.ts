@@ -485,7 +485,14 @@ try {
 }
 
 const piConfigName: string | undefined = pkg.piConfig?.name;
-export const PACKAGE_NAME: string = pkg.name || "@astralyn/pi";
+// Distribution constants for the standalone @astralyn/pi fork. Centralized so
+// upstream-facing files carry a one-line delta instead of scattered literals.
+export const DISTRIBUTION_PACKAGE_NAME = "@astralyn/pi";
+/** Upstream reports installs to https://pi.dev; this distribution does not report. */
+export const INSTALL_TELEMETRY_URL: string | undefined = undefined;
+/** Replaces the upstream pi.dev changelog link in the update notification. */
+export const UPDATE_CHANGELOG_HINT = "Run /changelog to view changes.";
+export const PACKAGE_NAME: string = pkg.name || DISTRIBUTION_PACKAGE_NAME;
 export const APP_NAME: string = piConfigName || "pi";
 export const APP_TITLE: string = piConfigName ? APP_NAME : "π";
 export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".pi";

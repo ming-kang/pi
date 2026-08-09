@@ -1,6 +1,14 @@
 import { ProcessTerminal, setKeybindings, type TUI, TuiMainScreen } from "@earendil-works/pi-tui";
 import { existsSync } from "fs";
-import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, getAgentDir, getSettingsPath, PACKAGE_NAME } from "../config.ts";
+import {
+	APP_NAME,
+	CONFIG_DIR_NAME,
+	DISTRIBUTION_PACKAGE_NAME,
+	ENV_AGENT_DIR,
+	getAgentDir,
+	getSettingsPath,
+	PACKAGE_NAME,
+} from "../config.ts";
 import { areExperimentalFeaturesEnabled } from "../core/experimental.ts";
 import { KeybindingsManager } from "../core/keybindings.ts";
 import { DefaultPackageManager, type ResolvedResource } from "../core/package-manager.ts";
@@ -23,7 +31,6 @@ import {
 	type Theme,
 } from "../modes/interactive/theme/theme.ts";
 
-const DISTRIBUTION_PACKAGE_NAME = "@astralyn/pi";
 const DISTRIBUTION_APP_NAME = "pi";
 const DISTRIBUTION_CONFIG_DIR_NAME = ".pi";
 

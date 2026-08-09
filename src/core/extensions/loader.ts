@@ -21,7 +21,7 @@ import { createJiti } from "jiti/static";
 import * as _bundledTypebox from "typebox";
 import * as _bundledTypeboxCompile from "typebox/compile";
 import * as _bundledTypeboxValue from "typebox/value";
-import { CONFIG_DIR_NAME, getAgentDir, isBunBinary } from "../../config.ts";
+import { CONFIG_DIR_NAME, DISTRIBUTION_PACKAGE_NAME, getAgentDir, isBunBinary } from "../../config.ts";
 // NOTE: This import works because loader.ts exports are NOT re-exported from index.ts,
 // avoiding a circular dependency. Extensions can import from @astralyn/pi.
 import * as _bundledPiCodingAgent from "../../index.ts";
@@ -64,7 +64,7 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@earendil-works/pi-ai/compat": _bundledPiAiCompat,
 	"@earendil-works/pi-ai/oauth": _bundledPiAiOauth,
 	"@earendil-works/pi-ai/providers/all": _bundledPiAiProviders,
-	"@astralyn/pi": _bundledPiCodingAgent,
+	[DISTRIBUTION_PACKAGE_NAME]: _bundledPiCodingAgent,
 	"@mariozechner/pi-agent-core": _bundledPiAgentCore,
 	"@mariozechner/pi-tui": _bundledPiTui,
 	"@mariozechner/pi-ai": _bundledPiAiCompat,
@@ -107,7 +107,7 @@ function getAliases(): Record<string, string> {
 	const piAiProvidersEntry = resolveImport("@earendil-works/pi-ai/providers/all");
 
 	_aliases = {
-		"@astralyn/pi": piCodingAgentEntry,
+		[DISTRIBUTION_PACKAGE_NAME]: piCodingAgentEntry,
 		"@earendil-works/pi-agent-core": piAgentCoreEntry,
 		"@earendil-works/pi-tui": piTuiEntry,
 		"@earendil-works/pi-ai/providers/all": piAiProvidersEntry,

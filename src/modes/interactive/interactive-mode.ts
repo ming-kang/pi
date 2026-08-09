@@ -52,6 +52,8 @@ import {
 	getDebugLogPath,
 	getDocsPath,
 	getShareViewerUrl,
+	INSTALL_TELEMETRY_URL,
+	UPDATE_CHANGELOG_HINT,
 	VERSION,
 } from "../../config.ts";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
@@ -94,6 +96,7 @@ import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from
 import type { TuiMode } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
+import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
@@ -103,6 +106,7 @@ import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipb
 import { parseGitUrl } from "../../utils/git.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
 import { getCwdRelativePath } from "../../utils/paths.ts";
+import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
@@ -378,6 +382,11 @@ export function createInteractiveTuiReference(getTui: () => TUI): TUI {
 		has: (_target, property) => Reflect.has(getTui(), property),
 		getPrototypeOf: () => Reflect.getPrototypeOf(getTui()),
 	});
+}
+
+/** Chat children that host tool presentation and share image display settings. */
+function isToolChatComponent(child: unknown): child is ToolExecutionComponent | ToolGroupComponent {
+	return child instanceof ToolExecutionComponent || child instanceof ToolGroupComponent;
 }
 
 export class InteractiveMode {
@@ -1177,18 +1186,43 @@ export class InteractiveMode {
 		const entries = parseChangelog(changelogPath);
 
 		if (!lastVersion) {
-			// Fresh install - record the version and don't show changelog.
+			// Fresh install - record the version, send telemetry, don't show changelog
 			this.settingsManager.setLastChangelogVersion(VERSION);
+			this.reportInstallTelemetry(VERSION);
 			return undefined;
 		}
 
 		const newEntries = getNewEntries(entries, lastVersion);
 		if (newEntries.length > 0) {
 			this.settingsManager.setLastChangelogVersion(VERSION);
+			this.reportInstallTelemetry(VERSION);
 			return newEntries.map((e) => normalizeChangelogLinks(e.content, e)).join("\n\n");
 		}
 
 		return undefined;
+	}
+
+	private reportInstallTelemetry(version: string): void {
+		if (!INSTALL_TELEMETRY_URL) {
+			return;
+		}
+
+		if (process.env.PI_OFFLINE) {
+			return;
+		}
+
+		if (!isInstallTelemetryEnabled(this.settingsManager)) {
+			return;
+		}
+
+		void fetch(`${INSTALL_TELEMETRY_URL}?version=${encodeURIComponent(version)}`, {
+			headers: {
+				"User-Agent": getPiUserAgent(version),
+			},
+			signal: AbortSignal.timeout(5000),
+		})
+			.then(() => undefined)
+			.catch(() => undefined);
 	}
 
 	private getMarkdownThemeWithSettings(): MarkdownTheme {
@@ -1933,13 +1967,9 @@ export class InteractiveMode {
 
 	private disposeChatToolComponents(): void {
 		for (const child of this.chatContainer.children) {
-			if (
-				child instanceof ToolExecutionComponent ||
-				child instanceof ToolGroupComponent ||
-				child instanceof ArminComponent ||
-				child instanceof DaxnutsComponent
-			) {
-				child.dispose();
+			const disposable = child as { dispose?: () => void };
+			if (typeof disposable.dispose === "function") {
+				disposable.dispose();
 			}
 		}
 	}
@@ -3362,7 +3392,6 @@ export class InteractiveMode {
 					}
 				} else {
 					if (event.result) {
-						this.clearChat();
 						this.rebuildChatFromMessages();
 						this.addMessageToChat(
 							createCompactionSummaryMessage(
@@ -4091,7 +4120,6 @@ export class InteractiveMode {
 		this.settingsManager.setHideThinkingBlock(this.hideThinkingBlock);
 
 		// Rebuild chat from session messages
-		this.clearChat();
 		this.rebuildChatFromMessages();
 
 		// If streaming, re-add the streaming component with updated visibility and re-render
@@ -4146,7 +4174,7 @@ export class InteractiveMode {
 	showNewVersionNotification(release: LatestPiRelease): void {
 		const action = theme.fg("accent", `${APP_NAME} update`);
 		const updateInstruction = theme.fg("muted", `New version ${release.version} is available. Run `) + action;
-		const changelogLine = theme.fg("muted", "Run /changelog to view changes.");
+		const changelogLine = theme.fg("muted", UPDATE_CHANGELOG_HINT);
 		const note = release.note?.trim();
 
 		this.chatContainer.addChild(new Spacer(1));
@@ -4461,7 +4489,7 @@ export class InteractiveMode {
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);
 						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent || child instanceof ToolGroupComponent) {
+							if (isToolChatComponent(child)) {
 								child.setShowImages(enabled);
 							}
 						}
@@ -4469,7 +4497,7 @@ export class InteractiveMode {
 					onImageWidthCellsChange: (width) => {
 						this.settingsManager.setImageWidthCells(width);
 						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent || child instanceof ToolGroupComponent) {
+							if (isToolChatComponent(child)) {
 								child.setImageWidthCells(width);
 							}
 						}
@@ -4517,7 +4545,6 @@ export class InteractiveMode {
 								child.setHideThinkingBlock(hidden);
 							}
 						}
-						this.clearChat();
 						this.rebuildChatFromMessages();
 					},
 					onMermaidRenderingModeChange: (mode) => {
