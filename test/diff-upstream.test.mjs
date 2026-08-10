@@ -53,6 +53,10 @@ function createTestRepo({ sourceDependencies = runtimeDependencies } = {}) {
 	for (const name of ["mod.txt", "drop.txt"]) {
 		writeFileSync(join(sourceDir, name), `${name}\n`);
 	}
+	mkdirSync(join(sourceDir, "sub"));
+	for (const name of ["a.txt", "b.txt"]) {
+		writeFileSync(join(sourceDir, "sub", name), `${name}\n`);
+	}
 	writeFileSync(join(sourceDir, ".gitignore"), "maintainers/\nignored.txt\n");
 
 	git(root, "add", "packages");
@@ -66,6 +70,10 @@ function createTestRepo({ sourceDependencies = runtimeDependencies } = {}) {
 	writeJson(join(root, "package.json"), localPackage);
 	for (const name of ["mod.txt", "drop.txt"]) {
 		writeFileSync(join(root, name), `${name}\n`);
+	}
+	mkdirSync(join(root, "sub"));
+	for (const name of ["a.txt", "b.txt"]) {
+		writeFileSync(join(root, "sub", name), `${name}\n`);
 	}
 	writeFileSync(join(root, ".gitignore"), "maintainers/\nignored.txt\n");
 
@@ -200,14 +208,14 @@ describe("diff-upstream worktree collection and CLI execution", () => {
 
 		writeJson(join(repo.root, "maintainers", "deltas.json"), {
 			deltas: [
-				{ path: "drop.txt", category: "distribution", intent: "Dropped file", tests: [], status: "verified" },
-				{ path: "mod.txt", category: "ui", intent: "Modified file", tests: [], status: "unverified" },
+				{ path: "drop.txt", category: "distribution", intent: "Dropped file" },
+				{ path: "mod.txt", category: "ui", intent: "Modified file" },
 			],
 		});
 		const checkResult = invoke(repo.root, ["--check"]);
 		expect(checkResult.code).toBe(0);
 		expect(checkResult.stdout).toContain("Verified 4 worktree differences against v1.2.3");
-		expect(checkResult.stdout).toContain("2 registered deltas (1 unverified)");
+		expect(checkResult.stdout).toContain("2 registered deltas");
 	});
 
 	test("verifies tag and tree integrity and falls back gracefully if tag is missing locally", () => {
@@ -245,21 +253,20 @@ describe("diff-upstream deviation ledger", () => {
 		// Rewrite an upstream-tracked path inside the prefix by re-creating the
 		// baseline diff: docs/extra.md is an addition, so only mod.txt is M.
 		writeJson(join(repo.root, "maintainers", "deltas.json"), {
-			deltas: [{ path: "mod.txt", category: "windows-compat", intent: "Rewrites the file", tests: [], status: "verified" }],
+			deltas: [{ path: "mod.txt", category: "windows-compat", intent: "Rewrites the file" }],
 		});
 
 		const report = invoke(repo.root);
 		expect(report.code).toBe(0);
-		expect(report.stdout).toContain("M mod.txt  [windows-compat, verified] Rewrites the file");
-		expect(report.stdout).toContain("1 registered deltas (0 unverified)");
+		expect(report.stdout).toContain("M mod.txt  [windows-compat] Rewrites the file");
+		expect(report.stdout).toContain("1 registered deltas");
 	});
 
 	test("prefix entries cover whole directories and stale entries fail the check", () => {
 		const repo = createTestRepo();
-		mkdirSync(join(repo.root, "sub"));
 		// No deviation matches the prefix, so the entry is stale.
 		writeJson(join(repo.root, "maintainers", "deltas.json"), {
-			deltas: [{ path: "sub/", category: "distribution", intent: "Distribution area", tests: [], status: "verified" }],
+			deltas: [{ path: "sub/", category: "distribution", intent: "Distribution area" }],
 		});
 		const stale = invoke(repo.root, ["--check"]);
 		expect(stale.code).toBe(1);
@@ -268,7 +275,7 @@ describe("diff-upstream deviation ledger", () => {
 		// A modified file under the prefix is covered by the prefix entry.
 		writeFileSync(join(repo.root, "mod.txt"), "changed\n");
 		writeJson(join(repo.root, "maintainers", "deltas.json"), {
-			deltas: [{ path: "mod.txt", category: "bugfix", intent: "Covered", tests: [], status: "verified" }],
+			deltas: [{ path: "mod.txt", category: "bugfix", intent: "Covered" }],
 		});
 		const covered = invoke(repo.root, ["--check"]);
 		expect(covered.code).toBe(0);
@@ -277,16 +284,34 @@ describe("diff-upstream deviation ledger", () => {
 		expect(reportStale.code).toBe(0);
 	});
 
-	test("rejects schema violations: unknown category, missing intent, duplicates, missing tests, unsorted", () => {
+	test("folds directory-covered paths into one annotated report line", () => {
+		const repo = createTestRepo();
+		writeFileSync(join(repo.root, "sub", "a.txt"), "changed\n");
+		writeFileSync(join(repo.root, "sub", "b.txt"), "changed\n");
+		writeJson(join(repo.root, "maintainers", "deltas.json"), {
+			deltas: [{ path: "sub/", category: "distribution", intent: "Distribution area" }],
+		});
+
+		const report = invoke(repo.root);
+		expect(report.code).toBe(0);
+		expect(report.stdout).toContain("M sub/ (2 files)  [distribution] Distribution area");
+		expect(report.stdout).not.toContain("sub/a.txt");
+
+		const check = invoke(repo.root, ["--check"]);
+		expect(check.code).toBe(0);
+	});
+
+	test("rejects schema violations: unknown category, missing intent, bad tests, unknown keys, duplicates, unsorted", () => {
 		const repo = createTestRepo();
 		writeFileSync(join(repo.root, "mod.txt"), "changed\n");
 
 		const cases = [
-			[{ path: "mod.txt", category: "nope", intent: "x", tests: [], status: "verified" }, "category must be one of"],
-			[{ path: "mod.txt", category: "ui", intent: "", tests: [], status: "verified" }, "intent must be a non-empty string"],
-			[{ path: "mod.txt", category: "ui", intent: "x", tests: ["test/missing.test.ts"], status: "verified" }, "does not exist"],
-			[{ path: "mod.txt", category: "ui", intent: "x", tests: [], status: "maybe" }, "status must be one of"],
-			[{ path: "mod.txt", category: "ui", intent: "x", tests: [], status: "verified", extra: 1 }, 'unexpected key "extra"'],
+			[{ path: "mod.txt", category: "nope", intent: "x" }, "category must be one of"],
+			[{ path: "mod.txt", category: "ui", intent: "" }, "intent must be a non-empty string"],
+			[{ path: "mod.txt", category: "ui", intent: "x", tests: ["test/missing.test.ts"] }, "does not exist"],
+			[{ path: "mod.txt", category: "ui", intent: "x", tests: "nope" }, "tests must be an array"],
+			[{ path: "mod.txt", category: "ui", intent: "x", status: "verified" }, 'unexpected key "status"'],
+			[{ path: "mod.txt", category: "ui", intent: "x", extra: 1 }, 'unexpected key "extra"'],
 		];
 		for (const [entry, expected] of cases) {
 			writeJson(join(repo.root, "maintainers", "deltas.json"), { deltas: [entry] });
@@ -297,8 +322,8 @@ describe("diff-upstream deviation ledger", () => {
 
 		writeJson(join(repo.root, "maintainers", "deltas.json"), {
 			deltas: [
-				{ path: "mod.txt", category: "ui", intent: "x", tests: [], status: "verified" },
-				{ path: "mod.txt", category: "ui", intent: "x", tests: [], status: "verified" },
+				{ path: "mod.txt", category: "ui", intent: "x" },
+				{ path: "mod.txt", category: "ui", intent: "x" },
 			],
 		});
 		const duplicate = invoke(repo.root, ["--check"]);
@@ -307,8 +332,8 @@ describe("diff-upstream deviation ledger", () => {
 
 		writeJson(join(repo.root, "maintainers", "deltas.json"), {
 			deltas: [
-				{ path: "zzz.txt", category: "ui", intent: "x", tests: [], status: "verified" },
-				{ path: "mod.txt", category: "ui", intent: "x", tests: [], status: "verified" },
+				{ path: "zzz.txt", category: "ui", intent: "x" },
+				{ path: "mod.txt", category: "ui", intent: "x" },
 			],
 		});
 		const unsorted = invoke(repo.root, ["--check"]);

@@ -10,7 +10,7 @@ Run `npm run diff:upstream` to inspect the full worktree path classification rep
 
 ## Deviation ledger
 
-[`deltas.json`](deltas.json) registers every modified or dropped upstream path (M/T/D) with a category (`ui`, `bugfix`, `extension-support`, `distribution`, `windows-compat`), a one-line intent, covering tests, and a verification status. Entries ending in `/` register a whole directory. The diff report annotates each path with its ledger entry; `--check` fails on unregistered deviations and stale entries. Update the ledger whenever a deviation is added, removed, or changes meaning — especially during upstream synchronization, where it answers "why does this file differ and can the upstream version replace it" without re-deriving history. `status: "unverified"` marks deviations whose underlying issue has not been reproduced against upstream yet.
+[`deltas.json`](deltas.json) registers every modified or dropped upstream path (M/T/D) with a category (`ui`, `bugfix`, `extension-support`, `distribution`, `windows-compat`), a one-line intent, and optional covering tests. Entries ending in `/` register a whole directory. The diff report annotates each path with its ledger entry; `--check` fails on unregistered deviations and stale entries. Update the ledger whenever a deviation is added, removed, or changes meaning — especially during upstream synchronization, where it answers "why does this file differ and can the upstream version replace it" without re-deriving history.
 
 Keep durable human context here when a meaningful local deviation changes.
 

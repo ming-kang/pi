@@ -8,9 +8,9 @@ import { prerelease, satisfies, valid, validRange } from "semver";
 
 const runtimeDependencyNames = ["@earendil-works/pi-agent-core", "@earendil-works/pi-ai", "@earendil-works/pi-tui"];
 const manifestKeys = ["repository", "tag", "commit", "sourceSubtree", "sourceTree"];
-const deltaKeys = ["path", "category", "intent", "tests", "status"];
+const deltaRequiredKeys = ["path", "category", "intent"];
+const deltaAllowedKeys = [...deltaRequiredKeys, "tests"];
 const deltaCategories = ["ui", "bugfix", "extension-support", "distribution", "windows-compat"];
-const deltaStatuses = ["verified", "unverified"];
 
 const usage = `Usage: node scripts/diff-upstream.mjs [--check]
 
@@ -115,11 +115,11 @@ export function validateDeltas(deltas, root, failures) {
 			failures.push(`${location} must be an object`);
 			continue;
 		}
-		for (const key of deltaKeys) {
+		for (const key of deltaRequiredKeys) {
 			if (!Object.hasOwn(entry, key)) failures.push(`${location} is missing required key "${key}"`);
 		}
 		for (const key of Object.keys(entry)) {
-			if (!deltaKeys.includes(key)) failures.push(`${location} has unexpected key "${key}"`);
+			if (!deltaAllowedKeys.includes(key)) failures.push(`${location} has unexpected key "${key}"`);
 		}
 		const isPrefix = typeof entry.path === "string" && entry.path.endsWith("/");
 		const normalizedPath = isPrefix ? entry.path.slice(0, -1) : entry.path;
@@ -137,15 +137,14 @@ export function validateDeltas(deltas, root, failures) {
 		if (!isNonEmptyString(entry.intent)) {
 			failures.push(`${location} intent must be a non-empty string`);
 		}
-		if (!deltaStatuses.includes(entry.status)) {
-			failures.push(`${location} status must be one of: ${deltaStatuses.join(", ")}`);
-		}
-		if (!Array.isArray(entry.tests) || entry.tests.some((test) => !isNonEmptyString(test))) {
-			failures.push(`${location} tests must be an array of repository-relative paths`);
-		} else {
-			for (const test of entry.tests) {
-				if (!existsSync(join(root, test))) {
-					failures.push(`${location} references a test path that does not exist: ${test}`);
+		if (Object.hasOwn(entry, "tests")) {
+			if (!Array.isArray(entry.tests) || entry.tests.some((test) => !isNonEmptyString(test))) {
+				failures.push(`${location} tests must be an array of repository-relative paths`);
+			} else {
+				for (const test of entry.tests) {
+					if (!existsSync(join(root, test))) {
+						failures.push(`${location} references a test path that does not exist: ${test}`);
+					}
 				}
 			}
 		}
@@ -463,7 +462,6 @@ export function runDiffUpstream({
 			? !ledgerScope.some((scoped) => scoped.path.startsWith(entry.path))
 			: !scopePaths.has(entry.path),
 	);
-	const unverifiedCount = deltaEntries.filter((entry) => entry.status === "unverified").length;
 
 	for (const w of warnings) writeLine(stderr, `warning: ${w}`);
 
@@ -477,17 +475,40 @@ export function runDiffUpstream({
 		}
 		writeLine(
 			stdout,
-			`Verified ${entries.length} worktree differences against ${manifest.tag}: ${modified.length} modified upstream (M/T), ${additions.length} distribution-local additions (A), ${dropped.length} dropped upstream (D), ${deltaEntries.length} registered deltas (${unverifiedCount} unverified).`,
+			`Verified ${entries.length} worktree differences against ${manifest.tag}: ${modified.length} modified upstream (M/T), ${additions.length} distribution-local additions (A), ${dropped.length} dropped upstream (D), ${deltaEntries.length} registered deltas.`,
 		);
 		return ledgerFailures.length > 0 || unregistered.length > 0 || stale.length > 0 ? 1 : 0;
 	}
 
 	for (const f of ledgerFailures) writeLine(stderr, `warning: ${f}`);
 
-	const annotate = (entry) => {
-		const delta = findDelta(deltaEntries, entry.path);
-		if (!delta) return `  ${entry.status} ${entry.path}`;
-		return `  ${entry.status} ${entry.path}  [${delta.category}, ${delta.status}] ${delta.intent}`;
+	// Paths covered by a directory ledger entry fold into one annotated line
+	// per directory so the report stays scannable at full worktree width.
+	const formatGroupLines = (groupEntries) => {
+		const lines = [];
+		const foldedByDir = new Map();
+		for (const entry of groupEntries) {
+			const delta = findDelta(deltaEntries, entry.path);
+			if (delta?.path.endsWith("/")) {
+				let folded = foldedByDir.get(delta.path);
+				if (folded === undefined) {
+					folded = { delta, statuses: new Set(), count: 0 };
+					foldedByDir.set(delta.path, folded);
+					lines.push(folded);
+				}
+				folded.statuses.add(entry.status);
+				folded.count += 1;
+				continue;
+			}
+			const annotation = delta === undefined ? "" : `  [${delta.category}] ${delta.intent}`;
+			lines.push(`  ${entry.status} ${entry.path}${annotation}`);
+		}
+		return lines.map((line) => {
+			if (typeof line === "string") return line;
+			const status = [...line.statuses].sort().join("/");
+			const noun = line.count === 1 ? "file" : "files";
+			return `  ${status} ${line.delta.path} (${line.count} ${noun})  [${line.delta.category}] ${line.delta.intent}`;
+		});
 	};
 
 	writeLine(
@@ -503,20 +524,20 @@ export function runDiffUpstream({
 	writeLine(stdout, `  ${String(modified.length).padStart(4)} modified upstream files (M/T)`);
 	writeLine(stdout, `  ${String(additions.length).padStart(4)} distribution-local additions (A)`);
 	writeLine(stdout, `  ${String(dropped.length).padStart(4)} dropped upstream files (D)`);
-	writeLine(stdout, `  ${String(deltaEntries.length).padStart(4)} registered deltas (${unverifiedCount} unverified)`);
+	writeLine(stdout, `  ${String(deltaEntries.length).padStart(4)} registered deltas`);
 
 	const groups = [
-		["Modified upstream files (M/T)", modified, annotate],
-		["Distribution-local additions (A)", additions, (entry) => `  ${entry.status} ${entry.path}`],
-		["Dropped upstream files (D)", dropped, annotate],
+		["Modified upstream files (M/T)", modified],
+		["Distribution-local additions (A)", additions],
+		["Dropped upstream files (D)", dropped],
 	];
 
-	for (const [title, groupEntries, format] of groups) {
+	for (const [title, groupEntries] of groups) {
 		if (groupEntries.length === 0) continue;
 		writeLine(stdout, "");
 		writeLine(stdout, `${title}:`);
-		for (const entry of groupEntries) {
-			writeLine(stdout, format(entry));
+		for (const line of formatGroupLines(groupEntries)) {
+			writeLine(stdout, line);
 		}
 	}
 
