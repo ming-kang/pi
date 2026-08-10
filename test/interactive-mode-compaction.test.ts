@@ -14,7 +14,8 @@ describe("InteractiveMode compaction events", () => {
 			statusContainer: { clear: vi.fn() },
 			chatContainer: { clear: clearChat },
 			clearChat,
-			rebuildChatFromMessages: vi.fn(),
+			// rebuildChatFromMessages clears the chat internally; the handler must not clear again beforehand.
+			rebuildChatFromMessages: vi.fn(() => clearChat()),
 			addMessageToChat: vi.fn(),
 			showError: vi.fn(),
 			showStatus: vi.fn(),
@@ -47,7 +48,7 @@ describe("InteractiveMode compaction events", () => {
 			willRetry: false,
 		});
 
-		expect(fakeThis.chatContainer.clear).toHaveBeenCalledTimes(1);
+		expect(clearChat).toHaveBeenCalledTimes(1);
 		expect(fakeThis.rebuildChatFromMessages).toHaveBeenCalledTimes(1);
 		expect(fakeThis.addMessageToChat).toHaveBeenCalledTimes(1);
 		expect(fakeThis.addMessageToChat).toHaveBeenCalledWith(
@@ -72,7 +73,8 @@ describe("InteractiveMode compaction events", () => {
 			statusContainer: { clear: vi.fn() },
 			chatContainer: { clear: clearChat, addChild: vi.fn() },
 			clearChat,
-			rebuildChatFromMessages: vi.fn(),
+			// rebuildChatFromMessages clears the chat internally; the handler must not clear again beforehand.
+			rebuildChatFromMessages: vi.fn(() => clearChat()),
 			addMessageToChat: vi.fn(),
 			showError: vi.fn(),
 			showStatus: vi.fn(),
@@ -103,7 +105,7 @@ describe("InteractiveMode compaction events", () => {
 			errorMessage: "Retained context is still too large",
 		});
 
-		expect(fakeThis.chatContainer.clear).toHaveBeenCalledTimes(1);
+		expect(clearChat).toHaveBeenCalledTimes(1);
 		expect(fakeThis.addMessageToChat).toHaveBeenCalledTimes(1);
 		expect(fakeThis.chatContainer.addChild).toHaveBeenCalledTimes(2);
 		expect(fakeThis.showError).not.toHaveBeenCalled();

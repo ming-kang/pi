@@ -3,9 +3,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ExtensionFactory } from "../../../src/index.ts";
 import { createHarness, type Harness } from "../harness.ts";
 
-type SessionWithCompactionInternals = {
+type CompactionControllerInternals = {
 	_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
 };
+
+/** Auto-compaction lives on the session's CompactionController. */
+function compactionInternals(session: unknown): CompactionControllerInternals {
+	return (session as { _compaction: unknown })._compaction as CompactionControllerInternals;
+}
 
 interface RecordedCompactionEvent {
 	type: "session_before_compact" | "session_compact";
@@ -69,9 +74,7 @@ describe("issue #5217 compaction reason on extension events", () => {
 		const recorded: RecordedCompactionEvent[] = [];
 		const harness = await createCompactionHarness(recorded);
 		harnesses.push(harness);
-		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
-
-		await sessionInternals._runAutoCompaction("threshold", false);
+		await compactionInternals(harness.session)._runAutoCompaction("threshold", false);
 
 		expect(recorded).toEqual([
 			{ type: "session_before_compact", reason: "threshold", willRetry: false },
@@ -83,9 +86,7 @@ describe("issue #5217 compaction reason on extension events", () => {
 		const recorded: RecordedCompactionEvent[] = [];
 		const harness = await createCompactionHarness(recorded);
 		harnesses.push(harness);
-		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
-
-		await sessionInternals._runAutoCompaction("overflow", true);
+		await compactionInternals(harness.session)._runAutoCompaction("overflow", true);
 
 		expect(recorded).toEqual([
 			{ type: "session_before_compact", reason: "overflow", willRetry: true },

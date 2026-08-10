@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.84.3] - 2026-08-10
+
 ### Added
 
 - Added `maintainers/deltas.json`, a per-path deviation ledger covering every modified or dropped upstream file with category, intent, covering tests, and verification status. `npm run diff:upstream` annotates its report from the ledger and `--check` now fails on unregistered deviations and stale entries.

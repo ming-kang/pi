@@ -16,7 +16,7 @@ import {
 	type TextContent,
 } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
@@ -133,11 +133,9 @@ describe("AgentSession concurrent prompt guard", () => {
 		// Start first prompt (don't await, it will block until abort)
 		const firstPrompt = session.prompt("First message");
 
-		// Wait a tick for isStreaming to be set
-		await new Promise((resolve) => setTimeout(resolve, 10));
-
-		// Verify we're streaming
-		expect(session.isStreaming).toBe(true);
+		// Wait for the first prompt to start streaming. The preflight is async
+		// (extension input emission, live auth check), so a fixed sleep is racy.
+		await vi.waitFor(() => expect(session.isStreaming).toBe(true), { timeout: 5000 });
 
 		// Second prompt should reject
 		await expect(session.prompt("Second message")).rejects.toThrow(
@@ -154,7 +152,7 @@ describe("AgentSession concurrent prompt guard", () => {
 
 		// Start first prompt
 		const firstPrompt = session.prompt("First message");
-		await new Promise((resolve) => setTimeout(resolve, 10));
+		await vi.waitFor(() => expect(session.isStreaming).toBe(true), { timeout: 5000 });
 
 		// steer should work while streaming
 		expect(() => session.steer("Steering message")).not.toThrow();
@@ -170,7 +168,7 @@ describe("AgentSession concurrent prompt guard", () => {
 
 		// Start first prompt
 		const firstPrompt = session.prompt("First message");
-		await new Promise((resolve) => setTimeout(resolve, 10));
+		await vi.waitFor(() => expect(session.isStreaming).toBe(true), { timeout: 5000 });
 
 		// followUp should work while streaming
 		expect(() => session.followUp("Follow-up message")).not.toThrow();
@@ -259,8 +257,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		});
 
 		const firstPrompt = session.prompt("First message");
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(session.isStreaming).toBe(true);
+		await vi.waitFor(() => expect(session.isStreaming).toBe(true), { timeout: 5000 });
 
 		const pi = (
 			globalThis as typeof globalThis & {
@@ -272,12 +269,15 @@ describe("AgentSession concurrent prompt guard", () => {
 		expect(pi).toBeDefined();
 
 		pi!.sendUserMessage("Steer from extension", { deliverAs: "steer" });
-		await new Promise((resolve) => setTimeout(resolve, 25));
-
-		expect(session.pendingMessageCount).toBe(1);
-		expect(session.getSteeringMessages()).toContain("Steer from extension");
-		expect(lastInputSource).toBe("extension");
-		expect(queueEvents.some((event) => event.steering.includes("Steer from extension"))).toBe(true);
+		await vi.waitFor(
+			() => {
+				expect(session.pendingMessageCount).toBe(1);
+				expect(session.getSteeringMessages()).toContain("Steer from extension");
+				expect(lastInputSource).toBe("extension");
+				expect(queueEvents.some((event) => event.steering.includes("Steer from extension"))).toBe(true);
+			},
+			{ timeout: 5000 },
+		);
 
 		expect(completeInitialTurn).toBeDefined();
 		completeInitialTurn!();
