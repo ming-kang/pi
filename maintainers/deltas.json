@@ -76,7 +76,7 @@
 		{
 			"path": "src/core/agent-session.ts",
 			"category": "bugfix",
-			"intent": "Auto-compaction delegated to CompactionController: mid-turn checks, fail-closed stop, overflow recovery",
+			"intent": "Auto-compaction delegated to CompactionController (fork-added src/core/compaction-controller.ts): mid-turn checks, fail-closed stop, overflow recovery",
 			"tests": [
 				"test/suite/agent-session-compaction.test.ts",
 				"test/agent-session-auto-compaction-queue.test.ts"
@@ -194,7 +194,7 @@
 		},
 		{
 			"path": "src/extensions/index.ts",
-			"category": "extension-support",
+			"category": "distribution",
 			"intent": "Registers the bundled hidden extensions (llama, deepwiki, question, router, statusline, subagent, todo)"
 		},
 		{

@@ -10,7 +10,15 @@ Run `npm run diff:upstream` to inspect the full worktree path classification rep
 
 ## Deviation ledger
 
-[`deltas.json`](deltas.json) registers every modified or dropped upstream path (M/T/D) with a category (`ui`, `bugfix`, `extension-support`, `distribution`, `windows-compat`), a one-line intent, and optional covering tests. Entries ending in `/` register a whole directory. The diff report annotates each path with its ledger entry; `--check` fails on unregistered deviations and stale entries. Update the ledger whenever a deviation is added, removed, or changes meaning — especially during upstream synchronization, where it answers "why does this file differ and can the upstream version replace it" without re-deriving history.
+[`deltas.json`](deltas.json) registers every modified or dropped upstream path (M/T/D) with a category, a one-line intent, and optional covering tests. Entries ending in `/` register a whole directory. The diff report annotates each path with its ledger entry; `--check` fails on unregistered deviations and stale entries. Update the ledger whenever a deviation is added, removed, or changes meaning — especially during upstream synchronization, where it answers "why does this file differ and can the upstream version replace it" without re-deriving history.
+
+Categories encode why a deviation exists and how to treat it during synchronization:
+
+- `distribution` — required for the standalone package to exist; never adopt the upstream version.
+- `bugfix` — fixes an upstream defect ahead of upstream; check each synchronization whether upstream fixed it and retire the entry once it has.
+- `windows-compat` — upstream behavior correct on POSIX but broken on native Windows; treat like `bugfix`, but expect longer-lived entries and verify with a Windows reproduction.
+- `ui` — the fork's TUI presentation identity; permanent, merge upstream changes into it by hand.
+- `extension-support` — additions to the upstream Extension API contract surface (`src/core/extensions/types.ts`, its barrel, `src/core/tools/tool-definition-wrapper.ts`); each intent names what drives the addition (a fork UI feature, the compaction controller, or a bundled-extension need). Merge upstream API evolution by hand, and retire an addition when it loses all consumers or upstream grows an equivalent.
 
 Keep durable human context here when a meaningful local deviation changes.
 
@@ -38,7 +46,7 @@ Keep durable human context here when a meaningful local deviation changes.
 
 Re-read these notes whenever the related upstream lifecycle or renderer behavior changes. Prefer public Extension API or a local adapter before changing an upstream-aligned runtime surface.
 
-- **Standalone package and bundled features:** This is a standalone `@astralyn/pi` package with exact published runtime dependencies. Bundled workflow extensions remain independent public-API consumers; their model-facing output stays bounded. Native themes and package documentation are distribution-owned.
+- **Standalone package and bundled features:** This is a standalone `@astralyn/pi` package with exact published runtime dependencies. Bundled workflow extensions remain independent public-API consumers; their model-facing output stays bounded. Native themes and package documentation are distribution-owned. Within `src/extensions/`, only `llama` is upstream's own bundled extension (kept byte-identical to the baseline); every other bundled extension is a fork addition.
 - **Mid-turn compaction (high risk):** Context is checked after a completed tool batch and before queued steering or follow-up work reaches the next provider request. Safe compaction continues the same run; unsafe retained context, aborts, and failures stop at an explicit lifecycle boundary. Do not simulate a graceful upstream turn stop where the Agent API does not provide one. Exercise continuation, cancellation, unavailable cut points, retained-context failure, and queued work in focused tests and a real TTY.
 - **Native tool presentation (high risk):** Keep native call/result chrome, bounded collapsed output, renderer refreshes, and keybinding-aware expansion hints without changing tool schemas, execution protocols, or model-facing results. Verify the affected pending, success, error, collapsed, expanded, grouped, and delayed-progress states in focused tests and a real TTY.
 - **Platform and time-sensitive UI:** Keep Windows shell normalization narrow, and ensure interactive timers and selectors derive from deadlines, repaint only while active, and dispose on replacement or shutdown. Re-check Windows process behavior and real-TTY lifecycle interactions after upstream changes.
