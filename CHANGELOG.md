@@ -4,6 +4,18 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Added `npm run diff:upstream -- --target v<version>`, which classifies an upstream release diff against the deviation ledger for synchronization triage: changes touching registered deviations, adoption candidates the fork has not touched, and removed upstream paths.
+
+### Changed
+
+- Slimmed the deviation ledger schema to category, intent, and optional covering tests, dropping the constant verification-status field. The `diff:upstream` report now folds directory-registered paths into single annotated lines, and `maintainers/upstream.md` documents what each category means and how to treat it during synchronization.
+
+### Removed
+
+- Removed the unused `SelectOption` object form from the Extension API select dialog; `ui.select()` takes plain string options again. The bundled extensions already render rich choices through their own dialogs, and the startup, RPC, and selector paths return to upstream behavior.
+
 ## [0.84.3] - 2026-08-10
 
 ### Added
