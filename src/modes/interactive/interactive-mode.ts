@@ -76,7 +76,6 @@ import type {
 	ExtensionWidgetOptions,
 	MarkdownTransformer,
 	ProjectTrustContext,
-	SelectOption,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
@@ -2473,7 +2472,7 @@ export class InteractiveMode {
 	 */
 	private showExtensionSelector(
 		title: string,
-		options: ReadonlyArray<string | SelectOption>,
+		options: string[],
 		opts?: ExtensionUIDialogOptions & { subtitle?: string },
 	): Promise<string | undefined> {
 		return new Promise((resolve) => {

@@ -78,13 +78,6 @@
 			"status": "verified"
 		},
 		{
-			"path": "src/cli/project-trust.ts",
-			"category": "extension-support",
-			"intent": "Normalizes SelectOption entries to labels for startup selectors",
-			"tests": [],
-			"status": "verified"
-		},
-		{
 			"path": "src/cli/session-picker.ts",
 			"category": "bugfix",
 			"intent": "Single finish path disposes the selector before resolving",
@@ -115,7 +108,7 @@
 		{
 			"path": "src/core/extensions/index.ts",
 			"category": "extension-support",
-			"intent": "Re-exports CompactionTiming, SelectOption, and stale-extension-context helpers",
+			"intent": "Re-exports CompactionTiming and stale-extension-context helpers",
 			"tests": [],
 			"status": "verified"
 		},
@@ -129,7 +122,7 @@
 		{
 			"path": "src/core/extensions/types.ts",
 			"category": "extension-support",
-			"intent": "SelectOption descriptions, toolGroup/toolGroupSummary/result render context, CompactionTiming, stale-context helpers",
+			"intent": "toolGroup/toolGroupSummary/result render context, CompactionTiming, stale-context helpers",
 			"tests": [],
 			"status": "verified"
 		},
@@ -268,8 +261,8 @@
 		},
 		{
 			"path": "src/modes/interactive/components/extension-selector.ts",
-			"category": "extension-support",
-			"intent": "SelectOption description lines and subtitle under the title",
+			"category": "ui",
+			"intent": "Selector subtitle line under the title and keybinding-aware hint labels",
 			"tests": ["test/extension-selector.test.ts"],
 			"status": "verified"
 		},
@@ -334,13 +327,6 @@
 			"category": "ui",
 			"intent": "Nested color restoration in fg/bg and bundled ice-cream themes",
 			"tests": ["test/theme-picker.test.ts"],
-			"status": "verified"
-		},
-		{
-			"path": "src/modes/rpc/rpc-mode.ts",
-			"category": "extension-support",
-			"intent": "Maps SelectOption entries back to plain labels to keep the wire protocol unchanged",
-			"tests": [],
 			"status": "verified"
 		},
 		{

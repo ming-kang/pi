@@ -4,7 +4,6 @@
  */
 
 import { Container, getKeybindings, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
-import type { SelectOption } from "../../../core/extensions/types.ts";
 import { theme } from "../theme/theme.ts";
 import { CountdownTimer } from "./countdown-timer.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
@@ -18,13 +17,8 @@ export interface ExtensionSelectorOptions {
 	subtitle?: string;
 }
 
-/** Normalize the string shorthand so rendering only deals with one shape. */
-function toSelectOption(option: string | SelectOption): SelectOption {
-	return typeof option === "string" ? { label: option } : option;
-}
-
 export class ExtensionSelectorComponent extends Container {
-	private options: SelectOption[];
+	private options: string[];
 	private selectedIndex = 0;
 	private listContainer: Container;
 	private onSelectCallback: (option: string) => void;
@@ -36,14 +30,14 @@ export class ExtensionSelectorComponent extends Container {
 
 	constructor(
 		title: string,
-		options: ReadonlyArray<string | SelectOption>,
+		options: string[],
 		onSelect: (option: string) => void,
 		onCancel: () => void,
 		opts?: ExtensionSelectorOptions,
 	) {
 		super();
 
-		this.options = options.map(toSelectOption);
+		this.options = options;
 		this.onSelectCallback = onSelect;
 		this.onCancelCallback = onCancel;
 		this.onToggleToolsExpanded = opts?.onToggleToolsExpanded;
@@ -88,11 +82,10 @@ export class ExtensionSelectorComponent extends Container {
 		this.listContainer.clear();
 		for (let i = 0; i < this.options.length; i++) {
 			const isSelected = i === this.selectedIndex;
-			const { label, description } = this.options[i];
-			const text = isSelected ? theme.fg("accent", `→ ${label}`) : `  ${theme.fg("text", label)}`;
+			const text = isSelected
+				? theme.fg("accent", "→ ") + theme.fg("accent", this.options[i])
+				: `  ${theme.fg("text", this.options[i])}`;
 			this.listContainer.addChild(new Text(text, 1, 0));
-			// Aligned under the label, muted so the action stays the thing you scan.
-			if (description) this.listContainer.addChild(new Text(`    ${theme.fg("muted", description)}`, 1, 0));
 		}
 	}
 
@@ -108,7 +101,7 @@ export class ExtensionSelectorComponent extends Container {
 			this.updateList();
 		} else if (kb.matches(keyData, "tui.select.confirm") || keyData === "\n") {
 			const selected = this.options[this.selectedIndex];
-			if (selected) this.onSelectCallback(selected.label);
+			if (selected) this.onSelectCallback(selected);
 		} else if (kb.matches(keyData, "tui.select.cancel")) {
 			this.onCancelCallback();
 		}

@@ -100,18 +100,6 @@ export interface ExtensionUIDialogOptions {
 	timeout?: number;
 }
 
-/**
- * One choice in a select dialog. A bare string is shorthand for `{ label }`;
- * the object form adds a muted description line beneath the label, so the
- * action and its rationale can be scanned separately.
- */
-export interface SelectOption {
-	/** The choice itself. This is what select() resolves to. */
-	label: string;
-	/** Muted second line explaining the choice. */
-	description?: string;
-}
-
 /** Placement for extension widgets. */
 export type WidgetPlacement = "aboveEditor" | "belowEditor";
 
@@ -141,12 +129,8 @@ export type EditorFactory = (tui: TUI, theme: EditorTheme, keybindings: Keybindi
  * Each mode (interactive, RPC, print) provides its own implementation.
  */
 export interface ExtensionUIContext {
-	/** Show a selector and return the label of the user's choice. */
-	select(
-		title: string,
-		options: ReadonlyArray<string | SelectOption>,
-		opts?: ExtensionUIDialogOptions,
-	): Promise<string | undefined>;
+	/** Show a selector and return the user's choice. */
+	select(title: string, options: string[], opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
 
 	/** Show a confirmation dialog. */
 	confirm(title: string, message: string, opts?: ExtensionUIDialogOptions): Promise<boolean>;

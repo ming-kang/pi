@@ -25,10 +25,7 @@ export function createProjectTrustContext(options: {
 				return showStartupSelector(
 					options.settingsManager,
 					title,
-					selectOptions.map((option) => {
-						const label = typeof option === "string" ? option : option.label;
-						return { label, value: label };
-					}),
+					selectOptions.map((option) => ({ label: option, value: option })),
 				);
 			},
 			confirm: async (title, message) => {
