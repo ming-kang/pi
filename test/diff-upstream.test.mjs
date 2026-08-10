@@ -239,6 +239,55 @@ describe("diff-upstream worktree collection and CLI execution", () => {
 		const result = invoke(repo.root, ["--invalid"]);
 		expect(result.code).toBe(2);
 		expect(result.stderr).toContain("Usage:");
+
+		const missingValue = invoke(repo.root, ["--target"]);
+		expect(missingValue.code).toBe(2);
+
+		const combined = invoke(repo.root, ["--check", "--target", "v1.2.4"]);
+		expect(combined.code).toBe(2);
+
+		const badTag = invoke(repo.root, ["--target", "nope"]);
+		expect(badTag.code).toBe(2);
+		expect(badTag.stderr).toContain("exact stable release tag");
+	});
+
+	test("--target classifies upstream changes against the ledger", () => {
+		const repo = createTestRepo();
+		// Recreate the upstream subtree at v1.2.4: mod.txt changes (registered),
+		// sub/a.txt changes (clear), new.txt appears, drop.txt disappears.
+		const sourceDir = join(repo.root, "packages", "coding-agent");
+		mkdirSync(join(sourceDir, "sub"), { recursive: true });
+		writeJson(join(sourceDir, "package.json"), {
+			name: "test-agent",
+			version: "1.2.4",
+			dependencies: runtimeDependencies,
+		});
+		writeFileSync(join(sourceDir, "mod.txt"), "upstream changed\n");
+		writeFileSync(join(sourceDir, "sub", "a.txt"), "upstream changed\n");
+		writeFileSync(join(sourceDir, "sub", "b.txt"), "b.txt\n");
+		writeFileSync(join(sourceDir, "new.txt"), "new upstream file\n");
+		writeFileSync(join(sourceDir, ".gitignore"), "maintainers/\nignored.txt\n");
+		git(repo.root, "add", "packages");
+		git(repo.root, "commit", "-m", "upstream v1.2.4");
+		git(repo.root, "tag", "v1.2.4");
+		writeJson(join(repo.root, "maintainers", "deltas.json"), {
+			deltas: [{ path: "mod.txt", category: "bugfix", intent: "Local fix" }],
+		});
+
+		const result = invoke(repo.root, ["--target", "v1.2.4"]);
+		expect(result.code).toBe(0);
+		expect(result.stdout).toContain("Target: v1.2.4 packages/coding-agent");
+		expect(result.stdout).toContain("1 touching registered deviations");
+		expect(result.stdout).toContain("3 clear of fork deviations");
+		expect(result.stdout).toContain("1 removed upstream");
+		expect(result.stdout).toContain("M mod.txt  [bugfix] Local fix");
+		expect(result.stdout).toContain("M sub/a.txt");
+		expect(result.stdout).toContain("A new.txt");
+		expect(result.stdout).toContain("D drop.txt");
+
+		const missingTag = invoke(repo.root, ["--target", "v9.9.9"]);
+		expect(missingTag.code).toBe(1);
+		expect(missingTag.stderr).toContain("not available locally");
 	});
 });
 

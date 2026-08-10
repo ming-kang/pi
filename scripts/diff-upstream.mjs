@@ -12,14 +12,15 @@ const deltaRequiredKeys = ["path", "category", "intent"];
 const deltaAllowedKeys = [...deltaRequiredKeys, "tests"];
 const deltaCategories = ["ui", "bugfix", "extension-support", "distribution", "windows-compat"];
 
-const usage = `Usage: node scripts/diff-upstream.mjs [--check]
+const usage = `Usage: node scripts/diff-upstream.mjs [--check | --target <tag>]
 
 Compares the current worktree against the recorded upstream baseline
 in maintainers/upstream.json, annotated with the per-path deviation
 ledger in maintainers/deltas.json.
 
-  (no flag)  print the deterministic full classification report
-  --check    verify baseline, dependencies, and ledger coverage and print a concise count summary`;
+  (no flag)       print the deterministic full classification report
+  --check         verify baseline, dependencies, and ledger coverage and print a concise count summary
+  --target <tag>  classify upstream changes from the baseline to a release tag against the ledger`;
 
 function isPlainObject(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -394,19 +395,89 @@ function printFailures(failures, stderr) {
 	for (const f of failures) writeLine(stderr, `  - ${f}`);
 }
 
+/** Load and validate the deviation ledger, reporting problems into failures. */
+function loadDeltaEntries(root, failures) {
+	const deltasPath = join(root, "maintainers", "deltas.json");
+	if (!existsSync(deltasPath)) {
+		failures.push("maintainers/deltas.json is missing; register upstream deviations there");
+		return [];
+	}
+	const deltasJson = readJsonFile(deltasPath, "maintainers/deltas.json", failures);
+	if (deltasJson === undefined) return [];
+	return validateDeltas(deltasJson, root, failures);
+}
+
+/**
+ * Format one report group. Paths covered by a directory ledger entry fold
+ * into a single annotated line so the report stays scannable.
+ */
+function formatGroupLines(groupEntries, deltaEntries) {
+	const lines = [];
+	const foldedByDir = new Map();
+	for (const entry of groupEntries) {
+		const delta = findDelta(deltaEntries, entry.path);
+		if (delta?.path.endsWith("/")) {
+			let folded = foldedByDir.get(delta.path);
+			if (folded === undefined) {
+				folded = { delta, statuses: new Set(), count: 0 };
+				foldedByDir.set(delta.path, folded);
+				lines.push(folded);
+			}
+			folded.statuses.add(entry.status);
+			folded.count += 1;
+			continue;
+		}
+		const annotation = delta === undefined ? "" : `  [${delta.category}] ${delta.intent}`;
+		lines.push(`  ${entry.status} ${entry.path}${annotation}`);
+	}
+	return lines.map((line) => {
+		if (typeof line === "string") return line;
+		const status = [...line.statuses].sort().join("/");
+		const noun = line.count === 1 ? "file" : "files";
+		return `  ${status} ${line.delta.path} (${line.count} ${noun})  [${line.delta.category}] ${line.delta.intent}`;
+	});
+}
+
+function printGroups(groups, deltaEntries, stdout) {
+	for (const [title, groupEntries] of groups) {
+		if (groupEntries.length === 0) continue;
+		writeLine(stdout, "");
+		writeLine(stdout, `${title}:`);
+		for (const line of formatGroupLines(groupEntries, deltaEntries)) {
+			writeLine(stdout, line);
+		}
+	}
+}
+
 export function runDiffUpstream({
 	root = resolve(import.meta.dirname, ".."),
 	args = process.argv.slice(2),
 	stdout = process.stdout,
 	stderr = process.stderr,
 } = {}) {
-	const knownFlags = new Set(["--check"]);
-	if (args.some((arg) => !knownFlags.has(arg)) || args.length > 1) {
+	let isCheck = false;
+	let targetTag;
+	for (let i = 0; i < args.length; i += 1) {
+		const arg = args[i];
+		if (arg === "--check" && !isCheck) {
+			isCheck = true;
+		} else if (arg === "--target" && targetTag === undefined && typeof args[i + 1] === "string") {
+			targetTag = args[i + 1];
+			i += 1;
+		} else {
+			writeLine(stderr, usage);
+			return 2;
+		}
+	}
+	if (isCheck && targetTag !== undefined) {
 		writeLine(stderr, usage);
 		return 2;
 	}
+	if (targetTag !== undefined && (!targetTag.startsWith("v") || !isStableSemver(targetTag.slice(1)))) {
+		writeLine(stderr, "--target requires an exact stable release tag (v<semver>)");
+		return 2;
+	}
 
-	const isCheck = args[0] === "--check";
 	const { git, tryGit } = createGit(root);
 
 	const failures = [];
@@ -422,11 +493,69 @@ export function runDiffUpstream({
 	}
 
 	const upstreamPackage = verifyBaseline(manifest, failures, warnings, tryGit);
-	verifyRuntimeDependencies(upstreamPackage, manifest, failures, root);
+	if (targetTag === undefined) {
+		verifyRuntimeDependencies(upstreamPackage, manifest, failures, root);
+	}
 	if (failures.length > 0) {
 		for (const w of warnings) writeLine(stderr, `warning: ${w}`);
 		printFailures(failures, stderr);
 		return 1;
+	}
+
+	// Target mode classifies the upstream release diff against the ledger and
+	// never inspects the worktree: it answers "which upstream changes collide
+	// with registered deviations" during synchronization triage.
+	if (targetTag !== undefined) {
+		const targetCommit = tryGit("rev-parse", "--verify", "--quiet", `refs/tags/${targetTag}^{commit}`);
+		if (!targetCommit) {
+			failures.push(`target tag ${targetTag} is not available locally; run git fetch upstream --tags`);
+		}
+		const targetTree = targetCommit
+			? tryGit("rev-parse", "--verify", "--quiet", `${targetCommit}:${manifest.sourceSubtree}`)
+			: undefined;
+		if (targetCommit && !targetTree) {
+			failures.push(`target tag ${targetTag} does not contain source subtree ${manifest.sourceSubtree}`);
+		}
+		if (failures.length > 0) {
+			for (const w of warnings) writeLine(stderr, `warning: ${w}`);
+			printFailures(failures, stderr);
+			return 1;
+		}
+
+		const ledgerFailures = [];
+		const deltaEntries = loadDeltaEntries(root, ledgerFailures);
+		for (const w of warnings) writeLine(stderr, `warning: ${w}`);
+		for (const f of ledgerFailures) writeLine(stderr, `warning: ${f}`);
+
+		const changes = parseNameStatus(
+			git("diff", "--name-status", "-z", "--no-renames", manifest.sourceTree, targetTree),
+		);
+		const removed = changes.filter((entry) => entry.status === "D");
+		const surviving = changes.filter((entry) => entry.status !== "D");
+		const colliding = surviving.filter((entry) => findDelta(deltaEntries, entry.path) !== undefined);
+		const clean = surviving.filter((entry) => findDelta(deltaEntries, entry.path) === undefined);
+
+		writeLine(
+			stdout,
+			`Upstream baseline: ${manifest.tag} ${manifest.sourceSubtree} (tree ${manifest.sourceTree.slice(0, 12)})`,
+		);
+		writeLine(stdout, `Target: ${targetTag} ${manifest.sourceSubtree} (tree ${targetTree.slice(0, 12)})`);
+		writeLine(stdout, "");
+		writeLine(stdout, `Upstream changes from ${manifest.tag} to ${targetTag} (${changes.length} total):`);
+		writeLine(stdout, `  ${String(colliding.length).padStart(4)} touching registered deviations (re-review each)`);
+		writeLine(stdout, `  ${String(clean.length).padStart(4)} clear of fork deviations (adoption candidates)`);
+		writeLine(stdout, `  ${String(removed.length).padStart(4)} removed upstream`);
+
+		printGroups(
+			[
+				["Changes touching registered deviations", colliding],
+				["Changes clear of fork deviations", clean],
+				["Removed upstream", removed],
+			],
+			deltaEntries,
+			stdout,
+		);
+		return 0;
 	}
 
 	const entries = collectWorktreeEntries(manifest.sourceTree, failures, git);
@@ -442,17 +571,8 @@ export function runDiffUpstream({
 
 	// The ledger must cover every modified or dropped upstream path (M/T/D).
 	// Additions are distribution-local and listed without registration.
-	const deltasPath = join(root, "maintainers", "deltas.json");
 	const ledgerFailures = [];
-	let deltaEntries = [];
-	if (existsSync(deltasPath)) {
-		const deltasJson = readJsonFile(deltasPath, "maintainers/deltas.json", ledgerFailures);
-		if (deltasJson !== undefined) {
-			deltaEntries = validateDeltas(deltasJson, root, ledgerFailures);
-		}
-	} else {
-		ledgerFailures.push("maintainers/deltas.json is missing; register upstream deviations there");
-	}
+	const deltaEntries = loadDeltaEntries(root, ledgerFailures);
 
 	const ledgerScope = [...modified, ...dropped];
 	const unregistered = ledgerScope.filter((entry) => findDelta(deltaEntries, entry.path) === undefined);
@@ -482,35 +602,6 @@ export function runDiffUpstream({
 
 	for (const f of ledgerFailures) writeLine(stderr, `warning: ${f}`);
 
-	// Paths covered by a directory ledger entry fold into one annotated line
-	// per directory so the report stays scannable at full worktree width.
-	const formatGroupLines = (groupEntries) => {
-		const lines = [];
-		const foldedByDir = new Map();
-		for (const entry of groupEntries) {
-			const delta = findDelta(deltaEntries, entry.path);
-			if (delta?.path.endsWith("/")) {
-				let folded = foldedByDir.get(delta.path);
-				if (folded === undefined) {
-					folded = { delta, statuses: new Set(), count: 0 };
-					foldedByDir.set(delta.path, folded);
-					lines.push(folded);
-				}
-				folded.statuses.add(entry.status);
-				folded.count += 1;
-				continue;
-			}
-			const annotation = delta === undefined ? "" : `  [${delta.category}] ${delta.intent}`;
-			lines.push(`  ${entry.status} ${entry.path}${annotation}`);
-		}
-		return lines.map((line) => {
-			if (typeof line === "string") return line;
-			const status = [...line.statuses].sort().join("/");
-			const noun = line.count === 1 ? "file" : "files";
-			return `  ${status} ${line.delta.path} (${line.count} ${noun})  [${line.delta.category}] ${line.delta.intent}`;
-		});
-	};
-
 	writeLine(
 		stdout,
 		`Upstream baseline: ${manifest.tag} ${manifest.sourceSubtree} (tree ${manifest.sourceTree.slice(0, 12)})`,
@@ -526,20 +617,15 @@ export function runDiffUpstream({
 	writeLine(stdout, `  ${String(dropped.length).padStart(4)} dropped upstream files (D)`);
 	writeLine(stdout, `  ${String(deltaEntries.length).padStart(4)} registered deltas`);
 
-	const groups = [
-		["Modified upstream files (M/T)", modified],
-		["Distribution-local additions (A)", additions],
-		["Dropped upstream files (D)", dropped],
-	];
-
-	for (const [title, groupEntries] of groups) {
-		if (groupEntries.length === 0) continue;
-		writeLine(stdout, "");
-		writeLine(stdout, `${title}:`);
-		for (const line of formatGroupLines(groupEntries)) {
-			writeLine(stdout, line);
-		}
-	}
+	printGroups(
+		[
+			["Modified upstream files (M/T)", modified],
+			["Distribution-local additions (A)", additions],
+			["Dropped upstream files (D)", dropped],
+		],
+		deltaEntries,
+		stdout,
+	);
 
 	if (unregistered.length > 0) {
 		writeLine(stdout, "");
