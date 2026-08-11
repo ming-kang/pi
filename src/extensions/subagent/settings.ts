@@ -85,9 +85,9 @@ export async function loadSubagentConfig(agentDir = getAgentDir()): Promise<Suba
 	}
 }
 
-// Queue-free write body: read-modify-write callers (updateProfileOverride,
-// resetProfileOverrides) run their whole transaction inside the queue, so
-// saveSubagentConfig must not queue the same path again — that would deadlock.
+// Queue-free write body: read-modify-write callers run their whole
+// transaction inside the queue, so saveSubagentConfig must not queue the
+// same path again — that would deadlock.
 async function writeSubagentConfigFile(filePath: string, config: SubagentConfigFile): Promise<void> {
 	const payload = `${JSON.stringify({ version: SUBAGENT_CONFIG_VERSION, profiles: config.profiles }, null, 2)}\n`;
 	await mkdir(dirname(filePath), { recursive: true });
@@ -137,9 +137,4 @@ export async function updateProfileOverride(
 		await writeSubagentConfigFile(filePath, config);
 		return config;
 	});
-}
-
-export async function resetProfileOverrides(agentDir = getAgentDir()): Promise<void> {
-	const filePath = getSubagentConfigPath(agentDir);
-	await withFileMutationQueue(filePath, () => writeSubagentConfigFile(filePath, emptySubagentConfig()));
 }

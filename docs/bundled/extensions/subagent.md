@@ -66,10 +66,25 @@ Callers cannot pick models per call, and profile Markdown `model`/`thinking`
 frontmatter is intentionally ignored: agent files travel across machines, so a
 pinned model rarely exists in the reader's environment.
 
-Run `/agents` to choose a profile and set either field to:
+Run `/agents` to choose a profile. The TUI presents display-only title labels
+(`explorer` becomes `Explorer`, `code-reviewer` becomes `Code Reviewer`) in
+identifier order, while tool calls, profile files, and saved configuration keep
+the lowercase identifier. The selected profile's human-facing description
+appears below the list in full and wraps to the terminal width; built-in
+profiles keep longer delegation guidance out of this UI copy.
 
-- **inherit**: follow the parent session's current value;
-- a configured `provider/model` or explicit supported thinking level.
+The profile editor keeps model search and thinking selection on one screen:
+
+- type to search configured models;
+- use `Tab` to switch between scoped and all models when a scope exists;
+- use the configured thinking-cycle key (`Shift+Tab` by default) to choose
+  **inherit** or a level supported by the highlighted model;
+- use `Enter` to save the model and thinking choice together, or `Esc` to return
+  without saving.
+
+**inherit** follows the parent session's current model or thinking value. An
+explicit model is stored as `provider/model`; an explicit thinking override is
+stored as its supported level.
 
 Overrides are user-owned and saved atomically in:
 

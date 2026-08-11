@@ -9,6 +9,8 @@ export type ToolActivityStatus = "running" | "succeeded" | "failed";
 export interface AgentDefinition {
 	name: string;
 	description: string;
+	/** Optional human-facing copy; description remains the model-facing usage guidance. */
+	uiDescription?: string;
 	tools: string[];
 	systemPrompt: string;
 	source: AgentSource;

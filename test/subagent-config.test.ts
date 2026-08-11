@@ -84,7 +84,11 @@ describe("subagent configuration", () => {
 		const explorer = trusted.agents.find((agent) => agent.name === "explorer");
 		expect(general?.systemPrompt).toContain("never create documentation files unless the task explicitly asks");
 		expect(general?.description).toContain("use explorer for read-only questions");
+		expect(general?.uiDescription).not.toContain("use explorer for read-only questions");
 		expect(explorer?.description).toContain('"quick" for a targeted lookup');
+		expect(explorer?.uiDescription).toBe(
+			"Fast read-only agent for finding files, searching code, and answering codebase questions.",
+		);
 		expect(explorer?.systemPrompt).toContain("batching independent searches and reads");
 		// Explorer carries bash for git history and similar inspection, but the
 		// prompt must pin it read-only, including the bash-native write paths

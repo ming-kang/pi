@@ -10,8 +10,13 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Changed
 
+- Redesigned the bundled Subagent `/agents` command around an alphabetized, title-cased profile picker and a unified model-search/thinking editor; model and thinking changes now commit together, while lowercase profile identifiers and inheritance semantics remain unchanged.
 - Slimmed the deviation ledger schema to category, intent, and optional covering tests, dropping the constant verification-status field. The `diff:upstream` report now folds directory-registered paths into single annotated lines, and `maintainers/upstream.md` documents what each category means and how to treat it during synchronization.
 - Reworked the bundled Todo UI into a width-responsive one-line widget that shows subjects only, hides when no unfinished work remains, and leaves full subject-and-description output to `/todos`; completion timers and visibility caches were removed.
+
+### Fixed
+
+- Fixed `/agents` placing model-facing Profile guidance in the dialog title; concise human-facing descriptions now render in full and wrap below the selected Profile.
 
 ### Breaking Changes
 

@@ -2,6 +2,7 @@ import { type Component, Container, Markdown, Spacer, Text } from "@earendil-wor
 import type { AgentToolResult, ToolRenderResultOptions } from "../../core/extensions/types.ts";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
+import { displayAgentName } from "./display-name.ts";
 import { getSubagentRetryView } from "./retry.ts";
 import { statusSummary } from "./runner.ts";
 import type { SubagentParams } from "./schema.ts";
@@ -40,17 +41,6 @@ class IndentedText implements Component {
 	invalidate(): void {
 		this.text.invalidate();
 	}
-}
-
-// Display-only: profile names stay lowercase everywhere the model sees
-// them; the transcript shows "general" as "General", "code-reviewer" as
-// "Code Reviewer".
-function displayAgentName(name: string): string {
-	return name
-		.split(/[-_]/u)
-		.filter(Boolean)
-		.map((word) => `${word[0]?.toUpperCase() ?? ""}${word.slice(1)}`)
-		.join(" ");
 }
 
 function singleAgentName(args: { agent?: string | null }): string {
