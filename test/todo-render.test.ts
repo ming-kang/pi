@@ -1,398 +1,434 @@
-import { describe, expect, test } from "vitest";
-import { EMPTY_TODO_STATE, type TodoParams, type TodoState } from "../src/extensions/todo/schema.ts";
-import { applyTodoMutation, cloneState } from "../src/extensions/todo/state.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { beforeAll, describe, expect, test } from "vitest";
+import { EMPTY_TODO_STATE, type TodoItem, type TodoState, type TodoStatus } from "../src/extensions/todo/schema.ts";
 import {
 	formatCommandList,
 	formatTodoCall,
+	formatTodoContent,
 	formatTodoGroupCall,
-	hasVisibleOverlayItems,
-	renderOverlayLines,
+	hasOpenTodos,
+	renderWidgetLine,
+	type TodoGroupRenderContext,
 } from "../src/extensions/todo/view.ts";
-import type { Theme } from "../src/modes/interactive/theme/theme.ts";
+import { initTheme, theme as realTheme, type Theme } from "../src/modes/interactive/theme/theme.ts";
+import { stripAnsi } from "../src/utils/ansi.ts";
 
 const theme = {
 	fg: (_color: string, text: string) => text,
 	bold: (text: string) => text,
-	strikethrough: (text: string) => text,
 } as unknown as Theme;
 
-const WIDTH = 120;
-
-function mutate(state: TodoState, params: Partial<TodoParams> & { action: TodoParams["action"] }): TodoState {
-	const result = applyTodoMutation(state, params as TodoParams);
-	expect(result.operation.kind).not.toBe("error");
-	return result.state;
+function item(id: number, subject: string, status: TodoStatus = "pending", description = "Do it"): TodoItem {
+	return { id, subject, description, status };
 }
 
-function createTask(state: TodoState, subject: string, extra: Partial<TodoParams> = {}): TodoState {
-	return mutate(state, { action: "create", subject, description: `${subject} description`, ...extra });
+function state(items: TodoItem[]): TodoState {
+	return { items, nextId: Math.max(0, ...items.map((entry) => entry.id)) + 1 };
 }
 
-describe("renderOverlayLines", () => {
-	test("returns nothing for an empty state", () => {
-		expect(renderOverlayLines(cloneState(EMPTY_TODO_STATE), theme, WIDTH, new Set())).toEqual([]);
+describe("renderWidgetLine", () => {
+	test("returns no line without open tasks and exactly one otherwise", () => {
+		expect(renderWidgetLine(EMPTY_TODO_STATE, theme, 120)).toEqual([]);
+		expect(renderWidgetLine(state([item(1, "Done", "completed")]), theme, 120)).toEqual([]);
+		expect(renderWidgetLine(state([item(1, "Open")]), theme, 120)).toHaveLength(1);
+		expect(renderWidgetLine(state([item(1, "Active", "in_progress")]), theme, 120)).toHaveLength(1);
 	});
 
-	test("heading counts completed over total visible tasks", () => {
-		let state = createTask(cloneState(EMPTY_TODO_STATE), "First");
-		state = createTask(state, "Second");
-		state = mutate(state, { action: "update", id: 1, status: "completed" });
-		const lines = renderOverlayLines(state, theme, WIDTH, new Set());
-		expect(lines[0]).toContain("Todos");
-		expect(lines[0]).toContain("(1/2)");
+	test("headers count completed over total and segments use the exact spacing form", () => {
+		const widgetState = state([
+			item(1, "One", "completed", "First done"),
+			item(2, "Two", "pending", "Second work"),
+			item(3, "Three", "pending", "Third work"),
+			item(4, "Four", "in_progress", "Fourth work"),
+			item(5, "Five", "pending", "Fifth work"),
+			item(6, "Six", "completed", "Sixth done"),
+		]);
+		const line = stripAnsi(renderWidgetLine(widgetState, theme, 200)[0]!);
+		// Header then " · ", segments separated by two spaces, no extra middle dots.
+		expect(line).toBe("Todos 2/6 · [>] #4 Four  [ ] #2 Two  [ ] #3 Three  [ ] #5 Five  +2 more (2 completed)");
 	});
 
-	test("hidden completed tasks are filtered from the body", () => {
-		let state = createTask(cloneState(EMPTY_TODO_STATE), "Done");
-		state = mutate(state, { action: "update", id: 1, status: "completed" });
-		expect(hasVisibleOverlayItems(state, new Set([1]))).toBe(false);
-		expect(renderOverlayLines(state, theme, WIDTH, new Set([1]))).toEqual([]);
-		expect(hasVisibleOverlayItems(state, new Set())).toBe(true);
+	test("orders active first and pending by id, hides descriptions and completed segments", () => {
+		const widgetState = state([
+			item(1, "One", "completed", "First done"),
+			item(2, "Two", "pending", "Second work"),
+			item(3, "Three", "pending", "Third work"),
+			item(4, "Four", "in_progress", "Fourth work"),
+			item(5, "Five", "pending", "Fifth work"),
+			item(6, "Six", "completed", "Sixth done"),
+		]);
+		const line = stripAnsi(renderWidgetLine(widgetState, theme, 200)[0]!);
+		expect(line.indexOf("[>] #4")).toBeLessThan(line.indexOf("[ ] #3"));
+		expect(line).not.toContain("First done");
+		expect(line).not.toContain("Sixth done");
+		expect(line).not.toMatch(/\[x\]/);
+		const shown = (line.match(/\[[> ]\] #\d+/g) ?? []).length;
+		const more = Number(line.match(/\+(\d+) more/)![1]);
+		expect(shown + more).toBe(6);
 	});
 
-	test("shows activeForm for the in_progress task", () => {
-		let state = createTask(cloneState(EMPTY_TODO_STATE), "Task", { activeForm: "doing the task" });
-		state = mutate(state, { action: "update", id: 1, status: "in_progress" });
-		const body = renderOverlayLines(state, theme, WIDTH, new Set()).join("\n");
-		expect(body).toContain("(doing the task)");
+	test("drops whole pending segments, shortens the overflow, and truncates only the active subject", () => {
+		const widgetState = state([
+			item(1, "Done one", "completed"),
+			item(2, "Active subject that is really quite long", "in_progress"),
+			item(3, "Pending three subject"),
+			item(4, "Pending four subject"),
+			item(5, "Pending five subject"),
+			item(6, "Pending six subject"),
+		]);
+		// Wide enough for the long overflow but not for every pending segment.
+		expect(stripAnsi(renderWidgetLine(widgetState, theme, 120)[0]!)).toBe(
+			"Todos 1/6 · [>] #2 Active subject that is really quite long  [ ] #3 Pending three subject  +4 more",
+		);
+		// Narrower: whole pending segments are dropped and the overflow shortens.
+		expect(stripAnsi(renderWidgetLine(widgetState, theme, 62)[0]!)).toBe(
+			"Todos 1/6 · [>] #2 Active subject that is really qui…  +5 more",
+		);
+		// Narrowest: the active subject truncates down to the last column.
+		expect(stripAnsi(renderWidgetLine(widgetState, theme, 60)[0]!)).toBe(
+			"Todos 1/6 · [>] #2 Active subject that is really q…  +5 more",
+		);
+		// Extreme widths still yield a single bounded line.
+		expect(renderWidgetLine(widgetState, theme, 1).map(stripAnsi)).toEqual(["…"]);
+		expect(renderWidgetLine(widgetState, theme, 0).map(stripAnsi)).toEqual(["…"]);
+		expect(renderWidgetLine(widgetState, theme, 500)).toHaveLength(1);
 	});
 
-	test("flags unresolved dependencies and shows ids when edges exist", () => {
-		let state = createTask(cloneState(EMPTY_TODO_STATE), "Base");
-		state = createTask(state, "Blocked", { blockedBy: [1] });
-		const body = renderOverlayLines(state, theme, WIDTH, new Set()).join("\n");
-		expect(body).toContain("#2");
-		expect(body).toContain("blocked by #1");
-		expect(body).toContain("(deps incomplete)");
+	test("every width from 1 to 200 yields at most one line that fits, CJK-safe", () => {
+		const widgetState = state([
+			item(1, "完成解析器接线", "completed", "配置解析全部通过"),
+			item(2, "修复登录重定向处理", "in_progress", "认证测试通过"),
+			item(3, "编写使用文档", "pending", "文档保持最新"),
+			item(4, "验证导出格式", "pending", "导出结果一致"),
+		]);
+		for (let width = 1; width <= 200; width++) {
+			const lines = renderWidgetLine(widgetState, theme, width);
+			expect(lines.length).toBeLessThanOrEqual(1);
+			for (const line of lines) {
+				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			}
+		}
 	});
 
-	test("orders the active task first and summarizes the overflow", () => {
-		let state = cloneState(EMPTY_TODO_STATE);
-		for (let i = 0; i < 12; i++) state = createTask(state, `Task ${i + 1}`);
-		state = mutate(state, { action: "update", id: 12, status: "in_progress" });
-		const lines = renderOverlayLines(state, theme, WIDTH, new Set());
-		expect(lines[1]).toContain("Task 12");
-		expect(lines.at(-2)).toContain("+3 more");
-		expect(lines.at(-2)).toContain("pending");
+	test("hasOpenTodos reflects pending and in_progress tasks", () => {
+		expect(hasOpenTodos(EMPTY_TODO_STATE)).toBe(false);
+		expect(hasOpenTodos(state([item(1, "Done", "completed")]))).toBe(false);
+		expect(hasOpenTodos(state([item(1, "Open")]))).toBe(true);
+		expect(hasOpenTodos(state([item(1, "Active", "in_progress")]))).toBe(true);
+	});
+
+	describe("with the real dark theme", () => {
+		beforeAll(() => initTheme("dark"));
+
+		test("ANSI-styled output matches the identity form and stays within width", () => {
+			const widgetState = state([
+				item(1, "Done one", "completed"),
+				item(2, "Active subject that is really quite long", "in_progress"),
+				item(3, "Pending three subject"),
+				item(4, "Pending four subject"),
+				item(5, "Pending five subject"),
+				item(6, "Pending six subject"),
+			]);
+			for (const width of [40, 62, 120, 200]) {
+				const ansi = renderWidgetLine(widgetState, realTheme, width);
+				const plain = renderWidgetLine(widgetState, theme, width);
+				expect(ansi.map((line) => stripAnsi(line))).toEqual(plain.map((line) => stripAnsi(line)));
+				for (const line of ansi) {
+					expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+				}
+			}
+		});
 	});
 });
 
 describe("formatCommandList", () => {
 	test("reports an empty list", () => {
-		expect(formatCommandList(cloneState(EMPTY_TODO_STATE))).toBe("No todos yet.");
+		expect(formatCommandList(EMPTY_TODO_STATE)).toBe("No todos.");
 	});
 
-	test("groups by status and annotates owner and unresolved deps", () => {
-		let state = createTask(cloneState(EMPTY_TODO_STATE), "Base");
-		state = createTask(state, "Blocked", { blockedBy: [1], owner: "agent-a" });
-		state = createTask(state, "Active", { activeForm: "working" });
-		state = mutate(state, { action: "update", id: 3, status: "in_progress" });
-		const text = formatCommandList(state);
-		const lines = text.split("\n");
-		expect(lines[0]).toBe("in_progress");
-		expect(text).toContain("(working)");
-		expect(text).toContain("@agent-a");
-		expect(text).toContain("blocked by #1");
+	test("shows status counts, status ordering, and indented descriptions", () => {
+		const listState = state([
+			item(2, "Second", "pending", "Do the second thing"),
+			item(3, "Third", "completed", "Third thing verified"),
+			item(1, "First", "in_progress", "Do the first thing"),
+		]);
+		expect(formatCommandList(listState)).toBe(
+			"Todos: 1 in progress, 1 pending, 1 completed\n" +
+				"[>] #1 First\n    Do the first thing\n" +
+				"[ ] #2 Second\n    Do the second thing\n" +
+				"[x] #3 Third\n    Third thing verified",
+		);
 	});
+});
 
-	test("tombstones stay out of the command list", () => {
-		let state = createTask(cloneState(EMPTY_TODO_STATE), "Gone");
-		state = mutate(state, { action: "delete", id: 1 });
-		expect(formatCommandList(state)).toBe("No todos yet.");
-	});
+describe("formatTodoContent", () => {
+	const contentState = state([
+		item(1, "Alpha", "pending"),
+		item(2, "Beta", "in_progress"),
+		item(3, "Gamma", "pending"),
+	]);
 
-	test("bounds command output and directs users to paged tool results", () => {
-		let state = cloneState(EMPTY_TODO_STATE);
-		for (let index = 1; index <= 55; index++) state = createTask(state, `Task ${index}`);
-		const output = formatCommandList(state);
-		expect(output).toContain("#50 Task 50");
-		expect(output).not.toContain("#51 Task 51");
-		expect(output).toContain("… and 5 more; use todo list with limit and afterId to page.");
+	test("summarizes create, update, demotion, list, and delete", () => {
+		expect(formatTodoContent({ kind: "create", ids: [1, 3] }, contentState)).toBe(
+			"Created 2 tasks: #1: Alpha; #3: Gamma",
+		);
+		expect(formatTodoContent({ kind: "update", id: 2, from: "pending", to: "in_progress" }, contentState)).toBe(
+			"Updated #2 (pending -> in_progress): Beta",
+		);
+		expect(
+			formatTodoContent({ kind: "update", id: 2, from: "pending", to: "in_progress", demotedId: 1 }, contentState),
+		).toBe("Updated #2 (pending -> in_progress): Beta; demoted #1 to pending");
+		expect(formatTodoContent({ kind: "update", id: 1, from: "pending", to: "pending" }, contentState)).toBe(
+			"Updated #1: Alpha",
+		);
+		expect(formatTodoContent({ kind: "list" }, contentState)).toBe(
+			"Todos: 1 in progress, 2 pending, 0 completed\n" +
+				"[>] #2 Beta\n    Do it\n" +
+				"[ ] #1 Alpha\n    Do it\n" +
+				"[ ] #3 Gamma\n    Do it",
+		);
+		expect(
+			formatTodoContent(
+				{
+					kind: "delete",
+					removed: [
+						{ id: 1, subject: "Alpha" },
+						{ id: 3, subject: "Gamma" },
+					],
+				},
+				contentState,
+			),
+		).toBe("Deleted 2 tasks: #1: Alpha; #3: Gamma");
+		expect(formatTodoContent({ kind: "list" }, EMPTY_TODO_STATE)).toBe("No todos.");
 	});
 });
 
 describe("formatTodoCall", () => {
-	test("collapses a create to a single headline", () => {
-		const line = formatTodoCall(
-			{ action: "create", subject: "Fix login redirect", description: "Auth tests pass" },
-			theme,
-			false,
-		);
-		expect(line).toBe("todo create Fix login redirect");
-	});
-
-	test("expanded adds the parameters the result never echoes", () => {
-		const lines = formatTodoCall(
-			{
-				action: "create",
-				subject: "Fix login redirect",
-				description: "Auth tests pass",
-				activeForm: "fixing login redirect",
-				blockedBy: [1, 2],
-			},
-			theme,
-			true,
-		).split("\n");
-		expect(lines[0]).toBe("todo create Fix login redirect");
-		expect(lines).toContain("description: Auth tests pass");
-		expect(lines).toContain("activeForm: fixing login redirect");
-		expect(lines).toContain("blockedBy: #1,#2");
-	});
-
-	test("shows id and target status for updates", () => {
-		expect(formatTodoCall({ action: "update", id: 2, status: "in_progress" }, theme, false)).toBe(
-			"todo update #2 in_progress",
-		);
-	});
-
-	test("labels dependency-only updates", () => {
-		expect(formatTodoCall({ action: "update", id: 3, addBlocks: [4] }, theme, false)).toBe(
-			"todo update #3 dependencies",
-		);
-	});
-
-	test("renders bare actions and status filters", () => {
-		expect(formatTodoCall({ action: "list" }, theme, false)).toBe("todo list");
-		expect(formatTodoCall({ action: "list", status: "pending" }, theme, false)).toBe("todo list pending");
-		expect(formatTodoCall({ action: "delete", id: 7 }, theme, false)).toBe("todo delete #7");
-	});
-
-	test("tolerates partial and mistyped streaming args", () => {
-		expect(formatTodoCall(undefined, theme, false)).toBe("todo");
-		expect(formatTodoCall({}, theme, false)).toBe("todo");
-		expect(formatTodoCall({ action: "create", subject: 42, status: "bogus" }, theme, false)).toBe("todo create");
-		expect(formatTodoCall({ action: "update", id: 1.5, blockedBy: "nope" }, theme, false)).toBe("todo update");
-
-		const sparseItems: unknown[] = new Array(2);
-		sparseItems[1] = {
-			subject: "Valid item",
-			description: "Still renders",
-			blockedBy: [1.5, -2, 4],
-		};
-		const sparse = formatTodoCall({ action: "create_many", items: sparseItems }, theme, true);
-		expect(sparse).toContain("1.");
-		expect(sparse).toContain("2. Valid item · blocked by #4");
-
-		const oversized = Array.from({ length: 25 }, (_, index) => ({ subject: `Task ${index + 1}` }));
-		const bounded = formatTodoCall({ action: "create_many", items: oversized }, theme, true);
-		expect(bounded).toContain("todo create 25 tasks · Task 1, Task 2, +23 more");
-		expect(bounded).toContain("20. Task 20");
-		expect(bounded).not.toContain("21. Task 21");
-	});
-
-	test("includes every create_many item and list/clear parameters when expanded", () => {
+	test("collapses to a one-line headline", () => {
 		expect(
 			formatTodoCall(
 				{
-					action: "create_many",
-					items: [{ subject: "Wire parser", description: "Parser handles config" }],
+					action: "create",
+					items: [
+						{ subject: "Fix login redirect", description: "Auth tests pass" },
+						{ subject: "Test parser", description: "Parser tests pass" },
+					],
 				},
 				theme,
 				false,
 			),
-		).toBe("todo create 1 task · Wire parser");
+		).toBe("todo create 2 tasks · Fix login redirect, Test parser");
+		expect(formatTodoCall({ action: "update", id: 2, status: "in_progress" }, theme, false)).toBe(
+			"todo update #2 in_progress",
+		);
+		expect(formatTodoCall({ action: "delete", ids: [3, 7] }, theme, false)).toBe("todo delete #3, #7");
+		expect(formatTodoCall({ action: "list" }, theme, false)).toBe("todo list");
+	});
 
-		const batch = formatTodoCall(
-			{
-				action: "create_many",
-				items: [
-					{ key: "parser", subject: "Wire parser", description: "Parser handles config" },
-					{
-						subject: "Test parser",
-						description: "Parser tests pass",
-						blockedByKeys: ["parser"],
-					},
-					{ subject: "Ship parser", description: "x".repeat(140), blockedBy: [9] },
-					{ subject: "Document parser", description: "Docs are current" },
-				],
+	test("previews at most two subjects and caps create batches at the maximum", () => {
+		const five = {
+			action: "create",
+			items: Array.from({ length: 5 }, (_, index) => ({ subject: `Task ${index + 1}`, description: "Do it" })),
+		};
+		expect(formatTodoCall(five, theme, false)).toBe("todo create 5 tasks · Task 1, Task 2, +3 more");
+		const oversized = {
+			action: "create",
+			items: Array.from({ length: 25 }, (_, index) => ({ subject: `Task ${index + 1}`, description: "Do it" })),
+		};
+		expect(formatTodoCall(oversized, theme, false)).toBe("todo create 20 tasks · Task 1, Task 2, +18 more");
+		const expanded = formatTodoCall(oversized, theme, true);
+		expect(expanded).toContain("20. Task 20");
+		expect(expanded).not.toContain("21. Task 21");
+	});
+
+	test("expanded create shows per-item subjects, indented descriptions, and result ids", () => {
+		const args = {
+			action: "create",
+			items: [
+				{ subject: "Wire parser", description: "Parser handles config" },
+				{ subject: "Test parser", description: "Parser tests pass" },
+			],
+		};
+		const result = {
+			content: [],
+			details: {
+				schemaVersion: 2,
+				change: { kind: "create", ids: [4, 5] },
+				state: { items: [item(4, "Wire parser"), item(5, "Test parser")], nextId: 6 },
 			},
+		};
+		expect(formatTodoCall(args, theme, true, result)).toBe(
+			"todo create 2 tasks · Wire parser, Test parser\n#4 Wire parser\n    Parser handles config\n#5 Test parser\n    Parser tests pass",
+		);
+	});
+
+	test("expanded update shows the replacement description bounded to 120 characters", () => {
+		const lines = formatTodoCall(
+			{ action: "update", id: 2, status: "in_progress", description: "x".repeat(140) },
 			theme,
 			true,
-			{
-				content: [],
-				details: {
-					schemaVersion: 1,
-					action: "create_many",
-					operation: { kind: "create_many", ids: [4, 5, 6, 7] },
-					items: [],
-					nextId: 8,
-				},
-			},
 		).split("\n");
-		expect(batch[0]).toBe("todo create 4 tasks · Wire parser, Test parser, +2 more");
-		expect(batch).toContain("#4 Wire parser");
-		expect(batch).toContain("  Parser handles config");
-		expect(batch).toContain("#5 Test parser · blocked by parser");
-		expect(batch).toContain("#6 Ship parser · blocked by #9");
-		expect(batch).toContain(`  ${"x".repeat(119)}…`);
-		expect(batch).toContain("#7 Document parser");
+		expect(lines[0]).toBe("todo update #2 in_progress");
+		expect(lines[1]).toBe(`    ${"x".repeat(119)}…`);
+	});
 
-		const filters = formatTodoCall(
-			{
-				action: "list",
-				includeDeleted: true,
-				limit: 10,
-				afterId: 5,
-				query: "parser",
-				unblockedOnly: true,
-			},
+	test("tolerates partial, sparse, and hostile args and details", () => {
+		expect(formatTodoCall(undefined, theme, false)).toBe("todo");
+		expect(formatTodoCall({}, theme, false)).toBe("todo");
+		expect(formatTodoCall({ action: "create" }, theme, false)).toBe("todo create");
+		expect(formatTodoCall({ action: "create", items: "nope" }, theme, true)).toBe("todo create");
+		expect(formatTodoCall({ action: "update", id: -1, status: "bogus", subject: 42 }, theme, false)).toBe(
+			"todo update",
+		);
+		expect(formatTodoCall({ action: "delete", ids: [1.5, -2, "x"] }, theme, false)).toBe("todo delete");
+
+		const sparseItems: unknown[] = new Array(2);
+		sparseItems[1] = { subject: "Valid item", description: "Still renders" };
+		const sparse = formatTodoCall({ action: "create", items: sparseItems }, theme, true);
+		expect(sparse).toContain("2 tasks");
+		expect(sparse).toContain("1. Valid item");
+
+		expect(
+			formatTodoCall({ action: "create", items: [{ subject: "A", description: "d" }] }, theme, true, {
+				content: [],
+				details: "garbage",
+			}),
+		).toBe("todo create 1 task · A\n1. A\n    d");
+
+		const hostileText = formatTodoCall(
+			{ action: "create", items: [{ subject: "x".repeat(10_000), description: "y".repeat(10_000) }] },
 			theme,
 			true,
 		);
-		expect(filters).toContain("includeDeleted: true");
-		expect(filters).toContain("limit: 10");
-		expect(filters).toContain("afterId: 5");
-		expect(filters).toContain("query: parser");
-		expect(filters).toContain("unblockedOnly: true");
-		expect(formatTodoCall({ action: "clear", confirm: true, expectedCount: 3 }, theme, true)).toContain(
-			"expectedCount: 3",
-		);
+		expect(hostileText.length).toBeLessThan(600);
+		expect(hostileText).not.toContain("x".repeat(161));
+		expect(hostileText).not.toContain("y".repeat(121));
 	});
 });
 
 describe("formatTodoGroupCall", () => {
-	function completed(details: unknown) {
+	function completed(details: unknown): TodoGroupRenderContext {
 		return { isError: false, isPartial: false, result: { content: [], details } };
 	}
 
-	test("uses successful structured details for concise operation summaries", () => {
-		expect(
-			formatTodoGroupCall(
-				{ action: "create", subject: "Fix login redirect" },
-				theme,
-				completed({
-					schemaVersion: 1,
-					action: "create",
-					operation: { kind: "create", ids: [3] },
-					items: [],
-					nextId: 4,
-				}),
-			),
-		).toBe("todo created #3 Fix login redirect");
-		const longCreate = formatTodoGroupCall(
-			{ action: "create", subject: `Long\n${"subject ".repeat(20)}` },
-			theme,
-			completed({
-				schemaVersion: 1,
-				action: "create",
-				operation: { kind: "create", ids: [4] },
-				items: [],
-				nextId: 5,
-			}),
-		);
-		expect(longCreate).not.toContain("\n");
-		expect(longCreate).toContain("…");
+	test("summarizes every v2 action from result details", () => {
+		const groupState = state([
+			item(1, "One", "in_progress"),
+			item(2, "Two", "pending"),
+			item(3, "Three", "completed"),
+		]);
 		expect(
 			formatTodoGroupCall(
 				{
-					action: "create_many",
-					items: [{ subject: "Wire parser" }, { subject: "Test parser" }, { subject: "Document parser" }],
+					action: "create",
+					items: [
+						{ subject: "Wire parser", description: "d" },
+						{ subject: "Test parser", description: "d" },
+					],
 				},
 				theme,
 				completed({
-					schemaVersion: 1,
-					action: "create_many",
-					operation: { kind: "create_many", ids: [4, 5, 6] },
-					items: [],
-					nextId: 7,
+					schemaVersion: 2,
+					change: { kind: "create", ids: [4, 5] },
+					state: { items: [item(4, "Wire parser"), item(5, "Test parser")], nextId: 6 },
 				}),
 			),
-		).toBe("todo created #4–#6 · Wire parser, Test parser, +1 more");
+		).toBe("todo created #4–#5 · Wire parser, Test parser");
 		expect(
 			formatTodoGroupCall(
-				{ action: "update", id: 4, status: "completed" },
+				{ action: "create", items: [] },
 				theme,
 				completed({
-					schemaVersion: 1,
-					action: "update",
-					operation: { kind: "update", id: 4, status: "completed" },
-					items: [],
-					nextId: 5,
+					schemaVersion: 2,
+					change: { kind: "create", ids: [2, 5] },
+					state: { items: [item(2, "Alpha"), item(5, "Beta")], nextId: 6 },
 				}),
 			),
-		).toBe("todo updated #4 completed");
+		).toBe("todo created #2, #5 · Alpha, Beta");
 		expect(
 			formatTodoGroupCall(
-				{ action: "list", status: "pending", limit: 1 },
+				{ action: "update", id: 4 },
 				theme,
 				completed({
-					schemaVersion: 1,
-					action: "list",
-					operation: {
-						kind: "list",
-						status: "pending",
-						limit: 1,
-						statusCounts: { pending: 1 },
-						resultCount: 1,
-					},
-					// The stored snapshot contains tasks that the filtered page did not return.
-					items: [{ status: "pending" }, { status: "in_progress" }, { status: "deleted" }],
-					nextId: 4,
+					schemaVersion: 2,
+					change: { kind: "update", id: 4, from: "pending", to: "in_progress", demotedId: 2 },
+					state: { items: [item(2, "Second", "pending"), item(4, "Fourth", "in_progress")], nextId: 5 },
 				}),
 			),
-		).toBe("todo list: 1 pending");
+		).toBe("todo updated #4 in_progress Fourth · demoted #2");
 		expect(
 			formatTodoGroupCall(
-				{ action: "get", id: 3 },
+				{ action: "list" },
 				theme,
-				completed({
-					schemaVersion: 1,
-					action: "get",
-					operation: { kind: "get", id: 3 },
-					items: [{ id: 3, status: "in_progress" }],
-					nextId: 4,
-				}),
+				completed({ schemaVersion: 2, change: { kind: "list" }, state: groupState }),
 			),
-		).toBe("todo get #3 in_progress");
+		).toBe("todo list: 1 in progress, 1 pending, 1 completed");
 		expect(
 			formatTodoGroupCall(
-				{ action: "delete", id: 3 },
+				{ action: "delete", ids: [3] },
 				theme,
 				completed({
-					schemaVersion: 1,
-					action: "delete",
-					operation: { kind: "delete", id: 3 },
-					items: [{ id: 3, subject: "Remove\nlegacy task", status: "deleted" }],
-					nextId: 4,
+					schemaVersion: 2,
+					change: { kind: "delete", removed: [{ id: 3, subject: "Remove legacy task" }] },
+					state: groupState,
 				}),
 			),
-		).toBe("todo deleted #3 Remove legacy task");
-		expect(
-			formatTodoGroupCall(
-				{ action: "clear", confirm: true, expectedCount: 2 },
-				theme,
-				completed({
-					schemaVersion: 1,
-					action: "clear",
-					operation: { kind: "clear", count: 2 },
-					items: [],
-					nextId: 3,
-				}),
-			),
-		).toBe("todo cleared 2 tasks");
+		).toBe("todo deleted #3 · Remove legacy task");
 	});
 
-	test("falls back for partial or malformed details and bounds one-line failures", () => {
-		const details = {
-			schemaVersion: 1,
-			action: "list",
-			operation: { kind: "list" },
-			items: "not an item list",
-			nextId: 1,
-		};
-		expect(formatTodoGroupCall({ action: "list" }, theme, { ...completed(details), isPartial: true })).toBe(
-			"todo list",
-		);
-		expect(formatTodoGroupCall({ action: "list" }, theme, completed(details))).toBe("todo list");
-
+	test("bounds group errors to one line of at most 120 characters", () => {
 		const failure = formatTodoGroupCall({ action: "update", id: 7 }, theme, {
 			isError: true,
 			isPartial: false,
 			result: { content: [{ type: "text", text: `bad request\n${"x".repeat(500)}` }], details: undefined },
 		});
-		expect(failure).toMatch(/^todo update #7 failed: bad request /);
+		expect(failure).toMatch(/^todo update #7 failed: bad request/);
 		expect(failure).not.toContain("\n");
 		expect(failure).not.toContain("x".repeat(200));
-		expect(failure.length).toBeLessThanOrEqual(150);
+		expect(failure.length).toBeLessThanOrEqual("todo update #7 failed: ".length + 120);
+	});
+
+	test("falls back for partial, v1, and hostile details without throwing", () => {
+		const v2Create = {
+			schemaVersion: 2,
+			change: { kind: "create", ids: [1] },
+			state: { items: [item(1, "A")], nextId: 2 },
+		};
+		expect(
+			formatTodoGroupCall({ action: "list" }, theme, {
+				isError: false,
+				isPartial: true,
+				result: { content: [], details: v2Create },
+			}),
+		).toBe("todo list");
+
+		const v1 = { schemaVersion: 1, action: "create", operation: { kind: "create", ids: [1] }, items: [], nextId: 2 };
+		expect(
+			formatTodoGroupCall({ action: "create", items: [{ subject: "A", description: "d" }] }, theme, completed(v1)),
+		).toBe("todo create 1 task · A");
+
+		expect(
+			formatTodoGroupCall(
+				{ action: "list" },
+				theme,
+				completed({ schemaVersion: 2, change: { kind: "list" }, state: { items: "nope" } }),
+			),
+		).toBe("todo list");
+
+		const hostile: unknown[] = [
+			undefined,
+			"garbage",
+			{ schemaVersion: 2 },
+			{ schemaVersion: 2, change: null, state: { items: [] } },
+			{ schemaVersion: 2, change: { kind: "create" }, state: { items: [] } },
+			{ schemaVersion: 2, change: { kind: "create", ids: [0] }, state: { items: [] } },
+			{ schemaVersion: 2, change: { kind: "create", ids: [1] }, state: { items: "nope" } },
+			{ schemaVersion: 2, change: { kind: "update", id: 1.5 }, state: { items: [] } },
+			{ schemaVersion: 2, change: { kind: "list" }, state: { items: Array.from({ length: 10_001 }, () => ({})) } },
+			{ schemaVersion: 2, change: { kind: "weird" }, state: { items: [] } },
+		];
+		for (const details of hostile) {
+			expect(() => formatTodoGroupCall({ action: "list" }, theme, completed(details))).not.toThrow();
+		}
 	});
 });

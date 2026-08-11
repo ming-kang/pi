@@ -14,7 +14,7 @@ These hidden built-ins use the same public Extension API available to external e
 | [Router](extensions/router.md) | `/router` | Configure and probe Codex-style routing endpoints |
 | [Statusline](extensions/statusline.md) | Footer status | Show concise extension-managed activity state |
 | [Subagent](extensions/subagent.md) | `subagent`, `/agents` | Delegate bounded work to isolated child Pi sessions |
-| [Todo](extensions/todo.md) | `todo`, `/todos` | Track multi-step work with dependencies and status |
+| [Todo](extensions/todo.md) | `todo`, `/todos` | Track ordered multi-step work in a compact one-line widget |
 
 ## Context safety
 

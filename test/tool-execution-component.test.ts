@@ -878,7 +878,7 @@ describe("ToolExecutionComponent parity", () => {
 			"todo",
 			"todo-group-created",
 			{
-				action: "create_many",
+				action: "create",
 				items: [
 					{ subject: "Wire parser", description: "Parser handles config" },
 					{ subject: "Test parser", description: "Parser tests pass" },
@@ -893,11 +893,15 @@ describe("ToolExecutionComponent parity", () => {
 			{
 				content: [{ type: "text", text: "Created 2 tasks" }],
 				details: {
-					schemaVersion: 1,
-					action: "create_many",
-					operation: { kind: "create_many", ids: [4, 5] },
-					items: [],
-					nextId: 6,
+					schemaVersion: 2,
+					change: { kind: "create", ids: [4, 5] },
+					state: {
+						items: [
+							{ id: 4, subject: "Wire parser", description: "Parser handles config", status: "pending" },
+							{ id: 5, subject: "Test parser", description: "Parser tests pass", status: "pending" },
+						],
+						nextId: 6,
+					},
 				},
 				isError: false,
 			},

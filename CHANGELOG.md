@@ -11,6 +11,11 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 ### Changed
 
 - Slimmed the deviation ledger schema to category, intent, and optional covering tests, dropping the constant verification-status field. The `diff:upstream` report now folds directory-registered paths into single annotated lines, and `maintainers/upstream.md` documents what each category means and how to treat it during synchronization.
+- Reworked the bundled Todo UI into a width-responsive one-line widget that shows subjects only, hides when no unfinished work remains, and leaves full subject-and-description output to `/todos`; completion timers and visibility caches were removed.
+
+### Breaking Changes
+
+- Replaced the bundled Todo tool with a smaller v2 protocol: `create` now accepts one ordered `items` array for both single and batch creation, while only `update`, `list`, and batch-ID `delete` remain. Dependencies, active-form/owner/metadata fields, tombstones, filtering, pagination, `get`, and `clear` were removed; subjects and descriptions can no longer be cleared to empty strings, and current lists are capped at 20 tasks. Tool-result `details` now use `{ schemaVersion, change, state }`; historical v1 snapshots are intentionally not restored.
 
 ### Removed
 

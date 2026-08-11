@@ -1,32 +1,92 @@
-# todo — task list overlay
+# todo — compact task list
 
-Adds a `todo` tool plus `/todos` for multi-step work, with a live overlay above the editor.
+Adds a `todo` tool and `/todos` command for multi-step work. While unfinished tasks exist, a width-aware one-line widget stays above the editor; `/todos` shows the complete list on demand.
 
-## Behavior
+## Tool actions
 
-- Actions: `create`, `create_many`, `update`, `list`, `get`, `delete`, `clear`. Statuses: `pending`, `in_progress`, `completed`, `deleted`. `create_many` atomically creates up to 20 pending tasks in input order (all-or-nothing); every item needs a `subject` and `description`, and unique batch `key` values let `blockedByKeys` name prerequisites in the same batch. `list` accepts an optional `status` filter and `includeDeleted`; `status: "deleted"` includes tombstones directly. It also supports `limit`/`afterId` pagination, a case-insensitive subject/description `query`, and `unblockedOnly` for tasks with no unresolved dependencies. Parameters that do not apply to the chosen action are rejected with guidance (for example `blockedBy` on `update` points at `addBlockedBy`/`removeBlockedBy`) instead of being silently ignored.
-- The live overlay renders above the editor and hides itself when there are no visible tasks.
-- Creation always starts a task as `pending` and requires both `subject` and `description` (what done means); `blockedBy` dependencies are supported for sequencing, and missing dependencies, deleted dependencies, self-dependencies, and cycles are rejected. A task cannot move to `in_progress` or `completed` until every `blockedBy` dependency is `completed`. If a new unresolved dependency blocks an active task, it is automatically moved to `pending` and named in the tool result.
-- `update` manages both edge directions: `addBlockedBy`/`removeBlockedBy` change what the task waits on, `addBlocks`/`removeBlocks` change what waits on it (stored as the targets' `blockedBy`, with the same validation and cycle checks). An empty string removes `description`, `activeForm`, or `owner`; `metadata` merges with `null` deleting keys.
-- `list` lines show only unresolved blockers plus the task's `@owner`; full `blockedBy`/`blocks` detail lives in `get`. `/todos` uses the same 50-task display bound and directs longer lists to paged `todo list` calls.
-- Deletion — via `delete` or `update` with `status: "deleted"` — leaves an immutable tombstone for branch history, removes that task from every dependent `blockedBy` list, and therefore releases dependents; the tool result names pending dependents that ended up fully unblocked. A deletion cannot be combined with other field edits in the same call. `clear` requires `confirm: true` and an `expectedCount` equal to the current task count, then empties the list without reusing ids.
-- Newly completed tasks remain visible for 30 seconds, then drop from the overlay; historical completions loaded by `/reload` or `/tree` stay hidden so live work remains prominent.
-- **Exactly one `in_progress`.** Moving a task to `in_progress` auto-demotes any other `in_progress` tasks to `pending`; the tool result lists demoted ids so the model sees the side effect.
-- **Transcript presentation.** Consecutive calls collapse into one `todo` group. A `create_many` headline reports the correct `task`/`tasks` count and previews the first two subjects; expanding shows every valid batch item, its description preview, and dependency edges, bounded by the tool's batch and dependency limits. Settled create summaries preserve subjects and use the real task IDs; delete summaries preserve the tombstoned subject. The model-facing `create_many` result likewise lists each `#id: subject (pending)` instead of returning IDs alone.
-- **Verification soft nudge.** When a completion leaves the list fully done with 3+ completed tasks and no subject/description matching `verif|test|check|review`, the tool result appends a short NOTE (text only — `details` schema unchanged).
+The tool has four actions:
+
+- `create` atomically adds one or more pending tasks from a single ordered `items` array. Each item requires a concise `subject` and a `description` of what done means.
+- `update` changes one task's `subject`, `description`, or `status`.
+- `list` returns every current task and its full description.
+- `delete` removes one or more task IDs from the current list.
+
+Single and batch creation use the same shape:
+
+```json
+{
+  "action": "create",
+  "items": [
+    {
+      "subject": "Implement config parsing",
+      "description": "Valid config is parsed and invalid config is rejected"
+    },
+    {
+      "subject": "Verify config parsing",
+      "description": "Focused parser tests pass"
+    }
+  ]
+}
+```
+
+Tasks have three statuses: `pending`, `in_progress`, and `completed`. Creation always starts at `pending`. `update` requires an ID and at least one replacement field; subjects and descriptions remain non-empty. Exactly one task may be `in_progress`; activating another automatically returns the previous active task to `pending` and reports that side effect. Any status can be reopened or corrected. `list` includes every task, ordered as active, pending by ID, then completed by ID.
+
+Todo v2 intentionally has no dependency graph, owner, metadata, active-form label, tombstone, filtering, pagination, `get`, or `clear`. Keep tasks in intended execution order. When work is blocked, return it to `pending`, create a task that resolves the blocker, and activate that task instead.
+
+`create` and `delete` are atomic: invalid input or a missing deletion ID leaves the list unchanged. Deletion removes an item from the current snapshot without reusing its ID. Older conversation branches still contain their earlier snapshots.
+
+## Presentation
+
+The persistent widget displays only subjects:
+
+```text
+Todos 2/6 · [>] #4 Fix login redirect  [ ] #5 Add regression tests  +4 more (2 pending, 2 completed)
+```
+
+`2/6` means completed tasks over total tasks. The active task is shown first, followed by pending tasks in ID order. Completed tasks are represented by the count and overflow summary, not individual segments. As width shrinks, complete pending segments move into `+N more`; the active subject is truncated only after the detailed overflow has fallen back to its short form. The renderer always returns at most one terminal-width-safe line.
+
+The widget is registered only while a `pending` or `in_progress` task exists. It disappears immediately for an empty or fully completed list; there is no completion timer or visibility cache.
+
+`/todos` shows every task with its description on an indented second line:
+
+```text
+Todos: 1 in progress, 3 pending, 2 completed
+[>] #4 Fix login redirect
+    Login reaches the dashboard and focused tests pass
+[ ] #5 Add regression tests
+    Cover invalid redirects and session restoration
+```
+
+Consecutive tool calls collapse into the native `todo` transcript group. Collapsed settled rows use result-aware v2 details to show actual created IDs and subjects, update status and automatic demotion, list counts, or deleted IDs. Expanding restores the complete call and native result. Malformed or older details fall back to a bounded call summary.
 
 ## Limits
 
-- `list` output is bounded at 50 items by default; `limit` accepts 1–50, and a paged result includes its next `afterId` when truncated.
-- Task input is bounded: subjects and active forms are limited to 240 characters, descriptions to 4,000, owners to 160, batch keys to 120, and dependency lists to 50 entries. List queries are limited to 200 characters.
-- `metadata` is a bounded JSON-like object: 8 levels deep, 100 entries, 160-character keys, and 16 KiB total UTF-8 payload.
-- The overlay body is capped at 10 rows; its truncation summary includes hidden status counts.
-- Newly completed tasks remain visible for 30 seconds then drop from the overlay.
+- At most 20 current tasks, including completed tasks.
+- At most 20 items in one `create` or IDs in one `delete`.
+- Subjects are limited to 160 characters.
+- Descriptions are limited to 500 characters.
+- Subject and description whitespace is normalized to one line.
+- Model-facing list output is bounded by those limits; no pagination is needed.
 
-## Implementation notes
+Delete completed or obsolete tasks before the list reaches capacity.
 
-- **Conversation-backed state.** Every tool result stores a schema-versioned full snapshot in `details`; lifecycle handlers replay the current branch on `/reload`, compaction, and session-tree navigation. There is no separate disk database. Compaction-safe by design: `sessionManager.getBranch()` returns the full branch history — only `buildSessionContext` summarizes for the LLM. Replay walks the branch **tail → head** to find the latest valid snapshot, accepting compatible unversioned history while rejecting malformed or unsupported versioned details.
-- **State is keyed per session id.** Resume and `/tree` can switch sessions within one process; `execute` and the lifecycle handlers re-point the active bucket before touching state.
-- **Status transitions are gated.** `completed` can be reopened to `in_progress` or `pending`, but a `deleted` tombstone is terminal. Single-active is enforced on demote (not hard-reject) so the model does not need a retry loop.
-- **Tool execution is sequential** (`executionMode: "sequential"`) so parallel tool calls cannot race on in-memory state. Validation failures **throw** so Pi marks `isError: true` and the branch replays the last good snapshot.
-- **Overlay paint is pure + width-cached.** Completion visibility bookkeeping runs in `update()` plus a disposable timeout, never during `render`. Same terminal width reuses the last line array.
+## Storage and replay
+
+Todo state is conversation-backed rather than stored in a separate database. Every successful tool result carries a full v2 snapshot:
+
+```ts
+{
+  schemaVersion: 2,
+  change: { /* create, update, list, or delete */ },
+  state: {
+    items: [/* complete current list */],
+    nextId: 7
+  }
+}
+```
+
+The assistant tool call already stores the arguments, so result details do not duplicate `params` or `action`. The extension keeps one closure-scoped store for its runtime and replays the latest valid v2 snapshot from the current conversation branch on session start and `/tree` navigation. `/reload`, resume, and session replacement create a fresh extension runtime and replay that branch. Compaction does not require a separate replay handler because it does not change the live branch state.
+
+Replay scans tail to head, validates the bounded state, and can fall back past a malformed v2 snapshot. Todo v1 snapshots are intentionally ignored and are not migrated; their historical tool-result text remains in the session transcript.
+
+Tool execution is sequential, so concurrent calls cannot race on the closure store. Validation failures throw before commit, allowing Pi to mark the result as an error while the previous snapshot remains authoritative.

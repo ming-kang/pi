@@ -1,16 +1,11 @@
 /**
  * todo — Pi-native task tracking for multi-step work.
  *
- * The state is intentionally conversation-backed: every tool result carries a
- * full snapshot in `details`, and lifecycle handlers replay the current branch.
- * This keeps /reload, compaction, and session-tree navigation aligned with the
- * conversation without adding a separate disk database. (Compaction-safe by
- * design: sessionManager.getBranch() returns the FULL branch history including
- * pre-compaction toolResult entries — only buildSessionContext summarizes.)
- *
- * State is keyed per session id (see state.ts): resume and /tree switches can
- * change the session within one process, and execute + lifecycle handlers
- * re-point the active bucket before touching state.
+ * State is conversation-backed: every tool result carries a full v2 snapshot
+ * in `details`, and lifecycle handlers replay the current branch into the
+ * closure store created by createTodoStore(). Resume, /reload, and /tree
+ * navigation stay aligned with the conversation without a disk database or
+ * any per-session global state.
  */
 import { Text } from "@earendil-works/pi-tui";
 import {
@@ -27,40 +22,29 @@ import {
 	TODO_TOOL_NAME,
 	TODOS_COMMAND_NAME,
 } from "./constants.ts";
-import { TodoOverlay } from "./overlay.ts";
 import { type TodoDetails, TodoParamsSchema } from "./schema.ts";
-import {
-	applyTodoMutation,
-	buildTodoDetails,
-	commitTodoState,
-	disposeTodoSession,
-	formatTodoContent,
-	getTodoState,
-	replaceTodoState,
-	replayTodosFromBranch,
-	setActiveTodoSession,
-} from "./state.ts";
-import { formatCommandList, formatTodoCall, formatTodoGroupCall } from "./view.ts";
+import { createTodoStore, replayTodosFromBranch, type TodoStore } from "./state.ts";
+import { formatCommandList, formatTodoCall, formatTodoContent, formatTodoGroupCall } from "./view.ts";
+import { TodoWidget } from "./widget.ts";
 
 interface TodoSessionCtx {
-	sessionManager: { getBranch(): Iterable<unknown>; getSessionId(): string };
+	sessionManager: { getBranch(): Iterable<unknown> };
 }
 
-function safeReplay(ctx: TodoSessionCtx): void {
-	// Every ctx.sessionManager access goes through a stale guard, so the whole
-	// body stays inside the try: a lifecycle event can race session replacement
-	// (resume, /tree, /reload), and a stale ctx just means another session took
-	// over — nothing left to replay for it.
+function safeReplay(ctx: TodoSessionCtx, store: TodoStore): void {
+	// Every ctx.sessionManager access stays inside the guard: a lifecycle event
+	// can race session replacement (resume, /tree, /reload), and a stale ctx
+	// just means another session took over — nothing left to replay for it.
 	try {
-		setActiveTodoSession(ctx.sessionManager.getSessionId());
-		replaceTodoState(replayTodosFromBranch(ctx));
+		store.replaceState(replayTodosFromBranch(ctx));
 	} catch (error) {
 		if (!isStaleExtensionContextError(error)) throw error;
 	}
 }
 
 export default function todo(pi: ExtensionAPI): void {
-	let overlay: TodoOverlay | undefined;
+	const store = createTodoStore();
+	let widget: TodoWidget | undefined;
 
 	pi.registerTool({
 		name: TODO_TOOL_NAME,
@@ -71,24 +55,16 @@ export default function todo(pi: ExtensionAPI): void {
 		parameters: TodoParamsSchema,
 		executionMode: "sequential" as ToolExecutionMode,
 		// Consecutive todo calls collapse into one run like read/find's `explore`
-		// group; the overlay already carries the live list, so the transcript only
+		// group; the widget already carries the live list, so the transcript only
 		// needs the sequence of operations.
 		toolGroup: TODO_TOOL_NAME,
 
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<TodoDetails>> {
-			// Re-point the active bucket: resume//tree can switch sessions between
-			// lifecycle events and this call.
-			setActiveTodoSession(ctx.sessionManager.getSessionId());
-			const result = applyTodoMutation(getTodoState(), params);
-			if (result.operation.kind === "error") {
-				throw new Error(result.operation.message);
-			}
-			commitTodoState(result.state);
-			const text = formatTodoContent(result.operation, result.state);
-			return {
-				content: [{ type: "text", text }],
-				details: buildTodoDetails(params, result.state),
-			};
+		async execute(_toolCallId, params, _signal, _onUpdate): Promise<AgentToolResult<TodoDetails>> {
+			// Validation errors throw before any state mutation, so the store is
+			// untouched on failure.
+			const details = store.execute(params);
+			const text = formatTodoContent(details.change, details.state);
+			return { content: [{ type: "text", text }], details };
 		},
 
 		renderCall(args, theme, context) {
@@ -103,47 +79,39 @@ export default function todo(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand(TODOS_COMMAND_NAME, {
-		description: "Show todos for the current conversation branch",
+		description: "Show the complete todo list for the current conversation branch",
 		handler: async (_args, ctx) => {
 			if (!ctx.hasUI) {
 				ctx.ui.notify("/todos requires an interactive UI.", "warning");
 				return;
 			}
-			setActiveTodoSession(ctx.sessionManager.getSessionId());
-			ctx.ui.notify(formatCommandList(getTodoState()), "info");
+			ctx.ui.notify(formatCommandList(store.getState()), "info");
 		},
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
-		safeReplay(ctx);
+		safeReplay(ctx, store);
 		if (ctx.hasUI) {
-			overlay ??= new TodoOverlay();
-			overlay.setUI(ctx.ui);
-			overlay.resetVisibility();
-			overlay.update();
+			widget ??= new TodoWidget(() => store.getState());
+			widget.setUI(ctx.ui);
+			widget.update();
 		}
 	});
 
-	pi.on("session_compact", async (_event, ctx) => {
-		safeReplay(ctx);
-		overlay?.resetVisibility();
-		overlay?.update();
-	});
-
 	pi.on("session_tree", async (_event, ctx) => {
-		safeReplay(ctx);
-		overlay?.resetVisibility();
-		overlay?.update();
+		safeReplay(ctx, store);
+		widget?.update();
 	});
 
-	pi.on("session_shutdown", async (_event, ctx) => {
-		disposeTodoSession(ctx.sessionManager.getSessionId());
-		overlay?.dispose();
-		overlay = undefined;
+	pi.on("session_shutdown", async (_event, _ctx) => {
+		// The store belongs to this extension runtime and is collected with it;
+		// the next runtime restores its own store during session_start.
+		widget?.dispose();
+		widget = undefined;
 	});
 
 	pi.on("tool_execution_end", async (event) => {
 		if (event.toolName !== TODO_TOOL_NAME || event.isError) return;
-		overlay?.update();
+		widget?.update();
 	});
 }
