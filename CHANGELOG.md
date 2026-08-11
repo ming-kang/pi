@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.84.4] - 2026-08-11
+
 ### Added
 
 - Added `npm run diff:upstream -- --target v<version>`, which classifies an upstream release diff against the deviation ledger for synchronization triage: changes touching registered deviations, adoption candidates the fork has not touched, and removed upstream paths.
