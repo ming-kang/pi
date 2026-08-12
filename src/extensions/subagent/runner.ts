@@ -2,19 +2,18 @@ import { relative } from "node:path";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai/compat";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
 import { sleep } from "../../utils/sleep.ts";
-import { boundText, emptyUsage, mergeUsage, tailText, toNestedUsage } from "./activity.ts";
+import { boundText, emptyUsage, mergeUsage, toNestedUsage } from "./activity.ts";
 import {
 	DETAILS_ACTIVITY_LIMIT,
 	DETAILS_OUTPUT_LIMIT,
 	ERROR_TEXT_LIMIT,
 	MAX_CONCURRENCY,
 	MAX_TASKS,
-	PARALLEL_OUTPUT_LIMIT,
-	PARALLEL_TASK_OUTPUT_LIMIT,
 	RETRY_ERROR_TEXT_LIMIT,
-	SINGLE_OUTPUT_LIMIT,
+	TASK_OUTPUT_LIMIT,
 	TASK_RETRY_BASE_DELAY_MS,
 	TASK_RETRY_LIMIT,
+	TOTAL_OUTPUT_LIMIT,
 } from "./constants.ts";
 import { type ParentModelContext, resolveSubagentTask } from "./resolve.ts";
 import { beginSubagentRetry, clearSubagentRetry } from "./retry.ts";
@@ -22,7 +21,6 @@ import type { SubagentParams, SubagentTask } from "./schema.ts";
 import { runSdkTask } from "./sdk-runner.ts";
 import { loadSubagentConfig } from "./settings.ts";
 import type {
-	AgentDefinition,
 	ResolvedSubagentTask,
 	SubagentDetails,
 	SubagentExecutionResult,
@@ -87,7 +85,6 @@ export class ConcurrencyGate {
 export interface SubagentInvocationOptions {
 	params: SubagentParams;
 	parentCwd: string;
-	agents: readonly AgentDefinition[];
 	parent: ParentModelContext;
 	modelRuntime: ModelRuntime;
 	agentDir: string;
@@ -108,9 +105,7 @@ function createRun(task: ResolvedSubagentTask, index: number, parentCwd: string)
 	return {
 		id: runId(index),
 		agent: task.agent.name,
-		agentSource: task.agent.source,
 		description: task.description,
-		prompt: task.prompt,
 		// Display-only relative path; the worker session itself uses the
 		// resolved absolute task.cwd. Empty means "same as the parent".
 		cwd: relative(parentCwd, task.cwd),
@@ -118,8 +113,7 @@ function createRun(task: ResolvedSubagentTask, index: number, parentCwd: string)
 		thinking: task.thinking,
 		status: "queued",
 		activities: [],
-		liveText: "",
-		finalOutput: "",
+		report: "",
 		usage: emptyUsage(),
 	};
 }
@@ -144,12 +138,11 @@ export function boundSubagentDetails(details: SubagentDetails): SubagentDetails 
 		1_024,
 		Math.floor((DETAILS_OUTPUT_LIMIT - 8 * 1024) / Math.max(1, details.runs.length)),
 	);
-	const outputLimit = Math.min(SINGLE_OUTPUT_LIMIT, Math.max(1_024, perRunBudget - 7 * 1024));
+	const reportLimit = Math.min(TASK_OUTPUT_LIMIT, Math.max(1_024, perRunBudget - 7 * 1024));
 	const bounded: SubagentDetails = {
 		...details,
 		runs: details.runs.map((run) => ({
 			...run,
-			prompt: boundText(run.prompt, 1_024),
 			cwd: boundText(run.cwd, 1_024),
 			currentActivity: run.currentActivity ? boundText(run.currentActivity, 512) : undefined,
 			retry: run.retry ? { ...run.retry, error: boundText(run.retry.error, RETRY_ERROR_TEXT_LIMIT) } : undefined,
@@ -158,22 +151,13 @@ export function boundSubagentDetails(details: SubagentDetails): SubagentDetails 
 				summary: boundText(activity.summary, 256),
 				resultSummary: activity.resultSummary ? boundText(activity.resultSummary, 256) : undefined,
 			})),
-			// liveText is a tail by construction: keep the newest lines, not the
-			// head, or the transcript's live tail would freeze at the 1KB mark.
-			liveText: tailText(run.liveText, 1_024),
-			finalOutput: boundText(run.finalOutput, outputLimit),
+			report: boundText(run.report, reportLimit),
 			error: run.error ? boundText(run.error, 1_024) : undefined,
 		})),
 	};
 	const fields: TextField[] = [];
 	for (const run of bounded.runs) {
 		fields.push(
-			{
-				get: () => run.prompt,
-				set: (value) => {
-					run.prompt = value;
-				},
-			},
 			{
 				get: () => run.cwd,
 				set: (value) => {
@@ -187,15 +171,9 @@ export function boundSubagentDetails(details: SubagentDetails): SubagentDetails 
 				},
 			},
 			{
-				get: () => run.liveText,
+				get: () => run.report,
 				set: (value) => {
-					run.liveText = value;
-				},
-			},
-			{
-				get: () => run.finalOutput,
-				set: (value) => {
-					run.finalOutput = value;
+					run.report = value;
 				},
 			},
 			{
@@ -234,29 +212,23 @@ export function boundSubagentDetails(details: SubagentDetails): SubagentDetails 
 }
 
 function statusOf(runs: readonly SubagentRunDetails[]): SubagentDetails["status"] {
-	if (runs.some((run) => run.status === "aborted")) return "aborted";
-	if (runs.some((run) => run.status === "failed")) return "failed";
+	// Active beats terminal: any queued or running run keeps the batch
+	// "running" regardless of what the others have settled to.
 	if (runs.some((run) => run.status === "queued" || run.status === "running")) return "running";
-	return "completed";
+	if (runs.length === 0) return "running";
+	if (runs.every((run) => run.status === "completed")) return "completed";
+	if (runs.some((run) => run.status === "completed")) return "partial";
+	if (runs.every((run) => run.status === "aborted")) return "aborted";
+	return "failed";
 }
 
 function statusText(details: SubagentDetails): string {
+	if (details.runs.length === 0) return "Initializing…";
 	const running = details.runs.filter((run) => run.status === "running").length;
 	const queued = details.runs.filter((run) => run.status === "queued").length;
 	const completed = details.runs.filter((run) => run.status === "completed").length;
 	const failed = details.runs.filter((run) => run.status === "failed").length;
 	const aborted = details.runs.filter((run) => run.status === "aborted").length;
-	if (details.mode === "single") {
-		const run = details.runs[0];
-		if (run?.currentActivity) return run.currentActivity;
-		if (
-			!run ||
-			(run.status === "running" && run.usage.turns === 0 && run.usage.toolUses === 0 && run.liveText.length === 0)
-		) {
-			return "Initializing…";
-		}
-		return run.status === "running" ? "Thinking…" : run.status;
-	}
 	const parts = [`${completed}/${details.runs.length} complete`];
 	if (running) parts.push(`${running} running`);
 	if (queued) parts.push(`${queued} queued`);
@@ -266,13 +238,11 @@ function statusText(details: SubagentDetails): string {
 }
 
 function emitDetails(
-	mode: SubagentDetails["mode"],
 	runs: SubagentRunDetails[],
 	startedAt: number,
 	onUpdate: ((details: SubagentDetails) => void) | undefined,
 ): SubagentDetails {
 	const details: SubagentDetails = {
-		mode,
 		status: statusOf(runs),
 		runs: [...runs],
 		startedAt,
@@ -292,10 +262,16 @@ async function resolveTasks(
 	options: SubagentInvocationOptions,
 ): Promise<ResolvedSubagentTask[]> {
 	validateTaskCount(tasks);
+	// One config load and one resolution pass for the whole batch: every
+	// task/profile/cwd/model is settled before any run is created or any
+	// worker starts, so a failing task cannot strand half-initialized runs.
 	const config = await loadSubagentConfig(options.agentDir);
 	return Promise.all(
-		tasks.map((task) =>
-			resolveSubagentTask(task, options.parentCwd, options.agents, options.parent, options.agentDir, config),
+		tasks.map((task, index) =>
+			resolveSubagentTask(task, options.parentCwd, options.parent, options.agentDir, config).catch((error) => {
+				const message = error instanceof Error ? error.message : String(error);
+				throw new Error(`Subagent task tasks[${index}] failed to resolve: ${message}`);
+			}),
 		),
 	);
 }
@@ -324,8 +300,7 @@ function resetRunForRetry(run: SubagentRunDetails, attempt: number, maxAttempts:
 	run.error = undefined;
 	run.startedAt = undefined;
 	run.endedAt = undefined;
-	run.finalOutput = "";
-	run.liveText = "";
+	run.report = "";
 	run.activities.length = 0;
 	run.usage = emptyUsage();
 	beginSubagentRetry(run, { attempt, maxAttempts, delayMs, error });
@@ -349,6 +324,10 @@ async function waitForTaskRetry(
 	}
 }
 
+// The gate slot is held only while a worker session actually runs. Backoff
+// waits outside the slot (release, sleep, reacquire) so a retrying task
+// cannot starve queued tasks, and aborting during the wait settles the run
+// without occupying the gate.
 async function runWithGate(
 	task: ResolvedSubagentTask,
 	run: SubagentRunDetails,
@@ -356,17 +335,19 @@ async function runWithGate(
 	onProgress: () => void,
 ): Promise<SubagentRunDetails> {
 	onProgress();
-	let release: (() => void) | undefined;
-	try {
-		release = await options.gate.acquire(options.signal);
-		if (options.signal?.aborted) {
-			run.status = "aborted";
-			run.error = "Subagent was aborted while queued.";
-			return run;
-		}
-		const baseDelayMs = options.taskRetryBaseDelayMs ?? TASK_RETRY_BASE_DELAY_MS;
-		for (let attempt = 0; ; attempt++) {
-			clearSubagentRetry(run);
+	const baseDelayMs = options.taskRetryBaseDelayMs ?? TASK_RETRY_BASE_DELAY_MS;
+	for (let attempt = 0; ; attempt++) {
+		clearSubagentRetry(run);
+		let release: (() => void) | undefined;
+		let delayMs = 0;
+		try {
+			release = await options.gate.acquire(options.signal);
+			if (options.signal?.aborted) {
+				run.status = "aborted";
+				run.error = "Subagent was aborted while queued.";
+				run.endedAt = Date.now();
+				return run;
+			}
 			const result = await runSdkTask({
 				task,
 				run,
@@ -378,77 +359,65 @@ async function runWithGate(
 				registerAbort: options.registerAbort,
 			});
 			if (attempt >= TASK_RETRY_LIMIT || options.signal?.aborted || !shouldRetryTask(result)) return result;
-			const delayMs = baseDelayMs * 2 ** attempt;
+			delayMs = baseDelayMs * 2 ** attempt;
 			resetRunForRetry(run, attempt + 1, TASK_RETRY_LIMIT, delayMs);
 			onProgress();
-			try {
-				await waitForTaskRetry(delayMs, options);
-			} catch {
-				clearSubagentRetry(run);
-				run.status = "aborted";
-				run.error = "Subagent was aborted while waiting to retry.";
-				run.endedAt = Date.now();
-				onProgress();
-				return run;
-			}
+		} catch (error) {
+			clearSubagentRetry(run);
+			run.status = options.signal?.aborted ? "aborted" : "failed";
+			run.error = boundText(error instanceof Error ? error.message : String(error), ERROR_TEXT_LIMIT);
+			run.endedAt = Date.now();
+			onProgress();
+			return run;
+		} finally {
+			release?.();
 		}
-	} catch (error) {
-		clearSubagentRetry(run);
-		run.status = options.signal?.aborted ? "aborted" : "failed";
-		run.error = boundText(error instanceof Error ? error.message : String(error), ERROR_TEXT_LIMIT);
-		run.endedAt = Date.now();
-		onProgress();
-		return run;
-	} finally {
-		release?.();
+		try {
+			await waitForTaskRetry(delayMs, options);
+		} catch {
+			clearSubagentRetry(run);
+			run.status = "aborted";
+			run.error = "Subagent was aborted while waiting to retry.";
+			run.endedAt = Date.now();
+			onProgress();
+			return run;
+		}
 	}
 }
 
+// Fair per-task report budget: the total cap is split evenly after reserving
+// room for the numbered section headings and separators, capped per task.
+function perTaskReportBudget(taskCount: number): number {
+	const headingReserve = Math.min(256 * taskCount, Math.floor(TOTAL_OUTPUT_LIMIT / 4));
+	const fairShare = Math.floor((TOTAL_OUTPUT_LIMIT - headingReserve) / Math.max(1, taskCount));
+	return Math.min(TASK_OUTPUT_LIMIT, Math.max(2_048, fairShare));
+}
+
+function reportSectionTitle(run: SubagentRunDetails, index: number): string {
+	return `### ${index + 1}. ${run.description} (${run.agent}) — ${run.status}`;
+}
+
+function reportSectionBody(run: SubagentRunDetails): string {
+	if (run.status === "completed") return run.report || EMPTY_OUTPUT;
+	if (run.status === "failed" || run.status === "aborted") {
+		const verdict = run.status === "aborted" ? "Subagent aborted" : "Subagent failed";
+		const cause = run.error ? `: ${run.error}` : ".";
+		const partial = run.report ? `\n\nPartial report:\n${run.report}` : "";
+		return `${verdict}${cause}${partial}`;
+	}
+	if (run.status === "queued") return "Task was queued and never started.";
+	return "Task was still running when the batch settled.";
+}
+
+// Always ordered numbered sections, even for a single task, so the parent
+// can reference results by number. Total cap with a fair per-task budget;
+// empty, failed, aborted, and partial reports are labeled explicitly.
 function resultContent(details: SubagentDetails): string {
-	if (details.mode === "single") {
-		const run = details.runs[0];
-		if (!run) return "Subagent produced no run.";
-		if (run.status === "failed" || run.status === "aborted") {
-			return boundText(
-				`${run.status === "aborted" ? "Subagent aborted" : "Subagent failed"}: ${run.error ?? "unknown error"}${run.finalOutput ? `\n\nPartial response:\n${run.finalOutput}` : ""}`,
-				SINGLE_OUTPUT_LIMIT,
-			);
-		}
-		return run.finalOutput || EMPTY_OUTPUT;
-	}
-	const sections = details.runs.map((run) => {
-		const output = run.finalOutput || run.error || EMPTY_OUTPUT;
-		return `### ${run.description} (${run.agent}) — ${run.status}\n\n${boundText(output, PARALLEL_TASK_OUTPUT_LIMIT)}`;
+	const perTaskBudget = perTaskReportBudget(details.runs.length);
+	const sections = details.runs.map((run, index) => {
+		return `${reportSectionTitle(run, index)}\n\n${boundText(reportSectionBody(run), perTaskBudget)}`;
 	});
-	return boundText(sections.join("\n\n---\n\n"), PARALLEL_OUTPUT_LIMIT);
-}
-
-function invocationMode(params: SubagentParams): { mode: SubagentDetails["mode"]; tasks: SubagentTask[] } {
-	const provided: string[] = [];
-	if (params.prompt != null) provided.push("prompt");
-	if (params.tasks != null) provided.push("tasks");
-	if (provided.length !== 1) {
-		throw new Error(
-			provided.length === 0
-				? "Provide exactly one subagent mode: prompt (single task) or tasks (parallel tasks); none was provided."
-				: `Provide exactly one subagent mode: received ${provided.join(", ")}. Keep one and set the unused mode fields to null or omit them.`,
-		);
-	}
-	if (params.tasks != null) {
-		return { mode: "parallel", tasks: params.tasks };
-	}
-	if (!params.description) throw new Error("description is required for single mode.");
-	return {
-		mode: "single",
-		tasks: [
-			{
-				agent: params.agent,
-				description: params.description,
-				prompt: params.prompt!,
-				cwd: params.cwd,
-			},
-		],
-	};
+	return boundText(sections.join("\n\n---\n\n"), TOTAL_OUTPUT_LIMIT);
 }
 
 // Cheap change detector: consecutive events that alter nothing user-visible
@@ -468,9 +437,7 @@ export function progressKey(runs: readonly SubagentRunDetails[]): string {
 				run.retry?.maxAttempts ?? "",
 				run.retry?.deadline ?? "",
 				run.retry?.error ?? "",
-				run.liveText.length,
-				run.liveText.slice(-24),
-				run.finalOutput.length,
+				run.report.length,
 				run.usage.turns,
 				run.usage.toolUses,
 				run.usage.totalTokens,
@@ -488,25 +455,26 @@ export function isSubagentError(details: Pick<SubagentDetails, "status" | "runs"
 }
 
 export async function runSubagentInvocation(options: SubagentInvocationOptions): Promise<SubagentExecutionResult> {
-	const { mode, tasks } = invocationMode(options.params);
+	// Defensive count check: the schema already enforces 1..MAX_TASKS, but
+	// strict providers can bypass minItems, so validate before any work.
+	const tasks = options.params.tasks ?? [];
 	const resolved = await resolveTasks(tasks, options);
 	const runs = resolved.map((task, index) => createRun(task, index, options.parentCwd));
 	const startedAt = Date.now();
-	let latestDetails = emitDetails(mode, runs, startedAt, options.onUpdate);
+	let latestDetails = emitDetails(runs, startedAt, options.onUpdate);
 	let lastProgressKey = progressKey(runs);
 	const progress = () => {
 		const key = progressKey(runs);
 		if (key === lastProgressKey) return;
 		lastProgressKey = key;
-		latestDetails = emitDetails(mode, runs, startedAt, options.onUpdate);
+		latestDetails = emitDetails(runs, startedAt, options.onUpdate);
 	};
 
-	if (mode === "single") {
-		await runWithGate(resolved[0]!, runs[0]!, options, progress);
-	} else {
-		await Promise.all(resolved.map((task, index) => runWithGate(task, runs[index]!, options, progress)));
-	}
-	latestDetails = emitDetails(mode, runs, startedAt, undefined);
+	// Every task runs concurrently through the shared gate; Promise.all keeps
+	// result order identical to input order. There is no single-task branch:
+	// one task is just a batch of one.
+	await Promise.all(resolved.map((task, index) => runWithGate(task, runs[index]!, options, progress)));
+	latestDetails = emitDetails(runs, startedAt, undefined);
 	latestDetails.endedAt = Date.now();
 	// Error classification lives in the tool_result handler (index.ts), the
 	// only channel that reaches the session transcript and export.

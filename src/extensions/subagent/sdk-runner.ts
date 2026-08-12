@@ -5,17 +5,8 @@ import { DefaultResourceLoader } from "../../core/resource-loader.ts";
 import { createAgentSession } from "../../core/sdk.ts";
 import { SessionManager } from "../../core/session-manager.ts";
 import { SettingsManager } from "../../core/settings-manager.ts";
-import {
-	activitySummary,
-	addUsage,
-	appendActivity,
-	assistantText,
-	boundText,
-	finalAssistantText,
-	resultSummary,
-	setLiveText,
-} from "./activity.ts";
-import { ERROR_TEXT_LIMIT, LIVE_TEXT_LIMIT, SINGLE_OUTPUT_LIMIT } from "./constants.ts";
+import { activitySummary, addUsage, appendActivity, boundText, finalAssistantText, resultSummary } from "./activity.ts";
+import { ERROR_TEXT_LIMIT, TASK_OUTPUT_LIMIT } from "./constants.ts";
 import { beginSubagentRetry, clearSubagentRetry } from "./retry.ts";
 import type { ResolvedSubagentTask, SubagentRunDetails, ToolActivity } from "./types.ts";
 
@@ -40,7 +31,7 @@ function workerSystemPrompt(base: string | undefined, task: ResolvedSubagentTask
 		"Stay inside the assigned working directory and delegated scope.",
 		"Do not ask the end user questions. If blocked, report the exact blocker and what would resolve it.",
 		"Do not spawn subagents or invoke tools outside the configured tool list.",
-		"When referencing files in the final report, use absolute paths so the caller can locate them unambiguously.",
+		"When referencing files in the final report, use paths relative to the task's working directory so the caller can locate them unambiguously.",
 		"Include code snippets only when the exact text is load-bearing (a bug you found, a signature the caller asked for); do not recap code you merely read.",
 		"End with a concise report covering findings or changes, verification performed, blockers, and unresolved risks. The caller will relay it to the user, so include only the essentials.",
 		task.agent.systemPrompt,
@@ -225,21 +216,14 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 				return;
 			}
 			if (event.type === "message_end" && event.message.role === "assistant") {
+				// Streaming updates carry no semantic weight (message_update is
+				// ignored); the settled message is where usage is accounted.
 				clearSubagentRetry(run);
 				if (!seenAssistantMessages.has(event.message)) {
 					seenAssistantMessages.add(event.message);
 					addUsage(run.usage, event.message.usage);
 				}
-				run.liveText = setLiveText(assistantText(event.message));
-				emitText();
-				return;
-			}
-			if (event.type === "message_update") {
-				clearSubagentRetry(run);
-				if (event.message.role === "assistant") run.liveText = setLiveText(assistantText(event.message));
-				if (event.assistantMessageEvent.type === "thinking_delta") run.currentActivity = "Thinking…";
-				if (event.assistantMessageEvent.type === "text_delta") run.currentActivity = "Writing response…";
-				emitText();
+				emitImmediate();
 				return;
 			}
 			if (event.type === "tool_execution_start") {
@@ -279,7 +263,7 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 		});
 		await session.prompt(task.prompt);
 		const finalMessage = lastAssistantMessage(session);
-		run.finalOutput = finalAssistantText(session.messages);
+		run.report = finalAssistantText(session.messages);
 		const error = assistantError(finalMessage);
 		if (signal?.aborted || finalMessage?.stopReason === "aborted") {
 			run.status = "aborted";
@@ -298,15 +282,14 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 			run.status = "failed";
 			run.error = boundText(error instanceof Error ? error.message : String(error), ERROR_TEXT_LIMIT);
 		}
-		if (session) run.finalOutput = finalAssistantText(session.messages);
+		if (session) run.report = finalAssistantText(session.messages);
 	} finally {
 		if (signal) signal.removeEventListener("abort", abortListener);
 		throttled.cancel();
 		unregisterAbort?.();
 		unsubscribe?.();
 		session?.dispose();
-		run.liveText = boundText(run.liveText, LIVE_TEXT_LIMIT);
-		run.finalOutput = boundText(run.finalOutput, SINGLE_OUTPUT_LIMIT);
+		run.report = boundText(run.report, TASK_OUTPUT_LIMIT);
 		if (run.error) run.error = boundText(run.error, ERROR_TEXT_LIMIT);
 		clearSubagentRetry(run);
 		run.endedAt = Date.now();

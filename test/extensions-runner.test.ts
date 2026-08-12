@@ -102,6 +102,15 @@ describe("ExtensionRunner", () => {
 		getScopedModels: () => [],
 	};
 
+	describe("modelRuntime", () => {
+		it("exposes the registry's canonical runtime on the extension context", async () => {
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+
+			expect(runner.createContext().modelRuntime).toBe(modelRegistry.getRuntime());
+		});
+	});
+
 	describe("scopedModels", () => {
 		it("reflects the getScopedModels context action on ctx.scopedModels", async () => {
 			const result = await discoverAndLoadExtensions([], tempDir, tempDir);

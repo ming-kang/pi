@@ -1,41 +1,19 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
+import type { SubagentAgentName } from "./constants.ts";
 
-export type AgentSource = "builtin" | "user" | "project";
-export type SubagentMode = "single" | "parallel";
-export type SubagentRunStatus = "queued" | "running" | "completed" | "failed" | "aborted";
-export type ToolActivityStatus = "running" | "succeeded" | "failed";
-
-export interface AgentDefinition {
-	name: string;
+// Static built-in subagent profile; the only agents a task can select.
+export interface AgentProfile {
+	name: SubagentAgentName;
 	description: string;
-	/** Optional human-facing copy; description remains the model-facing usage guidance. */
-	uiDescription?: string;
 	tools: string[];
 	systemPrompt: string;
-	source: AgentSource;
-	filePath: string;
-	backend: "sdk";
 	/**
 	 * Skip loading AGENTS.md/CLAUDE.md into the worker's system prompt.
 	 * Read-only exploration doesn't need commit/PR/style rules; the parent
-	 * has full context to interpret results. Builtin-only, not a
-	 * frontmatter field.
+	 * has full context to interpret results.
 	 */
 	omitContextFiles?: boolean;
-}
-
-export interface AgentDiagnostic {
-	path: string;
-	message: string;
-	source: Exclude<AgentSource, "builtin">;
-}
-
-export interface AgentDiscoveryResult {
-	agents: AgentDefinition[];
-	diagnostics: AgentDiagnostic[];
-	projectAgentsDir?: string;
-	projectAgentsTrusted: boolean;
 }
 
 export interface SubagentProfileOverride {
@@ -45,19 +23,24 @@ export interface SubagentProfileOverride {
 
 export interface SubagentConfigFile {
 	version: 1;
-	profiles: Record<string, SubagentProfileOverride>;
+	// Absence means "inherit the parent session"; only the two built-in
+	// profiles exist, so unknown keys are rejected by settings.ts.
+	profiles: Partial<Record<SubagentAgentName, SubagentProfileOverride>>;
 }
 
 export interface ResolvedSubagentTask {
-	agent: AgentDefinition;
+	agent: AgentProfile;
 	description: string;
 	prompt: string;
 	cwd: string;
 	model: Model<Api>;
 	thinking: ThinkingLevel;
-	modelSource: "profile" | "parent";
-	thinkingSource: "profile" | "parent";
 }
+
+export type SubagentRunStatus = "queued" | "running" | "completed" | "failed" | "aborted";
+/** Aggregate batch status; active runs beat every terminal verdict. */
+export type SubagentBatchStatus = "running" | "completed" | "partial" | "failed" | "aborted";
+export type ToolActivityStatus = "running" | "succeeded" | "failed";
 
 export interface ToolActivity {
 	id: string;
@@ -92,9 +75,7 @@ export interface SubagentRetryDetails {
 export interface SubagentRunDetails {
 	id: string;
 	agent: string;
-	agentSource: AgentSource;
 	description: string;
-	prompt: string;
 	cwd: string;
 	model: string;
 	thinking: ThinkingLevel;
@@ -104,20 +85,18 @@ export interface SubagentRunDetails {
 	currentActivity?: string;
 	retry?: SubagentRetryDetails;
 	activities: ToolActivity[];
-	liveText: string;
-	finalOutput: string;
+	/** Final assistant report; empty until the worker settles. */
+	report: string;
 	error?: string;
 	usage: SubagentUsage;
 }
 
 export interface SubagentDetails {
-	mode: SubagentMode;
-	status: SubagentRunStatus;
+	status: SubagentBatchStatus;
 	runs: SubagentRunDetails[];
 	startedAt: number;
 	endedAt?: number;
 	usage: SubagentUsage;
-	error?: string;
 }
 
 export interface SubagentExecutionResult {

@@ -31,7 +31,8 @@ export interface ProfileModelListOptions {
 	scopedModels: readonly { model: Model<Api> }[];
 	currentSessionModel: Model<Api> | undefined;
 	savedModelId: string | undefined;
-	onSelectionChange: (choice: ProfileModelChoice | undefined) => void;
+	/** Reports the confirmed choice; undefined means the picker was dismissed. */
+	onDone: (choice: ProfileModelChoice | undefined) => void;
 }
 
 interface ModelChoiceItem extends ProfileModelChoice {
@@ -66,14 +67,14 @@ function modelSearchText(item: ModelChoiceItem): string {
 	return `${item.provider} ${item.provider}/${item.id} ${item.provider} ${item.id}${name}`;
 }
 
-/** Non-closing /model-style search list embedded by the profile editor. */
+/** Searchable /model-style model picker used by /agents; confirm reports the selected choice. */
 export class ProfileModelListComponent extends Container implements Focusable {
 	private readonly theme: Theme;
 	private readonly keybindings: KeybindingsManager;
 	private readonly currentSessionModel: Model<Api> | undefined;
 	private readonly savedModelId: string | undefined;
 	private readonly scopedModelKeys: Set<string>;
-	private readonly onSelectionChange: (choice: ProfileModelChoice | undefined) => void;
+	private readonly onDone: (choice: ProfileModelChoice | undefined) => void;
 	private readonly searchInput: Input;
 	private readonly scopeContainer: Container;
 	private readonly listContainer: Container;
@@ -106,7 +107,7 @@ export class ProfileModelListComponent extends Container implements Focusable {
 		this.savedModelId = options.savedModelId;
 		this.scopedModelKeys = new Set(options.scopedModels.map(({ model }) => fullModelId(model)));
 		this.scope = this.scopedModelKeys.size > 0 ? "scoped" : "all";
-		this.onSelectionChange = options.onSelectionChange;
+		this.onDone = options.onDone;
 
 		this.scopeContainer = new Container();
 		this.addChild(this.scopeContainer);
@@ -191,7 +192,6 @@ export class ProfileModelListComponent extends Container implements Focusable {
 			this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, this.filteredChoices.length - 1));
 		}
 		this.updateList();
-		this.onSelectionChange(this.getSelectedChoice());
 	}
 
 	private updateScopeView(): void {
@@ -277,7 +277,6 @@ export class ProfileModelListComponent extends Container implements Focusable {
 		if (this.filteredChoices.length === 0) return;
 		this.selectedIndex = (this.selectedIndex + offset + this.filteredChoices.length) % this.filteredChoices.length;
 		this.updateList();
-		this.onSelectionChange(this.getSelectedChoice());
 	}
 
 	private toggleScope(): void {
@@ -322,6 +321,10 @@ export class ProfileModelListComponent extends Container implements Focusable {
 			this.moveSelection(-1);
 		} else if (this.keybindings.matches(data, "tui.select.down")) {
 			this.moveSelection(1);
+		} else if (this.keybindings.matches(data, "tui.select.confirm")) {
+			this.onDone(this.getSelectedChoice());
+		} else if (this.keybindings.matches(data, "tui.select.cancel")) {
+			this.onDone(undefined);
 		} else {
 			this.searchInput.handleInput(data);
 			this.applyFilter(this.searchInput.getValue());

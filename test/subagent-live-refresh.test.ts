@@ -41,9 +41,7 @@ function runningRun(id: string, startedAt: number): SubagentRunDetails {
 	return {
 		id,
 		agent: "explorer",
-		agentSource: "builtin",
 		description: `Inspect ${id}`,
-		prompt: "Inspect the code without producing output yet.",
 		cwd: process.cwd(),
 		model: "test/model",
 		thinking: "low",
@@ -51,16 +49,14 @@ function runningRun(id: string, startedAt: number): SubagentRunDetails {
 		startedAt,
 		currentActivity: "Exploring code",
 		activities: [],
-		liveText: "Waiting for the next finding",
-		finalOutput: "",
+		report: "",
 		usage: usage(),
 	};
 }
 
-function runningDetails(mode: "single" | "parallel", startedAt: number, runCount = 1): SubagentDetails {
+function runningDetails(startedAt: number, runCount = 1): SubagentDetails {
 	const runs = Array.from({ length: runCount }, (_, index) => runningRun(`run-${index + 1}`, startedAt));
 	return {
-		mode,
 		status: "running",
 		startedAt,
 		runs,
@@ -73,10 +69,8 @@ function completedDetails(startedAt: number, endedAt: number): SubagentDetails {
 	run.status = "completed";
 	run.endedAt = endedAt;
 	run.currentActivity = undefined;
-	run.liveText = "";
-	run.finalOutput = "Completed report.";
+	run.report = "Completed report.";
 	return {
-		mode: "single",
 		status: "completed",
 		startedAt,
 		endedAt,
@@ -118,15 +112,13 @@ describe("Subagent shell-driven live refresh", () => {
 			definition,
 			"subagent-live-single",
 			{
-				agent: "explorer",
-				description: "Inspect single",
-				prompt: "Inspect silently.",
+				tasks: [{ agent: "explorer", prompt: "Inspect silently." }],
 			},
 			requestRender,
 		);
 		component.markExecutionStarted();
 		component.updateResult(
-			{ content: [{ type: "text", text: "running" }], details: runningDetails("single", 0), isError: false },
+			{ content: [{ type: "text", text: "running" }], details: runningDetails(0), isError: false },
 			true,
 		);
 
@@ -150,6 +142,7 @@ describe("Subagent shell-driven live refresh", () => {
 			false,
 		);
 		const settled = render(component);
+		expect(settled).toContain("1 completed · 3.0s");
 		const settledRenderRequests = requestRender.mock.calls.length;
 		vi.advanceTimersByTime(5000);
 		expect(render(component)).toBe(settled);
@@ -161,7 +154,7 @@ describe("Subagent shell-driven live refresh", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
 		const definition = registeredSubagentTool();
-		const retrying = runningDetails("single", 0);
+		const retrying = runningDetails(0);
 		beginSubagentRetry(retrying.runs[0]!, {
 			attempt: 1,
 			maxAttempts: 3,
@@ -169,9 +162,7 @@ describe("Subagent shell-driven live refresh", () => {
 			error: "fetch failed",
 		});
 		const component = createComponent(definition, "subagent-live-retry", {
-			agent: "explorer",
-			description: "Inspect retry",
-			prompt: "Inspect silently.",
+			tasks: [{ agent: "explorer", prompt: "Inspect silently." }],
 		});
 		component.markExecutionStarted();
 		component.updateResult(
@@ -196,7 +187,7 @@ describe("Subagent shell-driven live refresh", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
 		const definition = registeredSubagentTool();
-		const retrying = runningDetails("parallel", 0, 5);
+		const retrying = runningDetails(0, 4);
 		const retryingRun = retrying.runs.at(-1)!;
 		retryingRun.status = "queued";
 		retryingRun.startedAt = undefined;
@@ -207,9 +198,8 @@ describe("Subagent shell-driven live refresh", () => {
 			error: "fetch failed",
 		});
 		const component = createComponent(definition, "subagent-task-retry", {
-			tasks: Array.from({ length: 5 }, (_, index) => ({
+			tasks: Array.from({ length: 4 }, (_, index) => ({
 				agent: "explorer",
-				description: `Task ${index + 1}`,
 				prompt: `Inspect task ${index + 1}.`,
 			})),
 		});
@@ -227,33 +217,31 @@ describe("Subagent shell-driven live refresh", () => {
 		component.dispose();
 	});
 
-	it("refreshes separate single and parallel cards from their own start times", () => {
+	it("refreshes separate single and batch cards from their own start times", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
 		const definition = registeredSubagentTool();
 		const first = createComponent(definition, "subagent-live-first", {
-			agent: "explorer",
-			description: "Inspect first",
-			prompt: "Inspect silently.",
+			tasks: [{ agent: "explorer", prompt: "Inspect silently." }],
 		});
 		first.markExecutionStarted();
 		first.updateResult(
-			{ content: [{ type: "text", text: "running" }], details: runningDetails("single", 0), isError: false },
+			{ content: [{ type: "text", text: "running" }], details: runningDetails(0), isError: false },
 			true,
 		);
 
 		vi.advanceTimersByTime(1000);
 		const second = createComponent(definition, "subagent-live-second", {
 			tasks: [
-				{ agent: "explorer", description: "Inspect A", prompt: "Inspect A." },
-				{ agent: "explorer", description: "Inspect B", prompt: "Inspect B." },
+				{ agent: "explorer", prompt: "Inspect A." },
+				{ agent: "general", prompt: "Inspect B." },
 			],
 		});
 		second.markExecutionStarted();
 		second.updateResult(
 			{
 				content: [{ type: "text", text: "running" }],
-				details: runningDetails("parallel", 1000, 2),
+				details: runningDetails(1000, 2),
 				isError: false,
 			},
 			true,
@@ -261,15 +249,15 @@ describe("Subagent shell-driven live refresh", () => {
 
 		vi.advanceTimersByTime(2000);
 		expect(render(first)).toContain("3.0s");
-		const parallelCollapsed = render(second);
-		expect(parallelCollapsed).toContain("2.0s");
-		expect(parallelCollapsed).toContain("2 running");
-		expect(parallelCollapsed).not.toContain("Running…");
+		const batchCollapsed = render(second);
+		expect(batchCollapsed).toContain("2.0s");
+		expect(batchCollapsed).toContain("2 running");
+		expect(batchCollapsed).not.toContain("Running…");
 
 		second.setExpanded(true);
-		const parallelExpanded = render(second);
-		expect(parallelExpanded).toContain("2.0s");
-		expect(parallelExpanded).not.toContain("Running…");
+		const batchExpanded = render(second);
+		expect(batchExpanded).toContain("2.0s");
+		expect(batchExpanded).not.toContain("Running…");
 		first.dispose();
 		second.dispose();
 	});

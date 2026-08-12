@@ -4,6 +4,20 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Added `ExtensionContext.modelRuntime`, exposing the parent session's canonical model/authentication runtime for nested SDK sessions without provider or credential mirroring.
+
+### Changed
+
+- Redesigned the bundled Subagent around one required `tasks` array: one item launches one worker and multiple items run concurrently through the session-wide five-worker gate, with Explorer as the default and results kept in input order. Calls now preflight the whole batch before launch, task-retry backoff releases its concurrency slot, and partial batches have an explicit aggregate status.
+- Reduced Subagent profiles to the two built-ins, Explorer and General. Explorer retains prompt-constrained read-only Bash for Git inspection; `/agents` now configures only these profiles and saves each model, thinking, or inherit selection immediately without a draft or Apply step.
+- Simplified the Subagent transcript: running collapsed cards show bounded task rows, running expanded cards show Activity, settled collapsed cards show only aggregate outcome/cost/duration, and settled expanded cards show each original Prompt and final Report. Streaming assistant tails and inferred activity phases were removed.
+
+### Breaking Changes
+
+- Removed the Subagent single/parallel parameter modes, caller-supplied task descriptions, dynamic user/project profile files, and compatibility parsing for old tool or configuration shapes. The tool now accepts only `{ tasks: [{ prompt, agent?, cwd? }] }`, and `subagent.json` accepts only `explorer` and `general` profile keys.
+
 ## [0.84.4] - 2026-08-11
 
 ### Added

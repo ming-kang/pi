@@ -4,9 +4,10 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type Api, clampThinkingLevel, type Model } from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../../config.ts";
 import type { ModelRegistry } from "../../core/model-registry.ts";
+import { AGENT_PROFILES } from "./agents.ts";
 import type { SubagentTask } from "./schema.ts";
 import { loadSubagentConfig } from "./settings.ts";
-import type { AgentDefinition, ResolvedSubagentTask, SubagentConfigFile, SubagentProfileOverride } from "./types.ts";
+import type { ResolvedSubagentTask, SubagentConfigFile, SubagentProfileOverride } from "./types.ts";
 
 export interface ParentModelContext {
 	model: Model<Api> | undefined;
@@ -74,51 +75,59 @@ function findAvailableModel(spec: string, parent: ParentModelContext): Model<Api
 
 // Exactly two layers: a /agents override wins, otherwise the subagent
 // inherits the parent session. Callers and agent files cannot pick models.
-function resolveModel(
-	override: SubagentProfileOverride | undefined,
-	parent: ParentModelContext,
-): { model: Model<Api>; source: ResolvedSubagentTask["modelSource"] } {
-	if (override?.model) return { model: findAvailableModel(override.model, parent), source: "profile" };
+function resolveModel(override: SubagentProfileOverride | undefined, parent: ParentModelContext): Model<Api> {
+	if (override?.model) return findAvailableModel(override.model, parent);
 	if (!parent.model) throw new Error("The parent session has no active model.");
-	return { model: parent.model, source: "parent" };
+	return parent.model;
 }
 
 function resolveThinking(
 	override: SubagentProfileOverride | undefined,
 	parent: ParentModelContext,
 	model: Model<Api>,
-): { thinking: ThinkingLevel; source: ResolvedSubagentTask["thinkingSource"] } {
+): ThinkingLevel {
 	const requested = override?.thinking ?? parent.thinking;
-	const source: ResolvedSubagentTask["thinkingSource"] = override?.thinking ? "profile" : "parent";
-	return { thinking: clampThinkingLevel(model, requested) as ThinkingLevel, source };
+	return clampThinkingLevel(model, requested) as ThinkingLevel;
+}
+
+// The schema restricts task.agent to explorer|general; an omitted or null
+// agent resolves to the read-only explorer profile.
+const DEFAULT_AGENT_NAME = "explorer";
+
+// The schema has no description field; derive a bounded UI label from the
+// briefing's first non-empty line so run rows stay readable.
+function taskDescription(prompt: string): string {
+	const firstLine =
+		prompt
+			.split("\n")
+			.map((line) => line.trim())
+			.find(Boolean) ?? "";
+	const characters = [...firstLine];
+	return characters.length <= 80 ? firstLine : `${characters.slice(0, 79).join("")}…`;
 }
 
 export async function resolveSubagentTask(
 	task: SubagentTask,
 	parentCwd: string,
-	agents: readonly AgentDefinition[],
 	parent: ParentModelContext,
 	configAgentDir = getAgentDir(),
 	preloadedConfig?: SubagentConfigFile,
 ): Promise<ResolvedSubagentTask> {
-	const agentName = task.agent ?? "general";
-	const agent = agents.find((candidate) => candidate.name === agentName);
+	const agentName = task.agent ?? DEFAULT_AGENT_NAME;
+	const agent = AGENT_PROFILES.find((candidate) => candidate.name === agentName);
 	if (!agent) {
-		const available = agents.map((candidate) => candidate.name).join(", ") || "none";
+		const available = AGENT_PROFILES.map((candidate) => candidate.name).join(", ") || "none";
 		throw new Error(`Unknown agent "${agentName}". Available agents: ${available}.`);
 	}
 	const config = preloadedConfig ?? (await loadSubagentConfig(configAgentDir));
 	const override = config.profiles[agent.name];
-	const resolvedModel = resolveModel(override, parent);
-	const resolvedThinking = resolveThinking(override, parent, resolvedModel.model);
+	const model = resolveModel(override, parent);
 	return {
 		agent,
-		description: task.description,
+		description: taskDescription(task.prompt),
 		prompt: task.prompt,
 		cwd: resolveTaskCwd(parentCwd, task.cwd ?? undefined),
-		model: resolvedModel.model,
-		thinking: resolvedThinking.thinking,
-		modelSource: resolvedModel.source,
-		thinkingSource: resolvedThinking.source,
+		model,
+		thinking: resolveThinking(override, parent, model),
 	};
 }

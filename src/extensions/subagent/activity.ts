@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai";
-import { ACTIVITY_LIMIT, ACTIVITY_TEXT_LIMIT, LIVE_TEXT_LIMIT, SINGLE_OUTPUT_LIMIT } from "./constants.ts";
+import { ACTIVITY_LIMIT, ACTIVITY_TEXT_LIMIT, TASK_OUTPUT_LIMIT } from "./constants.ts";
 import type { SubagentUsage, ToolActivity } from "./types.ts";
 
 export function emptyUsage(): SubagentUsage {
@@ -129,7 +129,7 @@ export function assistantText(message: AgentMessage | undefined): string {
 export function finalAssistantText(messages: readonly AgentMessage[]): string {
 	for (let index = messages.length - 1; index >= 0; index--) {
 		const text = assistantText(messages[index]);
-		if (text) return boundText(text, SINGLE_OUTPUT_LIMIT);
+		if (text) return boundText(text, TASK_OUTPUT_LIMIT);
 	}
 	return "";
 }
@@ -144,10 +144,6 @@ export function appendActivity(activities: ToolActivity[], activity: ToolActivit
 		if (activities.length <= 1) break;
 		activities.shift();
 	}
-}
-
-export function setLiveText(text: string): string {
-	return tailText(text, LIVE_TEXT_LIMIT);
 }
 
 export function activitySummary(toolName: string, args: unknown): string {

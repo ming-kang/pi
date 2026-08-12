@@ -96,14 +96,30 @@
 			]
 		},
 		{
+			"path": "src/core/extensions/runner.ts",
+			"category": "extension-support",
+			"intent": "Exposes the session's canonical ModelRuntime through ExtensionContext for nested SDK sessions",
+			"tests": [
+				"test/extensions-runner.test.ts"
+			]
+		},
+		{
 			"path": "src/core/extensions/types.ts",
 			"category": "extension-support",
-			"intent": "toolGroup/toolGroupSummary/result render context, CompactionTiming, stale-context helpers"
+			"intent": "toolGroup/toolGroupSummary/result render context, canonical ModelRuntime access, CompactionTiming, stale-context helpers"
 		},
 		{
 			"path": "src/core/keybindings.ts",
 			"category": "ui",
 			"intent": "Adds the configurable app.list.toggle binding for list selection"
+		},
+		{
+			"path": "src/core/model-registry.ts",
+			"category": "extension-support",
+			"intent": "Provides the canonical ModelRuntime backing ExtensionContext.modelRuntime",
+			"tests": [
+				"test/extensions-runner.test.ts"
+			]
 		},
 		{
 			"path": "src/core/resource-loader.ts",
@@ -287,9 +303,10 @@
 		{
 			"path": "src/modes/interactive/interactive-mode.ts",
 			"category": "ui",
-			"intent": "Tool grouping and dispose lifecycle, selector subtitle plumbing, distribution constants for telemetry and update hints",
+			"intent": "Tool grouping and dispose lifecycle, selector subtitle plumbing, canonical ModelRuntime on shortcut contexts, distribution constants for telemetry and update hints",
 			"tests": [
-				"test/interactive-tui.test.ts"
+				"test/interactive-tui.test.ts",
+				"test/extensions-runner.test.ts"
 			]
 		},
 		{

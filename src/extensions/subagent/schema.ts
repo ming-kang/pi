@@ -1,11 +1,11 @@
+import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, type TSchema, Type } from "typebox";
-import { MAX_TASKS } from "./constants.ts";
+import { MAX_CONCURRENCY, MAX_TASKS, SUBAGENT_AGENT_NAMES } from "./constants.ts";
 
 // Strict constrained-sampling providers treat every property as required
 // and reject bare unions at the top level, so the schema is a flat
 // `type: "object"` whose optional fields are also nullable: callers omit
 // a field when the grammar allows it and send null when it does not.
-// The exactly-one-mode rule is enforced at runtime in `invocationMode`.
 function nullable<T extends TSchema>(schema: T, description: string) {
 	return Type.Optional(Type.Union([schema, Type.Null()], { description }));
 }
@@ -13,14 +13,9 @@ function nullable<T extends TSchema>(schema: T, description: string) {
 export const TaskSchema = Type.Object(
 	{
 		agent: nullable(
-			Type.String({ minLength: 1, maxLength: 80 }),
-			"Agent profile from the list in the tool description; null or omit for general",
+			StringEnum(SUBAGENT_AGENT_NAMES, { description: "Which built-in profile runs this task" }),
+			"Built-in profile; null or omit for explorer (the default)",
 		),
-		description: Type.String({
-			minLength: 1,
-			maxLength: 80,
-			description: "Concise 3-8 word UI label",
-		}),
 		prompt: Type.String({
 			minLength: 1,
 			maxLength: 50_000,
@@ -36,26 +31,11 @@ export const TaskSchema = Type.Object(
 
 export const SubagentParamsSchema = Type.Object(
 	{
-		agent: nullable(
-			Type.String({ minLength: 1, maxLength: 80 }),
-			"Agent profile from the list in the tool description (single mode); null or omit otherwise (defaults to general)",
-		),
-		description: nullable(
-			Type.String({ minLength: 1, maxLength: 80 }),
-			"Concise 3-8 word UI label; required for single mode, null or omit otherwise",
-		),
-		prompt: nullable(
-			Type.String({ minLength: 1, maxLength: 50_000 }),
-			"Complete self-contained briefing; providing it selects single mode — null or omit when using tasks",
-		),
-		cwd: nullable(
-			Type.String({ minLength: 1, maxLength: 4_096 }),
-			"Relative or absolute directory inside the parent working directory (single mode); null or omit otherwise",
-		),
-		tasks: nullable(
-			Type.Array(TaskSchema, { minItems: 1, maxItems: MAX_TASKS }),
-			"Independent tasks run concurrently; providing it selects parallel mode — null or omit when using prompt",
-		),
+		tasks: Type.Array(TaskSchema, {
+			minItems: 1,
+			maxItems: MAX_TASKS,
+			description: `Independent tasks run concurrently: at most ${MAX_CONCURRENCY} active at once, excess tasks queue, and results preserve input order`,
+		}),
 	},
 	{ additionalProperties: false },
 );

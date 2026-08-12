@@ -2,7 +2,13 @@ import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "../../config.ts";
 import { withFileMutationQueue } from "../../core/tools/file-mutation-queue.ts";
-import { SUBAGENT_CONFIG_FILE, SUBAGENT_CONFIG_VERSION, THINKING_LEVELS } from "./constants.ts";
+import {
+	SUBAGENT_AGENT_NAMES,
+	SUBAGENT_CONFIG_FILE,
+	SUBAGENT_CONFIG_VERSION,
+	type SubagentAgentName,
+	THINKING_LEVELS,
+} from "./constants.ts";
 import type { SubagentConfigFile, SubagentProfileOverride } from "./types.ts";
 
 function isThinkingLevel(value: unknown): boolean {
@@ -10,20 +16,20 @@ function isThinkingLevel(value: unknown): boolean {
 }
 
 // Overrides hold concrete values only; absence means "inherit the parent
-// session". Legacy "inherit" entries from earlier versions are dropped.
+// session". The file format has no compatibility aliases.
 function normalizeOverride(value: unknown, profile: string): SubagentProfileOverride {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		throw new Error(`Profile override for "${profile}" must be an object.`);
 	}
 	const input = value as Record<string, unknown>;
 	const output: SubagentProfileOverride = {};
-	if (input.model !== undefined && input.model !== "inherit") {
-		if (typeof input.model !== "string" || input.model.trim().length === 0) {
-			throw new Error(`Profile "${profile}" model override must be a model id.`);
+	if (input.model !== undefined) {
+		if (typeof input.model !== "string" || input.model.trim().length === 0 || input.model === "inherit") {
+			throw new Error(`Profile "${profile}" model override must be a concrete model id.`);
 		}
 		output.model = input.model.trim();
 	}
-	if (input.thinking !== undefined && input.thinking !== "inherit") {
+	if (input.thinking !== undefined) {
 		if (!isThinkingLevel(input.thinking)) {
 			throw new Error(`Profile "${profile}" thinking override is invalid.`);
 		}
@@ -55,7 +61,7 @@ export function parseSubagentConfig(raw: string): SubagentConfigFile {
 		throw new Error(`${SUBAGENT_CONFIG_FILE} must be a JSON object.`);
 	}
 	const root = parsed as Record<string, unknown>;
-	if (root.version !== undefined && root.version !== SUBAGENT_CONFIG_VERSION) {
+	if (root.version !== SUBAGENT_CONFIG_VERSION) {
 		throw new Error(`${SUBAGENT_CONFIG_FILE} has unsupported version ${String(root.version)}.`);
 	}
 	if (
@@ -66,7 +72,11 @@ export function parseSubagentConfig(raw: string): SubagentConfigFile {
 	}
 	const profiles: Record<string, SubagentProfileOverride> = {};
 	for (const [name, value] of Object.entries((root.profiles as Record<string, unknown> | undefined) ?? {})) {
-		if (!name.trim()) throw new Error(`${SUBAGENT_CONFIG_FILE} contains an empty profile name.`);
+		// The only profiles are the two built-in ones; unknown keys are rejected
+		// outright (no legacy aliases or compatibility mapping).
+		if (!(SUBAGENT_AGENT_NAMES as readonly string[]).includes(name)) {
+			throw new Error(`${SUBAGENT_CONFIG_FILE} contains unknown profile "${name}".`);
+		}
 		profiles[name] = normalizeOverride(value, name);
 	}
 	const unknownKeys = Object.keys(root).filter((key) => key !== "version" && key !== "profiles");
@@ -105,15 +115,10 @@ async function writeSubagentConfigFile(filePath: string, config: SubagentConfigF
 	}
 }
 
-export async function saveSubagentConfig(config: SubagentConfigFile, agentDir = getAgentDir()): Promise<void> {
-	const filePath = getSubagentConfigPath(agentDir);
-	await withFileMutationQueue(filePath, () => writeSubagentConfigFile(filePath, config));
-}
-
 // Only keys present in the patch change; a key set to undefined clears
 // that override (back to inheriting the parent session).
 export async function updateProfileOverride(
-	profile: string,
+	profile: SubagentAgentName,
 	patch: Partial<SubagentProfileOverride>,
 	agentDir = getAgentDir(),
 ): Promise<SubagentConfigFile> {

@@ -8,16 +8,13 @@ function run(): SubagentRunDetails {
 	return {
 		id: "subagent-1",
 		agent: "explorer",
-		agentSource: "builtin",
 		description: "Inspect retries",
-		prompt: "Inspect retry behavior.",
 		cwd: "",
 		model: "test/model",
 		thinking: "low",
 		status: "running",
 		activities: [],
-		liveText: "",
-		finalOutput: "",
+		report: "",
 		usage: emptyUsage(),
 	};
 }
@@ -56,5 +53,32 @@ describe("Subagent provider retry state", () => {
 		});
 		expect(details.retry).toBeUndefined();
 		expect(details.currentActivity).toBeUndefined();
+	});
+
+	it("clears retry state when the provider finishes retrying successfully", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(1000);
+		const details = run();
+		applySubagentAutoRetryEvent(details, {
+			type: "auto_retry_start",
+			attempt: 2,
+			maxAttempts: 3,
+			delayMs: 2000,
+			errorMessage: "temporary overload",
+		});
+		expect(details.retry).toBeDefined();
+		expect(details.currentActivity).toBe("Retrying (2/3)…");
+
+		applySubagentAutoRetryEvent(details, {
+			type: "auto_retry_end",
+			success: true,
+			attempt: 2,
+		});
+		expect(details.retry).toBeUndefined();
+		expect(details.currentActivity).toBeUndefined();
+	});
+
+	it("returns no view for a run without retry state", () => {
+		expect(getSubagentRetryView(run())).toBeUndefined();
 	});
 });

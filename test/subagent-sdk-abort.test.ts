@@ -54,38 +54,31 @@ function model(): Model<Api> {
 function task(): ResolvedSubagentTask {
 	return {
 		agent: {
-			name: "worker",
-			description: "Test worker",
-			tools: ["read"],
+			name: "explorer",
+			description: "Read-only exploration",
+			tools: ["read", "grep", "find", "ls", "bash"],
 			systemPrompt: "Inspect the code.",
-			source: "builtin",
-			filePath: "builtin",
-			backend: "sdk",
+			omitContextFiles: true,
 		},
 		description: "Inspect initialization",
 		prompt: "Inspect without starting after abort.",
 		cwd: process.cwd(),
 		model: model(),
 		thinking: "low",
-		modelSource: "parent",
-		thinkingSource: "parent",
 	};
 }
 
 function run(): SubagentRunDetails {
 	return {
 		id: "subagent-1",
-		agent: "worker",
-		agentSource: "builtin",
+		agent: "explorer",
 		description: "Inspect initialization",
-		prompt: "Inspect without starting after abort.",
 		cwd: "",
 		model: "test/model",
 		thinking: "low",
 		status: "queued",
 		activities: [],
-		liveText: "",
-		finalOutput: "",
+		report: "",
 		usage: emptyUsage(),
 	};
 }

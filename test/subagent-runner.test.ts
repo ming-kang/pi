@@ -1,9 +1,13 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+import { Compile } from "typebox/compile";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
-import type { ParentModelContext } from "../src/extensions/subagent/resolve.ts";
+import { emptyUsage } from "../src/extensions/subagent/activity.ts";
+import { AGENT_PROFILES } from "../src/extensions/subagent/agents.ts";
+import { MAX_CONCURRENCY, MAX_TASKS } from "../src/extensions/subagent/constants.ts";
+import { type ParentModelContext, resolveSubagentTask } from "../src/extensions/subagent/resolve.ts";
 import {
 	ConcurrencyGate,
 	isSubagentError,
@@ -11,24 +15,16 @@ import {
 	runSubagentInvocation,
 	statusSummary,
 } from "../src/extensions/subagent/runner.ts";
-import type { SubagentParams } from "../src/extensions/subagent/schema.ts";
+import { type SubagentParams, SubagentParamsSchema } from "../src/extensions/subagent/schema.ts";
+import { emptySubagentConfig } from "../src/extensions/subagent/settings.ts";
 import type {
-	AgentDefinition,
 	SubagentDetails,
 	SubagentRunDetails,
 	SubagentRunStatus,
 	ToolActivity,
 } from "../src/extensions/subagent/types.ts";
 
-const agent: AgentDefinition = {
-	name: "worker",
-	description: "Test worker",
-	tools: ["read"],
-	systemPrompt: "Return a concise result.",
-	source: "user",
-	filePath: "worker.md",
-	backend: "sdk",
-};
+const validateParams = Compile(SubagentParamsSchema);
 
 function createParentContext(model: Model<Api>): ParentModelContext {
 	return {
@@ -42,21 +38,33 @@ function createParentContext(model: Model<Api>): ParentModelContext {
 	};
 }
 
+function minimalModel(): Model<Api> {
+	return {
+		id: "m",
+		name: "m",
+		api: "test-api" as Api,
+		provider: "test",
+		baseUrl: "https://example.test",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 10_000,
+		maxTokens: 1_000,
+	} as Model<Api>;
+}
+
 function baseRun(status: SubagentRunStatus, activities: ToolActivity[] = []): SubagentRunDetails {
 	return {
 		id: "subagent-1",
-		agent: "worker",
-		agentSource: "user",
+		agent: "explorer",
 		description: "Task",
-		prompt: "Prompt",
 		cwd: "",
 		model: "test/model",
 		thinking: "low",
 		status,
 		activities,
-		liveText: "",
-		finalOutput: "",
-		usage: { turns: 0, toolUses: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 },
+		report: "",
+		usage: emptyUsage(),
 	};
 }
 
@@ -73,27 +81,38 @@ describe("subagent SDK runner", () => {
 		return { modelRuntime, model: faux.getModel() as Model<Api> };
 	}
 
-	it("runs a single isolated SDK session and reports progress and usage", async () => {
-		const { modelRuntime, model } = await setup(["single result"]);
-		const updates: string[] = [];
-		const params: SubagentParams = {
-			agent: "worker",
-			description: "Run one worker",
-			prompt: "Return the result.",
-		};
-		const result = await runSubagentInvocation({
+	async function run(
+		params: SubagentParams,
+		modelRuntime: ModelRuntime,
+		model: Model<Api>,
+		gate = new ConcurrencyGate(1),
+		onUpdate?: (details: SubagentDetails) => void,
+	) {
+		return runSubagentInvocation({
 			params,
 			parentCwd: process.cwd(),
-			agents: [agent],
 			parent: createParentContext(model),
 			modelRuntime,
 			agentDir: process.cwd(),
 			projectTrusted: false,
-			gate: new ConcurrencyGate(1),
-			onUpdate: (details) => updates.push(details.status),
+			gate,
+			onUpdate,
 		});
-		expect(result.content).toBe("single result");
+	}
+
+	it("runs a single isolated SDK session and reports progress and usage", async () => {
+		const { modelRuntime, model } = await setup(["single result"]);
+		const updates: string[] = [];
+		const result = await run(
+			{ tasks: [{ prompt: "Return the result." }] },
+			modelRuntime,
+			model,
+			new ConcurrencyGate(1),
+			(details) => updates.push(details.status),
+		);
+		expect(result.content).toContain("single result");
 		expect(result.details.status).toBe("completed");
+		expect(result.details.runs).toHaveLength(1);
 		expect(result.details.runs[0]?.usage.totalTokens).toBeGreaterThan(0);
 		expect(updates).toContain("running");
 		expect(updates.at(-1)).toBe("completed");
@@ -112,26 +131,18 @@ describe("subagent SDK runner", () => {
 		const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
 		modelRuntime.registerNativeProvider(faux.provider);
 		const model = faux.getModel() as Model<Api>;
-		await runSubagentInvocation({
-			params: { agent: "worker", description: "Inspect worker prompt", prompt: "Check the prompt." },
-			parentCwd: process.cwd(),
-			agents: [agent],
-			parent: createParentContext(model),
-			modelRuntime,
-			agentDir: process.cwd(),
-			projectTrusted: false,
-			gate: new ConcurrencyGate(1),
-		});
+		await run({ tasks: [{ agent: "general", prompt: "Check the prompt." }] }, modelRuntime, model);
 
 		expect(settingsCreate).toHaveBeenCalledWith(process.cwd(), process.cwd(), { projectTrusted: false });
 		expect(systemPrompt).toContain("do not gold-plate it, but do not leave it half-done");
-		expect(systemPrompt).toContain("use absolute paths");
+		expect(systemPrompt).toContain("use paths relative to the task's working directory");
 		expect(systemPrompt).toContain("Only your final message is returned to the caller");
 		expect(systemPrompt).toContain("code snippets only when the exact text is load-bearing");
 		expect(systemPrompt).toContain("The caller will relay it to the user");
-		expect(systemPrompt).toContain(agent.systemPrompt);
-		// Default agents load project instructions (this repo has AGENTS.md).
+		// The general profile loads project instructions (this repo has AGENTS.md).
 		expect(systemPrompt).toContain("<project_context>");
+		const general = AGENT_PROFILES.find((profile) => profile.name === "general")!;
+		expect(systemPrompt).toContain(general.systemPrompt);
 	});
 
 	it("skips project instruction files for agents marked omitContextFiles", async () => {
@@ -146,139 +157,145 @@ describe("subagent SDK runner", () => {
 		const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
 		modelRuntime.registerNativeProvider(faux.provider);
 		const model = faux.getModel() as Model<Api>;
-		await runSubagentInvocation({
-			params: { agent: "scout", description: "Inspect context loading", prompt: "Check the prompt." },
-			parentCwd: process.cwd(),
-			agents: [{ ...agent, name: "scout", omitContextFiles: true }],
-			parent: createParentContext(model),
-			modelRuntime,
-			agentDir: process.cwd(),
-			projectTrusted: false,
-			gate: new ConcurrencyGate(1),
-		});
+		await run({ tasks: [{ agent: "explorer", prompt: "Check the context." }] }, modelRuntime, model);
 
-		expect(systemPrompt).toContain(agent.systemPrompt);
+		const explorer = AGENT_PROFILES.find((profile) => profile.name === "explorer")!;
+		expect(systemPrompt).toContain(explorer.systemPrompt);
 		expect(systemPrompt).not.toContain("<project_context>");
 	});
 
 	it("returns an explicit marker when a completed subagent has no output", async () => {
 		const { modelRuntime, model } = await setup([""]);
-		const result = await runSubagentInvocation({
-			params: { agent: "worker", description: "Run empty worker", prompt: "Return nothing." },
-			parentCwd: process.cwd(),
-			agents: [agent],
-			parent: createParentContext(model),
-			modelRuntime,
-			agentDir: process.cwd(),
-			projectTrusted: false,
-			gate: new ConcurrencyGate(1),
-		});
-		expect(result.content).toBe("(Subagent completed but returned no output.)");
+		const result = await run({ tasks: [{ prompt: "Return nothing." }] }, modelRuntime, model);
+		expect(result.content).toContain("(Subagent completed but returned no output.)");
+		expect(result.details.status).toBe("completed");
 	});
 
 	it("runs parallel tasks and labels each section with description and agent", async () => {
 		const { modelRuntime, model } = await setup(["first result", "second result"]);
-		const params: SubagentParams = {
-			tasks: [
-				{ agent: "worker", description: "First lookup", prompt: "Find the answer." },
-				{ agent: "worker", description: "Second lookup", prompt: "Find the other answer." },
-			],
-		};
-		const result = await runSubagentInvocation({
-			params,
-			parentCwd: process.cwd(),
-			agents: [agent],
-			parent: createParentContext(model),
+		const result = await run(
+			{
+				tasks: [{ prompt: "First lookup\nFind the answer." }, { prompt: "Second lookup\nFind the other answer." }],
+			},
 			modelRuntime,
-			agentDir: process.cwd(),
-			projectTrusted: false,
-			gate: new ConcurrencyGate(1),
-		});
+			model,
+		);
 		expect(result.details.status).toBe("completed");
 		expect(result.details.runs.map((run) => run.status)).toEqual(["completed", "completed"]);
-		expect(result.content).toContain("### First lookup (worker) — completed");
-		expect(result.content).toContain("### Second lookup (worker) — completed");
+		expect(result.details.runs.map((run) => run.agent)).toEqual(["explorer", "explorer"]);
+		expect(result.content).toContain("### 1. First lookup (explorer) — completed");
+		expect(result.content).toContain("### 2. Second lookup (explorer) — completed");
+		// Sections stay in input order.
+		expect(result.content.indexOf("### 1.")).toBeLessThan(result.content.indexOf("### 2."));
 	});
 
-	it("accepts null mode fields from strict providers that send every property", async () => {
+	it("accepts null agent and cwd fields from strict providers that send every property", async () => {
 		const { modelRuntime, model } = await setup(["task result"]);
-		const params: SubagentParams = {
-			agent: null,
-			description: null,
-			prompt: null,
-			cwd: null,
-			tasks: [{ agent: "worker", description: "Only task", prompt: "Do it.", cwd: null }],
-		};
-		const result = await runSubagentInvocation({
-			params,
-			parentCwd: process.cwd(),
-			agents: [agent],
-			parent: createParentContext(model),
-			modelRuntime,
-			agentDir: process.cwd(),
-			projectTrusted: false,
-			gate: new ConcurrencyGate(1),
-		});
+		const result = await run({ tasks: [{ agent: null, prompt: "Do it.", cwd: null }] }, modelRuntime, model);
 		expect(result.details.status).toBe("completed");
 		expect(result.content).toContain("task result");
 	});
 
-	it("names the received modes when the call is ambiguous", async () => {
-		const { modelRuntime, model } = await setup([]);
-		const base = {
-			parentCwd: process.cwd(),
-			agents: [agent],
-			parent: createParentContext(model),
-			modelRuntime,
-			agentDir: process.cwd(),
-			projectTrusted: false,
-			gate: new ConcurrencyGate(1),
-		};
-		const ambiguous: SubagentParams = {
-			description: "Everything at once",
-			prompt: "unused",
-			tasks: [{ description: "task", prompt: "p" }],
-		};
-		await expect(runSubagentInvocation({ ...base, params: ambiguous })).rejects.toThrow("received prompt, tasks");
-		const empty: SubagentParams = { agent: null, description: null, prompt: null, tasks: null };
-		await expect(runSubagentInvocation({ ...base, params: empty })).rejects.toThrow("none was provided");
+	it("rejects an empty task list and over-limit task lists before any work starts", async () => {
+		const modelRuntime = {} as ModelRuntime;
+		const model = minimalModel();
+		await expect(run({} as SubagentParams, modelRuntime, model)).rejects.toThrow(
+			"Subagent task list must not be empty.",
+		);
+		const tooMany = Array.from({ length: MAX_TASKS + 1 }, (_, index) => ({ prompt: `Task ${index}` }));
+		await expect(run({ tasks: tooMany }, modelRuntime, model)).rejects.toThrow(
+			`Subagent task list is limited to ${MAX_TASKS} tasks.`,
+		);
 	});
 
-	it("uses Initializing… only after a single run begins starting", () => {
-		const details: SubagentDetails = {
-			mode: "single",
-			status: "running",
-			startedAt: 0,
-			usage: { turns: 0, toolUses: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 },
-			runs: [
-				{
-					id: "subagent-1",
-					agent: "worker",
-					agentSource: "builtin",
-					description: "Initialize worker",
-					prompt: "Start the task.",
-					cwd: process.cwd(),
-					model: "test/model",
-					thinking: "medium",
-					status: "running",
-					activities: [],
-					liveText: "",
-					finalOutput: "",
-					usage: {
-						turns: 0,
-						toolUses: 0,
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: 0,
-					},
-				},
-			],
-		};
+	it("enforces tasks-only parameters and explorer/general agents at the schema level", () => {
+		expect(validateParams.Check({ tasks: [{ prompt: "Find it." }] })).toBe(true);
+		expect(validateParams.Check({ tasks: [{ agent: null, prompt: "Find it.", cwd: null }] })).toBe(true);
+		expect(validateParams.Check({ tasks: [{ agent: "explorer", prompt: "Find it." }] })).toBe(true);
+		expect(validateParams.Check({ tasks: [{ agent: "general", prompt: "Fix it." }] })).toBe(true);
+		// Top-level mode fields are gone: only `tasks` is accepted.
+		expect(validateParams.Check({ agent: "explorer", tasks: [{ prompt: "Find it." }] })).toBe(false);
+		expect(validateParams.Check({ tasks: [] })).toBe(false);
+		// Task items carry only agent/prompt/cwd; descriptions are derived from the prompt.
+		expect(validateParams.Check({ tasks: [{ description: "Lookup", prompt: "Find it." }] })).toBe(false);
+		// Only the two built-in profiles are selectable.
+		expect(validateParams.Check({ tasks: [{ agent: "worker", prompt: "Find it." }] })).toBe(false);
+	});
+
+	it("defaults an omitted agent to explorer and rejects unknown agents during resolution", async () => {
+		const parent = createParentContext(minimalModel());
+		const resolved = await resolveSubagentTask(
+			{ prompt: "Look something up." },
+			process.cwd(),
+			parent,
+			process.cwd(),
+			emptySubagentConfig(),
+		);
+		expect(resolved.agent.name).toBe("explorer");
+		expect(resolved.description).toBe("Look something up.");
+
+		const general = await resolveSubagentTask(
+			{ agent: "general", prompt: "Fix something." },
+			process.cwd(),
+			parent,
+			process.cwd(),
+			emptySubagentConfig(),
+		);
+		expect(general.agent.name).toBe("general");
+
+		await expect(
+			resolveSubagentTask(
+				{ agent: "worker", prompt: "x" } as unknown as SubagentParams["tasks"][number],
+				process.cwd(),
+				parent,
+				process.cwd(),
+				emptySubagentConfig(),
+			),
+		).rejects.toThrow("Unknown agent");
+	});
+
+	it("uses Initializing… only while no run exists yet", () => {
+		const details: SubagentDetails = { status: "running", runs: [], startedAt: 0, usage: emptyUsage() };
 		expect(statusSummary(details)).toBe("Initializing…");
-		expect(statusSummary({ ...details, runs: [{ ...details.runs[0]!, status: "queued" }] })).toBe("queued");
+		const queued = { ...details, runs: [baseRun("queued")] };
+		expect(statusSummary(queued)).toBe("0/1 complete · 1 queued");
+		const mixed = {
+			...details,
+			runs: [baseRun("completed"), baseRun("running"), baseRun("failed"), baseRun("aborted")],
+		};
+		expect(statusSummary(mixed)).toBe("1/4 complete · 1 running · 1 failed · 1 aborted");
+	});
+
+	it("limits concurrent workers to the gate's configured concurrency", async () => {
+		const gate = new ConcurrencyGate(2);
+		const first = await gate.acquire();
+		const second = await gate.acquire();
+		let thirdResolved = false;
+		const third = gate.acquire().then((release) => {
+			thirdResolved = true;
+			return release;
+		});
+		expect(thirdResolved).toBe(false);
+		second();
+		await third;
+		expect(thirdResolved).toBe(true);
+		first();
+	});
+
+	it("defaults the gate to the global max concurrency", async () => {
+		const gate = new ConcurrencyGate();
+		const releases: Array<() => void> = [];
+		for (let index = 0; index < MAX_CONCURRENCY; index++) releases.push(await gate.acquire());
+		let extraResolved = false;
+		const extra = gate.acquire().then((release) => {
+			extraResolved = true;
+			return release;
+		});
+		expect(extraResolved).toBe(false);
+		releases[0]?.();
+		await extra;
+		expect(extraResolved).toBe(true);
+		for (const release of releases.slice(1)) release();
 	});
 
 	it("does not start queued work after the parent signal aborts", async () => {

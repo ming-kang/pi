@@ -1,26 +1,37 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
+import {
+	Container,
+	type Focusable,
+	type KeybindingsManager,
+	Spacer,
+	Text,
+	TruncatedText,
+	type TUI,
+} from "@earendil-works/pi-tui";
 import { getAgentDir } from "../../config.ts";
 import type { ExtensionCommandContext } from "../../core/extensions/types.ts";
-import { discoverAgents } from "./agents.ts";
-import { THINKING_LEVELS } from "./constants.ts";
-import { displayAgentName } from "./display-name.ts";
+import { DynamicBorder } from "../../modes/interactive/components/dynamic-border.ts";
+import { keyLabel } from "../../modes/interactive/components/keybinding-hints.ts";
+import type { Theme } from "../../modes/interactive/theme/theme.ts";
+import { AGENT_PROFILES } from "./agents.ts";
+import { type SubagentAgentName, THINKING_LEVELS } from "./constants.ts";
 import { loadSubagentConfig, updateProfileOverride } from "./settings.ts";
-import type { AgentDefinition, AgentDiagnostic, SubagentProfileOverride } from "./types.ts";
-import { ProfileEditorComponent, type ProfileEditorResult } from "./ui/profile-editor.ts";
-import { ProfilePickerComponent, type ProfilePickerResult } from "./ui/profile-picker.ts";
+import type { AgentProfile, SubagentProfileOverride } from "./types.ts";
+import { type ProfileModelChoice, ProfileModelListComponent } from "./ui/model-list.ts";
 
 const MODEL_REFRESH_TIMEOUT_MS = 15_000;
-const MAX_DIAGNOSTICS = 20;
-const MAX_DIAGNOSTIC_LENGTH = 240;
 const MAX_REFRESH_ERROR_LENGTH = 240;
 
-function compareAgentNames(left: AgentDefinition, right: AgentDefinition): number {
-	if (left.name < right.name) return -1;
-	if (left.name > right.name) return 1;
-	return 0;
-}
+// Static display titles for the two built-in profiles; agents.ts owns the
+// model-facing copy.
+const PROFILE_LABELS: Record<SubagentAgentName, string> = {
+	explorer: "Explorer",
+	general: "General",
+};
+
+type SettingsAction = "model" | "thinking";
 
 function modelId(model: Pick<Model<Api>, "provider" | "id"> | undefined): string {
 	return model ? `${model.provider}/${model.id}` : "none";
@@ -36,37 +47,22 @@ function boundText(value: string, limit: number): string {
 	return characters.length <= limit ? value : `${characters.slice(0, Math.max(0, limit - 1)).join("")}…`;
 }
 
-function formatDiagnostics(diagnostics: readonly AgentDiagnostic[]): string {
-	const visible = diagnostics
-		.slice(0, MAX_DIAGNOSTICS)
-		.map((diagnostic) => boundText(`${diagnostic.path}: ${diagnostic.message}`, MAX_DIAGNOSTIC_LENGTH));
-	if (diagnostics.length > visible.length) {
-		visible.push(
-			`… ${diagnostics.length - visible.length} more issue${diagnostics.length - visible.length === 1 ? "" : "s"}`,
-		);
-	}
-	return visible.join("\n");
-}
-
-function overridesEqual(override: SubagentProfileOverride | undefined, result: ProfileEditorResult): boolean {
-	return override?.model === result.model && override?.thinking === result.thinking;
-}
-
-async function saveProfileResult(
-	ctx: ExtensionCommandContext,
-	profileName: string,
+// Capability checks use the saved model when it is still in the catalog,
+// falling back to the parent session model otherwise.
+function effectiveModel(
+	currentSessionModel: Model<Api> | undefined,
+	models: readonly Model<Api>[],
 	override: SubagentProfileOverride | undefined,
-	result: ProfileEditorResult,
-): Promise<void> {
-	if (overridesEqual(override, result)) return;
-	try {
-		await updateProfileOverride(profileName, { model: result.model, thinking: result.thinking }, getAgentDir());
-	} catch (error) {
-		ctx.ui.notify(
-			`Could not save ${displayAgentName(profileName)} settings: ${error instanceof Error ? error.message : String(error)}`,
-			"error",
-		);
+): Model<Api> | undefined {
+	if (override?.model) {
+		const saved = findModel(models, override.model);
+		if (saved) return saved;
 	}
+	return currentSessionModel;
+}
+
+function inheritedThinking(effective: Model<Api> | undefined, currentThinking: ThinkingLevel): ThinkingLevel {
+	return effective ? (clampThinkingLevel(effective, currentThinking) as ThinkingLevel) : currentThinking;
 }
 
 function refreshFailureMessage(providerIds: readonly string[]): string {
@@ -77,168 +73,413 @@ function refreshFailureMessage(providerIds: readonly string[]): string {
 	return `Could not refresh ${providerIds.length} model catalogs (${visible.join(", ")}${suffix}); showing cached models.`;
 }
 
-async function refreshEditorModels(ctx: ExtensionCommandContext, editor: ProfileEditorComponent): Promise<void> {
+function hint(
+	theme: Theme,
+	keybindings: KeybindingsManager,
+	binding: Parameters<KeybindingsManager["getKeys"]>[0],
+	description: string,
+): string {
+	const key = keyLabel(binding, { keybindings });
+	return key ? `${theme.fg("dim", key)}${theme.fg("muted", ` ${description}`)}` : "";
+}
+
+function navigationHint(theme: Theme, keybindings: KeybindingsManager): string {
+	const keys = [keyLabel("tui.select.up", { keybindings }), keyLabel("tui.select.down", { keybindings })]
+		.filter(Boolean)
+		.join("/");
+	return keys ? `${theme.fg("dim", keys)}${theme.fg("muted", " navigate")}` : "";
+}
+
+/** Compact Model/Thinking settings menu for one profile; every confirm persists immediately. */
+class ProfileSettingsMenuComponent extends Container implements Focusable {
+	private readonly theme: Theme;
+	private readonly keybindings: KeybindingsManager;
+	private readonly rows: Array<{ action: SettingsAction; label: string; value: string; override: boolean }>;
+	private readonly onDone: (action: SettingsAction | undefined) => void;
+	private readonly listContainer: Container;
+	private selectedIndex = 0;
+	private _focused = false;
+
+	get focused(): boolean {
+		return this._focused;
+	}
+
+	set focused(value: boolean) {
+		this._focused = value;
+	}
+
+	constructor(options: {
+		theme: Theme;
+		keybindings: KeybindingsManager;
+		profile: AgentProfile;
+		override: SubagentProfileOverride | undefined;
+		models: readonly Model<Api>[];
+		currentSessionModel: Model<Api> | undefined;
+		currentThinking: ThinkingLevel;
+		onDone: (action: SettingsAction | undefined) => void;
+	}) {
+		super();
+		this.theme = options.theme;
+		this.keybindings = options.keybindings;
+		this.onDone = options.onDone;
+		const effective = effectiveModel(options.currentSessionModel, options.models, options.override);
+		this.rows = [
+			{
+				action: "model",
+				label: "Model",
+				value: options.override?.model
+					? `override — ${options.override.model}${findModel(options.models, options.override.model) ? "" : " [unavailable]"}`
+					: `inherit — ${modelId(options.currentSessionModel)}`,
+				override: options.override?.model !== undefined,
+			},
+			{
+				action: "thinking",
+				label: "Thinking",
+				value: options.override?.thinking
+					? `override — ${options.override.thinking}`
+					: `inherit — ${inheritedThinking(effective, options.currentThinking)}`,
+				override: options.override?.thinking !== undefined,
+			},
+		];
+
+		this.addChild(new DynamicBorder());
+		this.addChild(new Spacer(1));
+		this.addChild(new Text(this.theme.fg("accent", this.theme.bold(PROFILE_LABELS[options.profile.name])), 1, 0));
+		this.addChild(new Spacer(1));
+		this.listContainer = new Container();
+		this.addChild(this.listContainer);
+		this.addChild(new Spacer(1));
+		const hints = [
+			navigationHint(this.theme, options.keybindings),
+			hint(this.theme, options.keybindings, "tui.select.confirm", "select"),
+			hint(this.theme, options.keybindings, "tui.select.cancel", "back"),
+		].filter(Boolean);
+		this.addChild(new Text(hints.join(this.theme.fg("muted", " • ")), 1, 0));
+		this.addChild(new Spacer(1));
+		this.addChild(new DynamicBorder());
+		this.updateList();
+	}
+
+	private updateList(): void {
+		this.listContainer.clear();
+		for (const [index, row] of this.rows.entries()) {
+			const selected = index === this.selectedIndex;
+			const prefix = selected ? this.theme.fg("accent", "→ ") : "  ";
+			const label = selected ? this.theme.fg("accent", row.label) : this.theme.fg("text", row.label);
+			const value = this.theme.fg("muted", `— ${row.value}`);
+			const checkmark = row.override ? this.theme.fg("success", " ✓") : "";
+			this.listContainer.addChild(new TruncatedText(`${prefix}${label} ${value}${checkmark}`, 1, 0));
+		}
+	}
+
+	private moveSelection(offset: -1 | 1): void {
+		this.selectedIndex = (this.selectedIndex + offset + this.rows.length) % this.rows.length;
+		this.updateList();
+	}
+
+	handleInput(data: string): void {
+		if (this.keybindings.matches(data, "tui.select.up")) {
+			this.moveSelection(-1);
+		} else if (this.keybindings.matches(data, "tui.select.down")) {
+			this.moveSelection(1);
+		} else if (this.keybindings.matches(data, "tui.select.confirm")) {
+			this.onDone(this.rows[this.selectedIndex]?.action);
+		} else if (this.keybindings.matches(data, "tui.select.cancel")) {
+			this.onDone(undefined);
+		}
+	}
+}
+
+/** Standalone searchable model picker for one profile; confirm saves immediately. */
+class ModelPickerComponent extends Container implements Focusable {
+	private readonly tui: TUI;
+	private readonly theme: Theme;
+	private readonly keybindings: KeybindingsManager;
+	private readonly modelList: ProfileModelListComponent;
+	private readonly refreshAbortController = new AbortController();
+	private closed = false;
+	private _focused = false;
+
+	get focused(): boolean {
+		return this._focused;
+	}
+
+	set focused(value: boolean) {
+		this._focused = value;
+		this.modelList.focused = value;
+	}
+
+	constructor(options: {
+		tui: TUI;
+		theme: Theme;
+		keybindings: KeybindingsManager;
+		profile: AgentProfile;
+		savedModelId: string | undefined;
+		models: readonly Model<Api>[];
+		scopedModels: readonly { model: Model<Api> }[];
+		currentSessionModel: Model<Api> | undefined;
+		onDone: (choice: ProfileModelChoice | undefined) => void;
+	}) {
+		super();
+		this.tui = options.tui;
+		this.theme = options.theme;
+		this.keybindings = options.keybindings;
+		this.addChild(new DynamicBorder());
+		this.addChild(new Spacer(1));
+		this.addChild(
+			new Text(this.theme.fg("accent", this.theme.bold(`Model — ${PROFILE_LABELS[options.profile.name]}`)), 1, 0),
+		);
+		this.addChild(new Spacer(1));
+		this.modelList = new ProfileModelListComponent({
+			theme: options.theme,
+			keybindings: options.keybindings,
+			models: options.models,
+			scopedModels: options.scopedModels,
+			currentSessionModel: options.currentSessionModel,
+			savedModelId: options.savedModelId,
+			onDone: options.onDone,
+		});
+		this.addChild(this.modelList);
+		this.addChild(new Spacer(1));
+		const hints = [
+			navigationHint(this.theme, options.keybindings),
+			options.scopedModels.length > 0 ? hint(this.theme, options.keybindings, "tui.input.tab", "scope") : "",
+			hint(this.theme, options.keybindings, "tui.select.confirm", "select"),
+			hint(this.theme, options.keybindings, "tui.select.cancel", "back"),
+		].filter(Boolean);
+		this.addChild(new Text(hints.join(this.theme.fg("muted", " • ")), 1, 0));
+		this.addChild(new Spacer(1));
+		this.addChild(new DynamicBorder());
+	}
+
+	get refreshSignal(): AbortSignal {
+		return this.refreshAbortController.signal;
+	}
+
+	cancelRefresh(): void {
+		this.refreshAbortController.abort();
+	}
+
+	get isClosed(): boolean {
+		return this.closed;
+	}
+
+	dispose(): void {
+		this.closed = true;
+		this.refreshAbortController.abort();
+	}
+
+	updateModels(models: readonly Model<Api>[]): void {
+		if (this.closed) return;
+		this.modelList.updateModels(models);
+		this.tui.requestRender();
+	}
+
+	setRefreshStatus(message: string | undefined, tone: "muted" | "success" | "error" = "muted"): void {
+		if (this.closed) return;
+		this.modelList.setStatus(message, tone);
+		this.tui.requestRender();
+	}
+
+	handleInput(data: string): void {
+		this.modelList.handleInput(data);
+	}
+}
+
+/** Persist a single override atomically; the UI only reflects the value on success. */
+async function persistOverride(
+	ctx: ExtensionCommandContext,
+	profile: AgentProfile,
+	patch: Partial<SubagentProfileOverride>,
+	current: string | ThinkingLevel | undefined,
+): Promise<void> {
+	const next = "model" in patch ? patch.model : patch.thinking;
+	if (next === current) return;
+	try {
+		await updateProfileOverride(profile.name, patch, getAgentDir());
+	} catch (error) {
+		ctx.ui.notify(
+			`Could not save ${PROFILE_LABELS[profile.name]} settings: ${error instanceof Error ? error.message : String(error)}`,
+			"error",
+		);
+	}
+}
+
+async function refreshPickerModels(ctx: ExtensionCommandContext, picker: ModelPickerComponent): Promise<void> {
 	let timedOut = false;
 	const timeout = setTimeout(() => {
 		timedOut = true;
-		editor.cancelRefresh();
+		picker.cancelRefresh();
 	}, MODEL_REFRESH_TIMEOUT_MS);
 	timeout.unref?.();
 	try {
-		const result = await ctx.modelRegistry.refresh({ signal: editor.refreshSignal });
-		if (editor.refreshSignal.aborted && !timedOut) return;
-		editor.updateModels(ctx.modelRegistry.getAvailable());
+		const result = await ctx.modelRegistry.refresh({ signal: picker.refreshSignal });
+		if (picker.isClosed || (picker.refreshSignal.aborted && !timedOut)) return;
+		picker.updateModels(ctx.modelRegistry.getAvailable());
 		if (result.aborted && timedOut) {
-			editor.setRefreshStatus("Model refresh timed out; showing cached models.", "error");
+			picker.setRefreshStatus("Model refresh timed out; showing cached models.", "error");
 			return;
 		}
 		const providerIds = [...result.errors.keys()];
 		if (providerIds.length > 0) {
-			editor.setRefreshStatus(refreshFailureMessage(providerIds), "error");
+			picker.setRefreshStatus(refreshFailureMessage(providerIds), "error");
 			return;
 		}
 		const registryError = ctx.modelRegistry.getError();
 		if (registryError) {
-			editor.setRefreshStatus(boundText(registryError, MAX_REFRESH_ERROR_LENGTH), "error");
+			picker.setRefreshStatus(boundText(registryError, MAX_REFRESH_ERROR_LENGTH), "error");
 			return;
 		}
-		editor.setRefreshStatus("Model catalogs refreshed.", "success");
+		picker.setRefreshStatus(undefined);
 	} catch (error) {
-		if (editor.refreshSignal.aborted && !timedOut) return;
+		if (picker.isClosed || (picker.refreshSignal.aborted && !timedOut)) return;
 		const message = timedOut
 			? "Model refresh timed out; showing cached models."
 			: `Could not refresh model catalogs: ${error instanceof Error ? error.message : String(error)}`;
-		editor.setRefreshStatus(boundText(message, MAX_REFRESH_ERROR_LENGTH), "error");
+		picker.setRefreshStatus(boundText(message, MAX_REFRESH_ERROR_LENGTH), "error");
 	} finally {
 		clearTimeout(timeout);
 	}
 }
 
-async function showTuiAgentsCommand(ctx: ExtensionCommandContext, currentThinking: ThinkingLevel): Promise<void> {
-	const agentDir = getAgentDir();
-	let selectedProfileName: string | undefined;
-	while (true) {
-		const discovery = discoverAgents(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
-		const picked = await ctx.ui.custom<ProfilePickerResult>(
-			(_tui, theme, keybindings, done) =>
-				new ProfilePickerComponent(
-					theme,
-					keybindings,
-					discovery.agents,
-					discovery.diagnostics,
-					done,
-					selectedProfileName,
-				),
-		);
-		if (!picked) return;
-		if (picked.kind === "diagnostics") {
-			ctx.ui.notify(formatDiagnostics(discovery.diagnostics), "warning");
-			continue;
-		}
+async function selectProfile(ctx: ExtensionCommandContext): Promise<AgentProfile | undefined> {
+	const labels = AGENT_PROFILES.map((profile) => PROFILE_LABELS[profile.name]);
+	const label = await ctx.ui.select("Agents", labels);
+	return label === undefined ? undefined : AGENT_PROFILES.find((profile) => PROFILE_LABELS[profile.name] === label);
+}
 
-		selectedProfileName = picked.name;
-		const agent = discovery.agents.find((candidate) => candidate.name === picked.name);
-		if (!agent) continue;
-		const config = await loadSubagentConfig(agentDir);
-		const override = config.profiles[agent.name];
-		const edited = await ctx.ui.custom<ProfileEditorResult | undefined>((tui, theme, keybindings, done) => {
-			const editor = new ProfileEditorComponent({
-				tui,
+async function showTuiSettingsMenu(
+	ctx: ExtensionCommandContext,
+	profile: AgentProfile,
+	override: SubagentProfileOverride | undefined,
+	currentThinking: ThinkingLevel,
+): Promise<SettingsAction | undefined> {
+	return ctx.ui.custom<SettingsAction | undefined>(
+		(_tui, theme, keybindings, done) =>
+			new ProfileSettingsMenuComponent({
 				theme,
 				keybindings,
-				agent,
+				profile,
 				override,
 				models: ctx.modelRegistry.getAvailable(),
-				scopedModels: ctx.scopedModels,
 				currentSessionModel: ctx.model,
 				currentThinking,
 				onDone: done,
-			});
-			editor.setRefreshStatus("Refreshing model catalogs…");
-			void refreshEditorModels(ctx, editor);
-			return editor;
-		});
-		if (!edited) continue;
-		await saveProfileResult(ctx, agent.name, override, edited);
-	}
-}
-
-function uniqueProfileLabels(agents: readonly AgentDefinition[]): Map<string, AgentDefinition> {
-	const sorted = [...agents].sort(compareAgentNames);
-	const counts = new Map<string, number>();
-	for (const agent of sorted) {
-		const display = displayAgentName(agent.name);
-		counts.set(display, (counts.get(display) ?? 0) + 1);
-	}
-	return new Map(
-		sorted.map((agent) => {
-			const display = displayAgentName(agent.name);
-			return [counts.get(display) === 1 ? display : `${display} (${agent.name})`, agent];
-		}),
+			}),
 	);
 }
 
-async function showDialogAgentsCommand(ctx: ExtensionCommandContext, currentThinking: ThinkingLevel): Promise<void> {
-	const agentDir = getAgentDir();
-	while (true) {
-		const discovery = discoverAgents(ctx.cwd, { projectTrusted: ctx.isProjectTrusted(), agentDir });
-		const labels = uniqueProfileLabels(discovery.agents);
-		const diagnosticsLabel = discovery.diagnostics.length
-			? `View ${discovery.diagnostics.length} agent file issue${discovery.diagnostics.length === 1 ? "" : "s"}`
-			: undefined;
-		const selectedLabel = await ctx.ui.select("Agents", [
-			...labels.keys(),
-			...(diagnosticsLabel ? [diagnosticsLabel] : []),
-		]);
-		if (!selectedLabel) return;
-		if (selectedLabel === diagnosticsLabel) {
-			ctx.ui.notify(formatDiagnostics(discovery.diagnostics), "warning");
-			continue;
-		}
-		const agent = labels.get(selectedLabel);
-		if (!agent) continue;
+async function showDialogSettingsMenu(
+	ctx: ExtensionCommandContext,
+	profile: AgentProfile,
+	override: SubagentProfileOverride | undefined,
+	currentThinking: ThinkingLevel,
+): Promise<SettingsAction | undefined> {
+	const models = ctx.modelRegistry.getAvailable();
+	const effective = effectiveModel(ctx.model, models, override);
+	const modelValue = override?.model
+		? `override — ${override.model}${findModel(models, override.model) ? "" : " [unavailable]"}`
+		: `inherit — ${modelId(ctx.model)}`;
+	const thinkingValue = override?.thinking
+		? `override — ${override.thinking}`
+		: `inherit — ${inheritedThinking(effective, currentThinking)}`;
+	const options = new Map<string, SettingsAction>();
+	options.set(`Model — ${modelValue}`, "model");
+	options.set(`Thinking — ${thinkingValue}`, "thinking");
+	const label = await ctx.ui.select(PROFILE_LABELS[profile.name], [...options.keys()]);
+	return label === undefined ? undefined : options.get(label);
+}
 
+async function showTuiModelPicker(
+	ctx: ExtensionCommandContext,
+	profile: AgentProfile,
+	override: SubagentProfileOverride | undefined,
+): Promise<{ modelId: string | undefined } | undefined> {
+	const chosen = await ctx.ui.custom<ProfileModelChoice | undefined>((tui, theme, keybindings, done) => {
+		const picker = new ModelPickerComponent({
+			tui,
+			theme,
+			keybindings,
+			profile,
+			savedModelId: override?.model,
+			models: ctx.modelRegistry.getAvailable(),
+			scopedModels: ctx.scopedModels,
+			currentSessionModel: ctx.model,
+			onDone: done,
+		});
+		picker.setRefreshStatus("Refreshing model catalogs…");
+		void refreshPickerModels(ctx, picker);
+		return picker;
+	});
+	return chosen === undefined ? undefined : { modelId: chosen.modelId };
+}
+
+async function showDialogModelPicker(
+	ctx: ExtensionCommandContext,
+	profile: AgentProfile,
+	override: SubagentProfileOverride | undefined,
+): Promise<{ modelId: string | undefined } | undefined> {
+	const models = ctx.modelRegistry.getAvailable().sort((left, right) => {
+		const provider = left.provider.localeCompare(right.provider);
+		return provider !== 0 ? provider : left.id.localeCompare(right.id);
+	});
+	const choices = new Map<string, string | undefined>();
+	choices.set(`inherit (${modelId(ctx.model)})${override?.model ? "" : " ✓"}`, undefined);
+	if (override?.model && !findModel(models, override.model)) {
+		choices.set(`${override.model} [unavailable] ✓`, override.model);
+	}
+	for (const model of models) {
+		const id = modelId(model);
+		choices.set(`${id}${override?.model === id ? " ✓" : ""}`, id);
+	}
+	const label = await ctx.ui.select(`Model — ${PROFILE_LABELS[profile.name]}`, [...choices.keys()]);
+	return label === undefined ? undefined : { modelId: choices.get(label) };
+}
+
+async function showThinkingPicker(
+	ctx: ExtensionCommandContext,
+	profile: AgentProfile,
+	override: SubagentProfileOverride | undefined,
+	currentThinking: ThinkingLevel,
+): Promise<{ level: ThinkingLevel | undefined } | undefined> {
+	const models = ctx.modelRegistry.getAvailable();
+	const effective = effectiveModel(ctx.model, models, override);
+	const levels = effective ? (getSupportedThinkingLevels(effective) as ThinkingLevel[]) : [...THINKING_LEVELS];
+	const inherited = inheritedThinking(effective, currentThinking);
+	const choices = new Map<string, ThinkingLevel | undefined>();
+	choices.set(`inherit (${inherited})${override?.thinking ? "" : " ✓"}`, undefined);
+	for (const level of levels) {
+		choices.set(`${level}${override?.thinking === level ? " ✓" : ""}`, level);
+	}
+	const label = await ctx.ui.select(`Thinking — ${PROFILE_LABELS[profile.name]}`, [...choices.keys()]);
+	return label === undefined ? undefined : { level: choices.get(label) };
+}
+
+async function runProfileSettings(
+	ctx: ExtensionCommandContext,
+	profile: AgentProfile,
+	currentThinking: ThinkingLevel,
+): Promise<void> {
+	const agentDir = getAgentDir();
+	const isTui = ctx.mode === "tui";
+	while (true) {
 		const config = await loadSubagentConfig(agentDir);
-		const override = config.profiles[agent.name];
-		const models = ctx.modelRegistry.getAvailable().sort((left, right) => {
-			const provider = left.provider.localeCompare(right.provider);
-			return provider !== 0 ? provider : left.id.localeCompare(right.id);
-		});
-		const modelChoices = new Map<string, string | undefined>();
-		const inheritModelLabel = `inherit (${modelId(ctx.model)})${override?.model ? "" : " ✓"}`;
-		modelChoices.set(inheritModelLabel, undefined);
-		if (override?.model && !findModel(models, override.model)) {
-			modelChoices.set(`${override.model} [unavailable] ✓`, override.model);
+		const override = config.profiles[profile.name];
+		const action = isTui
+			? await showTuiSettingsMenu(ctx, profile, override, currentThinking)
+			: await showDialogSettingsMenu(ctx, profile, override, currentThinking);
+		if (!action) return;
+		if (action === "model") {
+			const chosen = isTui
+				? await showTuiModelPicker(ctx, profile, override)
+				: await showDialogModelPicker(ctx, profile, override);
+			if (!chosen) continue;
+			await persistOverride(ctx, profile, { model: chosen.modelId }, override?.model);
+		} else {
+			const chosen = await showThinkingPicker(ctx, profile, override, currentThinking);
+			if (!chosen) continue;
+			await persistOverride(ctx, profile, { thinking: chosen.level }, override?.thinking);
 		}
-		for (const model of models) {
-			const id = modelId(model);
-			modelChoices.set(`${id}${override?.model === id ? " ✓" : ""}`, id);
-		}
-		const selectedModelLabel = await ctx.ui.select(`Model for ${displayAgentName(agent.name)}`, [
-			...modelChoices.keys(),
-		]);
-		if (!selectedModelLabel) continue;
-		const selectedModelId = modelChoices.get(selectedModelLabel);
-		const effectiveModel = selectedModelId ? findModel(models, selectedModelId) : ctx.model;
-		const levels = effectiveModel
-			? (getSupportedThinkingLevels(effectiveModel) as ThinkingLevel[])
-			: [...THINKING_LEVELS];
-		const inheritedThinking = effectiveModel
-			? (clampThinkingLevel(effectiveModel, currentThinking) as ThinkingLevel)
-			: currentThinking;
-		const thinkingChoices = new Map<string, ThinkingLevel | undefined>();
-		thinkingChoices.set(`inherit (${inheritedThinking})${override?.thinking ? "" : " ✓"}`, undefined);
-		for (const level of levels) {
-			thinkingChoices.set(`${level}${override?.thinking === level ? " ✓" : ""}`, level);
-		}
-		const selectedThinkingLabel = await ctx.ui.select(`Thinking for ${displayAgentName(agent.name)}`, [
-			...thinkingChoices.keys(),
-		]);
-		if (!selectedThinkingLabel) continue;
-		await saveProfileResult(ctx, agent.name, override, {
-			model: selectedModelId,
-			thinking: thinkingChoices.get(selectedThinkingLabel),
-		});
 	}
 }
 
@@ -247,6 +488,9 @@ export async function showAgentsCommand(ctx: ExtensionCommandContext, currentThi
 		ctx.ui.notify("/agents requires an interactive UI.", "warning");
 		return;
 	}
-	if (ctx.mode === "tui") await showTuiAgentsCommand(ctx, currentThinking);
-	else await showDialogAgentsCommand(ctx, currentThinking);
+	while (true) {
+		const profile = await selectProfile(ctx);
+		if (!profile) return;
+		await runProfileSettings(ctx, profile, currentThinking);
+	}
 }

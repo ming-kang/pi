@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import { discoverAgents, subagentToolDescription } from "../src/extensions/subagent/agents.ts";
+import { AGENT_PROFILES, subagentToolDescription } from "../src/extensions/subagent/agents.ts";
+import { MAX_CONCURRENCY, MAX_TASKS, SUBAGENT_AGENT_NAMES } from "../src/extensions/subagent/constants.ts";
 import { resolveSubagentTask, resolveTaskCwd } from "../src/extensions/subagent/resolve.ts";
 import type { SubagentTask } from "../src/extensions/subagent/schema.ts";
 import { parseSubagentConfig, updateProfileOverride } from "../src/extensions/subagent/settings.ts";
@@ -21,11 +22,6 @@ function model(provider: string, id: string, reasoning = true): Model<Api> {
 		contextWindow: 10_000,
 		maxTokens: 1_000,
 	};
-}
-
-function writeAgent(dir: string, fileName: string, content: string): void {
-	mkdirSync(dir, { recursive: true });
-	writeFileSync(join(dir, fileName), content, "utf8");
 }
 
 const parentModel = model("test", "parent");
@@ -55,158 +51,134 @@ describe("subagent configuration", () => {
 		for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 	});
 
-	it("loads built-ins, user agents, and trusted project overrides", () => {
-		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-config-"));
-		temporaryDirectories.push(root);
-		const agentDir = join(root, "agent");
-		const projectAgents = join(root, ".pi", "agents");
-		writeAgent(
-			join(agentDir, "agents"),
-			"reviewer.md",
-			"---\nname: reviewer\ndescription: User reviewer\ntools: read, grep\n---\nUser prompt",
-		);
-		writeAgent(
-			projectAgents,
-			"reviewer.md",
-			"---\nname: reviewer\ndescription: Project reviewer\ntools: read\nmodel: test/sonnet\n---\nProject prompt",
-		);
-
-		const trusted = discoverAgents(root, { projectTrusted: true, agentDir });
-		const reviewer = trusted.agents.find((agent) => agent.name === "reviewer");
-		expect(reviewer).toMatchObject({ description: "Project reviewer", source: "project" });
-		// Frontmatter model/thinking are ignored: agent files travel across
-		// machines, so pinned models rarely exist in the reader's environment.
-		expect(reviewer).not.toHaveProperty("model");
-		expect(reviewer).not.toHaveProperty("thinking");
-		expect(trusted.agents.some((agent) => agent.name === "general")).toBe(true);
-		expect(trusted.projectAgentsTrusted).toBe(true);
-		const general = trusted.agents.find((agent) => agent.name === "general");
-		const explorer = trusted.agents.find((agent) => agent.name === "explorer");
-		expect(general?.systemPrompt).toContain("never create documentation files unless the task explicitly asks");
-		expect(general?.description).toContain("use explorer for read-only questions");
-		expect(general?.uiDescription).not.toContain("use explorer for read-only questions");
+	it("defines exactly the two static built-in profiles with no discovery", () => {
+		// No user/project agent discovery exists: the tool description is a
+		// constant and the profile list is exactly the two built-ins.
+		expect(SUBAGENT_AGENT_NAMES).toEqual(["explorer", "general"]);
+		expect(AGENT_PROFILES.map((profile) => profile.name)).toEqual(["explorer", "general"]);
+		const [explorer, general] = AGENT_PROFILES;
+		expect(explorer?.name).toBe("explorer");
 		expect(explorer?.description).toContain('"quick" for a targeted lookup');
-		expect(explorer?.uiDescription).toBe(
-			"Fast read-only agent for finding files, searching code, and answering codebase questions.",
-		);
-		expect(explorer?.systemPrompt).toContain("batching independent searches and reads");
 		// Explorer carries bash for git history and similar inspection, but the
 		// prompt must pin it read-only, including the bash-native write paths
 		// (redirects, heredocs) that the tool list cannot block.
-		expect(explorer?.tools).toContain("bash");
-		expect(explorer?.description).toContain("git history");
+		expect(explorer?.tools).toEqual(["read", "grep", "find", "ls", "bash"]);
 		expect(explorer?.systemPrompt).toContain("read-only inspection only");
 		expect(explorer?.systemPrompt).toContain("no redirect (>, >>) or heredoc writes");
 		expect(explorer?.omitContextFiles).toBe(true);
-		const trustedToolDescription = subagentToolDescription(trusted);
-		expect(trustedToolDescription).toContain("- reviewer: Project reviewer (Tools: read)");
-		expect(trustedToolDescription).toContain("When not to delegate:");
-		expect(trustedToolDescription).toContain("Never delegate understanding");
-
-		const untrusted = discoverAgents(root, { projectTrusted: false, agentDir });
-		expect(untrusted.agents.find((agent) => agent.name === "reviewer")).toMatchObject({
-			description: "User reviewer",
-			source: "user",
-		});
-		expect(untrusted.projectAgentsTrusted).toBe(false);
-		const untrustedToolDescription = subagentToolDescription(untrusted);
-		expect(untrustedToolDescription).toContain("- reviewer: User reviewer (Tools: read, grep)");
-		expect(untrustedToolDescription).not.toContain("Project reviewer");
+		expect(general?.name).toBe("general");
+		expect(general?.tools).toEqual(["read", "bash", "edit", "write"]);
+		expect(general?.systemPrompt).toContain("never create documentation files unless the task explicitly asks");
+		expect(general?.description).toContain("use explorer for read-only questions");
 	});
 
-	it("reports invalid agent definitions without hiding valid agents", () => {
-		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-diagnostics-"));
-		temporaryDirectories.push(root);
-		const agentsDir = join(root, "agents");
-		writeAgent(agentsDir, "valid.md", "---\nname: valid\ndescription: Valid\n---\nPrompt");
-		writeAgent(agentsDir, "invalid.md", "---\nname: Invalid Name\ndescription: Invalid\ntools: unknown\n---\nPrompt");
-
-		const result = discoverAgents(root, { projectTrusted: false, agentDir: root });
-		expect(result.agents.some((agent) => agent.name === "valid")).toBe(true);
-		expect(result.diagnostics).toHaveLength(1);
-		expect(result.diagnostics[0]?.path).toContain("invalid.md");
+	it("describes concurrent tasks, queueing, and input-order results", () => {
+		const description = subagentToolDescription();
+		expect(description).toContain(`Provide 1-${MAX_TASKS} independent tasks`);
+		expect(description).toContain(`at most ${MAX_CONCURRENCY} active at once`);
+		expect(description).toContain("excess tasks queue, and results preserve input order");
+		expect(description).toContain("Agent profiles:");
+		expect(description).toContain("- explorer (default):");
+		expect(description).toContain("- general:");
+		expect(description).toContain("Do not delegate a trivial task");
+		// Static guidance: no runtime-discovered agent list appears.
+		expect(description).not.toContain("project");
+		expect(description).not.toContain("user agent");
 	});
 
-	it("bounds agent metadata before placing it in the model-facing tool description", () => {
-		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-description-"));
-		temporaryDirectories.push(root);
-		const agentDir = join(root, "agent");
-		for (let index = 0; index < 50; index++) {
-			writeAgent(
-				join(agentDir, "agents"),
-				`worker-${index}.md`,
-				`---\nname: worker-${index}\ndescription: ${"细节 ".repeat(200)}\ntools: read\n---\nPrompt`,
-			);
-		}
-
-		const description = subagentToolDescription(discoverAgents(root, { projectTrusted: false, agentDir }));
-		expect(Buffer.byteLength(description, "utf8")).toBeLessThan(10 * 1024);
-		expect(description).toContain("additional profiles omitted from this bounded description");
+	it("rejects unknown profiles, override keys, and top-level fields", () => {
+		expect(() => parseSubagentConfig(JSON.stringify({ version: 1, profiles: { reviewer: {} } }))).toThrow(
+			/unknown profile "reviewer"/,
+		);
+		expect(() =>
+			parseSubagentConfig(JSON.stringify({ version: 1, profiles: { explorer: { model: "test/sonnet", foo: 1 } } })),
+		).toThrow(/unsupported setting\(s\): foo/);
+		expect(() =>
+			parseSubagentConfig(JSON.stringify({ version: 1, profiles: { explorer: { mode: "parallel" } } })),
+		).toThrow(/unsupported setting\(s\): mode/);
+		expect(() => parseSubagentConfig(JSON.stringify({ version: 1, profiles: {}, mode: "parallel" }))).toThrow(
+			/unsupported field\(s\): mode/,
+		);
+		expect(() => parseSubagentConfig(JSON.stringify({ version: 2, profiles: {} }))).toThrow(/unsupported version 2/);
+		expect(() => parseSubagentConfig("not json")).toThrow(/not valid JSON/);
+		expect(() => parseSubagentConfig(JSON.stringify({ version: 1, profiles: { explorer: "high" } }))).toThrow(
+			/Profile override for "explorer" must be an object/,
+		);
 	});
 
 	it("persists profile model and thinking overrides atomically", async () => {
 		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-settings-"));
 		temporaryDirectories.push(root);
-		await updateProfileOverride("reviewer", { model: "test/sonnet", thinking: "high" }, root);
+		await updateProfileOverride("explorer", { model: "test/sonnet", thinking: "high" }, root);
 		const config = parseSubagentConfig(readFileSync(join(root, "subagent.json"), "utf8"));
-		expect(config).toEqual({ version: 1, profiles: { reviewer: { model: "test/sonnet", thinking: "high" } } });
+		expect(config).toEqual({ version: 1, profiles: { explorer: { model: "test/sonnet", thinking: "high" } } });
 	});
 
 	it("serializes concurrent override updates without losing any profile", async () => {
 		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-concurrent-"));
 		temporaryDirectories.push(root);
 		await Promise.all([
-			updateProfileOverride("alpha", { model: "test/alpha" }, root),
-			updateProfileOverride("beta", { thinking: "high" }, root),
+			updateProfileOverride("explorer", { model: "test/sonnet" }, root),
+			updateProfileOverride("general", { thinking: "high" }, root),
 		]);
 		const config = parseSubagentConfig(readFileSync(join(root, "subagent.json"), "utf8"));
 		expect(config.profiles).toEqual({
-			alpha: { model: "test/alpha" },
-			beta: { thinking: "high" },
+			explorer: { model: "test/sonnet" },
+			general: { thinking: "high" },
 		});
 	});
 
 	it("resolves overrides above parent inheritance and keeps the parent session unchanged", async () => {
 		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-resolution-"));
 		temporaryDirectories.push(root);
-		await updateProfileOverride("reviewer", { model: "test/sonnet", thinking: "high" }, root);
-		const task: SubagentTask = { agent: "reviewer", description: "Review", prompt: "Review this" };
-		const reviewer = {
-			name: "reviewer",
-			description: "Reviewer",
-			tools: ["read"],
-			systemPrompt: "Review",
-			source: "user" as const,
-			filePath: "reviewer.md",
-			backend: "sdk" as const,
-		};
-		const resolved = await resolveSubagentTask(task, root, [reviewer], parentContext(), root);
+		await updateProfileOverride("explorer", { model: "test/sonnet", thinking: "high" }, root);
+		const task: SubagentTask = { agent: "explorer", prompt: "Find the widget" };
+		const parent = parentContext();
+		const resolved = await resolveSubagentTask(task, root, parent, root);
+		expect(resolved.agent.name).toBe("explorer");
 		expect(resolved.model).toBe(sonnet);
 		expect(resolved.thinking).toBe("high");
-		expect(resolved.modelSource).toBe("profile");
-		expect(resolved.thinkingSource).toBe("profile");
-		expect(parentContext().thinking).toBe("medium");
+		expect(parent.thinking).toBe("medium");
+		expect(parent.model).toBe(parentModel);
 
-		await updateProfileOverride("reviewer", { model: undefined, thinking: undefined }, root);
-		const inherited = await resolveSubagentTask(task, root, [reviewer], parentContext(), root);
+		await updateProfileOverride("explorer", { model: undefined, thinking: undefined }, root);
+		const inherited = await resolveSubagentTask(task, root, parentContext(), root);
 		expect(inherited.model).toBe(parentModel);
 		expect(inherited.thinking).toBe("medium");
-		expect(inherited.modelSource).toBe("parent");
-		expect(inherited.thinkingSource).toBe("parent");
 	});
 
-	it("updates override fields independently and drops legacy inherit entries", async () => {
+	it("defaults an omitted agent to explorer and rejects names outside the enum", async () => {
+		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-agent-enum-"));
+		temporaryDirectories.push(root);
+		const resolved = await resolveSubagentTask({ prompt: "Find it" }, root, parentContext(), root);
+		expect(resolved.agent.name).toBe("explorer");
+		await expect(
+			resolveSubagentTask({ agent: "reviewer" as SubagentTask["agent"], prompt: "X" }, root, parentContext(), root),
+		).rejects.toThrow(/Unknown agent "reviewer"\. Available agents: explorer, general/);
+	});
+
+	it("updates override fields independently and rejects compatibility aliases", async () => {
 		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-partial-"));
 		temporaryDirectories.push(root);
-		await updateProfileOverride("reviewer", { thinking: "high" }, root);
-		await updateProfileOverride("reviewer", { model: "test/sonnet" }, root);
+		await updateProfileOverride("explorer", { thinking: "high" }, root);
+		await updateProfileOverride("explorer", { model: "test/sonnet" }, root);
 		const config = parseSubagentConfig(readFileSync(join(root, "subagent.json"), "utf8"));
-		expect(config.profiles.reviewer).toEqual({ model: "test/sonnet", thinking: "high" });
+		expect(config.profiles.explorer).toEqual({ model: "test/sonnet", thinking: "high" });
 
-		const legacy = parseSubagentConfig(
-			JSON.stringify({ version: 1, profiles: { reviewer: { model: "inherit", thinking: "inherit" } } }),
-		);
-		expect(legacy.profiles.reviewer).toEqual({});
+		// A cleared field removes just that override, then the whole entry.
+		await updateProfileOverride("explorer", { model: undefined }, root);
+		expect(parseSubagentConfig(readFileSync(join(root, "subagent.json"), "utf8")).profiles.explorer).toEqual({
+			thinking: "high",
+		});
+		await updateProfileOverride("explorer", { thinking: undefined }, root);
+		expect(parseSubagentConfig(readFileSync(join(root, "subagent.json"), "utf8")).profiles.explorer).toBeUndefined();
+
+		expect(() =>
+			parseSubagentConfig(
+				JSON.stringify({ version: 1, profiles: { explorer: { model: "inherit", thinking: "inherit" } } }),
+			),
+		).toThrow(/must be a concrete model id/);
+		expect(() => parseSubagentConfig(JSON.stringify({ profiles: {} }))).toThrow(/unsupported version undefined/);
 	});
 
 	it("accepts an absolute cwd inside the parent and rejects escapes", () => {

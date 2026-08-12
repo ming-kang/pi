@@ -1,27 +1,18 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelRuntime } from "../src/core/model-runtime.ts";
+import { DETAILS_OUTPUT_LIMIT, TASK_OUTPUT_LIMIT, TOTAL_OUTPUT_LIMIT } from "../src/extensions/subagent/constants.ts";
 import type { ParentModelContext } from "../src/extensions/subagent/resolve.ts";
-import { ConcurrencyGate, runSubagentInvocation } from "../src/extensions/subagent/runner.ts";
+import { ConcurrencyGate, isSubagentError, runSubagentInvocation } from "../src/extensions/subagent/runner.ts";
 import type { SdkRunnerOptions } from "../src/extensions/subagent/sdk-runner.ts";
 import { runSdkTask } from "../src/extensions/subagent/sdk-runner.ts";
-import type { AgentDefinition, SubagentDetails } from "../src/extensions/subagent/types.ts";
+import type { SubagentDetails } from "../src/extensions/subagent/types.ts";
 
 vi.mock("../src/extensions/subagent/sdk-runner.ts", () => ({
 	runSdkTask: vi.fn(),
 }));
 
 const runSdkTaskMock = vi.mocked(runSdkTask);
-
-const agent: AgentDefinition = {
-	name: "worker",
-	description: "Test worker",
-	tools: ["read"],
-	systemPrompt: "Return a concise result.",
-	source: "user",
-	filePath: "worker.md",
-	backend: "sdk",
-};
 
 function model(): Model<Api> {
 	return {
@@ -50,23 +41,21 @@ function parentContext(parentModel: Model<Api>): ParentModelContext {
 	};
 }
 
-function failWith(error: string): (options: SdkRunnerOptions) => Promise<SdkRunnerOptions["run"]> {
-	return async (options) => {
-		options.run.status = "failed";
-		options.run.error = error;
-		options.run.endedAt = Date.now();
-		return options.run;
-	};
+async function failRun(options: SdkRunnerOptions, error: string): Promise<SdkRunnerOptions["run"]> {
+	options.run.status = "failed";
+	options.run.error = error;
+	options.run.endedAt = Date.now();
+	options.onProgress?.();
+	return options.run;
 }
 
-function succeedWith(output: string): (options: SdkRunnerOptions) => Promise<SdkRunnerOptions["run"]> {
-	return async (options) => {
-		options.run.status = "completed";
-		options.run.finalOutput = output;
-		options.run.usage.turns = 1;
-		options.run.endedAt = Date.now();
-		return options.run;
-	};
+async function succeedRun(options: SdkRunnerOptions, output: string): Promise<SdkRunnerOptions["run"]> {
+	options.run.status = "completed";
+	options.run.report = output;
+	options.run.usage.turns = 1;
+	options.run.endedAt = Date.now();
+	options.onProgress?.();
+	return options.run;
 }
 
 interface InvokeOptions {
@@ -78,9 +67,8 @@ interface InvokeOptions {
 
 function invoke(options: InvokeOptions = {}) {
 	return runSubagentInvocation({
-		params: { agent: "worker", description: "Run worker", prompt: "Do the task." },
+		params: { tasks: [{ prompt: "Do the task." }] },
 		parentCwd: process.cwd(),
-		agents: [agent],
 		parent: parentContext(model()),
 		modelRuntime: {} as ModelRuntime,
 		agentDir: process.cwd(),
@@ -99,17 +87,19 @@ describe("subagent task-level retry", () => {
 	});
 
 	it("retries a produced-nothing failure with a retryable error and then succeeds", async () => {
-		runSdkTaskMock.mockImplementationOnce(failWith("fetch failed")).mockImplementationOnce(succeedWith("recovered"));
+		runSdkTaskMock
+			.mockImplementationOnce((options) => failRun(options, "fetch failed"))
+			.mockImplementationOnce((options) => succeedRun(options, "recovered"));
 		const result = await invoke();
 		expect(runSdkTaskMock).toHaveBeenCalledTimes(2);
-		expect(result.content).toBe("recovered");
+		expect(result.content).toContain("recovered");
 	});
 
 	it("emits bounded task retry deadlines and removes them from the final result", async () => {
 		const updates: SubagentDetails[] = [];
 		runSdkTaskMock
-			.mockImplementationOnce(failWith(`fetch failed ${"x".repeat(500)}`))
-			.mockImplementationOnce(succeedWith("recovered"));
+			.mockImplementationOnce((options) => failRun(options, `fetch failed ${"x".repeat(500)}`))
+			.mockImplementationOnce((options) => succeedRun(options, "recovered"));
 		const result = await invoke({ onUpdate: (details) => updates.push(details), taskRetryBaseDelayMs: 5 });
 		const retryUpdate = updates.find((details) => details.runs[0]?.retry);
 		const retry = retryUpdate?.runs[0]?.retry;
@@ -123,7 +113,7 @@ describe("subagent task-level retry", () => {
 
 	it("clears task retry state when aborted during backoff", async () => {
 		const controller = new AbortController();
-		runSdkTaskMock.mockImplementation(failWith("fetch failed"));
+		runSdkTaskMock.mockImplementation((options) => failRun(options, "fetch failed"));
 		const result = await invoke({
 			signal: controller.signal,
 			taskRetryBaseDelayMs: 8000,
@@ -139,7 +129,7 @@ describe("subagent task-level retry", () => {
 	it("clears task retry state when session shutdown aborts the backoff", async () => {
 		let registeredAbort: (() => Promise<void>) | undefined;
 		const unregisterAbort = vi.fn();
-		runSdkTaskMock.mockImplementation(failWith("fetch failed"));
+		runSdkTaskMock.mockImplementation((options) => failRun(options, "fetch failed"));
 		const result = await invoke({
 			taskRetryBaseDelayMs: 8000,
 			registerAbort: (abort) => {
@@ -161,7 +151,7 @@ describe("subagent task-level retry", () => {
 	});
 
 	it("stops after the retry budget is exhausted", async () => {
-		runSdkTaskMock.mockImplementation(failWith("socket hang up"));
+		runSdkTaskMock.mockImplementation((options) => failRun(options, "socket hang up"));
 		const result = await invoke();
 		// Initial attempt plus TASK_RETRY_LIMIT retries.
 		expect(runSdkTaskMock).toHaveBeenCalledTimes(3);
@@ -169,56 +159,12 @@ describe("subagent task-level retry", () => {
 	});
 
 	it("does not retry non-retryable errors", async () => {
-		runSdkTaskMock.mockImplementation(failWith("insufficient_quota: billing hard limit reached"));
+		runSdkTaskMock.mockImplementation((options) =>
+			failRun(options, "insufficient_quota: billing hard limit reached"),
+		);
 		const result = await invoke();
 		expect(runSdkTaskMock).toHaveBeenCalledTimes(1);
 		expect(result.details.runs[0]?.status).toBe("failed");
-	});
-
-	it("does not mark a parallel batch as an error while any task succeeded", async () => {
-		runSdkTaskMock
-			.mockImplementationOnce(succeedWith("good result"))
-			.mockImplementationOnce(failWith("insufficient_quota: billing hard limit reached"));
-		const result = await runSubagentInvocation({
-			params: {
-				tasks: [
-					{ agent: "worker", description: "First task", prompt: "Do the first." },
-					{ agent: "worker", description: "Second task", prompt: "Do the second." },
-				],
-			},
-			parentCwd: process.cwd(),
-			agents: [agent],
-			parent: parentContext(model()),
-			modelRuntime: {} as ModelRuntime,
-			agentDir: process.cwd(),
-			projectTrusted: false,
-			gate: new ConcurrencyGate(1),
-			taskRetryBaseDelayMs: 1,
-		});
-		expect(result.details.status).toBe("failed");
-		expect(result.content).toContain("good result");
-		expect(result.content).toContain("insufficient_quota");
-	});
-
-	it("marks a parallel batch as an error when every task failed", async () => {
-		runSdkTaskMock.mockImplementation(failWith("insufficient_quota: billing hard limit reached"));
-		const result = await runSubagentInvocation({
-			params: {
-				tasks: [
-					{ agent: "worker", description: "First task", prompt: "Do the first." },
-					{ agent: "worker", description: "Second task", prompt: "Do the second." },
-				],
-			},
-			parentCwd: process.cwd(),
-			agents: [agent],
-			parent: parentContext(model()),
-			modelRuntime: {} as ModelRuntime,
-			agentDir: process.cwd(),
-			projectTrusted: false,
-			gate: new ConcurrencyGate(1),
-			taskRetryBaseDelayMs: 1,
-		});
-		expect(result.details.status).toBe("failed");
 	});
 
 	it("does not retry once the run has produced work", async () => {
@@ -234,5 +180,320 @@ describe("subagent task-level retry", () => {
 		const result = await invoke();
 		expect(runSdkTaskMock).toHaveBeenCalledTimes(1);
 		expect(result.details.runs[0]?.status).toBe("failed");
+	});
+
+	it("reports partial when any task succeeded but others failed, and never treats the batch as an error", async () => {
+		runSdkTaskMock
+			.mockImplementationOnce((options) => succeedRun(options, "good result"))
+			.mockImplementationOnce((options) => failRun(options, "insufficient_quota: billing hard limit reached"));
+		const result = await runSubagentInvocation({
+			params: {
+				tasks: [{ prompt: "First task\nDo the first." }, { prompt: "Second task\nDo the second." }],
+			},
+			parentCwd: process.cwd(),
+			parent: parentContext(model()),
+			modelRuntime: {} as ModelRuntime,
+			agentDir: process.cwd(),
+			projectTrusted: false,
+			gate: new ConcurrencyGate(1),
+			taskRetryBaseDelayMs: 1,
+		});
+		expect(result.details.status).toBe("partial");
+		expect(isSubagentError(result.details)).toBe(false);
+		expect(result.content).toContain("good result");
+		expect(result.content).toContain("insufficient_quota");
+	});
+
+	it("marks a parallel batch as an error when every task failed", async () => {
+		runSdkTaskMock.mockImplementation((options) =>
+			failRun(options, "insufficient_quota: billing hard limit reached"),
+		);
+		const result = await runSubagentInvocation({
+			params: {
+				tasks: [{ prompt: "First task\nDo the first." }, { prompt: "Second task\nDo the second." }],
+			},
+			parentCwd: process.cwd(),
+			parent: parentContext(model()),
+			modelRuntime: {} as ModelRuntime,
+			agentDir: process.cwd(),
+			projectTrusted: false,
+			gate: new ConcurrencyGate(1),
+			taskRetryBaseDelayMs: 1,
+		});
+		expect(result.details.status).toBe("failed");
+		expect(isSubagentError(result.details)).toBe(true);
+	});
+
+	it("reports aborted when every task aborted", async () => {
+		runSdkTaskMock.mockImplementation(async (options) => {
+			options.run.status = "aborted";
+			options.run.error = "Subagent was aborted.";
+			options.run.endedAt = Date.now();
+			return options.run;
+		});
+		const result = await runSubagentInvocation({
+			params: {
+				tasks: [{ prompt: "First task\nDo the first." }, { prompt: "Second task\nDo the second." }],
+			},
+			parentCwd: process.cwd(),
+			parent: parentContext(model()),
+			modelRuntime: {} as ModelRuntime,
+			agentDir: process.cwd(),
+			projectTrusted: false,
+			gate: new ConcurrencyGate(1),
+			taskRetryBaseDelayMs: 1,
+		});
+		expect(result.details.status).toBe("aborted");
+		expect(isSubagentError(result.details)).toBe(true);
+	});
+
+	it("resolves every task before any worker starts", async () => {
+		runSdkTaskMock.mockImplementation(() => {
+			throw new Error("runSdkTask must not run before every task resolves");
+		});
+		await expect(
+			runSubagentInvocation({
+				params: {
+					tasks: [
+						{ prompt: "First\nValid task." },
+						{ prompt: "Second\nInvalid cwd.", cwd: "definitely-not-a-real-directory" },
+					],
+				},
+				parentCwd: process.cwd(),
+				parent: parentContext(model()),
+				modelRuntime: {} as ModelRuntime,
+				agentDir: process.cwd(),
+				projectTrusted: false,
+				gate: new ConcurrencyGate(1),
+				taskRetryBaseDelayMs: 1,
+			}),
+		).rejects.toThrow("Subagent task tasks[1] failed to resolve");
+		expect(runSdkTaskMock).not.toHaveBeenCalled();
+	});
+
+	it("runs queued tasks concurrently up to the configured gate limit and preserves input order", async () => {
+		const started: string[] = [];
+		let active = 0;
+		let maxActive = 0;
+		let releaseWorkers!: () => void;
+		const workersReleased = new Promise<void>((resolve) => {
+			releaseWorkers = resolve;
+		});
+		runSdkTaskMock.mockImplementation(async (options) => {
+			active++;
+			maxActive = Math.max(maxActive, active);
+			started.push(options.run.id);
+			await workersReleased;
+			active--;
+			options.run.status = "completed";
+			options.run.report = `result of ${options.run.description}`;
+			options.run.usage.turns = 1;
+			options.run.endedAt = Date.now();
+			return options.run;
+		});
+		const resultPromise = runSubagentInvocation({
+			params: {
+				tasks: [
+					{ prompt: "First task\nDo the first." },
+					{ prompt: "Second task\nDo the second." },
+					{ prompt: "Third task\nDo the third." },
+					{ prompt: "Fourth task\nDo the fourth." },
+				],
+			},
+			parentCwd: process.cwd(),
+			parent: parentContext(model()),
+			modelRuntime: {} as ModelRuntime,
+			agentDir: process.cwd(),
+			projectTrusted: false,
+			gate: new ConcurrencyGate(2),
+			taskRetryBaseDelayMs: 1,
+		});
+		// Exactly two workers start; the rest queue behind the gate.
+		await vi.waitFor(() => expect(started).toHaveLength(2));
+		expect(maxActive).toBe(2);
+		releaseWorkers();
+		const result = await resultPromise;
+		expect(started).toHaveLength(4);
+		expect(maxActive).toBeLessThanOrEqual(2);
+		expect(result.details.status).toBe("completed");
+		expect(result.details.runs.map((run) => run.description)).toEqual([
+			"First task",
+			"Second task",
+			"Third task",
+			"Fourth task",
+		]);
+		const titles = [...result.content.matchAll(/### (\d+)\./g)].map((match) => match[1]);
+		expect(titles).toEqual(["1", "2", "3", "4"]);
+	});
+
+	it("keeps the batch running while any task is queued or running", async () => {
+		const barriers: Array<() => void> = [];
+		runSdkTaskMock.mockImplementation(async (options) => {
+			options.run.status = "running";
+			options.run.startedAt = Date.now();
+			options.onProgress?.();
+			await new Promise<void>((resolve) => barriers.push(resolve));
+			options.run.status = "completed";
+			options.run.report = `report ${options.run.description}`;
+			options.run.usage.turns = 1;
+			options.run.endedAt = Date.now();
+			options.onProgress?.();
+			return options.run;
+		});
+		const updates: SubagentDetails[] = [];
+		const resultPromise = runSubagentInvocation({
+			params: {
+				tasks: [
+					{ prompt: "First task\nDo the first." },
+					{ prompt: "Second task\nDo the second." },
+					{ prompt: "Third task\nDo the third." },
+				],
+			},
+			parentCwd: process.cwd(),
+			parent: parentContext(model()),
+			modelRuntime: {} as ModelRuntime,
+			agentDir: process.cwd(),
+			projectTrusted: false,
+			gate: new ConcurrencyGate(1),
+			taskRetryBaseDelayMs: 1,
+			onUpdate: (details) => updates.push(details),
+		});
+		await vi.waitFor(() => expect(barriers).toHaveLength(1));
+		// Active runs win over every terminal verdict: queued tasks keep the batch running.
+		expect(
+			updates.some((details) => details.status === "running" && details.runs.some((run) => run.status === "queued")),
+		).toBe(true);
+		barriers[0]?.();
+		await vi.waitFor(() => expect(barriers).toHaveLength(2));
+		expect(
+			updates.some(
+				(details) =>
+					details.status === "running" &&
+					details.runs.some((run) => run.status === "running") &&
+					details.runs.some((run) => run.status === "completed"),
+			),
+		).toBe(true);
+		barriers[1]?.();
+		await vi.waitFor(() => expect(barriers).toHaveLength(3));
+		barriers[2]?.();
+		const result = await resultPromise;
+		expect(result.details.status).toBe("completed");
+	});
+
+	it("aborts queued tasks when the parent signal fires while they wait for the gate", async () => {
+		let releaseFirst!: () => void;
+		runSdkTaskMock.mockImplementation(async (options) => {
+			options.run.status = "running";
+			options.run.startedAt = Date.now();
+			options.onProgress?.();
+			await new Promise<void>((resolve) => {
+				releaseFirst = resolve;
+			});
+			options.run.status = "completed";
+			options.run.report = `report ${options.run.description}`;
+			options.run.usage.turns = 1;
+			options.run.endedAt = Date.now();
+			return options.run;
+		});
+		const controller = new AbortController();
+		const resultPromise = runSubagentInvocation({
+			params: {
+				tasks: [{ prompt: "Slow task\nHolds the gate." }, { prompt: "Queued task\nWaits for the gate." }],
+			},
+			parentCwd: process.cwd(),
+			parent: parentContext(model()),
+			modelRuntime: {} as ModelRuntime,
+			agentDir: process.cwd(),
+			projectTrusted: false,
+			signal: controller.signal,
+			gate: new ConcurrencyGate(1),
+			taskRetryBaseDelayMs: 1,
+		});
+		await vi.waitFor(() => expect(runSdkTaskMock).toHaveBeenCalledTimes(1));
+		controller.abort();
+		releaseFirst();
+		const result = await resultPromise;
+		expect(result.details.runs[1]?.status).toBe("aborted");
+		expect(result.details.runs[1]?.error).toContain("queued");
+		expect(result.details.runs[0]?.status).toBe("completed");
+		expect(result.details.status).toBe("partial");
+	});
+
+	it("releases the gate slot during retry backoff so queued tasks are not starved", async () => {
+		const updates: SubagentDetails[] = [];
+		const startOrder: string[] = [];
+		let calls = 0;
+		runSdkTaskMock.mockImplementation(async (options) => {
+			startOrder.push(options.run.description);
+			calls++;
+			if (calls === 1) return failRun(options, "fetch failed");
+			return succeedRun(options, `outcome ${calls}`);
+		});
+		const result = await runSubagentInvocation({
+			params: {
+				tasks: [{ prompt: "Flaky task\nRetry me." }, { prompt: "Fast task\nSucceed immediately." }],
+			},
+			parentCwd: process.cwd(),
+			parent: parentContext(model()),
+			modelRuntime: {} as ModelRuntime,
+			agentDir: process.cwd(),
+			projectTrusted: false,
+			gate: new ConcurrencyGate(1),
+			taskRetryBaseDelayMs: 200,
+			onUpdate: (details) => updates.push(details),
+		});
+		expect(runSdkTaskMock).toHaveBeenCalledTimes(3);
+		// The queued task ran between the flaky task's attempts: with a single
+		// gate slot, that is only possible if backoff released the slot.
+		expect(startOrder).toEqual(["Flaky task", "Fast task", "Flaky task"]);
+		const duringBackoff = updates.find(
+			(details) => details.runs[0]?.retry && details.runs[1]?.status === "completed",
+		);
+		expect(duringBackoff).toBeDefined();
+		expect(result.content).toContain("outcome 2");
+		expect(result.content).toContain("outcome 3");
+		expect(result.details.runs[0]?.status).toBe("completed");
+		expect(result.details.runs[1]?.status).toBe("completed");
+	});
+
+	it("bounds the aggregate report and details when every task produces oversized output", async () => {
+		const oversized = "界".repeat(40_000);
+		runSdkTaskMock.mockImplementation((options) => succeedRun(options, oversized));
+		const result = await runSubagentInvocation({
+			params: {
+				tasks: [
+					{ prompt: "First task\nDo the first." },
+					{ prompt: "Second task\nDo the second." },
+					{ prompt: "Third task\nDo the third." },
+					{ prompt: "Fourth task\nDo the fourth." },
+				],
+			},
+			parentCwd: process.cwd(),
+			parent: parentContext(model()),
+			modelRuntime: {} as ModelRuntime,
+			agentDir: process.cwd(),
+			projectTrusted: false,
+			gate: new ConcurrencyGate(2),
+			taskRetryBaseDelayMs: 1,
+		});
+		expect(Buffer.byteLength(result.content, "utf8")).toBeLessThanOrEqual(TOTAL_OUTPUT_LIMIT);
+		expect(Buffer.byteLength(JSON.stringify(result.details), "utf8")).toBeLessThanOrEqual(DETAILS_OUTPUT_LIMIT);
+		// Every section stays within its per-task budget.
+		for (const section of result.content.split("\n\n---\n\n")) {
+			expect(Buffer.byteLength(section, "utf8")).toBeLessThanOrEqual(TASK_OUTPUT_LIMIT);
+		}
+		// The oversized reports were truncated, not echoed whole.
+		expect(result.content).not.toContain(oversized);
+		expect(result.details.runs[0]?.report.length).toBeLessThan(oversized.length);
+	});
+
+	it("reports worker output through the run's report field rather than live text or final output", async () => {
+		runSdkTaskMock.mockImplementationOnce((options) => succeedRun(options, "recovered"));
+		const result = await invoke();
+		expect(result.details.runs[0]?.report).toBe("recovered");
+		expect(result.details.runs[0]).not.toHaveProperty("liveText");
+		expect(result.details.runs[0]).not.toHaveProperty("finalOutput");
+		expect(result.details.usage.turns).toBe(1);
+		expect(result.content).toContain("recovered");
 	});
 });
