@@ -212,10 +212,10 @@ export function boundSubagentDetails(details: SubagentDetails): SubagentDetails 
 }
 
 function statusOf(runs: readonly SubagentRunDetails[]): SubagentDetails["status"] {
+	if (runs.length === 0) return "running";
 	// Active beats terminal: any queued or running run keeps the batch
 	// "running" regardless of what the others have settled to.
 	if (runs.some((run) => run.status === "queued" || run.status === "running")) return "running";
-	if (runs.length === 0) return "running";
 	if (runs.every((run) => run.status === "completed")) return "completed";
 	if (runs.some((run) => run.status === "completed")) return "partial";
 	if (runs.every((run) => run.status === "aborted")) return "aborted";

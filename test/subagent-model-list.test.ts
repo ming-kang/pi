@@ -62,6 +62,19 @@ describe("Subagent profile model list", () => {
 		expect(onDone).toHaveBeenCalledWith(expect.objectContaining({ modelId: "provider/beta", unavailable: false }));
 	});
 
+	it("keeps the picker open when confirming an empty search result", () => {
+		const onDone = vi.fn();
+		const list = createList({ onDone });
+		for (const character of "zzzz") list.handleInput(character);
+		expect(render(list)).toContain("No matching models");
+
+		list.handleInput("\r");
+
+		expect(onDone).not.toHaveBeenCalled();
+		expect(list.getSearchValue()).toBe("zzzz");
+		expect(render(list)).toContain("No matching models");
+	});
+
 	it("defaults to the scoped set and toggles to all models", () => {
 		const alpha = model("provider", "alpha");
 		const beta = model("provider", "beta");

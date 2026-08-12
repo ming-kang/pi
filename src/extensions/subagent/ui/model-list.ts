@@ -322,7 +322,8 @@ export class ProfileModelListComponent extends Container implements Focusable {
 		} else if (this.keybindings.matches(data, "tui.select.down")) {
 			this.moveSelection(1);
 		} else if (this.keybindings.matches(data, "tui.select.confirm")) {
-			this.onDone(this.getSelectedChoice());
+			const selected = this.getSelectedChoice();
+			if (selected) this.onDone(selected);
 		} else if (this.keybindings.matches(data, "tui.select.cancel")) {
 			this.onDone(undefined);
 		} else {

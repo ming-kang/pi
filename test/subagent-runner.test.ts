@@ -175,7 +175,10 @@ describe("subagent SDK runner", () => {
 		const { modelRuntime, model } = await setup(["first result", "second result"]);
 		const result = await run(
 			{
-				tasks: [{ prompt: "First lookup\nFind the answer." }, { prompt: "Second lookup\nFind the other answer." }],
+				tasks: [
+					{ prompt: "## **First lookup**\nFind the answer." },
+					{ prompt: "Second lookup\nFind the other answer." },
+				],
 			},
 			modelRuntime,
 			model,
@@ -183,8 +186,10 @@ describe("subagent SDK runner", () => {
 		expect(result.details.status).toBe("completed");
 		expect(result.details.runs.map((run) => run.status)).toEqual(["completed", "completed"]);
 		expect(result.details.runs.map((run) => run.agent)).toEqual(["explorer", "explorer"]);
+		expect(result.details.runs.map((run) => run.description)).toEqual(["First lookup", "Second lookup"]);
 		expect(result.content).toContain("### 1. First lookup (explorer) — completed");
 		expect(result.content).toContain("### 2. Second lookup (explorer) — completed");
+		expect(result.content).not.toContain("### 1. ##");
 		// Sections stay in input order.
 		expect(result.content.indexOf("### 1.")).toBeLessThan(result.content.indexOf("### 2."));
 	});

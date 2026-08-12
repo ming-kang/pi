@@ -4,6 +4,7 @@ import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/them
 import { getSubagentRetryView } from "./retry.ts";
 import { statusSummary } from "./runner.ts";
 import type { SubagentParams } from "./schema.ts";
+import { firstPlainLine, plainLine } from "./text.ts";
 import type { SubagentDetails, SubagentRunDetails, SubagentRunStatus, ToolActivity } from "./types.ts";
 
 const COLLAPSED_RUN_LIMIT = 4;
@@ -19,27 +20,13 @@ function truncate(text: string, limit: number): string {
 	return characters.length <= limit ? text : `${characters.slice(0, Math.max(0, limit - 1)).join("")}…`;
 }
 
-function plainLine(text: string): string {
-	return text
-		.replace(/^\s*#{1,6}\s+/u, "")
-		.replace(/`([^`]*)`/gu, "$1")
-		.replace(/\*\*([^*]+)\*\*/gu, "$1")
-		.replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
-		.replace(/\s+/gu, " ")
-		.trim();
-}
-
 function taskPrompt(args: SubagentParams, index: number, run: SubagentRunDetails): string {
 	return args.tasks[index]?.prompt ?? run.description;
 }
 
 function taskSummary(args: SubagentParams, index: number, run: SubagentRunDetails): string {
-	const prompt = taskPrompt(args, index, run);
-	const firstLine = prompt
-		.split("\n")
-		.map((line) => plainLine(line))
-		.find(Boolean);
-	return truncate(firstLine || run.description || `Task ${index + 1}`, TASK_SUMMARY_LIMIT);
+	const firstLine = firstPlainLine(taskPrompt(args, index, run));
+	return truncate(firstLine || plainLine(run.description) || `Task ${index + 1}`, TASK_SUMMARY_LIMIT);
 }
 
 function profileLabel(agent: string): string {

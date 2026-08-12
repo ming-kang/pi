@@ -7,6 +7,7 @@ import type { ModelRegistry } from "../../core/model-registry.ts";
 import { AGENT_PROFILES } from "./agents.ts";
 import type { SubagentTask } from "./schema.ts";
 import { loadSubagentConfig } from "./settings.ts";
+import { firstPlainLine } from "./text.ts";
 import type { ResolvedSubagentTask, SubagentConfigFile, SubagentProfileOverride } from "./types.ts";
 
 export interface ParentModelContext {
@@ -94,14 +95,10 @@ function resolveThinking(
 // agent resolves to the read-only explorer profile.
 const DEFAULT_AGENT_NAME = "explorer";
 
-// The schema has no description field; derive a bounded UI label from the
-// briefing's first non-empty line so run rows stay readable.
+// The schema has no description field; derive a bounded plain-text label from
+// the briefing's first meaningful line so UI rows and report headings stay readable.
 function taskDescription(prompt: string): string {
-	const firstLine =
-		prompt
-			.split("\n")
-			.map((line) => line.trim())
-			.find(Boolean) ?? "";
+	const firstLine = firstPlainLine(prompt);
 	const characters = [...firstLine];
 	return characters.length <= 80 ? firstLine : `${characters.slice(0, 79).join("")}…`;
 }
