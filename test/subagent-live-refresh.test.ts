@@ -251,7 +251,7 @@ describe("Subagent shell-driven live refresh", () => {
 		expect(render(first)).toContain("3.0s");
 		const batchCollapsed = render(second);
 		expect(batchCollapsed).toContain("2.0s");
-		expect(batchCollapsed).toContain("2 running");
+		expect(batchCollapsed).toContain("0/2 done");
 		expect(batchCollapsed).not.toContain("Running…");
 
 		second.setExpanded(true);

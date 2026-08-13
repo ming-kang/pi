@@ -138,8 +138,10 @@ describe("subagent rendering", () => {
 			}),
 		);
 		expect(output).toContain("1 completed · 1 failed · 1 aborted · 1.5s · $0.420");
+		expect(output).toContain("✓ Explorer · Inspect the code. · 1.5s");
+		expect(output).toContain("× General · Review it · 1.5s");
+		expect(output).toContain("■ General · Clean up · 1.5s");
 		expect(output).not.toContain("nope");
-		expect(output).not.toContain("Review it");
 		expect(output).not.toContain("tok");
 		expect(output).not.toContain("tool use");
 		expect(output).not.toContain("turn");
@@ -157,12 +159,54 @@ describe("subagent rendering", () => {
 			}),
 		);
 		expect(output).toContain("1 completed · 1.5s");
+		expect(output).toContain("✓ Explorer · Inspect the code. · 1.5s");
 		expect(output).not.toContain("Summary");
 		expect(output).not.toContain("[Output truncated");
 		expect(output).not.toContain("read a.ts");
 		expect(output).not.toContain("Prompt");
 		expect(output).not.toContain("Report");
-		expect(output).not.toContain("Explorer");
+	});
+
+	it("colors the collapsed settled summary marker by the batch outcome", () => {
+		const renderColors = (data: SubagentDetails): string[] => {
+			const colors: string[] = [];
+			const trackingTheme = {
+				...theme,
+				fg: (color: string, text: string) => {
+					colors.push(color);
+					return text;
+				},
+			} as Theme;
+			renderSubagentResult(
+				{ content: [{ type: "text", text: "done" }], details: data },
+				{ expanded: false, isPartial: false },
+				trackingTheme,
+				defaultArgs,
+				false,
+			).render(120);
+			return colors;
+		};
+		const succeeded = renderColors(details());
+		expect(succeeded).toContain("success");
+		expect(succeeded).not.toContain("error");
+		expect(succeeded).not.toContain("warning");
+		expect(renderColors(details({ runs: [run({ status: "failed", error: "nope", report: "" })] }))).toContain(
+			"error",
+		);
+		const aborted = renderColors(details({ runs: [run({ status: "aborted", report: "" })] }));
+		expect(aborted).toContain("warning");
+		expect(aborted).not.toContain("error");
+	});
+
+	it("omits the duration tail for settled rows that never started", () => {
+		const output = collapsed(
+			details({
+				status: "aborted",
+				runs: [run({ status: "aborted", startedAt: undefined, endedAt: undefined, report: "" })],
+			}),
+		);
+		expect(output).toContain("■ Explorer · Inspect the code.");
+		expect(output).not.toContain("Inspect the code. ·");
 	});
 
 	it("formats minute boundaries without emitting sixty seconds", () => {
@@ -202,8 +246,8 @@ describe("subagent rendering", () => {
 			}),
 			true,
 		);
-		expect(output).toContain("0/1 complete · 1 running");
-		expect(output).toContain("› #1 Explorer · Inspect the code. — Run ls -d */");
+		expect(output).toContain("0/1 done");
+		expect(output).toContain("› Explorer · Inspect the code. — Run ls -d */");
 		expect(output).not.toContain("tok");
 		expect(output).not.toContain("●");
 		expect(output).not.toContain("Prompt");
@@ -238,14 +282,13 @@ describe("subagent rendering", () => {
 				],
 			},
 		);
-		expect(output).toContain("1/3 complete · 1 running · 1 queued");
-		expect(output).toContain("› #1 Explorer · Inspect A. — Reading files");
-		expect(output).toContain("○ #2 General · Check B. — Waiting for a worker slot");
-		expect(output).toContain("✓ #3 General · Review C.");
-		expect(output).not.toContain("0 queued");
+		expect(output).toContain("1/3 done");
+		expect(output).toContain("› Explorer · Inspect A. — Reading files");
+		expect(output).toContain("○ General · Check B. — Waiting for a worker slot");
+		expect(output).toContain("✓ General · Review C. · 1.5s");
 	});
 
-	it("keeps running tasks visible first in a capped collapsed batch", () => {
+	it("shows every task row in original order while running", () => {
 		const runs = [
 			run({ id: "1", description: "one" }),
 			run({ id: "2", agent: "general", description: "two" }),
@@ -276,15 +319,15 @@ describe("subagent rendering", () => {
 				prompt: `Task ${index + 1}`,
 			})),
 		});
-		expect(output).toContain("4/6 complete · 2 running");
-		// The ordinal is the task position, not the display slot, so the
-		// active-first reordering cannot scramble identity.
-		expect(output).toContain("› #5 General · Task 5 — reading files");
-		expect(output).toContain("› #6 Explorer · Task 6 — fetching data");
-		expect(output).toContain("✓ #1 Explorer · Task 1");
-		expect(output).toContain("+2 more");
-		expect(output.indexOf("› #5")).toBeLessThan(output.indexOf("✓ #1"));
-		expect(output).not.toContain("#3");
+		expect(output).toContain("4/6 done");
+		expect(output).toContain("✓ Explorer · Task 1 · 1.5s");
+		expect(output).toContain("✓ General · Task 4 · 1.5s");
+		expect(output).toContain("› General · Task 5 — reading files");
+		expect(output).toContain("› Explorer · Task 6 — fetching data");
+		// Rows keep the original task order even while later tasks are active.
+		expect(output.indexOf("Task 1")).toBeLessThan(output.indexOf("Task 5"));
+		expect(output).not.toContain("+2 more");
+		expect(output).not.toContain("#5");
 	});
 
 	it("shows the current activity verbatim instead of reclassifying it", () => {
@@ -422,7 +465,7 @@ describe("subagent rendering", () => {
 				],
 			},
 		);
-		expect(output).toContain("× #2 General · Review it. —");
+		expect(output).toContain("× General · Review it. —");
 		expect(output).toContain("…");
 		expect(output).not.toContain(omitted);
 	});
@@ -626,7 +669,7 @@ describe("subagent rendering", () => {
 				],
 			},
 		);
-		expect(output).toContain("0/2 complete · 2 running");
+		expect(output).toContain("0/2 done");
 		expect(output).toContain("── #1 › Explorer · Inspect the renderer.");
 		expect(output).toContain("3 tool uses · 1 turn · ctx: 1.3k · $0.012");
 		expect(output).not.toContain("1.3k tok");

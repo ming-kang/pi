@@ -7,7 +7,6 @@ import type { SubagentParams } from "./schema.ts";
 import { firstPlainLine, plainLine } from "./text.ts";
 import type { SubagentDetails, SubagentRunDetails, SubagentRunStatus, ToolActivity } from "./types.ts";
 
-const COLLAPSED_RUN_LIMIT = 4;
 const TASK_SUMMARY_LIMIT = 72;
 const ACTIVITY_SUMMARY_LIMIT = 120;
 const ACTIVITY_RESULT_LIMIT = 96;
@@ -113,17 +112,26 @@ function runningDetail(run: SubagentRunDetails): string | undefined {
 	return undefined;
 }
 
-function selectRunningRows(runs: readonly SubagentRunDetails[]): SubagentRunDetails[] {
-	if (runs.length <= COLLAPSED_RUN_LIMIT) return [...runs];
-	const active = runs.filter((run) => run.status === "running" || run.status === "queued");
-	const settled = runs.filter((run) => run.status !== "running" && run.status !== "queued");
-	return [...active, ...settled].slice(0, COLLAPSED_RUN_LIMIT);
+function batchMarker(details: SubagentDetails, theme: Theme): string {
+	if (details.runs.some((run) => run.status === "failed")) return theme.fg("error", "×");
+	if (details.runs.some((run) => run.status === "aborted")) return theme.fg("warning", "■");
+	return theme.fg("success", "✓");
 }
 
-function runningRow(run: SubagentRunDetails, index: number, args: SubagentParams, theme: Theme): string {
-	let line = `${statusMarker(run.status, theme)} ${theme.fg("dim", `#${index + 1}`)} ${theme.fg("accent", profileLabel(run.agent))}${theme.fg("dim", ` · ${taskSummary(args, index, run)}`)}`;
-	const detail = runningDetail(run);
-	if (detail) line += theme.fg("dim", ` — ${detail}`);
+function progressHeader(details: SubagentDetails, theme: Theme): string {
+	const settled = details.runs.filter((run) => run.status !== "running" && run.status !== "queued").length;
+	return theme.fg("accent", `› ${settled}/${details.runs.length} done · ${elapsed(details.startedAt) ?? "0.0s"}`);
+}
+
+function taskRow(run: SubagentRunDetails, index: number, args: SubagentParams, theme: Theme, live: boolean): string {
+	let line = `  ${statusMarker(run.status, theme)} ${theme.fg("accent", profileLabel(run.agent))}${theme.fg("dim", ` · ${taskSummary(args, index, run)}`)}`;
+	const detail = live ? runningDetail(run) : undefined;
+	if (detail) {
+		line += theme.fg("dim", ` — ${detail}`);
+	} else if (run.status !== "running" && run.status !== "queued") {
+		const duration = elapsed(run.startedAt, run.endedAt);
+		if (duration) line += theme.fg("dim", ` · ${duration}`);
+	}
 	return line;
 }
 
@@ -264,27 +272,22 @@ export function renderSubagentResult(
 	if (details.runs.length === 0) return new Text(theme.fg("muted", "Initializing…"), 0, 0);
 
 	if (!options.expanded) {
-		if (!options.isPartial) {
-			return new Text(theme.fg(isError ? "error" : "muted", outcomeSummary(details)), 0, 0);
-		}
 		const container = new Container();
-		const header = `${statusSummary(details)} · ${elapsed(details.startedAt) ?? "0.0s"}`;
-		container.addChild(new Text(theme.fg("accent", header), 0, 0));
-		const shown = selectRunningRows(details.runs);
-		for (const run of shown) {
-			const index = details.runs.indexOf(run);
-			container.addChild(new Text(runningRow(run, index, args, theme), 0, 0));
+		const header = options.isPartial
+			? progressHeader(details, theme)
+			: `${batchMarker(details, theme)} ${theme.fg(isError ? "error" : "muted", outcomeSummary(details))}`;
+		container.addChild(new Text(header, 0, 0));
+		for (const [index, run] of details.runs.entries()) {
+			container.addChild(new Text(taskRow(run, index, args, theme, options.isPartial), 0, 0));
 		}
-		const hidden = details.runs.length - shown.length;
-		if (hidden > 0) container.addChild(new Text(theme.fg("muted", `+${hidden} more`), 0, 0));
 		return container;
 	}
 
 	const container = new Container();
 	const header = options.isPartial
-		? `${statusSummary(details)} · ${elapsed(details.startedAt) ?? "0.0s"}`
-		: outcomeSummary(details);
-	container.addChild(new Text(theme.fg(isError ? "error" : options.isPartial ? "accent" : "toolTitle", header), 0, 0));
+		? progressHeader(details, theme)
+		: `${batchMarker(details, theme)} ${theme.fg(isError ? "error" : "toolTitle", outcomeSummary(details))}`;
+	container.addChild(new Text(header, 0, 0));
 	for (const [index, run] of details.runs.entries()) {
 		container.addChild(new Spacer(1));
 		container.addChild(
