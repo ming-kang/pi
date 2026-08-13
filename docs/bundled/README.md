@@ -9,6 +9,7 @@ These hidden built-ins use the same public Extension API available to external e
 | Feature | Tool or command | Purpose |
 |---|---|---|
 | [`llama.cpp`](../llama-cpp.md) | `/llama` | Manage models served by the local llama.cpp router |
+| [Background](extensions/background.md) | `bg_bash`, `/bg` | Run shell commands in the background with automatic completion notices |
 | [DeepWiki](extensions/deepwiki.md) | `deepwiki` | Query indexed public GitHub repository documentation |
 | [Question](extensions/question.md) | `question` | Ask structured questions through native interactive UI |
 | [Router](extensions/router.md) | `/router` | Configure and probe Codex-style routing endpoints |

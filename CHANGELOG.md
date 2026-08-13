@@ -7,6 +7,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 ### Added
 
 - Added `ExtensionContext.modelRuntime`, exposing the parent session's canonical model/authentication runtime for nested SDK sessions without provider or credential mirroring.
+- Added the bundled Background extension: `bg_bash` runs shell commands in the background with automatic completion notifications (queued while streaming, waking the agent when idle), `bg_logs` reads bounded output slices, and `bg_kill` stops a single task. `/bg` opens a two-pane task manager with a live output viewport, and running counts surface in the footer as `bg N running · M done`.
 
 ### Changed
 
