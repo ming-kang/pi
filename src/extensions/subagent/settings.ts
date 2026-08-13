@@ -85,13 +85,27 @@ export function parseSubagentConfig(raw: string): SubagentConfigFile {
 	return { version: SUBAGENT_CONFIG_VERSION, profiles };
 }
 
+// A stale or invalid config (older formats, unknown profiles, malformed
+// JSON) must not block every subagent call: reset it to an empty, fully
+// inheriting config. The reset is best-effort — when the write fails the
+// caller still gets the empty config and the next load retries the reset.
+async function resetSubagentConfigFile(filePath: string): Promise<void> {
+	try {
+		await writeSubagentConfigFile(filePath, emptySubagentConfig());
+	} catch {
+		// Keep the original failure invisible to callers; an unwritable config
+		// file is a setup problem, not a reason to fail the subagent call.
+	}
+}
+
 export async function loadSubagentConfig(agentDir = getAgentDir()): Promise<SubagentConfigFile> {
 	const filePath = getSubagentConfigPath(agentDir);
 	try {
 		return parseSubagentConfig(await readFile(filePath, "utf8"));
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptySubagentConfig();
-		throw error;
+		await resetSubagentConfigFile(filePath);
+		return emptySubagentConfig();
 	}
 }
 

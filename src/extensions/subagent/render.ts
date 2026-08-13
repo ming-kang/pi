@@ -20,7 +20,10 @@ function truncate(text: string, limit: number): string {
 }
 
 function taskPrompt(args: SubagentParams, index: number, run: SubagentRunDetails): string {
-	return args.tasks[index]?.prompt ?? run.description;
+	// Tool calls restored from before the tasks-array shape carry a legacy
+	// args object without `tasks`; those rows fall back to the description.
+	const tasks = (args as Partial<SubagentParams>).tasks;
+	return tasks?.[index]?.prompt ?? run.description;
 }
 
 function taskSummary(args: SubagentParams, index: number, run: SubagentRunDetails): string {

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -7,7 +7,7 @@ import { AGENT_PROFILES, subagentToolDescription } from "../src/extensions/subag
 import { MAX_CONCURRENCY, MAX_TASKS, SUBAGENT_AGENT_NAMES } from "../src/extensions/subagent/constants.ts";
 import { resolveSubagentTask, resolveTaskCwd } from "../src/extensions/subagent/resolve.ts";
 import type { SubagentTask } from "../src/extensions/subagent/schema.ts";
-import { parseSubagentConfig, updateProfileOverride } from "../src/extensions/subagent/settings.ts";
+import { loadSubagentConfig, parseSubagentConfig, updateProfileOverride } from "../src/extensions/subagent/settings.ts";
 
 function model(provider: string, id: string, reasoning = true): Model<Api> {
 	return {
@@ -104,6 +104,29 @@ describe("subagent configuration", () => {
 		expect(() => parseSubagentConfig(JSON.stringify({ version: 1, profiles: { explorer: "high" } }))).toThrow(
 			/Profile override for "explorer" must be an object/,
 		);
+	});
+
+	it("resets stale or invalid config files to an empty inheriting config", async () => {
+		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-reset-"));
+		temporaryDirectories.push(root);
+		for (const stale of [
+			JSON.stringify({ version: 1, profiles: { reviewer: {} } }),
+			JSON.stringify({ profiles: {} }),
+			"not json",
+			JSON.stringify({ version: 1, profiles: { explorer: { model: "inherit", thinking: "inherit" } } }),
+		]) {
+			writeFileSync(join(root, "subagent.json"), stale);
+			await expect(loadSubagentConfig(root)).resolves.toEqual({ version: 1, profiles: {} });
+			expect(parseSubagentConfig(readFileSync(join(root, "subagent.json"), "utf8"))).toEqual({
+				version: 1,
+				profiles: {},
+			});
+		}
+		// A later override update writes cleanly onto the reset config.
+		await updateProfileOverride("general", { thinking: "high" }, root);
+		expect(parseSubagentConfig(readFileSync(join(root, "subagent.json"), "utf8")).profiles).toEqual({
+			general: { thinking: "high" },
+		});
 	});
 
 	it("persists profile model and thinking overrides atomically", async () => {

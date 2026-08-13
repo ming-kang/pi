@@ -67,7 +67,7 @@ Overrides are saved atomically in:
 ~/.pi/agent/subagent.json
 ```
 
-Only `explorer` and `general` keys are valid. Overrides affect future workers and never change the parent session's model or thinking level.
+Only `explorer` and `general` keys are valid. A stale or invalid `subagent.json` (older formats, unknown profiles, or malformed JSON) is reset to an empty, fully inheriting config the first time it is loaded, so an old file never blocks the tool or `/agents`. Overrides affect future workers and never change the parent session's model or thinking level.
 
 ## Lifecycle and retry
 
@@ -82,22 +82,31 @@ Child sessions share the parent's canonical model/authentication runtime, so ext
 
 ## Transcript UI
 
-While running, the collapsed view shows aggregate progress followed by at most four stable task rows:
+While running, the collapsed view shows a progress header followed by one
+row per task in original input order:
 
 ```text
-2/4 complete · 1 running · 1 queued · 12s
-› #1 Explorer · Locate retry scheduling — Run git log
-✓ #2 Explorer · Map provider registration
-○ #3 Explorer · Find related tests
-○ #4 General  · Apply focused fix
+› 2/4 done · 12s
+  › Explorer · Locate retry scheduling — Run git log
+  ✓ Explorer · Map provider registration
+  ○ Explorer · Find related tests
+  ○ General  · Apply focused fix
 ```
+
+Every task is always listed: there is no row cap, no active-first
+reordering, and no `+N more` truncation. Live rows append the current
+activity, failure reason, or retry countdown.
 
 Expanded running calls show profile/model/thinking/cwd metrics, retry state, and the bounded Activity history for each task. Streaming assistant text is not copied into the parent transcript.
 
-Once settled, the collapsed view contains only the aggregate result, cost, and duration:
+Once settled, the collapsed view keeps the same one-row-per-task layout under an aggregate line with the batch outcome, counts, cost, and duration:
 
 ```text
-3 completed · 1 failed · 24s · $0.031
+✓ 3 completed · 1 failed · 24s · $0.031
+  ✓ Explorer · Locate retry scheduling · 12s
+  ✓ Explorer · Map provider registration · 8.4s
+  × General  · Apply focused fix · 1m 3s
+  ✓ Explorer · Find related tests · 21s
 ```
 
 The expanded settled view shows, for each task:

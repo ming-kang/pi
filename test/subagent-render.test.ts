@@ -119,6 +119,26 @@ describe("subagent rendering", () => {
 		expect(colors).toContain("error");
 	});
 
+	it("falls back to the run description for legacy args without a tasks array", () => {
+		// Tool calls restored from before the tasks-array shape carry the old
+		// single-task args object; summaries and the prompt section must use
+		// the stored run description instead of throwing.
+		const legacyArgs = { agent: "explorer", prompt: "Old shape" } as unknown as SubagentParams;
+		const settled = collapsed(details({ runs: [run({ report: "Found it." })] }), false, legacyArgs);
+		expect(settled).toContain("Map the code");
+		expect(settled).not.toContain("Old shape");
+		const running = collapsed(
+			details({ status: "running", endedAt: undefined, runs: [run({ status: "running", endedAt: undefined })] }),
+			true,
+			legacyArgs,
+		);
+		expect(running).toContain("Map the code");
+		expect(running).not.toContain("Old shape");
+		const expandedOutput = expanded(details({ runs: [run({ report: "Found it." })] }), false, legacyArgs);
+		expect(expandedOutput).toContain("Map the code");
+		expect(expandedOutput).not.toContain("Old shape");
+	});
+
 	it("collapses settled results to the aggregate outcome, cost, and duration", () => {
 		const output = collapsed(
 			details({
