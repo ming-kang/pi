@@ -10,13 +10,25 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 - Added `ExtensionContext.modelRuntime`, exposing the parent session's canonical model/authentication runtime for nested SDK sessions without provider or credential mirroring.
 - Added the bundled Background extension: `bg_bash` runs shell commands in the background with automatic completion notifications (queued while streaming, waking the agent when idle), `bg_logs` reads bounded output slices, and `bg_kill` stops a single task. `/bg` opens an inline task menu (like `/model`) with an Enter-to-open live output view, and running counts surface in the footer as `bg N running · M done`. Background tasks inherit the session's `PI_*` variables like the built-in bash tool.
+- Added inherited fullscreen transcript search with `Ctrl+Shift+F`, configurable search-match theme colors, next/previous navigation, host-clipboard selection copy, and unbound single-line transcript scrolling actions.
+- Added `defaultTools` for selecting startup built-ins, `fullscreenExitOutput` for choosing transcript or resume-hint output, and `--use-theme <name[/name]>` for a per-run initial theme.
+- Added experimental strict JSON-schema constrained sampling for the default `read`, `bash`, `edit`, and `write` tools under `PI_EXPERIMENTAL=1`, plus `expandPromptTemplates` for extension `pi.sendUserMessage()` calls.
+- Added inherited `createGatewayBindingFetch()` for tokenless Cloudflare AI Gateway bindings, `AssistantMessage.endTurn`, tool-call namespaces, and OpenAI Responses `additional_tools` compatibility.
 
 ### Changed
 
+- Followed upstream Pi `v0.84.2`, updating the exact `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-tui`, `@earendil-works/pi-client`, and `@earendil-works/pi-protocol` runtime dependencies to `0.84.2`.
+- Replaced the inherited Mistral SDK transport with a native Chat Completions HTTP stream, changed inherited Kimi Coding requests to use Pi's runtime user agent, and enabled message-anchored OpenAI Responses `additional_tools` where supported.
 - Redesigned the bundled Subagent around one required `tasks` array: one item launches one worker and multiple items run concurrently through the session-wide five-worker gate, with Explorer as the default and results kept in input order. Calls now preflight the whole batch before launch, task-retry backoff releases its concurrency slot, and partial batches have an explicit aggregate status.
 - Reduced Subagent profiles to the two built-ins, Explorer and General. Explorer retains prompt-constrained read-only Bash for Git inspection; `/agents` now configures only these profiles and saves each model, thinking, or inherit selection immediately without a draft or Apply step.
 - Simplified the Subagent transcript: running collapsed cards show a progress header plus one row per task, settled collapsed cards show the aggregate outcome plus one status row per task, and settled expanded cards show each original Prompt and final Report. Streaming assistant tails and inferred activity phases were removed.
 - Stale or invalid `subagent.json` files (pre-redesign formats, unknown profiles, malformed JSON) are reset to an empty inheriting config on load instead of failing the tool call or `/agents`.
+
+### Fixed
+
+- Fixed managed `fd`/`rg` downloads blocking TUI startup with hidden diagnostics, and fixed concurrent startup/model-selector catalog refreshes cancelling and restarting one another.
+- Fixed JSON and RPC `message_update` events dropping cumulative usage, `pi.sendMessage(..., { triggerTurn: false })` steering an active run instead of only recording its message, and custom system prompts concatenating the working-directory line with later prompt content.
+- Fixed inherited provider behavior across GitHub Copilot, DeepSeek, Amazon Bedrock, Google Generative AI, Vertex AI, and OpenAI Responses, plus fullscreen search, mouse selection/link activation, overlay scrolling, split `Alt+Enter`, idle repainting, and LaTeX parsing.
 
 ### Breaking Changes
 

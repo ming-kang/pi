@@ -169,7 +169,7 @@ Set `api` on the provider as the default, or on a model when one provider has mo
 | `openai-responses` | OpenAI Responses APIs |
 | `azure-openai-responses` | Azure OpenAI Responses APIs |
 | `openai-codex-responses` | OpenAI Codex Responses APIs |
-| `mistral-conversations` | Mistral Conversations APIs |
+| `mistral-conversations` | Native Mistral Chat Completions streaming |
 | `google-generative-ai` | Google Generative AI APIs |
 | `google-vertex` | Google Vertex AI APIs |
 | `bedrock-converse-stream` | Amazon Bedrock Converse Stream APIs |
