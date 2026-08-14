@@ -17,6 +17,7 @@ import {
 	type BgNotificationDetails,
 	createBackgroundExtension,
 	prependCommandPrefix,
+	resolveSessionShell,
 } from "../src/extensions/background/index.ts";
 import { renderBackgroundNotification, renderBgBashCall } from "../src/extensions/background/render.ts";
 import type { Theme } from "../src/modes/interactive/theme/theme.ts";
@@ -216,19 +217,37 @@ describe("background extension", () => {
 		expect(details.tailText).toBe("value is a<b\ndone\n");
 	});
 
-	it("strips XML-illegal control characters from command and error fields", async () => {
+	it("strips XML-illegal characters from command and error fields", async () => {
 		const harness = createHarness();
 		await harness.startSession();
 
-		await harness.execute("bg_bash", { command: "printf 'a\u0001b'" });
+		// Lone surrogate (U+D800), non-characters (U+FFFE/U+FFFF), C0 control (U+0001).
+		await harness.execute("bg_bash", { command: "x\uD800y\uFFFEz\uFFFFw\u0001v" });
 		harness.calls[0]?.fail(new Error("boom\u0007"));
 
 		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
 		const content = harness.sent[0]?.message.content ?? "";
-		expect(content).toContain("<command>printf &apos;ab&apos;</command>");
+		expect(content).toContain("<command>xyzwv</command>");
 		expect(content).toContain("<error>boom</error>");
-		// XML 1.0 forbids control characters except \t \n \r.
 		expect(content).not.toMatch(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/);
+		expect(content).not.toMatch(/[\ud800-\udfff\ufffe\uffff]/);
+	});
+
+	it("keeps XML-legal whitespace in command fields and filters the output tail too", async () => {
+		const harness = createHarness();
+		await harness.startSession();
+
+		await harness.execute("bg_bash", { command: "echo\tline" });
+		harness.calls[0]?.emitData("out\uFFFEput\n");
+		harness.calls[0]?.finish(0);
+
+		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
+		const content = harness.sent[0]?.message.content ?? "";
+		expect(content).toContain("<command>echo\tline</command>");
+		expect(content).not.toMatch(/[\ud800-\udfff\ufffe\uffff]/);
+		// The tail is part of the same XML document and goes through the same filter.
+		expect(content).toContain("output");
+		expect(content).not.toContain("\uFFFE");
 	});
 
 	it("tracks the footer status through the task lifecycle and shutdown", async () => {
@@ -479,6 +498,27 @@ describe("prependCommandPrefix", () => {
 		const base: BashOperations = { exec: async () => ({ exitCode: 0 }) };
 		expect(prependCommandPrefix(base, undefined)).toBe(base);
 		expect(prependCommandPrefix(base, "")).toBe(base);
+	});
+});
+
+describe("resolveSessionShell", () => {
+	it("prefers the session-provided shell settings", () => {
+		const ctx = {
+			getShellSettings: () => ({ shellPath: "/custom/bash", commandPrefix: "shopt -s expand_aliases" }),
+		} as unknown as ExtensionContext;
+		const readDiskSettings = () => {
+			throw new Error("disk settings must not be read when the session provides shell settings");
+		};
+		expect(resolveSessionShell(ctx, readDiskSettings)).toEqual({
+			shellPath: "/custom/bash",
+			commandPrefix: "shopt -s expand_aliases",
+		});
+	});
+
+	it("falls back to disk settings on hosts without getShellSettings", () => {
+		const ctx = {} as ExtensionContext;
+		expect(resolveSessionShell(ctx, () => ({ shellPath: "/bin/zsh" }))).toEqual({ shellPath: "/bin/zsh" });
+		expect(resolveSessionShell(ctx)).toEqual({});
 	});
 });
 

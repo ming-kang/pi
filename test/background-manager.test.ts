@@ -239,6 +239,22 @@ describe("BackgroundTasksMenu", () => {
 		expect(lines.some((line) => line.includes("two"))).toBe(true);
 	});
 
+	it("omits the resume hint when pageDown is unbound", async () => {
+		const task = makeTask("bg-aaa111");
+		const content = Array.from({ length: 30 }, (_, i) => `line-${i + 1}`).join("\n");
+		const harness = createHarness({ tasks: [task], sliceFor: { [task.outputPath]: `${content}\n` } });
+		harness.keybindings.setUserBindings({ "tui.select.pageDown": [] });
+		await vi.advanceTimersByTimeAsync(0);
+		await harness.enterDetail();
+
+		// Frozen via the raw sequence so unbinding pageDown does not block scrolling.
+		harness.component.handleInput("\x1b[5~");
+		const lines = harness.render();
+		expect(lines.some((line) => line.includes("paused"))).toBe(true);
+		expect(lines.some((line) => line.includes("( to follow)"))).toBe(false);
+		expect(lines.some((line) => line.includes("to follow"))).toBe(false);
+	});
+
 	it("kills only running tasks and shows feedback", async () => {
 		const running = makeTask("bg-aaa111");
 		const done = makeTask("bg-bbb222", "completed", { endedAt: 5000 });

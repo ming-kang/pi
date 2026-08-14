@@ -4,10 +4,14 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Added optional `ctx.getShellSettings()` for extensions, exposing the session's `shellPath` and `shellCommandPrefix` exactly as the built-in bash tool uses them (older hosts without it fall back to disk settings).
+
 ### Fixed
 
-- Fixed the bundled Background extension ignoring the `shellCommandPrefix` setting (`bg_bash` now runs commands through the session shell and its prefix exactly like the built-in `bash` tool, without surfacing the prefix in task labels or notifications) and rejecting over-limit `bg_bash` timeouts synchronously instead of failing the started task asynchronously.
-- Fixed Background completion notifications embedding XML-illegal control characters in the command and error fields.
+- Fixed the bundled Background extension building its shell configuration from disk instead of the current session's settings, which could diverge from the built-in bash tool on SDK hosts using a custom agent directory or in-memory settings, and rejecting over-limit `bg_bash` timeouts synchronously instead of failing the started task asynchronously.
+- Fixed Background completion notifications embedding XML-illegal characters (lone surrogates, U+FFFE/U+FFFF, control characters) by filtering all notification fields through a dedicated XML 1.0 character filter, and the `/bg` output view no longer renders an empty resume hint when `pageDown` is unbound.
 
 ## [0.84.5] - 2026-08-14
 

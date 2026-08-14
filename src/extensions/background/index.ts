@@ -122,13 +122,37 @@ export function escapeXml(text: string): string {
 		.replaceAll("'", "&apos;");
 }
 
+/**
+ * Strip characters XML 1.0 forbids: C0 controls (except \t \n \r), lone
+ * surrogates (U+D800–U+DFFF), and the non-characters U+FFFE/U+FFFF.
+ * sanitizeBinaryOutput does not remove the latter two classes, so this filter
+ * is the authority for every text field in the notification XML.
+ */
+export function filterXmlCharacters(text: string): string {
+	let result = "";
+	for (const char of text) {
+		const code = char.codePointAt(0) ?? 0;
+		if (
+			code === 0x09 ||
+			code === 0x0a ||
+			code === 0x0d ||
+			(code >= 0x20 && code <= 0xd7ff) ||
+			(code >= 0xe000 && code <= 0xfffd) ||
+			code >= 0x10000
+		) {
+			result += char;
+		}
+	}
+	return result;
+}
+
 export function buildNotificationContent(notification: BgTaskNotification): string {
 	const task = notification.task;
 	const runtime = formatDuration((task.endedAt ?? task.startedAt) - task.startedAt);
 	const exitCode = task.exitCode === undefined || task.exitCode === null ? "" : ` exitCode="${task.exitCode}"`;
-	// sanitizeBinaryOutput keeps \t \n \r (XML-legal) and strips other control
-	// characters, so every text field below is valid XML 1.0 after escaping.
-	const xmlText = (text: string) => escapeXml(sanitizeBinaryOutput(text));
+	// filterXmlCharacters keeps \t \n \r and every other XML-legal codepoint,
+	// so each field below is valid XML 1.0 after escaping.
+	const xmlText = (text: string) => escapeXml(filterXmlCharacters(text));
 	const lines = [
 		`<background-task id="${task.id}" status="${task.status}"${exitCode} runtime="${runtime}">`,
 		`<command>${xmlText(task.command)}</command>`,
@@ -148,7 +172,7 @@ export function buildNotificationContent(notification: BgTaskNotification): stri
 		]
 			.filter(Boolean)
 			.join(" ");
-		const tail = notification.tailText.length > 0 ? escapeXml(notification.tailText) : "(no output)";
+		const tail = notification.tailText.length > 0 ? xmlText(notification.tailText) : "(no output)";
 		lines.push(`<output-tail ${attrs}>`, tail.trimEnd(), "</output-tail>");
 	}
 	lines.push("</background-task>");
@@ -213,15 +237,25 @@ export interface BackgroundExtensionOverrides {
 	maxOutputBytes?: number;
 }
 
-/** Local shell operations honoring the session's configured shell path and command prefix. */
+/** Shell configuration for one bg_bash session: the session's settings win, disk settings are the fallback. */
+export function resolveSessionShell(
+	ctx: ExtensionContext,
+	readDiskSettings?: () => { shellPath?: string; commandPrefix?: string },
+): { shellPath?: string; commandPrefix?: string } {
+	return ctx.getShellSettings?.() ?? readDiskSettings?.() ?? {};
+}
+
+/** Local shell operations honoring the session's shell settings (shellPath, commandPrefix). */
 function createSessionBashOperations(ctx: ExtensionContext): BashOperations {
-	const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
-		projectTrusted: ctx.isProjectTrusted(),
+	const shell = resolveSessionShell(ctx, () => {
+		// Hosts without getShellSettings (older SDK hosts): fall back to reading
+		// settings from disk, matching what the session was configured with.
+		const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
+			projectTrusted: ctx.isProjectTrusted(),
+		});
+		return { shellPath: settings.getShellPath(), commandPrefix: settings.getShellCommandPrefix() };
 	});
-	return prependCommandPrefix(
-		createLocalBashOperations({ shellPath: settings.getShellPath() }),
-		settings.getShellCommandPrefix(),
-	);
+	return prependCommandPrefix(createLocalBashOperations({ shellPath: shell.shellPath }), shell.commandPrefix);
 }
 
 /** Factory with injectable seams for tests; the default export uses production wiring. */

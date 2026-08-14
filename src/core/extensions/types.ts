@@ -347,6 +347,8 @@ export interface ExtensionContext {
 	compact(options?: CompactOptions): void;
 	/** Get the current effective system prompt. */
 	getSystemPrompt(): string;
+	/** Get the session's shell settings (shellPath, commandPrefix) used by the built-in bash tool. */
+	getShellSettings?(): ShellSettings | undefined;
 }
 
 /**
@@ -1682,6 +1684,14 @@ export interface ExtensionActions {
  * Actions for ExtensionContext (ctx.* in event handlers).
  * Required by all modes.
  */
+/** Shell configuration for command execution, mirroring the built-in bash tool's settings. */
+export interface ShellSettings {
+	/** Custom shell path (e.g., for Cygwin users on Windows). */
+	shellPath?: string;
+	/** Prefix prepended to every executed command (e.g., "shopt -s expand_aliases"). */
+	commandPrefix?: string;
+}
+
 export interface ExtensionContextActions {
 	getModel: () => Model<any> | undefined;
 	getScopedModels: () => readonly ScopedModel[];
@@ -1695,6 +1705,8 @@ export interface ExtensionContextActions {
 	compact: (options?: CompactOptions) => void;
 	getSystemPrompt: () => string;
 	getSystemPromptOptions?: () => BuildSystemPromptOptions;
+	/** Session shell settings (shellPath, commandPrefix) as configured on the host. Optional for older hosts. */
+	getShellSettings?: () => ShellSettings | undefined;
 }
 
 /**

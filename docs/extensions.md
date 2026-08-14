@@ -1079,6 +1079,19 @@ ctx.compact({
 });
 ```
 
+### ctx.getShellSettings()
+
+Returns the session's shell settings (`shellPath`, `commandPrefix`) exactly as the built-in bash tool uses them. Returns `undefined` on hosts that do not provide shell settings; fall back to reading settings from disk if your extension must. Optional on `ExtensionContext` for the same reason.
+
+```typescript
+pi.on("session_start", (_event, ctx) => {
+  const shell = ctx.getShellSettings?.();
+  if (shell?.commandPrefix) {
+    // Commands spawned by this extension should honor the same prefix as bash.
+  }
+});
+```
+
 ### ctx.getSystemPrompt()
 
 Returns Pi's current system prompt string.

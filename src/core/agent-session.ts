@@ -2222,6 +2222,10 @@ export class AgentSession {
 				},
 				getSystemPrompt: () => this.systemPrompt,
 				getSystemPromptOptions: () => this._baseSystemPromptOptions,
+				getShellSettings: () => ({
+					shellPath: this.settingsManager.getShellPath(),
+					commandPrefix: this.settingsManager.getShellCommandPrefix(),
+				}),
 			},
 			{
 				registerProvider: (name, config) => {
