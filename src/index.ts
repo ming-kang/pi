@@ -127,6 +127,7 @@ export type {
 	SessionShutdownEvent,
 	SessionStartEvent,
 	SessionTreeEvent,
+	ShellSettings,
 	SlashCommandInfo,
 	SlashCommandSource,
 	SourceInfo,

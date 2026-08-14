@@ -6,7 +6,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Added
 
-- Added optional `ctx.getShellSettings()` for extensions, exposing the session's `shellPath` and `shellCommandPrefix` exactly as the built-in bash tool uses them (older hosts without it fall back to disk settings).
+- Added optional `ctx.getShellSettings()` for extensions, exposing the session's `shellPath` and `shellCommandPrefix` exactly as the built-in bash tool uses them (older hosts without it fall back to disk settings); the `ShellSettings` type is exported from the package root.
 
 ### Fixed
 
