@@ -14,6 +14,7 @@ interface FakeExecCall {
 	command: string;
 	cwd: string;
 	timeout: number | undefined;
+	env: NodeJS.ProcessEnv | undefined;
 	signal: AbortSignal | undefined;
 	emitData: (text: string | Buffer) => void;
 	finish: (exitCode: number | null) => void;
@@ -30,6 +31,7 @@ function createFakeOperations(): { operations: BashOperations; calls: FakeExecCa
 					command,
 					cwd,
 					timeout: options.timeout,
+					env: options.env,
 					signal: options.signal,
 					emitData: (text) => options.onData(Buffer.isBuffer(text) ? text : Buffer.from(text)),
 					finish: (exitCode) => resolve({ exitCode }),
@@ -255,6 +257,44 @@ describe("BackgroundTaskRegistry", () => {
 
 		calls[2]?.finish(0);
 		await registry.waitForTask(third.id);
+	});
+
+	it("passes the caller-provided environment through to exec", async () => {
+		const { registry, calls } = makeRegistry();
+		const task = registry.startTask({ command: "env", cwd: "/w", env: { PI_SESSION_ID: "sess-1", FOO: "bar" } });
+		expect(calls[0]?.env).toMatchObject({ PI_SESSION_ID: "sess-1", FOO: "bar" });
+		calls[0]?.finish(0);
+		await registry.waitForTask(task.id);
+	});
+
+	it("still notifies with tailError when the output file cannot be read", async () => {
+		const { registry, calls, notifications, outputDir } = makeRegistry();
+		const task = registry.startTask({ command: "echo hi", cwd: "/w" });
+		// Redirect the recorded path to a missing file: the stream keeps writing
+		// to the original fd, but the notification's tail read hits ENOENT.
+		task.outputPath = join(outputDir, "missing.log");
+		calls[0]?.finish(0);
+
+		const finished = await registry.waitForTask(task.id);
+		expect(finished.status).toBe("completed");
+		expect(notifications).toHaveLength(1);
+		expect(notifications[0]?.tailError).toMatch(/ENOENT|no such file/i);
+		expect(notifications[0]?.tailText).toBe("");
+	});
+
+	it("marks the notification tail as truncated when output exceeds the tail budget", async () => {
+		const { registry, calls, notifications } = makeRegistry({ notifyTailBytes: 8 });
+		const task = registry.startTask({ command: "seq", cwd: "/w" });
+		calls[0]?.emitData("0123456789abcdefghij");
+		calls[0]?.finish(0);
+
+		await registry.waitForTask(task.id);
+		const notification = notifications[0];
+		expect(notification?.tailText).toBe("cdefghij");
+		expect(notification?.tailBytes).toBe(8);
+		expect(notification?.totalBytes).toBe(20);
+		expect(notification?.tailTruncated).toBe(true);
+		expect(notification?.tailStartsMidLine).toBe(true);
 	});
 });
 

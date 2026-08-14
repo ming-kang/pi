@@ -14,7 +14,7 @@ import type {
 import type { CustomMessage } from "../../core/messages.ts";
 import { highlightCode, type Theme } from "../../modes/interactive/theme/theme.ts";
 import type { BgBashDetails, BgBashInput, BgKillInput, BgLogsInput, BgNotificationDetails } from "./index.ts";
-import type { BgTaskStatus } from "./registry.ts";
+import { type BgTaskStatus, firstCommandLine, formatDuration } from "./registry.ts";
 
 const COMMAND_PREVIEW_LIMIT = 120;
 const NOTIFY_TAIL_LIMIT = 4000;
@@ -23,16 +23,11 @@ function bgPrompt(theme: Theme): string {
 	return theme.fg("toolTitle", theme.bold("$ "));
 }
 
-function firstNonEmptyLine(command: string): string {
-	const line = command.split(/\r?\n/).find((candidate) => candidate.trim().length > 0) ?? command;
-	return line.trim();
-}
-
 function timeoutSuffix(timeout: number | undefined, theme: Theme): string {
 	return timeout ? theme.fg("muted", ` (timeout ${timeout}s)`) : "";
 }
 
-function statusGlyph(status: BgTaskStatus): string {
+export function statusGlyph(status: BgTaskStatus): string {
 	switch (status) {
 		case "completed":
 			return "✓";
@@ -46,7 +41,7 @@ function statusGlyph(status: BgTaskStatus): string {
 	}
 }
 
-function statusColor(status: BgTaskStatus): "success" | "error" | "warning" | "muted" | "accent" {
+export function statusColor(status: BgTaskStatus): "success" | "error" | "warning" | "accent" {
 	switch (status) {
 		case "completed":
 			return "success";
@@ -60,12 +55,22 @@ function statusColor(status: BgTaskStatus): "success" | "error" | "warning" | "m
 	}
 }
 
+/** First command line truncated to a visible-character budget with an ellipsis. */
+export function commandLabel(command: string, width: number): string {
+	const characters = [...firstCommandLine(command)];
+	return characters.length <= width ? characters.join("") : `${characters.slice(0, Math.max(0, width - 1)).join("")}…`;
+}
+
 export function renderBgBashCall(args: BgBashInput, theme: Theme, context: ToolRenderContext): Component {
-	const command = firstNonEmptyLine(args.command);
-	const body = highlightCode(command, "bash").join("\n");
+	const lines = args.command.split(/\r?\n/).filter((line) => line.trim().length > 0);
 	const suffix = theme.fg("muted", " &") + timeoutSuffix(args.timeout, theme);
-	if (!context.expanded && args.command.split(/\r?\n/).filter((line) => line.trim()).length > 1) {
-		const hidden = args.command.split(/\r?\n/).filter((line) => line.trim()).length - 1;
+	if (context.expanded && lines.length > 1) {
+		const body = highlightCode(args.command, "bash").join("\n");
+		return new Text(`${bgPrompt(theme)}${body}${suffix}`, 0, 0);
+	}
+	const body = highlightCode(firstCommandLine(args.command), "bash").join("\n");
+	if (lines.length > 1) {
+		const hidden = lines.length - 1;
 		const more = theme.fg("muted", ` (+${hidden} line${hidden === 1 ? "" : "s"})`);
 		return new Text(`${bgPrompt(theme)}${body}${suffix}${more}`, 0, 0);
 	}
@@ -107,25 +112,11 @@ export function renderBgKillCall(args: BgKillInput, theme: Theme): Component {
 
 /** One-line summary of a finished task, shared by the notification renderer. */
 function taskSummaryLine(details: BgNotificationDetails, theme: Theme): string {
-	const runtime = formatRuntimeMs(details.runtimeMs);
+	const runtime = formatDuration(details.runtimeMs);
 	const exit = details.exitCode !== undefined && details.exitCode !== null ? `, exit ${details.exitCode}` : "";
 	const outcome = theme.fg(statusColor(details.status), `${details.status}${exit} in ${runtime}`);
 	const glyph = theme.fg(statusColor(details.status), statusGlyph(details.status));
-	return `${glyph} ${theme.fg("accent", details.taskId)} ${truncateCommand(details.command)} ${theme.fg("muted", `— ${outcome}`)}`;
-}
-
-function truncateCommand(command: string): string {
-	const characters = [...firstNonEmptyLine(command)];
-	return characters.length <= COMMAND_PREVIEW_LIMIT
-		? characters.join("")
-		: `${characters.slice(0, COMMAND_PREVIEW_LIMIT - 1).join("")}…`;
-}
-
-function formatRuntimeMs(ms: number): string {
-	const totalSeconds = Math.max(0, Math.round(ms / 1000));
-	if (totalSeconds < 60) return `${totalSeconds}s`;
-	const minutes = Math.floor(totalSeconds / 60);
-	return `${minutes}m${String(totalSeconds % 60).padStart(2, "0")}s`;
+	return `${glyph} ${theme.fg("accent", details.taskId)} ${commandLabel(details.command, COMMAND_PREVIEW_LIMIT)} ${theme.fg("muted", `— ${outcome}`)}`;
 }
 
 /**
@@ -149,9 +140,10 @@ export function renderBackgroundNotification(
 		container.addChild(new Text(theme.fg("error", `Output unavailable: ${details.tailError}`), 1, 0));
 	} else if (options.expanded && details.tailText) {
 		container.addChild(new Text("", 0, 0));
+		// Keep the END of the tail when over budget — that is where the outcome lives.
 		const tail =
 			details.tailText.length > NOTIFY_TAIL_LIMIT
-				? `${details.tailText.slice(0, NOTIFY_TAIL_LIMIT)}…`
+				? `…${details.tailText.slice(-NOTIFY_TAIL_LIMIT)}`
 				: details.tailText;
 		const truncatedNote = details.tailTruncated
 			? `\n[showing tail of ${details.totalBytes} bytes; full output: ${details.outputPath}]`

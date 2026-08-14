@@ -165,7 +165,7 @@ export interface BashSpawnContext {
 
 export type BashSpawnHook = (context: BashSpawnContext) => BashSpawnContext;
 
-function resolveSpawnContext(
+export function resolveSpawnContext(
 	command: string,
 	cwd: string,
 	spawnHook: BashSpawnHook | undefined,

@@ -38,16 +38,17 @@ The transcript renders this notification as a one-line summary (`✓ bg-3f2a91 n
 
 ## /bg
 
-`/bg` opens a two-pane overlay: the task list on the left, the selected task's live output on the right.
+`/bg` opens an inline task menu in the editor slot (like `/model`); the chat transcript stays visible above it. The list shows each task's status glyph, id, duration, and command; `Enter` opens the selected task's live output view, which replaces the menu.
 
-| Key | Action |
-|---|---|
-| `↑` / `↓` | Select task (resets the viewport to follow) |
-| `k` | Kill the selected running task |
-| `PgUp` / `PgDn` | Scroll the output viewport; `PgUp` freezes it, scrolling back to the bottom resumes following |
-| `Esc` | Close |
+| Key | In the task list | In the output view |
+|---|---|---|
+| `↑` / `↓` | Select task | — |
+| `Enter` | Open the selected task's output | — |
+| `k` | Kill the selected running task | Kill the viewed task |
+| `PgUp` / `PgDn` | — | Scroll the output; `PgUp` freezes it, scrolling back to the bottom resumes following |
+| `Esc` | Close the menu | Back to the task list |
 
-The viewport polls the output file once per second and only ever reads the last 128KB. Outside an interactive TUI, `/bg` prints a bounded task summary instead.
+The output view polls the output file once per second and only ever reads the last 128KB. Outside an interactive TUI, `/bg` prints a bounded task summary instead.
 
 ## Statusline
 
@@ -55,6 +56,7 @@ Running and finished counts appear in the footer as `bg 2 running · 1 done`; th
 
 ## Limits and lifecycle
 
+- Background tasks inherit the session's `PI_*` environment variables (`PI_SESSION_ID`, `PI_MODEL`, …) just like the built-in bash tool, snapshotted when the task starts.
 - Output streams directly to a system-temp file (`pi-bg-<id>.log`), never into the project or into memory. Memory holds only a byte counter.
 - Output is capped at 20MB. Hitting the cap kills the task and marks it `failed` rather than silently truncating.
 - At most 8 tasks may run concurrently; `bg_bash` reports the running tasks when the limit is reached.

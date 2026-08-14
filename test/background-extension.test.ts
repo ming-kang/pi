@@ -9,12 +9,13 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 	ToolDefinition,
+	ToolRenderContext,
 } from "../src/core/extensions/types.ts";
 import type { CustomMessage } from "../src/core/messages.ts";
 import type { BashOperations } from "../src/core/tools/bash.ts";
 import type { BgNotificationDetails } from "../src/extensions/background/index.ts";
 import { createBackgroundExtension } from "../src/extensions/background/index.ts";
-import { renderBackgroundNotification } from "../src/extensions/background/render.ts";
+import { renderBackgroundNotification, renderBgBashCall } from "../src/extensions/background/render.ts";
 import type { Theme } from "../src/modes/interactive/theme/theme.ts";
 
 function textOf(result: AgentToolResult<unknown>): string {
@@ -25,6 +26,7 @@ function textOf(result: AgentToolResult<unknown>): string {
 interface FakeExecCall {
 	command: string;
 	cwd: string;
+	env: NodeJS.ProcessEnv | undefined;
 	signal: AbortSignal | undefined;
 	emitData: (text: string) => void;
 	finish: (exitCode: number | null) => void;
@@ -40,6 +42,7 @@ function createFakeOperations(): { operations: BashOperations; calls: FakeExecCa
 				calls.push({
 					command,
 					cwd,
+					env: options.env,
 					signal: options.signal,
 					emitData: (text) => options.onData(Buffer.from(text)),
 					finish: (exitCode) => resolve({ exitCode }),
@@ -64,6 +67,7 @@ interface Harness {
 	ctx: ExtensionContext;
 	statusUpdates: (string | undefined)[];
 	notifications: string[];
+	customCalls: { factory: unknown; options: unknown }[];
 	startSession: () => Promise<void>;
 	shutdownSession: () => Promise<void>;
 	execute: (tool: string, params: unknown, signal?: AbortSignal) => Promise<AgentToolResult<unknown>>;
@@ -82,6 +86,7 @@ function createHarness(): Harness {
 	const sent: FakeSentMessage[] = [];
 	const statusUpdates: (string | undefined)[] = [];
 	const notifications: string[] = [];
+	const customCalls: { factory: unknown; options: unknown }[] = [];
 
 	const pi = {
 		registerTool: (tool: ToolDefinition<any, any, any>) => tools.set(tool.name, tool),
@@ -102,12 +107,20 @@ function createHarness(): Harness {
 		hasUI: true,
 		cwd: outputDir,
 		isProjectTrusted: () => true,
+		// resolveSpawnContext reads these for the PI_* environment injection.
+		sessionManager: { getSessionId: () => "sess-test", getSessionFile: () => undefined },
+		model: { provider: "test-provider", id: "test-model" },
+		thinkingLevel: undefined,
 		ui: {
 			setStatus: (_key: string, text: string | undefined) => {
 				statusUpdates.push(text);
 			},
 			notify: (message: string) => {
 				notifications.push(message);
+			},
+			custom: (factory: unknown, options?: unknown) => {
+				customCalls.push({ factory, options });
+				return Promise.resolve(undefined);
 			},
 		},
 	} as unknown as ExtensionContext;
@@ -123,6 +136,7 @@ function createHarness(): Harness {
 		ctx,
 		statusUpdates,
 		notifications,
+		customCalls,
 		startSession: async () => {
 			await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
 		},
@@ -287,6 +301,46 @@ describe("background extension", () => {
 		expect(content).toContain("Working directory does not exist");
 	});
 
+	it("injects PI_* session variables like the built-in bash tool", async () => {
+		const harness = createHarness();
+		await harness.startSession();
+
+		await harness.execute("bg_bash", { command: "env" });
+		expect(harness.calls[0]?.env).toMatchObject({
+			PI_SESSION_ID: "sess-test",
+			PI_PROVIDER: "test-provider",
+			PI_MODEL: "test-model",
+		});
+
+		harness.calls[0]?.finish(0);
+		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
+	});
+
+	it("rejects a non-positive timeout synchronously without starting a task", async () => {
+		const harness = createHarness();
+		await harness.startSession();
+
+		await expect(harness.execute("bg_bash", { command: "x", timeout: 0 })).rejects.toThrow(/positive/);
+		await expect(harness.execute("bg_bash", { command: "x", timeout: -5 })).rejects.toThrow(/positive/);
+		expect(harness.calls).toHaveLength(0);
+		expect(harness.statusUpdates.at(-1)).toBeUndefined();
+	});
+
+	it("opens /bg as an inline component without overlay options", async () => {
+		const harness = createHarness();
+		await harness.startSession();
+
+		await harness.execute("bg_bash", { command: "npm run dev" });
+		const bg = harness.commands.get("bg");
+		await bg?.handler("", harness.ctx as unknown as ExtensionCommandContext);
+
+		expect(harness.customCalls).toHaveLength(1);
+		expect(harness.customCalls[0]?.options).toBeUndefined();
+
+		harness.calls[0]?.finish(0);
+		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
+	});
+
 	it("summarizes tasks via /bg outside the TUI", async () => {
 		const harness = createHarness();
 		await harness.startSession();
@@ -349,6 +403,18 @@ describe("renderBackgroundNotification", () => {
 		expect(expandedLines.join("\n")).toContain("build finished");
 	});
 
+	it("keeps the end of an oversized tail when expanded", () => {
+		const tailText = `HEAD${"x".repeat(4500)}TAIL`;
+		const expanded = renderBackgroundNotification(
+			message({ tailText }),
+			{ expanded: true, outputPad: 1 },
+			plainTheme,
+		);
+		const text = (expanded?.render(200) ?? []).map(stripTerminalSequences).join("\n");
+		expect(text).toContain("TAIL");
+		expect(text).not.toContain("HEAD");
+	});
+
 	it("falls back to the default renderer for malformed details", () => {
 		expect(
 			renderBackgroundNotification(
@@ -357,5 +423,27 @@ describe("renderBackgroundNotification", () => {
 				plainTheme,
 			),
 		).toBeUndefined();
+	});
+});
+
+describe("renderBgBashCall", () => {
+	const plainTheme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+	} as unknown as Theme;
+
+	it("shows the full multi-line command only when expanded", () => {
+		const args = { command: "echo one\necho two\necho three" };
+
+		const collapsed = renderBgBashCall(args, plainTheme, { expanded: false } as ToolRenderContext);
+		const collapsedText = collapsed.render(200).map(stripTerminalSequences).join("\n");
+		expect(collapsedText).toContain("+2 lines");
+		expect(collapsedText).not.toContain("echo three");
+
+		const expanded = renderBgBashCall(args, plainTheme, { expanded: true } as ToolRenderContext);
+		const expandedText = expanded.render(200).map(stripTerminalSequences).join("\n");
+		expect(expandedText).toContain("echo two");
+		expect(expandedText).toContain("echo three");
+		expect(expandedText).not.toContain("+2 lines");
 	});
 });

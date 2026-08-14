@@ -17,21 +17,21 @@ import type {
 	ExtensionContext,
 } from "../../core/extensions/types.ts";
 import { SettingsManager } from "../../core/settings-manager.ts";
-import { type BashOperations, createLocalBashOperations } from "../../core/tools/bash.ts";
+import { type BashOperations, createLocalBashOperations, resolveSpawnContext } from "../../core/tools/bash.ts";
 import { DEFAULT_MAX_BYTES, formatSize } from "../../core/tools/truncate.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
-import { BackgroundTasksOverlay } from "./manager.ts";
+import { BackgroundTasksMenu } from "./manager.ts";
 import {
 	BackgroundTaskRegistry,
 	type BgTask,
 	type BgTaskNotification,
 	type BgTaskStatus,
-	firstCommandLine,
 	formatDuration,
 	type ResolveTaskResult,
 	readOutputSlice,
 } from "./registry.ts";
 import {
+	commandLabel,
 	renderBackgroundNotification,
 	renderBgBashCall,
 	renderBgBashResult,
@@ -42,14 +42,13 @@ import {
 export const BG_NOTIFICATION_TYPE = "background-task";
 const BG_LOGS_DEFAULT_BYTES = 8 * 1024;
 const BG_LOGS_MIN_BYTES = 256;
-const COMMAND_LABEL_WIDTH = 60;
 
 const bgBashSchema = Type.Object({
 	command: Type.String({ description: "Bash command to run in the background" }),
 	timeout: Type.Optional(
 		Type.Number({
 			description:
-				"Timeout in seconds (optional, no default). On expiry the task is killed and reported as timeout.",
+				"Timeout in seconds (optional, no default; must be positive). On expiry the task is killed and reported as timeout.",
 		}),
 	),
 });
@@ -118,12 +117,6 @@ export function escapeXml(text: string): string {
 		.replaceAll("'", "&apos;");
 }
 
-function commandLabel(command: string, width = COMMAND_LABEL_WIDTH): string {
-	const line = firstCommandLine(command);
-	const characters = [...line];
-	return characters.length <= width ? line : `${characters.slice(0, Math.max(0, width - 1)).join("")}…`;
-}
-
 export function buildNotificationContent(notification: BgTaskNotification): string {
 	const task = notification.task;
 	const runtime = formatDuration((task.endedAt ?? task.startedAt) - task.startedAt);
@@ -165,7 +158,7 @@ export function formatStatusline(counts: { running: number; total: number }): st
 
 function describeResolveFailure(input: string, result: ResolveTaskResult & { ok: false }): string {
 	if (result.reason === "ambiguous") {
-		const lines = result.candidates.map((task) => `  ${task.id} (${task.status})  ${commandLabel(task.command)}`);
+		const lines = result.candidates.map((task) => `  ${task.id} (${task.status})  ${commandLabel(task.command, 60)}`);
 		return `Task id "${input}" is ambiguous. Candidates:\n${lines.join("\n")}`;
 	}
 	return `No background task matches "${input}". Check the id returned by bg_bash or open /bg.`;
@@ -276,12 +269,18 @@ export function createBackgroundExtension(overrides?: BackgroundExtensionOverrid
 			],
 			parameters: bgBashSchema,
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<BgBashDetails>> {
+				if (params.timeout !== undefined && (!Number.isFinite(params.timeout) || params.timeout <= 0)) {
+					throw new Error("Invalid timeout: must be a positive number of seconds.");
+				}
+				// Same PI_* session variables as the built-in bash tool, snapshotted at start.
+				const spawnContext = resolveSpawnContext(params.command, ctx.cwd, undefined, true, ctx);
 				// Deliberately ignore the turn signal: aborting the current turn must
 				// not kill the background task (that is what bg_kill is for).
 				const task = requireRegistry().startTask({
 					command: params.command,
 					cwd: ctx.cwd,
 					timeoutSeconds: params.timeout,
+					env: spawnContext.env,
 				});
 				const text = [
 					`Started background task ${task.id}.`,
@@ -413,9 +412,10 @@ export function createBackgroundExtension(overrides?: BackgroundExtensionOverrid
 }
 
 async function showBackgroundManager(ctx: ExtensionCommandContext, registry: BackgroundTaskRegistry): Promise<void> {
+	// No overlay options: the component mounts inline in the editor slot, like /model.
 	await ctx.ui.custom(
 		(tui, theme, keybindings, done) =>
-			new BackgroundTasksOverlay({
+			new BackgroundTasksMenu({
 				tui,
 				theme,
 				keybindings,
@@ -426,10 +426,6 @@ async function showBackgroundManager(ctx: ExtensionCommandContext, registry: Bac
 				},
 				onClose: () => done(undefined),
 			}),
-		{
-			overlay: true,
-			overlayOptions: { width: "80%", minWidth: 70, maxHeight: "90%", anchor: "center" },
-		},
 	);
 }
 

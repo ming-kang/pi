@@ -172,7 +172,7 @@ export class BackgroundTaskRegistry {
 		return this.shuttingDown;
 	}
 
-	startTask(input: { command: string; cwd: string; timeoutSeconds?: number }): BgTask {
+	startTask(input: { command: string; cwd: string; timeoutSeconds?: number; env?: NodeJS.ProcessEnv }): BgTask {
 		if (this.shuttingDown) {
 			throw new Error("Pi is shutting down; background task not started.");
 		}
@@ -223,7 +223,7 @@ export class BackgroundTaskRegistry {
 
 		this.tasks.set(id, task);
 		this.runtimes.set(id, runtime);
-		void this.run(task, runtime);
+		void this.run(task, runtime, input.env);
 		this.onChange();
 		return task;
 	}
@@ -317,13 +317,14 @@ export class BackgroundTaskRegistry {
 		}
 	}
 
-	private async run(task: BgTask, runtime: TaskRuntime): Promise<void> {
+	private async run(task: BgTask, runtime: TaskRuntime, env?: NodeJS.ProcessEnv): Promise<void> {
 		let outcome: { exitCode?: number | null; error?: unknown };
 		try {
 			const result = await this.operations.exec(task.command, task.cwd, {
 				onData: (data) => this.handleData(task, runtime, data),
 				signal: runtime.controller.signal,
 				timeout: task.timeoutSeconds,
+				env,
 			});
 			outcome = { exitCode: result.exitCode };
 		} catch (error) {
