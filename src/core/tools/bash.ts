@@ -23,7 +23,7 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult } from "./truncate.ts";
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
-const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
+export const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
 
 function resolveTimeoutMs(timeout: number | undefined): number | undefined {
 	if (timeout === undefined) return undefined;
@@ -66,6 +66,10 @@ export interface BashOperations {
 	 * @param cwd Working directory
 	 * @param options Execution options
 	 * @returns Promise resolving to exit code (null if killed)
+	 *
+	 * Error contract: reject with `new Error("aborted")` when aborted via `signal`,
+	 * and `new Error("timeout:<seconds>")` on timeout expiry — callers (including
+	 * the background extension) classify outcomes from these exact markers.
 	 */
 	exec: (
 		command: string,

@@ -245,7 +245,8 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		if (!task) return this.theme.fg("muted", "(no task selected)");
 		const duration = formatDuration((task.endedAt ?? Date.now()) - task.startedAt);
 		const exit = task.exitCode !== undefined && task.exitCode !== null ? ` exit ${task.exitCode}` : "";
-		const paused = this.follow ? "" : " — paused (PgDn to follow)";
+		const resumeLabel = keyLabel("tui.select.pageDown", { keybindings: this.keybindings });
+		const paused = this.follow ? "" : ` — paused (${resumeLabel} to follow)`;
 		const fileName = task.outputPath.replace(/\\/g, "/").split("/").at(-1) ?? task.outputPath;
 		const glyph = this.theme.fg(statusColor(task.status), statusGlyph(task.status));
 		const header = `${task.id} · ${task.status}${exit} · ${duration} · ${formatSize(task.outputBytes)} · ${fileName}${paused}`;

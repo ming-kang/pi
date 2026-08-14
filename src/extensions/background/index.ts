@@ -17,7 +17,12 @@ import type {
 	ExtensionContext,
 } from "../../core/extensions/types.ts";
 import { SettingsManager } from "../../core/settings-manager.ts";
-import { type BashOperations, createLocalBashOperations, resolveSpawnContext } from "../../core/tools/bash.ts";
+import {
+	type BashOperations,
+	createLocalBashOperations,
+	MAX_TIMEOUT_SECONDS,
+	resolveSpawnContext,
+} from "../../core/tools/bash.ts";
 import { DEFAULT_MAX_BYTES, formatSize } from "../../core/tools/truncate.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
 import { BackgroundTasksMenu } from "./manager.ts";
@@ -121,16 +126,19 @@ export function buildNotificationContent(notification: BgTaskNotification): stri
 	const task = notification.task;
 	const runtime = formatDuration((task.endedAt ?? task.startedAt) - task.startedAt);
 	const exitCode = task.exitCode === undefined || task.exitCode === null ? "" : ` exitCode="${task.exitCode}"`;
+	// sanitizeBinaryOutput keeps \t \n \r (XML-legal) and strips other control
+	// characters, so every text field below is valid XML 1.0 after escaping.
+	const xmlText = (text: string) => escapeXml(sanitizeBinaryOutput(text));
 	const lines = [
 		`<background-task id="${task.id}" status="${task.status}"${exitCode} runtime="${runtime}">`,
-		`<command>${escapeXml(task.command)}</command>`,
-		`<output-file>${escapeXml(task.outputPath)}</output-file>`,
+		`<command>${xmlText(task.command)}</command>`,
+		`<output-file>${xmlText(task.outputPath)}</output-file>`,
 	];
 	if (task.error) {
-		lines.push(`<error>${escapeXml(task.error)}</error>`);
+		lines.push(`<error>${xmlText(task.error)}</error>`);
 	}
 	if (notification.tailError) {
-		lines.push(`<output-tail unavailable="${escapeXml(notification.tailError)}"/>`);
+		lines.push(`<output-tail unavailable="${xmlText(notification.tailError)}"/>`);
 	} else {
 		const attrs = [
 			`bytes="${notification.tailBytes}"`,
@@ -187,18 +195,33 @@ function toNotificationDetails(notification: BgTaskNotification): BgNotification
 	};
 }
 
+/**
+ * Wrap operations so every executed command carries the prefix, mirroring the
+ * built-in bash tool. The prefix never reaches task labels or notifications:
+ * `BgTask.command` stays the user's original input.
+ */
+export function prependCommandPrefix(operations: BashOperations, prefix: string | undefined): BashOperations {
+	if (!prefix) return operations;
+	return {
+		exec: (command, cwd, options) => operations.exec(`${prefix}\n${command}`, cwd, options),
+	};
+}
+
 export interface BackgroundExtensionOverrides {
 	operations?: BashOperations;
 	outputDir?: string;
 	maxOutputBytes?: number;
 }
 
-/** Local shell operations honoring the session's configured shell path. */
+/** Local shell operations honoring the session's configured shell path and command prefix. */
 function createSessionBashOperations(ctx: ExtensionContext): BashOperations {
 	const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
 		projectTrusted: ctx.isProjectTrusted(),
 	});
-	return createLocalBashOperations({ shellPath: settings.getShellPath() });
+	return prependCommandPrefix(
+		createLocalBashOperations({ shellPath: settings.getShellPath() }),
+		settings.getShellCommandPrefix(),
+	);
 }
 
 /** Factory with injectable seams for tests; the default export uses production wiring. */
@@ -271,6 +294,9 @@ export function createBackgroundExtension(overrides?: BackgroundExtensionOverrid
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<BgBashDetails>> {
 				if (params.timeout !== undefined && (!Number.isFinite(params.timeout) || params.timeout <= 0)) {
 					throw new Error("Invalid timeout: must be a positive number of seconds.");
+				}
+				if (params.timeout !== undefined && params.timeout > MAX_TIMEOUT_SECONDS) {
+					throw new Error(`Invalid timeout: maximum is ${MAX_TIMEOUT_SECONDS} seconds`);
 				}
 				// Same PI_* session variables as the built-in bash tool, snapshotted at start.
 				const spawnContext = resolveSpawnContext(params.command, ctx.cwd, undefined, true, ctx);

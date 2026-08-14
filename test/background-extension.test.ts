@@ -13,8 +13,11 @@ import type {
 } from "../src/core/extensions/types.ts";
 import type { CustomMessage } from "../src/core/messages.ts";
 import type { BashOperations } from "../src/core/tools/bash.ts";
-import type { BgNotificationDetails } from "../src/extensions/background/index.ts";
-import { createBackgroundExtension } from "../src/extensions/background/index.ts";
+import {
+	type BgNotificationDetails,
+	createBackgroundExtension,
+	prependCommandPrefix,
+} from "../src/extensions/background/index.ts";
 import { renderBackgroundNotification, renderBgBashCall } from "../src/extensions/background/render.ts";
 import type { Theme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -213,6 +216,21 @@ describe("background extension", () => {
 		expect(details.tailText).toBe("value is a<b\ndone\n");
 	});
 
+	it("strips XML-illegal control characters from command and error fields", async () => {
+		const harness = createHarness();
+		await harness.startSession();
+
+		await harness.execute("bg_bash", { command: "printf 'a\u0001b'" });
+		harness.calls[0]?.fail(new Error("boom\u0007"));
+
+		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
+		const content = harness.sent[0]?.message.content ?? "";
+		expect(content).toContain("<command>printf &apos;ab&apos;</command>");
+		expect(content).toContain("<error>boom</error>");
+		// XML 1.0 forbids control characters except \t \n \r.
+		expect(content).not.toMatch(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/);
+	});
+
 	it("tracks the footer status through the task lifecycle and shutdown", async () => {
 		const harness = createHarness();
 		await harness.startSession();
@@ -326,6 +344,15 @@ describe("background extension", () => {
 		expect(harness.statusUpdates.at(-1)).toBeUndefined();
 	});
 
+	it("rejects an over-limit timeout synchronously without starting a task", async () => {
+		const harness = createHarness();
+		await harness.startSession();
+
+		await expect(harness.execute("bg_bash", { command: "x", timeout: 3_000_000_000 })).rejects.toThrow(/maximum/);
+		expect(harness.calls).toHaveLength(0);
+		expect(harness.statusUpdates.at(-1)).toBeUndefined();
+	});
+
 	it("opens /bg as an inline component without overlay options", async () => {
 		const harness = createHarness();
 		await harness.startSession();
@@ -423,6 +450,35 @@ describe("renderBackgroundNotification", () => {
 				plainTheme,
 			),
 		).toBeUndefined();
+	});
+});
+
+describe("prependCommandPrefix", () => {
+	it("prepends the configured prefix to every executed command, passing options through", async () => {
+		const seen: { command: string; cwd: string; timeout?: number }[] = [];
+		const base: BashOperations = {
+			exec: async (command, cwd, options) => {
+				seen.push({ command, cwd, timeout: options.timeout });
+				return { exitCode: 0 };
+			},
+		};
+		const wrapped = prependCommandPrefix(base, "shopt -s expand_aliases");
+
+		const result = await wrapped.exec("npm run build", "/work", {
+			onData: () => {},
+			signal: undefined,
+			timeout: 5,
+			env: { FOO: "bar" },
+		});
+
+		expect(result).toEqual({ exitCode: 0 });
+		expect(seen).toEqual([{ command: "shopt -s expand_aliases\nnpm run build", cwd: "/work", timeout: 5 }]);
+	});
+
+	it("returns the same operations without a prefix", () => {
+		const base: BashOperations = { exec: async () => ({ exitCode: 0 }) };
+		expect(prependCommandPrefix(base, undefined)).toBe(base);
+		expect(prependCommandPrefix(base, "")).toBe(base);
 	});
 });
 

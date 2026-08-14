@@ -12,6 +12,7 @@ import type {
 	ToolRenderResultOptions,
 } from "../../core/extensions/types.ts";
 import type { CustomMessage } from "../../core/messages.ts";
+import { formatSize } from "../../core/tools/truncate.ts";
 import { highlightCode, type Theme } from "../../modes/interactive/theme/theme.ts";
 import type { BgBashDetails, BgBashInput, BgKillInput, BgLogsInput, BgNotificationDetails } from "./index.ts";
 import { type BgTaskStatus, firstCommandLine, formatDuration } from "./registry.ts";
@@ -98,7 +99,7 @@ export function renderBgBashResult(
 
 export function renderBgLogsCall(args: BgLogsInput, theme: Theme): Component {
 	const mode = args.mode ?? "tail";
-	const size = args.bytes !== undefined ? ` ${args.bytes}B` : "";
+	const size = args.bytes !== undefined ? ` ${formatSize(args.bytes)}` : "";
 	return new Text(
 		`${theme.fg("toolTitle", theme.bold("bg logs "))}${theme.fg("accent", args.taskId)}${theme.fg("muted", ` ${mode}${size}`)}`,
 		0,

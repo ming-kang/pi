@@ -4,6 +4,11 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the bundled Background extension ignoring the `shellCommandPrefix` setting (`bg_bash` now runs commands through the session shell and its prefix exactly like the built-in `bash` tool, without surfacing the prefix in task labels or notifications) and rejecting over-limit `bg_bash` timeouts synchronously instead of failing the started task asynchronously.
+- Fixed Background completion notifications embedding XML-illegal control characters in the command and error fields.
+
 ## [0.84.5] - 2026-08-14
 
 ### Added

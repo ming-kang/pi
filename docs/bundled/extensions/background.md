@@ -57,8 +57,10 @@ Running and finished counts appear in the footer as `bg 2 running · 1 done`; th
 ## Limits and lifecycle
 
 - Background tasks inherit the session's `PI_*` environment variables (`PI_SESSION_ID`, `PI_MODEL`, …) just like the built-in bash tool, snapshotted when the task starts.
+- Tasks run through the session's configured shell (`shellPath`) and honor `shellCommandPrefix`, matching the built-in bash tool. The prefix is applied at execution time only — it never appears in task labels or notifications.
 - Output streams directly to a system-temp file (`pi-bg-<id>.log`), never into the project or into memory. Memory holds only a byte counter.
 - Output is capped at 20MB. Hitting the cap kills the task and marks it `failed` rather than silently truncating.
 - At most 8 tasks may run concurrently; `bg_bash` reports the running tasks when the limit is reached.
 - Aborting the current turn (Esc) does not kill background tasks — that is what `bg_kill` and `/bg` are for.
 - Session shutdown, `/reload`, new sessions, and session switches kill all running tasks; those kills are silent (no notification flood). There is no restart reattachment: finished-task records live only for the current session.
+- Output files outlive the session for later inspection (`bg_logs` and notifications keep pointing at them); Pi never deletes them automatically — the system temp directory's own cleanup policy applies.
