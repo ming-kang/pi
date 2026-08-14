@@ -1,6 +1,6 @@
 {
 	"name": "@astralyn/pi",
-	"version": "0.84.4",
+	"version": "0.84.5",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"type": "module",
 	"piConfig": {

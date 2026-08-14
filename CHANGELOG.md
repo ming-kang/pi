@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.84.5] - 2026-08-14
+
 ### Added
 
 - Added `ExtensionContext.modelRuntime`, exposing the parent session's canonical model/authentication runtime for nested SDK sessions without provider or credential mirroring.
