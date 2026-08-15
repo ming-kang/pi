@@ -8,8 +8,13 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 - Added optional `ctx.getShellSettings()` for extensions, exposing the session's `shellPath` and `shellCommandPrefix` exactly as the built-in bash tool uses them (older hosts without it fall back to disk settings); the `ShellSettings` type is exported from the package root.
 
+### Changed
+
+- Restructured the bundled Subagent extension internals into a pure per-run state machine with dedicated cancellation scopes, a loop-free two-pass details budget, and shared model-selection and choice helpers for `/agents`; the tool schema, `subagent.json` format, `/agents` interaction contract, and public result shapes are unchanged.
+
 ### Fixed
 
+- Fixed the bundled Subagent extension missing tasks that were still queued at the concurrency gate during session shutdown (a queued task could start after the shutdown snapshot and keep running), worker runs not settling when aborted while worker resources were still loading, the live activity line clearing while parallel tools were still running, and progress updates being swallowed when only usage cost or the context watermark changed.
 - Fixed the bundled Background extension building its shell configuration from disk instead of the current session's settings, which could diverge from the built-in bash tool on SDK hosts using a custom agent directory or in-memory settings, and rejecting over-limit `bg_bash` timeouts synchronously instead of failing the started task asynchronously.
 - Fixed Background completion notifications embedding XML-illegal characters (lone surrogates, U+FFFE/U+FFFF, control characters) by filtering all notification fields through a dedicated XML 1.0 character filter, and the `/bg` output view no longer renders an empty resume hint when `pageDown` is unbound.
 

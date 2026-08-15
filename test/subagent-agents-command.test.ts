@@ -9,6 +9,12 @@ import type { ExtensionCommandContext } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { showAgentsCommand } from "../src/extensions/subagent/agents-command.ts";
 import * as settings from "../src/extensions/subagent/settings.ts";
+import {
+	buildModelChoices,
+	buildSettingsRows,
+	buildThinkingChoices,
+	compareModels,
+} from "../src/extensions/subagent/ui/choices.ts";
 import { initTheme, type Theme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
@@ -257,5 +263,91 @@ describe("/agents command", () => {
 			"medium",
 		);
 		expect(notify).toHaveBeenCalledWith("/agents requires an interactive UI.", "warning");
+	});
+});
+
+describe("/agents shared choice builders", () => {
+	const session = model("anthropic", "claude-x");
+	const catalog = [model("provider", "worker"), session];
+
+	it("builds settings rows for inherit, override, and unavailable overrides", () => {
+		const inherited = buildSettingsRows({
+			override: undefined,
+			models: catalog,
+			currentSessionModel: session,
+			currentThinking: "medium",
+		});
+		expect(inherited).toEqual([
+			{ action: "model", label: "Model", value: "inherit — anthropic/claude-x", override: false },
+			{ action: "thinking", label: "Thinking", value: "inherit — medium", override: false },
+		]);
+
+		const overridden = buildSettingsRows({
+			override: { model: "provider/worker", thinking: "high" },
+			models: catalog,
+			currentSessionModel: session,
+			currentThinking: "medium",
+		});
+		expect(overridden[0]).toMatchObject({
+			action: "model",
+			value: "override — provider/worker",
+			override: true,
+		});
+		expect(overridden[1]).toMatchObject({ action: "thinking", value: "override — high", override: true });
+
+		const unavailable = buildSettingsRows({
+			override: { model: "gone/model" },
+			models: catalog,
+			currentSessionModel: session,
+			currentThinking: "medium",
+		});
+		expect(unavailable[0]?.value).toBe("override — gone/model [unavailable]");
+	});
+
+	it("builds model choices with inherit, saved-unavailable, and catalog entries", () => {
+		const inherited = buildModelChoices({
+			models: [...catalog].sort(compareModels),
+			currentSessionModel: session,
+			savedModelId: undefined,
+		});
+		expect([...inherited.keys()]).toEqual([
+			"inherit (anthropic/claude-x) ✓",
+			"anthropic/claude-x",
+			"provider/worker",
+		]);
+
+		const overridden = buildModelChoices({
+			models: [...catalog].sort(compareModels),
+			currentSessionModel: session,
+			savedModelId: "provider/worker",
+		});
+		expect(overridden.get("provider/worker ✓")).toBe("provider/worker");
+		expect(overridden.get("inherit (anthropic/claude-x)")).toBeUndefined();
+
+		const unavailable = buildModelChoices({
+			models: [...catalog].sort(compareModels),
+			currentSessionModel: session,
+			savedModelId: "gone/model",
+		});
+		expect(unavailable.get("gone/model [unavailable] ✓")).toBe("gone/model");
+	});
+
+	it("builds thinking choices from the effective model's supported levels", () => {
+		const choices = buildThinkingChoices({
+			currentSessionModel: session,
+			models: catalog,
+			override: undefined,
+			currentThinking: "medium",
+		});
+		expect(choices.get("inherit (medium) ✓")).toBeUndefined();
+		expect([...choices.keys()][1]).toBe("off");
+
+		const overridden = buildThinkingChoices({
+			currentSessionModel: session,
+			models: catalog,
+			override: { thinking: "high" },
+			currentThinking: "medium",
+		});
+		expect(overridden.get("high ✓")).toBe("high");
 	});
 });

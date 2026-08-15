@@ -1,23 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { addUsage, emptyUsage, mergeUsage, toNestedUsage } from "../src/extensions/subagent/activity.ts";
+import { boundSubagentDetails } from "../src/extensions/subagent/budget.ts";
 import {
-	addUsage,
-	appendActivity,
-	boundText,
-	emptyUsage,
-	mergeUsage,
-	tailText,
-	toNestedUsage,
-} from "../src/extensions/subagent/activity.ts";
-import {
-	ACTIVITY_LIMIT,
-	ACTIVITY_TEXT_LIMIT,
 	DETAILS_ACTIVITY_LIMIT,
 	DETAILS_OUTPUT_LIMIT,
 	RETRY_ERROR_TEXT_LIMIT,
 	TASK_OUTPUT_LIMIT,
 } from "../src/extensions/subagent/constants.ts";
-import { boundSubagentDetails } from "../src/extensions/subagent/runner.ts";
-import type { SubagentDetails, SubagentUsage, ToolActivity } from "../src/extensions/subagent/types.ts";
+import { boundText, tailText } from "../src/extensions/subagent/text.ts";
+import type { SubagentDetails, SubagentUsage } from "../src/extensions/subagent/types.ts";
 
 describe("subagent output bounds", () => {
 	it("never exceeds the requested UTF-8 byte budget, including the truncation notice", () => {
@@ -44,37 +35,6 @@ describe("subagent output bounds", () => {
 		for (const limit of [0, 1, 8, 24, 25, 26, 32]) {
 			expect(Buffer.byteLength(tailText("界".repeat(1_000), limit), "utf8")).toBeLessThanOrEqual(limit);
 		}
-	});
-
-	it("keeps activity lists within the per-run activity limits", () => {
-		const activities: ToolActivity[] = [];
-		for (let index = 0; index < 200; index++) {
-			appendActivity(activities, {
-				id: `tool-${index}`,
-				toolName: "read",
-				summary: `read ${index}.ts`,
-				status: "succeeded",
-				startedAt: index,
-			});
-		}
-		expect(activities.length).toBeLessThanOrEqual(ACTIVITY_LIMIT);
-		expect(activities.at(-1)?.id).toBe("tool-199");
-	});
-
-	it("drops the oldest activities while summaries exceed the text budget", () => {
-		const activities: ToolActivity[] = [];
-		for (let index = 0; index < 40; index++) {
-			appendActivity(activities, {
-				id: `tool-${index}`,
-				toolName: "read",
-				summary: "x".repeat(2_000),
-				status: "running",
-				startedAt: index,
-			});
-		}
-		const total = activities.reduce((sum, activity) => sum + activity.summary.length, 0);
-		expect(total).toBeLessThanOrEqual(ACTIVITY_TEXT_LIMIT);
-		expect(activities[0]?.id).not.toBe("tool-0");
 	});
 
 	it("aggregates usage with a context-token watermark rather than a sum", () => {

@@ -1,5 +1,18 @@
-import { DEFAULT_AGENT_TOOLS, EXPLORER_TOOLS, MAX_CONCURRENCY, MAX_TASKS } from "./constants.ts";
+import {
+	DEFAULT_AGENT_TOOLS,
+	EXPLORER_TOOLS,
+	MAX_CONCURRENCY,
+	MAX_TASKS,
+	type SubagentAgentName,
+} from "./constants.ts";
 import type { AgentProfile } from "./types.ts";
+
+// Static display titles for the two built-in profiles; this file owns the
+// model-facing copy, and renderers/commands share these labels.
+export const AGENT_PROFILE_LABELS: Record<SubagentAgentName, string> = {
+	explorer: "Explorer",
+	general: "General",
+};
 
 export const AGENT_PROFILES: readonly AgentProfile[] = [
 	{

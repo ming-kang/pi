@@ -5,20 +5,21 @@ import { DefaultResourceLoader } from "../../core/resource-loader.ts";
 import { createAgentSession } from "../../core/sdk.ts";
 import { SessionManager } from "../../core/session-manager.ts";
 import { SettingsManager } from "../../core/settings-manager.ts";
-import { activitySummary, addUsage, appendActivity, boundText, finalAssistantText, resultSummary } from "./activity.ts";
-import { ERROR_TEXT_LIMIT, TASK_OUTPUT_LIMIT } from "./constants.ts";
-import { beginSubagentRetry, clearSubagentRetry } from "./retry.ts";
-import type { ResolvedSubagentTask, SubagentRunDetails, ToolActivity } from "./types.ts";
+import { finalAssistantText } from "./activity.ts";
+import type { RunCancellation } from "./cancellation.ts";
+import type { SubagentRunEvent } from "./state.ts";
+import type { ResolvedSubagentTask } from "./types.ts";
 
 export interface SdkRunnerOptions {
 	task: ResolvedSubagentTask;
-	run: SubagentRunDetails;
+	/** Cancellation scope covering this attempt (queued through session end). */
+	scope: RunCancellation;
+	/** Reducer input; the adapter never touches run state directly. */
+	dispatch: (event: SubagentRunEvent) => void;
 	modelRuntime: ModelRuntime;
 	agentDir: string;
 	projectTrusted: boolean;
-	signal?: AbortSignal;
 	onProgress?: () => void;
-	registerAbort?: (abort: () => Promise<void>) => () => void;
 }
 
 function workerSystemPrompt(base: string | undefined, task: ResolvedSubagentTask): string {
@@ -76,56 +77,79 @@ function createThrottledEmitter(onProgress: (() => void) | undefined): Throttled
 	};
 }
 
-type AutoRetryEvent = Extract<AgentSessionEvent, { type: "auto_retry_start" | "auto_retry_end" }>;
+type InitializationOutcome =
+	| { kind: "created"; session: Awaited<ReturnType<typeof createAgentSession>>["session"] }
+	| { kind: "aborted" }
+	| { kind: "error"; error: unknown };
 
-export function applySubagentAutoRetryEvent(run: SubagentRunDetails, event: AutoRetryEvent): void {
-	if (event.type === "auto_retry_start") {
-		beginSubagentRetry(run, {
-			attempt: event.attempt,
-			maxAttempts: event.maxAttempts,
-			delayMs: event.delayMs,
-			error: event.errorMessage,
-		});
-		return;
-	}
-	clearSubagentRetry(run);
+// Neither resource loading nor session creation takes an abort signal, and
+// both can hang on network work; race both against the scope. The losing
+// chain keeps running, so its eventual result or rejection is always
+// consumed by a no-op handler.
+async function raceInitialization(
+	chain: Promise<InitializationOutcome>,
+	scope: RunCancellation,
+): Promise<InitializationOutcome> {
+	return new Promise<InitializationOutcome>((resolve) => {
+		let settled = false;
+		const finish = (outcome: InitializationOutcome): void => {
+			if (settled) return;
+			settled = true;
+			scope.signal.removeEventListener("abort", onAbort);
+			resolve(outcome);
+		};
+		const onAbort = (): void => {
+			finish({ kind: "aborted" });
+		};
+		if (scope.signal.aborted) {
+			onAbort();
+			void chain.then(
+				() => undefined,
+				() => undefined,
+			);
+			return;
+		}
+		scope.signal.addEventListener("abort", onAbort, { once: true });
+		void chain.then(
+			(outcome) => finish(outcome),
+			(error) => finish({ kind: "error", error }),
+		);
+	});
 }
 
-export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRunDetails> {
-	const { task, run, modelRuntime, agentDir, projectTrusted, signal, onProgress } = options;
+/**
+ * Runs one worker attempt as a pure adapter: it owns the worker session's
+ * lifecycle and translates AgentSessionEvents into SubagentRunEvents; every
+ * state transition happens in the reducer on the other side of dispatch.
+ */
+export async function runSdkTask(options: SdkRunnerOptions): Promise<void> {
+	const { task, scope, dispatch, modelRuntime, agentDir, projectTrusted, onProgress } = options;
 	const throttled = createThrottledEmitter(onProgress);
 	let unsubscribe: (() => void) | undefined;
 	let unregisterAbort: (() => void) | undefined;
 	let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
-	const activeActivities = new Map<string, ToolActivity>();
+	// Streaming updates carry no semantic weight; the settled messages are
+	// where usage is accounted, and worker sessions can replay them.
 	const seenAssistantMessages = new Set<unknown>();
-	const initializationAbortController = new AbortController();
-	const markAbort = async (): Promise<void> => {
-		clearSubagentRetry(run);
-		run.status = "aborted";
-		run.error ??= "Subagent was aborted.";
-		initializationAbortController.abort();
+	const emitImmediate = (): void => onProgress?.();
+	const emitThrottled = throttled.emit;
+
+	unregisterAbort = scope.onAbort(async () => {
 		if (session) await session.abort();
-	};
-	const isAborted = (): boolean => signal?.aborted === true || run.status === "aborted";
-	const abortListener = () => {
-		void markAbort().catch(() => undefined);
-	};
-	unregisterAbort = options.registerAbort?.(markAbort);
-	if (signal) signal.addEventListener("abort", abortListener, { once: true });
+	});
 
 	try {
-		if (isAborted()) {
-			clearSubagentRetry(run);
-			run.status = "aborted";
-			run.error = "Subagent was aborted before it started.";
-			return run;
+		if (scope.aborted) {
+			dispatch({
+				type: "settle",
+				verdict: "aborted",
+				report: "",
+				error: "Subagent was aborted before it started.",
+				endedAt: Date.now(),
+			});
+			return;
 		}
 
-		clearSubagentRetry(run);
-		run.status = "running";
-		run.startedAt = Date.now();
-		onProgress?.();
 		const settingsManager = SettingsManager.create(task.cwd, agentDir, { projectTrusted });
 		const resourceLoader = new DefaultResourceLoader({
 			cwd: task.cwd,
@@ -140,160 +164,173 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<SubagentRun
 			noContextFiles: task.agent.omitContextFiles ?? false,
 			systemPromptOverride: (base) => workerSystemPrompt(base, task),
 		});
-		await resourceLoader.reload();
-		if (isAborted()) {
-			run.error ??= "Subagent was aborted during initialization.";
-			return run;
-		}
-		const createPromise = createAgentSession({
-			cwd: task.cwd,
-			agentDir,
-			modelRuntime,
-			model: task.model,
-			thinkingLevel: task.thinking,
-			tools: task.agent.tools,
-			resourceLoader,
-			sessionManager: SessionManager.inMemory(task.cwd),
-			settingsManager,
-		});
-		// createAgentSession takes no signal and can hang on network work. Race
-		// both parent-signal and registered shutdown cancellation against it;
-		// only the winning branch owns disposal of the resulting session.
-		const initializationSignal = initializationAbortController.signal;
-		let creationAbortListener: (() => void) | undefined;
-		const abortedOutcome = new Promise<{ kind: "aborted" }>((resolve) => {
-			const resolveAborted = () => resolve({ kind: "aborted" });
-			if (initializationSignal.aborted) {
-				resolveAborted();
-				return;
-			}
-			creationAbortListener = resolveAborted;
-			initializationSignal.addEventListener("abort", resolveAborted, { once: true });
-		});
-		const outcome = await Promise.race([
-			createPromise.then((created) => ({ kind: "created" as const, created })),
-			abortedOutcome,
-		]).finally(() => {
-			if (creationAbortListener) initializationSignal.removeEventListener("abort", creationAbortListener);
-		});
+		const initialization = (async (): Promise<InitializationOutcome> => {
+			await resourceLoader.reload();
+			if (scope.signal.aborted) return { kind: "aborted" };
+			const created = await createAgentSession({
+				cwd: task.cwd,
+				agentDir,
+				modelRuntime,
+				model: task.model,
+				thinkingLevel: task.thinking,
+				tools: task.agent.tools,
+				resourceLoader,
+				sessionManager: SessionManager.inMemory(task.cwd),
+				settingsManager,
+			});
+			return { kind: "created", session: created.session };
+		})();
+		const outcome = await raceInitialization(initialization, scope);
+		if (outcome.kind === "error") throw outcome.error;
 		if (outcome.kind === "aborted") {
-			// The creation promise cannot be cancelled. Dispose its session if it
-			// eventually resolves, but keep background cleanup from surfacing an
-			// unhandled rejection after this run has already settled.
-			void createPromise.then(
-				(createdLate) => {
-					try {
-						createdLate.session.dispose();
-					} catch {
-						// The aborted run has no remaining channel for cleanup errors.
+			// The initialization chain cannot be cancelled. Dispose the
+			// session if it eventually resolves, and swallow a late rejection
+			// after this run has already settled.
+			void initialization.then(
+				(late) => {
+					if (late.kind === "created") {
+						try {
+							late.session.dispose();
+						} catch {
+							// The aborted run has no remaining channel for cleanup errors.
+						}
 					}
 				},
 				() => {},
 			);
-			run.error ??= "Subagent was aborted during initialization.";
-			return run;
+			dispatch({
+				type: "settle",
+				verdict: "aborted",
+				report: "",
+				error: "Subagent was aborted during initialization.",
+				endedAt: Date.now(),
+			});
+			return;
 		}
-		const created = outcome.created;
-		session = created.session;
-		if (isAborted()) {
-			run.error ??= "Subagent was aborted during initialization.";
+		session = outcome.session;
+		if (scope.aborted) {
 			await session.abort();
-			return run;
+			dispatch({
+				type: "settle",
+				verdict: "aborted",
+				report: "",
+				error: "Subagent was aborted during initialization.",
+				endedAt: Date.now(),
+			});
+			return;
 		}
-		const emitImmediate = () => onProgress?.();
-		const emitText = throttled.emit;
+
 		unsubscribe = session.subscribe((event: AgentSessionEvent) => {
-			if (event.type === "auto_retry_start" || event.type === "auto_retry_end") {
-				applySubagentAutoRetryEvent(run, event);
+			if (event.type === "auto_retry_start") {
+				dispatch({
+					type: "auto_retry_start",
+					attempt: event.attempt,
+					maxAttempts: event.maxAttempts,
+					deadline: Date.now() + event.delayMs,
+					error: event.errorMessage,
+				});
+				emitImmediate();
+				return;
+			}
+			if (event.type === "auto_retry_end") {
+				dispatch({ type: "auto_retry_end" });
 				emitImmediate();
 				return;
 			}
 			if (event.type === "turn_end") {
-				clearSubagentRetry(run);
-				run.usage.turns++;
-				run.currentActivity = undefined;
+				dispatch({ type: "turn_end" });
 				emitImmediate();
 				return;
 			}
 			if (event.type === "message_end" && event.message.role === "assistant") {
-				// Streaming updates carry no semantic weight (message_update is
-				// ignored); the settled message is where usage is accounted.
-				clearSubagentRetry(run);
 				if (!seenAssistantMessages.has(event.message)) {
 					seenAssistantMessages.add(event.message);
-					addUsage(run.usage, event.message.usage);
+					dispatch({ type: "assistant_message_settled", usage: event.message.usage });
+				} else {
+					dispatch({ type: "assistant_message_settled", usage: undefined });
 				}
 				emitImmediate();
 				return;
 			}
 			if (event.type === "tool_execution_start") {
-				clearSubagentRetry(run);
-				run.usage.toolUses++;
-				const activity: ToolActivity = {
-					id: event.toolCallId,
+				dispatch({
+					type: "tool_started",
+					toolCallId: event.toolCallId,
 					toolName: event.toolName,
-					summary: activitySummary(event.toolName, event.args),
-					status: "running",
+					args: event.args,
 					startedAt: Date.now(),
-				};
-				activeActivities.set(event.toolCallId, activity);
-				appendActivity(run.activities, activity);
-				run.currentActivity = activity.summary;
+				});
 				emitImmediate();
 				return;
 			}
 			if (event.type === "tool_execution_update") {
-				clearSubagentRetry(run);
-				run.currentActivity = activitySummary(event.toolName, event.args);
-				emitText();
+				dispatch({
+					type: "tool_updated",
+					toolCallId: event.toolCallId,
+					toolName: event.toolName,
+					args: event.args,
+				});
+				emitThrottled();
 				return;
 			}
 			if (event.type === "tool_execution_end") {
-				clearSubagentRetry(run);
-				const activity = activeActivities.get(event.toolCallId);
-				if (activity) {
-					activity.status = event.isError ? "failed" : "succeeded";
-					activity.endedAt = Date.now();
-					activity.resultSummary = resultSummary(event.result);
-				}
-				activeActivities.delete(event.toolCallId);
-				run.currentActivity = undefined;
+				dispatch({
+					type: "tool_ended",
+					toolCallId: event.toolCallId,
+					result: event.result,
+					isError: event.isError,
+					endedAt: Date.now(),
+				});
 				emitImmediate();
 			}
 		});
 		await session.prompt(task.prompt);
 		const finalMessage = lastAssistantMessage(session);
-		run.report = finalAssistantText(session.messages);
+		const report = finalAssistantText(session.messages);
 		const error = assistantError(finalMessage);
-		if (signal?.aborted || finalMessage?.stopReason === "aborted") {
-			run.status = "aborted";
-			run.error = boundText(error ?? "Subagent was aborted.", ERROR_TEXT_LIMIT);
+		if (scope.signal.aborted || finalMessage?.stopReason === "aborted") {
+			dispatch({
+				type: "settle",
+				verdict: "aborted",
+				report,
+				error: error ?? "Subagent was aborted.",
+				endedAt: Date.now(),
+			});
 		} else if (finalMessage?.stopReason === "error" || error) {
-			run.status = "failed";
-			run.error = boundText(error ?? "Subagent failed.", ERROR_TEXT_LIMIT);
+			dispatch({
+				type: "settle",
+				verdict: "failed",
+				report,
+				error: error ?? "Subagent failed.",
+				endedAt: Date.now(),
+			});
 		} else {
-			run.status = "completed";
+			dispatch({ type: "settle", verdict: "completed", report, error: undefined, endedAt: Date.now() });
 		}
 	} catch (error) {
-		if (signal?.aborted || run.status === "aborted") {
-			run.status = "aborted";
-			run.error = run.error ?? "Subagent was aborted.";
+		const report = session ? finalAssistantText(session.messages) : "";
+		if (scope.signal.aborted) {
+			dispatch({
+				type: "settle",
+				verdict: "aborted",
+				report,
+				error: "Subagent was aborted.",
+				endedAt: Date.now(),
+			});
 		} else {
-			run.status = "failed";
-			run.error = boundText(error instanceof Error ? error.message : String(error), ERROR_TEXT_LIMIT);
+			dispatch({
+				type: "settle",
+				verdict: "failed",
+				report,
+				error: error instanceof Error ? error.message : String(error),
+				endedAt: Date.now(),
+			});
 		}
-		if (session) run.report = finalAssistantText(session.messages);
 	} finally {
-		if (signal) signal.removeEventListener("abort", abortListener);
 		throttled.cancel();
 		unregisterAbort?.();
 		unsubscribe?.();
 		session?.dispose();
-		run.report = boundText(run.report, TASK_OUTPUT_LIMIT);
-		if (run.error) run.error = boundText(run.error, ERROR_TEXT_LIMIT);
-		clearSubagentRetry(run);
-		run.endedAt = Date.now();
-		onProgress?.();
+		emitImmediate();
 	}
-	return run;
 }

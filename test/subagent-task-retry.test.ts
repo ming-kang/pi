@@ -4,8 +4,7 @@ import type { ModelRuntime } from "../src/core/model-runtime.ts";
 import { DETAILS_OUTPUT_LIMIT, TASK_OUTPUT_LIMIT, TOTAL_OUTPUT_LIMIT } from "../src/extensions/subagent/constants.ts";
 import type { ParentModelContext } from "../src/extensions/subagent/resolve.ts";
 import { ConcurrencyGate, isSubagentError, runSubagentInvocation } from "../src/extensions/subagent/runner.ts";
-import type { SdkRunnerOptions } from "../src/extensions/subagent/sdk-runner.ts";
-import { runSdkTask } from "../src/extensions/subagent/sdk-runner.ts";
+import { runSdkTask, type SdkRunnerOptions } from "../src/extensions/subagent/sdk-runner.ts";
 import type { SubagentDetails } from "../src/extensions/subagent/types.ts";
 
 vi.mock("../src/extensions/subagent/sdk-runner.ts", () => ({
@@ -41,21 +40,15 @@ function parentContext(parentModel: Model<Api>): ParentModelContext {
 	};
 }
 
-async function failRun(options: SdkRunnerOptions, error: string): Promise<SdkRunnerOptions["run"]> {
-	options.run.status = "failed";
-	options.run.error = error;
-	options.run.endedAt = Date.now();
+async function failRun(options: SdkRunnerOptions, error: string): Promise<void> {
+	options.dispatch({ type: "settle", verdict: "failed", report: "", error, endedAt: Date.now() });
 	options.onProgress?.();
-	return options.run;
 }
 
-async function succeedRun(options: SdkRunnerOptions, output: string): Promise<SdkRunnerOptions["run"]> {
-	options.run.status = "completed";
-	options.run.report = output;
-	options.run.usage.turns = 1;
-	options.run.endedAt = Date.now();
+async function succeedRun(options: SdkRunnerOptions, output: string): Promise<void> {
+	options.dispatch({ type: "turn_end" });
+	options.dispatch({ type: "settle", verdict: "completed", report: output, error: undefined, endedAt: Date.now() });
 	options.onProgress?.();
-	return options.run;
 }
 
 interface InvokeOptions {
@@ -78,6 +71,20 @@ function invoke(options: InvokeOptions = {}) {
 		taskRetryBaseDelayMs: options.taskRetryBaseDelayMs ?? 1,
 		onUpdate: options.onUpdate,
 		registerAbort: options.registerAbort,
+	});
+}
+
+function invokeTasks(prompts: string[], gate = new ConcurrencyGate(1), options: InvokeOptions = {}) {
+	return runSubagentInvocation({
+		params: { tasks: prompts.map((prompt) => ({ prompt })) },
+		parentCwd: process.cwd(),
+		parent: parentContext(model()),
+		modelRuntime: {} as ModelRuntime,
+		agentDir: process.cwd(),
+		projectTrusted: false,
+		gate,
+		taskRetryBaseDelayMs: 1,
+		...options,
 	});
 }
 
@@ -109,6 +116,43 @@ describe("subagent task-level retry", () => {
 		expect(retryUpdate?.runs[0]?.currentActivity).toBe("Retrying (1/2)…");
 		expect(result.details.runs[0]?.retry).toBeUndefined();
 		expect(result.details.runs[0]?.currentActivity).toBeUndefined();
+	});
+
+	it("emits progress when only cost or context usage changes mid-run", async () => {
+		// Regression: the historical string progress key omitted usage cost
+		// and the context watermark, swallowing these updates.
+		const updates: SubagentDetails[] = [];
+		runSdkTaskMock.mockImplementation(async (options) => {
+			options.dispatch({
+				type: "assistant_message_settled",
+				usage: {
+					input: 10,
+					output: 5,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 15,
+					cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03 },
+				},
+			});
+			options.onProgress?.();
+			options.dispatch({
+				type: "assistant_message_settled",
+				usage: {
+					input: 10,
+					output: 5,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 15,
+					cost: { input: 0.05, output: 0.1, cacheRead: 0, cacheWrite: 0, total: 0.15 },
+				},
+			});
+			options.onProgress?.();
+			await succeedRun(options, "done");
+		});
+		await invoke({ onUpdate: (details) => updates.push(details) });
+		const costs = updates.map((details) => details.usage.cost);
+		expect(costs.length).toBeGreaterThanOrEqual(2);
+		expect(costs.at(-1)).toBeCloseTo(0.15 + 0.03);
 	});
 
 	it("clears task retry state when aborted during backoff", async () => {
@@ -169,13 +213,11 @@ describe("subagent task-level retry", () => {
 
 	it("does not retry once the run has produced work", async () => {
 		runSdkTaskMock.mockImplementation(async (options) => {
-			options.run.status = "failed";
-			options.run.error = "fetch failed";
 			// Session-level auto-retry already owned this failure: the run has
 			// real turns behind it, so a task-level rerun would discard work.
-			options.run.usage.turns = 2;
-			options.run.endedAt = Date.now();
-			return options.run;
+			options.dispatch({ type: "turn_end" });
+			options.dispatch({ type: "turn_end" });
+			await failRun(options, "fetch failed");
 		});
 		const result = await invoke();
 		expect(runSdkTaskMock).toHaveBeenCalledTimes(1);
@@ -186,18 +228,7 @@ describe("subagent task-level retry", () => {
 		runSdkTaskMock
 			.mockImplementationOnce((options) => succeedRun(options, "good result"))
 			.mockImplementationOnce((options) => failRun(options, "insufficient_quota: billing hard limit reached"));
-		const result = await runSubagentInvocation({
-			params: {
-				tasks: [{ prompt: "First task\nDo the first." }, { prompt: "Second task\nDo the second." }],
-			},
-			parentCwd: process.cwd(),
-			parent: parentContext(model()),
-			modelRuntime: {} as ModelRuntime,
-			agentDir: process.cwd(),
-			projectTrusted: false,
-			gate: new ConcurrencyGate(1),
-			taskRetryBaseDelayMs: 1,
-		});
+		const result = await invokeTasks(["First task\nDo the first.", "Second task\nDo the second."]);
 		expect(result.details.status).toBe("partial");
 		expect(isSubagentError(result.details)).toBe(false);
 		expect(result.content).toContain("good result");
@@ -208,41 +239,23 @@ describe("subagent task-level retry", () => {
 		runSdkTaskMock.mockImplementation((options) =>
 			failRun(options, "insufficient_quota: billing hard limit reached"),
 		);
-		const result = await runSubagentInvocation({
-			params: {
-				tasks: [{ prompt: "First task\nDo the first." }, { prompt: "Second task\nDo the second." }],
-			},
-			parentCwd: process.cwd(),
-			parent: parentContext(model()),
-			modelRuntime: {} as ModelRuntime,
-			agentDir: process.cwd(),
-			projectTrusted: false,
-			gate: new ConcurrencyGate(1),
-			taskRetryBaseDelayMs: 1,
-		});
+		const result = await invokeTasks(["First task\nDo the first.", "Second task\nDo the second."]);
 		expect(result.details.status).toBe("failed");
 		expect(isSubagentError(result.details)).toBe(true);
 	});
 
 	it("reports aborted when every task aborted", async () => {
 		runSdkTaskMock.mockImplementation(async (options) => {
-			options.run.status = "aborted";
-			options.run.error = "Subagent was aborted.";
-			options.run.endedAt = Date.now();
-			return options.run;
+			options.dispatch({
+				type: "settle",
+				verdict: "aborted",
+				report: "",
+				error: "Subagent was aborted.",
+				endedAt: Date.now(),
+			});
+			options.onProgress?.();
 		});
-		const result = await runSubagentInvocation({
-			params: {
-				tasks: [{ prompt: "First task\nDo the first." }, { prompt: "Second task\nDo the second." }],
-			},
-			parentCwd: process.cwd(),
-			parent: parentContext(model()),
-			modelRuntime: {} as ModelRuntime,
-			agentDir: process.cwd(),
-			projectTrusted: false,
-			gate: new ConcurrencyGate(1),
-			taskRetryBaseDelayMs: 1,
-		});
+		const result = await invokeTasks(["First task\nDo the first.", "Second task\nDo the second."]);
 		expect(result.details.status).toBe("aborted");
 		expect(isSubagentError(result.details)).toBe(true);
 	});
@@ -282,32 +295,20 @@ describe("subagent task-level retry", () => {
 		runSdkTaskMock.mockImplementation(async (options) => {
 			active++;
 			maxActive = Math.max(maxActive, active);
-			started.push(options.run.id);
+			started.push(options.task.description);
 			await workersReleased;
 			active--;
-			options.run.status = "completed";
-			options.run.report = `result of ${options.run.description}`;
-			options.run.usage.turns = 1;
-			options.run.endedAt = Date.now();
-			return options.run;
+			await succeedRun(options, `result of ${options.task.description}`);
 		});
-		const resultPromise = runSubagentInvocation({
-			params: {
-				tasks: [
-					{ prompt: "First task\nDo the first." },
-					{ prompt: "Second task\nDo the second." },
-					{ prompt: "Third task\nDo the third." },
-					{ prompt: "Fourth task\nDo the fourth." },
-				],
-			},
-			parentCwd: process.cwd(),
-			parent: parentContext(model()),
-			modelRuntime: {} as ModelRuntime,
-			agentDir: process.cwd(),
-			projectTrusted: false,
-			gate: new ConcurrencyGate(2),
-			taskRetryBaseDelayMs: 1,
-		});
+		const resultPromise = invokeTasks(
+			[
+				"First task\nDo the first.",
+				"Second task\nDo the second.",
+				"Third task\nDo the third.",
+				"Fourth task\nDo the fourth.",
+			],
+			new ConcurrencyGate(2),
+		);
 		// Exactly two workers start; the rest queue behind the gate.
 		await vi.waitFor(() => expect(started).toHaveLength(2));
 		expect(maxActive).toBe(2);
@@ -329,16 +330,9 @@ describe("subagent task-level retry", () => {
 	it("keeps the batch running while any task is queued or running", async () => {
 		const barriers: Array<() => void> = [];
 		runSdkTaskMock.mockImplementation(async (options) => {
-			options.run.status = "running";
-			options.run.startedAt = Date.now();
 			options.onProgress?.();
 			await new Promise<void>((resolve) => barriers.push(resolve));
-			options.run.status = "completed";
-			options.run.report = `report ${options.run.description}`;
-			options.run.usage.turns = 1;
-			options.run.endedAt = Date.now();
-			options.onProgress?.();
-			return options.run;
+			await succeedRun(options, `report ${options.task.description}`);
 		});
 		const updates: SubagentDetails[] = [];
 		const resultPromise = runSubagentInvocation({
@@ -383,17 +377,11 @@ describe("subagent task-level retry", () => {
 	it("aborts queued tasks when the parent signal fires while they wait for the gate", async () => {
 		let releaseFirst!: () => void;
 		runSdkTaskMock.mockImplementation(async (options) => {
-			options.run.status = "running";
-			options.run.startedAt = Date.now();
 			options.onProgress?.();
 			await new Promise<void>((resolve) => {
 				releaseFirst = resolve;
 			});
-			options.run.status = "completed";
-			options.run.report = `report ${options.run.description}`;
-			options.run.usage.turns = 1;
-			options.run.endedAt = Date.now();
-			return options.run;
+			await succeedRun(options, `report ${options.task.description}`);
 		});
 		const controller = new AbortController();
 		const resultPromise = runSubagentInvocation({
@@ -424,7 +412,7 @@ describe("subagent task-level retry", () => {
 		const startOrder: string[] = [];
 		let calls = 0;
 		runSdkTaskMock.mockImplementation(async (options) => {
-			startOrder.push(options.run.description);
+			startOrder.push(options.task.description);
 			calls++;
 			if (calls === 1) return failRun(options, "fetch failed");
 			return succeedRun(options, `outcome ${calls}`);
@@ -459,23 +447,15 @@ describe("subagent task-level retry", () => {
 	it("bounds the aggregate report and details when every task produces oversized output", async () => {
 		const oversized = "界".repeat(40_000);
 		runSdkTaskMock.mockImplementation((options) => succeedRun(options, oversized));
-		const result = await runSubagentInvocation({
-			params: {
-				tasks: [
-					{ prompt: "First task\nDo the first." },
-					{ prompt: "Second task\nDo the second." },
-					{ prompt: "Third task\nDo the third." },
-					{ prompt: "Fourth task\nDo the fourth." },
-				],
-			},
-			parentCwd: process.cwd(),
-			parent: parentContext(model()),
-			modelRuntime: {} as ModelRuntime,
-			agentDir: process.cwd(),
-			projectTrusted: false,
-			gate: new ConcurrencyGate(2),
-			taskRetryBaseDelayMs: 1,
-		});
+		const result = await invokeTasks(
+			[
+				"First task\nDo the first.",
+				"Second task\nDo the second.",
+				"Third task\nDo the third.",
+				"Fourth task\nDo the fourth.",
+			],
+			new ConcurrencyGate(2),
+		);
 		expect(Buffer.byteLength(result.content, "utf8")).toBeLessThanOrEqual(TOTAL_OUTPUT_LIMIT);
 		expect(Buffer.byteLength(JSON.stringify(result.details), "utf8")).toBeLessThanOrEqual(DETAILS_OUTPUT_LIMIT);
 		// Every section stays within its per-task budget.

@@ -8,15 +8,10 @@ import { emptyUsage } from "../src/extensions/subagent/activity.ts";
 import { AGENT_PROFILES } from "../src/extensions/subagent/agents.ts";
 import { MAX_CONCURRENCY, MAX_TASKS } from "../src/extensions/subagent/constants.ts";
 import { type ParentModelContext, resolveSubagentTask } from "../src/extensions/subagent/resolve.ts";
-import {
-	ConcurrencyGate,
-	isSubagentError,
-	progressKey,
-	runSubagentInvocation,
-	statusSummary,
-} from "../src/extensions/subagent/runner.ts";
+import { ConcurrencyGate, isSubagentError, runSubagentInvocation } from "../src/extensions/subagent/runner.ts";
 import { type SubagentParams, SubagentParamsSchema } from "../src/extensions/subagent/schema.ts";
 import { emptySubagentConfig } from "../src/extensions/subagent/settings.ts";
+import { createRunState, reduceRun, statusSummary, versionSum } from "../src/extensions/subagent/state.ts";
 import type {
 	SubagentDetails,
 	SubagentRunDetails,
@@ -314,18 +309,38 @@ describe("subagent SDK runner", () => {
 	});
 
 	it("detects mid-list activity changes from out-of-order tool ends", () => {
-		const activity = (status: ToolActivity["status"]): ToolActivity => ({
-			id: "read-1",
-			toolName: "read",
-			summary: "read a.ts",
-			status,
-			startedAt: 0,
-		});
 		// Tool B settles before tool A: the last activity is unchanged, but
-		// the settled row is mid-list and must still invalidate the renderer.
-		const before = baseRun("running", [activity("running"), activity("succeeded")]);
-		const after = baseRun("running", [activity("succeeded"), activity("succeeded")]);
-		expect(progressKey([before])).not.toBe(progressKey([after]));
+		// the settled row is mid-list and the run revision must still move so
+		// the progress detector emits an update.
+		const resolved = {
+			agent: {
+				name: "explorer" as const,
+				description: "",
+				tools: ["read"],
+				systemPrompt: "",
+				omitContextFiles: true,
+			},
+			description: "Task",
+			prompt: "Task",
+			cwd: process.cwd(),
+			model: minimalModel(),
+			thinking: "low" as const,
+		};
+		let run = createRunState(resolved, 0, undefined, process.cwd());
+		run = reduceRun(run, { type: "slot_acquired", startedAt: 0 });
+		run = reduceRun(run, { type: "tool_started", toolCallId: "a", toolName: "read", args: {}, startedAt: 0 });
+		run = reduceRun(run, { type: "tool_started", toolCallId: "b", toolName: "read", args: {}, startedAt: 0 });
+		const before = versionSum([run]);
+		run = reduceRun(run, {
+			type: "tool_ended",
+			toolCallId: "b",
+			result: { content: [] },
+			isError: false,
+			endedAt: 1,
+		});
+		expect(versionSum([run])).toBeGreaterThan(before);
+		// The derived line falls back to the still-running tool A.
+		expect(run.currentActivity).toBe("read");
 	});
 
 	it("classifies full failures as errors but partial batches as results", () => {

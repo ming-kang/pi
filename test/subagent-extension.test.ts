@@ -1,8 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ToolDefinition } from "../src/core/extensions/types.ts";
 import subagent from "../src/extensions/subagent/index.ts";
 import { SubagentParamsSchema, TaskSchema } from "../src/extensions/subagent/schema.ts";
-import type { SubagentDetails } from "../src/extensions/subagent/types.ts";
+import type { SubagentDetails, SubagentExecutionResult } from "../src/extensions/subagent/types.ts";
+
+const runSdkTaskMock = vi.hoisted(() => vi.fn());
+vi.mock("../src/extensions/subagent/sdk-runner.ts", () => ({
+	runSdkTask: runSdkTaskMock,
+}));
+// Isolate profile resolution from the developer's real ~/.pi/agent config:
+// execute() reads subagent.json through getAgentDir(), whose overrides can
+// reference models the fake registry here does not know.
+vi.mock("../src/extensions/subagent/settings.ts", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../src/extensions/subagent/settings.ts")>();
+	return {
+		...actual,
+		loadSubagentConfig: vi.fn(async () => actual.emptySubagentConfig()),
+	};
+});
 
 interface RegisteredCommand {
 	name: string;
@@ -94,6 +109,86 @@ describe("subagent extension registration", () => {
 		expect(failed).toEqual({ isError: true });
 		expect(partial).toBeUndefined();
 		expect(completed).toBeUndefined();
+	});
+
+	it("aborts queued tasks on session shutdown without ever starting them", async () => {
+		// Regression: shutdown aborts used to be registered only once a worker
+		// started, so a task still queued at the gate could slip past the
+		// shutdown snapshot and start afterwards. Scopes must cover the whole
+		// invocation from the batch start.
+		runSdkTaskMock.mockReset();
+		runSdkTaskMock.mockImplementation(
+			(options: {
+				scope: { onAbort: (handler: () => Promise<void> | void) => unknown };
+				dispatch: (event: unknown) => void;
+			}) =>
+				new Promise<void>((resolve) => {
+					options.scope.onAbort(() => {
+						options.dispatch({
+							type: "settle",
+							verdict: "aborted",
+							report: "",
+							error: "Subagent was aborted.",
+							endedAt: Date.now(),
+						});
+						resolve();
+					});
+				}),
+		);
+		let tool: ToolDefinition<typeof SubagentParamsSchema, SubagentDetails> | undefined;
+		const shutdownHandlers: Array<() => Promise<void>> = [];
+		const pi = {
+			registerTool: (definition: ToolDefinition<typeof SubagentParamsSchema, SubagentDetails>) => {
+				tool = definition;
+			},
+			registerCommand: () => {},
+			on: (event: string, handler: unknown) => {
+				if (event === "session_shutdown") shutdownHandlers.push(handler as () => Promise<void>);
+			},
+			getThinkingLevel: () => "medium",
+		} as unknown as ExtensionAPI;
+		subagent(pi);
+		expect(tool).toBeDefined();
+
+		const controller = new AbortController();
+		const execution = tool!.execute(
+			"call_shutdown_regression",
+			{ tasks: Array.from({ length: 6 }, (_, index) => ({ prompt: `Task ${index + 1}.` })) },
+			controller.signal,
+			undefined,
+			{
+				cwd: process.cwd(),
+				model: {
+					id: "m",
+					name: "m",
+					api: "test-api",
+					provider: "test",
+					baseUrl: "https://example.test",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 10_000,
+					maxTokens: 1_000,
+				} as never,
+				modelRuntime: {},
+				modelRegistry: {
+					find: () => undefined,
+					getAvailable: () => [],
+					hasConfiguredAuth: () => false,
+				},
+				isProjectTrusted: () => false,
+			} as never,
+		);
+		// Five workers occupy the gate (the module default); the sixth queues.
+		await vi.waitFor(() => expect(runSdkTaskMock).toHaveBeenCalledTimes(5));
+		for (const handler of shutdownHandlers) await handler();
+		const result = (await execution) as unknown as SubagentExecutionResult;
+		// The queued run settled aborted without a worker ever starting.
+		expect(runSdkTaskMock).toHaveBeenCalledTimes(5);
+		const queued = result.details.runs[5];
+		expect(queued?.status).toBe("aborted");
+		expect(queued?.error).toContain("queued");
+		for (const run of result.details.runs.slice(0, 5)) expect(run.status).toBe("aborted");
 	});
 
 	it("constrains the schema to a required 1-8 tasks array and the explorer|general enum", () => {

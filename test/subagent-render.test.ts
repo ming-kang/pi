@@ -1,6 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { renderSubagentCall, renderSubagentResult } from "../src/extensions/subagent/render.ts";
-import { beginSubagentRetry } from "../src/extensions/subagent/retry.ts";
 import type { SubagentParams } from "../src/extensions/subagent/schema.ts";
 import type { SubagentDetails, SubagentRunDetails, SubagentUsage } from "../src/extensions/subagent/types.ts";
 import { initTheme, type Theme } from "../src/modes/interactive/theme/theme.ts";
@@ -23,6 +22,18 @@ function usage(overrides: Partial<SubagentUsage> = {}): SubagentUsage {
 		cost: 0,
 		...overrides,
 	};
+}
+
+function withRetry(
+	run: SubagentRunDetails,
+	attempt: number,
+	maxAttempts: number,
+	delayMs: number,
+	error: string,
+): SubagentRunDetails {
+	run.retry = { attempt, maxAttempts, deadline: Date.now() + delayMs, error };
+	run.currentActivity = `Retrying (${attempt}/${maxAttempts})…`;
+	return run;
 }
 
 function run(overrides: Partial<SubagentRunDetails> = {}): SubagentRunDetails {
@@ -460,7 +471,7 @@ describe("subagent rendering", () => {
 
 	it("prefers the retry countdown over the current activity in rows", () => {
 		const retrying = run({ status: "running", endedAt: undefined, currentActivity: "Exploring code", report: "" });
-		beginSubagentRetry(retrying, { attempt: 1, maxAttempts: 3, delayMs: 8_000, error: "fetch failed" });
+		withRetry(retrying, 1, 3, 8_000, "fetch failed");
 		const output = collapsed(details({ status: "running", endedAt: undefined, runs: [retrying] }), true);
 		expect(output).toContain("Retrying (1/3) in 8s — fetch failed");
 		expect(output).not.toContain("Exploring code");
@@ -704,7 +715,7 @@ describe("subagent rendering", () => {
 
 	it("shows a retry once when no activity has started", () => {
 		const retrying = run({ status: "running", endedAt: undefined, activities: [], report: "" });
-		beginSubagentRetry(retrying, { attempt: 1, maxAttempts: 2, delayMs: 8_000, error: "temporary failure" });
+		withRetry(retrying, 1, 2, 8_000, "temporary failure");
 		const output = expanded(details({ status: "running", endedAt: undefined, runs: [retrying] }), true, defaultArgs);
 		expect(output.match(/Retrying \(1\/2\) in 8s/gu)).toHaveLength(1);
 		expect(output).toContain("Waiting to retry");

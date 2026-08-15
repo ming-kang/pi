@@ -1,38 +1,15 @@
 import { getAgentDir } from "../../config.ts";
-import type { AgentToolResult, ExtensionAPI, ToolRenderContext } from "../../core/extensions/types.ts";
+import type { AgentToolResult, ExtensionAPI } from "../../core/extensions/types.ts";
 import { emptyUsage } from "./activity.ts";
 import { subagentToolDescription } from "./agents.ts";
 import { showAgentsCommand } from "./agents-command.ts";
 import { SUBAGENT_COMMAND_NAME, SUBAGENT_TOOL_LABEL, SUBAGENT_TOOL_NAME } from "./constants.ts";
-import { renderSubagentCall, renderSubagentResult } from "./render.ts";
+import { renderSubagentCall, renderSubagentResult, type SubagentRenderState, scheduleLiveRefresh } from "./render.ts";
 import type { ParentModelContext } from "./resolve.ts";
-import { ConcurrencyGate, isSubagentError, runSubagentInvocation, statusSummary } from "./runner.ts";
+import { ConcurrencyGate, isSubagentError, runSubagentInvocation } from "./runner.ts";
 import { SubagentParamsSchema } from "./schema.ts";
+import { statusSummary } from "./state.ts";
 import type { SubagentDetails } from "./types.ts";
-
-interface SubagentRenderState {
-	refreshTimer?: ReturnType<typeof setTimeout>;
-}
-
-// Re-render elapsed time and retry countdowns once per second while the
-// result is still partial; the first settled render clears the timer.
-function scheduleLiveRefresh(context: ToolRenderContext<SubagentRenderState>, isPartial: boolean): void {
-	const state = context.state;
-	if (isPartial) {
-		if (state.refreshTimer === undefined) {
-			state.refreshTimer = setTimeout(() => {
-				state.refreshTimer = undefined;
-				context.invalidate();
-			}, 1000);
-			state.refreshTimer.unref?.();
-		}
-		return;
-	}
-	if (state.refreshTimer !== undefined) {
-		clearTimeout(state.refreshTimer);
-		state.refreshTimer = undefined;
-	}
-}
 
 export default function subagent(pi: ExtensionAPI): void {
 	const gate = new ConcurrencyGate();
@@ -47,7 +24,7 @@ export default function subagent(pi: ExtensionAPI): void {
 			"Use subagent for bounded work that benefits from isolated context or concurrent investigation; default to explorer, and choose general only when the task may modify files or state.",
 		],
 		parameters: SubagentParamsSchema,
-		async execute(_toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<SubagentDetails>> {
+		async execute(toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<SubagentDetails>> {
 			// First paint before task preflight so filesystem and model checks
 			// cannot leave the transcript card empty.
 			onUpdate?.({
@@ -73,6 +50,7 @@ export default function subagent(pi: ExtensionAPI): void {
 				projectTrusted: ctx.isProjectTrusted(),
 				signal,
 				gate,
+				batchId: toolCallId,
 				onUpdate: (details) => {
 					onUpdate?.({ content: [{ type: "text", text: statusSummary(details) }], details });
 				},

@@ -1,10 +1,11 @@
 import { type Component, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import type { AgentToolResult, ToolRenderResultOptions } from "../../core/extensions/types.ts";
+import type { AgentToolResult, ToolRenderContext, ToolRenderResultOptions } from "../../core/extensions/types.ts";
 import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
-import { getSubagentRetryView } from "./retry.ts";
-import { statusSummary } from "./runner.ts";
+import { AGENT_PROFILE_LABELS } from "./agents.ts";
+import type { SubagentAgentName } from "./constants.ts";
 import type { SubagentParams } from "./schema.ts";
-import { firstPlainLine, plainLine } from "./text.ts";
+import { getSubagentRetryView, statusSummary } from "./state.ts";
+import { firstPlainLine, plainLine, truncate } from "./text.ts";
 import type { SubagentDetails, SubagentRunDetails, SubagentRunStatus, ToolActivity } from "./types.ts";
 
 const TASK_SUMMARY_LIMIT = 72;
@@ -13,11 +14,6 @@ const ACTIVITY_RESULT_LIMIT = 96;
 const RETRY_ERROR_LIMIT = 160;
 const FALLBACK_OUTPUT_LIMIT = 4_000;
 const ACTIVITY_DURATION_MIN_MS = 10_000;
-
-function truncate(text: string, limit: number): string {
-	const characters = [...text];
-	return characters.length <= limit ? text : `${characters.slice(0, Math.max(0, limit - 1)).join("")}…`;
-}
 
 function taskPrompt(args: SubagentParams, index: number, run: SubagentRunDetails): string {
 	// Tool calls restored from before the tasks-array shape carry a legacy
@@ -32,9 +28,7 @@ function taskSummary(args: SubagentParams, index: number, run: SubagentRunDetail
 }
 
 function profileLabel(agent: string): string {
-	if (agent === "explorer") return "Explorer";
-	if (agent === "general") return "General";
-	return agent;
+	return AGENT_PROFILE_LABELS[agent as SubagentAgentName] ?? agent;
 }
 
 function formatTokens(value: number): string {
@@ -251,6 +245,31 @@ function fallbackResult(result: AgentToolResult<SubagentDetails>, theme: Theme, 
 	const text = result.content.find((part) => part.type === "text");
 	const value = text?.type === "text" ? truncate(text.text, FALLBACK_OUTPUT_LIMIT) : "(no output)";
 	return new Text(theme.fg(isError ? "error" : "muted", value), 0, 0);
+}
+
+/** Per-result live-refresh state owned by the shell's render context. */
+export interface SubagentRenderState {
+	refreshTimer?: ReturnType<typeof setTimeout>;
+}
+
+// Re-render elapsed time and retry countdowns once per second while the
+// result is still partial; the first settled render clears the timer.
+export function scheduleLiveRefresh(context: ToolRenderContext<SubagentRenderState>, isPartial: boolean): void {
+	const state = context.state;
+	if (isPartial) {
+		if (state.refreshTimer === undefined) {
+			state.refreshTimer = setTimeout(() => {
+				state.refreshTimer = undefined;
+				context.invalidate();
+			}, 1000);
+			state.refreshTimer.unref?.();
+		}
+		return;
+	}
+	if (state.refreshTimer !== undefined) {
+		clearTimeout(state.refreshTimer);
+		state.refreshTimer = undefined;
+	}
 }
 
 export function renderSubagentCall(args: SubagentParams, theme: Theme): Component {

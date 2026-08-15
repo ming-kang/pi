@@ -1,7 +1,11 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai";
-import { ACTIVITY_LIMIT, ACTIVITY_TEXT_LIMIT, TASK_OUTPUT_LIMIT } from "./constants.ts";
-import type { SubagentUsage, ToolActivity } from "./types.ts";
+import { TASK_OUTPUT_LIMIT } from "./constants.ts";
+import { boundText } from "./text.ts";
+import type { SubagentUsage } from "./types.ts";
+
+/** The usage fields that are summed when aggregating. */
+export const USAGE_SUM_FIELDS = ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const;
 
 export function emptyUsage(): SubagentUsage {
 	return {
@@ -18,11 +22,7 @@ export function emptyUsage(): SubagentUsage {
 
 export function addUsage(target: SubagentUsage, usage: Usage | undefined): void {
 	if (!usage) return;
-	target.input += usage.input ?? 0;
-	target.output += usage.output ?? 0;
-	target.cacheRead += usage.cacheRead ?? 0;
-	target.cacheWrite += usage.cacheWrite ?? 0;
-	target.totalTokens += usage.totalTokens ?? 0;
+	for (const field of USAGE_SUM_FIELDS) target[field] += usage[field] ?? 0;
 	target.cost += usage.cost?.total ?? 0;
 	// Watermark, not a sum: the latest request's total is the context size,
 	// and it can shrink again after the worker auto-compacts.
@@ -32,11 +32,7 @@ export function addUsage(target: SubagentUsage, usage: Usage | undefined): void 
 export function mergeUsage(target: SubagentUsage, source: SubagentUsage): void {
 	target.turns += source.turns;
 	target.toolUses += source.toolUses;
-	target.input += source.input;
-	target.output += source.output;
-	target.cacheRead += source.cacheRead;
-	target.cacheWrite += source.cacheWrite;
-	target.totalTokens += source.totalTokens;
+	for (const field of USAGE_SUM_FIELDS) target[field] += source[field];
 	target.cost += source.cost;
 	if (source.contextTokens) {
 		target.contextTokens = Math.max(target.contextTokens ?? 0, source.contextTokens);
@@ -60,64 +56,6 @@ export function toNestedUsage(usage: SubagentUsage): Usage {
 	};
 }
 
-// Iterates code points so a surrogate pair is never split in half.
-export function utf8Prefix(text: string, maxBytes: number): string {
-	if (maxBytes <= 0) return "";
-	if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
-	let output = "";
-	let bytes = 0;
-	for (const character of text) {
-		const characterBytes = Buffer.byteLength(character, "utf8");
-		if (bytes + characterBytes > maxBytes) break;
-		output += character;
-		bytes += characterBytes;
-	}
-	return output;
-}
-
-export function boundText(text: string, maxBytes: number): string {
-	if (maxBytes <= 0) return "";
-	if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
-	let output = utf8Prefix(text, maxBytes);
-	for (let attempt = 0; attempt < 8; attempt++) {
-		const omitted = Buffer.byteLength(text, "utf8") - Buffer.byteLength(output, "utf8");
-		const notice = `\n\n[Output truncated: ${omitted} bytes omitted.]`;
-		const available = maxBytes - Buffer.byteLength(notice, "utf8");
-		if (available <= 0) return utf8Prefix("[Output truncated.]", maxBytes);
-		const next = utf8Prefix(text, available);
-		if (next === output) return `${output}${notice}`;
-		output = next;
-	}
-	const omitted = Buffer.byteLength(text, "utf8") - Buffer.byteLength(output, "utf8");
-	const notice = `\n\n[Output truncated: ${omitted} bytes omitted.]`;
-	return `${utf8Prefix(output, Math.max(0, maxBytes - Buffer.byteLength(notice, "utf8")))}${notice}`;
-}
-
-function utf8Suffix(text: string, maxBytes: number): string {
-	if (maxBytes <= 0) return "";
-	if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
-	const characters: string[] = [];
-	let bytes = 0;
-	for (const character of Array.from(text).reverse()) {
-		const characterBytes = Buffer.byteLength(character, "utf8");
-		if (bytes + characterBytes > maxBytes) break;
-		characters.push(character);
-		bytes += characterBytes;
-	}
-	return characters.reverse().join("");
-}
-
-export function tailText(text: string, maxBytes: number): string {
-	if (maxBytes <= 0) return "";
-	if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
-	const noticeText = "[Earlier output omitted.]";
-	const notice = `${noticeText}\n`;
-	const available = maxBytes - Buffer.byteLength(notice, "utf8");
-	if (available <= 0) return utf8Prefix(noticeText, maxBytes);
-	const output = utf8Suffix(text, available);
-	return output ? `${notice}${output}` : utf8Prefix(noticeText, maxBytes);
-}
-
 export function assistantText(message: AgentMessage | undefined): string {
 	if (!message || message.role !== "assistant") return "";
 	return message.content
@@ -132,18 +70,6 @@ export function finalAssistantText(messages: readonly AgentMessage[]): string {
 		if (text) return boundText(text, TASK_OUTPUT_LIMIT);
 	}
 	return "";
-}
-
-export function appendActivity(activities: ToolActivity[], activity: ToolActivity): void {
-	activities.push(activity);
-	while (activities.length > ACTIVITY_LIMIT) activities.shift();
-	while (
-		activities.reduce((total, item) => total + item.summary.length + (item.resultSummary?.length ?? 0), 0) >
-		ACTIVITY_TEXT_LIMIT
-	) {
-		if (activities.length <= 1) break;
-		activities.shift();
-	}
 }
 
 export function activitySummary(toolName: string, args: unknown): string {

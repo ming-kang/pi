@@ -5,6 +5,7 @@ import { type Api, clampThinkingLevel, type Model } from "@earendil-works/pi-ai/
 import { getAgentDir } from "../../config.ts";
 import type { ModelRegistry } from "../../core/model-registry.ts";
 import { AGENT_PROFILES } from "./agents.ts";
+import { findAvailableModel } from "./model-selection.ts";
 import type { SubagentTask } from "./schema.ts";
 import { loadSubagentConfig } from "./settings.ts";
 import { firstPlainLine } from "./text.ts";
@@ -57,27 +58,10 @@ export function resolveTaskCwd(parentCwd: string, requestedCwd: string | undefin
 	return realCandidate;
 }
 
-function findAvailableModel(spec: string, parent: ParentModelContext): Model<Api> {
-	const normalized = spec.trim();
-	let model: Model<Api> | undefined;
-	if (normalized.includes("/")) {
-		const separator = normalized.indexOf("/");
-		model = parent.modelRegistry.find(normalized.slice(0, separator), normalized.slice(separator + 1));
-	} else {
-		const matches = parent.modelRegistry.getAvailable().filter((candidate) => candidate.id === normalized);
-		if (matches.length === 1) model = matches[0];
-		if (matches.length > 1) throw new Error(`Model id "${normalized}" is ambiguous; use provider/model.`);
-	}
-	if (!model) throw new Error(`Model "${normalized}" is not available.`);
-	if (!parent.modelRegistry.hasConfiguredAuth(model))
-		throw new Error(`Model "${normalized}" has no configured authentication.`);
-	return model;
-}
-
 // Exactly two layers: a /agents override wins, otherwise the subagent
 // inherits the parent session. Callers and agent files cannot pick models.
 function resolveModel(override: SubagentProfileOverride | undefined, parent: ParentModelContext): Model<Api> {
-	if (override?.model) return findAvailableModel(override.model, parent);
+	if (override?.model) return findAvailableModel(override.model, parent.modelRegistry);
 	if (!parent.model) throw new Error("The parent session has no active model.");
 	return parent.model;
 }

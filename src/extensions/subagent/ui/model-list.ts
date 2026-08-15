@@ -10,6 +10,7 @@ import {
 	TruncatedText,
 } from "@earendil-works/pi-tui";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
+import { modelId, parseModelSpec } from "../model-selection.ts";
 
 const MAX_VISIBLE_MODELS = 10;
 
@@ -42,17 +43,6 @@ interface ModelChoiceItem extends ProfileModelChoice {
 	name: string | undefined;
 }
 
-function fullModelId(model: Pick<Model<Api>, "provider" | "id">): string {
-	return `${model.provider}/${model.id}`;
-}
-
-function parseModelId(value: string): { provider: string; id: string } {
-	const separator = value.indexOf("/");
-	return separator > 0
-		? { provider: value.slice(0, separator), id: value.slice(separator + 1) }
-		: { provider: "", id: value };
-}
-
 function compareModels(left: Model<Api>, right: Model<Api>): number {
 	const provider = left.provider.localeCompare(right.provider);
 	return provider !== 0 ? provider : left.id.localeCompare(right.id);
@@ -60,7 +50,7 @@ function compareModels(left: Model<Api>, right: Model<Api>): number {
 
 function modelSearchText(item: ModelChoiceItem): string {
 	if (item.modelId === undefined) {
-		const inherited = item.model ? ` ${fullModelId(item.model)} ${item.model.name}` : "";
+		const inherited = item.model ? ` ${modelId(item.model)} ${item.model.name}` : "";
 		return `inherit${inherited}`;
 	}
 	const name = item.name ? ` ${item.name}` : "";
@@ -105,7 +95,7 @@ export class ProfileModelListComponent extends Container implements Focusable {
 		this.models = [...options.models];
 		this.currentSessionModel = options.currentSessionModel;
 		this.savedModelId = options.savedModelId;
-		this.scopedModelKeys = new Set(options.scopedModels.map(({ model }) => fullModelId(model)));
+		this.scopedModelKeys = new Set(options.scopedModels.map(({ model }) => modelId(model)));
 		this.scope = this.scopedModelKeys.size > 0 ? "scoped" : "all";
 		this.onDone = options.onDone;
 
@@ -134,8 +124,8 @@ export class ProfileModelListComponent extends Container implements Focusable {
 
 	private makeModelChoice(model: Model<Api>): ModelChoiceItem {
 		return {
-			key: fullModelId(model),
-			modelId: fullModelId(model),
+			key: modelId(model),
+			modelId: modelId(model),
 			model,
 			unavailable: false,
 			provider: model.provider,
@@ -145,7 +135,7 @@ export class ProfileModelListComponent extends Container implements Focusable {
 	}
 
 	private makeUnavailableChoice(modelId: string): ModelChoiceItem {
-		const parsed = parseModelId(modelId);
+		const parsed = parseModelSpec(modelId);
 		return {
 			key: modelId,
 			modelId,
@@ -159,14 +149,14 @@ export class ProfileModelListComponent extends Container implements Focusable {
 
 	private buildChoices(models: readonly Model<Api>[]): ModelChoiceItem[] {
 		const sorted = [...models].sort(compareModels);
-		const availableById = new Map(this.models.map((model) => [fullModelId(model), model]));
+		const availableById = new Map(this.models.map((model) => [modelId(model), model]));
 		const choices: ModelChoiceItem[] = [this.makeInheritChoice()];
 		if (this.savedModelId) {
 			const saved = availableById.get(this.savedModelId);
 			choices.push(saved ? this.makeModelChoice(saved) : this.makeUnavailableChoice(this.savedModelId));
 		}
 		for (const model of sorted) {
-			if (fullModelId(model) !== this.savedModelId) choices.push(this.makeModelChoice(model));
+			if (modelId(model) !== this.savedModelId) choices.push(this.makeModelChoice(model));
 		}
 		return choices;
 	}
@@ -174,7 +164,7 @@ export class ProfileModelListComponent extends Container implements Focusable {
 	private rebuildChoices(preferredKey?: string): void {
 		const currentKey = preferredKey ?? this.filteredChoices[this.selectedIndex]?.key ?? this.savedModelId ?? "";
 		this.allChoices = this.buildChoices(this.models);
-		const scopedModels = this.models.filter((model) => this.scopedModelKeys.has(fullModelId(model)));
+		const scopedModels = this.models.filter((model) => this.scopedModelKeys.has(modelId(model)));
 		this.scopedChoices = this.buildChoices(scopedModels);
 		this.activeChoices = this.scope === "scoped" ? this.scopedChoices : this.allChoices;
 		this.applyFilter(this.searchInput.getValue(), currentKey, false);
@@ -217,7 +207,7 @@ export class ProfileModelListComponent extends Container implements Focusable {
 
 	private choiceLabel(choice: ModelChoiceItem): string {
 		if (choice.modelId === undefined) {
-			const inherited = choice.model ? fullModelId(choice.model) : "none";
+			const inherited = choice.model ? modelId(choice.model) : "none";
 			return `inherit ${this.theme.fg("muted", `(${inherited})`)}`;
 		}
 		if (choice.unavailable) {

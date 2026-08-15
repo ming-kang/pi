@@ -2,7 +2,6 @@ import type { TUI } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ToolDefinition } from "../src/core/extensions/types.ts";
 import subagent from "../src/extensions/subagent/index.ts";
-import { beginSubagentRetry } from "../src/extensions/subagent/retry.ts";
 import type { SubagentParamsSchema } from "../src/extensions/subagent/schema.ts";
 import type { SubagentDetails, SubagentRunDetails } from "../src/extensions/subagent/types.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
@@ -35,6 +34,18 @@ function usage(toolUses = 1) {
 		totalTokens: 30,
 		cost: 0,
 	};
+}
+
+function withRetry(
+	run: SubagentRunDetails,
+	attempt: number,
+	maxAttempts: number,
+	delayMs: number,
+	error: string,
+): SubagentRunDetails {
+	run.retry = { attempt, maxAttempts, deadline: Date.now() + delayMs, error };
+	run.currentActivity = `Retrying (${attempt}/${maxAttempts})…`;
+	return run;
 }
 
 function runningRun(id: string, startedAt: number): SubagentRunDetails {
@@ -155,12 +166,7 @@ describe("Subagent shell-driven live refresh", () => {
 		vi.setSystemTime(0);
 		const definition = registeredSubagentTool();
 		const retrying = runningDetails(0);
-		beginSubagentRetry(retrying.runs[0]!, {
-			attempt: 1,
-			maxAttempts: 3,
-			delayMs: 8000,
-			error: "fetch failed",
-		});
+		withRetry(retrying.runs[0]!, 1, 3, 8_000, "fetch failed");
 		const component = createComponent(definition, "subagent-live-retry", {
 			tasks: [{ agent: "explorer", prompt: "Inspect silently." }],
 		});
@@ -191,12 +197,7 @@ describe("Subagent shell-driven live refresh", () => {
 		const retryingRun = retrying.runs.at(-1)!;
 		retryingRun.status = "queued";
 		retryingRun.startedAt = undefined;
-		beginSubagentRetry(retryingRun, {
-			attempt: 1,
-			maxAttempts: 2,
-			delayMs: 8000,
-			error: "fetch failed",
-		});
+		withRetry(retryingRun, 1, 2, 8_000, "fetch failed");
 		const component = createComponent(definition, "subagent-task-retry", {
 			tasks: Array.from({ length: 4 }, (_, index) => ({
 				agent: "explorer",

@@ -1,6 +1,5 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import {
 	Container,
 	type Focusable,
@@ -15,55 +14,22 @@ import type { ExtensionCommandContext } from "../../core/extensions/types.ts";
 import { DynamicBorder } from "../../modes/interactive/components/dynamic-border.ts";
 import { keyLabel } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
-import { AGENT_PROFILES } from "./agents.ts";
-import { type SubagentAgentName, THINKING_LEVELS } from "./constants.ts";
+import { AGENT_PROFILE_LABELS, AGENT_PROFILES } from "./agents.ts";
 import { loadSubagentConfig, updateProfileOverride } from "./settings.ts";
+import { truncate } from "./text.ts";
 import type { AgentProfile, SubagentProfileOverride } from "./types.ts";
+import {
+	buildModelChoices,
+	buildSettingsRows,
+	buildThinkingChoices,
+	compareModels,
+	type SettingsAction,
+	type SettingsRow,
+} from "./ui/choices.ts";
 import { type ProfileModelChoice, ProfileModelListComponent } from "./ui/model-list.ts";
 
 const MODEL_REFRESH_TIMEOUT_MS = 15_000;
 const MAX_REFRESH_ERROR_LENGTH = 240;
-
-// Static display titles for the two built-in profiles; agents.ts owns the
-// model-facing copy.
-const PROFILE_LABELS: Record<SubagentAgentName, string> = {
-	explorer: "Explorer",
-	general: "General",
-};
-
-type SettingsAction = "model" | "thinking";
-
-function modelId(model: Pick<Model<Api>, "provider" | "id"> | undefined): string {
-	return model ? `${model.provider}/${model.id}` : "none";
-}
-
-function findModel(models: readonly Model<Api>[], value: string | undefined): Model<Api> | undefined {
-	if (!value) return undefined;
-	return models.find((model) => `${model.provider}/${model.id}` === value);
-}
-
-function boundText(value: string, limit: number): string {
-	const characters = [...value];
-	return characters.length <= limit ? value : `${characters.slice(0, Math.max(0, limit - 1)).join("")}…`;
-}
-
-// Capability checks use the saved model when it is still in the catalog,
-// falling back to the parent session model otherwise.
-function effectiveModel(
-	currentSessionModel: Model<Api> | undefined,
-	models: readonly Model<Api>[],
-	override: SubagentProfileOverride | undefined,
-): Model<Api> | undefined {
-	if (override?.model) {
-		const saved = findModel(models, override.model);
-		if (saved) return saved;
-	}
-	return currentSessionModel;
-}
-
-function inheritedThinking(effective: Model<Api> | undefined, currentThinking: ThinkingLevel): ThinkingLevel {
-	return effective ? (clampThinkingLevel(effective, currentThinking) as ThinkingLevel) : currentThinking;
-}
 
 function refreshFailureMessage(providerIds: readonly string[]): string {
 	if (providerIds.length === 1) return `Could not refresh ${providerIds[0]}; showing cached models.`;
@@ -94,7 +60,7 @@ function navigationHint(theme: Theme, keybindings: KeybindingsManager): string {
 class ProfileSettingsMenuComponent extends Container implements Focusable {
 	private readonly theme: Theme;
 	private readonly keybindings: KeybindingsManager;
-	private readonly rows: Array<{ action: SettingsAction; label: string; value: string; override: boolean }>;
+	private readonly rows: readonly SettingsRow[];
 	private readonly onDone: (action: SettingsAction | undefined) => void;
 	private readonly listContainer: Container;
 	private selectedIndex = 0;
@@ -122,29 +88,18 @@ class ProfileSettingsMenuComponent extends Container implements Focusable {
 		this.theme = options.theme;
 		this.keybindings = options.keybindings;
 		this.onDone = options.onDone;
-		const effective = effectiveModel(options.currentSessionModel, options.models, options.override);
-		this.rows = [
-			{
-				action: "model",
-				label: "Model",
-				value: options.override?.model
-					? `override — ${options.override.model}${findModel(options.models, options.override.model) ? "" : " [unavailable]"}`
-					: `inherit — ${modelId(options.currentSessionModel)}`,
-				override: options.override?.model !== undefined,
-			},
-			{
-				action: "thinking",
-				label: "Thinking",
-				value: options.override?.thinking
-					? `override — ${options.override.thinking}`
-					: `inherit — ${inheritedThinking(effective, options.currentThinking)}`,
-				override: options.override?.thinking !== undefined,
-			},
-		];
+		this.rows = buildSettingsRows({
+			override: options.override,
+			models: options.models,
+			currentSessionModel: options.currentSessionModel,
+			currentThinking: options.currentThinking,
+		}) satisfies SettingsRow[];
 
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
-		this.addChild(new Text(this.theme.fg("accent", this.theme.bold(PROFILE_LABELS[options.profile.name])), 1, 0));
+		this.addChild(
+			new Text(this.theme.fg("accent", this.theme.bold(AGENT_PROFILE_LABELS[options.profile.name])), 1, 0),
+		);
 		this.addChild(new Spacer(1));
 		this.listContainer = new Container();
 		this.addChild(this.listContainer);
@@ -227,7 +182,11 @@ class ModelPickerComponent extends Container implements Focusable {
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
 		this.addChild(
-			new Text(this.theme.fg("accent", this.theme.bold(`Model — ${PROFILE_LABELS[options.profile.name]}`)), 1, 0),
+			new Text(
+				this.theme.fg("accent", this.theme.bold(`Model — ${AGENT_PROFILE_LABELS[options.profile.name]}`)),
+				1,
+				0,
+			),
 		);
 		this.addChild(new Spacer(1));
 		this.modelList = new ProfileModelListComponent({
@@ -299,7 +258,7 @@ async function persistOverride(
 		await updateProfileOverride(profile.name, patch, getAgentDir());
 	} catch (error) {
 		ctx.ui.notify(
-			`Could not save ${PROFILE_LABELS[profile.name]} settings: ${error instanceof Error ? error.message : String(error)}`,
+			`Could not save ${AGENT_PROFILE_LABELS[profile.name]} settings: ${error instanceof Error ? error.message : String(error)}`,
 			"error",
 		);
 	}
@@ -327,7 +286,7 @@ async function refreshPickerModels(ctx: ExtensionCommandContext, picker: ModelPi
 		}
 		const registryError = ctx.modelRegistry.getError();
 		if (registryError) {
-			picker.setRefreshStatus(boundText(registryError, MAX_REFRESH_ERROR_LENGTH), "error");
+			picker.setRefreshStatus(truncate(registryError, MAX_REFRESH_ERROR_LENGTH), "error");
 			return;
 		}
 		picker.setRefreshStatus(undefined);
@@ -336,16 +295,18 @@ async function refreshPickerModels(ctx: ExtensionCommandContext, picker: ModelPi
 		const message = timedOut
 			? "Model refresh timed out; showing cached models."
 			: `Could not refresh model catalogs: ${error instanceof Error ? error.message : String(error)}`;
-		picker.setRefreshStatus(boundText(message, MAX_REFRESH_ERROR_LENGTH), "error");
+		picker.setRefreshStatus(truncate(message, MAX_REFRESH_ERROR_LENGTH), "error");
 	} finally {
 		clearTimeout(timeout);
 	}
 }
 
 async function selectProfile(ctx: ExtensionCommandContext): Promise<AgentProfile | undefined> {
-	const labels = AGENT_PROFILES.map((profile) => PROFILE_LABELS[profile.name]);
+	const labels = AGENT_PROFILES.map((profile) => AGENT_PROFILE_LABELS[profile.name]);
 	const label = await ctx.ui.select("Agents", labels);
-	return label === undefined ? undefined : AGENT_PROFILES.find((profile) => PROFILE_LABELS[profile.name] === label);
+	return label === undefined
+		? undefined
+		: AGENT_PROFILES.find((profile) => AGENT_PROFILE_LABELS[profile.name] === label);
 }
 
 async function showTuiSettingsMenu(
@@ -375,18 +336,16 @@ async function showDialogSettingsMenu(
 	override: SubagentProfileOverride | undefined,
 	currentThinking: ThinkingLevel,
 ): Promise<SettingsAction | undefined> {
-	const models = ctx.modelRegistry.getAvailable();
-	const effective = effectiveModel(ctx.model, models, override);
-	const modelValue = override?.model
-		? `override — ${override.model}${findModel(models, override.model) ? "" : " [unavailable]"}`
-		: `inherit — ${modelId(ctx.model)}`;
-	const thinkingValue = override?.thinking
-		? `override — ${override.thinking}`
-		: `inherit — ${inheritedThinking(effective, currentThinking)}`;
 	const options = new Map<string, SettingsAction>();
-	options.set(`Model — ${modelValue}`, "model");
-	options.set(`Thinking — ${thinkingValue}`, "thinking");
-	const label = await ctx.ui.select(PROFILE_LABELS[profile.name], [...options.keys()]);
+	for (const row of buildSettingsRows({
+		override,
+		models: ctx.modelRegistry.getAvailable(),
+		currentSessionModel: ctx.model,
+		currentThinking,
+	})) {
+		options.set(`${row.label} — ${row.value}`, row.action);
+	}
+	const label = await ctx.ui.select(AGENT_PROFILE_LABELS[profile.name], [...options.keys()]);
 	return label === undefined ? undefined : options.get(label);
 }
 
@@ -419,20 +378,13 @@ async function showDialogModelPicker(
 	profile: AgentProfile,
 	override: SubagentProfileOverride | undefined,
 ): Promise<{ modelId: string | undefined } | undefined> {
-	const models = ctx.modelRegistry.getAvailable().sort((left, right) => {
-		const provider = left.provider.localeCompare(right.provider);
-		return provider !== 0 ? provider : left.id.localeCompare(right.id);
+	const models = [...ctx.modelRegistry.getAvailable()].sort(compareModels);
+	const choices = buildModelChoices({
+		models,
+		currentSessionModel: ctx.model,
+		savedModelId: override?.model,
 	});
-	const choices = new Map<string, string | undefined>();
-	choices.set(`inherit (${modelId(ctx.model)})${override?.model ? "" : " ✓"}`, undefined);
-	if (override?.model && !findModel(models, override.model)) {
-		choices.set(`${override.model} [unavailable] ✓`, override.model);
-	}
-	for (const model of models) {
-		const id = modelId(model);
-		choices.set(`${id}${override?.model === id ? " ✓" : ""}`, id);
-	}
-	const label = await ctx.ui.select(`Model — ${PROFILE_LABELS[profile.name]}`, [...choices.keys()]);
+	const label = await ctx.ui.select(`Model — ${AGENT_PROFILE_LABELS[profile.name]}`, [...choices.keys()]);
 	return label === undefined ? undefined : { modelId: choices.get(label) };
 }
 
@@ -442,16 +394,13 @@ async function showThinkingPicker(
 	override: SubagentProfileOverride | undefined,
 	currentThinking: ThinkingLevel,
 ): Promise<{ level: ThinkingLevel | undefined } | undefined> {
-	const models = ctx.modelRegistry.getAvailable();
-	const effective = effectiveModel(ctx.model, models, override);
-	const levels = effective ? (getSupportedThinkingLevels(effective) as ThinkingLevel[]) : [...THINKING_LEVELS];
-	const inherited = inheritedThinking(effective, currentThinking);
-	const choices = new Map<string, ThinkingLevel | undefined>();
-	choices.set(`inherit (${inherited})${override?.thinking ? "" : " ✓"}`, undefined);
-	for (const level of levels) {
-		choices.set(`${level}${override?.thinking === level ? " ✓" : ""}`, level);
-	}
-	const label = await ctx.ui.select(`Thinking — ${PROFILE_LABELS[profile.name]}`, [...choices.keys()]);
+	const choices = buildThinkingChoices({
+		currentSessionModel: ctx.model,
+		models: ctx.modelRegistry.getAvailable(),
+		override,
+		currentThinking,
+	});
+	const label = await ctx.ui.select(`Thinking — ${AGENT_PROFILE_LABELS[profile.name]}`, [...choices.keys()]);
 	return label === undefined ? undefined : { level: choices.get(label) };
 }
 

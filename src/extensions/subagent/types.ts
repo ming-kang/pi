@@ -52,18 +52,18 @@ export interface ToolActivity {
 	resultSummary?: string;
 }
 
-export interface SubagentUsage {
+// Flat projection of pi-ai's Usage: the cost breakdown collapses to a
+// scalar total (renderers need one number; toNestedUsage rebuilds the nested
+// shape for the parent transcript), and turns/toolUses/contextTokens track
+// worker progress. The optional pi-ai fields (reasoning, cacheWrite1h) stay
+// optional here and are not aggregated.
+export type SubagentUsage = Omit<Usage, "cost"> & {
+	cost: number;
 	turns: number;
 	toolUses: number;
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	totalTokens: number;
-	cost: number;
 	/** Context watermark: total tokens of the latest request, not a running sum. */
 	contextTokens?: number;
-}
+};
 
 export interface SubagentRetryDetails {
 	attempt: number;

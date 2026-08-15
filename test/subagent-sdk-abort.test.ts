@@ -1,9 +1,10 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelRuntime } from "../src/core/model-runtime.ts";
-import { emptyUsage } from "../src/extensions/subagent/activity.ts";
+import { createRunCancellation } from "../src/extensions/subagent/cancellation.ts";
 import { runSdkTask } from "../src/extensions/subagent/sdk-runner.ts";
-import type { ResolvedSubagentTask, SubagentRunDetails } from "../src/extensions/subagent/types.ts";
+import { createRunState, reduceRun, type SubagentRunState } from "../src/extensions/subagent/state.ts";
+import type { ResolvedSubagentTask } from "../src/extensions/subagent/types.ts";
 
 const sdkMocks = vi.hoisted(() => ({
 	reload: vi.fn(),
@@ -68,19 +69,36 @@ function task(): ResolvedSubagentTask {
 	};
 }
 
-function run(): SubagentRunDetails {
+function fakeSession() {
 	return {
-		id: "subagent-1",
-		agent: "explorer",
-		description: "Inspect initialization",
-		cwd: "",
-		model: "test/model",
-		thinking: "low",
-		status: "queued",
-		activities: [],
-		report: "",
-		usage: emptyUsage(),
+		messages: [],
+		subscribe: vi.fn(() => vi.fn()),
+		prompt: vi.fn(async () => {}),
+		abort: vi.fn(async () => {}),
+		dispose: vi.fn(),
 	};
+}
+
+interface Harness {
+	scope: ReturnType<typeof createRunCancellation>;
+	done: Promise<void>;
+	state(): SubagentRunState;
+}
+
+function start(signal?: AbortSignal): Harness {
+	const scope = createRunCancellation(signal);
+	let state = createRunState(task(), 0, undefined, process.cwd());
+	const done = runSdkTask({
+		task: task(),
+		scope,
+		dispatch: (event) => {
+			state = reduceRun(state, event);
+		},
+		modelRuntime: {} as ModelRuntime,
+		agentDir: process.cwd(),
+		projectTrusted: false,
+	});
+	return { scope, done, state: () => state };
 }
 
 describe("Subagent SDK initialization aborts", () => {
@@ -95,19 +113,13 @@ describe("Subagent SDK initialization aborts", () => {
 		sdkMocks.createAgentSession.mockReturnValue(created.promise);
 		const session = fakeSession();
 		const controller = new AbortController();
-		const execution = runSdkTask({
-			task: task(),
-			run: run(),
-			modelRuntime: {} as ModelRuntime,
-			agentDir: process.cwd(),
-			projectTrusted: false,
-			signal: controller.signal,
-		});
+		const execution = start(controller.signal);
 		await vi.waitFor(() => expect(sdkMocks.createAgentSession).toHaveBeenCalledTimes(1));
 
 		controller.abort();
-		const result = await execution;
-		expect(result.status).toBe("aborted");
+		await execution.done;
+		expect(execution.state().status).toBe("aborted");
+		expect(execution.state().error).toContain("during initialization");
 		// The abort wins the creation race: the run settles immediately and
 		// the never-assigned session never needs an abort.
 		expect(session.abort).not.toHaveBeenCalled();
@@ -117,48 +129,44 @@ describe("Subagent SDK initialization aborts", () => {
 		await vi.waitFor(() => expect(session.dispose).toHaveBeenCalledTimes(1));
 	});
 
+	it("settles immediately when the resource loader never resolves and the scope aborts", async () => {
+		// Regression: the initialization race must cover resource loading,
+		// not only session creation. A loader that hangs forever cannot keep
+		// the run unsettled after an abort.
+		sdkMocks.reload.mockReturnValue(new Promise<void>(() => {}));
+		const execution = start();
+		await vi.waitFor(() => expect(sdkMocks.reload).toHaveBeenCalledTimes(1));
+
+		await execution.scope.abort();
+		await execution.done;
+		expect(execution.state().status).toBe("aborted");
+		expect(execution.state().error).toContain("during initialization");
+		expect(sdkMocks.createAgentSession).not.toHaveBeenCalled();
+	});
+
 	it("settles aborted while session creation hangs instead of leaking the run", async () => {
 		sdkMocks.reload.mockResolvedValue(undefined);
 		sdkMocks.createAgentSession.mockReturnValue(new Promise<{ session: unknown }>(() => {}));
 		const controller = new AbortController();
-		const execution = runSdkTask({
-			task: task(),
-			run: run(),
-			modelRuntime: {} as ModelRuntime,
-			agentDir: process.cwd(),
-			projectTrusted: false,
-			signal: controller.signal,
-		});
+		const execution = start(controller.signal);
 		await vi.waitFor(() => expect(sdkMocks.createAgentSession).toHaveBeenCalledTimes(1));
 
 		controller.abort();
-		const result = await execution;
-		expect(result.status).toBe("aborted");
-		expect(result.error).toContain("aborted");
+		await execution.done;
+		expect(execution.state().status).toBe("aborted");
+		expect(execution.state().error).toContain("aborted");
 	});
 
-	it("settles a hanging creation through the registered shutdown abort", async () => {
+	it("settles a hanging creation through a direct scope abort (session shutdown path)", async () => {
 		sdkMocks.reload.mockResolvedValue(undefined);
 		sdkMocks.createAgentSession.mockReturnValue(new Promise<{ session: unknown }>(() => {}));
-		let registeredAbort: (() => Promise<void>) | undefined;
-		const unregisterAbort = vi.fn();
-		const execution = runSdkTask({
-			task: task(),
-			run: run(),
-			modelRuntime: {} as ModelRuntime,
-			agentDir: process.cwd(),
-			projectTrusted: false,
-			registerAbort: (abort) => {
-				registeredAbort = abort;
-				return unregisterAbort;
-			},
-		});
+		const execution = start();
 		await vi.waitFor(() => expect(sdkMocks.createAgentSession).toHaveBeenCalledTimes(1));
 
-		await registeredAbort?.();
-		const result = await execution;
-		expect(result.status).toBe("aborted");
-		expect(unregisterAbort).toHaveBeenCalledTimes(1);
+		await execution.scope.abort();
+		await execution.done;
+		expect(execution.state().status).toBe("aborted");
+		expect(execution.state().error).toContain("during initialization");
 	});
 
 	it("disposes exactly once when creation resolves immediately before abort", async () => {
@@ -167,57 +175,40 @@ describe("Subagent SDK initialization aborts", () => {
 		sdkMocks.createAgentSession.mockReturnValue(created.promise);
 		const session = fakeSession();
 		const controller = new AbortController();
-		const execution = runSdkTask({
-			task: task(),
-			run: run(),
-			modelRuntime: {} as ModelRuntime,
-			agentDir: process.cwd(),
-			projectTrusted: false,
-			signal: controller.signal,
-		});
+		const execution = start(controller.signal);
 		await vi.waitFor(() => expect(sdkMocks.createAgentSession).toHaveBeenCalledTimes(1));
 
 		created.resolve({ session });
 		controller.abort();
-		const result = await execution;
-		expect(result.status).toBe("aborted");
+		await execution.done;
+		expect(execution.state().status).toBe("aborted");
 		expect(session.prompt).not.toHaveBeenCalled();
 		expect(session.dispose).toHaveBeenCalledTimes(1);
 	});
 
-	it("registers session-shutdown abort while resources are still loading", async () => {
+	it("settles through the scope while resources are still loading", async () => {
 		const loading = deferred<void>();
 		sdkMocks.reload.mockReturnValue(loading.promise);
-		let registeredAbort: (() => Promise<void>) | undefined;
-		const unregisterAbort = vi.fn();
-		const execution = runSdkTask({
-			task: task(),
-			run: run(),
-			modelRuntime: {} as ModelRuntime,
-			agentDir: process.cwd(),
-			projectTrusted: false,
-			registerAbort: (abort) => {
-				registeredAbort = abort;
-				return unregisterAbort;
-			},
-		});
+		const execution = start();
 		await vi.waitFor(() => expect(sdkMocks.reload).toHaveBeenCalledTimes(1));
 
-		await registeredAbort?.();
-		loading.resolve();
-		const result = await execution;
-		expect(result.status).toBe("aborted");
+		await execution.scope.abort();
+		// The run settles without waiting for the loader to finish.
+		await execution.done;
+		expect(execution.state().status).toBe("aborted");
 		expect(sdkMocks.createAgentSession).not.toHaveBeenCalled();
-		expect(unregisterAbort).toHaveBeenCalledTimes(1);
+		// The abandoned loader chain resolves harmlessly later.
+		loading.resolve();
+	});
+
+	it("settles before it starts when the scope was already aborted", async () => {
+		sdkMocks.reload.mockResolvedValue(undefined);
+		const controller = new AbortController();
+		controller.abort();
+		const execution = start(controller.signal);
+		await execution.done;
+		expect(execution.state().status).toBe("aborted");
+		expect(execution.state().error).toBe("Subagent was aborted before it started.");
+		expect(sdkMocks.reload).not.toHaveBeenCalled();
 	});
 });
-
-function fakeSession() {
-	return {
-		messages: [],
-		subscribe: vi.fn(() => vi.fn()),
-		prompt: vi.fn(async () => {}),
-		abort: vi.fn(async () => {}),
-		dispose: vi.fn(),
-	};
-}
