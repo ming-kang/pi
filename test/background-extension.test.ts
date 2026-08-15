@@ -15,11 +15,12 @@ import type { CustomMessage } from "../src/core/messages.ts";
 import type { BashOperations } from "../src/core/tools/bash.ts";
 import {
 	type BgNotificationDetails,
+	type BgWaitDetails,
 	createBackgroundExtension,
 	prependCommandPrefix,
 	resolveSessionShell,
 } from "../src/extensions/background/index.ts";
-import { renderBackgroundNotification, renderBgBashCall } from "../src/extensions/background/render.ts";
+import { renderBackgroundNotification, renderBgCall } from "../src/extensions/background/render.ts";
 import type { Theme } from "../src/modes/interactive/theme/theme.ts";
 
 function textOf(result: AgentToolResult<unknown>): string {
@@ -162,14 +163,16 @@ afterEach(() => {
 });
 
 describe("background extension", () => {
-	it("registers the three tools and the /bg command", () => {
+	it("registers the single bg tool and the /bg command", () => {
 		const harness = createHarness();
-		expect([...harness.tools.keys()].sort()).toEqual(["bg_bash", "bg_kill", "bg_logs"]);
+		expect([...harness.tools.keys()]).toEqual(["bg"]);
 		expect(harness.commands.has("bg")).toBe(true);
-		expect(harness.tools.get("bg_bash")?.promptGuidelines?.[0]).toContain("Never poll");
-		for (const tool of harness.tools.values()) {
-			expect((tool.parameters as { type?: string }).type).toBe("object");
-		}
+		const tool = harness.tools.get("bg");
+		expect(tool?.description).toContain("create:");
+		expect(tool?.description).toContain("wait:");
+		expect(tool?.description).toContain("Do NOT append '&'");
+		expect(tool?.promptGuidelines?.[1]).toContain("Never wait");
+		expect((tool?.parameters as { type?: string }).type).toBe("object");
 	});
 
 	it("starts a task immediately and ignores the turn abort signal", async () => {
@@ -177,11 +180,11 @@ describe("background extension", () => {
 		await harness.startSession();
 
 		const turnAbort = new AbortController();
-		const result = await harness.execute("bg_bash", { command: "npm run build" }, turnAbort.signal);
+		const result = await harness.execute("bg", { action: "create", command: "npm run build" }, turnAbort.signal);
 		const text = textOf(result);
 		expect(text).toMatch(/Started background task bg-[0-9a-f]{6}/);
 		expect(text).toContain("Output file:");
-		expect(text).toContain("Do NOT poll");
+		expect(text).toContain("do NOT poll");
 
 		// Aborting the turn must not abort the background task.
 		turnAbort.abort();
@@ -195,7 +198,7 @@ describe("background extension", () => {
 		const harness = createHarness();
 		await harness.startSession();
 
-		await harness.execute("bg_bash", { command: 'echo "a<b" && true' });
+		await harness.execute("bg", { action: "create", command: 'echo "a<b" && true' });
 		harness.calls[0]?.emitData("value is a<b\ndone\n");
 		harness.calls[0]?.finish(0);
 
@@ -222,7 +225,7 @@ describe("background extension", () => {
 		await harness.startSession();
 
 		// Lone surrogate (U+D800), non-characters (U+FFFE/U+FFFF), C0 control (U+0001).
-		await harness.execute("bg_bash", { command: "x\uD800y\uFFFEz\uFFFFw\u0001v" });
+		await harness.execute("bg", { action: "create", command: "x\uD800y\uFFFEz\uFFFFw\u0001v" });
 		harness.calls[0]?.fail(new Error("boom\u0007"));
 
 		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
@@ -237,7 +240,7 @@ describe("background extension", () => {
 		const harness = createHarness();
 		await harness.startSession();
 
-		await harness.execute("bg_bash", { command: "echo\tline" });
+		await harness.execute("bg", { action: "create", command: "echo\tline" });
 		harness.calls[0]?.emitData("out\uFFFEput\n");
 		harness.calls[0]?.finish(0);
 
@@ -255,7 +258,7 @@ describe("background extension", () => {
 		await harness.startSession();
 		expect(harness.statusUpdates.at(-1)).toBeUndefined();
 
-		await harness.execute("bg_bash", { command: "sleep 5" });
+		await harness.execute("bg", { action: "create", command: "sleep 5" });
 		expect(harness.statusUpdates.at(-1)).toBe("bg 1 running");
 
 		harness.calls[0]?.finish(0);
@@ -269,67 +272,172 @@ describe("background extension", () => {
 		const harness = createHarness();
 		await harness.startSession();
 
-		const started = await harness.execute("bg_bash", { command: "npm test" });
+		const started = await harness.execute("bg", { action: "create", command: "npm test" });
 		const taskId = /bg-[0-9a-f]{6}/.exec(textOf(started))?.[0] ?? "";
 		harness.calls[0]?.emitData(`${"x".repeat(600)}\nhello tail\n`);
 
 		// The write stream flushes asynchronously; poll until the tail is visible.
 		await vi.waitFor(async () => {
-			const tail = await harness.execute("bg_logs", { taskId: taskId.slice(0, 6), bytes: 300 });
+			const tail = await harness.execute("bg", { action: "read", taskId: taskId.slice(0, 6), bytes: 300 });
 			const tailText = textOf(tail);
 			expect(tailText).toContain("hello tail");
 			expect(tailText).toContain(`task ${taskId} running`);
+			expect(tailText).toContain("still running");
 			expect(tailText).toContain("full output:");
 		});
 
-		const head = await harness.execute("bg_logs", { taskId, mode: "head", bytes: 300 });
+		const head = await harness.execute("bg", { action: "read", taskId, mode: "head", bytes: 300 });
 		expect(textOf(head)).toContain("x".repeat(100));
 		expect(textOf(head)).not.toContain("hello tail");
 
-		await expect(harness.execute("bg_logs", { taskId: "bg-zzz" })).rejects.toThrow(/No background task/);
+		await expect(harness.execute("bg", { action: "read", taskId: "bg-zzz" })).rejects.toThrow(/No background task/);
 
-		await harness.execute("bg_bash", { command: "second" });
-		await expect(harness.execute("bg_logs", { taskId: "bg-" })).rejects.toThrow(/ambiguous/i);
+		await harness.execute("bg", { action: "create", command: "second" });
+		await expect(harness.execute("bg", { action: "read", taskId: "bg-" })).rejects.toThrow(/ambiguous/i);
 
 		harness.calls[0]?.finish(0);
 		harness.calls[1]?.finish(0);
 		await vi.waitFor(() => expect(harness.sent).toHaveLength(2));
 	});
 
+	it("rejects actions that miss their required fields", async () => {
+		const harness = createHarness();
+		await harness.startSession();
+
+		await expect(harness.execute("bg", { action: "create" })).rejects.toThrow(/requires 'command'/);
+		await expect(harness.execute("bg", { action: "read" })).rejects.toThrow(/requires 'taskId'/);
+		await expect(harness.execute("bg", { action: "wait" })).rejects.toThrow(/requires 'taskId'/);
+		await expect(harness.execute("bg", { action: "kill" })).rejects.toThrow(/requires 'taskId'/);
+		expect(harness.calls).toHaveLength(0);
+	});
+
+	it("wait delivers a completion inline and suppresses the followUp notification", async () => {
+		const harness = createHarness();
+		await harness.startSession();
+
+		const started = await harness.execute("bg", { action: "create", command: "npm run build", description: "build" });
+		const taskId = /bg-[0-9a-f]{6}/.exec(textOf(started))?.[0] ?? "";
+		harness.calls[0]?.emitData("building\n");
+
+		// waitForResult registers its waiter synchronously up to the first await,
+		// so finishing right after the call starts is a deterministic claim.
+		const waitPromise = harness.execute("bg", { action: "wait", taskId, waitMs: 5_000, sinceBytes: 0 });
+		harness.calls[0]?.finish(0);
+		const result = await waitPromise;
+
+		const text = textOf(result);
+		expect(text).toContain("completed");
+		expect(text).toContain("building");
+		expect(text).toContain("+9B new output");
+		// The claim protocol suppresses the followUp: this result is the single delivery.
+		expect(harness.sent).toHaveLength(0);
+
+		const details = result.details as BgWaitDetails;
+		expect(details.action).toBe("wait");
+		expect(details.timedOut).toBe(false);
+		expect(details.deltaBytes).toBe(9);
+		expect(details.status).toBe("completed");
+	});
+
+	it("wait times out while the task keeps running; the followUp still fires later", async () => {
+		const harness = createHarness();
+		await harness.startSession();
+
+		const started = await harness.execute("bg", { action: "create", command: "npm run dev" });
+		const taskId = /bg-[0-9a-f]{6}/.exec(textOf(started))?.[0] ?? "";
+		harness.calls[0]?.emitData("progress line\n");
+
+		const result = await harness.execute("bg", { action: "wait", taskId, waitMs: 1_100 });
+		const text = textOf(result);
+		expect(text).toContain("still running");
+		expect(text).toContain("Do not sleep-poll");
+		expect(text).toContain("progress line");
+		expect((result.details as BgWaitDetails).timedOut).toBe(true);
+		expect(harness.sent).toHaveLength(0);
+
+		harness.calls[0]?.finish(0);
+		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
+	});
+
+	it("lists tasks with running first and the description in the label", async () => {
+		const harness = createHarness();
+		await harness.startSession();
+
+		const empty = await harness.execute("bg", { action: "list" });
+		expect(textOf(empty)).toContain("No background tasks");
+
+		await harness.execute("bg", { action: "create", command: "npm run dev", description: "dev server" });
+		const listing = textOf(await harness.execute("bg", { action: "list" }));
+		expect(listing).toContain("1 running · 0 finished");
+		expect(listing).toContain("dev server — npm run dev");
+
+		harness.calls[0]?.finish(0);
+		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
+	});
+
+	it("caps the finished entries in list output", async () => {
+		const harness = createHarness();
+		await harness.startSession();
+
+		for (let i = 0; i < 7; i++) {
+			await harness.execute("bg", { action: "create", command: `cmd-${i}` });
+			harness.calls[i]?.finish(0);
+		}
+		await vi.waitFor(() => expect(harness.sent).toHaveLength(7));
+
+		const text = textOf(await harness.execute("bg", { action: "list" }));
+		expect(text).toContain("0 running · 7 finished");
+		expect(text).toContain("(+2 more finished");
+	});
+
+	it("carries the description into the completion notification", async () => {
+		const harness = createHarness();
+		await harness.startSession();
+
+		await harness.execute("bg", { action: "create", command: "npm run dev", description: "dev <server>" });
+		harness.calls[0]?.finish(0);
+
+		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
+		const content = harness.sent[0]?.message.content ?? "";
+		expect(content).toContain("<description>dev &lt;server&gt;</description>");
+	});
+
 	it("kills a running task and rejects a second kill", async () => {
 		const harness = createHarness();
 		await harness.startSession();
 
-		const started = await harness.execute("bg_bash", { command: "npm run dev" });
+		const started = await harness.execute("bg", { action: "create", command: "npm run dev" });
 		const taskId = /bg-[0-9a-f]{6}/.exec(textOf(started))?.[0] ?? "";
 
-		const killed = await harness.execute("bg_kill", { taskId });
+		const killed = await harness.execute("bg", { action: "kill", taskId });
 		expect(textOf(killed)).toContain(`Killed task ${taskId}`);
 		expect(harness.calls[0]?.signal?.aborted).toBe(true);
 
 		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
 		expect(harness.sent[0]?.message.content).toContain('status="killed"');
 
-		await expect(harness.execute("bg_kill", { taskId })).rejects.toThrow(/not running/);
+		await expect(harness.execute("bg", { action: "kill", taskId })).rejects.toThrow(/not running/);
 	});
 
 	it("refuses new tasks after shutdown and stays silent for killed ones", async () => {
 		const harness = createHarness();
 		await harness.startSession();
 
-		await harness.execute("bg_bash", { command: "sleep 100" });
+		await harness.execute("bg", { action: "create", command: "sleep 100" });
 		await harness.shutdownSession();
 
 		expect(harness.calls[0]?.signal?.aborted).toBe(true);
 		expect(harness.sent).toHaveLength(0);
-		await expect(harness.execute("bg_bash", { command: "echo" })).rejects.toThrow(/not available|shutting down/);
+		await expect(harness.execute("bg", { action: "create", command: "echo" })).rejects.toThrow(
+			/not available|shutting down/,
+		);
 	});
 
 	it("reports spawn failures through the notification channel", async () => {
 		const harness = createHarness();
 		await harness.startSession();
 
-		await harness.execute("bg_bash", { command: "boom" });
+		await harness.execute("bg", { action: "create", command: "boom" });
 		harness.calls[0]?.fail(new Error("Working directory does not exist: /missing"));
 
 		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
@@ -342,7 +450,7 @@ describe("background extension", () => {
 		const harness = createHarness();
 		await harness.startSession();
 
-		await harness.execute("bg_bash", { command: "env" });
+		await harness.execute("bg", { action: "create", command: "env" });
 		expect(harness.calls[0]?.env).toMatchObject({
 			PI_SESSION_ID: "sess-test",
 			PI_PROVIDER: "test-provider",
@@ -357,8 +465,8 @@ describe("background extension", () => {
 		const harness = createHarness();
 		await harness.startSession();
 
-		await expect(harness.execute("bg_bash", { command: "x", timeout: 0 })).rejects.toThrow(/positive/);
-		await expect(harness.execute("bg_bash", { command: "x", timeout: -5 })).rejects.toThrow(/positive/);
+		await expect(harness.execute("bg", { action: "create", command: "x", timeout: 0 })).rejects.toThrow(/positive/);
+		await expect(harness.execute("bg", { action: "create", command: "x", timeout: -5 })).rejects.toThrow(/positive/);
 		expect(harness.calls).toHaveLength(0);
 		expect(harness.statusUpdates.at(-1)).toBeUndefined();
 	});
@@ -367,7 +475,9 @@ describe("background extension", () => {
 		const harness = createHarness();
 		await harness.startSession();
 
-		await expect(harness.execute("bg_bash", { command: "x", timeout: 3_000_000_000 })).rejects.toThrow(/maximum/);
+		await expect(harness.execute("bg", { action: "create", command: "x", timeout: 3_000_000_000 })).rejects.toThrow(
+			/maximum/,
+		);
 		expect(harness.calls).toHaveLength(0);
 		expect(harness.statusUpdates.at(-1)).toBeUndefined();
 	});
@@ -376,7 +486,7 @@ describe("background extension", () => {
 		const harness = createHarness();
 		await harness.startSession();
 
-		await harness.execute("bg_bash", { command: "npm run dev" });
+		await harness.execute("bg", { action: "create", command: "npm run dev" });
 		const bg = harness.commands.get("bg");
 		await bg?.handler("", harness.ctx as unknown as ExtensionCommandContext);
 
@@ -397,10 +507,10 @@ describe("background extension", () => {
 		await bg?.handler("", rpcCtx);
 		expect(harness.notifications.at(-1)).toBe("No background tasks.");
 
-		await harness.execute("bg_bash", { command: "npm run dev" });
+		await harness.execute("bg", { action: "create", command: "npm run dev" });
 		await bg?.handler("", rpcCtx);
 		expect(harness.notifications.at(-1)).toContain("running");
-		expect(harness.notifications.at(-1)).toContain("bg_kill");
+		expect(harness.notifications.at(-1)).toContain("action kill");
 
 		harness.calls[0]?.finish(0);
 		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
@@ -522,24 +632,57 @@ describe("resolveSessionShell", () => {
 	});
 });
 
-describe("renderBgBashCall", () => {
+describe("renderBgCall", () => {
 	const plainTheme = {
 		fg: (_color: string, text: string) => text,
 		bold: (text: string) => text,
 	} as unknown as Theme;
 
-	it("shows the full multi-line command only when expanded", () => {
-		const args = { command: "echo one\necho two\necho three" };
+	it("shows the full multi-line create command only when expanded", () => {
+		const args = { action: "create" as const, command: "echo one\necho two\necho three" };
 
-		const collapsed = renderBgBashCall(args, plainTheme, { expanded: false } as ToolRenderContext);
+		const collapsed = renderBgCall(args, plainTheme, { expanded: false } as ToolRenderContext);
 		const collapsedText = collapsed.render(200).map(stripTerminalSequences).join("\n");
 		expect(collapsedText).toContain("+2 lines");
 		expect(collapsedText).not.toContain("echo three");
 
-		const expanded = renderBgBashCall(args, plainTheme, { expanded: true } as ToolRenderContext);
+		const expanded = renderBgCall(args, plainTheme, { expanded: true } as ToolRenderContext);
 		const expandedText = expanded.render(200).map(stripTerminalSequences).join("\n");
 		expect(expandedText).toContain("echo two");
 		expect(expandedText).toContain("echo three");
 		expect(expandedText).not.toContain("+2 lines");
+	});
+
+	it("renders one line per action with the task id and parameters", () => {
+		const cases: [
+			{
+				action: "read" | "wait" | "kill" | "list";
+				taskId?: string;
+				mode?: "head" | "tail";
+				bytes?: number;
+				waitMs?: number;
+			},
+			RegExp,
+		][] = [
+			[{ action: "read", taskId: "bg-3f", mode: "tail", bytes: 8192 }, /^bg read bg-3f tail/],
+			[{ action: "wait", taskId: "3f", waitMs: 20_000 }, /^bg wait 3f 20s/],
+			[{ action: "kill", taskId: "bg-3f" }, /^bg kill bg-3f/],
+			[{ action: "list" }, /^bg list/],
+		];
+		for (const [args, pattern] of cases) {
+			const component = renderBgCall(args as never, plainTheme, { expanded: false } as ToolRenderContext);
+			const text = component.render(200).map(stripTerminalSequences).join("\n");
+			expect(text).toMatch(pattern);
+		}
+	});
+
+	it("appends the description label to a create call", () => {
+		const component = renderBgCall(
+			{ action: "create", command: "npm run dev", description: "dev server" },
+			plainTheme,
+			{ expanded: false } as ToolRenderContext,
+		);
+		const text = component.render(200).map(stripTerminalSequences).join("\n");
+		expect(text).toContain("npm run dev & · dev server");
 	});
 });

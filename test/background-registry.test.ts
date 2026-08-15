@@ -7,6 +7,7 @@ import {
 	type BackgroundRegistryOptions,
 	BackgroundTaskRegistry,
 	type BgTaskNotification,
+	readOutputSince,
 	readOutputSlice,
 } from "../src/extensions/background/registry.ts";
 
@@ -296,6 +297,74 @@ describe("BackgroundTaskRegistry", () => {
 		expect(notification?.tailTruncated).toBe(true);
 		expect(notification?.tailStartsMidLine).toBe(true);
 	});
+
+	it("stores the model-provided description on the task", () => {
+		const { registry } = makeRegistry();
+		const task = registry.startTask({ command: "npm run dev", cwd: "/w", description: "dev server" });
+		expect(task.description).toBe("dev server");
+	});
+
+	it("claim: a registered waiter delivers the completion and suppresses the followUp", async () => {
+		const { registry, calls, onNotify } = makeRegistry();
+		const task = registry.startTask({ command: "echo hi", cwd: "/w" });
+		calls[0]?.emitData("output\n");
+
+		const waitPromise = registry.waitForResult(task.id, 5_000);
+		calls[0]?.finish(0);
+		const result = await waitPromise;
+
+		expect(result.outcome).toBe("terminal");
+		expect(result.task.status).toBe("completed");
+		await registry.waitForTask(task.id);
+		expect(onNotify).not.toHaveBeenCalled();
+	});
+
+	it("claim: a kill while waiting is delivered inline without a followUp", async () => {
+		const { registry, onNotify } = makeRegistry();
+		const task = registry.startTask({ command: "sleep 100", cwd: "/w" });
+
+		const waitPromise = registry.waitForResult(task.id, 5_000);
+		registry.killTask(task.id);
+		const result = await waitPromise;
+
+		expect(result.outcome).toBe("terminal");
+		expect(result.task.status).toBe("killed");
+		await registry.waitForTask(task.id);
+		expect(onNotify).not.toHaveBeenCalled();
+	});
+
+	it("timeout: the wait window expiring leaves the followUp untouched", async () => {
+		const { registry, calls, onNotify } = makeRegistry();
+		const task = registry.startTask({ command: "sleep 100", cwd: "/w" });
+
+		const result = await registry.waitForResult(task.id, 20);
+		expect(result.outcome).toBe("timeout");
+		expect(result.task.status).toBe("running");
+		expect(onNotify).not.toHaveBeenCalled();
+
+		calls[0]?.finish(0);
+		await registry.waitForTask(task.id);
+		expect(onNotify).toHaveBeenCalledTimes(1);
+	});
+
+	it("waiting on an already-finished task returns the terminal state directly", async () => {
+		const { registry, calls, onNotify } = makeRegistry();
+		const task = registry.startTask({ command: "echo hi", cwd: "/w" });
+		calls[0]?.finish(0);
+		await registry.waitForTask(task.id);
+
+		const result = await registry.waitForResult(task.id, 20);
+		expect(result.outcome).toBe("terminal");
+		expect(result.task.status).toBe("completed");
+		// The followUp for this completion already fired — the direct read is an
+		// idempotent repeat, not a second notification.
+		expect(onNotify).toHaveBeenCalledTimes(1);
+	});
+
+	it("waitForResult rejects for an unknown task id", async () => {
+		const { registry } = makeRegistry();
+		await expect(registry.waitForResult("bg-nope", 20)).rejects.toThrow(/Unknown background task/);
+	});
 });
 
 describe("readOutputSlice", () => {
@@ -348,5 +417,60 @@ describe("readOutputSlice", () => {
 		const dir = mkdtempSync(join(tmpdir(), "pi-bg-slice-"));
 		tempDirs.push(dir);
 		await expect(readOutputSlice(join(dir, "missing.log"), { mode: "tail", maxBytes: 10 })).rejects.toThrow();
+	});
+});
+
+describe("readOutputSince", () => {
+	function writeTempFile(content: string | Buffer): string {
+		const dir = mkdtempSync(join(tmpdir(), "pi-bg-since-"));
+		tempDirs.push(dir);
+		const filePath = join(dir, "out.log");
+		writeFileSync(filePath, content);
+		return filePath;
+	}
+
+	it("returns the whole delta when it fits the budget", async () => {
+		const filePath = writeTempFile("0123456789");
+		const slice = await readOutputSince(filePath, 4, 100);
+		expect(slice.text).toBe("456789");
+		expect(slice.fromByte).toBe(4);
+		expect(slice.truncated).toBe(false);
+		expect(slice.totalBytes).toBe(10);
+	});
+
+	it("tail-aligns and reports truncation when the delta exceeds the budget", async () => {
+		const filePath = writeTempFile("0123456789");
+		const slice = await readOutputSince(filePath, 0, 4);
+		expect(slice.text).toBe("6789");
+		expect(slice.fromByte).toBe(6);
+		expect(slice.truncated).toBe(true);
+	});
+
+	it("clamps an offset at or beyond EOF to an empty read", async () => {
+		const filePath = writeTempFile("0123456789");
+		const atEof = await readOutputSince(filePath, 10, 100);
+		expect(atEof).toMatchObject({ text: "", sliceBytes: 0, truncated: false, fromByte: 10 });
+
+		const pastEof = await readOutputSince(filePath, 99, 100);
+		expect(pastEof).toMatchObject({ text: "", sliceBytes: 0, truncated: false, fromByte: 10 });
+	});
+
+	it("reports mid-line starts when the delta begins mid-line", async () => {
+		const filePath = writeTempFile("line one\nline two\n");
+		const midLine = await readOutputSince(filePath, 4, 100);
+		expect(midLine.text).toBe(" one\nline two\n");
+		expect(midLine.startsMidLine).toBe(true);
+
+		const atBoundary = await readOutputSince(filePath, 9, 100);
+		expect(atBoundary.text).toBe("line two\n");
+		expect(atBoundary.startsMidLine).toBe(false);
+	});
+
+	it("handles empty files and a zero offset", async () => {
+		const empty = await readOutputSince(writeTempFile(""), 0, 100);
+		expect(empty).toMatchObject({ text: "", sliceBytes: 0, totalBytes: 0, truncated: false });
+
+		const whole = await readOutputSince(writeTempFile("hi\n"), 0, 100);
+		expect(whole).toMatchObject({ text: "hi\n", truncated: false, startsMidLine: false, fromByte: 0 });
 	});
 });

@@ -1,7 +1,8 @@
 /**
- * Transcript rendering for the background extension: tool call/result rows
- * and the completion-notification message. Style follows the built-in bash
- * presentation: a `$` prompt row with an `&` marker for the background call.
+ * Transcript rendering for the background extension: the single bg tool's
+ * call/result rows (dispatched on action) and the completion-notification
+ * message. Style follows the built-in bash presentation: a `$` prompt row
+ * with an `&` marker for the background call.
  */
 
 import { type Component, Container, Text, TruncatedText } from "@earendil-works/pi-tui";
@@ -14,11 +15,13 @@ import type {
 import type { CustomMessage } from "../../core/messages.ts";
 import { formatSize } from "../../core/tools/truncate.ts";
 import { highlightCode, type Theme } from "../../modes/interactive/theme/theme.ts";
-import type { BgBashDetails, BgBashInput, BgKillInput, BgLogsInput, BgNotificationDetails } from "./index.ts";
+import type { BgCreateInput, BgDetails, BgInput, BgNotificationDetails } from "./index.ts";
 import { type BgTaskStatus, firstCommandLine, formatDuration } from "./registry.ts";
 
 const COMMAND_PREVIEW_LIMIT = 120;
 const NOTIFY_TAIL_LIMIT = 4000;
+/** Cap for expanded transcript views of tool-result text (already bounded at the source). */
+const RESULT_EXPAND_LIMIT = 4000;
 
 function bgPrompt(theme: Theme): string {
 	return theme.fg("toolTitle", theme.bold("$ "));
@@ -26,6 +29,11 @@ function bgPrompt(theme: Theme): string {
 
 function timeoutSuffix(timeout: number | undefined, theme: Theme): string {
 	return timeout ? theme.fg("muted", ` (timeout ${timeout}s)`) : "";
+}
+
+/** Keep the END of oversized text — that is where the outcome lives. */
+function capForTranscript(text: string, limit: number): string {
+	return text.length > limit ? `…${text.slice(-limit)}` : text;
 }
 
 export function statusGlyph(status: BgTaskStatus): string {
@@ -62,9 +70,44 @@ export function commandLabel(command: string, width: number): string {
 	return characters.length <= width ? characters.join("") : `${characters.slice(0, Math.max(0, width - 1)).join("")}…`;
 }
 
-export function renderBgBashCall(args: BgBashInput, theme: Theme, context: ToolRenderContext): Component {
+// ── tool call ─────────────────────────────────────────────────────────────
+
+export function renderBgCall(args: BgInput, theme: Theme, context: ToolRenderContext): Component {
+	switch (args.action) {
+		case "create":
+			return renderCreateCall(args as BgCreateInput, theme, context);
+		case "read": {
+			const mode = args.mode ?? "tail";
+			const size = args.bytes !== undefined ? ` ${formatSize(args.bytes)}` : "";
+			return new Text(
+				`${theme.fg("toolTitle", theme.bold("bg read "))}${theme.fg("accent", args.taskId ?? "")}${theme.fg("muted", ` ${mode}${size}`)}`,
+				0,
+				0,
+			);
+		}
+		case "wait": {
+			const ms = args.waitMs !== undefined ? ` ${formatDuration(args.waitMs)}` : "";
+			return new Text(
+				`${theme.fg("toolTitle", theme.bold("bg wait "))}${theme.fg("accent", args.taskId ?? "")}${theme.fg("muted", ms)}`,
+				0,
+				0,
+			);
+		}
+		case "kill":
+			return new Text(
+				`${theme.fg("toolTitle", theme.bold("bg kill "))}${theme.fg("accent", args.taskId ?? "")}`,
+				0,
+				0,
+			);
+		case "list":
+			return new Text(theme.fg("toolTitle", theme.bold("bg list")), 0, 0);
+	}
+}
+
+function renderCreateCall(args: BgCreateInput, theme: Theme, context: ToolRenderContext): Component {
 	const lines = args.command.split(/\r?\n/).filter((line) => line.trim().length > 0);
-	const suffix = theme.fg("muted", " &") + timeoutSuffix(args.timeout, theme);
+	const label = args.description ? theme.fg("muted", ` · ${args.description}`) : "";
+	const suffix = theme.fg("muted", " &") + timeoutSuffix(args.timeout, theme) + label;
 	if (context.expanded && lines.length > 1) {
 		const body = highlightCode(args.command, "bash").join("\n");
 		return new Text(`${bgPrompt(theme)}${body}${suffix}`, 0, 0);
@@ -78,38 +121,58 @@ export function renderBgBashCall(args: BgBashInput, theme: Theme, context: ToolR
 	return new Text(`${bgPrompt(theme)}${body}${suffix}`, 0, 0);
 }
 
-export function renderBgBashResult(
-	result: AgentToolResult<BgBashDetails | undefined>,
-	_options: ToolRenderResultOptions,
+// ── tool result ───────────────────────────────────────────────────────────
+
+export function renderBgResult(
+	result: AgentToolResult<BgDetails | undefined>,
+	options: ToolRenderResultOptions,
 	theme: Theme,
 	context: ToolRenderContext,
 ): Component {
-	if (context.isError) {
+	const details = result.details;
+	if (context.isError || !details) {
 		const text = result.content.find((part) => part.type === "text")?.text ?? "";
 		return new Text(theme.fg("toolOutput", text.trimEnd()), 0, 0);
 	}
-	const details = result.details;
-	if (!details) return new Text(theme.fg("toolOutput", "Background task started."), 0, 0);
-	const line = `${theme.fg("muted", "→ task ")}${theme.fg("accent", details.taskId)}${theme.fg(
-		"muted",
-		` started · ${details.outputPath}`,
-	)}`;
-	return new Text(line, 0, 0);
+
+	const container = new Container();
+	container.addChild(new TruncatedText(resultSummaryLine(details, theme), 1, 0));
+	if (options.expanded) {
+		const text = result.content.find((part) => part.type === "text")?.text ?? "";
+		container.addChild(new Text("", 0, 0));
+		container.addChild(new Text(theme.fg("toolOutput", capForTranscript(text, RESULT_EXPAND_LIMIT).trimEnd()), 1, 0));
+	}
+	return container;
 }
 
-export function renderBgLogsCall(args: BgLogsInput, theme: Theme): Component {
-	const mode = args.mode ?? "tail";
-	const size = args.bytes !== undefined ? ` ${formatSize(args.bytes)}` : "";
-	return new Text(
-		`${theme.fg("toolTitle", theme.bold("bg logs "))}${theme.fg("accent", args.taskId)}${theme.fg("muted", ` ${mode}${size}`)}`,
-		0,
-		0,
-	);
+function resultSummaryLine(details: BgDetails, theme: Theme): string {
+	switch (details.action) {
+		case "create":
+			return `${theme.fg("muted", "→ task ")}${theme.fg("accent", details.taskId)}${theme.fg("muted", ` started · ${details.outputPath}`)}`;
+		case "read": {
+			const size =
+				details.sliceBytes !== details.totalBytes
+					? `${details.mode} ${formatSize(details.sliceBytes)} of ${formatSize(details.totalBytes)}`
+					: formatSize(details.totalBytes);
+			return `${theme.fg("muted", "→ ")}${theme.fg("accent", details.taskId)}${theme.fg("muted", ` ${size} · ${details.outputPath}`)}`;
+		}
+		case "wait": {
+			if (details.timedOut) {
+				return `${theme.fg(statusColor(details.status), statusGlyph(details.status))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", ` still running · waited ${formatDuration(details.waitedMs)} · ${formatSize(details.totalBytes)}`)}`;
+			}
+			const exit = details.exitCode !== undefined && details.exitCode !== null ? `, exit ${details.exitCode}` : "";
+			return `${theme.fg(statusColor(details.status), statusGlyph(details.status))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", ` ${details.status}${exit} · waited ${formatDuration(details.waitedMs)} · +${formatSize(details.deltaBytes)}`)}`;
+		}
+		case "kill":
+			return `${theme.fg(statusColor("killed"), statusGlyph("killed"))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", " stopped")}`;
+		case "list": {
+			const hidden = details.hidden > 0 ? ` · ${details.hidden} more finished` : "";
+			return theme.fg("muted", `${details.running} running · ${details.finished} finished${hidden}`);
+		}
+	}
 }
 
-export function renderBgKillCall(args: BgKillInput, theme: Theme): Component {
-	return new Text(`${theme.fg("toolTitle", theme.bold("bg kill "))}${theme.fg("accent", args.taskId)}`, 0, 0);
-}
+// ── completion notification ───────────────────────────────────────────────
 
 /** One-line summary of a finished task, shared by the notification renderer. */
 function taskSummaryLine(details: BgNotificationDetails, theme: Theme): string {
@@ -117,11 +180,14 @@ function taskSummaryLine(details: BgNotificationDetails, theme: Theme): string {
 	const exit = details.exitCode !== undefined && details.exitCode !== null ? `, exit ${details.exitCode}` : "";
 	const outcome = theme.fg(statusColor(details.status), `${details.status}${exit} in ${runtime}`);
 	const glyph = theme.fg(statusColor(details.status), statusGlyph(details.status));
-	return `${glyph} ${theme.fg("accent", details.taskId)} ${commandLabel(details.command, COMMAND_PREVIEW_LIMIT)} ${theme.fg("muted", `— ${outcome}`)}`;
+	const label = details.description
+		? `${details.description} (${commandLabel(details.command, 40)})`
+		: commandLabel(details.command, COMMAND_PREVIEW_LIMIT);
+	return `${glyph} ${theme.fg("accent", details.taskId)} ${label} ${theme.fg("muted", `— ${outcome}`)}`;
 }
 
 /**
- * Collapsed: status glyph, task id, command, and outcome on one line, output
+ * Collapsed: status glyph, task id, label, and outcome on one line, output
  * path below. Expanded adds the embedded output tail. Returns undefined for
  * malformed details so the default custom-message rendering takes over.
  */
@@ -141,13 +207,9 @@ export function renderBackgroundNotification(
 		container.addChild(new Text(theme.fg("error", `Output unavailable: ${details.tailError}`), 1, 0));
 	} else if (options.expanded && details.tailText) {
 		container.addChild(new Text("", 0, 0));
-		// Keep the END of the tail when over budget — that is where the outcome lives.
-		const tail =
-			details.tailText.length > NOTIFY_TAIL_LIMIT
-				? `…${details.tailText.slice(-NOTIFY_TAIL_LIMIT)}`
-				: details.tailText;
+		const tail = capForTranscript(details.tailText, NOTIFY_TAIL_LIMIT);
 		const truncatedNote = details.tailTruncated
-			? `\n[showing tail of ${details.totalBytes} bytes; full output: ${details.outputPath}]`
+			? `\n[showing tail of ${formatSize(details.totalBytes)} bytes; full output: ${details.outputPath}]`
 			: "";
 		container.addChild(
 			new Text(`${theme.fg("toolOutput", tail.trimEnd())}${theme.fg("muted", truncatedNote)}`, 1, 0),

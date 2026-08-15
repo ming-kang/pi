@@ -1,11 +1,15 @@
 /**
  * background — run bash commands in the background.
  *
- * Tools: bg_bash starts a task and returns immediately; the result arrives as
- * a <background-task> notification (queued behind the current run while
- * streaming, waking the agent when idle). bg_logs reads a bounded slice of a
- * task's output file; bg_kill stops a single task. /bg opens the interactive
- * task manager. Running counts surface in the footer via ctx.ui.setStatus.
+ * Tools: a single `bg` tool with five actions. create starts a task and
+ * returns immediately; the result arrives as a <background-task> notification
+ * (queued behind the current run while streaming, waking the agent when
+ * idle). read returns a bounded slice of a task's output file; wait blocks
+ * (bounded) for a task's completion and delivers it inline — the followUp
+ * notification is suppressed so the completion is delivered exactly once;
+ * kill stops a single task; list enumerates known tasks. /bg opens the
+ * interactive task manager. Running counts surface in the footer via
+ * ctx.ui.setStatus.
  */
 
 import { type Static, Type } from "typebox";
@@ -31,62 +35,92 @@ import {
 	type BgTask,
 	type BgTaskNotification,
 	type BgTaskStatus,
+	firstCommandLine,
 	formatDuration,
 	type ResolveTaskResult,
+	readOutputSince,
 	readOutputSlice,
 } from "./registry.ts";
-import {
-	commandLabel,
-	renderBackgroundNotification,
-	renderBgBashCall,
-	renderBgBashResult,
-	renderBgKillCall,
-	renderBgLogsCall,
-} from "./render.ts";
+import { commandLabel, renderBackgroundNotification, renderBgCall, renderBgResult } from "./render.ts";
 
 export const BG_NOTIFICATION_TYPE = "background-task";
 const BG_LOGS_DEFAULT_BYTES = 8 * 1024;
 const BG_LOGS_MIN_BYTES = 256;
+const BG_WAIT_DEFAULT_MS = 20_000;
+const BG_WAIT_MIN_MS = 1_000;
+const BG_WAIT_MAX_MS = 60_000;
+/** Bounded output delta returned by a successful wait. */
+const BG_WAIT_DELTA_BYTES = 32 * 1024;
+/** Tail peek included in a wait timeout result so progress stays visible. */
+const BG_WAIT_PEEK_BYTES = 2 * 1024;
+const BG_LIST_FINISHED_SHOWN = 5;
 
-const bgBashSchema = Type.Object({
-	command: Type.String({ description: "Bash command to run in the background" }),
-	timeout: Type.Optional(
-		Type.Number({
-			description:
-				"Timeout in seconds (optional, no default; must be positive). On expiry the task is killed and reported as timeout.",
+const bgSchema = Type.Object({
+	action: Type.Union(
+		[Type.Literal("create"), Type.Literal("read"), Type.Literal("wait"), Type.Literal("kill"), Type.Literal("list")],
+		{ description: "Which background-task operation to perform" },
+	),
+	// — create —
+	command: Type.Optional(
+		Type.String({ description: "Bash command to run in the background (create). Do not append '&'" }),
+	),
+	description: Type.Optional(
+		Type.String({
+			description: "Short label for the task, shown in /bg and notifications, e.g. 'dev server' (create)",
 		}),
 	),
-});
-
-const bgLogsSchema = Type.Object({
-	taskId: Type.String({ description: "Task id; a unique prefix is accepted (e.g. 'bg-3f' or '3f')" }),
+	timeout: Type.Optional(
+		Type.Number({
+			description: "Kill the task after this many seconds; on expiry it is reported as timeout (create)",
+		}),
+	),
+	// — read / wait / kill —
+	taskId: Type.Optional(
+		Type.String({ description: "Task id; a unique prefix is accepted, e.g. 'bg-3f' or '3f' (read/wait/kill)" }),
+	),
+	// — read —
 	mode: Type.Optional(
 		Type.Union([Type.Literal("tail"), Type.Literal("head")], {
-			description: "Read from the end (default) or the start of the output",
+			description: "Read from the end (default) or the start of the output (read)",
 		}),
 	),
 	bytes: Type.Optional(
 		Type.Number({
-			description: `Max bytes to return (default ${BG_LOGS_DEFAULT_BYTES}, max ${DEFAULT_MAX_BYTES})`,
+			description: `Max bytes to return (read, default ${formatSize(BG_LOGS_DEFAULT_BYTES)}, max ${formatSize(DEFAULT_MAX_BYTES)})`,
+		}),
+	),
+	// — wait —
+	waitMs: Type.Optional(
+		Type.Number({
+			description: `Max time to wait in ms, default ${BG_WAIT_DEFAULT_MS}, max ${BG_WAIT_MAX_MS} (wait)`,
+		}),
+	),
+	sinceBytes: Type.Optional(
+		Type.Number({
+			description:
+				"Only return output written after this byte offset — take it from a previous read/wait result (wait)",
 		}),
 	),
 });
 
-const bgKillSchema = Type.Object({
-	taskId: Type.String({ description: "Task id; a unique prefix is accepted" }),
-});
+export type BgInput = Static<typeof bgSchema>;
 
-export type BgBashInput = Static<typeof bgBashSchema>;
-export type BgLogsInput = Static<typeof bgLogsSchema>;
-export type BgKillInput = Static<typeof bgKillSchema>;
+/** Per-action inputs: validateAction guarantees the required fields before the cast. */
+export type BgCreateInput = BgInput & { action: "create"; command: string };
+export type BgReadInput = BgInput & { action: "read"; taskId: string };
+export type BgWaitInput = BgInput & { action: "wait"; taskId: string };
+export type BgKillInput = BgInput & { action: "kill"; taskId: string };
 
-export interface BgBashDetails {
+export interface BgCreateDetails {
+	action: "create";
 	taskId: string;
 	outputPath: string;
 	command: string;
+	description?: string;
 }
 
-export interface BgLogsDetails {
+export interface BgReadDetails {
+	action: "read";
 	taskId: string;
 	mode: "head" | "tail";
 	sliceBytes: number;
@@ -94,14 +128,40 @@ export interface BgLogsDetails {
 	outputPath: string;
 }
 
+export interface BgWaitDetails {
+	action: "wait";
+	taskId: string;
+	/** True when the wait window expired and the task is still running. */
+	timedOut: boolean;
+	status: BgTaskStatus;
+	exitCode: number | null | undefined;
+	waitedMs: number;
+	deltaBytes: number;
+	totalBytes: number;
+	deltaTruncated: boolean;
+	outputPath: string;
+}
+
 export interface BgKillDetails {
+	action: "kill";
 	taskId: string;
 	command: string;
 }
 
+export interface BgListDetails {
+	action: "list";
+	running: number;
+	finished: number;
+	shown: number;
+	hidden: number;
+}
+
+export type BgDetails = BgCreateDetails | BgReadDetails | BgWaitDetails | BgKillDetails | BgListDetails;
+
 export interface BgNotificationDetails {
 	taskId: string;
 	command: string;
+	description?: string;
 	status: BgTaskStatus;
 	exitCode: number | null | undefined;
 	runtimeMs: number;
@@ -156,8 +216,11 @@ export function buildNotificationContent(notification: BgTaskNotification): stri
 	const lines = [
 		`<background-task id="${task.id}" status="${task.status}"${exitCode} runtime="${runtime}">`,
 		`<command>${xmlText(task.command)}</command>`,
-		`<output-file>${xmlText(task.outputPath)}</output-file>`,
 	];
+	if (task.description) {
+		lines.push(`<description>${xmlText(task.description)}</description>`);
+	}
+	lines.push(`<output-file>${xmlText(task.outputPath)}</output-file>`);
 	if (task.error) {
 		lines.push(`<error>${xmlText(task.error)}</error>`);
 	}
@@ -190,16 +253,24 @@ export function formatStatusline(counts: { running: number; total: number }): st
 
 function describeResolveFailure(input: string, result: ResolveTaskResult & { ok: false }): string {
 	if (result.reason === "ambiguous") {
-		const lines = result.candidates.map((task) => `  ${task.id} (${task.status})  ${commandLabel(task.command, 60)}`);
+		const lines = result.candidates.map(
+			(task) => `  ${task.id} (${task.status})  ${commandLabel(taskLabel(task), 60)}`,
+		);
 		return `Task id "${input}" is ambiguous. Candidates:\n${lines.join("\n")}`;
 	}
-	return `No background task matches "${input}". Check the id returned by bg_bash or open /bg.`;
+	return `No background task matches "${input}". Check the id returned by bg (action create), or run action list.`;
 }
 
+/** One row of a bounded task listing: the model-facing list and /bg summaries. */
 function describeTaskLine(task: BgTask, now: number): string {
 	const duration = formatDuration((task.endedAt ?? now) - task.startedAt);
 	const exit = task.exitCode !== undefined && task.exitCode !== null ? ` exit ${task.exitCode}` : "";
-	return `  ${task.id}  ${task.status}${exit}  ${duration}  ${commandLabel(task.command, 40)}`;
+	return `  ${task.id}  ${task.status}${exit}  ${duration}  ${commandLabel(taskLabel(task), 60)}`;
+}
+
+/** Label for listings: the model-provided description over the first command line. */
+function taskLabel(task: BgTask): string {
+	return task.description ? `${task.description} — ${firstCommandLine(task.command)}` : firstCommandLine(task.command);
 }
 
 function toNotificationDetails(notification: BgTaskNotification): BgNotificationDetails {
@@ -207,6 +278,7 @@ function toNotificationDetails(notification: BgTaskNotification): BgNotification
 	return {
 		taskId: task.id,
 		command: task.command,
+		description: task.description,
 		status: task.status,
 		exitCode: task.exitCode,
 		runtimeMs: (task.endedAt ?? task.startedAt) - task.startedAt,
@@ -237,7 +309,7 @@ export interface BackgroundExtensionOverrides {
 	maxOutputBytes?: number;
 }
 
-/** Shell configuration for one bg_bash session: the session's settings win, disk settings are the fallback. */
+/** Shell configuration for one bg session: the session's settings win, disk settings are the fallback. */
 export function resolveSessionShell(
 	ctx: ExtensionContext,
 	readDiskSettings?: () => { shellPath?: string; commandPrefix?: string },
@@ -256,6 +328,28 @@ function createSessionBashOperations(ctx: ExtensionContext): BashOperations {
 		return { shellPath: settings.getShellPath(), commandPrefix: settings.getShellCommandPrefix() };
 	});
 	return prependCommandPrefix(createLocalBashOperations({ shellPath: shell.shellPath }), shell.commandPrefix);
+}
+
+/** Validate per-action required fields; every message names the next step. */
+function validateAction(input: BgInput): void {
+	switch (input.action) {
+		case "create":
+			if (!input.command || input.command.trim().length === 0) {
+				throw new Error("action 'create' requires 'command' — pass the bash command to run in the background.");
+			}
+			break;
+		case "read":
+		case "wait":
+		case "kill":
+			if (!input.taskId || input.taskId.trim().length === 0) {
+				throw new Error(
+					`action '${input.action}' requires 'taskId' — use the id returned by action create, or action list to find it.`,
+				);
+			}
+			break;
+		case "list":
+			break;
+	}
 }
 
 /** Factory with injectable seams for tests; the default export uses production wiring. */
@@ -312,137 +406,313 @@ export function createBackgroundExtension(overrides?: BackgroundExtensionOverrid
 			await active?.shutdown();
 		});
 
-		pi.registerTool<typeof bgBashSchema, BgBashDetails>({
-			name: "bg_bash",
-			label: "bg bash",
-			description:
-				"Run a bash command in the background and return immediately with a task id and output file path. " +
-				"The result (status, exit code, output tail) arrives automatically as a <background-task> notification " +
-				"when the task ends. Use for long-running commands such as dev servers, watch builds, or slow tests. " +
-				"Optionally provide a timeout in seconds.",
-			promptSnippet: "Run bash commands in the background (bg_bash); results arrive automatically",
-			promptGuidelines: [
-				"Use bg_bash for long-running commands (servers, builds, slow tests). Never poll for completion with sleep loops or repeated bg_logs; the <background-task> notification arrives automatically when the task ends. Use bg_logs for an early peek at a running task and bg_kill to stop one.",
-			],
-			parameters: bgBashSchema,
-			async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<BgBashDetails>> {
-				if (params.timeout !== undefined && (!Number.isFinite(params.timeout) || params.timeout <= 0)) {
-					throw new Error("Invalid timeout: must be a positive number of seconds.");
-				}
-				if (params.timeout !== undefined && params.timeout > MAX_TIMEOUT_SECONDS) {
-					throw new Error(`Invalid timeout: maximum is ${MAX_TIMEOUT_SECONDS} seconds`);
-				}
-				// Same PI_* session variables as the built-in bash tool, snapshotted at start.
-				const spawnContext = resolveSpawnContext(params.command, ctx.cwd, undefined, true, ctx);
-				// Deliberately ignore the turn signal: aborting the current turn must
-				// not kill the background task (that is what bg_kill is for).
-				const task = requireRegistry().startTask({
+		const runCreate = async (
+			params: BgCreateInput,
+			ctx: ExtensionContext,
+		): Promise<AgentToolResult<BgCreateDetails>> => {
+			if (params.timeout !== undefined && (!Number.isFinite(params.timeout) || params.timeout <= 0)) {
+				throw new Error("Invalid timeout: must be a positive number of seconds.");
+			}
+			if (params.timeout !== undefined && params.timeout > MAX_TIMEOUT_SECONDS) {
+				throw new Error(`Invalid timeout: maximum is ${MAX_TIMEOUT_SECONDS} seconds`);
+			}
+			// Same PI_* session variables as the built-in bash tool, snapshotted at start.
+			const spawnContext = resolveSpawnContext(params.command, ctx.cwd, undefined, true, ctx);
+			// Deliberately ignore the turn signal: aborting the current turn must
+			// not kill the background task (that is what action kill is for).
+			const task = requireRegistry().startTask({
+				command: params.command,
+				cwd: ctx.cwd,
+				description: params.description,
+				timeoutSeconds: params.timeout,
+				env: spawnContext.env,
+			});
+			const label = task.description ? ` (${task.description})` : "";
+			const text = [
+				`Started background task ${task.id}${label}.`,
+				`Output file: ${task.outputPath}`,
+				"",
+				"A <background-task> notification with the result and output tail arrives automatically when the task " +
+					"ends — do NOT poll (no sleep loops, no repeated reads). Use action read for an early peek, " +
+					"action wait when the next step depends on the result, action kill to stop it.",
+			].join("\n");
+			return {
+				content: [{ type: "text", text }],
+				details: {
+					action: "create",
+					taskId: task.id,
+					outputPath: task.outputPath,
 					command: params.command,
-					cwd: ctx.cwd,
-					timeoutSeconds: params.timeout,
-					env: spawnContext.env,
-				});
-				const text = [
-					`Started background task ${task.id}.`,
-					`Output file: ${task.outputPath}`,
-					"",
-					"Do NOT poll for completion (no sleep loops, no repeated bg_logs). A <background-task> " +
-						"notification with the result and output tail arrives automatically when the task ends — " +
-						"continue independent work or end the turn. Use bg_logs for an early peek, bg_kill to stop it.",
-				].join("\n");
-				return {
-					content: [{ type: "text", text }],
-					details: { taskId: task.id, outputPath: task.outputPath, command: params.command },
-				};
-			},
-			renderCall(args, theme, context) {
-				return renderBgBashCall(args, theme, context);
-			},
-			renderResult(result, options, theme, context) {
-				return renderBgBashResult(result, options, theme, context);
-			},
-		});
+					description: params.description,
+				},
+			};
+		};
 
-		pi.registerTool<typeof bgLogsSchema, BgLogsDetails>({
-			name: "bg_logs",
-			label: "bg logs",
-			description:
-				`Read a bounded slice of a background task's output file (default: last ${formatSize(BG_LOGS_DEFAULT_BYTES)}, ` +
-				`max ${formatSize(DEFAULT_MAX_BYTES)}). Works while the task is still running. ` +
-				"Do not call this in a polling loop; completion arrives as a notification.",
-			parameters: bgLogsSchema,
-			async execute(_toolCallId, params, _signal, _onUpdate, _ctx): Promise<AgentToolResult<BgLogsDetails>> {
-				const task = resolveTaskOrThrow(params.taskId);
-				const mode = params.mode ?? "tail";
-				const maxBytes = Math.min(
-					DEFAULT_MAX_BYTES,
-					Math.max(BG_LOGS_MIN_BYTES, Math.floor(params.bytes ?? BG_LOGS_DEFAULT_BYTES)),
+		const runRead = async (params: BgReadInput): Promise<AgentToolResult<BgReadDetails>> => {
+			const task = resolveTaskOrThrow(params.taskId);
+			const mode = params.mode ?? "tail";
+			const maxBytes = Math.min(
+				DEFAULT_MAX_BYTES,
+				Math.max(BG_LOGS_MIN_BYTES, Math.floor(params.bytes ?? BG_LOGS_DEFAULT_BYTES)),
+			);
+			let slice: Awaited<ReturnType<typeof readOutputSlice>>;
+			try {
+				slice = await readOutputSlice(task.outputPath, { mode, maxBytes });
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				throw new Error(
+					`Could not read output for ${task.id} (${task.status}): ${message}\nOutput file: ${task.outputPath}`,
 				);
-				let slice: Awaited<ReturnType<typeof readOutputSlice>>;
+			}
+			const text = sanitizeBinaryOutput(slice.text);
+			const running = task.status === "running" ? ["still running"] : [];
+			const noticeParts = slice.truncated
+				? [
+						`${mode} ${formatSize(slice.sliceBytes)} of ${formatSize(slice.totalBytes)}`,
+						`task ${task.id} ${task.status}`,
+						...running,
+						...(slice.startsMidLine ? ["first line may be partial"] : []),
+						`full output: ${task.outputPath}`,
+					]
+				: [
+						`task ${task.id} ${task.status}`,
+						...running,
+						`${formatSize(slice.totalBytes)} total`,
+						`output: ${task.outputPath}`,
+					];
+			const body = text.length > 0 ? text : "(no output yet)";
+			return {
+				content: [{ type: "text", text: `[${noticeParts.join(" · ")}]\n${body}` }],
+				details: {
+					action: "read",
+					taskId: task.id,
+					mode,
+					sliceBytes: slice.sliceBytes,
+					totalBytes: slice.totalBytes,
+					outputPath: task.outputPath,
+				},
+			};
+		};
+
+		const runWait = async (params: BgWaitInput): Promise<AgentToolResult<BgWaitDetails>> => {
+			const task = resolveTaskOrThrow(params.taskId);
+			const waitMs = Math.min(
+				BG_WAIT_MAX_MS,
+				Math.max(BG_WAIT_MIN_MS, Math.floor(params.waitMs ?? BG_WAIT_DEFAULT_MS)),
+			);
+			const startedWait = Date.now();
+			const result = await requireRegistry().waitForResult(task.id, waitMs);
+			const waitedMs = Date.now() - startedWait;
+			const finalTask = result.task;
+			const exitSuffix =
+				finalTask.exitCode !== undefined && finalTask.exitCode !== null ? ` · exit ${finalTask.exitCode}` : "";
+			const ran = formatDuration((finalTask.endedAt ?? Date.now()) - finalTask.startedAt);
+
+			if (result.outcome === "timeout") {
+				// Still running: keep progress visible with a bounded tail peek.
+				let peekText = "";
+				let peekNote = "";
+				let totalBytes = finalTask.outputBytes;
 				try {
-					slice = await readOutputSlice(task.outputPath, { mode, maxBytes });
-				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					throw new Error(
-						`Could not read output for ${task.id} (${task.status}): ${message}\nOutput file: ${task.outputPath}`,
-					);
+					const peek = await readOutputSlice(finalTask.outputPath, { mode: "tail", maxBytes: BG_WAIT_PEEK_BYTES });
+					peekText = sanitizeBinaryOutput(peek.text);
+					totalBytes = peek.totalBytes;
+					peekNote = peek.truncated ? ` (last ${formatSize(peek.sliceBytes)})` : "";
+				} catch {
+					peekNote = " (output unavailable)";
 				}
-				const text = sanitizeBinaryOutput(slice.text);
-				const noticeParts = slice.truncated
-					? [
-							`${mode} ${formatSize(slice.sliceBytes)} of ${formatSize(slice.totalBytes)}`,
-							`task ${task.id} ${task.status}`,
-							...(slice.startsMidLine ? ["first line may be partial"] : []),
-							`full output: ${task.outputPath}`,
-						]
-					: [
-							`task ${task.id} ${task.status}`,
-							`${formatSize(slice.totalBytes)} total`,
-							`output: ${task.outputPath}`,
-						];
-				const body = text.length > 0 ? text : "(no output yet)";
+				const lines = [
+					`[${finalTask.id} still running · waited ${formatDuration(waitedMs)} · ${formatSize(totalBytes)} total]`,
+				];
+				const trimmed = peekText.trimEnd();
+				if (trimmed.length > 0) lines.push(`Last output${peekNote}:\n${trimmed}`);
+				lines.push(
+					"The task keeps running. Wait again (action wait), peek with action read, or stop it with action kill; " +
+						"the <background-task> notification still arrives when it ends. Do not sleep-poll.",
+				);
 				return {
-					content: [{ type: "text", text: `[${noticeParts.join(" · ")}]\n${body}` }],
+					content: [{ type: "text", text: lines.join("\n\n") }],
 					details: {
-						taskId: task.id,
-						mode,
-						sliceBytes: slice.sliceBytes,
-						totalBytes: slice.totalBytes,
-						outputPath: task.outputPath,
+						action: "wait",
+						taskId: finalTask.id,
+						timedOut: true,
+						status: finalTask.status,
+						exitCode: finalTask.exitCode,
+						waitedMs,
+						deltaBytes: 0,
+						totalBytes,
+						deltaTruncated: false,
+						outputPath: finalTask.outputPath,
 					},
 				};
-			},
-			renderCall(args, theme) {
-				return renderBgLogsCall(args, theme);
-			},
-		});
+			}
 
-		pi.registerTool<typeof bgKillSchema, BgKillDetails>({
-			name: "bg_kill",
-			label: "bg kill",
-			description:
-				"Kill a running background task (the whole process tree). The terminal status and output tail " +
-				"still arrive as the task's completion notification.",
-			parameters: bgKillSchema,
-			async execute(_toolCallId, params, _signal, _onUpdate, _ctx): Promise<AgentToolResult<BgKillDetails>> {
-				const task = resolveTaskOrThrow(params.taskId);
-				const result = requireRegistry().killTask(task.id);
-				if (!result.killed) {
-					const exit = task.exitCode !== undefined && task.exitCode !== null ? `, exit ${task.exitCode}` : "";
-					throw new Error(`Task ${task.id} is not running (status: ${task.status}${exit}).`);
+			// Terminal: deliver the bounded delta since the requested offset.
+			// The followUp notification was suppressed by the claim protocol —
+			// this result is the single delivery of the completion.
+			const since = params.sinceBytes !== undefined ? Math.max(0, Math.floor(params.sinceBytes)) : undefined;
+			let delta: Awaited<ReturnType<typeof readOutputSince>>;
+			let offsetNote: string | undefined;
+			try {
+				delta = await readOutputSince(finalTask.outputPath, since ?? 0, BG_WAIT_DELTA_BYTES);
+				if (since !== undefined && since > delta.totalBytes) {
+					// A stale offset past EOF (the output was truncated at the cap, or
+					// the model is reusing an id from an earlier read): fall back to
+					// the tail and say so. Never an error — the offset is not a bug.
+					delta = await readOutputSince(finalTask.outputPath, 0, BG_WAIT_DELTA_BYTES);
+					offsetNote = finalTask.outputTruncated
+						? "the given offset is past EOF — output was truncated at the limit; showing the tail"
+						: "the given offset is past EOF; showing the tail";
 				}
+			} catch (error) {
+				// Deliver the terminal status even when the output file cannot be read.
+				const message = error instanceof Error ? error.message : String(error);
 				return {
 					content: [
 						{
 							type: "text",
-							text: `Killed task ${task.id}. A completion notification follows once the process tree is reaped.`,
+							text: `[${finalTask.id} ${finalTask.status}${exitSuffix} · ran ${ran} · waited ${formatDuration(waitedMs)}]\nerror reading output: ${message}`,
 						},
 					],
-					details: { taskId: task.id, command: task.command },
+					details: {
+						action: "wait",
+						taskId: finalTask.id,
+						timedOut: false,
+						status: finalTask.status,
+						exitCode: finalTask.exitCode,
+						waitedMs,
+						deltaBytes: 0,
+						totalBytes: finalTask.outputBytes,
+						deltaTruncated: false,
+						outputPath: finalTask.outputPath,
+					},
 				};
+			}
+
+			const lines = [
+				`[${finalTask.id} ${finalTask.status}${exitSuffix} · ran ${ran} · waited ${formatDuration(waitedMs)} · +${formatSize(delta.sliceBytes)} new output · total ${formatSize(delta.totalBytes)}]`,
+			];
+			if (offsetNote) lines.push(`[${offsetNote}]`);
+			if (finalTask.error) lines.push(`error: ${finalTask.error}`);
+			if (delta.truncated) {
+				lines.push(
+					`[showing ${formatSize(delta.sliceBytes)} of ${formatSize(delta.totalBytes)}; full output: ${finalTask.outputPath}]`,
+				);
+			}
+			const body = sanitizeBinaryOutput(delta.text).trimEnd();
+			lines.push(body.length > 0 ? body : "(no new output)");
+			return {
+				content: [{ type: "text", text: lines.join("\n") }],
+				details: {
+					action: "wait",
+					taskId: finalTask.id,
+					timedOut: false,
+					status: finalTask.status,
+					exitCode: finalTask.exitCode,
+					waitedMs,
+					deltaBytes: delta.sliceBytes,
+					totalBytes: delta.totalBytes,
+					deltaTruncated: delta.truncated,
+					outputPath: finalTask.outputPath,
+				},
+			};
+		};
+
+		const runKill = (params: BgKillInput): AgentToolResult<BgKillDetails> => {
+			const task = resolveTaskOrThrow(params.taskId);
+			const result = requireRegistry().killTask(task.id);
+			if (!result.killed) {
+				const exit = task.exitCode !== undefined && task.exitCode !== null ? `, exit ${task.exitCode}` : "";
+				throw new Error(`Task ${task.id} is not running (status: ${task.status}${exit}).`);
+			}
+			return {
+				content: [
+					{
+						type: "text",
+						text: `Killed task ${task.id}. If you are waiting on it (action wait) the killed status is delivered there; otherwise a completion notification follows once the process tree is reaped.`,
+					},
+				],
+				details: { action: "kill", taskId: task.id, command: task.command },
+			};
+		};
+
+		const runList = (): AgentToolResult<BgListDetails> => {
+			const tasks = requireRegistry().listTasks();
+			if (tasks.length === 0) {
+				return {
+					content: [{ type: "text", text: "No background tasks this session. Start one with action create." }],
+					details: { action: "list", running: 0, finished: 0, shown: 0, hidden: 0 },
+				};
+			}
+			const now = Date.now();
+			const running = tasks.filter((task) => task.status === "running");
+			const finished = tasks.filter((task) => task.status !== "running");
+			const shownFinished = finished.slice(0, BG_LIST_FINISHED_SHOWN);
+			const hidden = finished.length - shownFinished.length;
+			const lines = [`${running.length} running · ${finished.length} finished`];
+			for (const task of [...running, ...shownFinished]) {
+				lines.push(describeTaskLine(task, now));
+			}
+			if (hidden > 0) {
+				lines.push(`(+${hidden} more finished, not shown — action read shows any task's output)`);
+			}
+			return {
+				content: [{ type: "text", text: lines.join("\n") }],
+				details: {
+					action: "list",
+					running: running.length,
+					finished: finished.length,
+					shown: running.length + shownFinished.length,
+					hidden,
+				},
+			};
+		};
+
+		pi.registerTool<typeof bgSchema, BgDetails>({
+			name: "bg",
+			label: "bg",
+			description:
+				"Run and manage background bash tasks.\n\n" +
+				"create: start a command in the background and return immediately with a task id and an " +
+				"output file path. Only use this when you don't need the result immediately and are OK being " +
+				"notified when the command completes later — a <background-task> notification with status, exit " +
+				"code, and output tail arrives automatically when it ends. Do NOT append '&' to the command; bg " +
+				"already runs it detached. An optional description labels the task in the UI; an optional timeout " +
+				"in seconds kills the task on expiry.\n\n" +
+				"read: bounded slice of a task's output (default: last 8KB); works while the task runs. The " +
+				"output file is a plain file — the read tool also works on it for line-based paging.\n\n" +
+				"wait: block until a task finishes (default 20s, max 60s) and return its status plus output " +
+				"written since a given offset. Use when the next step depends on the result; on timeout the task " +
+				"is still running and you may wait again. Never emulate waiting with sleep.\n\n" +
+				"kill: stop a running task (whole process tree).\n\n" +
+				"list: currently known tasks with status.\n\n" +
+				"Task ids accept a unique prefix ('3f' for 'bg-3f').",
+			promptSnippet: "Manage background shell tasks (bg: create/read/wait/kill/list)",
+			promptGuidelines: [
+				"Use bg (action create) for long-running commands (dev servers, watch builds, slow tests) instead of regular bash; results arrive as an automatic <background-task> notification, so continue independent work or end the turn.",
+				"Never wait on background tasks with sleep loops or repeated reads; use bg action wait (bounded) when a step depends on a task's result, or rely on the completion notification.",
+			],
+			parameters: bgSchema,
+			async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<BgDetails>> {
+				validateAction(params);
+				switch (params.action) {
+					case "create":
+						return runCreate(params as BgCreateInput, ctx);
+					case "read":
+						return runRead(params as BgReadInput);
+					case "wait":
+						return runWait(params as BgWaitInput);
+					case "kill":
+						return runKill(params as BgKillInput);
+					case "list":
+						return runList();
+				}
 			},
-			renderCall(args, theme) {
-				return renderBgKillCall(args, theme);
+			renderCall(args, theme, context) {
+				return renderBgCall(args, theme, context);
+			},
+			renderResult(result, options, theme, context) {
+				return renderBgResult(result, options, theme, context);
 			},
 		});
 
@@ -462,7 +732,10 @@ export function createBackgroundExtension(overrides?: BackgroundExtensionOverrid
 						.listTasks()
 						.slice(0, 10)
 						.map((task) => describeTaskLine(task, Date.now()));
-					ctx.ui.notify(`Background tasks:\n${lines.join("\n")}\nUse bg_kill <id> to stop a task.`, "info");
+					ctx.ui.notify(
+						`Background tasks:\n${lines.join("\n")}\nUse the bg tool (action kill) to stop a task.`,
+						"info",
+					);
 					return;
 				}
 				await showBackgroundManager(ctx, active);

@@ -30,6 +30,8 @@ export type BgTaskStatus = "running" | "completed" | "failed" | "killed" | "time
 export interface BgTask {
 	id: string;
 	command: string;
+	/** Optional model-provided label (e.g. "dev server") shown in /bg and notifications. */
+	description?: string;
 	cwd: string;
 	status: BgTaskStatus;
 	startedAt: number;
@@ -67,6 +69,9 @@ export interface OutputSlice {
 	/** True in tail mode when the slice starts mid-line. */
 	startsMidLine: boolean;
 }
+
+/** Outcome of a bounded wait: terminal delivery, or the wait window expiring. */
+export type WaitOutcome = { outcome: "terminal"; task: BgTask } | { outcome: "timeout"; task: BgTask };
 
 /**
  * Read a bounded slice from the head or tail of a file via positioned reads —
@@ -114,6 +119,55 @@ export async function readOutputSlice(
 	}
 }
 
+/**
+ * Read the last `maxBytes` of a file starting no earlier than `fromByte` — the
+ * bounded delta since an offset, tail-aligned so the outcome (at the end of
+ * the output) is always included. `fromByte` is clamped into the file; the
+ * returned `fromByte` is where the slice actually starts.
+ */
+export async function readOutputSince(
+	filePath: string,
+	fromByte: number,
+	maxBytes: number,
+): Promise<OutputSlice & { fromByte: number }> {
+	const file = await open(filePath, "r");
+	try {
+		const { size } = await file.stat();
+		const floor = Math.min(Math.max(0, Math.floor(fromByte)), size);
+		let length = Math.min(size - floor, Math.max(0, Math.floor(maxBytes)));
+		let position = size - length;
+		let startsMidLine = false;
+
+		if (position > 0 && length > 0) {
+			// Same boundary probe as tail reads: probe[0] tells whether the slice
+			// starts at a line boundary, the rest skips UTF-8 continuation bytes.
+			const probeStart = position - 1;
+			const probe = Buffer.alloc(Math.min(5, size - probeStart));
+			await file.read(probe, 0, probe.length, probeStart);
+			let skip = 0;
+			while (1 + skip < probe.length && ((probe[1 + skip] ?? 0) & 0b1100_0000) === 0b1000_0000) {
+				skip++;
+			}
+			position += skip;
+			length -= skip;
+			startsMidLine = probe[skip] !== 0x0a;
+		}
+
+		const buffer = Buffer.alloc(Math.max(0, length));
+		const bytesRead = buffer.length > 0 ? (await file.read(buffer, 0, buffer.length, position)).bytesRead : 0;
+		return {
+			text: buffer.subarray(0, bytesRead).toString("utf8"),
+			sliceBytes: bytesRead,
+			totalBytes: size,
+			truncated: position > floor,
+			startsMidLine,
+			fromByte: position,
+		};
+	} finally {
+		await file.close();
+	}
+}
+
 export interface BackgroundRegistryOptions {
 	operations: BashOperations;
 	/** Directory for task output files. Defaults to the system temp directory. */
@@ -135,6 +189,8 @@ interface TaskRuntime {
 	overflow: boolean;
 	streamError?: string;
 	finalized: boolean;
+	/** Registered waitForResult callers; see the claim protocol in finalize(). */
+	waiters: number;
 	done: Promise<void>;
 	resolveDone: () => void;
 }
@@ -172,7 +228,13 @@ export class BackgroundTaskRegistry {
 		return this.shuttingDown;
 	}
 
-	startTask(input: { command: string; cwd: string; timeoutSeconds?: number; env?: NodeJS.ProcessEnv }): BgTask {
+	startTask(input: {
+		command: string;
+		cwd: string;
+		description?: string;
+		timeoutSeconds?: number;
+		env?: NodeJS.ProcessEnv;
+	}): BgTask {
 		if (this.shuttingDown) {
 			throw new Error("Pi is shutting down; background task not started.");
 		}
@@ -180,7 +242,7 @@ export class BackgroundTaskRegistry {
 		if (running.length >= this.maxRunningTasks) {
 			const list = running.map((task) => `  ${task.id}  ${firstCommandLine(task.command)}`).join("\n");
 			throw new Error(
-				`Too many running background tasks (limit ${this.maxRunningTasks}). Kill one with bg_kill first:\n${list}`,
+				`Too many running background tasks (limit ${this.maxRunningTasks}). Kill one first (bg action kill):\n${list}`,
 			);
 		}
 
@@ -188,6 +250,7 @@ export class BackgroundTaskRegistry {
 		const task: BgTask = {
 			id,
 			command: input.command,
+			description: input.description,
 			cwd: input.cwd,
 			status: "running",
 			startedAt: this.now(),
@@ -203,7 +266,7 @@ export class BackgroundTaskRegistry {
 		const done = new Promise<void>((resolve) => {
 			resolveDone = resolve;
 		});
-		// Create the file synchronously so bg_logs and the /bg viewer never see
+		// Create the file synchronously so read/wait and the /bg viewer never see
 		// ENOENT between task start and the stream's async open.
 		writeFileSync(task.outputPath, "");
 		const runtime: TaskRuntime = {
@@ -212,6 +275,7 @@ export class BackgroundTaskRegistry {
 			killRequested: false,
 			overflow: false,
 			finalized: false,
+			waiters: 0,
 			done,
 			resolveDone,
 		};
@@ -282,6 +346,42 @@ export class BackgroundTaskRegistry {
 		if (!task) throw new Error(`Unknown background task: ${id}`);
 		await this.runtimes.get(id)?.done;
 		return task;
+	}
+
+	/**
+	 * Bounded model-facing wait with the claim protocol: a waiter registered
+	 * when the task finalizes takes over delivery — finalize sees waiters > 0
+	 * and suppresses the followUp notification, so the completion is delivered
+	 * exactly once, inline here. If the window expires first, the followUp
+	 * notification is left untouched and fires as usual.
+	 *
+	 * All interleavings are deterministic on JS's single thread: a waiter that
+	 * registers before finalize's synchronous claim check claims delivery; one
+	 * that arrives after sees a terminal status and returns it immediately
+	 * (the followUp may also arrive — an idempotent repeat, not a lie).
+	 */
+	async waitForResult(id: string, timeoutMs: number): Promise<WaitOutcome> {
+		const task = this.tasks.get(id);
+		if (!task) throw new Error(`Unknown background task: ${id}`);
+		const runtime = this.runtimes.get(id);
+		if (!runtime) throw new Error(`Unknown background task: ${id}`);
+		if (task.status !== "running") return { outcome: "terminal", task };
+
+		runtime.waiters++;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			const timedOut = await new Promise<boolean>((resolve) => {
+				timer = setTimeout(() => resolve(true), timeoutMs);
+				void runtime.done.then(() => resolve(false));
+			});
+			// done may resolve right after the timer fired (race window); a task
+			// that reached a terminal state during the wait is delivered here.
+			if (!timedOut || task.status !== "running") return { outcome: "terminal", task };
+			return { outcome: "timeout", task };
+		} finally {
+			runtime.waiters--;
+			if (timer !== undefined) clearTimeout(timer);
+		}
 	}
 
 	/**
@@ -378,6 +478,12 @@ export class BackgroundTaskRegistry {
 		task.exitCode = outcome.exitCode;
 		task.endedAt = this.now();
 		this.onChange();
+		// Claim protocol: at least one waitForResult caller is waiting on this
+		// completion, so it delivers the result inline. Mark notified to skip the
+		// followUp — the completion must be delivered exactly once.
+		if (runtime.waiters > 0) {
+			task.notified = true;
+		}
 		await this.notifyCompletion(task);
 		runtime.resolveDone();
 	}

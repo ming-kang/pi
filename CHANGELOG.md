@@ -6,6 +6,13 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Added
 
+- Added `wait` and `list` actions to the bundled Background extension's new single `bg` tool: `wait` blocks (bounded, default 20s / max 60s) for a task's completion and delivers it inline with the output delta since a given byte offset — the followUp notification is suppressed so the completion is delivered exactly once — and `list` enumerates known tasks (running first, five most recent finished) for the model.
+- Added an optional `description` label to Background task creation, shown in `/bg`, task listings, and the completion notification.
+
+### Changed
+
+- Merged the bundled Background extension's `bg_bash`, `bg_logs`, and `bg_kill` tools into one `bg` tool with an `action` parameter (`create`/`read`/`wait`/`kill`/`list`), rewrote the model-facing copy around the full task lifecycle (including the do-not-append-`&` and never-sleep-poll rules), and made every task's output readable with the built-in read tool via its plain output file.
+
 - Added optional `ctx.getShellSettings()` for extensions, exposing the session's `shellPath` and `shellCommandPrefix` exactly as the built-in bash tool uses them (older hosts without it fall back to disk settings); the `ShellSettings` type is exported from the package root.
 
 ### Changed

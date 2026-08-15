@@ -197,15 +197,17 @@ export class BackgroundTasksMenu implements Component, Focusable {
 
 	private renderTaskRow(task: BgTask, isSelected: boolean, width: number): string {
 		const duration = formatDuration((task.endedAt ?? Date.now()) - task.startedAt);
-		const command = firstCommandLine(task.command);
+		const label = task.description
+			? `${task.description} — ${firstCommandLine(task.command)}`
+			: firstCommandLine(task.command);
 		if (isSelected) {
 			// Pad to full width before styling so the selection background spans the row.
-			const plain = padLine(`→ ${statusGlyph(task.status)} ${task.id} ${duration} ${command}`, width);
+			const plain = padLine(`→ ${statusGlyph(task.status)} ${task.id} ${duration} ${label}`, width);
 			return this.theme.bg("selectedBg", this.theme.fg("text", plain));
 		}
 		const glyph = this.theme.fg(statusColor(task.status), statusGlyph(task.status));
 		const id = this.theme.fg("accent", task.id);
-		const rest = this.theme.fg("muted", `${duration} ${command}`);
+		const rest = this.theme.fg("muted", `${duration} ${label}`);
 		return padLine(`  ${glyph} ${id} ${rest}`, width);
 	}
 
