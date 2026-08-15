@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +7,7 @@ import {
 	type BackgroundRegistryOptions,
 	BackgroundTaskRegistry,
 	type BgTaskNotification,
+	createOutputFileExclusively,
 	readOutputSince,
 	readOutputSlice,
 } from "../src/extensions/background/registry.ts";
@@ -365,6 +366,16 @@ describe("BackgroundTaskRegistry", () => {
 		const { registry } = makeRegistry();
 		await expect(registry.waitForResult("bg-nope", 20)).rejects.toThrow(/Unknown background task/);
 	});
+
+	it("creates the output file exclusively before the task is returned", async () => {
+		const { registry, calls } = makeRegistry();
+		const task = registry.startTask({ command: "echo hi", cwd: "/w" });
+		// Synchronous exclusive create: the file exists empty from the moment
+		// startTask returns, and the stream only ever appends to it.
+		expect(readFileSync(task.outputPath, "utf8")).toBe("");
+		calls[0]?.emitData("written\n");
+		await vi.waitFor(() => expect(readFileSync(task.outputPath, "utf8")).toBe("written\n"));
+	});
 });
 
 describe("readOutputSlice", () => {
@@ -472,5 +483,39 @@ describe("readOutputSince", () => {
 
 		const whole = await readOutputSince(writeTempFile("hi\n"), 0, 100);
 		expect(whole).toMatchObject({ text: "hi\n", truncated: false, startsMidLine: false, fromByte: 0 });
+	});
+});
+
+describe("exclusive output file creation", () => {
+	it("fails with EEXIST when the path already exists as a regular file", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-bg-wx-"));
+		tempDirs.push(dir);
+		const filePath = join(dir, "existing.log");
+		writeFileSync(filePath, "precious");
+		expect(() => createOutputFileExclusively(filePath)).toThrow(/EEXIST/);
+		expect(readFileSync(filePath, "utf8")).toBe("precious");
+	});
+
+	it("fails with EEXIST when the path is a symlink and leaves the target intact", () => {
+		// Creating symlinks on Windows needs elevated privileges; the property
+		// (EEXIST on any existing path, symlink included) is POSIX-defined.
+		if (process.platform === "win32") return;
+		const dir = mkdtempSync(join(tmpdir(), "pi-bg-wx-"));
+		tempDirs.push(dir);
+		const target = join(dir, "target.log");
+		const link = join(dir, "link.log");
+		writeFileSync(target, "do not truncate");
+		symlinkSync(target, link);
+
+		expect(() => createOutputFileExclusively(link)).toThrow(/EEXIST/);
+		expect(readFileSync(target, "utf8")).toBe("do not truncate");
+	});
+
+	it("creates an empty file on a fresh path", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-bg-wx-"));
+		tempDirs.push(dir);
+		const filePath = join(dir, "fresh.log");
+		createOutputFileExclusively(filePath);
+		expect(readFileSync(filePath, "utf8")).toBe("");
 	});
 });

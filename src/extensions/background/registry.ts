@@ -12,7 +12,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { createWriteStream, type WriteStream, writeFileSync } from "node:fs";
+import { closeSync, createWriteStream, openSync, type WriteStream } from "node:fs";
 import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -267,8 +267,10 @@ export class BackgroundTaskRegistry {
 			resolveDone = resolve;
 		});
 		// Create the file synchronously so read/wait and the /bg viewer never see
-		// ENOENT between task start and the stream's async open.
-		writeFileSync(task.outputPath, "");
+		// ENOENT between task start and the stream's async open. The exclusive
+		// 'wx' flag fails on any existing path — including a symlink — so creation
+		// can never truncate a file a stale id (or an attacker-planted link) points at.
+		createOutputFileExclusively(task.outputPath);
 		const runtime: TaskRuntime = {
 			controller: new AbortController(),
 			stream: createWriteStream(task.outputPath, { flags: "a" }),
@@ -545,6 +547,15 @@ export class BackgroundTaskRegistry {
 			task.notified = false;
 		}
 	}
+}
+
+/**
+ * Create an empty output file exclusively ('wx'): fails on any existing path,
+ * including a symlink, so creation can never truncate what the path points at.
+ */
+export function createOutputFileExclusively(path: string): void {
+	const handle = openSync(path, "wx");
+	closeSync(handle);
 }
 
 /** First non-empty line of a command, trimmed — for one-line task labels. */
