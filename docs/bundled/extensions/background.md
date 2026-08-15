@@ -67,7 +67,7 @@ Task ids accept a unique prefix (with or without the `bg-` part); an ambiguous p
 
 When a task ends, the extension sends a `background-task` notification: a small XML message carrying the task id, terminal status, exit code, runtime, output file path, the optional description, and the sanitized last ~4KB of output. While the agent is streaming, the notification queues behind the current run and is delivered when the run settles; when the agent is idle, it wakes a new turn so the result is acted on immediately.
 
-The transcript renders this notification as a one-line summary (`✓ bg-3f2a91 npm run build — completed, exit 0 in 34s`; with a description: `✓ bg-3f2a91 dev server (npm run build) — completed, exit 0 in 34s`) with the output path below; expanding it shows the embedded output tail.
+The transcript renders this notification as a one-line summary (`✓ bg-3f2a91 npm run build — completed, exit 0 in 34s`; with a description: `✓ bg-3f2a91 dev server (npm run build) — completed, exit 0 in 34s`) with the output file's name below; expanding it shows the full output path and the embedded output tail.
 
 ## /bg
 
@@ -75,17 +75,17 @@ The transcript renders this notification as a one-line summary (`✓ bg-3f2a91 n
 
 | Key | In the task list | In the output view |
 |---|---|---|
-| `↑` / `↓` | Select task | — |
+| `↑` / `↓` | Select task | Scroll one line (freezes following) |
 | `Enter` | Open the selected task's output | — |
 | `k` | Kill the selected running task | Kill the viewed task |
-| `PgUp` / `PgDn` | — | Scroll the output; `PgUp` freezes it, scrolling back to the bottom resumes following |
+| `PgUp` / `PgDn` | — | Scroll a page; `PgUp` freezes following, scrolling back to the bottom resumes it |
 | `Esc` | Close the menu | Back to the task list |
 
-The output view polls the output file once per second and only ever reads the last 128KB. Outside an interactive TUI, `/bg` prints a bounded task summary instead.
+While a `bg wait` call is pending, its transcript row refreshes once per second (`bg wait bg-3f · waiting 12s/20s · +3.2KB new output`) until the result settles. The task list separates running tasks from finished ones with a `── finished ──` divider and adapts its visible rows to short terminal windows. The output view polls the output file once per second and only ever reads the last 128KB — and only when the task's output actually grew; a finished task's output is read once. Outside an interactive TUI, `/bg` prints a bounded task summary instead.
 
 ## Statusline
 
-Running and finished counts appear in the footer as `bg 2 running · 1 done`, or `bg 2 running · 1 waiting for input` when the stall watchdog has flagged a task; the segment disappears when no tasks exist.
+Running and finished counts appear in the footer as `bg 2 running · 1 done`; tasks the stall watchdog has flagged are reported separately as `bg 2 running · 1 waiting for input · 1 done` (flagged tasks are running tasks, so the counts add up); the segment disappears when no tasks exist.
 
 ## Limits and lifecycle
 

@@ -18,6 +18,9 @@ const POLL_INTERVAL_MS = 1000;
 const VIEW_TAIL_BYTES = 128 * 1024;
 const MAX_VIEW_LINES = 2000;
 const LIST_MAX_VISIBLE = 10;
+const LIST_MIN_VISIBLE = 3;
+/** Rows outside the task list itself (borders, title, counter, footer, padding). */
+const LIST_RESERVED_ROWS = 14;
 
 export interface BackgroundManagerHost {
 	listTasks(): BgTask[];
@@ -43,6 +46,8 @@ interface TailCache {
 	taskId: string;
 	lines: string[];
 	totalBytes: number;
+	/** True once a terminal task's final output has been read; skips re-reads. */
+	settledRead?: boolean;
 	error?: string;
 }
 
@@ -67,6 +72,10 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	private tailOffsetLines = 0;
 	private tailCache: TailCache | undefined;
 	private killFeedback: string | undefined;
+	/** Task whose settle expires killFeedback; undefined = persists until the next key. */
+	private killFeedbackTaskId: string | undefined;
+	/** Last tick's render signature; unchanged means nothing visible moved. */
+	private lastSignature = "";
 	private pollTimer: ReturnType<typeof setInterval> | undefined;
 	private readBusy = false;
 	private disposed = false;
@@ -107,7 +116,11 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	}
 
 	handleInput(data: string): void {
-		this.killFeedback = undefined;
+		if (this.killFeedback !== undefined) {
+			this.killFeedback = undefined;
+			this.killFeedbackTaskId = undefined;
+			this.tui.requestRender();
+		}
 		if (this.keybindings.matches(data, "tui.select.cancel")) {
 			if (this.view === "detail") {
 				this.view = "list";
@@ -144,24 +157,38 @@ export class BackgroundTasksMenu implements Component, Focusable {
 
 	private handleDetailInput(data: string): void {
 		if (this.keybindings.matches(data, "tui.select.pageUp")) {
-			const max = this.maxTailOffset();
-			if (max === 0) return; // Nothing above the viewport to scroll back to.
-			const page = Math.max(1, this.detailBodyHeight());
-			this.follow = false;
-			this.tailOffsetLines = Math.min(max, this.tailOffsetLines + page);
-			this.tui.requestRender();
+			this.scrollDetail(Math.max(1, this.detailBodyHeight()));
 			return;
 		}
 		if (this.keybindings.matches(data, "tui.select.pageDown")) {
+			if (!this.follow) this.scrollDetail(-Math.max(1, this.detailBodyHeight()));
+			return;
+		}
+		if (this.keybindings.matches(data, "tui.select.up")) {
+			this.scrollDetail(1);
+			return;
+		}
+		if (this.keybindings.matches(data, "tui.select.down")) {
+			if (!this.follow) this.scrollDetail(-1);
+		}
+	}
+
+	/** Scroll the detail viewport by `lines` (positive = back through history). */
+	private scrollDetail(lines: number): void {
+		if (lines > 0) {
+			const max = this.maxTailOffset();
+			if (max === 0) return; // Nothing above the viewport to scroll back to.
+			this.follow = false;
+			this.tailOffsetLines = Math.min(max, this.tailOffsetLines + lines);
+		} else {
 			if (this.follow) return;
-			const page = Math.max(1, this.detailBodyHeight());
-			this.tailOffsetLines = Math.max(0, this.tailOffsetLines - page);
+			this.tailOffsetLines = Math.max(0, this.tailOffsetLines + lines);
 			if (this.tailOffsetLines === 0) {
 				this.follow = true;
 				void this.refreshViewport();
 			}
-			this.tui.requestRender();
 		}
+		this.tui.requestRender();
 	}
 
 	render(width: number): string[] {
@@ -171,6 +198,11 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	}
 
 	// ── list view ──────────────────────────────────────────────────────────
+
+	/** Task rows the terminal can spare; short windows trade rows for the transcript. */
+	private listMaxVisible(): number {
+		return Math.min(LIST_MAX_VISIBLE, Math.max(LIST_MIN_VISIBLE, this.tui.terminal.rows - LIST_RESERVED_ROWS));
+	}
 
 	private renderList(width: number): string[] {
 		const lines: string[] = [];
@@ -184,11 +216,19 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		}
 
 		const selected = this.selectedTask();
-		const visible = this.tasks.slice(this.listScrollTop, this.listScrollTop + LIST_MAX_VISIBLE);
+		const maxVisible = this.listMaxVisible();
+		const visible = this.tasks.slice(this.listScrollTop, this.listScrollTop + maxVisible);
+		let seenRunning = false;
 		for (const task of visible) {
+			// listTasks() orders running first, finished after: one separator at the boundary.
+			if (seenRunning && task.status !== "running") {
+				lines.push(padLine(this.theme.fg("muted", "  ── finished ──"), width));
+				seenRunning = false;
+			}
+			if (task.status === "running") seenRunning = true;
 			lines.push(this.renderTaskRow(task, task === selected, width));
 		}
-		if (this.tasks.length > LIST_MAX_VISIBLE) {
+		if (this.tasks.length > maxVisible) {
 			const index = this.tasks.findIndex((task) => task.id === this.selectedTaskId);
 			lines.push(padLine(this.theme.fg("muted", `  (${index + 1}/${this.tasks.length})`), width));
 		}
@@ -275,7 +315,8 @@ export class BackgroundTasksMenu implements Component, Focusable {
 						`${keyLabel("tui.select.cancel", opts)} close`,
 					]
 				: [
-						`${keyLabel("tui.select.pageUp", opts)}/${keyLabel("tui.select.pageDown", opts)} scroll`,
+						`${keyLabel("tui.select.up", opts)}/${keyLabel("tui.select.down", opts)} scroll`,
+						`${keyLabel("tui.select.pageUp", opts)}/${keyLabel("tui.select.pageDown", opts)} page`,
 						`${keyLabel("app.backgroundTasks.kill", opts)} kill`,
 						`${keyLabel("tui.select.cancel", opts)} back`,
 					];
@@ -294,7 +335,9 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		if (!task) return;
 		this.selectedTaskId = task.id;
 		if (next < this.listScrollTop) this.listScrollTop = next;
-		if (next >= this.listScrollTop + LIST_MAX_VISIBLE) this.listScrollTop = next - LIST_MAX_VISIBLE + 1;
+		if (next >= this.listScrollTop + this.listMaxVisible()) {
+			this.listScrollTop = next - this.listMaxVisible() + 1;
+		}
 		this.resetFollow();
 		this.tui.requestRender();
 	}
@@ -325,7 +368,9 @@ export class BackgroundTasksMenu implements Component, Focusable {
 			return;
 		}
 		this.host.killTask(task.id);
-		this.killFeedback = `killed ${task.id}`;
+		// Terminal state lands on the next poll; the feedback expires with it (tick).
+		this.killFeedback = `stopping ${task.id}…`;
+		this.killFeedbackTaskId = task.id;
 		this.tui.requestRender();
 	}
 
@@ -333,8 +378,59 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		if (this.disposed) return;
 		this.tasks = this.host.listTasks();
 		if (!this.selectedTask() && this.tasks[0]) this.selectedTaskId = this.tasks[0].id;
-		if (this.view === "detail" && this.follow) await this.refreshViewport();
+		this.expireKillFeedback();
+		if (this.renderSignature() === this.lastSignature) return; // Nothing visible changed.
+		if (this.view === "detail" && this.follow && this.detailOutputChanged()) {
+			await this.refreshViewport();
+		}
+		this.lastSignature = this.renderSignature();
 		this.tui.requestRender();
+	}
+
+	/** Drop "stopping" feedback once its task has settled. */
+	private expireKillFeedback(): void {
+		if (this.killFeedbackTaskId === undefined) return;
+		const task = this.tasks.find((candidate) => candidate.id === this.killFeedbackTaskId);
+		if (!task || task.status !== "running") {
+			this.killFeedback = undefined;
+			this.killFeedbackTaskId = undefined;
+		}
+	}
+
+	/** Everything the rendered output depends on; equal signatures need no redraw. */
+	private renderSignature(): string {
+		const parts = [
+			this.view,
+			this.selectedTaskId ?? "",
+			String(this.listScrollTop),
+			String(this.follow),
+			String(this.tailOffsetLines),
+			this.killFeedback ?? "",
+			this.tailCache
+				? `${this.tailCache.taskId}:${this.tailCache.lines.length}:${this.tailCache.totalBytes}:${this.tailCache.error ?? ""}:${String(this.tailCache.settledRead ?? false)}`
+				: "",
+		];
+		for (const task of this.tasks) {
+			const duration = formatDuration((task.endedAt ?? Date.now()) - task.startedAt);
+			parts.push(
+				`${task.id}:${task.status}:${String(task.stalled)}:${task.outputBytes}:${task.exitCode ?? ""}:${duration}`,
+			);
+		}
+		return parts.join("|");
+	}
+
+	/** True when the detail viewport must re-read the output file this tick. */
+	private detailOutputChanged(): boolean {
+		const task = this.selectedTask();
+		if (!task) return false;
+		const cache = this.tailCache;
+		if (!cache || cache.taskId !== task.id) return true;
+		if (cache.error !== undefined) return true; // Keep retrying; failed reads are cheap.
+		if (task.status !== "running") {
+			// Terminal task: the file is final — read it once, then never again.
+			return cache.settledRead !== true;
+		}
+		return cache.totalBytes !== task.outputBytes;
 	}
 
 	private async refreshViewport(): Promise<void> {
@@ -345,7 +441,12 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		try {
 			const slice = await this.host.readSlice(task.outputPath, { mode: "tail", maxBytes: VIEW_TAIL_BYTES });
 			if (this.disposed || this.selectedTaskId !== task.id || !this.follow) return;
-			this.tailCache = { taskId: task.id, lines: toViewLines(slice.text), totalBytes: slice.totalBytes };
+			this.tailCache = {
+				taskId: task.id,
+				lines: toViewLines(slice.text),
+				totalBytes: slice.totalBytes,
+				settledRead: task.status !== "running",
+			};
 		} catch (error) {
 			if (this.disposed || this.selectedTaskId !== task.id) return;
 			this.tailCache = {

@@ -17,10 +17,16 @@ import {
 	type BgNotificationDetails,
 	type BgWaitDetails,
 	createBackgroundExtension,
+	formatStatusline,
 	prependCommandPrefix,
 	resolveSessionShell,
 } from "../src/extensions/background/index.ts";
-import { renderBackgroundNotification, renderBgCall } from "../src/extensions/background/render.ts";
+import {
+	type BgRenderState,
+	renderBackgroundNotification,
+	renderBgCall,
+	renderBgResult,
+} from "../src/extensions/background/render.ts";
 import type { Theme } from "../src/modes/interactive/theme/theme.ts";
 
 function textOf(result: AgentToolResult<unknown>): string {
@@ -423,7 +429,7 @@ describe("background extension", () => {
 		expect(details.status).toBe("running");
 
 		// Statusline reflects the waiting-for-input state and clears on completion.
-		await vi.waitFor(() => expect(harness.statusUpdates.at(-1)).toBe("bg 1 running · 1 waiting for input"));
+		await vi.waitFor(() => expect(harness.statusUpdates.at(-1)).toBe("bg 1 waiting for input"));
 		harness.calls[0]?.finish(0);
 		await vi.waitFor(() => {
 			expect(harness.sent).toHaveLength(2);
@@ -582,10 +588,14 @@ describe("renderBackgroundNotification", () => {
 		expect(collapsedLines.join("\n")).toContain("bg-abc123");
 		expect(collapsedLines.join("\n")).toContain("completed, exit 0");
 		expect(collapsedLines.join("\n")).not.toContain("build finished");
+		// Collapsed keeps the row compact: file name only, not the full path.
+		expect(collapsedLines.join("\n")).toContain("pi-bg-abc123.log");
+		expect(collapsedLines.join("\n")).not.toContain("/tmp/pi-bg-abc123.log");
 
 		const expanded = renderBackgroundNotification(message(), { expanded: true, outputPad: 1 }, plainTheme);
 		const expandedLines = (expanded?.render(120) ?? []).map(stripTerminalSequences);
 		expect(expandedLines.join("\n")).toContain("build finished");
+		expect(expandedLines.join("\n")).toContain("/tmp/pi-bg-abc123.log");
 	});
 
 	it("keeps the end of an oversized tail when expanded", () => {
@@ -727,5 +737,114 @@ describe("renderBgCall", () => {
 		);
 		const text = component.render(200).map(stripTerminalSequences).join("\n");
 		expect(text).toContain("npm run dev & · dev server");
+	});
+});
+
+describe("renderBgCall wait live line", () => {
+	const plainTheme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+	} as unknown as Theme;
+
+	it("shows elapsed/window and the output delta while pending, then settles", () => {
+		vi.useFakeTimers();
+		try {
+			const state: BgRenderState = {};
+			let bytes = 100;
+			const probe = () => ({ status: "running" as const, outputBytes: bytes });
+			const context = {
+				expanded: false,
+				isPartial: true,
+				state,
+				invalidate: vi.fn(),
+			} as unknown as ToolRenderContext<BgRenderState>;
+
+			const first = renderBgCall({ action: "wait", taskId: "bg-3f" }, plainTheme, context, probe);
+			expect(first.render(200).map(stripTerminalSequences).join("\n")).toMatch(/^bg wait bg-3f waiting 0s\/20s/);
+			expect(state.refreshTimer).toBeDefined();
+
+			// Output grows; the armed timer invalidates and the next render shows the delta.
+			bytes = 3378;
+			vi.advanceTimersByTime(1000);
+			expect(context.invalidate).toHaveBeenCalledTimes(1);
+			const second = renderBgCall({ action: "wait", taskId: "bg-3f" }, plainTheme, context, probe);
+			const text = second.render(200).map(stripTerminalSequences).join("\n");
+			expect(text).toMatch(/^bg wait bg-3f waiting 1s\/20s/);
+			expect(text).toContain("+3.2KB new output");
+
+			// Settled: timer cleared, static form returns.
+			const settledContext = {
+				expanded: false,
+				isPartial: false,
+				state,
+			} as unknown as ToolRenderContext<BgRenderState>;
+			const settled = renderBgCall(
+				{ action: "wait", taskId: "bg-3f", waitMs: 20_000 },
+				plainTheme,
+				settledContext,
+				probe,
+			);
+			expect(settled.render(200).map(stripTerminalSequences).join("\n")).toMatch(/^bg wait bg-3f 20s/);
+			expect(state.refreshTimer).toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("falls back to the static line without shell state", () => {
+		const component = renderBgCall(
+			{ action: "wait", taskId: "bg-3f", waitMs: 5000 },
+			plainTheme,
+			{ expanded: false, isPartial: true } as ToolRenderContext<BgRenderState>,
+			() => ({ status: "running", outputBytes: 10 }),
+		);
+		expect(component.render(200).map(stripTerminalSequences).join("\n")).toMatch(/^bg wait bg-3f 5s/);
+	});
+});
+
+describe("renderBgResult summaries", () => {
+	const plainTheme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+	} as unknown as Theme;
+
+	it("carries the description label on a create summary", () => {
+		const component = renderBgResult(
+			{
+				content: [{ type: "text", text: "Started background task bg-3f." }],
+				details: {
+					action: "create",
+					taskId: "bg-3f",
+					outputPath: "/tmp/pi-bg-3f.log",
+					command: "npm run dev",
+					description: "dev server",
+				},
+			},
+			{ expanded: false, isPartial: false },
+			plainTheme,
+			{ args: { action: "create" }, state: {} } as ToolRenderContext,
+		);
+		const text = component.render(200).map(stripTerminalSequences).join("\n");
+		expect(text).toContain("bg-3f (dev server) started");
+	});
+});
+
+describe("formatStatusline", () => {
+	it("reports running and done counts", () => {
+		expect(formatStatusline({ running: 2, total: 3 })).toBe("bg 2 running · 1 done");
+	});
+
+	it("splits stalled tasks out of the running count so the counts add up", () => {
+		expect(formatStatusline({ running: 3, total: 4, stalled: 1 })).toBe(
+			"bg 2 running · 1 waiting for input · 1 done",
+		);
+	});
+
+	it("reports a lone stalled task without a running segment", () => {
+		expect(formatStatusline({ running: 1, total: 1, stalled: 1 })).toBe("bg 1 waiting for input");
+	});
+
+	it("hides the segment when no tasks exist", () => {
+		expect(formatStatusline({ running: 0, total: 0 })).toBeUndefined();
 	});
 });

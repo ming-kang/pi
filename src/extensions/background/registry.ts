@@ -23,6 +23,11 @@ import { sanitizeBinaryOutput } from "../../utils/shell.ts";
 export const DEFAULT_MAX_OUTPUT_BYTES = 20 * 1024 * 1024;
 export const DEFAULT_MAX_RUNNING_TASKS = 8;
 export const DEFAULT_NOTIFY_TAIL_BYTES = 4 * 1024;
+
+/** Wait-window bounds shared by execution and the pending-call renderer. */
+export const BG_WAIT_DEFAULT_MS = 20_000;
+export const BG_WAIT_MIN_MS = 1_000;
+export const BG_WAIT_MAX_MS = 60_000;
 const SHUTDOWN_GRACE_MS = 2_000;
 
 /** Stall watchdog defaults, matching Claude Code's CC-1175 tuning. */

@@ -32,6 +32,9 @@ import { sanitizeBinaryOutput } from "../../utils/shell.ts";
 import { BackgroundTasksMenu } from "./manager.ts";
 import {
 	BackgroundTaskRegistry,
+	BG_WAIT_DEFAULT_MS,
+	BG_WAIT_MAX_MS,
+	BG_WAIT_MIN_MS,
 	type BgStallNotification,
 	type BgTask,
 	type BgTaskNotification,
@@ -42,19 +45,22 @@ import {
 	readOutputSince,
 	readOutputSlice,
 } from "./registry.ts";
-import { commandLabel, renderBackgroundNotification, renderBgCall, renderBgResult } from "./render.ts";
+import {
+	commandLabel,
+	renderBackgroundNotification,
+	renderBgCall,
+	renderBgResult,
+	type WaitLiveProbe,
+} from "./render.ts";
 
 export const BG_NOTIFICATION_TYPE = "background-task";
 const BG_LOGS_DEFAULT_BYTES = 8 * 1024;
 const BG_LOGS_MIN_BYTES = 256;
-const BG_WAIT_DEFAULT_MS = 20_000;
-const BG_WAIT_MIN_MS = 1_000;
-const BG_WAIT_MAX_MS = 60_000;
+const BG_LIST_FINISHED_SHOWN = 5;
 /** Bounded output delta returned by a successful wait. */
 const BG_WAIT_DELTA_BYTES = 32 * 1024;
 /** Tail peek included in a wait timeout result so progress stays visible. */
 const BG_WAIT_PEEK_BYTES = 2 * 1024;
-const BG_LIST_FINISHED_SHOWN = 5;
 
 const bgSchema = Type.Object({
 	action: Type.Union(
@@ -247,15 +253,13 @@ export function buildNotificationContent(notification: BgTaskNotification): stri
 
 export function formatStatusline(counts: { running: number; total: number; stalled?: number }): string | undefined {
 	if (counts.total === 0) return undefined;
+	// Stalled tasks are running tasks: report them separately so the counts add up.
+	const waiting = counts.stalled ?? 0;
+	const running = counts.running - waiting;
 	const ended = counts.total - counts.running;
 	const parts: string[] = [];
-	if (counts.running > 0) {
-		parts.push(
-			counts.stalled && counts.stalled > 0
-				? `${counts.running} running · ${counts.stalled} waiting for input`
-				: `${counts.running} running`,
-		);
-	}
+	if (running > 0) parts.push(`${running} running`);
+	if (waiting > 0) parts.push(`${waiting} waiting for input`);
 	if (ended > 0) parts.push(`${ended} done`);
 	return `bg ${parts.join(" · ")}`;
 }
@@ -431,6 +435,13 @@ export function createBackgroundExtension(overrides?: BackgroundExtensionOverrid
 			const resolved = requireRegistry().resolveTask(taskId);
 			if (!resolved.ok) throw new Error(describeResolveFailure(taskId, resolved));
 			return resolved.task;
+		};
+
+		/** Read-only live peek for the pending wait renderer; never throws. */
+		const waitLiveProbe: WaitLiveProbe = (taskId) => {
+			if (!registry) return undefined;
+			const resolved = registry.resolveTask(taskId);
+			return resolved.ok ? { status: resolved.task.status, outputBytes: resolved.task.outputBytes } : undefined;
 		};
 
 		const updateStatus = () => {
@@ -788,7 +799,7 @@ export function createBackgroundExtension(overrides?: BackgroundExtensionOverrid
 				}
 			},
 			renderCall(args, theme, context) {
-				return renderBgCall(args, theme, context);
+				return renderBgCall(args, theme, context, waitLiveProbe);
 			},
 			renderResult(result, options, theme, context) {
 				return renderBgResult(result, options, theme, context);

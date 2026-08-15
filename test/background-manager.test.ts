@@ -277,7 +277,18 @@ describe("BackgroundTasksMenu", () => {
 
 		harness.component.handleInput("k");
 		expect(harness.killed).toEqual([running.id]);
-		expect(harness.render().some((line) => line.includes(`killed ${running.id}`))).toBe(true);
+		expect(harness.render().some((line) => line.includes(`stopping ${running.id}…`))).toBe(true);
+
+		// "stopping" feedback expires once the task settles (next poll sees the terminal status).
+		const settling = makeTask("bg-ccc333");
+		const expiring = createHarness({ tasks: [settling] });
+		await vi.advanceTimersByTimeAsync(0);
+		expiring.component.handleInput("k");
+		expect(expiring.render().some((line) => line.includes("stopping bg-ccc333…"))).toBe(true);
+		settling.status = "killed";
+		settling.endedAt = Date.now();
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(expiring.render().some((line) => line.includes("stopping"))).toBe(false);
 
 		// Move to the finished task; kill must be a no-op with feedback.
 		harness.component.handleInput(rawKey("tui.select.down"));
@@ -382,5 +393,108 @@ describe("BackgroundTasksMenu", () => {
 		for (const line of lines) {
 			expect(visibleWidth(line)).toBe(100);
 		}
+	});
+
+	it("stops redrawing entirely once every task has settled", async () => {
+		const task = makeTask("bg-aaa111", "completed", { endedAt: Date.now(), exitCode: 0 });
+		const harness = createHarness({ tasks: [task], sliceFor: { [task.outputPath]: "done\n" } });
+		await vi.advanceTimersByTimeAsync(0);
+		await harness.enterDetail();
+		await vi.advanceTimersByTimeAsync(1000); // Stabilize: the post-enter tick lands.
+
+		const rendersBefore = harness.tui.requestRender.mock.calls.length;
+		let reads = 0;
+		const originalRead = harness.host.readSlice;
+		harness.host.readSlice = async (filePath, options) => {
+			reads += 1;
+			return originalRead(filePath, options);
+		};
+
+		await vi.advanceTimersByTimeAsync(1000);
+		await vi.advanceTimersByTimeAsync(1000);
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(reads).toBe(0);
+		expect(harness.tui.requestRender.mock.calls.length).toBe(rendersBefore);
+	});
+
+	it("re-reads a running task's output only when it actually grew", async () => {
+		const content = Array.from({ length: 30 }, (_, i) => `line-${i + 1}`).join("\n");
+		const task = makeTask("bg-aaa111", "running", { outputBytes: content.length + 1 });
+		const harness = createHarness({ tasks: [task], sliceFor: { [task.outputPath]: `${content}\n` } });
+		await vi.advanceTimersByTimeAsync(0);
+		await harness.enterDetail();
+		await vi.advanceTimersByTimeAsync(1000); // Stabilize: one read has landed.
+
+		let reads = 0;
+		const originalRead = harness.host.readSlice;
+		harness.host.readSlice = async (filePath, options) => {
+			reads += 1;
+			return originalRead(filePath, options);
+		};
+
+		// Idle ticks: the duration keeps the UI live, but the file is not touched.
+		await vi.advanceTimersByTimeAsync(1000);
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(reads).toBe(0);
+
+		// Output grows: exactly one re-read on the next poll, new line visible.
+		harness.sliceFor[task.outputPath] = `${content}\nextra line\n`;
+		task.outputBytes += "extra line\n".length;
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(reads).toBe(1);
+		expect(harness.render().some((line) => line.includes("extra line"))).toBe(true);
+	});
+
+	it("separates finished tasks from running ones in the list", async () => {
+		const harness = createHarness({
+			tasks: [
+				makeTask("bg-aaa111"),
+				makeTask("bg-bbb222"),
+				makeTask("bg-ccc333", "completed", { endedAt: Date.now(), exitCode: 0 }),
+			],
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(harness.render().some((line) => line.includes("── finished ──"))).toBe(true);
+
+		// No boundary, no separator — and never for an empty finished group.
+		const onlyRunning = createHarness({ tasks: [makeTask("bg-aaa111")] });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(onlyRunning.render().some((line) => line.includes("── finished ──"))).toBe(false);
+	});
+
+	it("narrows the visible list rows on short terminals", async () => {
+		const tasks = Array.from({ length: 5 }, (_, i) =>
+			makeTask(`bg-s${i}00aa`, "completed", { endedAt: Date.now(), exitCode: 0 }),
+		);
+		const harness = createHarness({ tasks, rows: 16 });
+		await vi.advanceTimersByTimeAsync(0);
+
+		const lines = harness.render();
+		expect(lines.filter((line) => line.includes("bg-s")).length).toBe(3);
+		expect(lines.some((line) => line.includes("(1/5)"))).toBe(true);
+	});
+
+	it("scrolls the output view one line at a time with up/down", async () => {
+		const task = makeTask("bg-aaa111", "completed", { endedAt: Date.now(), exitCode: 0 });
+		const content = Array.from({ length: 30 }, (_, i) => `line-${String(i + 1).padStart(2, "0")}`).join("\n");
+		const harness = createHarness({ tasks: [task], sliceFor: { [task.outputPath]: `${content}\n` } });
+		await vi.advanceTimersByTimeAsync(0);
+		await harness.enterDetail();
+
+		// Following shows the bottom 16 lines: 15–30.
+		let lines = harness.render();
+		expect(lines.some((line) => line.includes("line-15"))).toBe(true);
+		expect(lines.some((line) => line.includes("line-14"))).toBe(false);
+
+		harness.component.handleInput(rawKey("tui.select.up"));
+		lines = harness.render();
+		expect(lines.some((line) => line.includes("paused"))).toBe(true);
+		expect(lines.some((line) => line.includes("line-14"))).toBe(true);
+		expect(lines.some((line) => line.includes("line-30"))).toBe(false);
+
+		harness.component.handleInput(rawKey("tui.select.down"));
+		lines = harness.render();
+		expect(lines.some((line) => line.includes("paused"))).toBe(false);
+		expect(lines.some((line) => line.includes("line-30"))).toBe(true);
 	});
 });

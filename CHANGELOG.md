@@ -10,15 +10,17 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - Added an optional `description` label to Background task creation, shown in `/bg`, task listings, and the completion notification.
 - Added a stall watchdog to the bundled Background extension (Claude Code CC-1175 design): a task whose output stops growing for 45s with a prompt-looking tail (`(y/n)`, `Press Enter`, …) is flagged `waiting for input`, sends a one-shot notification with remediation advice (kill and re-run with piped input or a non-interactive flag), marks the task in `/bg` and the footer statusline, and never fires twice or on merely-slow tasks.
 - Background task output files are now created exclusively (`wx`), so creation can never truncate an existing file or a symlink target.
+- Added a live pending line to the bundled Background extension's `bg wait` transcript row: while the wait is open it refreshes once per second with elapsed/wait-window and the new-output delta since the wait began (e.g. `bg wait bg-3f · waiting 12s/20s · +3.2KB new output`), then settles with the result row.
+- Added single-line scrolling (`↑`/`↓`) to the `/bg` output view alongside paging, and a `── finished ──` separator between running and finished tasks in the `/bg` list.
 
 ### Changed
 
 - Merged the bundled Background extension's `bg_bash`, `bg_logs`, and `bg_kill` tools into one `bg` tool with an `action` parameter (`create`/`read`/`wait`/`kill`/`list`), rewrote the model-facing copy around the full task lifecycle (including the do-not-append-`&` and never-sleep-poll rules), and made every task's output readable with the built-in read tool via its plain output file.
-
 - Added optional `ctx.getShellSettings()` for extensions, exposing the session's `shellPath` and `shellCommandPrefix` exactly as the built-in bash tool uses them (older hosts without it fall back to disk settings); the `ShellSettings` type is exported from the package root.
-
-### Changed
-
+- The `/bg` task list now adapts its visible rows to short terminal windows (down from 10), and the output view only re-reads a task's output file when its byte count actually changed — finished tasks are read once; fully-settled menus stop redrawing entirely.
+- A collapsed Background completion notification now shows the output file's name instead of its full path (the full path and tail remain available when expanded).
+- The Background footer segment now reports stalled tasks separately (`bg 2 running · 1 waiting for input · 2 done`), so the counts add up.
+- `/bg` kill feedback now reads `stopping <id>…` and expires once the task settles; any keypress also clears it.
 - Restructured the bundled Subagent extension internals into a pure per-run state machine with dedicated cancellation scopes, a loop-free two-pass details budget, and shared model-selection and choice helpers for `/agents`; the tool schema, `subagent.json` format, `/agents` interaction contract, and public result shapes are unchanged.
 
 ### Fixed
