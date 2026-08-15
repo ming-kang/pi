@@ -214,6 +214,11 @@
 			"intent": "Registers the bundled hidden extensions (llama, deepwiki, question, router, statusline, subagent, todo)"
 		},
 		{
+			"path": "src/index.ts",
+			"category": "extension-support",
+			"intent": "Re-exports the ShellSettings type for the fork's ctx.getShellSettings() extension API"
+		},
+		{
 			"path": "src/migrations.ts",
 			"category": "bugfix",
 			"intent": "Uses the shared cwdToSafeDirName helper instead of a local duplicate",

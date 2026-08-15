@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.84.6] - 2026-08-15
+
 ### Added
 
 - Added `wait` and `list` actions to the bundled Background extension's new single `bg` tool: `wait` blocks (bounded, default 20s / max 60s) for a task's completion and delivers it inline with the output delta since a given byte offset — the followUp notification is suppressed so the completion is delivered exactly once — and `list` enumerates known tasks (running first, five most recent finished) for the model.
