@@ -25,6 +25,32 @@ export const DEFAULT_MAX_RUNNING_TASKS = 8;
 export const DEFAULT_NOTIFY_TAIL_BYTES = 4 * 1024;
 const SHUTDOWN_GRACE_MS = 2_000;
 
+/** Stall watchdog defaults, matching Claude Code's CC-1175 tuning. */
+export const STALL_POLL_INTERVAL_MS = 5_000;
+export const STALL_THRESHOLD_MS = 45_000;
+export const STALL_TAIL_BYTES = 1_024;
+
+/**
+ * Last-line patterns that suggest a command is blocked waiting for keyboard
+ * input. Used to gate the stall notification: a task that is merely slow
+ * (git log -S, long silent builds) stays silent — only a tail that looks like
+ * a prompt the model can act on triggers a notification.
+ */
+const STALL_PROMPT_PATTERNS: RegExp[] = [
+	/\(y\/n\)/i, // (Y/n), (y/N)
+	/\[y\/n\]/i, // [Y/n], [y/N]
+	/\(yes\/no\)/i,
+	/\b(?:Do you|Would you|Shall I|Are you sure|Ready to)\b.*\? *$/i, // directed questions
+	/Press (any key|Enter)/i,
+	/Continue\?/i,
+	/Overwrite\?/i,
+];
+
+export function looksLikePrompt(tail: string): boolean {
+	const lastLine = tail.trimEnd().split("\n").pop() ?? "";
+	return STALL_PROMPT_PATTERNS.some((pattern) => pattern.test(lastLine));
+}
+
 export type BgTaskStatus = "running" | "completed" | "failed" | "killed" | "timeout";
 
 export interface BgTask {
@@ -36,6 +62,8 @@ export interface BgTask {
 	status: BgTaskStatus;
 	startedAt: number;
 	endedAt?: number;
+	/** True when the stall watchdog flagged this task as waiting for input. */
+	stalled: boolean;
 	/** Process exit code; null when reaped by a signal, undefined while running or when spawn failed. */
 	exitCode: number | null | undefined;
 	outputPath: string;
@@ -57,6 +85,17 @@ export interface BgTaskNotification {
 	tailTruncated: boolean;
 	tailStartsMidLine: boolean;
 	/** Set when the output file could not be read; the notification still fires. */
+	tailError?: string;
+}
+
+/** One-shot signal that a running task appears blocked on interactive input. */
+export interface BgStallNotification {
+	task: BgTask;
+	tailText: string;
+	tailBytes: number;
+	totalBytes: number;
+	tailTruncated: boolean;
+	tailStartsMidLine: boolean;
 	tailError?: string;
 }
 
@@ -177,6 +216,10 @@ export interface BackgroundRegistryOptions {
 	notifyTailBytes?: number;
 	/** Called once per finished task; a synchronous throw rolls back `notified`. */
 	onNotify: (notification: BgTaskNotification) => void;
+	/** Called at most once per task when its output stalls on an interactive-looking prompt. */
+	onStall?: (notification: BgStallNotification) => void;
+	/** Stall watchdog tuning (tests inject short windows); defaults follow Claude Code's CC-1175. */
+	stall?: { pollIntervalMs?: number; thresholdMs?: number; tailBytes?: number };
 	/** Called whenever a task starts or reaches a terminal state. */
 	onChange: () => void;
 	now?: () => number;
@@ -191,6 +234,11 @@ interface TaskRuntime {
 	finalized: boolean;
 	/** Registered waitForResult callers; see the claim protocol in finalize(). */
 	waiters: number;
+	stallTimer: ReturnType<typeof setInterval> | undefined;
+	stallLastSize: number;
+	stallLastGrowthAt: number;
+	/** One-shot latch: the stall notification fires at most once per task. */
+	stallNotified: boolean;
 	done: Promise<void>;
 	resolveDone: () => void;
 }
@@ -206,6 +254,10 @@ export class BackgroundTaskRegistry {
 	private readonly maxRunningTasks: number;
 	private readonly notifyTailBytes: number;
 	private readonly onNotify: (notification: BgTaskNotification) => void;
+	private readonly onStall: ((notification: BgStallNotification) => void) | undefined;
+	private readonly stallPollIntervalMs: number;
+	private readonly stallThresholdMs: number;
+	private readonly stallTailBytes: number;
 	private readonly onChange: () => void;
 	private readonly now: () => number;
 
@@ -220,6 +272,10 @@ export class BackgroundTaskRegistry {
 		this.maxRunningTasks = options.maxRunningTasks ?? DEFAULT_MAX_RUNNING_TASKS;
 		this.notifyTailBytes = options.notifyTailBytes ?? DEFAULT_NOTIFY_TAIL_BYTES;
 		this.onNotify = options.onNotify;
+		this.onStall = options.onStall;
+		this.stallPollIntervalMs = options.stall?.pollIntervalMs ?? STALL_POLL_INTERVAL_MS;
+		this.stallThresholdMs = options.stall?.thresholdMs ?? STALL_THRESHOLD_MS;
+		this.stallTailBytes = options.stall?.tailBytes ?? STALL_TAIL_BYTES;
 		this.onChange = options.onChange;
 		this.now = options.now ?? Date.now;
 	}
@@ -260,6 +316,7 @@ export class BackgroundTaskRegistry {
 			outputTruncated: false,
 			timeoutSeconds: input.timeoutSeconds,
 			notified: false,
+			stalled: false,
 		};
 
 		let resolveDone!: () => void;
@@ -278,6 +335,10 @@ export class BackgroundTaskRegistry {
 			overflow: false,
 			finalized: false,
 			waiters: 0,
+			stallTimer: undefined,
+			stallLastSize: 0,
+			stallLastGrowthAt: this.now(),
+			stallNotified: false,
 			done,
 			resolveDone,
 		};
@@ -289,6 +350,7 @@ export class BackgroundTaskRegistry {
 
 		this.tasks.set(id, task);
 		this.runtimes.set(id, runtime);
+		this.armStallWatchdog(task, runtime);
 		void this.run(task, runtime, input.env);
 		this.onChange();
 		return task;
@@ -333,11 +395,12 @@ export class BackgroundTaskRegistry {
 		return { killed: true };
 	}
 
-	counts(): Record<BgTaskStatus, number> & { total: number } {
-		const counts = { running: 0, completed: 0, failed: 0, killed: 0, timeout: 0, total: 0 };
+	counts(): Record<BgTaskStatus, number> & { total: number; stalled: number } {
+		const counts = { running: 0, completed: 0, failed: 0, killed: 0, timeout: 0, total: 0, stalled: 0 };
 		for (const task of this.tasks.values()) {
 			counts[task.status]++;
 			counts.total++;
+			if (task.stalled) counts.stalled++;
 		}
 		return counts;
 	}
@@ -412,6 +475,92 @@ export class BackgroundTaskRegistry {
 		}
 	}
 
+	/**
+	 * Stall watchdog (Claude Code CC-1175): poll the output file; when output
+	 * stops growing past the threshold AND the tail looks like an interactive
+	 * prompt, flag the task and fire a one-shot notification. Merely-slow tasks
+	 * never match; recovery clears the flag (the notification never re-fires).
+	 */
+	private armStallWatchdog(task: BgTask, runtime: TaskRuntime): void {
+		if (!this.onStall) return;
+		runtime.stallTimer = setInterval(() => this.checkStall(task, runtime), this.stallPollIntervalMs);
+		runtime.stallTimer.unref?.();
+	}
+
+	private clearStallWatchdog(runtime: TaskRuntime): void {
+		if (runtime.stallTimer !== undefined) {
+			clearInterval(runtime.stallTimer);
+			runtime.stallTimer = undefined;
+		}
+	}
+
+	private checkStall(task: BgTask, runtime: TaskRuntime): void {
+		if (runtime.finalized || this.shuttingDown) return;
+		const size = task.outputBytes;
+		if (size > runtime.stallLastSize) {
+			runtime.stallLastSize = size;
+			runtime.stallLastGrowthAt = this.now();
+			if (task.stalled) {
+				// Output resumed: reflect reality in listings, never re-notify.
+				task.stalled = false;
+				this.onChange();
+			}
+			return;
+		}
+		if (this.now() - runtime.stallLastGrowthAt < this.stallThresholdMs) return;
+		void this.probeStallTail(task, runtime);
+	}
+
+	private async probeStallTail(task: BgTask, runtime: TaskRuntime): Promise<void> {
+		// Re-check inside the async boundary: finalize may have raced the probe.
+		if (runtime.finalized || this.shuttingDown) return;
+		let tailText = "";
+		let tailError: string | undefined;
+		try {
+			const slice = await readOutputSlice(task.outputPath, { mode: "tail", maxBytes: this.stallTailBytes });
+			tailText = slice.text;
+		} catch (error) {
+			tailError = error instanceof Error ? error.message : String(error);
+		}
+		if (runtime.finalized || this.shuttingDown) return;
+		// Merely slow: not prompt-shaped. Reset so the next check is a full
+		// threshold window out instead of re-probing on every tick.
+		if (!tailError && !looksLikePrompt(tailText)) {
+			runtime.stallLastGrowthAt = this.now();
+			return;
+		}
+		task.stalled = true;
+		this.onChange();
+		if (runtime.stallNotified) return;
+		runtime.stallNotified = true;
+
+		let tailBytes = 0;
+		let totalBytes = task.outputBytes;
+		let tailTruncated = false;
+		let tailStartsMidLine = false;
+		if (!tailError) {
+			try {
+				const slice = await readOutputSlice(task.outputPath, { mode: "tail", maxBytes: this.stallTailBytes });
+				tailText = slice.text;
+				tailBytes = slice.sliceBytes;
+				totalBytes = slice.totalBytes;
+				tailTruncated = slice.truncated;
+				tailStartsMidLine = slice.startsMidLine;
+			} catch (error) {
+				tailError = error instanceof Error ? error.message : String(error);
+			}
+		}
+		this.onStall?.({
+			task,
+			tailText: sanitizeBinaryOutput(tailText),
+			tailBytes,
+			totalBytes,
+			tailTruncated,
+			tailStartsMidLine,
+			tailError,
+		});
+	}
+
 	private newTaskId(): string {
 		while (true) {
 			const id = `bg-${randomBytes(3).toString("hex")}`;
@@ -461,6 +610,8 @@ export class BackgroundTaskRegistry {
 	): Promise<void> {
 		if (runtime.finalized) return;
 		runtime.finalized = true;
+		this.clearStallWatchdog(runtime);
+		task.stalled = false;
 
 		// Flush before setting terminal state: the output file must hold the
 		// complete truth by the time anyone is told the task ended.

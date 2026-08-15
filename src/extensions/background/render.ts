@@ -36,7 +36,8 @@ function capForTranscript(text: string, limit: number): string {
 	return text.length > limit ? `…${text.slice(-limit)}` : text;
 }
 
-export function statusGlyph(status: BgTaskStatus): string {
+export function statusGlyph(status: BgTaskStatus, stalled?: boolean): string {
+	if (stalled) return "…";
 	switch (status) {
 		case "completed":
 			return "✓";
@@ -50,7 +51,8 @@ export function statusGlyph(status: BgTaskStatus): string {
 	}
 }
 
-export function statusColor(status: BgTaskStatus): "success" | "error" | "warning" | "accent" {
+export function statusColor(status: BgTaskStatus, stalled?: boolean): "success" | "error" | "warning" | "accent" {
+	if (stalled) return "warning";
 	switch (status) {
 		case "completed":
 			return "success";
@@ -178,6 +180,13 @@ function resultSummaryLine(details: BgDetails, theme: Theme): string {
 function taskSummaryLine(details: BgNotificationDetails, theme: Theme): string {
 	const runtime = formatDuration(details.runtimeMs);
 	const exit = details.exitCode !== undefined && details.exitCode !== null ? `, exit ${details.exitCode}` : "";
+	if (details.stalled) {
+		const glyph = theme.fg("warning", "…");
+		const label = details.description
+			? `${details.description} (${commandLabel(details.command, 40)})`
+			: commandLabel(details.command, COMMAND_PREVIEW_LIMIT);
+		return `${glyph} ${theme.fg("accent", details.taskId)} ${label} ${theme.fg("muted", `— waiting for input (${runtime})`)}`;
+	}
 	const outcome = theme.fg(statusColor(details.status), `${details.status}${exit} in ${runtime}`);
 	const glyph = theme.fg(statusColor(details.status), statusGlyph(details.status));
 	const label = details.description
@@ -213,6 +222,18 @@ export function renderBackgroundNotification(
 			: "";
 		container.addChild(
 			new Text(`${theme.fg("toolOutput", tail.trimEnd())}${theme.fg("muted", truncatedNote)}`, 1, 0),
+		);
+	}
+	if (details.stalled && options.expanded) {
+		container.addChild(
+			new Text(
+				theme.fg(
+					"warning",
+					"Blocked on interactive input — kill (bg action kill) and re-run with piped input or a non-interactive flag.",
+				),
+				1,
+				0,
+			),
 		);
 	}
 	return container;

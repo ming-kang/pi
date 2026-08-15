@@ -32,6 +32,7 @@ import { sanitizeBinaryOutput } from "../../utils/shell.ts";
 import { BackgroundTasksMenu } from "./manager.ts";
 import {
 	BackgroundTaskRegistry,
+	type BgStallNotification,
 	type BgTask,
 	type BgTaskNotification,
 	type BgTaskStatus,
@@ -163,6 +164,8 @@ export interface BgNotificationDetails {
 	command: string;
 	description?: string;
 	status: BgTaskStatus;
+	/** True for the one-shot "waiting for interactive input" signal; the task keeps running. */
+	stalled?: true;
 	exitCode: number | null | undefined;
 	runtimeMs: number;
 	outputPath: string;
@@ -242,13 +245,72 @@ export function buildNotificationContent(notification: BgTaskNotification): stri
 	return lines.join("\n");
 }
 
-export function formatStatusline(counts: { running: number; total: number }): string | undefined {
+export function formatStatusline(counts: { running: number; total: number; stalled?: number }): string | undefined {
 	if (counts.total === 0) return undefined;
 	const ended = counts.total - counts.running;
 	const parts: string[] = [];
-	if (counts.running > 0) parts.push(`${counts.running} running`);
+	if (counts.running > 0) {
+		parts.push(
+			counts.stalled && counts.stalled > 0
+				? `${counts.running} running · ${counts.stalled} waiting for input`
+				: `${counts.running} running`,
+		);
+	}
 	if (ended > 0) parts.push(`${ended} done`);
 	return `bg ${parts.join(" · ")}`;
+}
+
+export function buildStallContent(notification: BgStallNotification): string {
+	const task = notification.task;
+	const runtime = formatDuration((task.endedAt ?? Date.now()) - task.startedAt);
+	const xmlText = (text: string) => escapeXml(filterXmlCharacters(text));
+	const lines = [
+		`<background-task id="${task.id}" status="running" waiting-for-input="true" runtime="${runtime}">`,
+		`<command>${xmlText(task.command)}</command>`,
+	];
+	if (task.description) {
+		lines.push(`<description>${xmlText(task.description)}</description>`);
+	}
+	lines.push(`<output-file>${xmlText(task.outputPath)}</output-file>`);
+	if (notification.tailError) {
+		lines.push(`<output-tail unavailable="${xmlText(notification.tailError)}"/>`);
+	} else {
+		const attrs = [
+			`bytes="${notification.tailBytes}"`,
+			`totalBytes="${notification.totalBytes}"`,
+			notification.tailTruncated ? 'truncated="true"' : "",
+			notification.tailStartsMidLine ? 'startsMidLine="true"' : "",
+		]
+			.filter(Boolean)
+			.join(" ");
+		const tail = notification.tailText.length > 0 ? xmlText(notification.tailText) : "(no output)";
+		lines.push(`<output-tail ${attrs}>`, tail.trimEnd(), "</output-tail>");
+	}
+	lines.push(
+		"<advice>The command appears blocked waiting for interactive input. Kill it (bg action kill) and " +
+			"re-run with piped input (e.g. echo y | command) or a non-interactive flag if one exists (e.g. --yes). " +
+			"The task keeps running until then.</advice>",
+	);
+	lines.push("</background-task>");
+	return lines.join("\n");
+}
+
+function toStallDetails(notification: BgStallNotification): BgNotificationDetails {
+	const task = notification.task;
+	return {
+		taskId: task.id,
+		command: task.command,
+		description: task.description,
+		status: "running",
+		stalled: true,
+		exitCode: undefined,
+		runtimeMs: Date.now() - task.startedAt,
+		outputPath: task.outputPath,
+		totalBytes: notification.totalBytes,
+		tailText: notification.tailText,
+		tailTruncated: notification.tailTruncated,
+		tailError: notification.tailError,
+	};
 }
 
 function describeResolveFailure(input: string, result: ResolveTaskResult & { ok: false }): string {
@@ -307,6 +369,8 @@ export interface BackgroundExtensionOverrides {
 	operations?: BashOperations;
 	outputDir?: string;
 	maxOutputBytes?: number;
+	/** Stall watchdog tuning; defaults follow Claude Code's CC-1175 (5s/45s/1KB). */
+	stall?: { pollIntervalMs?: number; thresholdMs?: number; tailBytes?: number };
 }
 
 /** Shell configuration for one bg session: the session's settings win, disk settings are the fallback. */
@@ -382,6 +446,7 @@ export function createBackgroundExtension(overrides?: BackgroundExtensionOverrid
 				operations: overrides?.operations ?? createSessionBashOperations(ctx),
 				outputDir: overrides?.outputDir,
 				maxOutputBytes: overrides?.maxOutputBytes,
+				stall: overrides?.stall,
 				onNotify: (notification) => {
 					pi.sendMessage(
 						{
@@ -389,6 +454,20 @@ export function createBackgroundExtension(overrides?: BackgroundExtensionOverrid
 							content: buildNotificationContent(notification),
 							display: true,
 							details: toNotificationDetails(notification),
+						},
+						{ deliverAs: "followUp", triggerTurn: true },
+					);
+				},
+				onStall: (notification) => {
+					// Informational one-shot signal: not a terminal state, so it bypasses
+					// the claim protocol (a waiting model needs to know it is blocked on
+					// input, not merely slow).
+					pi.sendMessage(
+						{
+							customType: BG_NOTIFICATION_TYPE,
+							content: buildStallContent(notification),
+							display: true,
+							details: toStallDetails(notification),
 						},
 						{ deliverAs: "followUp", triggerTurn: true },
 					);

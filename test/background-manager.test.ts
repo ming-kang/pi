@@ -46,6 +46,7 @@ function makeTask(id: string, status: BgTask["status"] = "running", overrides?: 
 		outputPath: `/tmp/pi-${id}.log`,
 		outputBytes: 64,
 		outputTruncated: false,
+		stalled: false,
 		notified: false,
 		...overrides,
 	};
@@ -145,6 +146,19 @@ describe("BackgroundTasksMenu", () => {
 		expect(lines.some((line) => line.includes("select"))).toBe(true);
 		// The list view never shows task output.
 		expect(lines.some((line) => line.includes("hidden output"))).toBe(false);
+	});
+
+	it("marks stalled tasks in the list and detail header", async () => {
+		const task = makeTask("bg-aaa111", "running", { stalled: true });
+		const harness = createHarness({ tasks: [task], sliceFor: { [task.outputPath]: "Proceed? (y/n)\n" } });
+		await vi.advanceTimersByTimeAsync(0);
+
+		const listLines = harness.render();
+		expect(listLines.some((line) => line.includes("…"))).toBe(true);
+
+		await harness.enterDetail();
+		const detailLines = harness.render();
+		expect(detailLines.some((line) => line.includes("waiting for input"))).toBe(true);
 	});
 
 	it("opens the output view on enter and steps back on cancel", async () => {

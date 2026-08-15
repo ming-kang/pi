@@ -202,10 +202,10 @@ export class BackgroundTasksMenu implements Component, Focusable {
 			: firstCommandLine(task.command);
 		if (isSelected) {
 			// Pad to full width before styling so the selection background spans the row.
-			const plain = padLine(`→ ${statusGlyph(task.status)} ${task.id} ${duration} ${label}`, width);
+			const plain = padLine(`→ ${statusGlyph(task.status, task.stalled)} ${task.id} ${duration} ${label}`, width);
 			return this.theme.bg("selectedBg", this.theme.fg("text", plain));
 		}
-		const glyph = this.theme.fg(statusColor(task.status), statusGlyph(task.status));
+		const glyph = this.theme.fg(statusColor(task.status, task.stalled), statusGlyph(task.status, task.stalled));
 		const id = this.theme.fg("accent", task.id);
 		const rest = this.theme.fg("muted", `${duration} ${label}`);
 		return padLine(`  ${glyph} ${id} ${rest}`, width);
@@ -250,8 +250,9 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const resumeLabel = keyLabel("tui.select.pageDown", { keybindings: this.keybindings });
 		const paused = this.follow ? "" : resumeLabel ? ` — paused (${resumeLabel} to follow)` : " — paused";
 		const fileName = task.outputPath.replace(/\\/g, "/").split("/").at(-1) ?? task.outputPath;
-		const glyph = this.theme.fg(statusColor(task.status), statusGlyph(task.status));
-		const header = `${task.id} · ${task.status}${exit} · ${duration} · ${formatSize(task.outputBytes)} · ${fileName}${paused}`;
+		const glyph = this.theme.fg(statusColor(task.status, task.stalled), statusGlyph(task.status, task.stalled));
+		const statusLabel = task.stalled ? "running, waiting for input" : task.status;
+		const header = `${task.id} · ${statusLabel}${exit} · ${duration} · ${formatSize(task.outputBytes)} · ${fileName}${paused}`;
 		return `${glyph} ${this.theme.fg("muted", header)}`;
 	}
 

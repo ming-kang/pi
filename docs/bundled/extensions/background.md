@@ -85,13 +85,13 @@ The output view polls the output file once per second and only ever reads the la
 
 ## Statusline
 
-Running and finished counts appear in the footer as `bg 2 running · 1 done`; the segment disappears when no tasks exist.
+Running and finished counts appear in the footer as `bg 2 running · 1 done`, or `bg 2 running · 1 waiting for input` when the stall watchdog has flagged a task; the segment disappears when no tasks exist.
 
 ## Limits and lifecycle
 
 - Background tasks inherit the session's `PI_*` environment variables (`PI_SESSION_ID`, `PI_MODEL`, …) just like the built-in bash tool, snapshotted when the task starts.
 - Tasks run through the session's configured shell (`shellPath`) and honor `shellCommandPrefix`, matching the built-in bash tool. The prefix is applied at execution time only — it never appears in task labels or notifications.
-- Output streams directly to a system-temp file (`pi-bg-<id>.log`), never into the project or into memory. Memory holds only a byte counter. The file is created exclusively (`wx`), so a stale id or a planted symlink can never cause truncation of an existing file.
+- Output streams directly to a system-temp file (`pi-bg-<id>.log`), never into the project or into memory. Memory holds only a byte counter.
 - Output is capped at 20MB. Hitting the cap kills the task and marks it `failed` rather than silently truncating.
 - At most 8 tasks may run concurrently; `create` reports the running tasks when the limit is reached.
 - Aborting the current turn (Esc) does not kill background tasks — that is what `kill` and `/bg` are for.

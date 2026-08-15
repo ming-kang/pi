@@ -6,8 +6,10 @@ import type { BashOperations } from "../src/core/tools/bash.ts";
 import {
 	type BackgroundRegistryOptions,
 	BackgroundTaskRegistry,
+	type BgStallNotification,
 	type BgTaskNotification,
 	createOutputFileExclusively,
+	looksLikePrompt,
 	readOutputSince,
 	readOutputSlice,
 } from "../src/extensions/background/registry.ts";
@@ -70,6 +72,34 @@ function makeRegistry(overrides?: Partial<BackgroundRegistryOptions>): {
 		...overrides,
 	});
 	return { registry, calls, notifications, onNotify, onChange, outputDir };
+}
+
+/**
+ * Stall-watchdog harness: real (tiny) timers with an injected fake clock for
+ * the threshold arithmetic; assertions poll with vi.waitFor. (Fake timers
+ * cannot drive the libuv thread-pool completion that readOutputSlice's async
+ * file I/O depends on.)
+ */
+function makeStallRegistry() {
+	let clock = 1_000_000;
+	const stalls: BgStallNotification[] = [];
+	const onStall = vi.fn((notification: BgStallNotification) => {
+		stalls.push(notification);
+	});
+	const base = makeRegistry({
+		onStall,
+		now: () => clock,
+		stall: { pollIntervalMs: 5, thresholdMs: 15, tailBytes: 1_024 },
+	});
+	/** Jump the injected clock forward by ms (the real 5ms timer keeps ticking). */
+	const advance = async (ms: number) => {
+		clock += ms;
+		await new Promise((resolve) => setTimeout(resolve, Math.max(20, ms / 5) * 1));
+	};
+	const setClock = (ms: number) => {
+		clock = ms;
+	};
+	return { ...base, stalls, onStall, advance, setClock };
 }
 
 afterEach(() => {
@@ -431,6 +461,181 @@ describe("readOutputSlice", () => {
 	});
 });
 
+describe("looksLikePrompt", () => {
+	it("matches the interactive-prompt patterns on the last line", () => {
+		for (const tail of [
+			"Install? (y/n)",
+			"Proceed? [y/N]",
+			"choose (yes/no)",
+			"Do you want to continue?",
+			"Would you like to proceed? ",
+			"Press any key to continue",
+			"Press Enter to confirm",
+			"Continue?",
+			"Overwrite?",
+		]) {
+			expect(looksLikePrompt(tail)).toBe(true);
+		}
+	});
+
+	it("does not match merely-slow output", () => {
+		for (const tail of ["Refactoring modules…", "", "42% complete", "Building (no question)"]) {
+			expect(looksLikePrompt(tail)).toBe(false);
+		}
+	});
+
+	it("only tests the last non-empty line", () => {
+		expect(looksLikePrompt("earlier Continue?\nCompiling module 7 of 9")).toBe(false);
+		expect(looksLikePrompt("Compiling module 7 of 9\nOverwrite?")).toBe(true);
+	});
+});
+
+describe("stall watchdog", () => {
+	it("fires once when output stalls on a prompt-looking tail", async () => {
+		const { registry, calls, stalls, onStall, advance } = makeStallRegistry();
+		const task = registry.startTask({ command: "npm install", cwd: "/w" });
+		calls[0]?.emitData("downloading…\nProceed? (y/n) ");
+		await vi.waitFor(() => expect(readFileSync(task.outputPath, "utf8")).toContain("(y/n)"));
+
+		await advance(40);
+		await vi.waitFor(() => expect(stalls).toHaveLength(1));
+		expect(stalls[0]?.task.id).toBe(task.id);
+		expect(stalls[0]?.tailText).toContain("(y/n)");
+		expect(task.stalled).toBe(true);
+		expect(registry.counts().stalled).toBe(1);
+
+		// One-shot latch: further stall windows never re-notify.
+		await advance(60);
+		expect(onStall).toHaveBeenCalledTimes(1);
+	});
+
+	it("stays silent for merely-slow tasks without prompt tails", async () => {
+		const { registry, calls, stalls, advance } = makeStallRegistry();
+		registry.startTask({ command: "git log -S foo", cwd: "/w" });
+		calls[0]?.emitData("searching revisions…");
+		await advance(300);
+		expect(stalls).toHaveLength(0);
+	});
+
+	it("clears the stalled flag when output resumes without re-notifying", async () => {
+		const { registry, calls, stalls, advance } = makeStallRegistry();
+		const task = registry.startTask({ command: "npm install", cwd: "/w" });
+		calls[0]?.emitData("Proceed? (y/n) ");
+		// Wait for the flush before jumping the clock: the growth check reads
+		// task.outputBytes, which the async stream has not yet counted otherwise.
+		await vi.waitFor(() => expect(readFileSync(task.outputPath, "utf8")).toContain("(y/n)"));
+		await advance(40);
+		await vi.waitFor(() => expect(stalls).toHaveLength(1));
+
+		calls[0]?.emitData("resumed work\n");
+		await advance(20);
+		expect(task.stalled).toBe(false);
+
+		// Stall again: flag returns, notification does not.
+		await advance(100);
+		expect(task.stalled).toBe(true);
+		expect(stalls).toHaveLength(1);
+	});
+
+	it("does not trigger while output keeps growing", async () => {
+		const { registry, calls, stalls, advance } = makeStallRegistry();
+		registry.startTask({ command: "yes | head", cwd: "/w" });
+		for (let i = 0; i < 8; i++) {
+			calls[0]?.emitData(`tick ${i}\n`);
+			await advance(30);
+		}
+		expect(stalls).toHaveLength(0);
+	});
+
+	it("stall then complete: completion notification is unaffected", async () => {
+		const { registry, calls, stalls, notifications, advance } = makeStallRegistry();
+		const task = registry.startTask({ command: "npm install", cwd: "/w" });
+		calls[0]?.emitData("Proceed? (y/n) ");
+		await vi.waitFor(() => expect(readFileSync(task.outputPath, "utf8")).toContain("(y/n)"));
+		await advance(40);
+		await vi.waitFor(() => expect(stalls).toHaveLength(1));
+
+		calls[0]?.finish(0);
+		const finished = await registry.waitForTask(task.id);
+		expect(finished.status).toBe("completed");
+		expect(finished.stalled).toBe(false);
+		expect(notifications).toHaveLength(1);
+	});
+
+	it("stall then kill: normal terminal path, no duplicate stall", async () => {
+		const { registry, calls, stalls, onNotify, advance } = makeStallRegistry();
+		const task = registry.startTask({ command: "npm install", cwd: "/w" });
+		// No output at all: an empty, non-growing file is a legitimate stall probe
+		// only when it looks like a prompt — empty tail does not, so this test
+		// needs a prompt tail too. (Empty file never stalls; keep a real tail.)
+		calls[0]?.emitData("Proceed? (y/n) ");
+		await vi.waitFor(() => expect(readFileSync(task.outputPath, "utf8")).toContain("(y/n)"));
+		await advance(40);
+		await vi.waitFor(() => expect(stalls).toHaveLength(1));
+
+		registry.killTask(task.id);
+		const finished = await registry.waitForTask(task.id);
+		expect(finished.status).toBe("killed");
+		expect(onNotify).toHaveBeenCalledTimes(1);
+		await advance(50);
+		expect(stalls).toHaveLength(1);
+	});
+
+	it("shutdown stops the watchdog and stays silent", async () => {
+		const { registry, stalls, advance } = makeStallRegistry();
+		registry.startTask({ command: "npm install", cwd: "/w" });
+		await advance(20);
+		await registry.shutdown();
+		await advance(100);
+		expect(stalls).toHaveLength(0);
+	});
+
+	it("still notifies with tailError when the output file cannot be read", async () => {
+		const { registry, stalls, outputDir, advance } = makeStallRegistry();
+		const task = registry.startTask({ command: "npm install", cwd: "/w" });
+		// Redirect the recorded path so the stall probe hits ENOENT: a read
+		// failure still notifies (with tailError) even though no tail exists.
+		task.outputPath = join(outputDir, "missing.log");
+		await advance(60);
+		await vi.waitFor(() => expect(stalls).toHaveLength(1));
+		expect(stalls[0]?.tailError).toMatch(/ENOENT|no such file/i);
+	});
+});
+
+describe("exclusive output file creation", () => {
+	it("fails with EEXIST when the path already exists as a regular file", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-bg-wx-"));
+		tempDirs.push(dir);
+		const filePath = join(dir, "existing.log");
+		writeFileSync(filePath, "precious");
+		expect(() => createOutputFileExclusively(filePath)).toThrow(/EEXIST/);
+		expect(readFileSync(filePath, "utf8")).toBe("precious");
+	});
+
+	it("fails with EEXIST when the path is a symlink and leaves the target intact", () => {
+		// Creating symlinks on Windows needs elevated privileges; the property
+		// (EEXIST on any existing path, symlink included) is POSIX-defined.
+		if (process.platform === "win32") return;
+		const dir = mkdtempSync(join(tmpdir(), "pi-bg-wx-"));
+		tempDirs.push(dir);
+		const target = join(dir, "target.log");
+		const link = join(dir, "link.log");
+		writeFileSync(target, "do not truncate");
+		symlinkSync(target, link);
+
+		expect(() => createOutputFileExclusively(link)).toThrow(/EEXIST/);
+		expect(readFileSync(target, "utf8")).toBe("do not truncate");
+	});
+
+	it("creates an empty file on a fresh path", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-bg-wx-"));
+		tempDirs.push(dir);
+		const filePath = join(dir, "fresh.log");
+		createOutputFileExclusively(filePath);
+		expect(readFileSync(filePath, "utf8")).toBe("");
+	});
+});
+
 describe("readOutputSince", () => {
 	function writeTempFile(content: string | Buffer): string {
 		const dir = mkdtempSync(join(tmpdir(), "pi-bg-since-"));
@@ -483,39 +688,5 @@ describe("readOutputSince", () => {
 
 		const whole = await readOutputSince(writeTempFile("hi\n"), 0, 100);
 		expect(whole).toMatchObject({ text: "hi\n", truncated: false, startsMidLine: false, fromByte: 0 });
-	});
-});
-
-describe("exclusive output file creation", () => {
-	it("fails with EEXIST when the path already exists as a regular file", () => {
-		const dir = mkdtempSync(join(tmpdir(), "pi-bg-wx-"));
-		tempDirs.push(dir);
-		const filePath = join(dir, "existing.log");
-		writeFileSync(filePath, "precious");
-		expect(() => createOutputFileExclusively(filePath)).toThrow(/EEXIST/);
-		expect(readFileSync(filePath, "utf8")).toBe("precious");
-	});
-
-	it("fails with EEXIST when the path is a symlink and leaves the target intact", () => {
-		// Creating symlinks on Windows needs elevated privileges; the property
-		// (EEXIST on any existing path, symlink included) is POSIX-defined.
-		if (process.platform === "win32") return;
-		const dir = mkdtempSync(join(tmpdir(), "pi-bg-wx-"));
-		tempDirs.push(dir);
-		const target = join(dir, "target.log");
-		const link = join(dir, "link.log");
-		writeFileSync(target, "do not truncate");
-		symlinkSync(target, link);
-
-		expect(() => createOutputFileExclusively(link)).toThrow(/EEXIST/);
-		expect(readFileSync(target, "utf8")).toBe("do not truncate");
-	});
-
-	it("creates an empty file on a fresh path", () => {
-		const dir = mkdtempSync(join(tmpdir(), "pi-bg-wx-"));
-		tempDirs.push(dir);
-		const filePath = join(dir, "fresh.log");
-		createOutputFileExclusively(filePath);
-		expect(readFileSync(filePath, "utf8")).toBe("");
 	});
 });

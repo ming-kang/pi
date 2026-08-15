@@ -80,7 +80,7 @@ interface Harness {
 
 const tempDirs: string[] = [];
 
-function createHarness(): Harness {
+function createHarness(stall?: { pollIntervalMs: number; thresholdMs: number }): Harness {
 	const outputDir = mkdtempSync(join(tmpdir(), "pi-bg-ext-"));
 	tempDirs.push(outputDir);
 	const { operations, calls } = createFakeOperations();
@@ -130,7 +130,7 @@ function createHarness(): Harness {
 		},
 	} as unknown as ExtensionContext;
 
-	createBackgroundExtension({ operations, outputDir })(pi);
+	createBackgroundExtension({ operations, outputDir, ...(stall ? { stall } : {}) })(pi);
 
 	return {
 		tools,
@@ -402,6 +402,35 @@ describe("background extension", () => {
 		expect(content).toContain("<description>dev &lt;server&gt;</description>");
 	});
 
+	it("sends a one-shot stalled-task notification with advice when output blocks on a prompt", async () => {
+		const harness = createHarness({ pollIntervalMs: 5, thresholdMs: 15 });
+		await harness.startSession();
+
+		await harness.execute("bg", { action: "create", command: "npm install" });
+		harness.calls[0]?.emitData("Proceed? (y/n) ");
+
+		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
+		const sent = harness.sent[0];
+		expect(sent?.options).toEqual({ deliverAs: "followUp", triggerTurn: true });
+		const content = sent?.message.content ?? "";
+		expect(content).toContain('status="running"');
+		expect(content).toContain('waiting-for-input="true"');
+		expect(content).toContain("(y/n)");
+		expect(content).toContain("<advice>");
+		expect(content).toContain("bg action kill");
+		const details = sent?.message.details as { stalled?: boolean; status: string };
+		expect(details.stalled).toBe(true);
+		expect(details.status).toBe("running");
+
+		// Statusline reflects the waiting-for-input state and clears on completion.
+		await vi.waitFor(() => expect(harness.statusUpdates.at(-1)).toBe("bg 1 running · 1 waiting for input"));
+		harness.calls[0]?.finish(0);
+		await vi.waitFor(() => {
+			expect(harness.sent).toHaveLength(2);
+			expect(harness.statusUpdates.at(-1)).toBe("bg 1 done");
+		});
+	});
+
 	it("kills a running task and rejects a second kill", async () => {
 		const harness = createHarness();
 		await harness.startSession();
@@ -579,6 +608,20 @@ describe("renderBackgroundNotification", () => {
 				plainTheme,
 			),
 		).toBeUndefined();
+	});
+
+	it("renders a stalled notification as waiting-for-input with advice on expand", () => {
+		const stalled = message({ stalled: true, status: "running", tailText: "Proceed? (y/n)\n" });
+
+		const collapsed = renderBackgroundNotification(stalled, { expanded: false, outputPad: 1 }, plainTheme);
+		const collapsedText = (collapsed?.render(120) ?? []).map(stripTerminalSequences).join("\n");
+		expect(collapsedText).toContain("waiting for input");
+		expect(collapsedText).not.toContain("(y/n)");
+
+		const expanded = renderBackgroundNotification(stalled, { expanded: true, outputPad: 1 }, plainTheme);
+		const expandedText = (expanded?.render(120) ?? []).map(stripTerminalSequences).join("\n");
+		expect(expandedText).toContain("Proceed? (y/n)");
+		expect(expandedText).toContain("kill");
 	});
 });
 

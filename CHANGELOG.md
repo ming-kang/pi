@@ -8,6 +8,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 - Added `wait` and `list` actions to the bundled Background extension's new single `bg` tool: `wait` blocks (bounded, default 20s / max 60s) for a task's completion and delivers it inline with the output delta since a given byte offset — the followUp notification is suppressed so the completion is delivered exactly once — and `list` enumerates known tasks (running first, five most recent finished) for the model.
 - Added an optional `description` label to Background task creation, shown in `/bg`, task listings, and the completion notification.
+- Added a stall watchdog to the bundled Background extension (Claude Code CC-1175 design): a task whose output stops growing for 45s with a prompt-looking tail (`(y/n)`, `Press Enter`, …) is flagged `waiting for input`, sends a one-shot notification with remediation advice (kill and re-run with piped input or a non-interactive flag), marks the task in `/bg` and the footer statusline, and never fires twice or on merely-slow tasks.
 - Background task output files are now created exclusively (`wx`), so creation can never truncate an existing file or a symlink target.
 
 ### Changed
