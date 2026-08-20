@@ -140,7 +140,9 @@ export function renderBgCall(
 ): Component {
 	switch (args.action) {
 		case "create":
-			return renderCreateCall(args as BgCreateInput, theme, context);
+			return typeof args.command === "string"
+				? renderCreateCall(args as BgCreateInput, theme, context)
+				: new Text(theme.fg("toolTitle", theme.bold("bg create")), 0, 0);
 		case "read": {
 			const mode = args.mode ?? "tail";
 			const size = args.bytes !== undefined ? ` ${formatSize(args.bytes)}` : "";
@@ -160,6 +162,12 @@ export function renderBgCall(
 			);
 		case "list":
 			return new Text(theme.fg("toolTitle", theme.bold("bg list")), 0, 0);
+		default: {
+			// Tool arguments arrive incrementally while the model is still emitting
+			// JSON. Keep the call row renderable until `action` becomes valid.
+			const action = typeof args.action === "string" ? ` ${theme.fg("dim", args.action)}` : "";
+			return new Text(`${theme.fg("toolTitle", theme.bold("bg"))}${action}`, 0, 0);
+		}
 	}
 }
 

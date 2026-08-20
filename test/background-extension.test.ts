@@ -691,6 +691,26 @@ describe("renderBgCall", () => {
 		bold: (text: string) => text,
 	} as unknown as Theme;
 
+	it("stays renderable while streaming incomplete arguments", () => {
+		const empty = renderBgCall({} as never, plainTheme, {
+			expanded: false,
+			isPartial: true,
+		} as ToolRenderContext);
+		expect(empty.render(200).map(stripTerminalSequences).join("\n").trimEnd()).toBe("bg");
+
+		const partialAction = renderBgCall({ action: "cre" } as never, plainTheme, {
+			expanded: false,
+			isPartial: true,
+		} as ToolRenderContext);
+		expect(partialAction.render(200).map(stripTerminalSequences).join("\n").trimEnd()).toBe("bg cre");
+
+		const createWithoutCommand = renderBgCall({ action: "create" } as never, plainTheme, {
+			expanded: false,
+			isPartial: true,
+		} as ToolRenderContext);
+		expect(createWithoutCommand.render(200).map(stripTerminalSequences).join("\n").trimEnd()).toBe("bg create");
+	});
+
 	it("shows the full multi-line create command only when expanded", () => {
 		const args = { action: "create" as const, command: "echo one\necho two\necho three" };
 

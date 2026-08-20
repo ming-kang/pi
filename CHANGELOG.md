@@ -4,10 +4,13 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.84.7] - 2026-08-21
+
 ### Fixed
 
 - Fixed `/agents` flashing the main editor for one frame between nested TUI pages by keeping profile, settings, model, and thinking navigation inside one custom UI lifecycle.
 - Fixed `/router` flashing the main editor between nested menus, prompts, confirmations, catalog loading, and model selection by keeping its complete TUI flow inside one custom UI lifecycle.
+- Fixed an uncaught TUI crash when the Background tool received an incomplete streaming argument frame by keeping its call renderer valid until the action and create command are available.
 
 ## [0.84.6] - 2026-08-15
 
