@@ -25,6 +25,7 @@ export async function probeRelayModels(opts: {
 		return { ok: false, error: `Unsupported protocol: ${baseUrl.protocol}` };
 	}
 
+	if (opts.signal?.aborted) return { ok: false, error: "Cancelled." };
 	const controller = new AbortController();
 	const timeoutMs = opts.timeoutMs ?? DEFAULTS.probeTimeoutMs;
 	const timer = setTimeout(() => controller.abort(), timeoutMs);

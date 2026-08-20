@@ -7,6 +7,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 ### Fixed
 
 - Fixed `/agents` flashing the main editor for one frame between nested TUI pages by keeping profile, settings, model, and thinking navigation inside one custom UI lifecycle.
+- Fixed `/router` flashing the main editor between nested menus, prompts, confirmations, catalog loading, and model selection by keeping its complete TUI flow inside one custom UI lifecycle.
 
 ## [0.84.6] - 2026-08-15
 
