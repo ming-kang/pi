@@ -1,4 +1,13 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -135,6 +144,16 @@ describe("subagent configuration", () => {
 		await updateProfileOverride("explorer", { model: "test/sonnet", thinking: "high" }, root);
 		const config = parseSubagentConfig(readFileSync(join(root, "subagent.json"), "utf8"));
 		expect(config).toEqual({ version: 1, profiles: { explorer: { model: "test/sonnet", thinking: "high" } } });
+	});
+
+	it("does not create a config file when an override is already inherited", async () => {
+		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-noop-settings-"));
+		temporaryDirectories.push(root);
+		await expect(updateProfileOverride("explorer", { model: undefined }, root)).resolves.toEqual({
+			version: 1,
+			profiles: {},
+		});
+		expect(existsSync(join(root, "subagent.json"))).toBe(false);
 	});
 
 	it("serializes concurrent override updates without losing any profile", async () => {

@@ -93,6 +93,18 @@ describe("Subagent profile model list", () => {
 		expect(render(list)).toContain("→ retired [missing · unavailable] ✓");
 	});
 
+	it("rebuilds themed rows when invalidated", () => {
+		const list = createList();
+		const before = list.render(100).join("\n");
+		try {
+			initTheme("light");
+			list.invalidate();
+			expect(list.render(100).join("\n")).not.toBe(before);
+		} finally {
+			initTheme("dark");
+		}
+	});
+
 	it("distinguishes choosing inherit from dismissing the picker", () => {
 		const choose = vi.fn();
 		const inherit = createList({ savedModelId: undefined, onDone: choose });

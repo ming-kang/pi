@@ -2,7 +2,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { Component, TUI, KeybindingsManager as TuiKeybindingsManager } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	Container,
+	type TUI,
+	type KeybindingsManager as TuiKeybindingsManager,
+	TuiMainScreen,
+} from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 import type { ExtensionCommandContext } from "../src/core/extensions/types.ts";
@@ -15,8 +21,10 @@ import {
 	buildThinkingChoices,
 	compareModels,
 } from "../src/extensions/subagent/ui/choices.ts";
+import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme, type Theme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
+import { VirtualTerminal } from "./helpers/virtual-terminal.ts";
 
 function model(provider: string, id: string): Model<Api> {
 	return {
@@ -159,10 +167,11 @@ describe("/agents command", () => {
 		expect(configAt(root).profiles.explorer).toBeUndefined();
 	});
 
-	it("runs the unified TUI flow and commits each selection immediately", async () => {
+	it("keeps one TUI lifecycle while navigating back and commits each selection immediately", async () => {
 		const root = temporaryAgentDir();
 		const activeModel = model("provider", "worker");
 		let customCalls = 0;
+		let nestedBackStayedOpen = false;
 		const savedMenuRender: string[] = [];
 		const custom = async <T>(
 			factory: (
@@ -172,42 +181,67 @@ describe("/agents command", () => {
 				done: (result: T) => void,
 			) => Component | Promise<Component>,
 		): Promise<T> =>
-			new Promise<T>((resolve) => {
+			new Promise<T>((resolve, reject) => {
+				let settled = false;
+				const done = (result: T) => {
+					settled = true;
+					resolve(result);
+				};
 				void Promise.resolve(
-					factory({ requestRender: vi.fn() } as unknown as TUI, theme, new KeybindingsManager(), resolve),
-				).then((component) => {
-					customCalls++;
-					const interactive = component as unknown as {
-						handleInput(data: string): void;
-						render(width: number): string[];
-					};
-					if (customCalls === 1) {
-						// Settings menu: move to Thinking and confirm it.
-						interactive.handleInput("\x1b[B");
+					factory({ requestRender: vi.fn() } as unknown as TUI, theme, new KeybindingsManager(), done),
+				)
+					.then(async (component) => {
+						customCalls++;
+						const interactive = component as unknown as {
+							handleInput(data: string): void;
+							render(width: number): string[];
+						};
+						const render = () => stripAnsi(interactive.render(100).join("\n"));
+						const choose = (label: string) => {
+							for (let index = 0; index < 12; index++) {
+								const selected = render()
+									.split("\n")
+									.find((line) => line.includes("→"));
+								if (selected?.includes(label)) {
+									interactive.handleInput("\r");
+									return;
+								}
+								interactive.handleInput("\x1b[B");
+							}
+							throw new Error(`Could not select ${label}`);
+						};
+
+						expect(render()).toContain("Agents");
 						interactive.handleInput("\r");
-					} else if (customCalls === 2) {
-						// Settings menu: confirm Model on the first row.
-						interactive.handleInput("\r");
-					} else if (customCalls === 3) {
-						// Model picker: step past the inherit row to provider/worker.
-						interactive.handleInput("\x1b[B");
-						interactive.handleInput("\r");
-					} else {
-						// Settings menu: both overrides visible, then back out.
-						savedMenuRender.push(stripAnsi(interactive.render(80).join("\n")));
+						expect(render()).toContain("Model — inherit");
+
+						// Esc from profile settings switches the mounted child back to
+						// the profile list; it must not resolve ctx.ui.custom().
 						interactive.handleInput("\x1b");
-					}
-				});
+						expect(settled).toBe(false);
+						expect(render()).toContain("General");
+						nestedBackStayedOpen = true;
+
+						interactive.handleInput("\r");
+						interactive.handleInput("\x1b[B");
+						interactive.handleInput("\r");
+						choose("high");
+						await vi.waitFor(() => expect(render()).toContain("override — high ✓"));
+
+						interactive.handleInput("\x1b[A");
+						interactive.handleInput("\r");
+						choose("worker [provider]");
+						await vi.waitFor(() => expect(render()).toContain("override — provider/worker ✓"));
+
+						savedMenuRender.push(render());
+						interactive.handleInput("\x1b");
+						expect(settled).toBe(false);
+						expect(render()).toContain("Agents");
+						interactive.handleInput("\x1b");
+					})
+					.catch(reject);
 			});
-		let agentsSelections = 0;
-		const select = vi.fn(async (title: string, options: string[]) => {
-			if (title === "Agents") {
-				agentsSelections++;
-				return agentsSelections === 1 ? "Explorer" : undefined;
-			}
-			if (title === "Thinking — Explorer") return options.find((option) => option === "high");
-			return undefined;
-		});
+		const select = vi.fn();
 		const ctx = {
 			...baseContext(root, activeModel),
 			mode: "tui",
@@ -215,12 +249,213 @@ describe("/agents command", () => {
 		} as unknown as ExtensionCommandContext;
 
 		await showAgentsCommand(ctx, "medium");
-		expect(customCalls).toBe(4);
-		// The last menu shows the already-persisted overrides: selections are
-		// committed as they are confirmed, with no apply/save draft step.
+		expect(customCalls).toBe(1);
+		expect(select).not.toHaveBeenCalled();
+		expect(nestedBackStayedOpen).toBe(true);
 		expect(savedMenuRender.join("\n")).toContain("override — provider/worker ✓");
 		expect(savedMenuRender.join("\n")).toContain("override — high ✓");
 		expect(configAt(root).profiles.explorer).toEqual({ model: "provider/worker", thinking: "high" });
+	});
+
+	it("does not mount an editor frame when Esc returns from settings to profiles", async () => {
+		const root = temporaryAgentDir();
+		const activeModel = model("provider", "worker");
+		const terminal = new VirtualTerminal(80, 24);
+		const tui: TUI = new TuiMainScreen(terminal);
+		const editorContainer = new Container();
+		const editor = new (class implements Component {
+			focused = false;
+			renderCount = 0;
+			private text = "";
+
+			render(): string[] {
+				this.renderCount++;
+				return ["EDITOR"];
+			}
+
+			getText(): string {
+				return this.text;
+			}
+
+			setText(text: string): void {
+				this.text = text;
+			}
+
+			invalidate(): void {}
+		})();
+		const fakeMode = {
+			editor,
+			editorContainer,
+			keybindings: new KeybindingsManager(),
+			ui: tui,
+			disposeActiveSelector: vi.fn(),
+		};
+		const custom = <T>(
+			factory: (
+				tuiValue: TUI,
+				themeValue: Theme,
+				keybindings: TuiKeybindingsManager,
+				done: (result: T) => void,
+			) => Component | Promise<Component>,
+		): Promise<T> => (InteractiveMode as any).prototype.showExtensionCustom.call(fakeMode, factory) as Promise<T>;
+		const ctx = {
+			...baseContext(root, activeModel),
+			mode: "tui",
+			ui: { custom, select: vi.fn(), notify: vi.fn() },
+		} as unknown as ExtensionCommandContext;
+		const sendInput = async (data: string) => {
+			await new Promise<void>((resolve) => {
+				setImmediate(() => {
+					terminal.sendInput(data);
+					resolve();
+				});
+			});
+			await terminal.waitForRender();
+		};
+
+		editorContainer.addChild(editor);
+		tui.addChild(editorContainer);
+		tui.setFocus(editor);
+		tui.start();
+		try {
+			const command = showAgentsCommand(ctx, "medium");
+			await vi.waitFor(() => expect(editorContainer.children[0]).not.toBe(editor));
+			await terminal.waitForRender();
+
+			await sendInput("\r");
+			expect((await terminal.flushAndGetViewport()).join("\n")).toContain("Explorer");
+			editor.renderCount = 0;
+
+			await sendInput("\x1b");
+			expect(editor.renderCount).toBe(0);
+			expect((await terminal.flushAndGetViewport()).join("\n")).toContain("Agents");
+
+			await sendInput("\r");
+			await sendInput("\r");
+			editor.renderCount = 0;
+			await sendInput("\x1b");
+			expect(editor.renderCount).toBe(0);
+
+			await sendInput("\x1b[B");
+			await sendInput("\r");
+			editor.renderCount = 0;
+			await sendInput("\x1b");
+			expect(editor.renderCount).toBe(0);
+
+			await sendInput("\x1b");
+			await sendInput("\x1b");
+			await command;
+			expect(editor.renderCount).toBeGreaterThan(0);
+		} finally {
+			tui.stop();
+		}
+	});
+
+	it("aborts an in-flight model refresh when leaving the model page", async () => {
+		const root = temporaryAgentDir();
+		const activeModel = model("provider", "worker");
+		let refreshSignal: AbortSignal | undefined;
+		const refresh = vi.fn(
+			({ signal }: { signal: AbortSignal }) =>
+				new Promise<{ aborted: boolean; errors: Map<string, Error> }>((resolve) => {
+					refreshSignal = signal;
+					signal.addEventListener("abort", () => resolve({ aborted: true, errors: new Map() }), { once: true });
+				}),
+		);
+		const custom = async <T>(
+			factory: (
+				tui: TUI,
+				themeValue: Theme,
+				keybindings: TuiKeybindingsManager,
+				done: (result: T) => void,
+			) => Component | Promise<Component>,
+		): Promise<T> =>
+			new Promise<T>((resolve, reject) => {
+				void Promise.resolve(
+					factory({ requestRender: vi.fn() } as unknown as TUI, theme, new KeybindingsManager(), resolve),
+				)
+					.then((component) => {
+						const interactive = component as unknown as { handleInput(data: string): void };
+						interactive.handleInput("\r");
+						interactive.handleInput("\r");
+						expect(refreshSignal).toBeDefined();
+						interactive.handleInput("\x1b");
+						expect(refreshSignal?.aborted).toBe(true);
+						interactive.handleInput("\x1b");
+						interactive.handleInput("\x1b");
+					})
+					.catch(reject);
+			});
+		const ctx = {
+			...baseContext(root, activeModel),
+			mode: "tui",
+			modelRegistry: { ...registry([activeModel]), refresh },
+			ui: { custom, select: vi.fn(), notify: vi.fn() },
+		} as unknown as ExtensionCommandContext;
+
+		await showAgentsCommand(ctx, "medium");
+		expect(refresh).toHaveBeenCalledTimes(1);
+	});
+
+	it("allows Esc to close the TUI while an override save is still pending", async () => {
+		const root = temporaryAgentDir();
+		const activeModel = model("provider", "worker");
+		let finishSave: (config: ReturnType<typeof settings.emptySubagentConfig>) => void = () => {
+			throw new Error("save resolver was not initialized");
+		};
+		const pendingSave = new Promise<ReturnType<typeof settings.emptySubagentConfig>>((resolve) => {
+			finishSave = resolve;
+		});
+		const saveSpy = vi.spyOn(settings, "updateProfileOverride").mockReturnValue(pendingSave);
+		const custom = async <T>(
+			factory: (
+				tui: TUI,
+				themeValue: Theme,
+				keybindings: TuiKeybindingsManager,
+				done: (result: T) => void,
+			) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>,
+		): Promise<T> =>
+			new Promise<T>((resolve, reject) => {
+				let mounted: (Component & { dispose?(): void }) | undefined;
+				let settled = false;
+				const done = (result: T) => {
+					settled = true;
+					mounted?.dispose?.();
+					resolve(result);
+				};
+				void Promise.resolve(
+					factory({ requestRender: vi.fn() } as unknown as TUI, theme, new KeybindingsManager(), done),
+				)
+					.then((component) => {
+						mounted = component;
+						const interactive = component as unknown as {
+							handleInput(data: string): void;
+							render(width: number): string[];
+						};
+						const render = () => stripAnsi(interactive.render(100).join("\n"));
+						interactive.handleInput("\r");
+						interactive.handleInput("\r");
+						interactive.handleInput("\x1b[B");
+						interactive.handleInput("\r");
+						expect(render()).toContain("Saving…");
+
+						interactive.handleInput("\x1b");
+						expect(settled).toBe(false);
+						expect(render()).toContain("Agents");
+						interactive.handleInput("\x1b");
+					})
+					.catch(reject);
+			});
+		const ctx = {
+			...baseContext(root, activeModel),
+			mode: "tui",
+			ui: { custom, select: vi.fn(), notify: vi.fn() },
+		} as unknown as ExtensionCommandContext;
+
+		await showAgentsCommand(ctx, "medium");
+		expect(saveSpy).toHaveBeenCalledWith("explorer", { model: "provider/worker" }, root);
+		finishSave(settings.emptySubagentConfig());
+		await Promise.resolve();
 	});
 
 	it("reports save failures and continues without writing a partial config", async () => {

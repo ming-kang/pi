@@ -141,7 +141,8 @@ export async function updateProfileOverride(
 	// different profiles cannot overwrite each other.
 	return withFileMutationQueue(filePath, async () => {
 		const config = await loadSubagentConfig(agentDir);
-		const current = config.profiles[profile] ?? {};
+		const currentOverride = config.profiles[profile];
+		const current = currentOverride ?? {};
 		const next: SubagentProfileOverride = { ...current };
 		if ("model" in patch) {
 			if (patch.model === undefined) delete next.model;
@@ -151,8 +152,14 @@ export async function updateProfileOverride(
 			if (patch.thinking === undefined) delete next.thinking;
 			else next.thinking = patch.thinking;
 		}
-		if (Object.keys(next).length === 0) delete config.profiles[profile];
-		else config.profiles[profile] = next;
+		const hasNext = Object.keys(next).length > 0;
+		const changed =
+			(currentOverride !== undefined) !== hasNext ||
+			current.model !== next.model ||
+			current.thinking !== next.thinking;
+		if (!changed) return config;
+		if (hasNext) config.profiles[profile] = next;
+		else delete config.profiles[profile];
 		await writeSubagentConfigFile(filePath, config);
 		return config;
 	});

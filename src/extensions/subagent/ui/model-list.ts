@@ -304,6 +304,12 @@ export class ProfileModelListComponent extends Container implements Focusable {
 		this.updateList();
 	}
 
+	override invalidate(): void {
+		this.updateScopeView();
+		this.updateList();
+		super.invalidate();
+	}
+
 	handleInput(data: string): void {
 		if (this.keybindings.matches(data, "tui.input.tab")) {
 			this.toggleScope();
