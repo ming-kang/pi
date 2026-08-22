@@ -119,6 +119,8 @@ Valid cut points are:
 
 Never cut at tool results (they must stay with their tool call).
 
+Because tool results are not valid cut points, a batch of trailing tool results can exceed `keepRecentTokens` on its own, leaving no cut point at or after the entry that crosses the budget. The cut then lands on the last valid cut point — the least the message structure allows Pi to keep. This matters most for sessions with very few cut points, such as a subagent worker, whose whole session is a single turn: one prompt followed by assistant and tool result entries only.
+
 ### CompactionEntry Structure
 
 The public `CompactionEntry` type is documented in [Session Format](session-format.md):

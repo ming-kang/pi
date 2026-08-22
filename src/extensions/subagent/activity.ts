@@ -85,6 +85,27 @@ export function activitySummary(toolName: string, args: unknown): string {
 	return toolName;
 }
 
+export function formatTokens(value: number): string {
+	if (value < 1_000) return String(value);
+	if (value < 1_000_000) return `${(value / 1_000).toFixed(value < 10_000 ? 1 : 0)}k`;
+	return `${(value / 1_000_000).toFixed(1)}M`;
+}
+
+/**
+ * Activity summary for the synthetic auto-compaction entry. The before/after
+ * pair is only known once a compaction succeeds; a failed or aborted one keeps
+ * the neutral label and carries its reason in the entry's resultSummary.
+ */
+export function compactionSummary(tokensBefore: number | undefined, tokensAfter: number | undefined): string {
+	if (tokensBefore && tokensAfter) return `Compacted ${formatTokens(tokensBefore)} → ${formatTokens(tokensAfter)}`;
+	return "Compact context";
+}
+
+/** Failure reason for the compaction activity; bounded like {@link resultSummary}. */
+export function compactionError(error: string): string {
+	return boundText(error.replace(/\s+/gu, " ").trim(), 240);
+}
+
 export function resultSummary(result: unknown): string {
 	if (!result || typeof result !== "object") return "";
 	const content = (result as { content?: unknown }).content;

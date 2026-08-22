@@ -285,6 +285,81 @@ describe("subagent rendering", () => {
 		expect(output).not.toContain("Report");
 	});
 
+	it("shows auto-compaction in the running activity log", () => {
+		const output = expanded(
+			details({
+				status: "running",
+				endedAt: undefined,
+				runs: [
+					run({
+						status: "running",
+						endedAt: undefined,
+						currentActivity: "Compacting context…",
+						activities: [
+							{
+								id: "grep-1",
+								toolName: "grep",
+								summary: "Search normalizeSnapshotState",
+								status: "succeeded",
+								startedAt: 0,
+								endedAt: 1_000,
+							},
+							{
+								id: "compaction",
+								toolName: "compaction",
+								summary: "Compacting context…",
+								status: "running",
+								startedAt: 1_000,
+							},
+						],
+						report: "",
+					}),
+				],
+			}),
+			true,
+		);
+		expect(output).toContain("› Compacting context…");
+	});
+
+	it("shows a settled compaction's sizes and a failed one's reason", () => {
+		const output = expanded(
+			details({
+				status: "running",
+				endedAt: undefined,
+				runs: [
+					run({
+						status: "running",
+						endedAt: undefined,
+						currentActivity: undefined,
+						activities: [
+							{
+								id: "compaction",
+								toolName: "compaction",
+								summary: "Compacted 244k → 48k",
+								status: "succeeded",
+								startedAt: 0,
+								endedAt: 12_000,
+							},
+							{
+								id: "compaction",
+								toolName: "compaction",
+								summary: "Compact context",
+								status: "failed",
+								startedAt: 12_000,
+								endedAt: 15_000,
+								resultSummary: "Auto-compaction failed: Nothing to compact",
+							},
+						],
+						report: "",
+					}),
+				],
+			}),
+			true,
+		);
+		expect(output).toContain("Compacted 244k → 48k · 12s");
+		expect(output).toContain("× Compact context · Auto-compaction failed: Nothing to compact");
+	});
+
 	it("counts running and queued tasks in the collapsed header", () => {
 		const output = collapsed(
 			details({

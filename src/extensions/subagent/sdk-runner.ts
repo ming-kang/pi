@@ -242,6 +242,25 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<void> {
 				emitImmediate();
 				return;
 			}
+			if (event.type === "compaction_start") {
+				dispatch({ type: "compaction_started", startedAt: Date.now() });
+				emitImmediate();
+				return;
+			}
+			if (event.type === "compaction_end") {
+				// A worker has no status line of its own, so the compaction's outcome —
+				// especially the reason a failed one blocks the next request — only
+				// reaches the caller through the activity log.
+				dispatch({
+					type: "compaction_ended",
+					tokensBefore: event.result?.tokensBefore,
+					tokensAfter: event.result?.estimatedTokensAfter,
+					error: event.errorMessage,
+					endedAt: Date.now(),
+				});
+				emitImmediate();
+				return;
+			}
 			if (event.type === "message_end" && event.message.role === "assistant") {
 				if (!seenAssistantMessages.has(event.message)) {
 					seenAssistantMessages.add(event.message);

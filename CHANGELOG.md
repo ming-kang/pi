@@ -10,6 +10,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Fixed
 
+- Fixed auto-compaction aborting a run instead of compacting when the tool results trailing the last assistant message exceeded `compaction.keepRecentTokens` on their own: tool results are not valid cut points, so no cut point existed at or after the entry that crossed the budget and the search silently fell back to "keep everything", leaving nothing to summarize. The cut now lands on the last valid cut point. Subagent workers hit this reliably because their whole session is a single turn — one prompt followed only by assistant and tool result entries — which leaves the fewest possible cut points; the run ended with `Stopped before the next provider request because auto-compaction did not produce a safe context`.
+- Subagent runs now report auto-compaction in their activity log — in progress, the before/after context sizes on success, and the reason on failure — so a worker blocked by compaction can be diagnosed from its panel. Previously the session's compaction events were dropped by the subagent adapter, so the warning its error message points at was never rendered.
 - Fixed the bundled Todo extension repeating the headline's ID list as the only detail line when a `delete` call was expanded; a settled deletion now names each removed task's ID and subject, and an unsettled one adds no detail line at all.
 - Fixed Todo's collapsed call preview letting an empty subject consume one of its two preview slots while streaming arguments are still arriving.
 - Todo's capacity error now names its remedy (`delete completed or obsolete tasks first`), because completed tasks keep counting against the 20-task limit.

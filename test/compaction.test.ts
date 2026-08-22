@@ -67,6 +67,35 @@ function createAssistantMessage(text: string, usage?: Usage): AssistantMessage {
 	};
 }
 
+/** Assistant turn that calls a tool; its result follows as a separate entry. */
+function createToolCallMessage(toolCallId: string, text: string, usage?: Usage): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [
+			{ type: "text", text },
+			{ type: "toolCall", id: toolCallId, name: "grep", arguments: { pattern: "x" } },
+		],
+		usage: usage || createMockUsage(100, 50),
+		stopReason: "toolUse",
+		timestamp: Date.now(),
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "claude-sonnet-4-5",
+	} as AssistantMessage;
+}
+
+/** Tool result of `chars` characters; never a valid cut point. */
+function createToolResultMessage(toolCallId: string, chars: number): AgentMessage {
+	return {
+		role: "toolResult",
+		toolCallId,
+		toolName: "grep",
+		content: [{ type: "text", text: "x".repeat(chars) }],
+		isError: false,
+		timestamp: Date.now(),
+	} as unknown as AgentMessage;
+}
+
 let entryCounter = 0;
 let lastId: string | null = null;
 
@@ -373,6 +402,24 @@ describe("findCutPoint", () => {
 		expect(customFitsBudget.isSplitTurn).toBe(false);
 		expect(customFitsBudget.turnStartIndex).toBe(-1);
 	});
+
+	it("cuts at the last valid cut point when trailing tool results alone blow the budget", () => {
+		// Tool results are never valid cut points, so no cut point exists at or after
+		// the entry that crosses the budget. Keeping everything would make compaction
+		// a no-op; the cut must land on the last assistant instead.
+		const entries: SessionEntry[] = [
+			createMessageEntry(createUserMessage("task briefing")),
+			createMessageEntry(createToolCallMessage("t1", "searching")),
+			createMessageEntry(createToolResultMessage("t1", 40_000)),
+			createMessageEntry(createToolCallMessage("t2", "searching more")),
+			createMessageEntry(createToolResultMessage("t2", 100_000)),
+		];
+
+		const result = findCutPoint(entries, 0, entries.length, DEFAULT_COMPACTION_SETTINGS.keepRecentTokens);
+		expect(result.firstKeptEntryIndex).toBe(3);
+		expect(result.isSplitTurn).toBe(true);
+		expect(result.turnStartIndex).toBe(0);
+	});
 });
 
 describe("buildSessionContext", () => {
@@ -502,6 +549,62 @@ describe("prepareCompaction with previous compaction", () => {
 		expect(summarizedText).toContain("user msg 3 - kept by compaction1");
 		expect(summarizedText).not.toContain("First summary");
 		expect(preparation!.previousSummary).toBe("First summary");
+	});
+});
+
+// A subagent session is a single turn: one prompt, then only assistant and tool
+// result entries. That leaves the fewest possible cut points, so a fat tail used
+// to degrade findCutPoint into "keep everything" and left nothing to compact.
+describe("prepareCompaction for a single-turn session with a fat tail", () => {
+	function singleTurnEntries(): SessionEntry[] {
+		return [
+			createMessageEntry(createUserMessage("Review the redesigned todo extension.")),
+			createMessageEntry(createToolCallMessage("t1", "searching")),
+			createMessageEntry(createToolResultMessage("t1", 40_000)),
+			createMessageEntry(createToolCallMessage("t2", "searching more")),
+			createMessageEntry(createToolResultMessage("t2", 100_000)),
+		];
+	}
+
+	it("summarizes the turn prefix on the first compaction", () => {
+		const preparation = prepareCompaction(singleTurnEntries(), DEFAULT_COMPACTION_SETTINGS);
+
+		expect(preparation).toBeDefined();
+		expect(preparation!.isSplitTurn).toBe(true);
+		// Nothing precedes the only turn, so the whole prefix goes to the turn summary.
+		expect(preparation!.messagesToSummarize).toHaveLength(0);
+		expect(preparation!.turnPrefixMessages.length).toBeGreaterThan(0);
+	});
+
+	it("summarizes the retained history on a second compaction", () => {
+		const u = createMessageEntry(createUserMessage("Review the redesigned todo extension."));
+		const a1 = createMessageEntry(createToolCallMessage("t1", "a1"));
+		const r1 = createMessageEntry(createToolResultMessage("t1", 40_000));
+		const a2 = createMessageEntry(createToolCallMessage("t2", "a2"));
+		const r2 = createMessageEntry(createToolResultMessage("t2", 40_000));
+		const compaction1 = createCompactionEntry("First summary", a2.id);
+		const a3 = createMessageEntry(createToolCallMessage("t3", "a3"));
+		const r3 = createMessageEntry(createToolResultMessage("t3", 100_000));
+
+		const preparation = prepareCompaction([u, a1, r1, a2, r2, compaction1, a3, r3], DEFAULT_COMPACTION_SETTINGS);
+
+		expect(preparation).toBeDefined();
+		expect(preparation!.firstKeptEntryId).toBe(a3.id);
+		expect(preparation!.messagesToSummarize.length).toBeGreaterThan(0);
+		expect(preparation!.previousSummary).toBe("First summary");
+	});
+
+	it("still keeps everything when the tail fits the budget", () => {
+		const entries: SessionEntry[] = [
+			createMessageEntry(createUserMessage("Review the redesigned todo extension.")),
+			createMessageEntry(createToolCallMessage("t1", "searching")),
+			createMessageEntry(createToolResultMessage("t1", 2_000)),
+		];
+
+		const result = findCutPoint(entries, 0, entries.length, DEFAULT_COMPACTION_SETTINGS.keepRecentTokens);
+		expect(result.firstKeptEntryIndex).toBe(0);
+		// Everything fits, so there is genuinely nothing to compact.
+		expect(prepareCompaction(entries, DEFAULT_COMPACTION_SETTINGS)).toBeUndefined();
 	});
 });
 

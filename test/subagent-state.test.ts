@@ -158,6 +158,92 @@ describe("subagent run state reducer", () => {
 		expect(run.currentActivity).toBeUndefined();
 	});
 
+	it("logs auto-compaction as an activity without counting it as a tool use", () => {
+		let run = state();
+		run = reduceRun(run, { type: "slot_acquired", startedAt: 0 });
+		run = reduceRun(run, {
+			type: "tool_started",
+			toolCallId: "a",
+			toolName: "grep",
+			args: { pattern: "x" },
+			startedAt: 1,
+		});
+		run = reduceRun(run, {
+			type: "tool_ended",
+			toolCallId: "a",
+			result: { content: [] },
+			isError: false,
+			endedAt: 2,
+		});
+		expect(run.usage.toolUses).toBe(1);
+
+		run = reduceRun(run, { type: "compaction_started", startedAt: 3 });
+		expect(run.activities).toHaveLength(2);
+		expect(run.currentActivity).toBe("Compacting context…");
+		// Compaction is not a tool call.
+		expect(run.usage.toolUses).toBe(1);
+
+		run = reduceRun(run, {
+			type: "compaction_ended",
+			tokensBefore: 244_000,
+			tokensAfter: 48_000,
+			error: undefined,
+			endedAt: 4,
+		});
+		expect(run.activities[1]).toMatchObject({
+			status: "succeeded",
+			summary: "Compacted 244k → 48k",
+			endedAt: 4,
+		});
+		expect(run.activities[1]?.resultSummary).toBeUndefined();
+		expect(run.currentActivity).toBeUndefined();
+		expect(run.usage.toolUses).toBe(1);
+	});
+
+	it("surfaces a failed compaction's reason on the activity entry", () => {
+		let run = state();
+		run = reduceRun(run, { type: "slot_acquired", startedAt: 0 });
+		run = reduceRun(run, { type: "compaction_started", startedAt: 1 });
+		run = reduceRun(run, {
+			type: "compaction_ended",
+			tokensBefore: undefined,
+			tokensAfter: undefined,
+			error: "Auto-compaction failed: Nothing to compact\n  while preserving the recent context.",
+			endedAt: 2,
+		});
+		expect(run.activities[0]).toMatchObject({
+			status: "failed",
+			summary: "Compact context",
+			resultSummary: "Auto-compaction failed: Nothing to compact while preserving the recent context.",
+		});
+		expect(run.currentActivity).toBeUndefined();
+	});
+
+	it("ends the newest running compaction when a worker compacts more than once", () => {
+		let run = state();
+		run = reduceRun(run, { type: "slot_acquired", startedAt: 0 });
+		run = reduceRun(run, { type: "compaction_started", startedAt: 1 });
+		run = reduceRun(run, {
+			type: "compaction_ended",
+			tokensBefore: 200_000,
+			tokensAfter: 40_000,
+			error: undefined,
+			endedAt: 2,
+		});
+		run = reduceRun(run, { type: "compaction_started", startedAt: 3 });
+		run = reduceRun(run, {
+			type: "compaction_ended",
+			tokensBefore: undefined,
+			tokensAfter: undefined,
+			error: "Auto-compaction failed: boom",
+			endedAt: 4,
+		});
+		expect(run.activities).toHaveLength(2);
+		// The first entry keeps its own outcome.
+		expect(run.activities[0]).toMatchObject({ status: "succeeded", summary: "Compacted 200k → 40k" });
+		expect(run.activities[1]).toMatchObject({ status: "failed", resultSummary: "Auto-compaction failed: boom" });
+	});
+
 	it("keeps the current activity on the still-running tool when parallel tools end out of order", () => {
 		let run = state();
 		run = reduceRun(run, { type: "slot_acquired", startedAt: 0 });

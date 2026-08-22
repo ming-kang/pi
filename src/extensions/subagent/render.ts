@@ -1,6 +1,7 @@
 import { type Component, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { AgentToolResult, ToolRenderContext, ToolRenderResultOptions } from "../../core/extensions/types.ts";
 import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
+import { formatTokens } from "./activity.ts";
 import { AGENT_PROFILE_LABELS } from "./agents.ts";
 import type { SubagentAgentName } from "./constants.ts";
 import type { SubagentParams } from "./schema.ts";
@@ -29,12 +30,6 @@ function taskSummary(args: SubagentParams, index: number, run: SubagentRunDetail
 
 function profileLabel(agent: string): string {
 	return AGENT_PROFILE_LABELS[agent as SubagentAgentName] ?? agent;
-}
-
-function formatTokens(value: number): string {
-	if (value < 1_000) return String(value);
-	if (value < 1_000_000) return `${(value / 1_000).toFixed(value < 10_000 ? 1 : 0)}k`;
-	return `${(value / 1_000_000).toFixed(1)}M`;
 }
 
 function formatDuration(seconds: number): string {

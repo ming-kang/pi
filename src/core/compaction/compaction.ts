@@ -392,6 +392,8 @@ export interface CutPointResult {
  *
  * Can cut at user OR assistant messages (never tool results). When cutting at an
  * assistant message with tool calls, its tool results come after and will be kept.
+ * When the trailing tool results alone exceed the budget, the cut lands on the last
+ * valid cut point: the least the message structure allows us to keep.
  *
  * Returns CutPointResult with:
  * - firstKeptEntryIndex: the entry index to start keeping from
@@ -427,13 +429,11 @@ export function findCutPoint(
 
 		// Check if we've exceeded the budget
 		if (accumulatedTokens >= keepRecentTokens) {
-			// Find the closest valid cut point at or after this entry
-			for (let c = 0; c < cutPoints.length; c++) {
-				if (cutPoints[c] >= i) {
-					cutIndex = cutPoints[c];
-					break;
-				}
-			}
+			// Cut at the closest valid cut point at or after this entry. Tool results are never
+			// valid cut points, so a tail that alone blows the budget leaves none at or after `i`;
+			// keep from the last cut point instead of falling back to the "budget never spent"
+			// default, which would keep everything and make compaction a no-op.
+			cutIndex = cutPoints.find((point) => point >= i) ?? cutPoints[cutPoints.length - 1];
 			break;
 		}
 	}

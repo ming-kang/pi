@@ -1,9 +1,17 @@
 import { relative } from "node:path";
 import type { Usage } from "@earendil-works/pi-ai";
-import { activitySummary, addUsage, emptyUsage, resultSummary } from "./activity.ts";
+import {
+	activitySummary,
+	addUsage,
+	compactionError,
+	compactionSummary,
+	emptyUsage,
+	resultSummary,
+} from "./activity.ts";
 import {
 	ACTIVITY_LIMIT,
 	ACTIVITY_TEXT_LIMIT,
+	COMPACTION_ACTIVITY_ID,
 	ERROR_TEXT_LIMIT,
 	RETRY_ERROR_TEXT_LIMIT,
 	TASK_OUTPUT_LIMIT,
@@ -40,6 +48,14 @@ export type SubagentRunEvent =
 	| { type: "tool_started"; toolCallId: string; toolName: string; args: unknown; startedAt: number }
 	| { type: "tool_updated"; toolCallId: string; toolName: string; args: unknown }
 	| { type: "tool_ended"; toolCallId: string; result: unknown; isError: boolean; endedAt: number }
+	| { type: "compaction_started"; startedAt: number }
+	| {
+			type: "compaction_ended";
+			tokensBefore: number | undefined;
+			tokensAfter: number | undefined;
+			error: string | undefined;
+			endedAt: number;
+	  }
 	| {
 			type: "settle";
 			verdict: "completed" | "failed" | "aborted";
@@ -259,6 +275,37 @@ export function reduceRun(state: SubagentRunState, event: SubagentRunEvent): Sub
 					activity.status = event.isError ? "failed" : "succeeded";
 					activity.endedAt = event.endedAt;
 					activity.resultSummary = resultSummary(event.result) || undefined;
+				}
+				draft.currentActivity = deriveCurrentActivity(draft);
+			});
+		case "compaction_started":
+			// Auto-compaction is a synthetic activity: it has a start, an end and a
+			// failure mode just like a tool call, so it reuses the activity log and its
+			// budgets. It is not a tool call, so it never counts toward toolUses.
+			return withRevision(state, (draft) => {
+				clearRetry(draft);
+				appendActivity(draft.activities, {
+					id: COMPACTION_ACTIVITY_ID,
+					toolName: COMPACTION_ACTIVITY_ID,
+					summary: "Compacting context…",
+					status: "running",
+					startedAt: event.startedAt,
+				});
+				draft.currentActivity = deriveCurrentActivity(draft);
+			});
+		case "compaction_ended":
+			return withRevision(state, (draft) => {
+				clearRetry(draft);
+				// Only one compaction runs at a time, so the newest running entry with
+				// this id is always the one that just ended.
+				const activity = [...draft.activities]
+					.reverse()
+					.find((candidate) => candidate.id === COMPACTION_ACTIVITY_ID && candidate.status === "running");
+				if (activity) {
+					activity.status = event.error ? "failed" : "succeeded";
+					activity.endedAt = event.endedAt;
+					activity.summary = compactionSummary(event.tokensBefore, event.tokensAfter);
+					activity.resultSummary = event.error ? compactionError(event.error) : undefined;
 				}
 				draft.currentActivity = deriveCurrentActivity(draft);
 			});
