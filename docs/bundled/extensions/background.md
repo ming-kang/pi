@@ -41,7 +41,7 @@ Blocks until a task finishes, within a bound:
 - `waitMs` defaults to 20000 and clamps between 1000 and 60000.
 - `sinceBytes` (taken from a previous read/wait result) restricts the returned output to what was written after that offset; without it the last 32KB is returned. Offsets past EOF (for example after output truncation) fall back to the tail and say so.
 
-If the task finishes within the window, the result is delivered inline — status, exit code, runtime, and the bounded output delta — and the followUp notification is suppressed, so the completion is delivered exactly once. If the window expires, the result says the task is still running, includes a small tail peek so progress stays visible, and the notification fires later as usual. This is the only sanctioned way to wait; sleeping to emulate it is never correct.
+If the task finishes within the window, the result is delivered inline — status, exit code, runtime, and the bounded output delta — and the followUp notification is suppressed, so the completion is delivered exactly once. Interrupting the turn during a wait releases that claim, so the notification arrives normally instead. If the window expires, the result says the task is still running, includes a small tail peek so progress stays visible, and the notification fires later as usual. This is the only sanctioned way to wait; sleeping to emulate it is never correct.
 
 ### kill
 
@@ -90,10 +90,10 @@ Running and finished counts appear in the footer as `bg 2 running · 1 done`; ta
 ## Limits and lifecycle
 
 - Background tasks inherit the session's `PI_*` environment variables (`PI_SESSION_ID`, `PI_MODEL`, …) just like the built-in bash tool, snapshotted when the task starts.
-- Tasks run through the session's configured shell (`shellPath`) and honor `shellCommandPrefix`, matching the built-in bash tool. The prefix is applied at execution time only — it never appears in task labels or notifications.
+- Tasks run through the session's configured shell (`shellPath`) and honor `shellCommandPrefix`, matching the built-in bash tool. The prefix is applied at execution time only — it never appears in task labels or notifications. Unlike the built-in bash tool, `bg` does not apply an SDK host's `spawnHook` — extensions have no access to it — so a host that rewrites or sandboxes commands through that hook does not cover background tasks.
 - Output streams directly to a system-temp file (`pi-bg-<id>.log`), never into the project or into memory. Memory holds only a byte counter.
 - Output is capped at 20MB. Hitting the cap kills the task and marks it `failed` rather than silently truncating.
 - At most 8 tasks may run concurrently; `create` reports the running tasks when the limit is reached.
 - Aborting the current turn (Esc) does not kill background tasks — that is what `kill` and `/bg` are for.
 - Session shutdown, `/reload`, new sessions, and session switches kill all running tasks; those kills are silent (no notification flood). There is no restart reattachment: finished-task records live only for the current session.
-- Output files outlive the session for later inspection (the `read` action and notifications keep pointing at them); Pi never deletes them automatically — the system temp directory's own cleanup policy applies.
+- Output files outlive the session for later inspection (the `read` action and notifications keep pointing at them); Pi never deletes them automatically — the system temp directory's own cleanup policy applies. That policy varies by platform: Linux usually clears `/tmp` on reboot and macOS after a few days, but Windows never clears `%TEMP%` on its own.

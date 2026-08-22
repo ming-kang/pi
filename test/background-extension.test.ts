@@ -365,6 +365,26 @@ describe("background extension", () => {
 		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
 	});
 
+	it("an aborted wait hands the claim back so the followUp still fires", async () => {
+		const harness = createHarness();
+		await harness.startSession();
+
+		const started = await harness.execute("bg", { action: "create", command: "npm run build" });
+		const taskId = /bg-[0-9a-f]{6}/.exec(textOf(started))?.[0] ?? "";
+		harness.calls[0]?.emitData("building\n");
+
+		const controller = new AbortController();
+		const waitPromise = harness.execute("bg", { action: "wait", taskId, waitMs: 5_000 }, controller.signal);
+		// The turn is interrupted, so this result is discarded. The wait must not
+		// keep the delivery claim it registered, or the completion is lost.
+		controller.abort();
+		await expect(waitPromise).rejects.toThrow("aborted");
+
+		harness.calls[0]?.finish(0);
+		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
+		expect(harness.sent[0]?.message.content).toContain('status="completed"');
+	});
+
 	it("lists tasks with running first and the description in the label", async () => {
 		const harness = createHarness();
 		await harness.startSession();
@@ -774,6 +794,7 @@ describe("renderBgCall wait live line", () => {
 			const probe = () => ({ status: "running" as const, outputBytes: bytes });
 			const context = {
 				expanded: false,
+				executionStarted: true,
 				isPartial: true,
 				state,
 				invalidate: vi.fn(),
@@ -795,6 +816,7 @@ describe("renderBgCall wait live line", () => {
 			// Settled: timer cleared, static form returns.
 			const settledContext = {
 				expanded: false,
+				executionStarted: true,
 				isPartial: false,
 				state,
 			} as unknown as ToolRenderContext<BgRenderState>;
@@ -809,6 +831,25 @@ describe("renderBgCall wait live line", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("stays static until execution starts", () => {
+		const state: BgRenderState = {};
+		// Arguments are still streaming, or this is a replayed transcript row that
+		// will never settle. Either way there is nothing to count up to yet.
+		const context = {
+			expanded: false,
+			executionStarted: false,
+			isPartial: true,
+			state,
+		} as unknown as ToolRenderContext<BgRenderState>;
+
+		const line = renderBgCall({ action: "wait", taskId: "bg-3f" }, plainTheme, context, () => ({
+			status: "running" as const,
+			outputBytes: 100,
+		}));
+		expect(line.render(200).map(stripTerminalSequences).join("\n")).not.toContain("waiting");
+		expect(state.refreshTimer).toBeUndefined();
 	});
 
 	it("falls back to the static line without shell state", () => {

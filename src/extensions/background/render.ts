@@ -189,9 +189,15 @@ function renderWaitCall(
 ): Component {
 	const taskId = typeof args.taskId === "string" ? args.taskId.trim() : "";
 	const live = getTaskLive !== undefined && taskId ? getTaskLive(taskId) : undefined;
-	// The live display needs shell-owned state; without it (standalone renders)
-	// fall back to the static line.
-	const pending = context.isPartial === true && context.state !== undefined && taskId.length > 0;
+	// isPartial alone means "not settled", which also covers argument streaming
+	// and replayed history rows that never settle; executionStarted narrows it to
+	// a call that is actually running. The live display also needs shell-owned
+	// state; without it (standalone renders) fall back to the static line.
+	const pending =
+		context.executionStarted === true &&
+		context.isPartial === true &&
+		context.state !== undefined &&
+		taskId.length > 0;
 	scheduleWaitRefresh(context, pending);
 	if (!pending) {
 		const ms = args.waitMs !== undefined ? ` ${formatDuration(clampWaitMs(args.waitMs))}` : "";

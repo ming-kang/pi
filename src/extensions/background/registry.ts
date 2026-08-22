@@ -13,7 +13,7 @@
 
 import { randomBytes } from "node:crypto";
 import { closeSync, createWriteStream, openSync, type WriteStream } from "node:fs";
-import { open } from "node:fs/promises";
+import { type FileHandle, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BashOperations } from "../../core/tools/bash.ts";
@@ -69,7 +69,10 @@ export interface BgTask {
 	endedAt?: number;
 	/** True when the stall watchdog flagged this task as waiting for input. */
 	stalled: boolean;
-	/** Process exit code; null when reaped by a signal, undefined while running or when spawn failed. */
+	/**
+	 * Process exit code; null when reaped by a signal, undefined while running
+	 * or when the run produced none (spawn failure, kill, timeout).
+	 */
 	exitCode: number | null | undefined;
 	outputPath: string;
 	/** Bytes accepted into the output file (excludes the overflow notice). */
@@ -78,6 +81,7 @@ export interface BgTask {
 	outputTruncated: boolean;
 	error?: string;
 	timeoutSeconds?: number;
+	/** Delivery was claimed: onNotify returned without throwing, or a waiter took it over. */
 	notified: boolean;
 }
 
@@ -94,15 +98,7 @@ export interface BgTaskNotification {
 }
 
 /** One-shot signal that a running task appears blocked on interactive input. */
-export interface BgStallNotification {
-	task: BgTask;
-	tailText: string;
-	tailBytes: number;
-	totalBytes: number;
-	tailTruncated: boolean;
-	tailStartsMidLine: boolean;
-	tailError?: string;
-}
+export type BgStallNotification = BgTaskNotification;
 
 export interface OutputSlice {
 	text: string;
@@ -118,9 +114,43 @@ export interface OutputSlice {
 export type WaitOutcome = { outcome: "terminal"; task: BgTask } | { outcome: "timeout"; task: BgTask };
 
 /**
+ * Read `length` bytes at `start`, first nudging the start past any UTF-8
+ * continuation bytes so the text begins on a codepoint boundary. The same probe
+ * reveals whether the slice starts mid-line. A `start` of 0 is used as-is —
+ * there is nothing before it to align against.
+ */
+async function readAligned(
+	file: FileHandle,
+	size: number,
+	start: number,
+	length: number,
+): Promise<{ text: string; sliceBytes: number; startsMidLine: boolean; position: number }> {
+	let position = start;
+	let remaining = length;
+	let startsMidLine = false;
+	if (position > 0 && remaining > 0) {
+		// Probe from one byte before the slice: probe[0] tells whether the slice
+		// starts at a line boundary, the rest lets us skip UTF-8 continuation
+		// bytes (0b10xxxxxx) so we never split a codepoint.
+		const probeStart = position - 1;
+		const probe = Buffer.alloc(Math.min(5, size - probeStart));
+		await file.read(probe, 0, probe.length, probeStart);
+		let skip = 0;
+		while (1 + skip < probe.length && ((probe[1 + skip] ?? 0) & 0b1100_0000) === 0b1000_0000) {
+			skip++;
+		}
+		position += skip;
+		remaining -= skip;
+		startsMidLine = probe[skip] !== 0x0a;
+	}
+	const buffer = Buffer.alloc(Math.max(0, remaining));
+	const bytesRead = buffer.length > 0 ? (await file.read(buffer, 0, buffer.length, position)).bytesRead : 0;
+	return { text: buffer.subarray(0, bytesRead).toString("utf8"), sliceBytes: bytesRead, startsMidLine, position };
+}
+
+/**
  * Read a bounded slice from the head or tail of a file via positioned reads —
- * never the whole file. Tail reads skip UTF-8 continuation bytes so the text
- * starts on a codepoint boundary.
+ * never the whole file.
  */
 export async function readOutputSlice(
 	filePath: string,
@@ -129,34 +159,15 @@ export async function readOutputSlice(
 	const file = await open(filePath, "r");
 	try {
 		const { size } = await file.stat();
-		let length = Math.min(size, Math.max(0, Math.floor(options.maxBytes)));
-		let position = options.mode === "tail" ? size - length : 0;
-		let startsMidLine = false;
-
-		if (options.mode === "tail" && position > 0 && length > 0) {
-			// Probe from one byte before the slice: probe[0] tells whether the
-			// slice starts at a line boundary, the rest lets us skip UTF-8
-			// continuation bytes (0b10xxxxxx) so we never split a codepoint.
-			const probeStart = position - 1;
-			const probe = Buffer.alloc(Math.min(5, size - probeStart));
-			await file.read(probe, 0, probe.length, probeStart);
-			let skip = 0;
-			while (1 + skip < probe.length && ((probe[1 + skip] ?? 0) & 0b1100_0000) === 0b1000_0000) {
-				skip++;
-			}
-			position += skip;
-			length -= skip;
-			startsMidLine = probe[skip] !== 0x0a;
-		}
-
-		const buffer = Buffer.alloc(Math.max(0, length));
-		const bytesRead = buffer.length > 0 ? (await file.read(buffer, 0, buffer.length, position)).bytesRead : 0;
+		const length = Math.min(size, Math.max(0, Math.floor(options.maxBytes)));
+		const start = options.mode === "tail" ? size - length : 0;
+		const slice = await readAligned(file, size, start, length);
 		return {
-			text: buffer.subarray(0, bytesRead).toString("utf8"),
-			sliceBytes: bytesRead,
+			text: slice.text,
+			sliceBytes: slice.sliceBytes,
 			totalBytes: size,
-			truncated: size > bytesRead,
-			startsMidLine,
+			truncated: size > slice.sliceBytes,
+			startsMidLine: slice.startsMidLine,
 		};
 	} finally {
 		await file.close();
@@ -178,34 +189,19 @@ export async function readOutputSince(
 	try {
 		const { size } = await file.stat();
 		const floor = Math.min(Math.max(0, Math.floor(fromByte)), size);
-		let length = Math.min(size - floor, Math.max(0, Math.floor(maxBytes)));
-		let position = size - length;
-		let startsMidLine = false;
-
-		if (position > 0 && length > 0) {
-			// Same boundary probe as tail reads: probe[0] tells whether the slice
-			// starts at a line boundary, the rest skips UTF-8 continuation bytes.
-			const probeStart = position - 1;
-			const probe = Buffer.alloc(Math.min(5, size - probeStart));
-			await file.read(probe, 0, probe.length, probeStart);
-			let skip = 0;
-			while (1 + skip < probe.length && ((probe[1 + skip] ?? 0) & 0b1100_0000) === 0b1000_0000) {
-				skip++;
-			}
-			position += skip;
-			length -= skip;
-			startsMidLine = probe[skip] !== 0x0a;
-		}
-
-		const buffer = Buffer.alloc(Math.max(0, length));
-		const bytesRead = buffer.length > 0 ? (await file.read(buffer, 0, buffer.length, position)).bytesRead : 0;
+		const length = Math.min(size - floor, Math.max(0, Math.floor(maxBytes)));
+		const start = size - length;
+		// Decided before alignment: nudging the start past continuation bytes is
+		// not the same as dropping output the caller asked for.
+		const truncated = start > floor;
+		const slice = await readAligned(file, size, start, length);
 		return {
-			text: buffer.subarray(0, bytesRead).toString("utf8"),
-			sliceBytes: bytesRead,
+			text: slice.text,
+			sliceBytes: slice.sliceBytes,
 			totalBytes: size,
-			truncated: position > floor,
-			startsMidLine,
-			fromByte: position,
+			truncated,
+			startsMidLine: slice.startsMidLine,
+			fromByte: slice.position,
 		};
 	} finally {
 		await file.close();
@@ -429,8 +425,11 @@ export class BackgroundTaskRegistry {
 	 * registers before finalize's synchronous claim check claims delivery; one
 	 * that arrives after sees a terminal status and returns it immediately
 	 * (the followUp may also arrive — an idempotent repeat, not a lie).
+	 *
+	 * An aborted wait (the turn was interrupted) hands the claim back: the
+	 * caller's result is discarded, so it must not also swallow the followUp.
 	 */
-	async waitForResult(id: string, timeoutMs: number): Promise<WaitOutcome> {
+	async waitForResult(id: string, timeoutMs: number, signal?: AbortSignal): Promise<WaitOutcome> {
 		const task = this.tasks.get(id);
 		if (!task) throw new Error(`Unknown background task: ${id}`);
 		const runtime = this.runtimes.get(id);
@@ -443,7 +442,11 @@ export class BackgroundTaskRegistry {
 			const timedOut = await new Promise<boolean>((resolve) => {
 				timer = setTimeout(() => resolve(true), timeoutMs);
 				void runtime.done.then(() => resolve(false));
+				signal?.addEventListener("abort", () => resolve(true), { once: true });
 			});
+			// Throwing from inside `try` matters: `finally` drops the waiter count
+			// first, so finalize sees waiters === 0 and still sends the followUp.
+			if (signal?.aborted) throw new Error("aborted");
 			// done may resolve right after the timer fired (race window); a task
 			// that reached a terminal state during the wait is delivered here.
 			if (!timedOut || task.status !== "running") return { outcome: "terminal", task };
@@ -519,49 +522,34 @@ export class BackgroundTaskRegistry {
 	private async probeStallTail(task: BgTask, runtime: TaskRuntime): Promise<void> {
 		// Re-check inside the async boundary: finalize may have raced the probe.
 		if (runtime.finalized || this.shuttingDown) return;
-		let tailText = "";
+		let slice: OutputSlice | undefined;
 		let tailError: string | undefined;
 		try {
-			const slice = await readOutputSlice(task.outputPath, { mode: "tail", maxBytes: this.stallTailBytes });
-			tailText = slice.text;
+			slice = await readOutputSlice(task.outputPath, { mode: "tail", maxBytes: this.stallTailBytes });
 		} catch (error) {
 			tailError = error instanceof Error ? error.message : String(error);
 		}
 		if (runtime.finalized || this.shuttingDown) return;
 		// Merely slow: not prompt-shaped. Reset so the next check is a full
-		// threshold window out instead of re-probing on every tick.
-		if (!tailError && !looksLikePrompt(tailText)) {
+		// threshold window out instead of re-probing on every tick. A tail that
+		// could not be read is reported, not dismissed as slow.
+		if (slice && !looksLikePrompt(slice.text)) {
 			runtime.stallLastGrowthAt = this.now();
 			return;
 		}
-		task.stalled = true;
-		this.onChange();
+		if (!task.stalled) {
+			task.stalled = true;
+			this.onChange();
+		}
 		if (runtime.stallNotified) return;
 		runtime.stallNotified = true;
-
-		let tailBytes = 0;
-		let totalBytes = task.outputBytes;
-		let tailTruncated = false;
-		let tailStartsMidLine = false;
-		if (!tailError) {
-			try {
-				const slice = await readOutputSlice(task.outputPath, { mode: "tail", maxBytes: this.stallTailBytes });
-				tailText = slice.text;
-				tailBytes = slice.sliceBytes;
-				totalBytes = slice.totalBytes;
-				tailTruncated = slice.truncated;
-				tailStartsMidLine = slice.startsMidLine;
-			} catch (error) {
-				tailError = error instanceof Error ? error.message : String(error);
-			}
-		}
 		this.onStall?.({
 			task,
-			tailText: sanitizeBinaryOutput(tailText),
-			tailBytes,
-			totalBytes,
-			tailTruncated,
-			tailStartsMidLine,
+			tailText: sanitizeBinaryOutput(slice?.text ?? ""),
+			tailBytes: slice?.sliceBytes ?? 0,
+			totalBytes: slice?.totalBytes ?? task.outputBytes,
+			tailTruncated: slice?.truncated ?? false,
+			tailStartsMidLine: slice?.startsMidLine ?? false,
 			tailError,
 		});
 	}

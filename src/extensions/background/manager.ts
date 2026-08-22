@@ -379,10 +379,11 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		this.tasks = this.host.listTasks();
 		if (!this.selectedTask() && this.tasks[0]) this.selectedTaskId = this.tasks[0].id;
 		this.expireKillFeedback();
-		if (this.renderSignature() === this.lastSignature) return; // Nothing visible changed.
-		if (this.view === "detail" && this.follow && this.detailOutputChanged()) {
-			await this.refreshViewport();
-		}
+		// A pending re-read counts as a change: refreshViewport may skip this tick
+		// (readBusy), and the signature alone would let that retry be dropped.
+		const needsRead = this.view === "detail" && this.follow && this.detailOutputChanged();
+		if (!needsRead && this.renderSignature() === this.lastSignature) return; // Nothing visible changed.
+		if (needsRead) await this.refreshViewport();
 		this.lastSignature = this.renderSignature();
 		this.tui.requestRender();
 	}

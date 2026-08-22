@@ -215,13 +215,33 @@ export function filterXmlCharacters(text: string): string {
 	return result;
 }
 
+/**
+ * filterXmlCharacters keeps \t \n \r and every other XML-legal codepoint, so
+ * every field built with this is valid XML 1.0 after escaping.
+ */
+const xmlText = (text: string) => escapeXml(filterXmlCharacters(text));
+
+/** The `<output-tail>` element, shared by the completion and stall notifications. */
+function renderOutputTail(notification: BgTaskNotification): string[] {
+	if (notification.tailError) {
+		return [`<output-tail unavailable="${xmlText(notification.tailError)}"/>`];
+	}
+	const attrs = [
+		`bytes="${notification.tailBytes}"`,
+		`totalBytes="${notification.totalBytes}"`,
+		notification.tailTruncated ? 'truncated="true"' : "",
+		notification.tailStartsMidLine ? 'startsMidLine="true"' : "",
+	]
+		.filter(Boolean)
+		.join(" ");
+	const tail = notification.tailText.length > 0 ? xmlText(notification.tailText) : "(no output)";
+	return [`<output-tail ${attrs}>`, tail.trimEnd(), "</output-tail>"];
+}
+
 export function buildNotificationContent(notification: BgTaskNotification): string {
 	const task = notification.task;
 	const runtime = formatDuration((task.endedAt ?? task.startedAt) - task.startedAt);
 	const exitCode = task.exitCode === undefined || task.exitCode === null ? "" : ` exitCode="${task.exitCode}"`;
-	// filterXmlCharacters keeps \t \n \r and every other XML-legal codepoint,
-	// so each field below is valid XML 1.0 after escaping.
-	const xmlText = (text: string) => escapeXml(filterXmlCharacters(text));
 	const lines = [
 		`<background-task id="${task.id}" status="${task.status}"${exitCode} runtime="${runtime}">`,
 		`<command>${xmlText(task.command)}</command>`,
@@ -233,20 +253,7 @@ export function buildNotificationContent(notification: BgTaskNotification): stri
 	if (task.error) {
 		lines.push(`<error>${xmlText(task.error)}</error>`);
 	}
-	if (notification.tailError) {
-		lines.push(`<output-tail unavailable="${xmlText(notification.tailError)}"/>`);
-	} else {
-		const attrs = [
-			`bytes="${notification.tailBytes}"`,
-			`totalBytes="${notification.totalBytes}"`,
-			notification.tailTruncated ? 'truncated="true"' : "",
-			notification.tailStartsMidLine ? 'startsMidLine="true"' : "",
-		]
-			.filter(Boolean)
-			.join(" ");
-		const tail = notification.tailText.length > 0 ? xmlText(notification.tailText) : "(no output)";
-		lines.push(`<output-tail ${attrs}>`, tail.trimEnd(), "</output-tail>");
-	}
+	lines.push(...renderOutputTail(notification));
 	lines.push("</background-task>");
 	return lines.join("\n");
 }
@@ -266,8 +273,8 @@ export function formatStatusline(counts: { running: number; total: number; stall
 
 export function buildStallContent(notification: BgStallNotification): string {
 	const task = notification.task;
-	const runtime = formatDuration((task.endedAt ?? Date.now()) - task.startedAt);
-	const xmlText = (text: string) => escapeXml(filterXmlCharacters(text));
+	// A stalled task is by definition still running, so it has no endedAt.
+	const runtime = formatDuration(Date.now() - task.startedAt);
 	const lines = [
 		`<background-task id="${task.id}" status="running" waiting-for-input="true" runtime="${runtime}">`,
 		`<command>${xmlText(task.command)}</command>`,
@@ -276,20 +283,7 @@ export function buildStallContent(notification: BgStallNotification): string {
 		lines.push(`<description>${xmlText(task.description)}</description>`);
 	}
 	lines.push(`<output-file>${xmlText(task.outputPath)}</output-file>`);
-	if (notification.tailError) {
-		lines.push(`<output-tail unavailable="${xmlText(notification.tailError)}"/>`);
-	} else {
-		const attrs = [
-			`bytes="${notification.tailBytes}"`,
-			`totalBytes="${notification.totalBytes}"`,
-			notification.tailTruncated ? 'truncated="true"' : "",
-			notification.tailStartsMidLine ? 'startsMidLine="true"' : "",
-		]
-			.filter(Boolean)
-			.join(" ");
-		const tail = notification.tailText.length > 0 ? xmlText(notification.tailText) : "(no output)";
-		lines.push(`<output-tail ${attrs}>`, tail.trimEnd(), "</output-tail>");
-	}
+	lines.push(...renderOutputTail(notification));
 	lines.push(
 		"<advice>The command appears blocked waiting for interactive input. Kill it (bg action kill) and " +
 			"re-run with piped input (e.g. echo y | command) or a non-interactive flag if one exists (e.g. --yes). " +
@@ -449,6 +443,14 @@ export function createBackgroundExtension(overrides?: BackgroundExtensionOverrid
 			sessionCtx?.ui.setStatus("background", formatStatusline(registry.counts()));
 		};
 
+		/** Both background messages reach the model the same way; that choice lives here only. */
+		const notify = (content: string, details: BgNotificationDetails) => {
+			pi.sendMessage(
+				{ customType: BG_NOTIFICATION_TYPE, content, display: true, details },
+				{ deliverAs: "followUp", triggerTurn: true },
+			);
+		};
+
 		pi.on("session_start", (_event, ctx) => {
 			sessionCtx = ctx;
 			// Defensive: a leftover registry (session_shutdown not seen) must not leak processes.
@@ -458,31 +460,12 @@ export function createBackgroundExtension(overrides?: BackgroundExtensionOverrid
 				outputDir: overrides?.outputDir,
 				maxOutputBytes: overrides?.maxOutputBytes,
 				stall: overrides?.stall,
-				onNotify: (notification) => {
-					pi.sendMessage(
-						{
-							customType: BG_NOTIFICATION_TYPE,
-							content: buildNotificationContent(notification),
-							display: true,
-							details: toNotificationDetails(notification),
-						},
-						{ deliverAs: "followUp", triggerTurn: true },
-					);
-				},
-				onStall: (notification) => {
-					// Informational one-shot signal: not a terminal state, so it bypasses
-					// the claim protocol (a waiting model needs to know it is blocked on
-					// input, not merely slow).
-					pi.sendMessage(
-						{
-							customType: BG_NOTIFICATION_TYPE,
-							content: buildStallContent(notification),
-							display: true,
-							details: toStallDetails(notification),
-						},
-						{ deliverAs: "followUp", triggerTurn: true },
-					);
-				},
+				onNotify: (notification) =>
+					notify(buildNotificationContent(notification), toNotificationDetails(notification)),
+				// Informational one-shot signal: not a terminal state, so it bypasses
+				// the claim protocol (a waiting model needs to know it is blocked on
+				// input, not merely slow).
+				onStall: (notification) => notify(buildStallContent(notification), toStallDetails(notification)),
 				onChange: updateStatus,
 			});
 			updateStatus();
@@ -584,14 +567,14 @@ export function createBackgroundExtension(overrides?: BackgroundExtensionOverrid
 			};
 		};
 
-		const runWait = async (params: BgWaitInput): Promise<AgentToolResult<BgWaitDetails>> => {
+		const runWait = async (params: BgWaitInput, signal?: AbortSignal): Promise<AgentToolResult<BgWaitDetails>> => {
 			const task = resolveTaskOrThrow(params.taskId);
 			const waitMs = Math.min(
 				BG_WAIT_MAX_MS,
 				Math.max(BG_WAIT_MIN_MS, Math.floor(params.waitMs ?? BG_WAIT_DEFAULT_MS)),
 			);
 			const startedWait = Date.now();
-			const result = await requireRegistry().waitForResult(task.id, waitMs);
+			const result = await requireRegistry().waitForResult(task.id, waitMs, signal);
 			const waitedMs = Date.now() - startedWait;
 			const finalTask = result.task;
 			const exitSuffix =
@@ -783,7 +766,7 @@ export function createBackgroundExtension(overrides?: BackgroundExtensionOverrid
 				"Never wait on background tasks with sleep loops or repeated reads; use bg action wait (bounded) when a step depends on a task's result, or rely on the completion notification.",
 			],
 			parameters: bgSchema,
-			async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<BgDetails>> {
+			async execute(_toolCallId, params, signal, _onUpdate, ctx): Promise<AgentToolResult<BgDetails>> {
 				validateAction(params);
 				switch (params.action) {
 					case "create":
@@ -791,7 +774,7 @@ export function createBackgroundExtension(overrides?: BackgroundExtensionOverrid
 					case "read":
 						return runRead(params as BgReadInput);
 					case "wait":
-						return runWait(params as BgWaitInput);
+						return runWait(params as BgWaitInput, signal);
 					case "kill":
 						return runKill(params as BgKillInput);
 					case "list":
