@@ -4,6 +4,17 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Rewrote the bundled Todo extension's model-facing copy along the split Pi's built-in tools use: the tool description now carries mechanism only (what each action does, input bounds, the single-`in_progress` rule, and that ids are never reused), while when-to-use policy moved into four single-clause `promptGuidelines` bullets matching the register of the system prompt's `Guidelines` section.
+
+### Fixed
+
+- Fixed the bundled Todo extension repeating the headline's ID list as the only detail line when a `delete` call was expanded; a settled deletion now names each removed task's ID and subject, and an unsettled one adds no detail line at all.
+- Fixed Todo's collapsed call preview letting an empty subject consume one of its two preview slots while streaming arguments are still arriving.
+- Todo's capacity error now names its remedy (`delete completed or obsolete tasks first`), because completed tasks keep counting against the 20-task limit.
+- Hardened Todo against tampered input: every session-history field read during branch replay is now guarded, and created IDs are derived from the validated before/after states instead of re-reading the tool arguments after validation.
+
 ## [0.84.7] - 2026-08-21
 
 ### Fixed

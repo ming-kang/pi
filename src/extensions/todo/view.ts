@@ -314,9 +314,11 @@ function descriptionPreview(value: string): string {
 
 /** At most two subjects, each truncated to the preview width, plus `+N more`. */
 function formatSubjectPreview(subjects: string[], total: number): string {
+	// Filter before slicing so an empty subject (streaming args) does not consume
+	// a preview slot.
 	const shown = subjects
-		.slice(0, CALL_SUBJECT_PREVIEW_COUNT)
 		.filter(Boolean)
+		.slice(0, CALL_SUBJECT_PREVIEW_COUNT)
 		.map((subject) => truncateToWidth(subject, CALL_SUBJECT_PREVIEW_WIDTH, "…"));
 	if (!shown.length) return "";
 	const hidden = Math.max(0, total - shown.length);
@@ -341,6 +343,15 @@ function createResultIds(result: AgentToolResult<unknown> | undefined, count: nu
 	if (!details || safeString(safeValue(details.change, "kind")) !== "create") return undefined;
 	const ids = readIds(safeValue(details.change, "ids"), true);
 	return ids?.length === count ? ids : undefined;
+}
+
+/** Removed entries for an expanded delete; absent until a v2 delete result arrives. */
+function deleteResultRemoved(
+	result: AgentToolResult<unknown> | undefined,
+): Array<{ id: number; subject: string }> | undefined {
+	const details = todoDetails(result?.details);
+	if (!details || safeString(safeValue(details.change, "kind")) !== "delete") return undefined;
+	return removedEntries(safeValue(details.change, "removed"));
 }
 
 /** Headline plus the parameters the result never echoes as detail lines. */
@@ -381,10 +392,11 @@ function formatCallParts(
 		if (description) details.push(`    ${theme.fg("dim", descriptionPreview(description))}`);
 	} else if (verb === "delete") {
 		const ids = readIds(args?.ids, false) ?? [];
-		if (ids.length) {
-			const rendered = theme.fg("accent", ids.map((id) => `#${id}`).join(", "));
-			headline.push(rendered);
-			details.push(rendered);
+		if (ids.length) headline.push(theme.fg("accent", ids.map((id) => `#${id}`).join(", ")));
+		// The headline already carries the ids, so details only earn their line
+		// once the result names what was actually removed.
+		for (const entry of deleteResultRemoved(result) ?? []) {
+			details.push(`${theme.fg("accent", `#${entry.id}`)} ${theme.fg("text", entry.subject)}`);
 		}
 	}
 

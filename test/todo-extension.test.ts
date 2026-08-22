@@ -85,7 +85,9 @@ describe("todo store create", () => {
 			store,
 			Array.from({ length: TODO_MAX_ITEMS }, (_, index) => `Task ${index + 1}`),
 		);
-		expect(() => createTasks(store, ["One more"])).toThrow(/todo list is full \(max 20 tasks\)/);
+		expect(() => createTasks(store, ["One more"])).toThrow(
+			/todo list is full \(max 20 tasks\); delete completed or obsolete tasks first/,
+		);
 		expect(() =>
 			createTasks(
 				createStore(),
@@ -505,10 +507,16 @@ describe("todo extension wiring", () => {
 		expect(tool.toolGroup).toBe(TODO_TOOL_NAME);
 		expect(tool.promptSnippet).toContain("task list");
 		expect(tool.promptGuidelines?.length).toBeGreaterThan(0);
-		expect(tool.description).toContain("create: atomically add one or many pending tasks");
-		expect(tool.description).toContain("update: edit one task by id");
-		expect(tool.description).toContain("list: show every remaining task");
-		expect(tool.description).toContain("delete: remove obsolete tasks");
+		// The description carries mechanism only; when-to-use policy lives in the guidelines.
+		expect(tool.description).toContain("create atomically adds 1-20 pending tasks");
+		expect(tool.description).toContain("update edits one task by id");
+		expect(tool.description).toContain("list returns every remaining task");
+		expect(tool.description).toContain("delete removes 1-20 tasks by ids");
+		expect(tool.description).toContain("at most 20 tasks including completed ones");
+		expect(tool.description).toContain("ids are never reused");
+		expect(tool.description).toContain("demotes any other active task");
+		expect(tool.description).not.toMatch(/^##/m);
+		expect(tool.promptGuidelines?.every((guideline) => guideline.includes("`todo`"))).toBe(true);
 		for (const copy of [tool.description, tool.promptSnippet ?? "", ...(tool.promptGuidelines ?? [])]) {
 			expect(copy).not.toMatch(/create_many|blockedBy|addBlocks|metadata|owner|dependency/);
 		}

@@ -94,7 +94,7 @@ function applyCreate(state: TodoState, params: TodoParams): TodoState {
 	if (!Array.isArray(rawItems) || rawItems.length === 0) throw new Error("items required for create");
 	if (rawItems.length > TODO_MAX_BATCH_ITEMS) throw new Error(`items exceeds ${TODO_MAX_BATCH_ITEMS} tasks`);
 	if (state.items.length + rawItems.length > TODO_MAX_ITEMS) {
-		throw new Error(`todo list is full (max ${TODO_MAX_ITEMS} tasks)`);
+		throw new Error(`todo list is full (max ${TODO_MAX_ITEMS} tasks); delete completed or obsolete tasks first`);
 	}
 	if (!Number.isSafeInteger(state.nextId) || state.nextId < 1) throw new Error("next id is invalid");
 	if (state.nextId > Number.MAX_SAFE_INTEGER - rawItems.length) throw new Error("next id is exhausted");
@@ -209,10 +209,10 @@ export function applyTodoAction(state: TodoState, params: TodoParams): TodoState
 /** Derive the operation model for one call from the before/after states. */
 export function buildTodoChange(params: TodoParams, before: TodoState, after: TodoState): TodoChange {
 	switch (params.action) {
-		case "create": {
-			const count = Array.isArray(params.items) ? params.items.length : 0;
-			return { kind: "create", ids: after.items.slice(after.items.length - count).map((item) => item.id) };
-		}
+		// Derived from the validated before/after states rather than params.items,
+		// which is external input and could read differently on a second access.
+		case "create":
+			return { kind: "create", ids: after.items.slice(before.items.length).map((item) => item.id) };
 		case "update": {
 			const id = params.id;
 			if (!isPositiveSafeInteger(id)) throw new Error("id required for update");
@@ -276,7 +276,15 @@ export function createTodoStore(initial?: TodoState): TodoStore {
 	};
 }
 
-/** Validate an external v2 snapshot; returns undefined when malformed. */
+/**
+ * Validate an external v2 snapshot; returns undefined when malformed.
+ *
+ * Snapshot text must already be in normalizeText() form, which makes that
+ * function's output part of the v2 persistence contract: relaxing or changing
+ * it would silently invalidate every historical snapshot, falling back to an
+ * earlier one or to the empty state with no diagnostic. Change normalizeText
+ * only together with TODO_DETAILS_SCHEMA_VERSION.
+ */
 function normalizeSnapshotState(value: unknown): TodoState | undefined {
 	if (!isRecord(value) || !Array.isArray(value.items) || !isPositiveSafeInteger(value.nextId)) return undefined;
 	if (value.items.length > TODO_MAX_ITEMS) return undefined;
@@ -314,17 +322,20 @@ function normalizeSnapshotState(value: unknown): TodoState | undefined {
 export function replayTodosFromBranch(ctx: { sessionManager: { getBranch(): Iterable<unknown> } }): TodoState {
 	const branch = Array.from(ctx.sessionManager.getBranch());
 	for (let index = branch.length - 1; index >= 0; index--) {
-		const entry = branch[index];
-		if (!isRecord(entry) || entry.type !== "message") continue;
-		const message = entry.message;
-		if (!isRecord(message) || message.role !== "toolResult" || message.toolName !== TODO_TOOL_NAME) continue;
-		const details = message.details;
-		if (!isRecord(details) || details.schemaVersion !== TODO_DETAILS_SCHEMA_VERSION) continue;
+		// Session history is external input, so every field read stays inside the
+		// guard: a hostile entry falls through to an earlier snapshot instead of
+		// escaping to the lifecycle handler.
 		try {
+			const entry = branch[index];
+			if (!isRecord(entry) || entry.type !== "message") continue;
+			const message = entry.message;
+			if (!isRecord(message) || message.role !== "toolResult" || message.toolName !== TODO_TOOL_NAME) continue;
+			const details = message.details;
+			if (!isRecord(details) || details.schemaVersion !== TODO_DETAILS_SCHEMA_VERSION) continue;
 			const state = normalizeSnapshotState(details.state);
 			if (state) return state;
 		} catch {
-			// Session history is external input; keep scanning for an earlier valid v2.
+			// Keep scanning for an earlier valid v2 snapshot.
 		}
 	}
 	return cloneTodoState(EMPTY_TODO_STATE);

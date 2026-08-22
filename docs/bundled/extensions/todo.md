@@ -57,7 +57,7 @@ Todos: 1 in progress, 3 pending, 2 completed
     Cover invalid redirects and session restoration
 ```
 
-Consecutive tool calls collapse into the native `todo` transcript group. Collapsed settled rows use result-aware v2 details to show actual created IDs and subjects, update status and automatic demotion, list counts, or deleted IDs. Expanding restores the complete call and native result. Malformed or older details fall back to a bounded call summary.
+Consecutive tool calls collapse into the native `todo` transcript group. Collapsed settled rows use result-aware v2 details to show actual created IDs and subjects, update status and automatic demotion, list counts, or deleted IDs. Expanding restores the complete call and native result: a created batch lists each task's ID, subject, and indented description, and a settled deletion names every removed task's ID and subject. Malformed or older details fall back to a bounded call summary.
 
 ## Limits
 
@@ -68,7 +68,7 @@ Consecutive tool calls collapse into the native `todo` transcript group. Collaps
 - Subject and description whitespace is normalized to one line.
 - Model-facing list output is bounded by those limits; no pagination is needed.
 
-Delete completed or obsolete tasks before the list reaches capacity.
+Delete completed or obsolete tasks before the list reaches capacity; `create` past the limit fails with an error that names that remedy.
 
 ## Storage and replay
 

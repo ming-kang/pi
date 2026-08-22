@@ -241,6 +241,19 @@ describe("formatTodoCall", () => {
 		expect(expanded).not.toContain("21. Task 21");
 	});
 
+	test("skips empty subjects when filling the two preview slots", () => {
+		// Streaming args can deliver a later subject first; an empty one must not
+		// consume a preview slot.
+		const items = [
+			{ subject: "", description: "" },
+			{ subject: "Beta", description: "" },
+			{ subject: "Gamma", description: "" },
+		];
+		expect(formatTodoCall({ action: "create", items }, theme, false)).toBe(
+			"todo create 3 tasks · Beta, Gamma, +1 more",
+		);
+	});
+
 	test("expanded create shows per-item subjects, indented descriptions, and result ids", () => {
 		const args = {
 			action: "create",
@@ -270,6 +283,38 @@ describe("formatTodoCall", () => {
 		).split("\n");
 		expect(lines[0]).toBe("todo update #2 in_progress");
 		expect(lines[1]).toBe(`    ${"x".repeat(119)}…`);
+	});
+
+	test("expanded delete names removed tasks instead of repeating the headline ids", () => {
+		const args = { action: "delete", ids: [3, 7] };
+		// The headline already carries the ids, so an unsettled call adds no detail line.
+		expect(formatTodoCall(args, theme, true)).toBe("todo delete #3, #7");
+
+		const result = {
+			content: [],
+			details: {
+				schemaVersion: 2,
+				change: {
+					kind: "delete",
+					removed: [
+						{ id: 3, subject: "Remove legacy task" },
+						{ id: 7, subject: "Drop unused flag" },
+					],
+				},
+				state: { items: [], nextId: 8 },
+			},
+		};
+		expect(formatTodoCall(args, theme, true, result)).toBe(
+			"todo delete #3, #7\n#3 Remove legacy task\n#7 Drop unused flag",
+		);
+
+		// A create result never feeds the delete detail lines.
+		expect(
+			formatTodoCall(args, theme, true, {
+				content: [],
+				details: { schemaVersion: 2, change: { kind: "create", ids: [3] }, state: { items: [], nextId: 4 } },
+			}),
+		).toBe("todo delete #3, #7");
 	});
 
 	test("tolerates partial, sparse, and hostile args and details", () => {
