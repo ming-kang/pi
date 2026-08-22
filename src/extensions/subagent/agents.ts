@@ -1,10 +1,4 @@
-import {
-	DEFAULT_AGENT_TOOLS,
-	EXPLORER_TOOLS,
-	MAX_CONCURRENCY,
-	MAX_TASKS,
-	type SubagentAgentName,
-} from "./constants.ts";
+import { DEFAULT_AGENT_TOOLS, EXPLORER_TOOLS, MAX_TASKS, type SubagentAgentName } from "./constants.ts";
 import type { AgentProfile } from "./types.ts";
 
 // Static display titles for the two built-in profiles; this file owns the
@@ -47,16 +41,20 @@ export const AGENT_PROFILES: readonly AgentProfile[] = [
 
 // Static model-facing guidance: there are exactly two profiles and one
 // tasks-array parameter shape, so the description never depends on discovery.
+// Concurrency and result ordering live on the tasks parameter; when-to-delegate
+// routing lives in promptGuidelines. The self-contained-briefing rule is stated
+// here as well as on the prompt parameter because it is the failure mode workers
+// hit most often.
 export function subagentToolDescription(): string {
 	return [
 		"Delegate bounded work to isolated one-shot subagents. Workers cannot see the parent conversation: each task needs a complete self-contained briefing, and you receive only their final reports.",
 		"",
-		`Provide 1-${MAX_TASKS} independent tasks. Multiple tasks run concurrently: at most ${MAX_CONCURRENCY} active at once, excess tasks queue, and results preserve input order. For sequential work, call this tool again with the previous result folded into the next briefing.`,
+		`Provide 1-${MAX_TASKS} independent tasks; for sequential work, call this tool again with the previous result folded into the next briefing.`,
 		"",
 		"Agent profiles:",
 		"- explorer (default): read-only investigation — finding files, searching code, and answering codebase questions; bash is restricted to read-only inspection (git log/diff/blame, ls, cat, and similar). Never use for changes.",
 		"- general: implementation — edits, fixes, refactors, and verification in a scoped area; use when the task changes files.",
 		"",
-		"Do not delegate a trivial task you can answer with one or two direct tool calls, and never delegate understanding with vague instructions: state what must be investigated or changed and the expected output.",
+		"Never delegate with vague instructions: state what must be investigated or changed and the expected output.",
 	].join("\n");
 }

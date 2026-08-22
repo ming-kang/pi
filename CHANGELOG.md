@@ -7,6 +7,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 ### Changed
 
 - Rewrote the bundled Todo extension's model-facing copy along the split Pi's built-in tools use: the tool description now carries mechanism only (what each action does, input bounds, the single-`in_progress` rule, and that ids are never reused), while when-to-use policy moved into four single-clause `promptGuidelines` bullets matching the register of the system prompt's `Guidelines` section.
+- Applied that same split to the remaining bundled extensions that register tools. `deepwiki` lost the two `promptGuidelines` bullets that documented `page` and `repoName` syntax already stated on those parameters, and a hardcoded repository suggestion that was reaching every session in every project; `question` lost the when-to-use paragraph its first guideline already carried, plus seven per-field authoring rules duplicated from `QuestionParams`; `bg` lost the two policy sentences its guidelines already carried and now backticks its own name; `subagent` promoted "do not delegate a task you can finish with one or two direct tool calls" out of the description, where the model only saw it after deciding to call the tool, into the guideline that previously restated the profile list. Descriptions that repeat their own parameter schema were trimmed to the rule models most often break, following `edit`, which states the `oldText` uniqueness rule in both places and nothing else twice. No behavior changed.
 
 ### Fixed
 
@@ -16,6 +17,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - Fixed Todo's collapsed call preview letting an empty subject consume one of its two preview slots while streaming arguments are still arriving.
 - Todo's capacity error now names its remedy (`delete completed or obsolete tasks first`), because completed tasks keep counting against the 20-task limit.
 - Hardened Todo against tampered input: every session-history field read during branch replay is now guarded, and created IDs are derived from the validated before/after states instead of re-reading the tool arguments after validation.
+- Fixed the bundled DeepWiki extension's `action` enum describing `contents` as reading the full generated wiki, which is the usage the `page` parameter on the same schema tells the model to avoid.
 
 ## [0.84.7] - 2026-08-21
 

@@ -507,11 +507,12 @@ describe("todo extension wiring", () => {
 		expect(tool.toolGroup).toBe(TODO_TOOL_NAME);
 		expect(tool.promptSnippet).toContain("task list");
 		expect(tool.promptGuidelines?.length).toBeGreaterThan(0);
-		// The description carries mechanism only; when-to-use policy lives in the guidelines.
-		expect(tool.description).toContain("create atomically adds 1-20 pending tasks");
+		// The description carries mechanism only; when-to-use policy lives in the
+		// guidelines and per-parameter bounds live in the schema.
+		expect(tool.description).toContain("create atomically adds pending tasks");
 		expect(tool.description).toContain("update edits one task by id");
 		expect(tool.description).toContain("list returns every remaining task");
-		expect(tool.description).toContain("delete removes 1-20 tasks by ids");
+		expect(tool.description).toContain("delete removes tasks by ids");
 		expect(tool.description).toContain("at most 20 tasks including completed ones");
 		expect(tool.description).toContain("ids are never reused");
 		expect(tool.description).toContain("demotes any other active task");

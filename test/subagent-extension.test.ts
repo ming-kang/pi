@@ -64,19 +64,18 @@ describe("subagent extension registration", () => {
 		expect(tools).toHaveLength(1);
 		const initialTool = tools.get("subagent");
 		expect(initialTool).toMatchObject({ name: "subagent", label: "Subagent" });
-		// The description is static: exactly the two built-in profiles, bounded
-		// concurrency, and input-order results. No discovery-dependent copy.
+		// The description is static: exactly the two built-in profiles. Concurrency
+		// and input-order results live on the tasks parameter, not here.
 		expect(initialTool?.description).toContain("Delegate bounded work to isolated one-shot subagents");
 		expect(initialTool?.description).toContain("Workers cannot see the parent conversation");
 		expect(initialTool?.description).toContain("Provide 1-8 independent tasks");
-		expect(initialTool?.description).toContain("at most 5 active at once, excess tasks queue");
-		expect(initialTool?.description).toContain("results preserve input order");
+		expect(initialTool?.description).not.toContain("active at once");
 		expect(initialTool?.description).toContain("Agent profiles:");
 		expect(initialTool?.description).toContain("- explorer (default):");
 		expect(initialTool?.description).toContain("- general:");
-		expect(initialTool?.promptSnippet).toBe("Delegate bounded work to isolated Explorer or General workers");
+		expect(initialTool?.promptSnippet).toBe("Delegate bounded work to isolated explorer or general workers");
 		expect(initialTool?.promptGuidelines).toEqual([
-			"Use subagent for bounded work that benefits from isolated context or concurrent investigation; default to explorer, and choose general only when the task may modify files or state.",
+			"Use `subagent` for bounded work that benefits from isolated context or concurrent investigation; do not delegate a task you can finish with one or two direct tool calls.",
 		]);
 		expect(initialTool?.executionMode).toBeUndefined();
 		expect(initialTool?.prepareArguments).toBeUndefined();

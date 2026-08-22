@@ -19,9 +19,9 @@ export default function subagent(pi: ExtensionAPI): void {
 		name: SUBAGENT_TOOL_NAME,
 		label: SUBAGENT_TOOL_LABEL,
 		description: subagentToolDescription(),
-		promptSnippet: "Delegate bounded work to isolated Explorer or General workers",
+		promptSnippet: "Delegate bounded work to isolated explorer or general workers",
 		promptGuidelines: [
-			"Use subagent for bounded work that benefits from isolated context or concurrent investigation; default to explorer, and choose general only when the task may modify files or state.",
+			"Use `subagent` for bounded work that benefits from isolated context or concurrent investigation; do not delegate a task you can finish with one or two direct tool calls.",
 		],
 		parameters: SubagentParamsSchema,
 		async execute(toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<SubagentDetails>> {

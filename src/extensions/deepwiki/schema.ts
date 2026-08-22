@@ -8,7 +8,7 @@ const MAX_QUESTION_REPOS = 10;
 
 const DeepWikiActionSchema = StringEnum(DEEPWIKI_ACTIONS, {
 	description:
-		"DeepWiki operation: structure lists generated wiki pages for one repo, contents reads the full generated wiki for one repo, and question answers focused repo/reference/comparison questions across up to 10 repos.",
+		"DeepWiki operation: structure lists a repo's generated wiki pages, contents reads one page of that wiki (or all of it when page is omitted), and question answers focused repo/reference/comparison questions across up to 10 repos.",
 });
 
 export const DeepWikiParamsSchema = Type.Object({

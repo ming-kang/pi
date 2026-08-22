@@ -15,7 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { AGENT_PROFILES, subagentToolDescription } from "../src/extensions/subagent/agents.ts";
 import { MAX_CONCURRENCY, MAX_TASKS, SUBAGENT_AGENT_NAMES } from "../src/extensions/subagent/constants.ts";
 import { resolveSubagentTask, resolveTaskCwd } from "../src/extensions/subagent/resolve.ts";
-import type { SubagentTask } from "../src/extensions/subagent/schema.ts";
+import { SubagentParamsSchema, type SubagentTask } from "../src/extensions/subagent/schema.ts";
 import { loadSubagentConfig, parseSubagentConfig, updateProfileOverride } from "../src/extensions/subagent/settings.ts";
 
 function model(provider: string, id: string, reasoning = true): Model<Api> {
@@ -81,15 +81,22 @@ describe("subagent configuration", () => {
 		expect(general?.description).toContain("use explorer for read-only questions");
 	});
 
-	it("describes concurrent tasks, queueing, and input-order results", () => {
+	it("keeps profile copy in the description and concurrency on the tasks parameter", () => {
 		const description = subagentToolDescription();
 		expect(description).toContain(`Provide 1-${MAX_TASKS} independent tasks`);
-		expect(description).toContain(`at most ${MAX_CONCURRENCY} active at once`);
-		expect(description).toContain("excess tasks queue, and results preserve input order");
+		// Concurrency and ordering are stated once, on the parameter that owns them.
+		// TypeBox keeps `description` as a runtime JSON Schema annotation only.
+		const tasksParam = SubagentParamsSchema.properties.tasks as unknown as { description?: string };
+		expect(description).not.toContain("active at once");
+		expect(tasksParam.description).toContain(`at most ${MAX_CONCURRENCY} active at once`);
+		expect(tasksParam.description).toContain("results preserve input order");
 		expect(description).toContain("Agent profiles:");
 		expect(description).toContain("- explorer (default):");
 		expect(description).toContain("- general:");
-		expect(description).toContain("Do not delegate a trivial task");
+		// When-to-delegate routing is promptGuidelines' job; the description keeps
+		// only the briefing-quality rule.
+		expect(description).not.toContain("Do not delegate a trivial task");
+		expect(description).toContain("Never delegate with vague instructions");
 		// Static guidance: no runtime-discovered agent list appears.
 		expect(description).not.toContain("project");
 		expect(description).not.toContain("user agent");

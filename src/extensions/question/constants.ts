@@ -9,11 +9,14 @@
 export const QUESTION_TOOL_NAME = "question";
 export const QUESTION_LABEL = "Question";
 
+// Mechanism plus the two rules the schema cannot state: the recommended-option
+// convention, and the reserved/vague labels models reach for most often.
+// Per-field authoring rules and limits live in QuestionParams.
 export const QUESTION_DESCRIPTION =
-	"Ask the user 1-4 structured multiple-choice questions. Use it only when you are blocked on a decision that is genuinely the user's to make — one you cannot resolve from the request, the code, or sensible defaults: product direction, subjective preference, credentials/permissions, or destructive/irreversible choices. For low-risk details, pick a reasonable default yourself and state it instead. Write each question as one concrete decision ending in a question mark, with a short header and 2-4 mutually distinct options. Every option must have a concise description explaining its consequence or trade-off; never author vague labels ('Option A') or an 'Other'-style option — the UI adds a custom-answer path automatically. If you recommend an option, put it first and append ' (Recommended)' to its label. Use multiSelect only when options can validly be combined. Use option previews only for concrete artifacts the user must visually compare (code snippets, UI mockups, copy or config variants); previews render for single-select questions only.";
+	"Ask the user 1-4 structured multiple-choice questions and return their selections. Never author an 'Other'-style option or a vague label like 'Option A' — the UI adds a custom-answer path itself. If you recommend an option, put it first and append ' (Recommended)' to its label.";
 
 export const QUESTION_PROMPT_SNIPPET =
-	"Ask the user structured multiple-choice questions when blocked on a decision only they can make (preference, direction, permissions, destructive choices)";
+	"Ask the user structured multiple-choice questions when blocked on a decision only they can make";
 
 export const QUESTION_PROMPT_GUIDELINES = [
 	"Use `question` only for decisions you cannot resolve from the request, the code, or sensible defaults (direction, preference, permissions, destructive choices); for everything else choose a reasonable default and state it.",

@@ -747,23 +747,19 @@ export function createBackgroundExtension(overrides?: BackgroundExtensionOverrid
 			description:
 				"Run and manage background bash tasks.\n\n" +
 				"create: start a command in the background and return immediately with a task id and an " +
-				"output file path. Only use this when you don't need the result immediately and are OK being " +
-				"notified when the command completes later — a <background-task> notification with status, exit " +
-				"code, and output tail arrives automatically when it ends. Do NOT append '&' to the command; bg " +
-				"already runs it detached. An optional description labels the task in the UI; an optional timeout " +
-				"in seconds kills the task on expiry.\n\n" +
-				"read: bounded slice of a task's output (default: last 8KB); works while the task runs. The " +
+				"output file path. A <background-task> notification with status, exit code, and output tail " +
+				"arrives automatically when it ends. Do NOT append '&' to the command; bg already runs it " +
+				"detached.\n\n" +
+				"read: bounded slice of a task's output; works while the task runs. The " +
 				"output file is a plain file — the read tool also works on it for line-based paging.\n\n" +
-				"wait: block until a task finishes (default 20s, max 60s) and return its status plus output " +
-				"written since a given offset. Use when the next step depends on the result; on timeout the task " +
-				"is still running and you may wait again. Never emulate waiting with sleep.\n\n" +
+				"wait: block until a task finishes and return its status plus output written since a given " +
+				"offset. On timeout the task is still running and you may wait again.\n\n" +
 				"kill: stop a running task (whole process tree).\n\n" +
-				"list: currently known tasks with status.\n\n" +
-				"Task ids accept a unique prefix ('3f' for 'bg-3f').",
-			promptSnippet: "Manage background shell tasks (bg: create/read/wait/kill/list)",
+				"list: currently known tasks with status.",
+			promptSnippet: "Manage background shell tasks (create, read, wait, kill, list)",
 			promptGuidelines: [
-				"Use bg (action create) for long-running commands (dev servers, watch builds, slow tests) instead of regular bash; results arrive as an automatic <background-task> notification, so continue independent work or end the turn.",
-				"Never wait on background tasks with sleep loops or repeated reads; use bg action wait (bounded) when a step depends on a task's result, or rely on the completion notification.",
+				"Use `bg` action create for long-running commands (dev servers, watch builds, slow tests) instead of regular bash; the completion notification arrives on its own, so continue independent work or end the turn.",
+				"Never wait on a `bg` task with sleep loops or repeated reads; use `bg` action wait when the next step depends on its result.",
 			],
 			parameters: bgSchema,
 			async execute(_toolCallId, params, signal, _onUpdate, ctx): Promise<AgentToolResult<BgDetails>> {
