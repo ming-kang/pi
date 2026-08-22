@@ -83,6 +83,14 @@
 			]
 		},
 		{
+			"path": "src/core/compaction/compaction.ts",
+			"category": "bugfix",
+			"intent": "Cuts at the last valid point when trailing tool results exceed keepRecentTokens, instead of keeping everything and making auto-compaction a no-op",
+			"tests": [
+				"test/compaction.test.ts"
+			]
+		},
+		{
 			"path": "src/core/extensions/index.ts",
 			"category": "extension-support",
 			"intent": "Re-exports CompactionTiming and stale-extension-context helpers"
