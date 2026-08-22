@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.84.8] - 2026-08-22
+
 ### Changed
 
 - Rewrote the bundled Todo extension's model-facing copy along the split Pi's built-in tools use: the tool description now carries mechanism only (what each action does, input bounds, the single-`in_progress` rule, and that ids are never reused), while when-to-use policy moved into four single-clause `promptGuidelines` bullets matching the register of the system prompt's `Guidelines` section.
@@ -11,6 +13,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Fixed
 
+- Fixed an interrupted `bg wait` silently dropping its task's completion: the wait held a delivery claim that was never released on abort, so the `<background-task>` notification was suppressed and the finished task's result was lost. The claim is now released when the turn aborts.
+- Fixed a replayed unfinished `bg wait` row refreshing once a second forever from a bogus elapsed anchor; the live row now requires the wait to have actually started, not just to be partial.
 - Fixed auto-compaction aborting a run instead of compacting when the tool results trailing the last assistant message exceeded `compaction.keepRecentTokens` on their own: tool results are not valid cut points, so no cut point existed at or after the entry that crossed the budget and the search silently fell back to "keep everything", leaving nothing to summarize. The cut now lands on the last valid cut point. Subagent workers hit this reliably because their whole session is a single turn — one prompt followed only by assistant and tool result entries — which leaves the fewest possible cut points; the run ended with `Stopped before the next provider request because auto-compaction did not produce a safe context`.
 - Subagent runs now report auto-compaction in their activity log — in progress, the before/after context sizes on success, and the reason on failure — so a worker blocked by compaction can be diagnosed from its panel. Previously the session's compaction events were dropped by the subagent adapter, so the warning its error message points at was never rendered.
 - Fixed the bundled Todo extension repeating the headline's ID list as the only detail line when a `delete` call was expanded; a settled deletion now names each removed task's ID and subject, and an unsettled one adds no detail line at all.
