@@ -82,41 +82,58 @@ Child sessions share the parent's canonical model/authentication runtime, so ext
 
 ## Transcript UI
 
-While running, the collapsed view shows a progress header followed by one
-row per task in original input order:
+The native tool title owns whole-call elapsed time. While running, the collapsed view lists one width-bounded physical row per task:
 
 ```text
-› 2/4 done · 12s
-  › Explorer · Locate retry scheduling — Run git log
-  ✓ Explorer · Map provider registration
-  ○ Explorer · Find related tests
-  ○ General  · Apply focused fix
+● Subagent · 12s
+│ › #1 Explorer · Thinking...
+│ › #2 Explorer · Run git log
+│ ○ #3 Explorer · Queued
+│ › #4 General · Compacting...
 ```
 
-Every task is always listed: there is no row cap, no active-first
-reordering, and no `+N more` truncation. Live rows append the current
-activity, failure reason, or retry countdown.
+`#N` is the task's stable one-based input position. Rows always remain in `#1` through `#N` order: there is no progress header, prompt excerpt, row cap, active-first reordering, or `+N more` truncation. A row reports the task's current state directly:
 
-Expanded running calls show profile/model/thinking/cwd metrics, retry state, and the bounded Activity history for each task. Streaming assistant text is not copied into the parent transcript.
+- `Starting...` before the worker has begun a turn;
+- `Thinking...` while the model is active without a tool;
+- `Read`, `Search`, `Find`, `List`, `Run`, `Edit`, or `Write` for the current tool;
+- `Compacting...` during worker auto-compaction;
+- `Queued` while waiting for a worker slot;
+- `Retrying (n/m) in Xs` during retry backoff;
+- `Completed`, `Failed`, or `Aborted`, with duration when the task started.
 
-Once settled, the collapsed view keeps the same one-row-per-task layout under an aggregate line with the batch outcome, counts, cost, and duration:
+Long states and activities are truncated by visible terminal width, including ANSI styling and wide CJK characters, instead of wrapping onto continuation rows.
+
+Once settled, aggregate cost joins the frozen duration in the native title, and the ordered task rows become the complete collapsed outcome summary:
 
 ```text
-✓ 3 completed · 1 failed · 24s · $0.031
-  ✓ Explorer · Locate retry scheduling · 12s
-  ✓ Explorer · Map provider registration · 8.4s
-  × General  · Apply focused fix · 1m 3s
-  ✓ Explorer · Find related tests · 21s
+● Subagent · 1m 24s · $0.042
+│ ✓ #1 Explorer · Completed · 48s
+│ ✓ #2 Explorer · Completed · 1m 3s
+│ × #3 General · Failed · 36s
+│ ✓ #4 Explorer · Completed · 1m 20s
 ```
 
-The expanded settled view shows, for each task:
+Zero cost is omitted. There is no separate aggregate count line; the per-task markers show the mixed outcome directly.
 
-- the complete original Prompt from the tool call;
-- model, thinking, cwd, usage, cost, and duration;
-- Error when present;
-- the final Report, or `Report · partial` when a failed/aborted worker produced useful output.
+Expanded sections also remain in input order. Their single-line header contains only identity and compact runtime metadata:
 
-Activity is intentionally a running-state view; settled transparency comes from the original Prompt and final Report. Full child transcripts are not stored separately. Activity, errors, reports, usage, and model-facing output remain bounded, and completed calls restore through the parent session tree.
+```text
+── #1 Explorer · anthropic/claude-sonnet-4-5 · medium · 3 tool uses · 2 turns · 1m 5s
+
+Prompt
+<complete original task briefing>
+
+Activity
+  Read .github/workflows/ci.yml
+› Run npm test
+```
+
+The thinking level is shown as its raw value (`medium`, not `medium thinking`) and omitted when it is `off`; a non-parent working directory appears as `cwd: ...`. Per-run token, context, and cost fields are omitted from this header.
+
+Every expanded task shows the complete original Prompt, including while the batch is still running. Active and queued tasks show bounded Activity history and retry state. A completed, failed, or aborted task immediately switches to Error/Report presentation even if sibling tasks are still active; failed or aborted workers with useful output use `Report · partial`. Streaming assistant text is not copied into the parent transcript.
+
+Full child transcripts are not stored separately. Activity, errors, reports, usage, and model-facing output remain bounded, and completed calls restore through the parent session tree.
 
 ## Deliberate non-features
 

@@ -153,11 +153,72 @@ describe("Subagent shell-driven live refresh", () => {
 			false,
 		);
 		const settled = render(component);
-		expect(settled).toContain("1 completed · 3.0s");
+		expect(settled).toContain("● Subagent · 3.0s");
+		expect(settled).toContain("── #1 Explorer · test/model · low");
+		expect(settled).not.toContain("completed · 3.0s");
 		const settledRenderRequests = requestRender.mock.calls.length;
 		vi.advanceTimersByTime(5000);
 		expect(render(component)).toBe(settled);
 		expect(requestRender).toHaveBeenCalledTimes(settledRenderRequests);
+		component.dispose();
+	});
+
+	it("keeps the earliest partial clock and moves aggregate cost into the settled title", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+		const definition = registeredSubagentTool();
+		const component = createComponent(definition, "subagent-title-summary", {
+			tasks: [{ agent: "explorer", prompt: "Inspect silently." }],
+		});
+		component.markExecutionStarted();
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "starting" }],
+				details: { status: "running", startedAt: 0, runs: [], usage: usage(0) },
+				isError: false,
+			},
+			true,
+		);
+		expect(render(component)).toContain("● Subagent · 0.0s");
+		expect(render(component)).toContain("Starting...");
+
+		vi.advanceTimersByTime(1000);
+		component.updateResult(
+			{ content: [{ type: "text", text: "running" }], details: runningDetails(1000), isError: false },
+			true,
+		);
+		vi.advanceTimersByTime(2000);
+		expect(render(component)).toContain("● Subagent · 3.0s");
+
+		const finalDetails = completedDetails(1000, 3000);
+		finalDetails.usage.cost = 0.042;
+		finalDetails.runs[0]!.usage.cost = 0.042;
+		component.updateResult(
+			{ content: [{ type: "text", text: "done" }], details: finalDetails, isError: false },
+			false,
+		);
+		const settled = render(component);
+		expect(settled).toContain("● Subagent · 3.0s · $0.042");
+		expect(settled).toContain("✓ #1 Explorer · Completed · 2.0s");
+		expect(settled).not.toContain("1 completed");
+		component.dispose();
+	});
+
+	it("reconstructs frozen title timing and cost from a settled result without prior partial state", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(10_000);
+		const definition = registeredSubagentTool();
+		const component = createComponent(definition, "subagent-restored-settled", {
+			tasks: [{ agent: "explorer", prompt: "Inspect silently." }],
+		});
+		const restored = completedDetails(1_000, 4_000);
+		restored.usage.cost = 0.007;
+		restored.runs[0]!.usage.cost = 0.007;
+		component.updateResult({ content: [{ type: "text", text: "done" }], details: restored, isError: false }, false);
+		expect(render(component)).toContain("● Subagent · 3.0s · $0.007");
+		expect(render(component)).toContain("✓ #1 Explorer · Completed · 3.0s");
+		component.setExpanded(true);
+		expect(render(component)).toContain("── #1 Explorer · test/model · low");
 		component.dispose();
 	});
 
@@ -176,16 +237,16 @@ describe("Subagent shell-driven live refresh", () => {
 			true,
 		);
 
-		expect(render(component)).toContain("Retrying (1/3) in 8s — fetch failed");
+		expect(render(component)).toContain("Retrying (1/3) in 8s · fetch failed");
 		vi.advanceTimersByTime(1000);
-		expect(render(component)).toContain("Retrying (1/3) in 7s — fetch failed");
+		expect(render(component)).toContain("Retrying (1/3) in 7s · fetch failed");
 		vi.advanceTimersByTime(6000);
-		expect(render(component)).toContain("Retrying (1/3) in 1s — fetch failed");
+		expect(render(component)).toContain("Retrying (1/3) in 1s · fetch failed");
 
 		component.setExpanded(true);
-		expect(render(component)).toContain("Retrying (1/3) in 1s — fetch failed");
+		expect(render(component)).toContain("Retrying (1/3) in 1s · fetch failed");
 		vi.advanceTimersByTime(1000);
-		expect(render(component)).toContain("Retrying now… (1/3) — fetch failed");
+		expect(render(component)).toContain("Retrying (1/3) now... · fetch failed");
 		component.dispose();
 	});
 
@@ -210,11 +271,11 @@ describe("Subagent shell-driven live refresh", () => {
 			true,
 		);
 
-		expect(render(component)).toContain("Retrying (1/2) in 8s — fetch failed");
+		expect(render(component)).toContain("○ #4 Explorer · Retrying (1/2) in 8s · fetch failed");
 		vi.advanceTimersByTime(1000);
-		expect(render(component)).toContain("Retrying (1/2) in 7s — fetch failed");
+		expect(render(component)).toContain("Retrying (1/2) in 7s · fetch failed");
 		component.setExpanded(true);
-		expect(render(component)).toContain("Retrying (1/2) in 7s — fetch failed");
+		expect(render(component)).toContain("Retrying (1/2) in 7s · fetch failed");
 		component.dispose();
 	});
 
@@ -251,8 +312,10 @@ describe("Subagent shell-driven live refresh", () => {
 		vi.advanceTimersByTime(2000);
 		expect(render(first)).toContain("3.0s");
 		const batchCollapsed = render(second);
-		expect(batchCollapsed).toContain("2.0s");
-		expect(batchCollapsed).toContain("0/2 done");
+		expect(batchCollapsed).toContain("● Subagent · 2.0s");
+		expect(batchCollapsed).toContain("› #1 Explorer · Exploring code");
+		expect(batchCollapsed).toContain("› #2 Explorer · Exploring code");
+		expect(batchCollapsed).not.toContain("0/2 done");
 		expect(batchCollapsed).not.toContain("Running…");
 
 		second.setExpanded(true);

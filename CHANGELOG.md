@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Redesigned the bundled Subagent transcript around stable `#N` task rows. Collapsed running and settled cards now keep every task in input order on one terminal-width-aware line, show direct states or activities instead of prompt excerpts, move elapsed time and settled aggregate cost into the native title, and drop the redundant progress/outcome lines. Expanded sections remove the repeated prompt-head summary and verbose metric labels, show the complete original Prompt during execution as well as after settlement, and reveal a terminal task's Error/Report immediately while sibling tasks continue.
+
 ## [0.84.8] - 2026-08-22
 
 ### Changed
