@@ -16,7 +16,12 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "./compaction/index.ts";
-import type { CompactionTiming, ExtensionRunner, SessionBeforeCompactResult } from "./extensions/index.ts";
+import type {
+	CompactionTiming,
+	ExtensionRunner,
+	SessionBeforeCompactResult,
+	SessionCompactFailedEvent,
+} from "./extensions/index.ts";
 import type { CompactionEntry, SessionManager } from "./session-manager.ts";
 import { getLatestCompactionEntry } from "./session-manager.ts";
 import type { SettingsManager } from "./settings-manager.ts";
@@ -71,6 +76,7 @@ export interface CompactionHost {
 	/** Whether a manual /compact run currently owns the compaction lifecycle. */
 	isManualCompactionActive(): boolean;
 	emit(event: AgentSessionEvent): void;
+	emitSessionCompactFailed(event: Omit<SessionCompactFailedEvent, "type">): Promise<void>;
 	getRequiredRequestAuth(model: Model<any>): Promise<SummarizationRequestAuth>;
 	getSummarizationRequestAuth(
 		model: Model<any>,
@@ -243,8 +249,9 @@ export class CompactionController {
 		// independent of the configured context size or any context-clamped provider request limit.
 		// A successful response over the configured window should compact but must not retry: the
 		// assistant answer already completed and agent.continue() cannot continue from an assistant.
+		const contextOverflow = sameModel && isContextOverflow(assistantMessage, contextWindow);
 		const recoverableLength = sameModel && isRecoverableLength(assistantMessage, model?.maxTokens ?? 0);
-		if (sameModel && (isContextOverflow(assistantMessage, contextWindow) || recoverableLength)) {
+		if (contextOverflow || recoverableLength) {
 			const willRetry = assistantMessage.stopReason !== "stop";
 
 			if (!willRetry) {
@@ -253,14 +260,23 @@ export class CompactionController {
 
 			if (this._overflowRecoveryAttempted) {
 				this._stopAfterTurnRequested = true;
+				const errorMessage = contextOverflow
+					? "Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model."
+					: "Truncated response recovery failed after one compact-and-retry attempt.";
 				this.host.emit({
 					type: "compaction_end",
 					reason: "overflow",
 					result: undefined,
 					aborted: false,
 					willRetry: false,
-					errorMessage:
-						"Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.",
+					errorMessage,
+				});
+				await this.host.emitSessionCompactFailed({
+					reason: "overflow",
+					errorMessage,
+					aborted: false,
+					willRetry: false,
+					fromExtension: false,
 				});
 				return false;
 			}
@@ -284,17 +300,20 @@ export class CompactionController {
 		if (assistantMessage.stopReason === "error" || directContextTokens === 0) {
 			const messages = this.host.agent.state.messages;
 			const estimate = estimateContextTokens(messages);
-			if (estimate.lastUsageIndex === null) return false; // No usage data at all
-			// Verify the usage source is post-compaction. Kept pre-compaction messages
-			// have stale usage reflecting the old (larger) context and would falsely
-			// trigger compaction right after one just finished.
-			const usageMsg = messages[estimate.lastUsageIndex];
-			if (
-				compactionEntry &&
-				usageMsg.role === "assistant" &&
-				(usageMsg as AssistantMessage).timestamp <= new Date(compactionEntry.timestamp).getTime()
-			) {
-				return false;
+			// Without provider usage, estimate.tokens is the pure message-size estimate.
+			// Only usage-backed estimates need the stale pre-compaction check.
+			if (estimate.lastUsageIndex !== null) {
+				// Verify the usage source is post-compaction. Kept pre-compaction messages
+				// have stale usage reflecting the old (larger) context and would falsely
+				// trigger compaction right after one just finished.
+				const usageMsg = messages[estimate.lastUsageIndex];
+				if (
+					compactionEntry &&
+					usageMsg.role === "assistant" &&
+					(usageMsg as AssistantMessage).timestamp <= new Date(compactionEntry.timestamp).getTime()
+				) {
+					return false;
+				}
 			}
 			contextTokens = estimate.tokens;
 		} else {
@@ -329,6 +348,7 @@ export class CompactionController {
 	): Promise<AutoCompactionOutcome> {
 		const settings = this.host.settingsManager.getCompactionSettings();
 		let started = false;
+		let fromExtension = false;
 		let controller: AbortController | undefined;
 		let removeParentAbortListener: (() => void) | undefined;
 
@@ -361,11 +381,16 @@ export class CompactionController {
 					aborted: true,
 					willRetry: false,
 				});
+				await this.host.emitSessionCompactFailed({
+					reason,
+					aborted: true,
+					willRetry: false,
+					fromExtension: false,
+				});
 				return { compacted: false, shouldContinue: false };
 			}
 
 			let extensionCompaction: CompactionResult | undefined;
-			let fromExtension = false;
 			const pathEntries = this.host.sessionManager.getBranch();
 			const preparation = prepareCompaction(pathEntries, settings);
 			if (!preparation) {
@@ -392,6 +417,12 @@ export class CompactionController {
 						result: undefined,
 						aborted: true,
 						willRetry: false,
+					});
+					await this.host.emitSessionCompactFailed({
+						reason,
+						aborted: true,
+						willRetry: false,
+						fromExtension: false,
 					});
 					// A cancel produced by an abort (abortCompaction/parent abort) is not an
 					// extension decision; only a voluntary cancel hands the risk to the extension.
@@ -440,6 +471,12 @@ export class CompactionController {
 						aborted: true,
 						willRetry: false,
 					});
+					await this.host.emitSessionCompactFailed({
+						reason,
+						aborted: true,
+						willRetry: false,
+						fromExtension: false,
+					});
 					return { compacted: false, shouldContinue: false };
 				}
 
@@ -471,6 +508,12 @@ export class CompactionController {
 					result: undefined,
 					aborted: true,
 					willRetry: false,
+				});
+				await this.host.emitSessionCompactFailed({
+					reason,
+					aborted: true,
+					willRetry: false,
+					fromExtension,
 				});
 				return { compacted: false, shouldContinue: false };
 			}
@@ -549,22 +592,27 @@ export class CompactionController {
 			return { compacted: true, shouldContinue: this.host.agent.hasQueuedMessages() };
 		} catch (error) {
 			const aborted = controller?.signal.aborted || (error instanceof Error && error.name === "AbortError");
-			const errorMessage = error instanceof Error ? error.message : "compaction failed";
+			const message = error instanceof Error ? error.message : "compaction failed";
 			if (started) {
+				const errorMessage = aborted
+					? undefined
+					: reason === "overflow"
+						? `Context overflow recovery failed: ${message}`
+						: `Auto-compaction failed: ${message}`;
 				this.host.emit({
 					type: "compaction_end",
 					reason,
 					result: undefined,
 					aborted,
 					willRetry: false,
-					...(aborted
-						? {}
-						: {
-								errorMessage:
-									reason === "overflow"
-										? `Context overflow recovery failed: ${errorMessage}`
-										: `Auto-compaction failed: ${errorMessage}`,
-							}),
+					...(errorMessage ? { errorMessage } : {}),
+				});
+				await this.host.emitSessionCompactFailed({
+					reason,
+					errorMessage,
+					aborted,
+					willRetry: false,
+					fromExtension,
 				});
 			}
 			return { compacted: false, shouldContinue: false };

@@ -4,6 +4,11 @@ import { highlightCode, initTheme } from "../src/modes/interactive/theme/theme.t
 import { highlight, renderHighlightedHtml, supportsLanguage } from "../src/utils/syntax-highlight.ts";
 
 describe("syntax highlight renderer", () => {
+	it("loads supported languages through the static highlight.js import", () => {
+		expect(supportsLanguage("typescript")).toBe(true);
+		expect(supportsLanguage("ada")).toBe(true);
+	});
+
 	it("renders highlighted spans with the provided theme", () => {
 		const rendered = renderHighlightedHtml('<span class="hljs-keyword">const</span> value', {
 			keyword: (text) => `[keyword:${text}]`,

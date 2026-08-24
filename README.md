@@ -14,13 +14,14 @@ Run `pi` in a project directory. For authentication, uninstalling, and a first s
 
 ## Overview
 
-Pi provides interactive and one-shot coding workflows, persistent sessions and context compaction, native tool presentation, and customization through its public extension API. The installed package also includes bundled workflows, themes, and local-model support.
+Pi provides interactive and one-shot coding workflows, persistent sessions and context compaction, native tool presentation, and customization through its public extension API. Built-in execution uses Bash by default, with an optional native PowerShell tool on Windows. The installed package also includes bundled workflows, themes, and local-model support.
 
 See the [bundled features overview](docs/bundled/README.md) for the complete shipped-feature and extension catalog.
 
 ## Use and customize
 
-- [Using Pi](docs/usage.md) covers interactive commands, context files, and CLI usage.
+- [Using Pi](docs/usage.md) covers interactive commands, context files, CLI usage, and the `--` end-of-options delimiter.
+- [Windows setup](docs/windows.md) covers Git Bash and the optional PowerShell tool.
 - [Sessions](docs/sessions.md) and [Compaction](docs/compaction.md) cover saved work and context management.
 - [Extensions](docs/extensions.md), [Skills](docs/skills.md), [Prompt templates](docs/prompt-templates.md), [Themes](docs/themes.md), and [Pi packages](docs/packages.md) cover customization.
 - [SDK](docs/sdk.md), [JSON mode](docs/json.md), and [RPC mode](docs/rpc.md) cover programmatic use.

@@ -16,6 +16,7 @@ import { getCustomThemesDir, getThemesDir } from "../../../config.ts";
 import type { SourceInfo } from "../../../core/source-info.ts";
 import { closeWatcher, watchWithErrorHandler } from "../../../utils/fs-watch.ts";
 import { highlight, supportsLanguage } from "../../../utils/syntax-highlight.ts";
+import { stripBom } from "../../../utils/text.ts";
 
 // ============================================================================
 // Types & Schema
@@ -476,7 +477,7 @@ function getBuiltinThemes(): Record<string, ThemeJson> {
 		BUILTIN_THEMES = {};
 		for (const name of BUILTIN_THEME_NAMES) {
 			const themePath = path.join(themesDir, `${name}.json`);
-			BUILTIN_THEMES[name] = JSON.parse(fs.readFileSync(themePath, "utf-8")) as ThemeJson;
+			BUILTIN_THEMES[name] = JSON.parse(stripBom(fs.readFileSync(themePath, "utf-8"))) as ThemeJson;
 		}
 	}
 	return BUILTIN_THEMES;
@@ -597,7 +598,7 @@ function parseThemeJson(label: string, json: unknown): ThemeJson {
 function parseThemeJsonContent(label: string, content: string): ThemeJson {
 	let json: unknown;
 	try {
-		json = JSON.parse(content);
+		json = JSON.parse(stripBom(content));
 	} catch (error) {
 		throw new Error(`Failed to parse theme ${label}: ${error}`);
 	}

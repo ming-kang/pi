@@ -61,6 +61,7 @@ npm:pkg
 ```
 
 - Versioned specs are pinned and skipped by package updates (`pi update --extensions`, `pi update --all`).
+- Update checks only offer a registry version newer than the installed version; Pi does not downgrade a package when the registry reports an older version.
 - User installs go under `~/.pi/agent/npm/`.
 - Project installs go under `.pi/npm/`.
 - Set `npmCommand` in `settings.json` to pin npm package lookup and install operations to a specific wrapper command such as `mise` or `asdf`.
@@ -130,7 +131,7 @@ Add a `pi` manifest to `package.json` or use conventional directories. Include t
 }
 ```
 
-Paths are relative to the package root. Arrays support glob patterns and `!exclusions`.
+Paths are relative to the package root. Arrays support glob patterns and `!exclusions`. Positive manifest globs discover visible paths in lexical order. List dot-prefixed paths directly. If a glob would need to continue through a symlink, list the symlinked resource root directly.
 
 ### Gallery Metadata
 

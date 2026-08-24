@@ -347,6 +347,14 @@
 			]
 		},
 		{
+			"path": "src/utils/syntax-highlight.ts",
+			"category": "distribution",
+			"intent": "Loads highlight.js grammars through a static top-level import; repository source policy forbids upstream's deferred dynamic import",
+			"tests": [
+				"test/syntax-highlight.test.ts"
+			]
+		},
+		{
 			"path": "src/utils/version-check.ts",
 			"category": "distribution",
 			"intent": "Version checks query the npm registry instead of the upstream pi.dev API",

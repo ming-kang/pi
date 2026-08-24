@@ -53,6 +53,8 @@ Start Pi and configure the provider:
 
 Enter the router URL and optional API key. The default URL is `http://127.0.0.1:8080`.
 
+If you start the router with `--no-models-autoload`, `/login llama.cpp` only stores the connection. Run `/llama` to load a model, then `/model` to select the loaded model for the current session.
+
 Environment variables can configure the same values without `/login`:
 
 ```bash
@@ -71,8 +73,8 @@ Run:
 /llama
 ```
 
-- Select an unloaded model to load it.
-- Select a loaded model to unload it.
+- Select an unloaded model to load it. Pi shows router progress and waits for the model to reach the loaded state before refreshing the catalog.
+- Select a loaded or idle-sleeping model to unload it.
 - Select **Download model…**, search Hugging Face, then choose a repository and quantization. Exact `owner/repository[:quant]` values also work.
 - Press Escape during a load or download to confirm cancellation.
 
@@ -80,7 +82,7 @@ Hugging Face search uses `HF_TOKEN` when set, then checks `$HF_TOKEN_PATH`, `$HF
 
 If other models are loaded, Pi asks whether to unload them first or keep them loaded. Pi does not silently unload models and never deletes model files. The router may be shared with other clients, so `/llama` always displays the router's current state.
 
-Only loaded models appear in `/model`. After loading a model, run `/model` to select it for the current Pi session.
+Loaded models and models the router has put into its idle `sleeping` state appear in `/model`; selecting a sleeping model lets the router wake it for inference. Models that are unloaded or still loading do not appear. After loading a model, run `/model` to select it for the current Pi session.
 
 If the router disconnects, `/llama` shows **Retry** and **Close**. Retry reconnects and refreshes model state without replaying the interrupted operation.
 
@@ -94,6 +96,6 @@ curl http://127.0.0.1:8080/models
 ```
 
 - **No models in `/llama`:** Check `--models-dir`, the directory layout, and restart the router.
-- **Model missing from `/model`:** Load it with `/llama` first.
+- **Model missing from `/model`:** Load it with `/llama` first and wait for loading to finish. Idle-sleeping models remain selectable.
 - **Load fails or uses too much memory:** Lower `-c` or unload another model.
 - **Server is not in router mode:** Start it without `--model`, `-m`, or `-hf`.

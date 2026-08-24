@@ -6,7 +6,7 @@ LLMs have limited context windows. When conversations grow too long, Pi uses com
 
 Programmatic compaction helpers are exported by [`@astralyn/pi`](https://www.npmjs.com/package/@astralyn/pi): `compact`, `generateSummary`, `generateSummaryWithUsage`, `collectEntriesForBranchSummary`, `prepareBranchEntries`, `generateBranchSummary`, and `serializeConversation`.
 
-`CompactionEntry` and `BranchSummaryEntry` are public types; see [Session Format](session-format.md) for their persisted JSONL representation. For extension lifecycle events, see [compaction events](extensions.md#session_before_compact--session_compact) and [tree events](extensions.md#session_before_tree--session_tree).
+`CompactionEntry` and `BranchSummaryEntry` are public types; see [Session Format](session-format.md) for their persisted JSONL representation. For extension lifecycle events, see [compaction events](extensions.md#session_before_compact--session_compact--session_compact_failed) and [tree events](extensions.md#session_before_tree--session_tree).
 
 ## Overview
 
@@ -148,6 +148,8 @@ interface CompactionDetails {
 
 Extensions can store any JSON-serializable data in `details`. The default compaction tracks file operations, but custom extension implementations can use their own structure. Generated and extension-provided summaries store their LLM `usage` when available so session totals include summarization work.
 
+When `showCacheMissNotices` is enabled, the interactive transcript shows the tokens billed and estimated cost for each compaction or branch summary with recorded usage. These notices are derived from persisted summary usage, so they also appear when a session is resumed; they are not separate session entries.
+
 Pi uses an internal preparation step before `compact()`. For direct programmatic summarization, `generateSummary()` returns the summary text and `generateSummaryWithUsage()` returns `{ text, usage }`.
 
 ## Branch Summarization
@@ -275,7 +277,7 @@ Tool results are truncated to 2000 characters during serialization. Content beyo
 
 ## Custom Summarization via Extensions
 
-Extensions can intercept and customize both compaction and branch summarization. See [compaction events](extensions.md#session_before_compact--session_compact) and [tree events](extensions.md#session_before_tree--session_tree).
+Extensions can intercept and customize both compaction and branch summarization. See [compaction events](extensions.md#session_before_compact--session_compact--session_compact_failed) and [tree events](extensions.md#session_before_tree--session_tree).
 
 ### session_before_compact
 
@@ -354,6 +356,21 @@ pi.on("session_before_compact", async (event, ctx) => {
 ```
 
 See [custom-compaction.ts](../examples/extensions/custom-compaction.ts) for a complete example using a different model.
+
+### session_compact_failed
+
+Fired when manual or automatic compaction fails or is aborted. This is useful for telemetry extensions that need to pair `session_before_compact` attempts with terminal outcomes.
+
+```typescript
+pi.on("session_compact_failed", async (event, ctx) => {
+  const { reason, errorMessage, aborted, willRetry, fromExtension } = event;
+  // reason - "manual" (/compact), "threshold", or "overflow"
+  // errorMessage - present for non-abort failures
+  // aborted - true for cancelled/aborted compactions
+  // willRetry - whether the aborted turn would have retried after compaction
+  // fromExtension - whether extension-provided compaction content was being used
+});
+```
 
 ### session_before_tree
 

@@ -558,7 +558,7 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 
 Specify which built-in tools to enable:
 
-- Built-in tool names: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`
+- Built-in tool names: `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, `ls`
 - Default built-ins: `read`, `bash`, `edit`, `write`
 - `noTools: "all"` disables all tools
 - `noTools: "builtin"` disables default built-ins while keeping extension and custom tools enabled
@@ -577,6 +577,11 @@ const { session: readOnlySession } = await createAgentSession({
 // Pick specific tools
 const { session: selectedToolsSession } = await createAgentSession({
   tools: ["read", "bash", "grep"],
+});
+
+// Use PowerShell instead of Bash on Windows
+const { session } = await createAgentSession({
+  tools: ["read", "powershell", "edit", "write"],
 });
 
 // Disable one tool while keeping the rest available
@@ -1165,8 +1170,13 @@ SettingsManager
 // Tool factories
 createCodingTools
 createReadOnlyTools
-createReadTool, createBashTool, createEditTool, createWriteTool
+createReadTool, createBashTool, createPowerShellTool, createEditTool, createWriteTool
 createGrepTool, createFindTool, createLsTool
+createPowerShellToolDefinition, createLocalPowerShellOperations, getPowerShellConfig
+
+// PowerShell types
+PowerShellOperations, PowerShellSpawnContext, PowerShellSpawnHook
+PowerShellToolCallEvent, PowerShellToolDetails, PowerShellToolInput, PowerShellToolOptions
 
 // Types
 type CreateAgentSessionOptions

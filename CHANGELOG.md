@@ -4,6 +4,13 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Upstream sync: Pi v0.84.3
+
+- Added the optional Windows `powershell` tool and its Extension API/SDK types, `session_compact_failed` lifecycle events, compaction and branch-summary billing notices, and `toolcall_start` ID/name metadata for JSON and RPC clients.
+- Changed model and thinking selection to remain session-scoped unless explicitly saved, added per-model thinking defaults, and added OpenAI-compatible thinking-budget controls for vLLM, Qwen/SGLang, and llama.cpp. Updated inherited model catalogs and compatibility metadata for xAI, Z.AI, Qwen Token Plan, DeepSeek, Google, Bedrock, Azure OpenAI, GitHub Copilot, Kimi, and related providers.
+- Updated Windows and WSL keybinding defaults, nested skill discovery, deterministic package glob behavior, non-downgrading npm package update checks, and llama.cpp loading/sleeping model handling.
+- Fixed dash-prefixed prompts through the `--` delimiter, UTF-8 BOM parsing in user configuration and frontmatter, compaction usage accounting and threshold checks, and related provider/model compatibility issues.
+
 ## [0.84.9] - 2026-08-23
 
 ### Changed
@@ -380,7 +387,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 - **Constrained tool sampling** — Tools can prefer or require strict JSON Schema sampling or use OpenAI Lark/regex grammars, with model capability metadata preventing unsupported requests.
 - **OpenRouter and Kimi Code sign-in** — Use `/login` to authorize OpenRouter or a Kimi Code subscription without manually configuring API keys. See [OpenRouter](docs/providers.md#openrouter).
-- **Session-aware, streaming bash integrations** — Bash tools receive current session/model metadata, while direct RPC bash commands stream correlated output. See [Bash Tool Session Environment](docs/environment-variables.md#bash-tool-session-environment) and [RPC bash events](docs/rpc.md#bash_execution_update).
+- **Session-aware, streaming bash integrations** — Bash tools receive current session/model metadata, while direct RPC bash commands stream correlated output. See [Bash Tool Session Environment](docs/environment-variables.md#shell-tool-session-environment) and [RPC bash events](docs/rpc.md#bash_execution_update).
 
 ### Added
 
@@ -389,7 +396,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - Added inherited `supportsGrammarTools` and `supportsStrictTools` compatibility flags, expanded `supportsStrictMode` coverage, and generated model capability metadata to gate constrained sampling.
 - Added inherited Kimi Code subscription OAuth login for the Kimi For Coding provider, including device authorization and automatic token refresh ([#6935](https://github.com/earendil-works/pi/pull/6935) by [@zaycruz](https://github.com/zaycruz)).
 - Added inherited OpenRouter OAuth PKCE login through `/login`, minting a user-controlled API key. See [OpenRouter](docs/providers.md#openrouter) ([#6927](https://github.com/earendil-works/pi/pull/6927) by [@rsaryev](https://github.com/rsaryev)).
-- Exposed `PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL` to commands run by built-in and factory-created bash tools. See [Bash Tool Session Environment](docs/environment-variables.md#bash-tool-session-environment).
+- Exposed `PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL` to commands run by built-in and factory-created bash tools. See [Bash Tool Session Environment](docs/environment-variables.md#shell-tool-session-environment).
 - Added streaming `bash_execution_update` events for direct RPC bash commands, correlated with request IDs. See [RPC bash events](docs/rpc.md#bash_execution_update) ([#6971](https://github.com/earendil-works/pi/pull/6971) by [@ananthakumaran](https://github.com/ananthakumaran)).
 
 ### Changed

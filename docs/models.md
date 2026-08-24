@@ -2,7 +2,7 @@
 
 Use `~/.pi/agent/models.json` to add static providers and models, such as Ollama, vLLM, LM Studio, and compatible proxies. For a provider that needs OAuth, dynamic discovery, request rewriting, or a protocol Pi AI does not implement, use an [extension](custom-provider.md) instead.
 
-Pi reads this file at startup and on a model refresh, including when you open `/model`; restart is not required. It is a configuration overlay, not a discovered catalog stored in `models-store.json`.
+Pi reads this file at startup and on a model refresh, including when you open `/model`; restart is not required. It accepts a leading UTF-8 byte-order mark (BOM). It is a configuration overlay, not a discovered catalog stored in `models-store.json`.
 
 ## Table of Contents
 
@@ -290,6 +290,9 @@ When `cost` is supplied on a `models` entry, it must contain all four base rates
 ```
 
 Only OpenAI-compatible APIs apply it (`openai-completions`, `openai-responses`, `azure-openai-responses`); other APIs ignore it. Keys override pi's named request fields (for example a `temperature` key here beats the request-level temperature), so prefer it as the single source of sampling truth for a model. In `modelOverrides`, `samplingParams` merges per key with the base model's value.
+
+A constant thinking-token cap can go here too, but it will not follow `thinkingBudgets` or leave room for the answer. Prefer `compat.thinkingTokenBudgetField` (or the `supportsThinkingTokenBudget` alias) for that.
+
 ### Thinking Level Map
 
 `thinkingLevelMap` uses these Pi levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. It only affects a model with `reasoning: true`; a non-reasoning model exposes `off` only.
@@ -473,8 +476,10 @@ For `api: "openai-completions"`, Pi auto-detects many defaults from the provider
 | `requiresThinkingAsText` | Replays thinking blocks as text delimited by `<thinking>`. Default: URL-detected. |
 | `requiresReasoningContentOnAssistantMessages` | Includes empty `reasoning_content` on replayed assistant messages when reasoning is enabled. Default: URL-detected. |
 | `thinkingFormat` | One of `openai`, `openrouter`, `deepseek`, `together`, `zai`, `qwen`, `chat-template`, `qwen-chat-template`, `string-thinking`, or `ant-ling`. Default: `openai` unless URL detection selects a known provider format. |
-| `chatTemplateKwargs` | `chat_template_kwargs` for `thinkingFormat: "chat-template"`. Values may be strings, numbers, booleans, `null`, or `{ "$var": "thinking.enabled" | "thinking.effort", "omitWhenOff"?: true }`. |
-| `chatTemplateArgs` | `chat_template_args` for `thinkingFormat: "baseten"`. Values may be strings, numbers, booleans, `null`, or `{ "$var": "thinking.enabled" | "thinking.effort", "omitWhenOff"?: true }`. |
+| `chatTemplateKwargs` | `chat_template_kwargs` for `thinkingFormat: "chat-template"`. Values may be strings, numbers, booleans, `null`, or `{ "$var": "thinking.enabled" | "thinking.effort" | "thinking.budget", "omitWhenOff"?: true }`. |
+| `chatTemplateArgs` | `chat_template_args` for `thinkingFormat: "baseten"`. Values may be strings, numbers, booleans, `null`, or `{ "$var": "thinking.enabled" | "thinking.effort" | "thinking.budget", "omitWhenOff"?: true }`. |
+| `thinkingTokenBudgetField` | Top-level request field used to cap reasoning tokens from `thinkingBudgets`, clamped so at least 1024 tokens remain for the answer. Use `thinking_token_budget` for vLLM, `thinking_budget` for Qwen/DashScope/SGLang, or `thinking_budget_tokens` for llama.cpp. Off by default. |
+| `supportsThinkingTokenBudget` | Alias for `thinkingTokenBudgetField: "thinking_token_budget"` (vLLM). Prefer `thinkingTokenBudgetField`. Default: `false`. |
 | `zaiToolStream` | Sends top-level `tool_stream: true` when tools are present. Default: `false`; use only for Z.AI-compatible endpoints that require it. |
 | `cacheControlFormat` | `anthropic` applies Anthropic-style `cache_control` markers to the system prompt, last tool definition, and final text content when caching is enabled. |
 | `sendSessionAffinityHeaders` | Sends session-affinity headers from the session ID when caching is enabled. Default: `false`. |
@@ -487,6 +492,8 @@ For `api: "openai-completions"`, Pi auto-detects many defaults from the provider
 | `vercelGatewayRouting` | Vercel AI Gateway routing preferences (`only`, `order`) sent as `providerOptions.gateway`. |
 
 Thinking formats use these request shapes: `openai` sends `reasoning_effort`; `openrouter` sends `reasoning: { effort }`; `deepseek` sends `thinking: { type }` and, when enabled, `reasoning_effort`; `together` sends `reasoning: { enabled }` and optionally `reasoning_effort`; `zai` sends `thinking: { type }`; `qwen` sends `enable_thinking`; `qwen-chat-template` sends `chat_template_kwargs.enable_thinking` and `preserve_thinking`; `string-thinking` sends top-level `thinking` as a string; and `ant-ling` sends `reasoning: { effort }` only for a non-null mapped effort. `chat-template` sends the configured `chatTemplateKwargs`.
+
+`thinkingTokenBudgetField` is independent of `thinkingFormat`. Do not enable it on the generated Qwen catalog: those models already send `reasoning_effort`, and DashScope rejects `thinking_budget` together with `reasoning_effort`.
 
 Use `qwen-chat-template` for local Qwen-compatible servers that need its fixed chat-template kwargs. Use `chat-template` for vLLM or Hugging Face templates that need custom kwargs, for example:
 
