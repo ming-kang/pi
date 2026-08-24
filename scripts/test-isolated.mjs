@@ -2,11 +2,24 @@
 
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import spawn from "cross-spawn";
 
 const root = resolve(import.meta.dirname, "..");
 const isWindows = process.platform === "win32";
+
+function getIsolatedPath() {
+	const path = process.env.PATH;
+	if (!isWindows || !path) return path;
+
+	// Microsoft Store app aliases are bound to the real USERPROFILE and fail
+	// with EPERM after this runner replaces it. Keep native Windows coverage by
+	// falling back to system executables such as Windows PowerShell instead.
+	return path
+		.split(delimiter)
+		.filter((entry) => !entry.replaceAll("/", "\\").toLowerCase().includes("\\windowsapps"))
+		.join(delimiter);
+}
 
 // Isolate user resources, credentials, temporary files, and tool configuration.
 const testRoot = mkdtempSync(join(tmpdir(), "pi-test-"));
@@ -23,7 +36,7 @@ if (!isWindows) chmodSync(askpass, 0o755);
 
 // Start from an empty environment and allow only required platform and test settings.
 const environment = {
-	PATH: process.env.PATH,
+	PATH: getIsolatedPath(),
 	PWD: process.cwd(),
 	HOME: join(testRoot, "home"),
 	USERPROFILE: join(testRoot, "home"),
