@@ -105,14 +105,6 @@ export function resolvePath(input: string, baseDir: string = process.cwd(), opti
 	return isAbsolute(normalized) ? nodeResolvePath(normalized) : nodeResolvePath(normalizedBaseDir, normalized);
 }
 
-/**
- * Encode a cwd into the filesystem-safe directory name shared by session
- * storage and session migrations. Callers decide whether to resolve first.
- */
-export function cwdToSafeDirName(cwd: string): string {
-	return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
-}
-
 export function getCwdRelativePath(filePath: string, cwd: string): string | undefined {
 	const resolvedCwd = resolvePath(cwd);
 	const resolvedPath = resolvePath(filePath, resolvedCwd);

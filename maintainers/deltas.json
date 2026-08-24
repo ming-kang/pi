@@ -93,7 +93,7 @@
 		{
 			"path": "src/core/extensions/index.ts",
 			"category": "extension-support",
-			"intent": "Re-exports CompactionTiming and stale-extension-context helpers"
+			"intent": "Re-exports CompactionTiming, ShellSettings, and stale-extension-context helpers"
 		},
 		{
 			"path": "src/core/extensions/loader.ts",
@@ -106,7 +106,7 @@
 		{
 			"path": "src/core/extensions/runner.ts",
 			"category": "extension-support",
-			"intent": "Exposes the session's canonical ModelRuntime through ExtensionContext for nested SDK sessions",
+			"intent": "Exposes canonical ModelRuntime and host shell settings through ExtensionContext for bundled nested sessions and background tasks",
 			"tests": [
 				"test/extensions-runner.test.ts"
 			]
@@ -114,12 +114,12 @@
 		{
 			"path": "src/core/extensions/types.ts",
 			"category": "extension-support",
-			"intent": "toolGroup/toolGroupSummary/result render context, canonical ModelRuntime access, CompactionTiming, stale-context helpers"
+			"intent": "Tool grouping/result render context, canonical ModelRuntime, CompactionTiming, stale-context helpers, and host ShellSettings access"
 		},
 		{
 			"path": "src/core/keybindings.ts",
 			"category": "ui",
-			"intent": "Adds the configurable app.list.toggle binding for list selection"
+			"intent": "Adds configurable app.list.toggle and app.backgroundTasks.kill bindings"
 		},
 		{
 			"path": "src/core/model-registry.ts",
@@ -138,14 +138,6 @@
 			]
 		},
 		{
-			"path": "src/core/session-manager.ts",
-			"category": "bugfix",
-			"intent": "Uses the shared cwdToSafeDirName helper instead of a local duplicate",
-			"tests": [
-				"test/paths.test.ts"
-			]
-		},
-		{
 			"path": "src/core/settings-manager.ts",
 			"category": "distribution",
 			"intent": "Default tuiMode is fullscreen; keep when syncing upstream"
@@ -153,7 +145,7 @@
 		{
 			"path": "src/core/tools/bash.ts",
 			"category": "ui",
-			"intent": "Syntax-highlighted collapsed command line and shared hints; calls rewriteCmdNulRedirects before spawning",
+			"intent": "Syntax-highlighted collapsed command line, shared hints, Windows nul rewriting, and execution helpers consumed by the background extension",
 			"tests": [
 				"test/bash-tool-rendering.test.ts",
 				"test/bash-nul-redirect.test.ts"
@@ -219,20 +211,12 @@
 		{
 			"path": "src/extensions/index.ts",
 			"category": "distribution",
-			"intent": "Registers the bundled hidden extensions (llama, deepwiki, question, router, statusline, subagent, todo)"
+			"intent": "Registers the bundled hidden extensions (llama, background, deepwiki, question, router, statusline, subagent, todo)"
 		},
 		{
 			"path": "src/index.ts",
 			"category": "extension-support",
 			"intent": "Re-exports the ShellSettings type for the fork's ctx.getShellSettings() extension API"
-		},
-		{
-			"path": "src/migrations.ts",
-			"category": "bugfix",
-			"intent": "Uses the shared cwdToSafeDirName helper instead of a local duplicate",
-			"tests": [
-				"test/paths.test.ts"
-			]
 		},
 		{
 			"path": "src/modes/interactive/components/armin.ts",
@@ -262,11 +246,6 @@
 			"tests": [
 				"test/extension-selector.test.ts"
 			]
-		},
-		{
-			"path": "src/modes/interactive/components/index.ts",
-			"category": "ui",
-			"intent": "Exports ToolGroupComponent"
 		},
 		{
 			"path": "src/modes/interactive/components/keybinding-hints.ts",
@@ -328,14 +307,6 @@
 			"intent": "Nested color restoration in fg/bg and bundled ice-cream themes",
 			"tests": [
 				"test/theme-picker.test.ts"
-			]
-		},
-		{
-			"path": "src/utils/paths.ts",
-			"category": "bugfix",
-			"intent": "Shared cwdToSafeDirName encoder for session-directory names",
-			"tests": [
-				"test/paths.test.ts"
 			]
 		},
 		{

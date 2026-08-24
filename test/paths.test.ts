@@ -5,7 +5,6 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	canonicalizePath,
-	cwdToSafeDirName,
 	getCwdRelativePath,
 	isLocalPath,
 	normalizePath,
@@ -197,15 +196,5 @@ describe("isLocalPath", () => {
 
 	it("returns false for https: protocol", () => {
 		expect(isLocalPath("https://example.com")).toBe(false);
-	});
-});
-
-describe("cwdToSafeDirName", () => {
-	it("encodes windows paths with drive colons", () => {
-		expect(cwdToSafeDirName("C:\\Users\\me\\proj")).toBe("--C--Users-me-proj--");
-	});
-
-	it("encodes posix paths, dropping the leading slash", () => {
-		expect(cwdToSafeDirName("/home/me/proj")).toBe("--home-me-proj--");
 	});
 });
