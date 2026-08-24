@@ -1,8 +1,11 @@
+import { Compile } from "typebox/compile";
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ToolDefinition } from "../src/core/extensions/types.ts";
 import subagent from "../src/extensions/subagent/index.ts";
 import { SubagentParamsSchema, TaskSchema } from "../src/extensions/subagent/schema.ts";
 import type { SubagentDetails, SubagentExecutionResult } from "../src/extensions/subagent/types.ts";
+
+const validateParams = Compile(SubagentParamsSchema);
 
 const runSdkTaskMock = vi.hoisted(() => vi.fn());
 vi.mock("../src/extensions/subagent/sdk-runner.ts", () => ({
@@ -226,6 +229,7 @@ describe("subagent extension registration", () => {
 		expect(taskSchema.properties).not.toHaveProperty("description");
 		expect(taskSchema.properties.prompt?.type).toBe("string");
 		expect(taskSchema.properties.prompt?.minLength).toBe(1);
+		expect(validateParams.Check({ tasks: [{ agent: null, prompt: "Find it.", cwd: null }] })).toBe(true);
 		const agentSchema = taskSchema.properties.agent as { description?: string };
 		expect(agentSchema.description).toContain("null or omit for explorer (the default)");
 		// The agent enum is exactly the two static profiles.

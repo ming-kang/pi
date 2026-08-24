@@ -81,7 +81,7 @@ export interface BgTask {
 	outputTruncated: boolean;
 	error?: string;
 	timeoutSeconds?: number;
-	/** Delivery was claimed: onNotify returned without throwing, or a waiter took it over. */
+	/** Delivery was claimed by a notification attempt, or a waiter took it over. */
 	notified: boolean;
 }
 
@@ -215,7 +215,7 @@ export interface BackgroundRegistryOptions {
 	maxOutputBytes?: number;
 	maxRunningTasks?: number;
 	notifyTailBytes?: number;
-	/** Called once per finished task; a synchronous throw rolls back `notified`. */
+	/** Called at most once for an unclaimed finished task; synchronous throws do not prevent settlement. */
 	onNotify: (notification: BgTaskNotification) => void;
 	/** Called at most once per task when its output stalls on an interactive-looking prompt. */
 	onStall?: (notification: BgStallNotification) => void;
@@ -355,10 +355,6 @@ export class BackgroundTaskRegistry {
 		void this.run(task, runtime, input.env);
 		this.onChange();
 		return task;
-	}
-
-	getTask(id: string): BgTask | undefined {
-		return this.tasks.get(id);
 	}
 
 	/** Running tasks first (oldest first), then finished tasks (newest first). */
@@ -686,9 +682,8 @@ export class BackgroundTaskRegistry {
 		try {
 			this.onNotify({ task, tailText, tailBytes, totalBytes, tailTruncated, tailStartsMidLine, tailError });
 		} catch {
-			// The send failed synchronously (e.g. stale extension runtime after a
-			// session replacement); do not pretend the notification was delivered.
-			task.notified = false;
+			// Notification failures must not undo task completion or prevent settlement;
+			// there is no retry path, so the delivery claim remains recorded.
 		}
 	}
 }

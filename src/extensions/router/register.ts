@@ -11,10 +11,6 @@ import type { RelayConfig, RouterFile } from "./types.ts";
 /** Provider ids currently registered by this extension in the process. */
 const registeredIds = new Set<string>();
 
-export function getRegisteredRelayIds(): ReadonlySet<string> {
-	return registeredIds;
-}
-
 export function toProviderConfig(relay: RelayConfig) {
 	return {
 		name: relay.id,

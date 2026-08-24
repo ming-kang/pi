@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import { modelId, parseModelSpec } from "../model-selection.ts";
+import { compareModels } from "./choices.ts";
 
 const MAX_VISIBLE_MODELS = 10;
 
@@ -41,11 +42,6 @@ interface ModelChoiceItem extends ProfileModelChoice {
 	provider: string;
 	id: string;
 	name: string | undefined;
-}
-
-function compareModels(left: Model<Api>, right: Model<Api>): number {
-	const provider = left.provider.localeCompare(right.provider);
-	return provider !== 0 ? provider : left.id.localeCompare(right.id);
 }
 
 function modelSearchText(item: ModelChoiceItem): string {
@@ -282,14 +278,6 @@ export class ProfileModelListComponent extends Container implements Focusable {
 		const selected = this.filteredChoices[this.selectedIndex];
 		if (!selected) return undefined;
 		return { modelId: selected.modelId, model: selected.model, unavailable: selected.unavailable };
-	}
-
-	getScope(): ModelScope {
-		return this.scope;
-	}
-
-	getSearchValue(): string {
-		return this.searchInput.getValue();
 	}
 
 	updateModels(models: readonly Model<Api>[]): void {

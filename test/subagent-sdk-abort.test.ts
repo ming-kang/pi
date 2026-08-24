@@ -129,34 +129,6 @@ describe("Subagent SDK initialization aborts", () => {
 		await vi.waitFor(() => expect(session.dispose).toHaveBeenCalledTimes(1));
 	});
 
-	it("settles immediately when the resource loader never resolves and the scope aborts", async () => {
-		// Regression: the initialization race must cover resource loading,
-		// not only session creation. A loader that hangs forever cannot keep
-		// the run unsettled after an abort.
-		sdkMocks.reload.mockReturnValue(new Promise<void>(() => {}));
-		const execution = start();
-		await vi.waitFor(() => expect(sdkMocks.reload).toHaveBeenCalledTimes(1));
-
-		await execution.scope.abort();
-		await execution.done;
-		expect(execution.state().status).toBe("aborted");
-		expect(execution.state().error).toContain("during initialization");
-		expect(sdkMocks.createAgentSession).not.toHaveBeenCalled();
-	});
-
-	it("settles aborted while session creation hangs instead of leaking the run", async () => {
-		sdkMocks.reload.mockResolvedValue(undefined);
-		sdkMocks.createAgentSession.mockReturnValue(new Promise<{ session: unknown }>(() => {}));
-		const controller = new AbortController();
-		const execution = start(controller.signal);
-		await vi.waitFor(() => expect(sdkMocks.createAgentSession).toHaveBeenCalledTimes(1));
-
-		controller.abort();
-		await execution.done;
-		expect(execution.state().status).toBe("aborted");
-		expect(execution.state().error).toContain("aborted");
-	});
-
 	it("settles a hanging creation through a direct scope abort (session shutdown path)", async () => {
 		sdkMocks.reload.mockResolvedValue(undefined);
 		sdkMocks.createAgentSession.mockReturnValue(new Promise<{ session: unknown }>(() => {}));

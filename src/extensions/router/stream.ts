@@ -19,7 +19,7 @@ import {
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai/compat";
 
-import { DEFAULTS, formatError, ROUTER_API } from "./constants.ts";
+import { DEFAULTS, formatError } from "./constants.ts";
 
 const responsesApi = openAIResponsesApi();
 
@@ -302,15 +302,4 @@ function stripLeadingSystemRoles(input: unknown): unknown {
 function clampCacheKey(sessionId: string | undefined): string | undefined {
 	if (!sessionId) return undefined;
 	return sessionId.length <= 64 ? sessionId : sessionId.slice(0, 64);
-}
-
-export function resolveResponsesUrl(baseUrl: string): string {
-	const normalized = baseUrl.trim().replace(/\/+$/, "");
-	if (!normalized) throw new Error("Model baseUrl is empty.");
-	if (normalized.endsWith("/responses")) return normalized;
-	return `${normalized}/responses`;
-}
-
-export function isRouterApi(api: string): boolean {
-	return api === ROUTER_API;
 }

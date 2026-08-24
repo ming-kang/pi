@@ -7,7 +7,7 @@ import {
 	RETRY_ERROR_TEXT_LIMIT,
 	TASK_OUTPUT_LIMIT,
 } from "../src/extensions/subagent/constants.ts";
-import { boundText, tailText } from "../src/extensions/subagent/text.ts";
+import { boundText } from "../src/extensions/subagent/text.ts";
 import type { SubagentDetails, SubagentUsage } from "../src/extensions/subagent/types.ts";
 
 describe("subagent output bounds", () => {
@@ -15,25 +15,6 @@ describe("subagent output bounds", () => {
 		for (const limit of [1, 8, 32, 64, 256]) {
 			const bounded = boundText("界".repeat(1_000), limit);
 			expect(Buffer.byteLength(bounded, "utf8")).toBeLessThanOrEqual(limit);
-		}
-	});
-
-	it("keeps tail truncation Unicode-safe and inside the total UTF-8 budget", () => {
-		const input = `😀${"é".repeat(23)}${"a".repeat(975)}`;
-		const bounded = tailText(input, 1_024);
-		expect(Buffer.byteLength(bounded, "utf8")).toBeLessThanOrEqual(1_024);
-		expect(bounded).toContain("[Earlier output omitted.]\n");
-		expect(
-			Array.from(bounded).some((character) => {
-				const codePoint = character.codePointAt(0) ?? 0;
-				return codePoint >= 0xd800 && codePoint <= 0xdfff;
-			}),
-		).toBe(false);
-
-		const latest = tailText(`${"old ".repeat(100)}😀最终`, 64);
-		expect(latest).toMatch(/😀最终$/u);
-		for (const limit of [0, 1, 8, 24, 25, 26, 32]) {
-			expect(Buffer.byteLength(tailText("界".repeat(1_000), limit), "utf8")).toBeLessThanOrEqual(limit);
 		}
 	});
 

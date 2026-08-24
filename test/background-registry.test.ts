@@ -216,7 +216,7 @@ describe("BackgroundTaskRegistry", () => {
 		expect(onNotify).toHaveBeenCalledTimes(1);
 	});
 
-	it("rolls back the notified flag when onNotify throws", async () => {
+	it("preserves completion and settlement when onNotify throws", async () => {
 		const { registry, calls, onNotify } = makeRegistry();
 		onNotify.mockImplementationOnce(() => {
 			throw new Error("stale runtime");
@@ -225,7 +225,7 @@ describe("BackgroundTaskRegistry", () => {
 		calls[0]?.finish(0);
 		const finished = await registry.waitForTask(task.id);
 		expect(finished.status).toBe("completed");
-		expect(finished.notified).toBe(false);
+		expect(onNotify).toHaveBeenCalledOnce();
 	});
 
 	it("shutdown mutes notifications, kills running tasks, and refuses new ones", async () => {
@@ -327,12 +327,6 @@ describe("BackgroundTaskRegistry", () => {
 		expect(notification?.totalBytes).toBe(20);
 		expect(notification?.tailTruncated).toBe(true);
 		expect(notification?.tailStartsMidLine).toBe(true);
-	});
-
-	it("stores the model-provided description on the task", () => {
-		const { registry } = makeRegistry();
-		const task = registry.startTask({ command: "npm run dev", cwd: "/w", description: "dev server" });
-		expect(task.description).toBe("dev server");
 	});
 
 	it("claim: a registered waiter delivers the completion and suppresses the followUp", async () => {

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import {
 	normalizeRepository,
 	runDiffUpstream,
+	validateDeltas,
 	validateManifest,
 } from "../scripts/diff-upstream.mjs";
 
@@ -16,6 +17,13 @@ const runtimeDependencies = {
 };
 
 const temporaryDirectories = [];
+
+function createTemporaryDirectory(prefix = "pi-diff-test") {
+	const root = join(tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+	temporaryDirectories.push(root);
+	mkdirSync(root, { recursive: true });
+	return root;
+}
 
 function git(root, ...args) {
 	return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
@@ -37,9 +45,7 @@ function baseManifest() {
 }
 
 function createTestRepo({ sourceDependencies = runtimeDependencies } = {}) {
-	const root = join(tmpdir(), `pi-diff-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-	temporaryDirectories.push(root);
-	mkdirSync(root, { recursive: true });
+	const root = createTemporaryDirectory();
 
 	git(root, "init");
 	git(root, "config", "user.email", "test@example.invalid");
@@ -109,6 +115,12 @@ function invoke(root, args = []) {
 		stderr: { write: (t) => (stderr += t) },
 	});
 	return { code, stdout, stderr };
+}
+
+function deltaValidationFailures(entries, root = ".") {
+	const failures = [];
+	validateDeltas({ deltas: entries }, root, failures);
+	return failures.join("\n");
 }
 
 afterEach(() => {
@@ -209,13 +221,17 @@ describe("diff-upstream worktree collection and CLI execution", () => {
 		writeJson(join(repo.root, "maintainers", "deltas.json"), {
 			deltas: [
 				{ path: "drop.txt", category: "distribution", intent: "Dropped file" },
-				{ path: "mod.txt", category: "ui", intent: "Modified file" },
+				{ path: "mod.txt", category: "windows-compat", intent: "Rewrites the file" },
 			],
 		});
 		const checkResult = invoke(repo.root, ["--check"]);
 		expect(checkResult.code).toBe(0);
 		expect(checkResult.stdout).toContain("Verified 4 worktree differences against v1.2.3");
 		expect(checkResult.stdout).toContain("2 registered deltas");
+
+		const annotatedReport = invoke(repo.root);
+		expect(annotatedReport.code).toBe(0);
+		expect(annotatedReport.stdout).toContain("M mod.txt  [windows-compat] Rewrites the file");
 	});
 
 	test("verifies tag and tree integrity and falls back gracefully if tag is missing locally", () => {
@@ -235,18 +251,18 @@ describe("diff-upstream worktree collection and CLI execution", () => {
 	});
 
 	test("rejects invalid or unknown CLI flags with exit code 2", () => {
-		const repo = createTestRepo();
-		const result = invoke(repo.root, ["--invalid"]);
+		const fakeRoot = join(tmpdir(), "pi-diff-cli-argument-parsing-only");
+		const result = invoke(fakeRoot, ["--invalid"]);
 		expect(result.code).toBe(2);
 		expect(result.stderr).toContain("Usage:");
 
-		const missingValue = invoke(repo.root, ["--target"]);
+		const missingValue = invoke(fakeRoot, ["--target"]);
 		expect(missingValue.code).toBe(2);
 
-		const combined = invoke(repo.root, ["--check", "--target", "v1.2.4"]);
+		const combined = invoke(fakeRoot, ["--check", "--target", "v1.2.4"]);
 		expect(combined.code).toBe(2);
 
-		const badTag = invoke(repo.root, ["--target", "nope"]);
+		const badTag = invoke(fakeRoot, ["--target", "nope"]);
 		expect(badTag.code).toBe(2);
 		expect(badTag.stderr).toContain("exact stable release tag");
 	});
@@ -292,25 +308,6 @@ describe("diff-upstream worktree collection and CLI execution", () => {
 });
 
 describe("diff-upstream deviation ledger", () => {
-	test("annotates registered deviations and supports directory-prefix entries", () => {
-		const repo = createTestRepo();
-		writeFileSync(join(repo.root, "mod.txt"), "modified content\n");
-		mkdirSync(join(repo.root, "docs"));
-		writeFileSync(join(repo.root, "docs", "extra.md"), "doc\n");
-		git(repo.root, "add", "-A");
-		git(repo.root, "commit", "-m", "local docs baseline");
-		// Rewrite an upstream-tracked path inside the prefix by re-creating the
-		// baseline diff: docs/extra.md is an addition, so only mod.txt is M.
-		writeJson(join(repo.root, "maintainers", "deltas.json"), {
-			deltas: [{ path: "mod.txt", category: "windows-compat", intent: "Rewrites the file" }],
-		});
-
-		const report = invoke(repo.root);
-		expect(report.code).toBe(0);
-		expect(report.stdout).toContain("M mod.txt  [windows-compat] Rewrites the file");
-		expect(report.stdout).toContain("1 registered deltas");
-	});
-
 	test("prefix entries cover whole directories and stale entries fail the check", () => {
 		const repo = createTestRepo();
 		// No deviation matches the prefix, so the entry is stale.
@@ -351,43 +348,36 @@ describe("diff-upstream deviation ledger", () => {
 	});
 
 	test("rejects schema violations: unknown category, missing intent, bad tests, unknown keys, duplicates, unsorted", () => {
-		const repo = createTestRepo();
-		writeFileSync(join(repo.root, "mod.txt"), "changed\n");
-
+		const pathCheckRoot = createTemporaryDirectory("pi-delta-schema-test");
 		const cases = [
 			[{ path: "mod.txt", category: "nope", intent: "x" }, "category must be one of"],
 			[{ path: "mod.txt", category: "ui", intent: "" }, "intent must be a non-empty string"],
-			[{ path: "mod.txt", category: "ui", intent: "x", tests: ["test/missing.test.ts"] }, "does not exist"],
+			[
+				{ path: "mod.txt", category: "ui", intent: "x", tests: ["test/missing.test.ts"] },
+				"does not exist",
+				pathCheckRoot,
+			],
 			[{ path: "mod.txt", category: "ui", intent: "x", tests: "nope" }, "tests must be an array"],
 			[{ path: "mod.txt", category: "ui", intent: "x", status: "verified" }, 'unexpected key "status"'],
 			[{ path: "mod.txt", category: "ui", intent: "x", extra: 1 }, 'unexpected key "extra"'],
 		];
-		for (const [entry, expected] of cases) {
-			writeJson(join(repo.root, "maintainers", "deltas.json"), { deltas: [entry] });
-			const result = invoke(repo.root, ["--check"]);
-			expect(result.code).toBe(1);
-			expect(result.stderr).toContain(expected);
+		for (const [entry, expected, root] of cases) {
+			expect(deltaValidationFailures([entry], root)).toContain(expected);
 		}
 
-		writeJson(join(repo.root, "maintainers", "deltas.json"), {
-			deltas: [
+		expect(
+			deltaValidationFailures([
 				{ path: "mod.txt", category: "ui", intent: "x" },
 				{ path: "mod.txt", category: "ui", intent: "x" },
-			],
-		});
-		const duplicate = invoke(repo.root, ["--check"]);
-		expect(duplicate.code).toBe(1);
-		expect(duplicate.stderr).toContain("duplicate path");
+			]),
+		).toContain("duplicate path");
 
-		writeJson(join(repo.root, "maintainers", "deltas.json"), {
-			deltas: [
+		expect(
+			deltaValidationFailures([
 				{ path: "zzz.txt", category: "ui", intent: "x" },
 				{ path: "mod.txt", category: "ui", intent: "x" },
-			],
-		});
-		const unsorted = invoke(repo.root, ["--check"]);
-		expect(unsorted.code).toBe(1);
-		expect(unsorted.stderr).toContain("sorted by path");
+			]),
+		).toContain("sorted by path");
 	});
 
 	test("missing ledger keeps the report usable but fails the check", () => {

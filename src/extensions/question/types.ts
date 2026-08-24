@@ -67,6 +67,6 @@ export interface DialogResult {
 
 export type DisplayOption =
 	| (QuestionOption & { kind: "option"; optionIndex: number })
-	| { kind: "other"; label: string; isOther: true };
+	| { kind: "other"; label: string };
 
-export const OTHER_OPTION: DisplayOption = { kind: "other", label: "Type something", isOther: true };
+export const OTHER_OPTION: DisplayOption = { kind: "other", label: "Type something" };

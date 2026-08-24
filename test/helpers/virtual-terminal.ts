@@ -11,7 +11,6 @@ const XtermTerminal = xterm.Terminal;
 export class VirtualTerminal implements Terminal {
 	private xterm: XtermTerminalType;
 	private inputHandler?: (data: string) => void;
-	private resizeHandler?: () => void;
 	private _columns: number;
 	private _rows: number;
 
@@ -29,9 +28,8 @@ export class VirtualTerminal implements Terminal {
 		});
 	}
 
-	start(onInput: (data: string) => void, onResize: () => void): void {
+	start(onInput: (data: string) => void, _onResize: () => void): void {
 		this.inputHandler = onInput;
-		this.resizeHandler = onResize;
 		// Enable bracketed paste mode for consistency with ProcessTerminal
 		this.xterm.write("\x1b[?2004h");
 	}
@@ -44,7 +42,6 @@ export class VirtualTerminal implements Terminal {
 		// Disable bracketed paste mode
 		this.xterm.write("\x1b[?2004l");
 		this.inputHandler = undefined;
-		this.resizeHandler = undefined;
 	}
 
 	write(data: string): void {
@@ -114,18 +111,6 @@ export class VirtualTerminal implements Terminal {
 	}
 
 	/**
-	 * Resize the terminal
-	 */
-	resize(columns: number, rows: number): void {
-		this._columns = columns;
-		this._rows = rows;
-		this.xterm.resize(columns, rows);
-		if (this.resizeHandler) {
-			this.resizeHandler();
-		}
-	}
-
-	/**
 	 * Wait for all pending writes to complete. Viewport and scroll buffer will be updated.
 	 */
 	async flush(): Promise<void> {
@@ -162,51 +147,6 @@ export class VirtualTerminal implements Terminal {
 		}
 
 		return lines;
-	}
-
-	/**
-	 * Get the entire scroll buffer
-	 */
-	getScrollBuffer(): string[] {
-		const lines: string[] = [];
-		const buffer = this.xterm.buffer.active;
-
-		// Get all lines in the buffer (including scrollback)
-		for (let i = 0; i < buffer.length; i++) {
-			const line = buffer.getLine(i);
-			if (line) {
-				lines.push(line.translateToString(true));
-			} else {
-				lines.push("");
-			}
-		}
-
-		return lines;
-	}
-
-	/**
-	 * Clear the terminal viewport
-	 */
-	clear(): void {
-		this.xterm.clear();
-	}
-
-	/**
-	 * Reset the terminal completely
-	 */
-	reset(): void {
-		this.xterm.reset();
-	}
-
-	/**
-	 * Get cursor position
-	 */
-	getCursorPosition(): { x: number; y: number } {
-		const buffer = this.xterm.buffer.active;
-		return {
-			x: buffer.cursorX,
-			y: buffer.cursorY,
-		};
 	}
 
 	/** Wait for TUI's throttled render pipeline to settle. */

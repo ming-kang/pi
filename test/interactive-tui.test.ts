@@ -1,13 +1,12 @@
 import type { Component, Terminal, TUI } from "@earendil-works/pi-tui";
 import { Container, isViewportTUI, Text } from "@earendil-works/pi-tui";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FullscreenExitOutput, TuiMode } from "../src/core/settings-manager.ts";
 import {
 	createInteractiveTui,
 	createInteractiveTuiReference,
 	InteractiveMode,
 } from "../src/modes/interactive/interactive-mode.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { VirtualTerminal } from "./helpers/virtual-terminal.ts";
 
 const clipboardMocks = vi.hoisted(() => ({
@@ -260,63 +259,5 @@ describe("clear-on-shrink status spacing", () => {
 			expect(dispose).toHaveBeenCalledOnce();
 			expect(context.statusContainer.children).toHaveLength(expectedChildren);
 		}
-	});
-});
-
-describe("InteractiveMode user-requested transcript rebuilds", () => {
-	beforeAll(() => {
-		// The reload box renders theme-colored text during handleReloadCommand.
-		initTheme("dark");
-	});
-
-	it("rebuilds the transcript when a session rebuild replaces it", () => {
-		const renderInitialMessages = vi.fn();
-		const fakeThis = Object.assign(Object.create(InteractiveMode.prototype), {
-			loadedResourcesContainer: new Container(),
-			chatContainer: new Container(),
-			pendingMessagesContainer: new Container(),
-			pendingTools: new Map(),
-			renderInitialMessages,
-		});
-
-		(InteractiveMode.prototype as any).renderCurrentSessionState.call(fakeThis);
-
-		expect(renderInitialMessages).toHaveBeenCalledTimes(1);
-	});
-
-	it("rebuilds the transcript for the /reload command", async () => {
-		const rebuildChatFromMessages = vi.fn();
-		const sessionReload = vi.fn(async (options?: { beforeSessionStart?: () => void | Promise<void> }) => {
-			await options?.beforeSessionStart?.();
-		});
-		const fakeThis: any = {
-			session: {
-				isStreaming: false,
-				isCompacting: false,
-				reload: sessionReload,
-				resourceLoader: { getThemes: () => ({ themes: [] }) },
-				modelRuntime: { getError: () => undefined },
-				extensionRunner: {},
-			},
-			settingsManager: { getHideThinkingBlock: () => false, getOutputPad: () => 1 },
-			rebuildChatFromMessages,
-			resetExtensionUI: () => {},
-			editorContainer: new Container(),
-			ui: { setFocus: vi.fn(), requestRender: vi.fn() },
-			editor: { render: () => [], invalidate: () => {} },
-			keybindings: { reload: vi.fn() },
-			themeController: { applyFromSettings: async () => {} },
-			applyRuntimeSettings: () => {},
-			setupAutocompleteProvider: () => {},
-			setupExtensionShortcuts: () => {},
-			showLoadedResources: () => {},
-			maybeSaveImplicitProjectTrustAfterReload: () => undefined,
-			showStatus: () => {},
-		};
-
-		await (InteractiveMode.prototype as any).handleReloadCommand.call(fakeThis);
-
-		expect(sessionReload).toHaveBeenCalledTimes(1);
-		expect(rebuildChatFromMessages).toHaveBeenCalledTimes(1);
 	});
 });

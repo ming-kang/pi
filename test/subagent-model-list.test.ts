@@ -71,7 +71,6 @@ describe("Subagent profile model list", () => {
 		list.handleInput("\r");
 
 		expect(onDone).not.toHaveBeenCalled();
-		expect(list.getSearchValue()).toBe("zzzz");
 		expect(render(list)).toContain("No matching models");
 	});
 

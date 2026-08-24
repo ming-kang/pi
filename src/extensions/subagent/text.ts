@@ -21,7 +21,7 @@ export function firstPlainLine(text: string): string {
 }
 
 // Truncates by code points (never splitting a surrogate pair) and appends an
-// ellipsis; for UTF-8 byte budgets use boundText/tailText instead.
+// ellipsis; for UTF-8 byte budgets use boundText instead.
 export function truncate(text: string, limit: number): string {
 	const characters = [...text];
 	return characters.length <= limit ? text : `${characters.slice(0, Math.max(0, limit - 1)).join("")}…`;
@@ -42,20 +42,6 @@ export function utf8Prefix(text: string, maxBytes: number): string {
 	return output;
 }
 
-function utf8Suffix(text: string, maxBytes: number): string {
-	if (maxBytes <= 0) return "";
-	if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
-	const characters: string[] = [];
-	let bytes = 0;
-	for (const character of Array.from(text).reverse()) {
-		const characterBytes = Buffer.byteLength(character, "utf8");
-		if (bytes + characterBytes > maxBytes) break;
-		characters.push(character);
-		bytes += characterBytes;
-	}
-	return characters.reverse().join("");
-}
-
 export function boundText(text: string, maxBytes: number): string {
 	if (maxBytes <= 0) return "";
 	if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
@@ -72,15 +58,4 @@ export function boundText(text: string, maxBytes: number): string {
 	const omitted = Buffer.byteLength(text, "utf8") - Buffer.byteLength(output, "utf8");
 	const notice = `\n\n[Output truncated: ${omitted} bytes omitted.]`;
 	return `${utf8Prefix(output, Math.max(0, maxBytes - Buffer.byteLength(notice, "utf8")))}${notice}`;
-}
-
-export function tailText(text: string, maxBytes: number): string {
-	if (maxBytes <= 0) return "";
-	if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
-	const noticeText = "[Earlier output omitted.]";
-	const notice = `${noticeText}\n`;
-	const available = maxBytes - Buffer.byteLength(notice, "utf8");
-	if (available <= 0) return utf8Prefix(noticeText, maxBytes);
-	const output = utf8Suffix(text, available);
-	return output ? `${notice}${output}` : utf8Prefix(noticeText, maxBytes);
 }

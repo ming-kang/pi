@@ -6,7 +6,6 @@ import {
 	formatTodoCall,
 	formatTodoContent,
 	formatTodoGroupCall,
-	hasOpenTodos,
 	renderWidgetLine,
 	type TodoGroupRenderContext,
 } from "../src/extensions/todo/view.ts";
@@ -108,13 +107,6 @@ describe("renderWidgetLine", () => {
 				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 			}
 		}
-	});
-
-	test("hasOpenTodos reflects pending and in_progress tasks", () => {
-		expect(hasOpenTodos(EMPTY_TODO_STATE)).toBe(false);
-		expect(hasOpenTodos(state([item(1, "Done", "completed")]))).toBe(false);
-		expect(hasOpenTodos(state([item(1, "Open")]))).toBe(true);
-		expect(hasOpenTodos(state([item(1, "Active", "in_progress")]))).toBe(true);
 	});
 
 	describe("with the real dark theme", () => {

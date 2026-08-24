@@ -262,6 +262,7 @@ describe("subagent run state reducer", () => {
 			startedAt: 2,
 		});
 		expect(run.currentActivity).toBe("Search x");
+		const beforeEndVersion = versionSum([run]);
 		run = reduceRun(run, {
 			type: "tool_ended",
 			toolCallId: "b",
@@ -270,7 +271,9 @@ describe("subagent run state reducer", () => {
 			endedAt: 3,
 		});
 		// The historical implementation cleared the line here; the derived
-		// line must fall back to the still-running tool.
+		// line must fall back to the still-running tool. The run revision must
+		// also move even though the last activity remains unchanged.
+		expect(versionSum([run])).toBeGreaterThan(beforeEndVersion);
 		expect(run.currentActivity).toBe("read a.ts");
 		expect(deriveCurrentActivity(run)).toBe("read a.ts");
 	});
@@ -391,6 +394,21 @@ describe("subagent run state reducer", () => {
 		expect(run.currentActivity).toBeUndefined();
 	});
 
+	it("normalizes non-finite provider retry values defensively", () => {
+		let run = state();
+		run = reduceRun(run, { type: "slot_acquired", startedAt: 0 });
+		run = reduceRun(run, {
+			type: "auto_retry_start",
+			attempt: Number.NaN,
+			maxAttempts: 0,
+			deadline: Number.NaN,
+			error: "",
+		});
+		expect(run.retry?.attempt).toBe(1);
+		expect(run.retry?.maxAttempts).toBe(1);
+		expect(getSubagentRetryView(run, 0)).toBeUndefined();
+	});
+
 	it("returns no retry view for a run without retry state", () => {
 		expect(getSubagentRetryView(state())).toBeUndefined();
 	});
@@ -469,12 +487,35 @@ describe("subagent run state reducer", () => {
 			endedAt: 2,
 		});
 		const failed = reduceRun(running, { type: "settle", verdict: "failed", report: "", error: "boom", endedAt: 2 });
+		const aborted = reduceRun(running, {
+			type: "settle",
+			verdict: "aborted",
+			report: "",
+			error: "aborted",
+			endedAt: 2,
+		});
 		expect(statusOf([])).toBe("running");
 		expect(statusOf([queued, completed])).toBe("running");
 		expect(statusOf([completed])).toBe("completed");
 		expect(statusOf([completed, failed])).toBe("partial");
 		expect(statusOf([failed])).toBe("failed");
 		expect(statusSummary({ status: "running", runs: [], startedAt: 0, usage: emptyUsage() })).toBe("Initializing…");
+		expect(
+			statusSummary({
+				status: "running",
+				startedAt: 0,
+				usage: emptyUsage(),
+				runs: [toRunDetails(queued)],
+			}),
+		).toBe("0/1 complete · 1 queued");
+		expect(
+			statusSummary({
+				status: "running",
+				startedAt: 0,
+				usage: emptyUsage(),
+				runs: [toRunDetails(completed), toRunDetails(running), toRunDetails(failed), toRunDetails(aborted)],
+			}),
+		).toBe("1/4 complete · 1 running · 1 failed · 1 aborted");
 		expect(
 			statusSummary({
 				status: "failed",
@@ -485,5 +526,7 @@ describe("subagent run state reducer", () => {
 		).toBe("1/2 complete · 1 failed");
 		expect(isSubagentError({ status: "failed", runs: [toRunDetails(failed)] })).toBe(true);
 		expect(isSubagentError({ status: "failed", runs: [toRunDetails(completed), toRunDetails(failed)] })).toBe(false);
+		expect(isSubagentError({ status: "aborted", runs: [toRunDetails(aborted)] })).toBe(true);
+		expect(isSubagentError({ status: "completed", runs: [toRunDetails(completed)] })).toBe(false);
 	});
 });

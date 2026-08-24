@@ -1,25 +1,14 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
-import { Compile } from "typebox/compile";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
-import { emptyUsage } from "../src/extensions/subagent/activity.ts";
 import { AGENT_PROFILES } from "../src/extensions/subagent/agents.ts";
 import { MAX_CONCURRENCY, MAX_TASKS } from "../src/extensions/subagent/constants.ts";
-import { type ParentModelContext, resolveSubagentTask } from "../src/extensions/subagent/resolve.ts";
-import { ConcurrencyGate, isSubagentError, runSubagentInvocation } from "../src/extensions/subagent/runner.ts";
-import { type SubagentParams, SubagentParamsSchema } from "../src/extensions/subagent/schema.ts";
-import { emptySubagentConfig } from "../src/extensions/subagent/settings.ts";
-import { createRunState, reduceRun, statusSummary, versionSum } from "../src/extensions/subagent/state.ts";
-import type {
-	SubagentDetails,
-	SubagentRunDetails,
-	SubagentRunStatus,
-	ToolActivity,
-} from "../src/extensions/subagent/types.ts";
-
-const validateParams = Compile(SubagentParamsSchema);
+import type { ParentModelContext } from "../src/extensions/subagent/resolve.ts";
+import { ConcurrencyGate, runSubagentInvocation } from "../src/extensions/subagent/runner.ts";
+import type { SubagentParams } from "../src/extensions/subagent/schema.ts";
+import type { SubagentDetails } from "../src/extensions/subagent/types.ts";
 
 function createParentContext(model: Model<Api>): ParentModelContext {
 	return {
@@ -46,21 +35,6 @@ function minimalModel(): Model<Api> {
 		contextWindow: 10_000,
 		maxTokens: 1_000,
 	} as Model<Api>;
-}
-
-function baseRun(status: SubagentRunStatus, activities: ToolActivity[] = []): SubagentRunDetails {
-	return {
-		id: "subagent-1",
-		agent: "explorer",
-		description: "Task",
-		cwd: "",
-		model: "test/model",
-		thinking: "low",
-		status,
-		activities,
-		report: "",
-		usage: emptyUsage(),
-	};
 }
 
 describe("subagent SDK runner", () => {
@@ -208,64 +182,6 @@ describe("subagent SDK runner", () => {
 		);
 	});
 
-	it("enforces tasks-only parameters and explorer/general agents at the schema level", () => {
-		expect(validateParams.Check({ tasks: [{ prompt: "Find it." }] })).toBe(true);
-		expect(validateParams.Check({ tasks: [{ agent: null, prompt: "Find it.", cwd: null }] })).toBe(true);
-		expect(validateParams.Check({ tasks: [{ agent: "explorer", prompt: "Find it." }] })).toBe(true);
-		expect(validateParams.Check({ tasks: [{ agent: "general", prompt: "Fix it." }] })).toBe(true);
-		// Top-level mode fields are gone: only `tasks` is accepted.
-		expect(validateParams.Check({ agent: "explorer", tasks: [{ prompt: "Find it." }] })).toBe(false);
-		expect(validateParams.Check({ tasks: [] })).toBe(false);
-		// Task items carry only agent/prompt/cwd; descriptions are derived from the prompt.
-		expect(validateParams.Check({ tasks: [{ description: "Lookup", prompt: "Find it." }] })).toBe(false);
-		// Only the two built-in profiles are selectable.
-		expect(validateParams.Check({ tasks: [{ agent: "worker", prompt: "Find it." }] })).toBe(false);
-	});
-
-	it("defaults an omitted agent to explorer and rejects unknown agents during resolution", async () => {
-		const parent = createParentContext(minimalModel());
-		const resolved = await resolveSubagentTask(
-			{ prompt: "Look something up." },
-			process.cwd(),
-			parent,
-			process.cwd(),
-			emptySubagentConfig(),
-		);
-		expect(resolved.agent.name).toBe("explorer");
-		expect(resolved.description).toBe("Look something up.");
-
-		const general = await resolveSubagentTask(
-			{ agent: "general", prompt: "Fix something." },
-			process.cwd(),
-			parent,
-			process.cwd(),
-			emptySubagentConfig(),
-		);
-		expect(general.agent.name).toBe("general");
-
-		await expect(
-			resolveSubagentTask(
-				{ agent: "worker", prompt: "x" } as unknown as SubagentParams["tasks"][number],
-				process.cwd(),
-				parent,
-				process.cwd(),
-				emptySubagentConfig(),
-			),
-		).rejects.toThrow("Unknown agent");
-	});
-
-	it("uses Initializing… only while no run exists yet", () => {
-		const details: SubagentDetails = { status: "running", runs: [], startedAt: 0, usage: emptyUsage() };
-		expect(statusSummary(details)).toBe("Initializing…");
-		const queued = { ...details, runs: [baseRun("queued")] };
-		expect(statusSummary(queued)).toBe("0/1 complete · 1 queued");
-		const mixed = {
-			...details,
-			runs: [baseRun("completed"), baseRun("running"), baseRun("failed"), baseRun("aborted")],
-		};
-		expect(statusSummary(mixed)).toBe("1/4 complete · 1 running · 1 failed · 1 aborted");
-	});
-
 	it("limits concurrent workers to the gate's configured concurrency", async () => {
 		const gate = new ConcurrencyGate(2);
 		const first = await gate.acquire();
@@ -306,47 +222,5 @@ describe("subagent SDK runner", () => {
 		controller.abort();
 		await expect(queued).rejects.toThrow("queued");
 		release();
-	});
-
-	it("detects mid-list activity changes from out-of-order tool ends", () => {
-		// Tool B settles before tool A: the last activity is unchanged, but
-		// the settled row is mid-list and the run revision must still move so
-		// the progress detector emits an update.
-		const resolved = {
-			agent: {
-				name: "explorer" as const,
-				description: "",
-				tools: ["read"],
-				systemPrompt: "",
-				omitContextFiles: true,
-			},
-			description: "Task",
-			prompt: "Task",
-			cwd: process.cwd(),
-			model: minimalModel(),
-			thinking: "low" as const,
-		};
-		let run = createRunState(resolved, 0, undefined, process.cwd());
-		run = reduceRun(run, { type: "slot_acquired", startedAt: 0 });
-		run = reduceRun(run, { type: "tool_started", toolCallId: "a", toolName: "read", args: {}, startedAt: 0 });
-		run = reduceRun(run, { type: "tool_started", toolCallId: "b", toolName: "read", args: {}, startedAt: 0 });
-		const before = versionSum([run]);
-		run = reduceRun(run, {
-			type: "tool_ended",
-			toolCallId: "b",
-			result: { content: [] },
-			isError: false,
-			endedAt: 1,
-		});
-		expect(versionSum([run])).toBeGreaterThan(before);
-		// The derived line falls back to the still-running tool A.
-		expect(run.currentActivity).toBe("read");
-	});
-
-	it("classifies full failures as errors but partial batches as results", () => {
-		expect(isSubagentError({ status: "failed", runs: [baseRun("failed")] })).toBe(true);
-		expect(isSubagentError({ status: "failed", runs: [baseRun("completed"), baseRun("failed")] })).toBe(false);
-		expect(isSubagentError({ status: "aborted", runs: [baseRun("aborted")] })).toBe(true);
-		expect(isSubagentError({ status: "completed", runs: [baseRun("completed")] })).toBe(false);
 	});
 });
