@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.84.10] - 2026-08-24
+
 ### Upstream sync: Pi v0.84.3
 
 - Added the optional Windows `powershell` tool and its Extension API/SDK types, `session_compact_failed` lifecycle events, compaction and branch-summary billing notices, and `toolcall_start` ID/name metadata for JSON and RPC clients.
