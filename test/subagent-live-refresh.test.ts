@@ -8,7 +8,7 @@ import { ToolExecutionComponent } from "../src/modes/interactive/components/tool
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
-const SPINNER_CLASS = "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]";
+const SPINNER_CLASS = "[·✢✼✶✻✽]";
 
 function registeredSubagentTool(): ToolDefinition<typeof SubagentParamsSchema, SubagentDetails> {
 	let definition: ToolDefinition<typeof SubagentParamsSchema, SubagentDetails> | undefined;

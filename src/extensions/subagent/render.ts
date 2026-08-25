@@ -22,10 +22,13 @@ const FALLBACK_OUTPUT_LIMIT = 4_000;
 const ACTIVITY_DURATION_MIN_MS = 10_000;
 const OUTPUT_TRUNCATION_NOTICE_PATTERN = /\s*\[Output truncated(?:: \d+ bytes omitted)?\.\]\s*$/u;
 
-// Borrowed from pi-tui's Loader for a familiar look; a local aesthetic
-// choice rather than a consistency contract with the shell's indicators.
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const SPINNER_INTERVAL_MS = 80;
+// A breathing dot-to-star bloom: the sequence plays forward to full bloom
+// and back, holding each extreme for two ticks. The mid frame uses ✼ rather
+// than the more common ✳ because U+2733 carries the Unicode Emoji property
+// and some terminals render it as a double-width color emoji.
+const SPINNER_BLOOM = ["·", "✢", "✼", "✶", "✻", "✽"];
+const SPINNER_FRAMES = [...SPINNER_BLOOM, ...[...SPINNER_BLOOM].reverse()];
+const SPINNER_INTERVAL_MS = 120;
 const ELAPSED_REFRESH_INTERVAL_MS = 1_000;
 const FLOW_SEPARATOR = " · ";
 const FLOW_SEPARATOR_WIDTH = 3;

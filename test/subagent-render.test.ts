@@ -159,7 +159,7 @@ describe("subagent rendering", () => {
 			isPartial: true,
 			args: legacyArgs,
 		});
-		expect(running).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #1 Explorer$/u);
+		expect(running).toMatch(/^[·✢✼✶✻✽] #1 Explorer$/u);
 		expect(running).not.toContain("Thinking");
 		expect(running).not.toContain("Map the code");
 
@@ -266,7 +266,7 @@ describe("subagent rendering", () => {
 		const output = collapsed(details({ status: "running", endedAt: undefined, runs: [active] }), {
 			isPartial: true,
 		});
-		expect(output).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #1 Explorer$/u);
+		expect(output).toMatch(/^[·✢✼✶✻✽] #1 Explorer$/u);
 		expect(output).not.toContain("Run ls -d */");
 		expect(output).not.toContain("0/1");
 		expect(output).not.toContain("Inspect the code");
@@ -309,7 +309,7 @@ describe("subagent rendering", () => {
 		const folded = collapsed(details({ status: "running", endedAt: undefined, runs: [compacting] }), {
 			isPartial: true,
 		});
-		expect(folded).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #1 Explorer$/u);
+		expect(folded).toMatch(/^[·✢✼✶✻✽] #1 Explorer$/u);
 		expect(folded).not.toContain("Compacting");
 
 		const open = expanded(details({ status: "running", endedAt: undefined, runs: [compacting] }), {
@@ -370,11 +370,11 @@ describe("subagent rendering", () => {
 			expect(output.indexOf(`#${index}`)).toBeLessThan(output.indexOf(`#${index + 1}`));
 		}
 		expect(output).toContain("✓ #1 Explorer");
-		expect(output).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #2 General/u);
+		expect(output).toMatch(/[·✢✼✶✻✽] #2 General/u);
 		expect(output).toContain("× #3 Explorer");
 		expect(output).toContain("■ #4 General");
 		expect(output).toContain("○ #5 Explorer");
-		expect(output).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #6 Explorer/u);
+		expect(output).toMatch(/[·✢✼✶✻✽] #6 Explorer/u);
 		expect(output).not.toContain("done");
 	});
 
@@ -383,7 +383,7 @@ describe("subagent rendering", () => {
 			details({ status: "running", endedAt: undefined, runs: [liveRun({ currentActivity: "Run git status" })] }),
 			{ isPartial: true },
 		);
-		expect(output).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #1 Explorer$/u);
+		expect(output).toMatch(/^[·✢✼✶✻✽] #1 Explorer$/u);
 		expect(output).not.toContain("git status");
 	});
 
@@ -402,8 +402,8 @@ describe("subagent rendering", () => {
 			},
 		});
 		expect(output).toContain("○ #1 Explorer");
-		expect(output).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #2 Explorer/u);
-		expect(output).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #3 Explorer/u);
+		expect(output).toMatch(/[·✢✼✶✻✽] #2 Explorer/u);
+		expect(output).toMatch(/[·✢✼✶✻✽] #3 Explorer/u);
 		expect(output).not.toContain("Queued");
 		expect(output).not.toContain("Starting");
 		expect(output).not.toContain("Thinking");
@@ -439,7 +439,7 @@ describe("subagent rendering", () => {
 		expect(visibleWidth(lines[0]!)).toBe(visibleWidth(lines[1]!));
 		for (const line of lines) {
 			expect(visibleWidth(line)).toBeLessThanOrEqual(60);
-			expect(line).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #[1-6] Explorer/u);
+			expect(line).toMatch(/^[·✢✼✶✻✽] #[1-6] Explorer/u);
 		}
 	});
 
@@ -449,7 +449,7 @@ describe("subagent rendering", () => {
 			isPartial: true,
 			args: { tasks: [{ agent: "explorer", prompt }] },
 		});
-		expect(output).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #1 Explorer$/u);
+		expect(output).toMatch(/^[·✢✼✶✻✽] #1 Explorer$/u);
 		expect(output).not.toContain("中文摘要");
 		expect(output).not.toContain("链接");
 		expect(output).not.toContain("entry.ts");
@@ -461,7 +461,7 @@ describe("subagent rendering", () => {
 		const folded = collapsed(details({ status: "running", endedAt: undefined, runs: [retrying] }), {
 			isPartial: true,
 		});
-		expect(folded).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #1 Explorer$/u);
+		expect(folded).toMatch(/^[·✢✼✶✻✽] #1 Explorer$/u);
 		expect(folded).not.toContain("Retrying");
 		expect(folded).not.toContain("Exploring code");
 		const open = expanded(details({ status: "running", endedAt: undefined, runs: [retrying] }), {
