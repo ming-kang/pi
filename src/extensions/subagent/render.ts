@@ -1,4 +1,12 @@
-import { type Component, Container, Markdown, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	Container,
+	Markdown,
+	Spacer,
+	Text,
+	truncateToWidth,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 import type { AgentToolResult, ToolRenderContext, ToolRenderResultOptions } from "../../core/extensions/types.ts";
 import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
 import { AGENT_PROFILE_LABELS } from "./agents.ts";
@@ -13,6 +21,14 @@ const RETRY_ERROR_LIMIT = 160;
 const FALLBACK_OUTPUT_LIMIT = 4_000;
 const ACTIVITY_DURATION_MIN_MS = 10_000;
 const OUTPUT_TRUNCATION_NOTICE_PATTERN = /\s*\[Output truncated(?:: \d+ bytes omitted)?\.\]\s*$/u;
+
+// Mirrors pi-tui's Loader frame set and cadence so the collapsed flow
+// animates with the same native spinner as the shell's working indicators.
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_INTERVAL_MS = 80;
+const ELAPSED_REFRESH_INTERVAL_MS = 1_000;
+const FLOW_SEPARATOR = " · ";
+const FLOW_SEPARATOR_WIDTH = 3;
 
 /** Width-aware single-line text for compact rows and section headers. */
 class SingleLineText implements Component {
@@ -159,8 +175,63 @@ function runStateText(run: SubagentRunDetails): string {
 	return statusWord(run.status);
 }
 
-function taskRow(run: SubagentRunDetails, index: number, theme: Theme): string {
-	return `${statusMarker(run.status, theme)} ${theme.fg("dim", `#${index + 1}`)} ${theme.fg("accent", profileLabel(run.agent))}${theme.fg("dim", ` · ${runStateText(run)}`)}`;
+function spinnerGlyph(now: number): string {
+	const frame = Math.floor(now / SPINNER_INTERVAL_MS) % SPINNER_FRAMES.length;
+	return SPINNER_FRAMES[frame] ?? SPINNER_FRAMES[0] ?? "";
+}
+
+/** One collapsed cell: status glyph, ordinal, and profile label only. */
+function flowSegment(run: SubagentRunDetails, index: number, theme: Theme, now: number): string {
+	const marker =
+		run.status === "completed"
+			? theme.fg("success", "✓")
+			: run.status === "failed"
+				? theme.fg("error", "×")
+				: run.status === "aborted"
+					? theme.fg("warning", "■")
+					: theme.fg("accent", spinnerGlyph(now));
+	return `${marker} ${theme.fg("dim", `#${index + 1}`)} ${theme.fg("accent", profileLabel(run.agent))}`;
+}
+
+/** Collapsed batch flow: one cell per run, wrapped at cell boundaries with
+ * uniform cell widths so continuation rows keep their columns aligned. */
+class CollapsedFlow implements Component {
+	private readonly segments: string[];
+	private readonly cellWidth: number;
+
+	constructor(segments: string[]) {
+		this.segments = segments;
+		this.cellWidth = segments.reduce((max, segment) => Math.max(max, visibleWidth(segment)), 1);
+	}
+
+	render(width: number): string[] {
+		const usable = Math.max(1, width);
+		const joined = this.segments.join(FLOW_SEPARATOR);
+		const packed = visibleWidth(joined);
+		if (this.cellWidth > usable || packed <= usable) {
+			return [packed <= usable ? joined : truncateToWidth(joined, usable, "...")];
+		}
+		const columnCount = Math.max(
+			1,
+			Math.floor((usable + FLOW_SEPARATOR_WIDTH) / (this.cellWidth + FLOW_SEPARATOR_WIDTH)),
+		);
+		const lines: string[] = [];
+		for (let start = 0; start < this.segments.length; start += columnCount) {
+			const row = this.segments.slice(start, start + columnCount);
+			lines.push(
+				row
+					.map((segment, index) => {
+						if (index === row.length - 1) return segment;
+						const padding = Math.max(0, this.cellWidth - visibleWidth(segment));
+						return `${segment}${padding > 0 ? " ".repeat(padding) : ""}${FLOW_SEPARATOR}`;
+					})
+					.join(""),
+			);
+		}
+		return lines;
+	}
+
+	invalidate(): void {}
 }
 
 function runHeader(run: SubagentRunDetails, index: number, theme: Theme): string {
@@ -253,38 +324,31 @@ function fallbackResult(result: AgentToolResult<SubagentDetails>, theme: Theme, 
 	return new Text(theme.fg(isError ? "error" : "muted", value), 0, 0);
 }
 
-/** Per-result live-refresh and timing state owned by the shell's render context. */
+/** Per-result live-refresh state owned by the shell's render context. */
 export interface SubagentRenderState {
 	refreshTimer?: ReturnType<typeof setTimeout>;
-	startedAt?: number;
-	endedAt?: number;
 }
 
 type SubagentToolRenderContext = ToolRenderContext<SubagentRenderState, SubagentParams, SubagentDetails>;
 
-function observeTiming(context: SubagentToolRenderContext): void {
-	const details = context.result?.details;
-	const startedAt = details?.startedAt;
-	if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
-		context.state.startedAt =
-			context.state.startedAt === undefined ? startedAt : Math.min(context.state.startedAt, startedAt);
-	}
-	if (!context.isPartial && context.state.endedAt === undefined) {
-		const endedAt = details?.endedAt;
-		context.state.endedAt = typeof endedAt === "number" && Number.isFinite(endedAt) ? endedAt : Date.now();
-	}
+function hasActiveRuns(runs: SubagentRunDetails[]): boolean {
+	return runs.some((run) => run.status === "queued" || run.status === "running");
 }
 
-// Re-render elapsed time and retry countdowns once per second while the
-// result is still partial; the first settled render clears the timer.
+// Animate a collapsed flow at the native spinner cadence while runs are
+// active; otherwise re-render timing and retry text once per second. The
+// first settled render clears the timer.
 export function scheduleLiveRefresh(context: ToolRenderContext<SubagentRenderState>, isPartial: boolean): void {
 	const state = context.state;
 	if (isPartial) {
 		if (state.refreshTimer === undefined) {
+			const details = context.result?.details as SubagentDetails | undefined;
+			const interval =
+				!context.expanded && hasActiveRuns(details?.runs ?? []) ? SPINNER_INTERVAL_MS : ELAPSED_REFRESH_INTERVAL_MS;
 			state.refreshTimer = setTimeout(() => {
 				state.refreshTimer = undefined;
 				context.invalidate();
-			}, 1000);
+			}, interval);
 			state.refreshTimer.unref?.();
 		}
 		return;
@@ -295,18 +359,25 @@ export function scheduleLiveRefresh(context: ToolRenderContext<SubagentRenderSta
 	}
 }
 
-export function renderSubagentCall(args: SubagentParams, theme: Theme, context?: SubagentToolRenderContext): Component {
+export function renderSubagentCall(
+	args: SubagentParams,
+	theme: Theme,
+	_context?: SubagentToolRenderContext,
+): Component {
 	const count = Array.isArray(args.tasks) ? args.tasks.length : 0;
 	const title = theme.fg(count > 0 ? "toolTitle" : "error", theme.bold("Subagent"));
-	if (!context) return new Text(title, 0, 0);
+	return new Text(title, 0, 0);
+}
 
-	observeTiming(context);
-	const metadata: string[] = [];
-	const duration = elapsed(context.state.startedAt, context.state.endedAt);
-	if (duration) metadata.push(duration);
-	const cost = context.isPartial ? undefined : context.result?.details?.usage.cost;
-	if (typeof cost === "number" && Number.isFinite(cost) && cost > 0) metadata.push(`$${cost.toFixed(3)}`);
-	return new Text(`${title}${metadata.length > 0 ? theme.fg("dim", ` · ${metadata.join(" · ")}`) : ""}`, 0, 0);
+/** Batch-level timing and cost live only in the expanded view. */
+function batchSummaryLine(details: SubagentDetails, theme: Theme, isPartial: boolean): string {
+	const parts: string[] = [];
+	const duration = elapsed(details.startedAt, details.endedAt);
+	if (duration) parts.push(duration);
+	const cost = details.usage?.cost;
+	if (!isPartial && typeof cost === "number" && Number.isFinite(cost) && cost > 0) parts.push(`$${cost.toFixed(3)}`);
+	const tasks = `${details.runs.length} task${details.runs.length === 1 ? "" : "s"}`;
+	return `${theme.fg("dim", `── Batch · ${tasks}`)}${parts.length > 0 ? `${theme.fg("dim", ` · ${parts.join(" · ")}`)}` : ""}`;
 }
 
 export function renderSubagentResult(
@@ -322,12 +393,13 @@ export function renderSubagentResult(
 
 	const container = new Container();
 	if (!options.expanded) {
-		for (const [index, run] of details.runs.entries()) {
-			container.addChild(new SingleLineText(taskRow(run, index, theme)));
-		}
+		const now = Date.now();
+		container.addChild(new CollapsedFlow(details.runs.map((run, index) => flowSegment(run, index, theme, now))));
 		return container;
 	}
 
+	container.addChild(new SingleLineText(batchSummaryLine(details, theme, options.isPartial)));
+	container.addChild(new Spacer(1));
 	for (const [index, run] of details.runs.entries()) {
 		if (index > 0) container.addChild(new Spacer(1));
 		const settled = run.status === "completed" || run.status === "failed" || run.status === "aborted";

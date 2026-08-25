@@ -8,6 +8,8 @@ import { ToolExecutionComponent } from "../src/modes/interactive/components/tool
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
+const SPINNER_CLASS = "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]";
+
 function registeredSubagentTool(): ToolDefinition<typeof SubagentParamsSchema, SubagentDetails> {
 	let definition: ToolDefinition<typeof SubagentParamsSchema, SubagentDetails> | undefined;
 	const api = {
@@ -114,7 +116,7 @@ describe("Subagent shell-driven live refresh", () => {
 		vi.useRealTimers();
 	});
 
-	it("refreshes silent collapsed and expanded elapsed time without generic progress", () => {
+	it("keeps the collapsed call header quiet and animates the flow while running", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
 		const definition = registeredSubagentTool();
@@ -133,15 +135,22 @@ describe("Subagent shell-driven live refresh", () => {
 			true,
 		);
 
-		expect(render(component)).toContain("0.0s");
+		const initial = render(component);
+		expect(initial).toContain("● Subagent");
+		expect(initial).toMatch(new RegExp(`${SPINNER_CLASS} #1 Explorer`, "u"));
+		expect(initial).not.toContain("0.0s");
+		expect(initial).not.toContain("Running…");
+
 		vi.advanceTimersByTime(3000);
-		const collapsed = render(component);
-		expect(collapsed).toContain("3.0s");
-		expect(collapsed).not.toContain("Running…");
+		const after = render(component);
+		expect(after).toMatch(new RegExp(`${SPINNER_CLASS} #1 Explorer`, "u"));
+		expect(after).not.toContain("3.0s");
+		expect(after).not.toContain("Running…");
 
 		component.setExpanded(true);
 		const expanded = render(component);
 		expect(expanded).toContain("3.0s");
+		expect(expanded).toContain("── Batch · 1 task");
 		expect(expanded).not.toContain("Running…");
 
 		component.updateResult(
@@ -152,10 +161,11 @@ describe("Subagent shell-driven live refresh", () => {
 			},
 			false,
 		);
+		component.setExpanded(false);
 		const settled = render(component);
-		expect(settled).toContain("● Subagent · 3.0s");
-		expect(settled).toContain("── #1 Explorer · test/model · low");
-		expect(settled).not.toContain("completed · 3.0s");
+		expect(settled).toContain("● Subagent");
+		expect(settled).toContain("✓ #1 Explorer");
+		expect(settled).not.toContain("3.0s");
 		const settledRenderRequests = requestRender.mock.calls.length;
 		vi.advanceTimersByTime(5000);
 		expect(render(component)).toBe(settled);
@@ -163,7 +173,7 @@ describe("Subagent shell-driven live refresh", () => {
 		component.dispose();
 	});
 
-	it("keeps the earliest partial clock and moves aggregate cost into the settled title", () => {
+	it("moves aggregate timing and cost into the expanded batch summary", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
 		const definition = registeredSubagentTool();
@@ -179,7 +189,7 @@ describe("Subagent shell-driven live refresh", () => {
 			},
 			true,
 		);
-		expect(render(component)).toContain("● Subagent · 0.0s");
+		expect(render(component)).toContain("● Subagent");
 		expect(render(component)).toContain("Starting...");
 
 		vi.advanceTimersByTime(1000);
@@ -188,7 +198,6 @@ describe("Subagent shell-driven live refresh", () => {
 			true,
 		);
 		vi.advanceTimersByTime(2000);
-		expect(render(component)).toContain("● Subagent · 3.0s");
 
 		const finalDetails = completedDetails(1000, 3000);
 		finalDetails.usage.cost = 0.042;
@@ -197,14 +206,16 @@ describe("Subagent shell-driven live refresh", () => {
 			{ content: [{ type: "text", text: "done" }], details: finalDetails, isError: false },
 			false,
 		);
+		expect(render(component)).toContain("● Subagent");
+		expect(render(component)).toContain("✓ #1 Explorer");
+		component.setExpanded(true);
 		const settled = render(component);
-		expect(settled).toContain("● Subagent · 3.0s · $0.042");
-		expect(settled).toContain("✓ #1 Explorer · Completed · 2.0s");
+		expect(settled).toContain("── Batch · 1 task · 2.0s · $0.042");
 		expect(settled).not.toContain("1 completed");
 		component.dispose();
 	});
 
-	it("reconstructs frozen title timing and cost from a settled result without prior partial state", () => {
+	it("reconstructs batch timing and cost from a settled result without prior partial state", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(10_000);
 		const definition = registeredSubagentTool();
@@ -215,10 +226,12 @@ describe("Subagent shell-driven live refresh", () => {
 		restored.usage.cost = 0.007;
 		restored.runs[0]!.usage.cost = 0.007;
 		component.updateResult({ content: [{ type: "text", text: "done" }], details: restored, isError: false }, false);
-		expect(render(component)).toContain("● Subagent · 3.0s · $0.007");
-		expect(render(component)).toContain("✓ #1 Explorer · Completed · 3.0s");
+		expect(render(component)).toContain("● Subagent");
+		expect(render(component)).toContain("✓ #1 Explorer");
 		component.setExpanded(true);
-		expect(render(component)).toContain("── #1 Explorer · test/model · low");
+		const output = render(component);
+		expect(output).toContain("── Batch · 1 task · 3.0s · $0.007");
+		expect(output).toContain("── #1 Explorer · test/model · low");
 		component.dispose();
 	});
 
@@ -237,20 +250,23 @@ describe("Subagent shell-driven live refresh", () => {
 			true,
 		);
 
+		expect(render(component)).toMatch(new RegExp(`${SPINNER_CLASS} #1 Explorer`, "u"));
+		expect(render(component)).not.toContain("Retrying");
+		component.setExpanded(true);
 		expect(render(component)).toContain("Retrying (1/3) in 8s · fetch failed");
 		vi.advanceTimersByTime(1000);
+		component.invalidate();
 		expect(render(component)).toContain("Retrying (1/3) in 7s · fetch failed");
 		vi.advanceTimersByTime(6000);
-		expect(render(component)).toContain("Retrying (1/3) in 1s · fetch failed");
-
-		component.setExpanded(true);
+		component.invalidate();
 		expect(render(component)).toContain("Retrying (1/3) in 1s · fetch failed");
 		vi.advanceTimersByTime(1000);
+		component.invalidate();
 		expect(render(component)).toContain("Retrying (1/3) now... · fetch failed");
 		component.dispose();
 	});
 
-	it("shows queued task retry countdowns in collapsed and expanded batches", () => {
+	it("shows queued task retry countdowns in expanded batches only", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
 		const definition = registeredSubagentTool();
@@ -271,10 +287,13 @@ describe("Subagent shell-driven live refresh", () => {
 			true,
 		);
 
-		expect(render(component)).toContain("○ #4 Explorer · Retrying (1/2) in 8s · fetch failed");
-		vi.advanceTimersByTime(1000);
-		expect(render(component)).toContain("Retrying (1/2) in 7s · fetch failed");
+		const folded = render(component);
+		expect(folded).toMatch(new RegExp(`${SPINNER_CLASS} #4 Explorer`, "u"));
+		expect(folded).not.toContain("Retrying");
 		component.setExpanded(true);
+		expect(render(component)).toContain("○ Retrying (1/2) in 8s · fetch failed");
+		vi.advanceTimersByTime(1000);
+		component.invalidate();
 		expect(render(component)).toContain("Retrying (1/2) in 7s · fetch failed");
 		component.dispose();
 	});
@@ -310,17 +329,21 @@ describe("Subagent shell-driven live refresh", () => {
 		);
 
 		vi.advanceTimersByTime(2000);
-		expect(render(first)).toContain("3.0s");
+		const single = render(first);
+		expect(single).toContain("● Subagent");
+		expect(single).toMatch(new RegExp(`${SPINNER_CLASS} #1 Explorer`, "u"));
+		expect(single).not.toContain("3.0s");
 		const batchCollapsed = render(second);
-		expect(batchCollapsed).toContain("● Subagent · 2.0s");
-		expect(batchCollapsed).toContain("› #1 Explorer · Exploring code");
-		expect(batchCollapsed).toContain("› #2 Explorer · Exploring code");
+		expect(batchCollapsed).toContain("● Subagent");
+		expect(batchCollapsed).toMatch(new RegExp(`${SPINNER_CLASS} #1 Explorer`, "u"));
+		expect(batchCollapsed).toMatch(new RegExp(`${SPINNER_CLASS} #2 Explorer`, "u"));
+		expect(batchCollapsed).not.toContain("Exploring code");
 		expect(batchCollapsed).not.toContain("0/2 done");
 		expect(batchCollapsed).not.toContain("Running…");
 
 		second.setExpanded(true);
 		const batchExpanded = render(second);
-		expect(batchExpanded).toContain("2.0s");
+		expect(batchExpanded).toContain("── Batch · 2 tasks · 2.0s");
 		expect(batchExpanded).not.toContain("Running…");
 		first.dispose();
 		second.dispose();

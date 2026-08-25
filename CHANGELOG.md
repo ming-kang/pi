@@ -4,6 +4,9 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Redesigned the bundled Subagent collapsed view around a compact flow grid: each task renders as one status-marked cell — native pi-tui Loader spinner frames while active, `✓`/`×`/`■` when settled — showing only its ordinal and profile, cells wrap at their boundaries with uniform widths so continuation rows stay column-aligned, and the call header settles on a quiet `● Subagent` title. Batch elapsed time and aggregate cost moved into a `── Batch` summary line at the top of the expanded view; activity summaries, per-run durations, failure details, and retry countdowns are no longer echoed in collapsed rows. Live refresh now runs at the native spinner cadence while any task is active and the card is collapsed, falling back to a one-second cadence when expanded or settled.
 ## [0.84.10] - 2026-08-24
 
 ### Upstream sync: Pi v0.84.3

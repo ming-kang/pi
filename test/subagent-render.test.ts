@@ -129,10 +129,10 @@ describe("subagent rendering", () => {
 			},
 			theme,
 		);
-		expect(single.render(120).join("\n")).toContain("Subagent");
-		expect(batch.render(120).join("\n")).toContain("Subagent");
+		expect(single.render(120).join("\n").trim()).toBe("Subagent");
+		expect(batch.render(120).join("\n").trim()).toBe("Subagent");
 		expect(single.render(120).join("\n")).not.toContain("task");
-		expect(batch.render(120).join("\n")).not.toContain("task");
+		expect(batch.render(120).join("\n")).not.toContain(" · ");
 	});
 
 	it("flags an empty tasks list in the call header color", () => {
@@ -151,7 +151,7 @@ describe("subagent rendering", () => {
 	it("keeps prompts out of collapsed legacy rows and falls back to the run description when expanded", () => {
 		const legacyArgs = { agent: "explorer", prompt: "Old shape" } as unknown as SubagentParams;
 		const settled = collapsed(details({ runs: [run({ report: "Found it." })] }), { args: legacyArgs });
-		expect(settled).toContain("✓ #1 Explorer · Completed · 1.5s");
+		expect(settled).toBe("✓ #1 Explorer");
 		expect(settled).not.toContain("Map the code");
 		expect(settled).not.toContain("Old shape");
 
@@ -159,7 +159,8 @@ describe("subagent rendering", () => {
 			isPartial: true,
 			args: legacyArgs,
 		});
-		expect(running).toContain("› #1 Explorer · Thinking...");
+		expect(running).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #1 Explorer$/u);
+		expect(running).not.toContain("Thinking");
 		expect(running).not.toContain("Map the code");
 
 		const expandedOutput = expanded(details({ runs: [run({ report: "Found it." })] }), { args: legacyArgs });
@@ -179,9 +180,7 @@ describe("subagent rendering", () => {
 				],
 			}),
 		);
-		expect(output).toBe(
-			"✓ #1 Explorer · Completed · 1.5s\n× #2 General · Failed · 1.5s\n■ #3 General · Aborted · 1.5s",
-		);
+		expect(output).toBe("✓ #1 Explorer · × #2 General · ■ #3 General");
 		expect(output).not.toContain("completed · 1 failed");
 		expect(output).not.toContain("$0.420");
 		expect(output).not.toContain("nope");
@@ -199,7 +198,7 @@ describe("subagent rendering", () => {
 				],
 			}),
 		);
-		expect(output).toBe("✓ #1 Explorer · Completed · 1.5s");
+		expect(output).toBe("✓ #1 Explorer");
 		expect(output).not.toContain("Summary");
 		expect(output).not.toContain("Output truncated");
 		expect(output).not.toContain("Read a.ts");
@@ -240,11 +239,11 @@ describe("subagent rendering", () => {
 				runs: [run({ status: "aborted", startedAt: undefined, endedAt: undefined, report: "" })],
 			}),
 		);
-		expect(output).toBe("■ #1 Explorer · Aborted");
+		expect(output).toBe("■ #1 Explorer");
 	});
 
 	it("formats per-run minute boundaries without emitting sixty seconds", () => {
-		const output = collapsed(
+		const output = expanded(
 			details({
 				runs: [
 					run({ endedAt: 75_000 }),
@@ -253,13 +252,13 @@ describe("subagent rendering", () => {
 				],
 			}),
 		);
-		expect(output).toContain("Completed · 1m 15s");
-		expect(output).toContain("Completed · 2m 0s");
-		expect(output).toContain("Completed · 1m 0s");
+		expect(output).toContain("── #1 Explorer · test/model · low · 2 tool uses · 1 turn · 1m 15s");
+		expect(output).toContain("── #2 General · test/model · low · 2 tool uses · 1 turn · 2m 0s");
+		expect(output).toContain("── #3 General · test/model · low · 2 tool uses · 1 turn · 1m 0s");
 		expect(output).not.toMatch(/\b60s\b/u);
 	});
 
-	it("shows only the stable ordinal, profile, and current activity while running", () => {
+	it("keeps collapsed rows to the status glyph, ordinal, and profile only", () => {
 		const active = liveRun({
 			currentActivity: "Run ls -d */",
 			activities: [runningActivity("bash-1", "bash", "Run ls -d */")],
@@ -267,7 +266,8 @@ describe("subagent rendering", () => {
 		const output = collapsed(details({ status: "running", endedAt: undefined, runs: [active] }), {
 			isPartial: true,
 		});
-		expect(output).toBe("› #1 Explorer · Run ls -d */");
+		expect(output).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #1 Explorer$/u);
+		expect(output).not.toContain("Run ls -d */");
 		expect(output).not.toContain("0/1");
 		expect(output).not.toContain("Inspect the code");
 		expect(output).not.toContain("Prompt");
@@ -286,19 +286,19 @@ describe("subagent rendering", () => {
 		const runs = activities.map((activity, index) =>
 			liveRun({ id: `r${index + 1}`, agent: index === 6 ? "general" : "explorer", activities: [activity] }),
 		);
-		const output = collapsed(details({ status: "running", endedAt: undefined, runs }), {
+		const output = expanded(details({ status: "running", endedAt: undefined, runs }), {
 			isPartial: true,
 			args: {
 				tasks: runs.map((entry) => ({ agent: entry.agent as "explorer" | "general", prompt: "Hidden" })),
 			},
 		});
-		expect(output).toContain("› #1 Explorer · Run npm test");
-		expect(output).toContain("› #2 Explorer · Read src/index.ts");
-		expect(output).toContain("› #3 Explorer · Search normalizeState");
-		expect(output).toContain("› #4 Explorer · Find **/*.test.ts");
-		expect(output).toContain("› #5 Explorer · List src");
-		expect(output).toContain("› #6 Explorer · Edit src/index.ts");
-		expect(output).toContain("› #7 General · Write docs/design.md");
+		expect(output).toContain("› Run npm test");
+		expect(output).toContain("› Read src/index.ts");
+		expect(output).toContain("› Search normalizeState");
+		expect(output).toContain("› Find **/*.test.ts");
+		expect(output).toContain("› List src");
+		expect(output).toContain("› Edit src/index.ts");
+		expect(output).toContain("› Write docs/design.md");
 	});
 
 	it("shows auto-compaction as its own running state", () => {
@@ -309,7 +309,8 @@ describe("subagent rendering", () => {
 		const folded = collapsed(details({ status: "running", endedAt: undefined, runs: [compacting] }), {
 			isPartial: true,
 		});
-		expect(folded).toBe("› #1 Explorer · Compacting...");
+		expect(folded).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #1 Explorer$/u);
+		expect(folded).not.toContain("Compacting");
 
 		const open = expanded(details({ status: "running", endedAt: undefined, runs: [compacting] }), {
 			isPartial: true,
@@ -368,12 +369,12 @@ describe("subagent rendering", () => {
 		for (let index = 1; index < runs.length; index++) {
 			expect(output.indexOf(`#${index}`)).toBeLessThan(output.indexOf(`#${index + 1}`));
 		}
-		expect(output).toContain("✓ #1 Explorer · Completed · 1.5s");
-		expect(output).toContain("› #2 General · Run check");
-		expect(output).toContain("× #3 Explorer · Failed · 1.5s");
-		expect(output).toContain("■ #4 General · Aborted · 1.5s");
-		expect(output).toContain("○ #5 Explorer · Queued");
-		expect(output).toContain("› #6 Explorer · Thinking...");
+		expect(output).toContain("✓ #1 Explorer");
+		expect(output).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #2 General/u);
+		expect(output).toContain("× #3 Explorer");
+		expect(output).toContain("■ #4 General");
+		expect(output).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #5 Explorer/u);
+		expect(output).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #6 Explorer/u);
 		expect(output).not.toContain("done");
 	});
 
@@ -382,7 +383,8 @@ describe("subagent rendering", () => {
 			details({ status: "running", endedAt: undefined, runs: [liveRun({ currentActivity: "Run git status" })] }),
 			{ isPartial: true },
 		);
-		expect(output).toBe("› #1 Explorer · Run git status");
+		expect(output).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #1 Explorer$/u);
+		expect(output).not.toContain("git status");
 	});
 
 	it("labels queued, starting, and idle model states", () => {
@@ -399,23 +401,46 @@ describe("subagent rendering", () => {
 				],
 			},
 		});
-		expect(output).toContain("○ #1 Explorer · Queued");
-		expect(output).toContain("› #2 Explorer · Starting...");
-		expect(output).toContain("› #3 Explorer · Thinking...");
+		expect(output).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #1 Explorer/u);
+		expect(output).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #2 Explorer/u);
+		expect(output).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #3 Explorer/u);
+		expect(output).not.toContain("Queued");
+		expect(output).not.toContain("Starting");
+		expect(output).not.toContain("Thinking");
 	});
 
-	it.each([60, 80])("keeps a long CJK/emoji activity on one width-safe line at %i columns", (width) => {
-		const command = `Run npm test -- --filter ${"测试🚀命令".repeat(40)}`;
-		const lines = renderLines(
-			details({ status: "running", endedAt: undefined, runs: [liveRun({ currentActivity: command })] }),
-			{ isPartial: true, width },
-		);
-		expect(lines).toHaveLength(1);
-		expect(lines[0]).toMatch(/^› #1 Explorer · Run npm test/u);
-		expect(lines[0]).toContain("...");
-		expect(visibleWidth(lines[0]!)).toBeLessThanOrEqual(width);
-		expect(lines[0]).not.toContain("�");
-		expect(lines[0]).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/u);
+	it.each([60, 80, 120])("stays width-safe while wrapping a wide batch at %i columns", (width) => {
+		const runs = Array.from({ length: 12 }, (_, index) => liveRun({ id: `r${index}` }));
+		const lines = renderLines(details({ status: "running", endedAt: undefined, runs }), {
+			isPartial: true,
+			width,
+			args: {
+				tasks: runs.map((entry) => ({ agent: "explorer", prompt: `Prompt ${entry.id}` })),
+			},
+		});
+		expect(lines.length).toBeGreaterThan(1);
+		for (const line of lines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			expect(line).not.toContain("�");
+			expect(line).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/u);
+		}
+	});
+
+	it("aligns every continuation row to the same columns", () => {
+		const runs = Array.from({ length: 6 }, (_, index) => liveRun({ id: `r${index}` }));
+		const lines = renderLines(details({ status: "running", endedAt: undefined, runs }), {
+			isPartial: true,
+			width: 60,
+			args: {
+				tasks: runs.map((entry) => ({ agent: "explorer", prompt: `Prompt ${entry.id}` })),
+			},
+		});
+		expect(lines).toHaveLength(2);
+		expect(visibleWidth(lines[0]!)).toBe(visibleWidth(lines[1]!));
+		for (const line of lines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(60);
+			expect(line).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #[1-6] Explorer/u);
+		}
 	});
 
 	it("never leaks prompt heads or markdown into collapsed task rows", () => {
@@ -424,28 +449,37 @@ describe("subagent rendering", () => {
 			isPartial: true,
 			args: { tasks: [{ agent: "explorer", prompt }] },
 		});
-		expect(output).toBe("› #1 Explorer · Thinking...");
+		expect(output).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #1 Explorer$/u);
 		expect(output).not.toContain("中文摘要");
 		expect(output).not.toContain("链接");
 		expect(output).not.toContain("entry.ts");
 		expect(output).not.toContain("🚀");
 	});
 
-	it("prefers retry countdowns over activity and uses the run marker for active provider retry", () => {
+	it("keeps collapsed rows free of retry countdowns and shows them expanded", () => {
 		const retrying = withRetry(liveRun({ currentActivity: "Exploring code" }), 1, 3, 8_000, "fetch failed");
-		const output = collapsed(details({ status: "running", endedAt: undefined, runs: [retrying] }), {
+		const folded = collapsed(details({ status: "running", endedAt: undefined, runs: [retrying] }), {
 			isPartial: true,
 		});
-		expect(output).toContain("› #1 Explorer · Retrying (1/3) in 8s · fetch failed");
-		expect(output).not.toContain("Exploring code");
+		expect(folded).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #1 Explorer$/u);
+		expect(folded).not.toContain("Retrying");
+		expect(folded).not.toContain("Exploring code");
+		const open = expanded(details({ status: "running", endedAt: undefined, runs: [retrying] }), {
+			isPartial: true,
+		});
+		expect(open).toContain("› Retrying (1/3) in 8s · fetch failed");
 	});
 
-	it("uses the queued marker for task-level retry backoff", () => {
+	it("keeps task-level retry backoff out of collapsed rows", () => {
 		const retrying = withRetry(liveRun({ status: "queued", startedAt: undefined }), 1, 2, 8_000, "fetch failed");
-		const output = collapsed(details({ status: "running", endedAt: undefined, runs: [retrying] }), {
+		const folded = collapsed(details({ status: "running", endedAt: undefined, runs: [retrying] }), {
 			isPartial: true,
 		});
-		expect(output).toContain("○ #1 Explorer · Retrying (1/2) in 8s · fetch failed");
+		expect(folded).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #1 Explorer$/u);
+		const open = expanded(details({ status: "running", endedAt: undefined, runs: [retrying] }), {
+			isPartial: true,
+		});
+		expect(open).toContain("○ Retrying (1/2) in 8s · fetch failed");
 	});
 
 	it("keeps terminal failure reasons out of compact rows", () => {
@@ -466,9 +500,26 @@ describe("subagent rendering", () => {
 				},
 			},
 		);
-		expect(output).toContain("× #2 Explorer · Failed · 1.5s");
+		expect(output).toContain("✓ #1 Explorer");
+		expect(output).toContain("× #2 Explorer");
 		expect(output).not.toContain("failure context");
 		expect(output).not.toContain(omitted);
+	});
+
+	it("keeps batch timing and cost out of collapsed rows and shows them expanded", () => {
+		const data = details({
+			status: "failed",
+			startedAt: 0,
+			endedAt: 4_000,
+			usage: usage({ turns: 2, toolUses: 7, totalTokens: 120, cost: 0.42 }),
+			runs: [run({ status: "failed", error: "nope", report: "" }), run({ id: "r2", agent: "general" })],
+		});
+		const folded = collapsed(data);
+		expect(folded).toBe("× #1 Explorer · ✓ #2 General");
+		expect(folded).not.toContain("$0.420");
+		expect(folded).not.toContain("4.0s");
+		const open = expanded(data);
+		expect(open).toContain("── Batch · 2 tasks · 4.0s · $0.420");
 	});
 
 	it("expands a settled task into compact metadata, full prompt, and report", () => {
@@ -485,6 +536,7 @@ describe("subagent rendering", () => {
 				],
 			}),
 		);
+		expect(output).toContain("── Batch · 1 task · 4.0s");
 		expect(output).toContain("── #1 Explorer · test/model · low · 2 tool uses · 1 turn · 4.0s");
 		expect(output).toContain("Prompt");
 		expect(output).toContain("Inspect the code.");
