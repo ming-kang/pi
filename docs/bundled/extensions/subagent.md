@@ -26,7 +26,7 @@ agent?   explorer or general; defaults to explorer
 cwd?     Directory inside the parent working directory
 ```
 
-There is no separate single-task or parallel mode. One item launches one worker; multiple items launch concurrent workers. A session-scoped gate permits at most five active workers across all sibling `subagent` calls, so additional items wait for a slot. Results always follow input order, regardless of completion order.
+There is no separate single-task or parallel mode. One item launches one worker; multiple items launch concurrent workers. A session-scoped gate permits at most six active workers across all sibling `subagent` calls, so additional items wait for a slot. Results always follow input order, regardless of completion order.
 
 All tasks are preflighted before any worker starts. Profile, working-directory, model, thinking-level, or authentication failure in one item rejects the entire call without launching the other workers. Once execution begins, one worker failing does not cancel independent siblings.
 

@@ -155,7 +155,7 @@ describe("subagent extension registration", () => {
 		const controller = new AbortController();
 		const execution = tool!.execute(
 			"call_shutdown_regression",
-			{ tasks: Array.from({ length: 6 }, (_, index) => ({ prompt: `Task ${index + 1}.` })) },
+			{ tasks: Array.from({ length: 7 }, (_, index) => ({ prompt: `Task ${index + 1}.` })) },
 			controller.signal,
 			undefined,
 			{
@@ -181,16 +181,16 @@ describe("subagent extension registration", () => {
 				isProjectTrusted: () => false,
 			} as never,
 		);
-		// Five workers occupy the gate (the module default); the sixth queues.
-		await vi.waitFor(() => expect(runSdkTaskMock).toHaveBeenCalledTimes(5));
+		// Six workers occupy the gate (the module default); the seventh queues.
+		await vi.waitFor(() => expect(runSdkTaskMock).toHaveBeenCalledTimes(6));
 		for (const handler of shutdownHandlers) await handler();
 		const result = (await execution) as unknown as SubagentExecutionResult;
 		// The queued run settled aborted without a worker ever starting.
-		expect(runSdkTaskMock).toHaveBeenCalledTimes(5);
-		const queued = result.details.runs[5];
+		expect(runSdkTaskMock).toHaveBeenCalledTimes(6);
+		const queued = result.details.runs[6];
 		expect(queued?.status).toBe("aborted");
 		expect(queued?.error).toContain("queued");
-		for (const run of result.details.runs.slice(0, 5)) expect(run.status).toBe("aborted");
+		for (const run of result.details.runs.slice(0, 6)) expect(run.status).toBe("aborted");
 	});
 
 	it("constrains the schema to a required 1-8 tasks array and the explorer|general enum", () => {
@@ -219,7 +219,7 @@ describe("subagent extension registration", () => {
 		expect(tasks?.type).toBe("array");
 		expect(tasks?.minItems).toBe(1);
 		expect(tasks?.maxItems).toBe(8);
-		expect(tasks?.description).toContain("at most 5 active at once");
+		expect(tasks?.description).toContain("at most 6 active at once");
 		expect(tasks?.description).toContain("results preserve input order");
 
 		expect(taskSchema.required).toEqual(["prompt"]);

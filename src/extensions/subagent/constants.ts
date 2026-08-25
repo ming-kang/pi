@@ -7,7 +7,7 @@ export const SUBAGENT_CONFIG_VERSION = 1;
 export const SUBAGENT_CONFIG_FILE = "subagent.json";
 
 export const MAX_TASKS = 8;
-export const MAX_CONCURRENCY = 5;
+export const MAX_CONCURRENCY = 6;
 
 // Task-level retry for failures that bypass the session's own auto-retry
 // (preflight throws such as auth checks). Only runs that produced nothing
