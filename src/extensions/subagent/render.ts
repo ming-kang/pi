@@ -22,8 +22,8 @@ const FALLBACK_OUTPUT_LIMIT = 4_000;
 const ACTIVITY_DURATION_MIN_MS = 10_000;
 const OUTPUT_TRUNCATION_NOTICE_PATTERN = /\s*\[Output truncated(?:: \d+ bytes omitted)?\.\]\s*$/u;
 
-// Mirrors pi-tui's Loader frame set and cadence so the collapsed flow
-// animates with the same native spinner as the shell's working indicators.
+// Borrowed from pi-tui's Loader for a familiar look; a local aesthetic
+// choice rather than a consistency contract with the shell's indicators.
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_INTERVAL_MS = 80;
 const ELAPSED_REFRESH_INTERVAL_MS = 1_000;
@@ -182,14 +182,7 @@ function spinnerGlyph(now: number): string {
 
 /** One collapsed cell: status glyph, ordinal, and profile label only. */
 function flowSegment(run: SubagentRunDetails, index: number, theme: Theme, now: number): string {
-	const marker =
-		run.status === "completed"
-			? theme.fg("success", "✓")
-			: run.status === "failed"
-				? theme.fg("error", "×")
-				: run.status === "aborted"
-					? theme.fg("warning", "■")
-					: theme.fg("accent", spinnerGlyph(now));
+	const marker = run.status === "running" ? theme.fg("accent", spinnerGlyph(now)) : statusMarker(run.status, theme);
 	return `${marker} ${theme.fg("dim", `#${index + 1}`)} ${theme.fg("accent", profileLabel(run.agent))}`;
 }
 
@@ -327,43 +320,52 @@ function fallbackResult(result: AgentToolResult<SubagentDetails>, theme: Theme, 
 /** Per-result live-refresh state owned by the shell's render context. */
 export interface SubagentRenderState {
 	refreshTimer?: ReturnType<typeof setTimeout>;
+	/** Cadence the current timer was created with, used to detect changes. */
+	refreshInterval?: number;
 }
 
 type SubagentToolRenderContext = ToolRenderContext<SubagentRenderState, SubagentParams, SubagentDetails>;
 
-function hasActiveRuns(runs: SubagentRunDetails[]): boolean {
-	return runs.some((run) => run.status === "queued" || run.status === "running");
+// Only genuinely running runs justify spinner-cadence repaints; queued runs
+// show a static marker and pick the animation back up via runner updates.
+function hasRunningRuns(runs: SubagentRunDetails[]): boolean {
+	return runs.some((run) => run.status === "running");
 }
 
-// Animate a collapsed flow at the native spinner cadence while runs are
-// active; otherwise re-render timing and retry text once per second. The
-// first settled render clears the timer.
-export function scheduleLiveRefresh(context: ToolRenderContext<SubagentRenderState>, isPartial: boolean): void {
+// Animate a collapsed flow at the spinner cadence while runs are active;
+// otherwise re-render timing and retry text once per second. The first
+// settled render clears the timer, and a cadence change (expand/collapse or
+// the last run finishing) reschedules immediately instead of waiting out
+// the previous interval.
+export function scheduleLiveRefresh(context: SubagentToolRenderContext, isPartial: boolean): void {
 	const state = context.state;
 	if (isPartial) {
-		if (state.refreshTimer === undefined) {
-			const details = context.result?.details as SubagentDetails | undefined;
-			const interval =
-				!context.expanded && hasActiveRuns(details?.runs ?? []) ? SPINNER_INTERVAL_MS : ELAPSED_REFRESH_INTERVAL_MS;
-			state.refreshTimer = setTimeout(() => {
-				state.refreshTimer = undefined;
-				context.invalidate();
-			}, interval);
-			state.refreshTimer.unref?.();
+		const details = context.result?.details;
+		const interval =
+			!context.expanded && hasRunningRuns(details?.runs ?? []) ? SPINNER_INTERVAL_MS : ELAPSED_REFRESH_INTERVAL_MS;
+		if (state.refreshTimer !== undefined) {
+			// Keep a matching timer so unrelated re-renders cannot postpone the
+			// next tick; only reschedule when the desired cadence changes.
+			if (state.refreshInterval === interval) return;
+			clearTimeout(state.refreshTimer);
 		}
+		state.refreshInterval = interval;
+		state.refreshTimer = setTimeout(() => {
+			state.refreshTimer = undefined;
+			state.refreshInterval = undefined;
+			context.invalidate();
+		}, interval);
+		state.refreshTimer.unref?.();
 		return;
 	}
 	if (state.refreshTimer !== undefined) {
 		clearTimeout(state.refreshTimer);
 		state.refreshTimer = undefined;
+		state.refreshInterval = undefined;
 	}
 }
 
-export function renderSubagentCall(
-	args: SubagentParams,
-	theme: Theme,
-	_context?: SubagentToolRenderContext,
-): Component {
+export function renderSubagentCall(args: SubagentParams, theme: Theme): Component {
 	const count = Array.isArray(args.tasks) ? args.tasks.length : 0;
 	const title = theme.fg(count > 0 ? "toolTitle" : "error", theme.bold("Subagent"));
 	return new Text(title, 0, 0);

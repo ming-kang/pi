@@ -373,7 +373,7 @@ describe("subagent rendering", () => {
 		expect(output).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #2 General/u);
 		expect(output).toContain("× #3 Explorer");
 		expect(output).toContain("■ #4 General");
-		expect(output).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #5 Explorer/u);
+		expect(output).toContain("○ #5 Explorer");
 		expect(output).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #6 Explorer/u);
 		expect(output).not.toContain("done");
 	});
@@ -401,7 +401,7 @@ describe("subagent rendering", () => {
 				],
 			},
 		});
-		expect(output).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #1 Explorer/u);
+		expect(output).toContain("○ #1 Explorer");
 		expect(output).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #2 Explorer/u);
 		expect(output).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #3 Explorer/u);
 		expect(output).not.toContain("Queued");
@@ -475,7 +475,7 @@ describe("subagent rendering", () => {
 		const folded = collapsed(details({ status: "running", endedAt: undefined, runs: [retrying] }), {
 			isPartial: true,
 		});
-		expect(folded).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] #1 Explorer$/u);
+		expect(folded).toBe("○ #1 Explorer");
 		const open = expanded(details({ status: "running", endedAt: undefined, runs: [retrying] }), {
 			isPartial: true,
 		});

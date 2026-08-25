@@ -288,7 +288,7 @@ describe("Subagent shell-driven live refresh", () => {
 		);
 
 		const folded = render(component);
-		expect(folded).toMatch(new RegExp(`${SPINNER_CLASS} #4 Explorer`, "u"));
+		expect(folded).toContain("○ #4 Explorer");
 		expect(folded).not.toContain("Retrying");
 		component.setExpanded(true);
 		expect(render(component)).toContain("○ Retrying (1/2) in 8s · fetch failed");

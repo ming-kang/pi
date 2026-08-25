@@ -65,8 +65,8 @@ export default function subagent(pi: ExtensionAPI): void {
 				usage: execution.usage,
 			};
 		},
-		renderCall(args, theme, context) {
-			return renderSubagentCall(args, theme, context);
+		renderCall(args, theme) {
+			return renderSubagentCall(args, theme);
 		},
 		renderResult(result, options, theme, context) {
 			scheduleLiveRefresh(context, options.isPartial);
