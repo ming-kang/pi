@@ -10,7 +10,6 @@ import { runSdkTask } from "./sdk-runner.ts";
 import { loadSubagentConfig } from "./settings.ts";
 import {
 	createRunState,
-	isSubagentError as isSubagentErrorSelector,
 	reduceRun,
 	type SubagentRunEvent,
 	type SubagentRunState,
@@ -25,6 +24,7 @@ interface Waiter {
 	reject: (error: Error) => void;
 	signal?: AbortSignal;
 	abortListener?: () => void;
+	settled: boolean;
 }
 
 export class ConcurrencyGate {
@@ -43,9 +43,11 @@ export class ConcurrencyGate {
 			return Promise.resolve(() => this.release());
 		}
 		return new Promise<() => void>((resolve, reject) => {
-			const waiter: Waiter = { resolve, reject, signal };
+			const waiter: Waiter = { resolve, reject, signal, settled: false };
 			if (signal) {
 				waiter.abortListener = () => {
+					if (waiter.settled) return;
+					waiter.settled = true;
 					const index = this.waiters.indexOf(waiter);
 					if (index >= 0) this.waiters.splice(index, 1);
 					reject(new Error("Subagent was aborted while queued."));
@@ -60,10 +62,8 @@ export class ConcurrencyGate {
 		this.active = Math.max(0, this.active - 1);
 		while (this.waiters.length > 0) {
 			const waiter = this.waiters.shift()!;
-			if (waiter.signal?.aborted) {
-				waiter.abortListener?.();
-				continue;
-			}
+			if (waiter.settled || waiter.signal?.aborted) continue;
+			waiter.settled = true;
 			waiter.signal?.removeEventListener("abort", waiter.abortListener!);
 			this.active++;
 			waiter.resolve(() => this.release());
@@ -269,6 +269,4 @@ export async function runSubagentInvocation(options: SubagentInvocationOptions):
 	};
 }
 
-export function isSubagentError(details: Pick<SubagentDetails, "status" | "runs">): boolean {
-	return isSubagentErrorSelector(details);
-}
+export { isSubagentError } from "./state.ts";

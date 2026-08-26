@@ -190,150 +190,206 @@ function clearRetry(draft: SubagentRunState): void {
  */
 export function reduceRun(state: SubagentRunState, event: SubagentRunEvent): SubagentRunState {
 	if (isTerminal(state) && event.type !== "retry_scheduled") return state;
+	return withRevision(state, (draft) => {
+		// Cross-cutting pre-hook: every event clears the retry view except
+		// retry_scheduled (which sets it) and the two abort-terminal events
+		// (which clear it explicitly in their own body).
+		if (event.type !== "retry_scheduled") clearRetry(draft);
+		applyEvent(draft, event);
+		// Cross-cutting post-hook: derive the live activity line from the
+		// new state. Terminal abort events override this to undefined.
+		draft.currentActivity = deriveCurrentActivity(draft);
+	});
+}
 
+// ─── Individual event handlers ───────────────────────────────────────────────
+// Each handler mutates the draft in place. Cross-cutting clearRetry and
+// deriveCurrentActivity are handled by the dispatch layer above.
+
+function handleSlotAcquired(
+	draft: SubagentRunState,
+	event: Extract<SubagentRunEvent, { type: "slot_acquired" }>,
+): void {
+	draft.status = "running";
+	draft.startedAt = event.startedAt;
+}
+
+function handleRetryScheduled(
+	draft: SubagentRunState,
+	event: Extract<SubagentRunEvent, { type: "retry_scheduled" }>,
+): void {
+	// Full reset: only runs that produced nothing are retried, so nothing of
+	// value is discarded. The retry view stays visible through the backoff.
+	const error = draft.error ?? "Subagent failed before retry.";
+	draft.status = "queued";
+	draft.error = undefined;
+	draft.startedAt = undefined;
+	draft.endedAt = undefined;
+	draft.report = "";
+	draft.activities = [];
+	draft.usage = emptyUsage();
+	draft.retry = makeRetry(event.attempt, event.maxAttempts, event.deadline, error);
+}
+
+function handleRetryStarted(draft: SubagentRunState): void {
+	// No-op beyond the cross-cutting clearRetry already applied.
+	void draft;
+}
+
+function handleAutoRetryStart(
+	draft: SubagentRunState,
+	event: Extract<SubagentRunEvent, { type: "auto_retry_start" }>,
+): void {
+	draft.retry = makeRetry(event.attempt, event.maxAttempts, event.deadline, event.error);
+}
+
+function handleAutoRetryEnd(draft: SubagentRunState): void {
+	// No-op beyond the cross-cutting clearRetry already applied.
+	void draft;
+}
+
+function handleTurnEnd(draft: SubagentRunState): void {
+	draft.usage.turns++;
+}
+
+function handleAssistantMessageSettled(
+	draft: SubagentRunState,
+	event: Extract<SubagentRunEvent, { type: "assistant_message_settled" }>,
+): void {
+	addUsage(draft.usage, event.usage);
+}
+
+function handleToolStarted(draft: SubagentRunState, event: Extract<SubagentRunEvent, { type: "tool_started" }>): void {
+	draft.usage.toolUses++;
+	appendActivity(draft.activities, {
+		id: event.toolCallId,
+		toolName: event.toolName,
+		summary: activitySummary(event.toolName, event.args),
+		status: "running",
+		startedAt: event.startedAt,
+	});
+}
+
+function handleToolUpdated(draft: SubagentRunState, event: Extract<SubagentRunEvent, { type: "tool_updated" }>): void {
+	const summary = activitySummary(event.toolName, event.args);
+	const activity =
+		draft.activities.find((candidate) => candidate.id === event.toolCallId && candidate.status === "running") ??
+		[...draft.activities].reverse().find((candidate) => candidate.status === "running");
+	if (activity) activity.summary = summary;
+}
+
+function handleToolEnded(draft: SubagentRunState, event: Extract<SubagentRunEvent, { type: "tool_ended" }>): void {
+	const activity = draft.activities.find((candidate) => candidate.id === event.toolCallId);
+	if (activity && activity.status === "running") {
+		activity.status = event.isError ? "failed" : "succeeded";
+		activity.endedAt = event.endedAt;
+		activity.resultSummary = resultSummary(event.result) || undefined;
+	}
+}
+
+function handleCompactionStarted(
+	draft: SubagentRunState,
+	event: Extract<SubagentRunEvent, { type: "compaction_started" }>,
+): void {
+	appendActivity(draft.activities, {
+		id: COMPACTION_ACTIVITY_ID,
+		toolName: COMPACTION_ACTIVITY_ID,
+		summary: "Compacting context…",
+		status: "running",
+		startedAt: event.startedAt,
+	});
+}
+
+function handleCompactionEnded(
+	draft: SubagentRunState,
+	event: Extract<SubagentRunEvent, { type: "compaction_ended" }>,
+): void {
+	const activity = [...draft.activities]
+		.reverse()
+		.find((candidate) => candidate.id === COMPACTION_ACTIVITY_ID && candidate.status === "running");
+	if (activity) {
+		activity.status = event.error ? "failed" : "succeeded";
+		activity.endedAt = event.endedAt;
+		activity.summary = compactionSummary(event.tokensBefore, event.tokensAfter);
+		activity.resultSummary = event.error ? compactionError(event.error) : undefined;
+	}
+}
+
+function handleSettle(draft: SubagentRunState, event: Extract<SubagentRunEvent, { type: "settle" }>): void {
+	draft.status = event.verdict;
+	draft.report = boundText(event.report, TASK_OUTPUT_LIMIT);
+	draft.error = event.error ? boundText(event.error, ERROR_TEXT_LIMIT) : undefined;
+	draft.endedAt = event.endedAt;
+	draft.retry = undefined;
+}
+
+function handleAbortWhileQueued(
+	draft: SubagentRunState,
+	event: Extract<SubagentRunEvent, { type: "abort_while_queued" }>,
+): void {
+	draft.status = "aborted";
+	draft.error = "Subagent was aborted while queued.";
+	draft.endedAt = event.endedAt;
+	draft.retry = undefined;
+}
+
+function handleAbortWhileRetrying(
+	draft: SubagentRunState,
+	event: Extract<SubagentRunEvent, { type: "abort_while_retrying" }>,
+): void {
+	draft.status = "aborted";
+	draft.error = "Subagent was aborted while waiting to retry.";
+	draft.endedAt = event.endedAt;
+	draft.retry = undefined;
+}
+
+function applyEvent(draft: SubagentRunState, event: SubagentRunEvent): void {
 	switch (event.type) {
 		case "slot_acquired":
-			return withRevision(state, (draft) => {
-				clearRetry(draft);
-				draft.status = "running";
-				draft.startedAt = event.startedAt;
-				draft.currentActivity = deriveCurrentActivity(draft);
-			});
+			handleSlotAcquired(draft, event);
+			break;
 		case "retry_scheduled":
-			// The full reset matrix from the historical resetRunForRetry: only
-			// runs that produced nothing are retried, so nothing of value is
-			// discarded. The retry view stays visible through the backoff.
-			return withRevision(state, (draft) => {
-				const error = draft.error ?? "Subagent failed before retry.";
-				draft.status = "queued";
-				draft.error = undefined;
-				draft.startedAt = undefined;
-				draft.endedAt = undefined;
-				draft.report = "";
-				draft.activities = [];
-				draft.usage = emptyUsage();
-				draft.retry = makeRetry(event.attempt, event.maxAttempts, event.deadline, error);
-				draft.currentActivity = deriveCurrentActivity(draft);
-			});
+			handleRetryScheduled(draft, event);
+			break;
 		case "retry_started":
-			return withRevision(state, (draft) => {
-				clearRetry(draft);
-				draft.currentActivity = deriveCurrentActivity(draft);
-			});
+			handleRetryStarted(draft);
+			break;
 		case "auto_retry_start":
-			return withRevision(state, (draft) => {
-				draft.retry = makeRetry(event.attempt, event.maxAttempts, event.deadline, event.error);
-				draft.currentActivity = deriveCurrentActivity(draft);
-			});
+			handleAutoRetryStart(draft, event);
+			break;
 		case "auto_retry_end":
-			return withRevision(state, (draft) => {
-				clearRetry(draft);
-				draft.currentActivity = deriveCurrentActivity(draft);
-			});
+			handleAutoRetryEnd(draft);
+			break;
 		case "turn_end":
-			return withRevision(state, (draft) => {
-				clearRetry(draft);
-				draft.usage.turns++;
-				draft.currentActivity = deriveCurrentActivity(draft);
-			});
+			handleTurnEnd(draft);
+			break;
 		case "assistant_message_settled":
-			return withRevision(state, (draft) => {
-				clearRetry(draft);
-				addUsage(draft.usage, event.usage);
-				draft.currentActivity = deriveCurrentActivity(draft);
-			});
+			handleAssistantMessageSettled(draft, event);
+			break;
 		case "tool_started":
-			return withRevision(state, (draft) => {
-				clearRetry(draft);
-				draft.usage.toolUses++;
-				appendActivity(draft.activities, {
-					id: event.toolCallId,
-					toolName: event.toolName,
-					summary: activitySummary(event.toolName, event.args),
-					status: "running",
-					startedAt: event.startedAt,
-				});
-				draft.currentActivity = deriveCurrentActivity(draft);
-			});
-		case "tool_updated": {
-			const summary = activitySummary(event.toolName, event.args);
-			return withRevision(state, (draft) => {
-				clearRetry(draft);
-				const activity =
-					draft.activities.find(
-						(candidate) => candidate.id === event.toolCallId && candidate.status === "running",
-					) ?? [...draft.activities].reverse().find((candidate) => candidate.status === "running");
-				if (activity) activity.summary = summary;
-				draft.currentActivity = deriveCurrentActivity(draft);
-			});
-		}
+			handleToolStarted(draft, event);
+			break;
+		case "tool_updated":
+			handleToolUpdated(draft, event);
+			break;
 		case "tool_ended":
-			return withRevision(state, (draft) => {
-				clearRetry(draft);
-				const activity = draft.activities.find((candidate) => candidate.id === event.toolCallId);
-				if (activity && activity.status === "running") {
-					activity.status = event.isError ? "failed" : "succeeded";
-					activity.endedAt = event.endedAt;
-					activity.resultSummary = resultSummary(event.result) || undefined;
-				}
-				draft.currentActivity = deriveCurrentActivity(draft);
-			});
+			handleToolEnded(draft, event);
+			break;
 		case "compaction_started":
-			// Auto-compaction is a synthetic activity: it has a start, an end and a
-			// failure mode just like a tool call, so it reuses the activity log and its
-			// budgets. It is not a tool call, so it never counts toward toolUses.
-			return withRevision(state, (draft) => {
-				clearRetry(draft);
-				appendActivity(draft.activities, {
-					id: COMPACTION_ACTIVITY_ID,
-					toolName: COMPACTION_ACTIVITY_ID,
-					summary: "Compacting context…",
-					status: "running",
-					startedAt: event.startedAt,
-				});
-				draft.currentActivity = deriveCurrentActivity(draft);
-			});
+			handleCompactionStarted(draft, event);
+			break;
 		case "compaction_ended":
-			return withRevision(state, (draft) => {
-				clearRetry(draft);
-				// Only one compaction runs at a time, so the newest running entry with
-				// this id is always the one that just ended.
-				const activity = [...draft.activities]
-					.reverse()
-					.find((candidate) => candidate.id === COMPACTION_ACTIVITY_ID && candidate.status === "running");
-				if (activity) {
-					activity.status = event.error ? "failed" : "succeeded";
-					activity.endedAt = event.endedAt;
-					activity.summary = compactionSummary(event.tokensBefore, event.tokensAfter);
-					activity.resultSummary = event.error ? compactionError(event.error) : undefined;
-				}
-				draft.currentActivity = deriveCurrentActivity(draft);
-			});
+			handleCompactionEnded(draft, event);
+			break;
 		case "settle":
-			return withRevision(state, (draft) => {
-				draft.status = event.verdict;
-				draft.report = boundText(event.report, TASK_OUTPUT_LIMIT);
-				draft.error = event.error ? boundText(event.error, ERROR_TEXT_LIMIT) : undefined;
-				draft.endedAt = event.endedAt;
-				draft.retry = undefined;
-				draft.currentActivity = deriveCurrentActivity({ ...draft, status: event.verdict });
-			});
+			handleSettle(draft, event);
+			break;
 		case "abort_while_queued":
-			return withRevision(state, (draft) => {
-				draft.status = "aborted";
-				draft.error = "Subagent was aborted while queued.";
-				draft.endedAt = event.endedAt;
-				draft.retry = undefined;
-				draft.currentActivity = undefined;
-			});
+			handleAbortWhileQueued(draft, event);
+			break;
 		case "abort_while_retrying":
-			return withRevision(state, (draft) => {
-				draft.status = "aborted";
-				draft.error = "Subagent was aborted while waiting to retry.";
-				draft.endedAt = event.endedAt;
-				draft.retry = undefined;
-				draft.currentActivity = undefined;
-			});
+			handleAbortWhileRetrying(draft, event);
+			break;
 	}
 }
 

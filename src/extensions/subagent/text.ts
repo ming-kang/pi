@@ -46,6 +46,10 @@ export function boundText(text: string, maxBytes: number): string {
 	if (maxBytes <= 0) return "";
 	if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
 	let output = utf8Prefix(text, maxBytes);
+	// The loop converges because the only variable in the notice is the digit
+	// count of "N bytes omitted" — each iteration shortens the prefix by at
+	// most the byte-length difference of one fewer digit, so it stabilizes in
+	// ≤2 iterations in practice. The cap of 8 is purely defensive.
 	for (let attempt = 0; attempt < 8; attempt++) {
 		const omitted = Buffer.byteLength(text, "utf8") - Buffer.byteLength(output, "utf8");
 		const notice = `\n\n[Output truncated: ${omitted} bytes omitted.]`;

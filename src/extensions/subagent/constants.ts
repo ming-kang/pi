@@ -17,6 +17,7 @@ export const TASK_RETRY_BASE_DELAY_MS = 1_000;
 
 // The only selectable agents: the schema's agent field restricts task items
 // to these names, resolve.ts defaults an omitted/null agent to explorer.
+// SubagentAgentName is co-located with its source value; types.ts re-imports it.
 export const SUBAGENT_AGENT_NAMES = ["explorer", "general"] as const;
 export type SubagentAgentName = (typeof SUBAGENT_AGENT_NAMES)[number];
 

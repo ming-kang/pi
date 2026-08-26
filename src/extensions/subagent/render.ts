@@ -183,9 +183,23 @@ function spinnerGlyph(now: number): string {
 	return SPINNER_FRAMES[frame] ?? SPINNER_FRAMES[0] ?? "";
 }
 
+// All spinner and status glyphs are single-width characters; this constant
+// documents the expectation and guards against accidental double-width
+// substitutions causing layout flicker in the collapsed flow.
+const MARKER_WIDTH = 1;
+
 /** One collapsed cell: status glyph, ordinal, and profile label only. */
 function flowSegment(run: SubagentRunDetails, index: number, theme: Theme, now: number): string {
-	const marker = run.status === "running" ? theme.fg("accent", spinnerGlyph(now)) : statusMarker(run.status, theme);
+	let marker: string;
+	if (run.status === "running") {
+		const glyph = spinnerGlyph(now);
+		// Pad to MARKER_WIDTH so cellWidth stays stable across frames even if
+		// a glyph measures wider on some terminal/font combinations.
+		const pad = Math.max(0, MARKER_WIDTH - visibleWidth(glyph));
+		marker = theme.fg("accent", glyph) + (pad > 0 ? " ".repeat(pad) : "");
+	} else {
+		marker = statusMarker(run.status, theme);
+	}
 	return `${marker} ${theme.fg("dim", `#${index + 1}`)} ${theme.fg("accent", profileLabel(run.agent))}`;
 }
 

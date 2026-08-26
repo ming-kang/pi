@@ -28,12 +28,10 @@ function isWithin(parent: string, child: string): boolean {
 	const normalizedParent = process.platform === "win32" ? parent.toLowerCase() : parent;
 	const normalizedChild = process.platform === "win32" ? child.toLowerCase() : child;
 	const rest = relative(normalizedParent, normalizedChild);
-	return rest === "" || (rest !== ".." && !rest.startsWith(`..${requirePathSeparator()}`) && !isAbsolute(rest));
+	return rest === "" || (rest !== ".." && !rest.startsWith(`..${PATH_SEP}`) && !isAbsolute(rest));
 }
 
-function requirePathSeparator(): string {
-	return process.platform === "win32" ? "\\" : "/";
-}
+const PATH_SEP = process.platform === "win32" ? "\\" : "/";
 
 export function resolveTaskCwd(parentCwd: string, requestedCwd: string | undefined): string {
 	const value = normalizeCwdInput(requestedCwd);

@@ -106,6 +106,11 @@ export function compactionError(error: string): string {
 	return boundText(error.replace(/\s+/gu, " ").trim(), 240);
 }
 
+/**
+ * Extracts a short text summary from a tool result's content array.
+ * Accepts `unknown` because SDK event payloads carry loosely-typed result
+ * objects; the function defensively narrows to the text-content shape.
+ */
 export function resultSummary(result: unknown): string {
 	if (!result || typeof result !== "object") return "";
 	const content = (result as { content?: unknown }).content;

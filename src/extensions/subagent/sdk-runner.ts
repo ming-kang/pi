@@ -22,6 +22,11 @@ export interface SdkRunnerOptions {
 	onProgress?: () => void;
 }
 
+/**
+ * Assembles the worker session's system prompt.
+ * @param base - The global system prompt from resource loading; undefined when
+ *   no global system prompt is configured (e.g. no AGENTS.md or system prompt override).
+ */
 function workerSystemPrompt(base: string | undefined, task: ResolvedSubagentTask): string {
 	return [
 		base,
@@ -75,6 +80,97 @@ function createThrottledEmitter(onProgress: (() => void) | undefined): Throttled
 			timer = undefined;
 		},
 	};
+}
+
+export interface MappedSessionEvent {
+	runEvent: SubagentRunEvent;
+	/** Whether the progress emission should be immediate (true) or throttled (false). */
+	immediate: boolean;
+}
+
+/**
+ * Pure mapping from AgentSessionEvent to SubagentRunEvent. Returns undefined
+ * for events the subagent adapter does not handle. Exported for unit testing.
+ */
+export function mapSessionEvent(
+	event: AgentSessionEvent,
+	seenAssistantMessages: Set<unknown>,
+	now = Date.now(),
+): MappedSessionEvent | undefined {
+	if (event.type === "auto_retry_start") {
+		return {
+			runEvent: {
+				type: "auto_retry_start",
+				attempt: event.attempt,
+				maxAttempts: event.maxAttempts,
+				deadline: now + event.delayMs,
+				error: event.errorMessage,
+			},
+			immediate: true,
+		};
+	}
+	if (event.type === "auto_retry_end") {
+		return { runEvent: { type: "auto_retry_end" }, immediate: true };
+	}
+	if (event.type === "turn_end") {
+		return { runEvent: { type: "turn_end" }, immediate: true };
+	}
+	if (event.type === "compaction_start") {
+		return { runEvent: { type: "compaction_started", startedAt: now }, immediate: true };
+	}
+	if (event.type === "compaction_end") {
+		return {
+			runEvent: {
+				type: "compaction_ended",
+				tokensBefore: event.result?.tokensBefore,
+				tokensAfter: event.result?.estimatedTokensAfter,
+				error: event.errorMessage,
+				endedAt: now,
+			},
+			immediate: true,
+		};
+	}
+	if (event.type === "message_end" && event.message.role === "assistant") {
+		const usage = seenAssistantMessages.has(event.message) ? undefined : event.message.usage;
+		seenAssistantMessages.add(event.message);
+		return { runEvent: { type: "assistant_message_settled", usage }, immediate: true };
+	}
+	if (event.type === "tool_execution_start") {
+		return {
+			runEvent: {
+				type: "tool_started",
+				toolCallId: event.toolCallId,
+				toolName: event.toolName,
+				args: event.args,
+				startedAt: now,
+			},
+			immediate: true,
+		};
+	}
+	if (event.type === "tool_execution_update") {
+		return {
+			runEvent: {
+				type: "tool_updated",
+				toolCallId: event.toolCallId,
+				toolName: event.toolName,
+				args: event.args,
+			},
+			immediate: false,
+		};
+	}
+	if (event.type === "tool_execution_end") {
+		return {
+			runEvent: {
+				type: "tool_ended",
+				toolCallId: event.toolCallId,
+				result: event.result,
+				isError: event.isError,
+				endedAt: now,
+			},
+			immediate: true,
+		};
+	}
+	return undefined;
 }
 
 type InitializationOutcome =
@@ -221,87 +317,11 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<void> {
 		}
 
 		unsubscribe = session.subscribe((event: AgentSessionEvent) => {
-			if (event.type === "auto_retry_start") {
-				dispatch({
-					type: "auto_retry_start",
-					attempt: event.attempt,
-					maxAttempts: event.maxAttempts,
-					deadline: Date.now() + event.delayMs,
-					error: event.errorMessage,
-				});
-				emitImmediate();
-				return;
-			}
-			if (event.type === "auto_retry_end") {
-				dispatch({ type: "auto_retry_end" });
-				emitImmediate();
-				return;
-			}
-			if (event.type === "turn_end") {
-				dispatch({ type: "turn_end" });
-				emitImmediate();
-				return;
-			}
-			if (event.type === "compaction_start") {
-				dispatch({ type: "compaction_started", startedAt: Date.now() });
-				emitImmediate();
-				return;
-			}
-			if (event.type === "compaction_end") {
-				// A worker has no status line of its own, so the compaction's outcome —
-				// especially the reason a failed one blocks the next request — only
-				// reaches the caller through the activity log.
-				dispatch({
-					type: "compaction_ended",
-					tokensBefore: event.result?.tokensBefore,
-					tokensAfter: event.result?.estimatedTokensAfter,
-					error: event.errorMessage,
-					endedAt: Date.now(),
-				});
-				emitImmediate();
-				return;
-			}
-			if (event.type === "message_end" && event.message.role === "assistant") {
-				if (!seenAssistantMessages.has(event.message)) {
-					seenAssistantMessages.add(event.message);
-					dispatch({ type: "assistant_message_settled", usage: event.message.usage });
-				} else {
-					dispatch({ type: "assistant_message_settled", usage: undefined });
-				}
-				emitImmediate();
-				return;
-			}
-			if (event.type === "tool_execution_start") {
-				dispatch({
-					type: "tool_started",
-					toolCallId: event.toolCallId,
-					toolName: event.toolName,
-					args: event.args,
-					startedAt: Date.now(),
-				});
-				emitImmediate();
-				return;
-			}
-			if (event.type === "tool_execution_update") {
-				dispatch({
-					type: "tool_updated",
-					toolCallId: event.toolCallId,
-					toolName: event.toolName,
-					args: event.args,
-				});
-				emitThrottled();
-				return;
-			}
-			if (event.type === "tool_execution_end") {
-				dispatch({
-					type: "tool_ended",
-					toolCallId: event.toolCallId,
-					result: event.result,
-					isError: event.isError,
-					endedAt: Date.now(),
-				});
-				emitImmediate();
-			}
+			const mapped = mapSessionEvent(event, seenAssistantMessages);
+			if (!mapped) return;
+			dispatch(mapped.runEvent);
+			if (mapped.immediate) emitImmediate();
+			else emitThrottled();
 		});
 		await session.prompt(task.prompt);
 		const finalMessage = lastAssistantMessage(session);
