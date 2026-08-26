@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.84.11] - 2026-08-26
+
 ### Changed
 
 - Increased the bundled Subagent maximum concurrency limit from 5 to 6 active workers.
