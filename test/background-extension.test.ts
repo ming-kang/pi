@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
 	AgentToolResult,
@@ -618,6 +618,31 @@ describe("renderBackgroundNotification", () => {
 		const expandedLines = (expanded?.render(120) ?? []).map(stripTerminalSequences);
 		expect(expandedLines.join("\n")).toContain("build finished");
 		expect(expandedLines.join("\n")).toContain("/tmp/pi-bg-abc123.log");
+	});
+
+	it("bounds a wide-character command by display width, not code-point count", () => {
+		// Each CJK code point occupies two terminal columns, so a count-based
+		// truncation emits roughly twice the intended width and overflows the row.
+		const command = "编译前端资源包".repeat(40);
+		const collapsed = renderBackgroundNotification(
+			message({ command }),
+			{ expanded: false, outputPad: 1 },
+			plainTheme,
+		);
+		const summary = ((collapsed?.render(400) ?? []).map(stripTerminalSequences)[0] ?? "").trimEnd();
+		// 120 columns for the command, plus the glyph, id, and outcome.
+		expect(visibleWidth(summary)).toBeLessThanOrEqual(200);
+
+		// With a description the command gets the tighter 40-column budget, so the
+		// row is shorter still, and the description survives.
+		const labelled = renderBackgroundNotification(
+			message({ command, description: "构建" }),
+			{ expanded: false, outputPad: 1 },
+			plainTheme,
+		);
+		const labelledSummary = ((labelled?.render(400) ?? []).map(stripTerminalSequences)[0] ?? "").trimEnd();
+		expect(labelledSummary).toContain("构建");
+		expect(visibleWidth(labelledSummary)).toBeLessThan(visibleWidth(summary));
 	});
 
 	it("keeps the end of an oversized tail when expanded", () => {

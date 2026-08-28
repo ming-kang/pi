@@ -8,6 +8,7 @@
  * vocabulary drifting. Pure functions; no TUI components, no theme.
  */
 
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { BgTaskStatus } from "./registry.ts";
 import { firstCommandLine, formatDuration } from "./text.ts";
 /** How long a task has run, or ran. A running task has no `endedAt`, so it measures to `now`. */
@@ -41,13 +42,12 @@ export function taskLabel(task: { description?: string; command: string }): stri
 
 /** A listing row's label, fitted to a visible-column budget. */
 export function taskLabelWithin(task: { description?: string; command: string }, width: number): string {
-	return commandLabel(taskLabel(task), width);
+	return truncateToWidth(taskLabel(task), width, "…");
 }
 
-/** First command line truncated to a visible-character budget with an ellipsis. */
+/** First command line fitted to a visible-column budget — wide characters count as two. */
 export function commandLabel(command: string, width: number): string {
-	const characters = [...firstCommandLine(command)];
-	return characters.length <= width ? characters.join("") : `${characters.slice(0, Math.max(0, width - 1)).join("")}…`;
+	return truncateToWidth(firstCommandLine(command), width, "…");
 }
 
 export function statusGlyph(status: BgTaskStatus, stalled?: boolean): string {
