@@ -4,6 +4,11 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed a `bg wait` losing its task's completion when the turn was interrupted in the same tick the task settled. Delivery was claimed on the waiter's behalf by the task's own finalization, so an abort arriving after that claim discarded the result while the `<background-task>` notification stayed suppressed — the finished task's status was never reported anywhere. Delivery is now claimed only by whoever actually delivers, and the last waiter to leave without delivering sends the notification itself. A related leak is gone too: each `bg wait` left an abort listener attached to the turn's signal, so a turn with many waits tripped Node's max-listeners warning.
+- Fixed `/bg` task rows and `<background-task>` notification summaries overflowing the terminal width for commands containing wide characters. The label was truncated by code-point count rather than display width, so a CJK command produced a row roughly twice its intended width; it now uses the same width-aware truncation as the rest of the TUI. An invalid `bg` timeout is also reported with the same wording as the built-in bash tool, which owns the rule.
+
 ## [0.84.11] - 2026-08-26
 
 ### Changed
