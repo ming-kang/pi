@@ -26,7 +26,11 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult
 const MAX_TIMEOUT_MS = 2_147_483_647;
 export const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
 
-function resolveTimeoutMs(timeout: number | undefined): number | undefined {
+/**
+ * The one timeout rule, shared by this tool and the background extension so a
+ * rejected timeout reads the same wherever it is caught.
+ */
+export function resolveTimeoutMs(timeout: number | undefined): number | undefined {
 	if (timeout === undefined) return undefined;
 	if (!Number.isFinite(timeout) || timeout <= 0) {
 		throw new Error("Invalid timeout: must be a finite number of seconds");

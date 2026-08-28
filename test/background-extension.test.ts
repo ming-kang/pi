@@ -517,8 +517,13 @@ describe("background extension", () => {
 		const harness = createHarness();
 		await harness.startSession();
 
-		await expect(harness.execute("bg", { action: "create", command: "x", timeout: 0 })).rejects.toThrow(/positive/);
-		await expect(harness.execute("bg", { action: "create", command: "x", timeout: -5 })).rejects.toThrow(/positive/);
+		// Same rule and same wording as the built-in bash tool.
+		await expect(harness.execute("bg", { action: "create", command: "x", timeout: 0 })).rejects.toThrow(
+			/Invalid timeout/,
+		);
+		await expect(harness.execute("bg", { action: "create", command: "x", timeout: -5 })).rejects.toThrow(
+			/Invalid timeout/,
+		);
 		expect(harness.calls).toHaveLength(0);
 		expect(harness.statusUpdates.at(-1)).toBeUndefined();
 	});

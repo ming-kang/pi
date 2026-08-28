@@ -8,7 +8,7 @@
  */
 
 import { type Static, Type } from "typebox";
-import { MAX_TIMEOUT_SECONDS } from "../../core/tools/bash.ts";
+import { resolveTimeoutMs } from "../../core/tools/bash.ts";
 import { DEFAULT_MAX_BYTES, formatSize } from "../../core/tools/truncate.ts";
 import {
 	BG_LOGS_DEFAULT_BYTES,
@@ -92,14 +92,9 @@ export function requireTaskId(input: BgInput): string {
 	return taskId;
 }
 
-/** Rejected before a task is started, so an invalid timeout never spawns anything. */
+/** Validated with the bash tool's own rule, so a rejected timeout reads the same either way. */
 export function parseTimeoutSeconds(timeout: number | undefined): number | undefined {
-	if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
-		throw new Error("Invalid timeout: must be a positive number of seconds.");
-	}
-	if (timeout !== undefined && timeout > MAX_TIMEOUT_SECONDS) {
-		throw new Error(`Invalid timeout: maximum is ${MAX_TIMEOUT_SECONDS} seconds`);
-	}
+	resolveTimeoutMs(timeout);
 	return timeout;
 }
 
