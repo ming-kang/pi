@@ -15,17 +15,15 @@ import type {
 import type { CustomMessage } from "../../core/messages.ts";
 import { formatSize } from "../../core/tools/truncate.ts";
 import { highlightCode, type Theme } from "../../modes/interactive/theme/theme.ts";
-import type { BgCreateInput, BgDetails, BgInput, BgNotificationDetails } from "./index.ts";
-import {
-	BG_WAIT_DEFAULT_MS,
-	BG_WAIT_MAX_MS,
-	BG_WAIT_MIN_MS,
-	type BgTaskStatus,
-	firstCommandLine,
-	formatDuration,
-} from "./registry.ts";
+import type { BgTaskStatus } from "./registry.ts";
+import { type BgInput, clampWaitMs } from "./schema.ts";
+import { commandLabel, exitSuffix, statusColor, statusGlyph } from "./task-view.ts";
+import { fileNameOf, firstCommandLine, formatDuration } from "./text.ts";
+import type { BgDetails, BgNotificationDetails } from "./types.ts";
 
 const COMMAND_PREVIEW_LIMIT = 120;
+/** Command budget inside a notification label that also carries a description. */
+const LABELLED_COMMAND_LIMIT = 40;
 const NOTIFY_TAIL_LIMIT = 4000;
 /** Cap for expanded transcript views of tool-result text (already bounded at the source). */
 const RESULT_EXPAND_LIMIT = 4000;
@@ -76,11 +74,6 @@ export function scheduleWaitRefresh(context: ToolRenderContext<BgRenderState>, p
 	state.waitBaselineBytes = undefined;
 }
 
-/** Basename of a path, slash-normalized — compact display of output files. */
-export function fileNameOf(path: string): string {
-	return path.replace(/\\/g, "/").split("/").at(-1) ?? path;
-}
-
 function bgPrompt(theme: Theme): string {
 	return theme.fg("toolTitle", theme.bold("$ "));
 }
@@ -94,42 +87,6 @@ function capForTranscript(text: string, limit: number): string {
 	return text.length > limit ? `…${text.slice(-limit)}` : text;
 }
 
-export function statusGlyph(status: BgTaskStatus, stalled?: boolean): string {
-	if (stalled) return "…";
-	switch (status) {
-		case "completed":
-			return "✓";
-		case "failed":
-		case "timeout":
-			return "✗";
-		case "killed":
-			return "○";
-		default:
-			return "●";
-	}
-}
-
-export function statusColor(status: BgTaskStatus, stalled?: boolean): "success" | "error" | "warning" | "accent" {
-	if (stalled) return "warning";
-	switch (status) {
-		case "completed":
-			return "success";
-		case "failed":
-			return "error";
-		case "timeout":
-		case "killed":
-			return "warning";
-		default:
-			return "accent";
-	}
-}
-
-/** First command line truncated to a visible-character budget with an ellipsis. */
-export function commandLabel(command: string, width: number): string {
-	const characters = [...firstCommandLine(command)];
-	return characters.length <= width ? characters.join("") : `${characters.slice(0, Math.max(0, width - 1)).join("")}…`;
-}
-
 // ── tool call ─────────────────────────────────────────────────────────────
 
 export function renderBgCall(
@@ -139,10 +96,13 @@ export function renderBgCall(
 	getTaskLive?: WaitLiveProbe,
 ): Component {
 	switch (args.action) {
-		case "create":
-			return typeof args.command === "string"
-				? renderCreateCall(args as BgCreateInput, theme, context)
+		case "create": {
+			// Arguments stream in, so `command` may not have arrived yet.
+			const command = args.command;
+			return typeof command === "string"
+				? renderCreateCall(command, args, theme, context)
 				: new Text(theme.fg("toolTitle", theme.bold("bg create")), 0, 0);
+		}
 		case "read": {
 			const mode = args.mode ?? "tail";
 			const size = args.bytes !== undefined ? ` ${formatSize(args.bytes)}` : "";
@@ -169,11 +129,6 @@ export function renderBgCall(
 			return new Text(`${theme.fg("toolTitle", theme.bold("bg"))}${action}`, 0, 0);
 		}
 	}
-}
-
-/** Mirror the execution-side clamp so the shown window matches the real one. */
-export function clampWaitMs(waitMs: number | undefined): number {
-	return Math.min(BG_WAIT_MAX_MS, Math.max(BG_WAIT_MIN_MS, Math.floor(waitMs ?? BG_WAIT_DEFAULT_MS)));
 }
 
 /**
@@ -226,15 +181,15 @@ function renderWaitCall(
 	);
 }
 
-function renderCreateCall(args: BgCreateInput, theme: Theme, context: ToolRenderContext): Component {
-	const lines = args.command.split(/\r?\n/).filter((line) => line.trim().length > 0);
+function renderCreateCall(command: string, args: BgInput, theme: Theme, context: ToolRenderContext): Component {
+	const lines = command.split(/\r?\n/).filter((line) => line.trim().length > 0);
 	const label = args.description ? theme.fg("muted", ` · ${args.description}`) : "";
 	const suffix = theme.fg("muted", " &") + timeoutSuffix(args.timeout, theme) + label;
 	if (context.expanded && lines.length > 1) {
-		const body = highlightCode(args.command, "bash").join("\n");
+		const body = highlightCode(command, "bash").join("\n");
 		return new Text(`${bgPrompt(theme)}${body}${suffix}`, 0, 0);
 	}
-	const body = highlightCode(firstCommandLine(args.command), "bash").join("\n");
+	const body = highlightCode(firstCommandLine(command), "bash").join("\n");
 	if (lines.length > 1) {
 		const hidden = lines.length - 1;
 		const more = theme.fg("muted", ` (+${hidden} line${hidden === 1 ? "" : "s"})`);
@@ -287,7 +242,7 @@ function resultSummaryLine(details: BgDetails, theme: Theme): string {
 			if (details.timedOut) {
 				return `${theme.fg(statusColor(details.status), statusGlyph(details.status))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", ` still running · waited ${formatDuration(details.waitedMs)} · ${formatSize(details.totalBytes)}`)}`;
 			}
-			const exit = details.exitCode !== undefined && details.exitCode !== null ? `, exit ${details.exitCode}` : "";
+			const exit = exitSuffix(details.exitCode, ", ");
 			return `${theme.fg(statusColor(details.status), statusGlyph(details.status))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", ` ${details.status}${exit} · waited ${formatDuration(details.waitedMs)} · +${formatSize(details.deltaBytes)}`)}`;
 		}
 		case "kill":
@@ -304,19 +259,18 @@ function resultSummaryLine(details: BgDetails, theme: Theme): string {
 /** One-line summary of a finished task, shared by the notification renderer. */
 function taskSummaryLine(details: BgNotificationDetails, theme: Theme): string {
 	const runtime = formatDuration(details.runtimeMs);
-	const exit = details.exitCode !== undefined && details.exitCode !== null ? `, exit ${details.exitCode}` : "";
+	const label = details.description
+		? `${details.description} (${commandLabel(details.command, LABELLED_COMMAND_LIMIT)})`
+		: commandLabel(details.command, COMMAND_PREVIEW_LIMIT);
 	if (details.stalled) {
 		const glyph = theme.fg("warning", "…");
-		const label = details.description
-			? `${details.description} (${commandLabel(details.command, 40)})`
-			: commandLabel(details.command, COMMAND_PREVIEW_LIMIT);
 		return `${glyph} ${theme.fg("accent", details.taskId)} ${label} ${theme.fg("muted", `— waiting for input (${runtime})`)}`;
 	}
-	const outcome = theme.fg(statusColor(details.status), `${details.status}${exit} in ${runtime}`);
+	const outcome = theme.fg(
+		statusColor(details.status),
+		`${details.status}${exitSuffix(details.exitCode, ", ")} in ${runtime}`,
+	);
 	const glyph = theme.fg(statusColor(details.status), statusGlyph(details.status));
-	const label = details.description
-		? `${details.description} (${commandLabel(details.command, 40)})`
-		: commandLabel(details.command, COMMAND_PREVIEW_LIMIT);
 	return `${glyph} ${theme.fg("accent", details.taskId)} ${label} ${theme.fg("muted", `— ${outcome}`)}`;
 }
 

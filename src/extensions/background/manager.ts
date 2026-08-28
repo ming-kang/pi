@@ -11,8 +11,10 @@ import { formatSize } from "../../core/tools/truncate.ts";
 import { keyLabel } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
-import { type BgTask, firstCommandLine, formatDuration, type OutputSlice } from "./registry.ts";
-import { statusColor, statusGlyph } from "./render.ts";
+import type { OutputSlice } from "./output-file.ts";
+import type { BgTask } from "./registry.ts";
+import { exitSuffix, runtimeLabel, statusColor, statusGlyph, taskLabel } from "./task-view.ts";
+import { fileNameOf } from "./text.ts";
 
 const POLL_INTERVAL_MS = 1000;
 const VIEW_TAIL_BYTES = 128 * 1024;
@@ -236,10 +238,8 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	}
 
 	private renderTaskRow(task: BgTask, isSelected: boolean, width: number): string {
-		const duration = formatDuration((task.endedAt ?? Date.now()) - task.startedAt);
-		const label = task.description
-			? `${task.description} — ${firstCommandLine(task.command)}`
-			: firstCommandLine(task.command);
+		const duration = runtimeLabel(task);
+		const label = taskLabel(task);
 		if (isSelected) {
 			// Pad to full width before styling so the selection background spans the row.
 			const plain = padLine(`→ ${statusGlyph(task.status, task.stalled)} ${task.id} ${duration} ${label}`, width);
@@ -285,11 +285,11 @@ export class BackgroundTasksMenu implements Component, Focusable {
 
 	private detailHeader(task: BgTask | undefined): string {
 		if (!task) return this.theme.fg("muted", "(no task selected)");
-		const duration = formatDuration((task.endedAt ?? Date.now()) - task.startedAt);
-		const exit = task.exitCode !== undefined && task.exitCode !== null ? ` exit ${task.exitCode}` : "";
+		const duration = runtimeLabel(task);
+		const exit = exitSuffix(task.exitCode, " ");
 		const resumeLabel = keyLabel("tui.select.pageDown", { keybindings: this.keybindings });
 		const paused = this.follow ? "" : resumeLabel ? ` — paused (${resumeLabel} to follow)` : " — paused";
-		const fileName = task.outputPath.replace(/\\/g, "/").split("/").at(-1) ?? task.outputPath;
+		const fileName = fileNameOf(task.outputPath);
 		const glyph = this.theme.fg(statusColor(task.status, task.stalled), statusGlyph(task.status, task.stalled));
 		const statusLabel = task.stalled ? "running, waiting for input" : task.status;
 		const header = `${task.id} · ${statusLabel}${exit} · ${duration} · ${formatSize(task.outputBytes)} · ${fileName}${paused}`;
@@ -412,7 +412,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 				: "",
 		];
 		for (const task of this.tasks) {
-			const duration = formatDuration((task.endedAt ?? Date.now()) - task.startedAt);
+			const duration = runtimeLabel(task);
 			parts.push(
 				`${task.id}:${task.status}:${String(task.stalled)}:${task.outputBytes}:${task.exitCode ?? ""}:${duration}`,
 			);

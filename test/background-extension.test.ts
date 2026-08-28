@@ -13,20 +13,17 @@ import type {
 } from "../src/core/extensions/types.ts";
 import type { CustomMessage } from "../src/core/messages.ts";
 import type { BashOperations } from "../src/core/tools/bash.ts";
-import {
-	type BgNotificationDetails,
-	type BgWaitDetails,
-	createBackgroundExtension,
-	formatStatusline,
-	prependCommandPrefix,
-	resolveSessionShell,
-} from "../src/extensions/background/index.ts";
+import { createBackgroundExtension, prependCommandPrefix } from "../src/extensions/background/index.ts";
+import { buildNotificationContent, toNotificationDetails } from "../src/extensions/background/notify.ts";
+import type { BgNotification, BgTask } from "../src/extensions/background/registry.ts";
 import {
 	type BgRenderState,
 	renderBackgroundNotification,
 	renderBgCall,
 	renderBgResult,
 } from "../src/extensions/background/render.ts";
+import { formatStatusline } from "../src/extensions/background/task-view.ts";
+import type { BgNotificationDetails, BgWaitDetails } from "../src/extensions/background/types.ts";
 import type { Theme } from "../src/modes/interactive/theme/theme.ts";
 
 function textOf(result: AgentToolResult<unknown>): string {
@@ -684,27 +681,6 @@ describe("prependCommandPrefix", () => {
 	});
 });
 
-describe("resolveSessionShell", () => {
-	it("prefers the session-provided shell settings", () => {
-		const ctx = {
-			getShellSettings: () => ({ shellPath: "/custom/bash", commandPrefix: "shopt -s expand_aliases" }),
-		} as unknown as ExtensionContext;
-		const readDiskSettings = () => {
-			throw new Error("disk settings must not be read when the session provides shell settings");
-		};
-		expect(resolveSessionShell(ctx, readDiskSettings)).toEqual({
-			shellPath: "/custom/bash",
-			commandPrefix: "shopt -s expand_aliases",
-		});
-	});
-
-	it("falls back to disk settings on hosts without getShellSettings", () => {
-		const ctx = {} as ExtensionContext;
-		expect(resolveSessionShell(ctx, () => ({ shellPath: "/bin/zsh" }))).toEqual({ shellPath: "/bin/zsh" });
-		expect(resolveSessionShell(ctx)).toEqual({});
-	});
-});
-
 describe("renderBgCall", () => {
 	const plainTheme = {
 		fg: (_color: string, text: string) => text,
@@ -892,7 +868,7 @@ describe("renderBgResult summaries", () => {
 
 describe("formatStatusline", () => {
 	it("reports running and done counts", () => {
-		expect(formatStatusline({ running: 2, total: 3 })).toBe("bg 2 running · 1 done");
+		expect(formatStatusline({ running: 2, total: 3, stalled: 0 })).toBe("bg 2 running · 1 done");
 	});
 
 	it("splits stalled tasks out of the running count so the counts add up", () => {
@@ -906,6 +882,135 @@ describe("formatStatusline", () => {
 	});
 
 	it("hides the segment when no tasks exist", () => {
-		expect(formatStatusline({ running: 0, total: 0 })).toBeUndefined();
+		expect(formatStatusline({ running: 0, total: 0, stalled: 0 })).toBeUndefined();
+	});
+});
+
+describe("buildNotificationContent", () => {
+	const task: BgTask = {
+		id: "bg-abc123",
+		command: "npm run build",
+		cwd: "/w",
+		status: "completed",
+		startedAt: 1_000,
+		endedAt: 13_000,
+		stalled: false,
+		exitCode: 0,
+		outputPath: "/tmp/pi-bg-abc123.log",
+		outputBytes: 200,
+		outputTruncated: false,
+		notified: false,
+	};
+
+	const tail = { text: "done\n", sliceBytes: 5, totalBytes: 200, truncated: true, startsMidLine: true };
+
+	function notification(overrides?: Partial<BgNotification>): BgNotification {
+		return { kind: "completion", task, tail, ...overrides };
+	}
+
+	it("renders a completion with its exit code, runtime, and tail metadata", () => {
+		const xml = buildNotificationContent(notification());
+		expect(xml).toContain('<background-task id="bg-abc123" status="completed" exitCode="0" runtime="12s">');
+		expect(xml).toContain("<command>npm run build</command>");
+		expect(xml).toContain("<output-file>/tmp/pi-bg-abc123.log</output-file>");
+		expect(xml).toContain('<output-tail bytes="5" totalBytes="200" truncated="true" startsMidLine="true">');
+		expect(xml).not.toContain("waiting-for-input");
+		expect(xml).not.toContain("<advice>");
+	});
+
+	it("omits exitCode when the task produced none and includes the error and description", () => {
+		const failed = {
+			...task,
+			status: "failed" as const,
+			exitCode: null,
+			error: "Command was terminated by a signal.",
+		};
+		const xml = buildNotificationContent(notification({ task: { ...failed, description: "build" } }));
+		expect(xml).toContain('status="failed"');
+		expect(xml).not.toContain("exitCode=");
+		expect(xml).toContain("<description>build</description>");
+		expect(xml).toContain("<error>Command was terminated by a signal.</error>");
+	});
+
+	it("renders a stall as a still-running task with advice and no exit code or error", () => {
+		const stalled = {
+			...task,
+			status: "running" as const,
+			endedAt: undefined,
+			exitCode: undefined,
+			error: "ignored",
+		};
+		const xml = buildNotificationContent(notification({ kind: "stall", task: stalled }));
+		expect(xml).toContain('status="running" waiting-for-input="true"');
+		expect(xml).not.toContain("exitCode=");
+		expect(xml).not.toContain("<error>");
+		expect(xml).toContain("<advice>");
+		expect(xml).toContain("non-interactive flag");
+	});
+
+	it("escapes markup and strips XML-illegal characters from every text field", () => {
+		const hostile = { ...task, command: 'echo "a<b" && c>d \u0000\uFFFE', description: "it's <b>" };
+		const xml = buildNotificationContent(notification({ task: hostile }));
+		expect(xml).toContain("<command>echo &quot;a&lt;b&quot; &amp;&amp; c&gt;d </command>");
+		expect(xml).toContain("<description>it&apos;s &lt;b&gt;</description>");
+		expect(xml).not.toContain("\u0000");
+		expect(xml).not.toContain("\uFFFE");
+	});
+
+	it("reports an unreadable tail instead of an empty one", () => {
+		const xml = buildNotificationContent(notification({ tail: undefined, tailError: "ENOENT: no such file" }));
+		expect(xml).toContain('<output-tail unavailable="ENOENT: no such file"/>');
+	});
+
+	it("falls back to (no output) for an empty tail", () => {
+		const xml = buildNotificationContent(notification({ tail: { ...tail, text: "", truncated: false } }));
+		expect(xml).toContain("(no output)");
+	});
+});
+
+describe("toNotificationDetails", () => {
+	const task: BgTask = {
+		id: "bg-abc123",
+		command: "npm run build",
+		cwd: "/w",
+		status: "failed",
+		startedAt: 1_000,
+		endedAt: 13_000,
+		stalled: false,
+		exitCode: 2,
+		error: "Command exited with code 2",
+		outputPath: "/tmp/pi-bg-abc123.log",
+		outputBytes: 200,
+		outputTruncated: false,
+		notified: false,
+	};
+	const tail = { text: "boom\n", sliceBytes: 5, totalBytes: 200, truncated: true, startsMidLine: false };
+
+	it("projects a completion onto the persisted shape", () => {
+		const details = toNotificationDetails({ kind: "completion", task, tail });
+		expect(details).toMatchObject({
+			taskId: "bg-abc123",
+			status: "failed",
+			exitCode: 2,
+			runtimeMs: 12_000,
+			totalBytes: 200,
+			tailText: "boom\n",
+			tailTruncated: true,
+			error: "Command exited with code 2",
+		});
+		expect(details.stalled).toBeUndefined();
+	});
+
+	it("keeps the historical `stalled` flag rather than leaking the kind discriminant", () => {
+		const running = { ...task, status: "running" as const, endedAt: undefined };
+		const details = toNotificationDetails({ kind: "stall", task: running, tail });
+		// The persisted shape is a compatibility surface: older transcripts are
+		// rendered by this build, so the flag it has always carried must stay.
+		expect(details.stalled).toBe(true);
+		expect(details).not.toHaveProperty("kind");
+		expect(details.status).toBe("running");
+		// A stall is informational: no terminal exit code, no error of its own.
+		expect(details.exitCode).toBeUndefined();
+		expect(details.error).toBeUndefined();
 	});
 });

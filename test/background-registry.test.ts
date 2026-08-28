@@ -4,14 +4,15 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BashOperations } from "../src/core/tools/bash.ts";
 import {
-	type BackgroundRegistryOptions,
-	BackgroundTaskRegistry,
-	type BgStallNotification,
-	type BgTaskNotification,
 	createOutputFileExclusively,
-	looksLikePrompt,
 	readOutputSince,
 	readOutputSlice,
+} from "../src/extensions/background/output-file.ts";
+import {
+	type BackgroundRegistryOptions,
+	BackgroundTaskRegistry,
+	type BgNotification,
+	looksLikePrompt,
 } from "../src/extensions/background/registry.ts";
 
 interface FakeExecCall {
@@ -51,7 +52,7 @@ const tempDirs: string[] = [];
 function makeRegistry(overrides?: Partial<BackgroundRegistryOptions>): {
 	registry: BackgroundTaskRegistry;
 	calls: FakeExecCall[];
-	notifications: BgTaskNotification[];
+	notifications: BgNotification[];
 	onNotify: ReturnType<typeof vi.fn>;
 	onChange: ReturnType<typeof vi.fn>;
 	outputDir: string;
@@ -59,8 +60,8 @@ function makeRegistry(overrides?: Partial<BackgroundRegistryOptions>): {
 	const { operations, calls } = createFakeOperations();
 	const outputDir = mkdtempSync(join(tmpdir(), "pi-bg-test-"));
 	tempDirs.push(outputDir);
-	const notifications: BgTaskNotification[] = [];
-	const onNotify = vi.fn((notification: BgTaskNotification) => {
+	const notifications: BgNotification[] = [];
+	const onNotify = vi.fn((notification: BgNotification) => {
 		notifications.push(notification);
 	});
 	const onChange = vi.fn();
@@ -82,12 +83,19 @@ function makeRegistry(overrides?: Partial<BackgroundRegistryOptions>): {
  */
 function makeStallRegistry() {
 	let clock = 1_000_000;
-	const stalls: BgStallNotification[] = [];
-	const onStall = vi.fn((notification: BgStallNotification) => {
+	const notifications: BgNotification[] = [];
+	const stalls: BgNotification[] = [];
+	// Completion and stall share one callback now; split them back apart here so
+	// the stall assertions stay about stalls.
+	const onStall = vi.fn((notification: BgNotification) => {
 		stalls.push(notification);
 	});
+	const onNotify = vi.fn((notification: BgNotification) => {
+		if (notification.kind === "stall") onStall(notification);
+		else notifications.push(notification);
+	});
 	const base = makeRegistry({
-		onStall,
+		onNotify,
 		now: () => clock,
 		stall: { pollIntervalMs: 5, thresholdMs: 15, tailBytes: 1_024 },
 	});
@@ -99,7 +107,7 @@ function makeStallRegistry() {
 	const setClock = (ms: number) => {
 		clock = ms;
 	};
-	return { ...base, stalls, onStall, advance, setClock };
+	return { ...base, notifications, onNotify, stalls, onStall, advance, setClock };
 }
 
 afterEach(() => {
@@ -123,7 +131,7 @@ describe("BackgroundTaskRegistry", () => {
 		calls[0]?.emitData("line two\n");
 
 		let fileAtNotifyTime = "";
-		onNotify.mockImplementationOnce((notification: BgTaskNotification) => {
+		onNotify.mockImplementationOnce((notification: BgNotification) => {
 			fileAtNotifyTime = readFileSync(notification.task.outputPath, "utf8");
 			notifications.push(notification);
 		});
@@ -136,8 +144,8 @@ describe("BackgroundTaskRegistry", () => {
 		expect(onNotify).toHaveBeenCalledTimes(1);
 		// The notification only fires after the stream is flushed.
 		expect(fileAtNotifyTime).toBe("line one\nline two\n");
-		expect(notifications[0]?.tailText).toBe("line one\nline two\n");
-		expect(notifications[0]?.tailTruncated).toBe(false);
+		expect(notifications[0]?.tail?.text).toBe("line one\nline two\n");
+		expect(notifications[0]?.tail?.truncated).toBe(false);
 	});
 
 	it("classifies a non-zero exit as failed", async () => {
@@ -161,8 +169,8 @@ describe("BackgroundTaskRegistry", () => {
 		expect(finished.status).toBe("killed");
 		expect(onNotify).toHaveBeenCalledTimes(1);
 
-		expect(registry.killTask(task.id)).toEqual({ killed: false, reason: "not-running" });
-		expect(registry.killTask("bg-nope")).toEqual({ killed: false, reason: "not-found" });
+		expect(registry.killTask(task.id)).toEqual({ killed: false });
+		expect(registry.killTask("bg-nope")).toEqual({ killed: false });
 	});
 
 	it("classifies an ops timeout as timeout", async () => {
@@ -311,7 +319,7 @@ describe("BackgroundTaskRegistry", () => {
 		expect(finished.status).toBe("completed");
 		expect(notifications).toHaveLength(1);
 		expect(notifications[0]?.tailError).toMatch(/ENOENT|no such file/i);
-		expect(notifications[0]?.tailText).toBe("");
+		expect(notifications[0]?.tail).toBeUndefined();
 	});
 
 	it("marks the notification tail as truncated when output exceeds the tail budget", async () => {
@@ -322,11 +330,11 @@ describe("BackgroundTaskRegistry", () => {
 
 		await registry.waitForTask(task.id);
 		const notification = notifications[0];
-		expect(notification?.tailText).toBe("cdefghij");
-		expect(notification?.tailBytes).toBe(8);
-		expect(notification?.totalBytes).toBe(20);
-		expect(notification?.tailTruncated).toBe(true);
-		expect(notification?.tailStartsMidLine).toBe(true);
+		expect(notification?.tail?.text).toBe("cdefghij");
+		expect(notification?.tail?.sliceBytes).toBe(8);
+		expect(notification?.tail?.totalBytes).toBe(20);
+		expect(notification?.tail?.truncated).toBe(true);
+		expect(notification?.tail?.startsMidLine).toBe(true);
 	});
 
 	it("claim: a registered waiter delivers the completion and suppresses the followUp", async () => {
@@ -494,7 +502,7 @@ describe("stall watchdog", () => {
 		await advance(40);
 		await vi.waitFor(() => expect(stalls).toHaveLength(1));
 		expect(stalls[0]?.task.id).toBe(task.id);
-		expect(stalls[0]?.tailText).toContain("(y/n)");
+		expect(stalls[0]?.tail?.text).toContain("(y/n)");
 		expect(task.stalled).toBe(true);
 		expect(registry.counts().stalled).toBe(1);
 
@@ -557,7 +565,7 @@ describe("stall watchdog", () => {
 	});
 
 	it("stall then kill: normal terminal path, no duplicate stall", async () => {
-		const { registry, calls, stalls, onNotify, advance } = makeStallRegistry();
+		const { registry, calls, stalls, notifications, advance } = makeStallRegistry();
 		const task = registry.startTask({ command: "npm install", cwd: "/w" });
 		// No output at all: an empty, non-growing file is a legitimate stall probe
 		// only when it looks like a prompt — empty tail does not, so this test
@@ -570,7 +578,7 @@ describe("stall watchdog", () => {
 		registry.killTask(task.id);
 		const finished = await registry.waitForTask(task.id);
 		expect(finished.status).toBe("killed");
-		expect(onNotify).toHaveBeenCalledTimes(1);
+		expect(notifications).toHaveLength(1);
 		await advance(50);
 		expect(stalls).toHaveLength(1);
 	});
@@ -656,13 +664,15 @@ describe("readOutputSince", () => {
 		expect(slice.truncated).toBe(true);
 	});
 
-	it("clamps an offset at or beyond EOF to an empty read", async () => {
+	it("returns an empty read at EOF and falls back to the tail past it", async () => {
 		const filePath = writeTempFile("0123456789");
 		const atEof = await readOutputSince(filePath, 10, 100);
-		expect(atEof).toMatchObject({ text: "", sliceBytes: 0, truncated: false, fromByte: 10 });
+		expect(atEof).toMatchObject({ text: "", sliceBytes: 0, truncated: false, fromByte: 10, offsetPastEof: false });
 
+		// A stale offset (output truncated at the cap, or an id reused from an
+		// earlier read) is recoverable, not an error: show the tail and say so.
 		const pastEof = await readOutputSince(filePath, 99, 100);
-		expect(pastEof).toMatchObject({ text: "", sliceBytes: 0, truncated: false, fromByte: 10 });
+		expect(pastEof).toMatchObject({ text: "0123456789", sliceBytes: 10, truncated: false, offsetPastEof: true });
 	});
 
 	it("reports mid-line starts when the delta begins mid-line", async () => {

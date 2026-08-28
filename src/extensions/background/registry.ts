@@ -12,22 +12,19 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { closeSync, createWriteStream, openSync, type WriteStream } from "node:fs";
-import { type FileHandle, open } from "node:fs/promises";
+import { createWriteStream, type WriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BashOperations } from "../../core/tools/bash.ts";
 import { formatSize } from "../../core/tools/truncate.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
+import { createOutputFileExclusively, type OutputSlice, readTail } from "./output-file.ts";
+import { firstCommandLine } from "./text.ts";
 
 export const DEFAULT_MAX_OUTPUT_BYTES = 20 * 1024 * 1024;
 export const DEFAULT_MAX_RUNNING_TASKS = 8;
 export const DEFAULT_NOTIFY_TAIL_BYTES = 4 * 1024;
 
-/** Wait-window bounds shared by execution and the pending-call renderer. */
-export const BG_WAIT_DEFAULT_MS = 20_000;
-export const BG_WAIT_MIN_MS = 1_000;
-export const BG_WAIT_MAX_MS = 60_000;
 const SHUTDOWN_GRACE_MS = 2_000;
 
 /** Stall watchdog defaults, matching Claude Code's CC-1175 tuning. */
@@ -85,128 +82,25 @@ export interface BgTask {
 	notified: boolean;
 }
 
-export interface BgTaskNotification {
+/**
+ * What a settled or stalled task hands to the extension for delivery.
+ *
+ * One shape with one discriminant, because both are delivered the same way and
+ * carry the same payload; only the registry cares about the difference (a
+ * completion participates in the delivery claim, a stall is informational and
+ * bypasses it).
+ */
+export interface BgNotification {
+	kind: "completion" | "stall";
 	task: BgTask;
-	/** Sanitized tail of the output file; empty when unavailable. */
-	tailText: string;
-	tailBytes: number;
-	totalBytes: number;
-	tailTruncated: boolean;
-	tailStartsMidLine: boolean;
+	/** Sanitized tail of the output file; absent when it could not be read. */
+	tail: OutputSlice | undefined;
 	/** Set when the output file could not be read; the notification still fires. */
 	tailError?: string;
 }
 
-/** One-shot signal that a running task appears blocked on interactive input. */
-export type BgStallNotification = BgTaskNotification;
-
-export interface OutputSlice {
-	text: string;
-	sliceBytes: number;
-	totalBytes: number;
-	/** True when the file holds more bytes than the slice. */
-	truncated: boolean;
-	/** True in tail mode when the slice starts mid-line. */
-	startsMidLine: boolean;
-}
-
 /** Outcome of a bounded wait: terminal delivery, or the wait window expiring. */
 export type WaitOutcome = { outcome: "terminal"; task: BgTask } | { outcome: "timeout"; task: BgTask };
-
-/**
- * Read `length` bytes at `start`, first nudging the start past any UTF-8
- * continuation bytes so the text begins on a codepoint boundary. The same probe
- * reveals whether the slice starts mid-line. A `start` of 0 is used as-is —
- * there is nothing before it to align against.
- */
-async function readAligned(
-	file: FileHandle,
-	size: number,
-	start: number,
-	length: number,
-): Promise<{ text: string; sliceBytes: number; startsMidLine: boolean; position: number }> {
-	let position = start;
-	let remaining = length;
-	let startsMidLine = false;
-	if (position > 0 && remaining > 0) {
-		// Probe from one byte before the slice: probe[0] tells whether the slice
-		// starts at a line boundary, the rest lets us skip UTF-8 continuation
-		// bytes (0b10xxxxxx) so we never split a codepoint.
-		const probeStart = position - 1;
-		const probe = Buffer.alloc(Math.min(5, size - probeStart));
-		await file.read(probe, 0, probe.length, probeStart);
-		let skip = 0;
-		while (1 + skip < probe.length && ((probe[1 + skip] ?? 0) & 0b1100_0000) === 0b1000_0000) {
-			skip++;
-		}
-		position += skip;
-		remaining -= skip;
-		startsMidLine = probe[skip] !== 0x0a;
-	}
-	const buffer = Buffer.alloc(Math.max(0, remaining));
-	const bytesRead = buffer.length > 0 ? (await file.read(buffer, 0, buffer.length, position)).bytesRead : 0;
-	return { text: buffer.subarray(0, bytesRead).toString("utf8"), sliceBytes: bytesRead, startsMidLine, position };
-}
-
-/**
- * Read a bounded slice from the head or tail of a file via positioned reads —
- * never the whole file.
- */
-export async function readOutputSlice(
-	filePath: string,
-	options: { mode: "head" | "tail"; maxBytes: number },
-): Promise<OutputSlice> {
-	const file = await open(filePath, "r");
-	try {
-		const { size } = await file.stat();
-		const length = Math.min(size, Math.max(0, Math.floor(options.maxBytes)));
-		const start = options.mode === "tail" ? size - length : 0;
-		const slice = await readAligned(file, size, start, length);
-		return {
-			text: slice.text,
-			sliceBytes: slice.sliceBytes,
-			totalBytes: size,
-			truncated: size > slice.sliceBytes,
-			startsMidLine: slice.startsMidLine,
-		};
-	} finally {
-		await file.close();
-	}
-}
-
-/**
- * Read the last `maxBytes` of a file starting no earlier than `fromByte` — the
- * bounded delta since an offset, tail-aligned so the outcome (at the end of
- * the output) is always included. `fromByte` is clamped into the file; the
- * returned `fromByte` is where the slice actually starts.
- */
-export async function readOutputSince(
-	filePath: string,
-	fromByte: number,
-	maxBytes: number,
-): Promise<OutputSlice & { fromByte: number }> {
-	const file = await open(filePath, "r");
-	try {
-		const { size } = await file.stat();
-		const floor = Math.min(Math.max(0, Math.floor(fromByte)), size);
-		const length = Math.min(size - floor, Math.max(0, Math.floor(maxBytes)));
-		const start = size - length;
-		// Decided before alignment: nudging the start past continuation bytes is
-		// not the same as dropping output the caller asked for.
-		const truncated = start > floor;
-		const slice = await readAligned(file, size, start, length);
-		return {
-			text: slice.text,
-			sliceBytes: slice.sliceBytes,
-			totalBytes: size,
-			truncated,
-			startsMidLine: slice.startsMidLine,
-			fromByte: slice.position,
-		};
-	} finally {
-		await file.close();
-	}
-}
 
 export interface BackgroundRegistryOptions {
 	operations: BashOperations;
@@ -215,12 +109,13 @@ export interface BackgroundRegistryOptions {
 	maxOutputBytes?: number;
 	maxRunningTasks?: number;
 	notifyTailBytes?: number;
-	/** Called at most once for an unclaimed finished task; synchronous throws do not prevent settlement. */
-	onNotify: (notification: BgTaskNotification) => void;
-	/** Called at most once per task when its output stalls on an interactive-looking prompt. */
-	onStall?: (notification: BgStallNotification) => void;
-	/** Stall watchdog tuning (tests inject short windows); defaults follow Claude Code's CC-1175. */
-	stall?: { pollIntervalMs?: number; thresholdMs?: number; tailBytes?: number };
+	/** Called at most once per task per kind; synchronous throws do not prevent settlement. */
+	onNotify: (notification: BgNotification) => void;
+	/**
+	 * Stall watchdog tuning; `false` disables the watchdog outright. Defaults
+	 * follow Claude Code's CC-1175 (5s/45s/1KB).
+	 */
+	stall?: { pollIntervalMs?: number; thresholdMs?: number; tailBytes?: number } | false;
 	/** Called whenever a task starts or reaches a terminal state. */
 	onChange: () => void;
 	now?: () => number;
@@ -254,8 +149,8 @@ export class BackgroundTaskRegistry {
 	private readonly maxOutputBytes: number;
 	private readonly maxRunningTasks: number;
 	private readonly notifyTailBytes: number;
-	private readonly onNotify: (notification: BgTaskNotification) => void;
-	private readonly onStall: ((notification: BgStallNotification) => void) | undefined;
+	private readonly onNotify: (notification: BgNotification) => void;
+	private readonly stallEnabled: boolean;
 	private readonly stallPollIntervalMs: number;
 	private readonly stallThresholdMs: number;
 	private readonly stallTailBytes: number;
@@ -273,10 +168,11 @@ export class BackgroundTaskRegistry {
 		this.maxRunningTasks = options.maxRunningTasks ?? DEFAULT_MAX_RUNNING_TASKS;
 		this.notifyTailBytes = options.notifyTailBytes ?? DEFAULT_NOTIFY_TAIL_BYTES;
 		this.onNotify = options.onNotify;
-		this.onStall = options.onStall;
-		this.stallPollIntervalMs = options.stall?.pollIntervalMs ?? STALL_POLL_INTERVAL_MS;
-		this.stallThresholdMs = options.stall?.thresholdMs ?? STALL_THRESHOLD_MS;
-		this.stallTailBytes = options.stall?.tailBytes ?? STALL_TAIL_BYTES;
+		const stall = options.stall === false ? undefined : options.stall;
+		this.stallEnabled = options.stall !== false;
+		this.stallPollIntervalMs = stall?.pollIntervalMs ?? STALL_POLL_INTERVAL_MS;
+		this.stallThresholdMs = stall?.thresholdMs ?? STALL_THRESHOLD_MS;
+		this.stallTailBytes = stall?.tailBytes ?? STALL_TAIL_BYTES;
 		this.onChange = options.onChange;
 		this.now = options.now ?? Date.now;
 	}
@@ -382,11 +278,16 @@ export class BackgroundTaskRegistry {
 		return { ok: false, reason: "ambiguous", candidates };
 	}
 
-	killTask(id: string): { killed: true } | { killed: false; reason: "not-found" | "not-running" } {
+	/**
+	 * Request a kill. Reports only whether one was issued: why it was not is
+	 * already on the task (an unknown id cannot reach here through the tool,
+	 * which resolves first, and a settled task carries its own status).
+	 */
+	killTask(id: string): { killed: boolean } {
 		const task = this.tasks.get(id);
 		const runtime = this.runtimes.get(id);
-		if (!task || !runtime) return { killed: false, reason: "not-found" };
-		if (task.status !== "running" || runtime.finalized) return { killed: false, reason: "not-running" };
+		if (!task || !runtime) return { killed: false };
+		if (task.status !== "running" || runtime.finalized) return { killed: false };
 		runtime.killRequested = true;
 		runtime.controller.abort();
 		return { killed: true };
@@ -486,7 +387,7 @@ export class BackgroundTaskRegistry {
 	 * never match; recovery clears the flag (the notification never re-fires).
 	 */
 	private armStallWatchdog(task: BgTask, runtime: TaskRuntime): void {
-		if (!this.onStall) return;
+		if (!this.stallEnabled) return;
 		runtime.stallTimer = setInterval(() => this.checkStall(task, runtime), this.stallPollIntervalMs);
 		runtime.stallTimer.unref?.();
 	}
@@ -518,17 +419,12 @@ export class BackgroundTaskRegistry {
 	private async probeStallTail(task: BgTask, runtime: TaskRuntime): Promise<void> {
 		// Re-check inside the async boundary: finalize may have raced the probe.
 		if (runtime.finalized || this.shuttingDown) return;
-		let slice: OutputSlice | undefined;
-		let tailError: string | undefined;
-		try {
-			slice = await readOutputSlice(task.outputPath, { mode: "tail", maxBytes: this.stallTailBytes });
-		} catch (error) {
-			tailError = error instanceof Error ? error.message : String(error);
-		}
+		const { slice, error } = await readTail(task.outputPath, this.stallTailBytes);
 		if (runtime.finalized || this.shuttingDown) return;
 		// Merely slow: not prompt-shaped. Reset so the next check is a full
 		// threshold window out instead of re-probing on every tick. A tail that
-		// could not be read is reported, not dismissed as slow.
+		// could not be read is reported, not dismissed as slow. Matched on the
+		// raw text — sanitizing is for delivery, not for detection.
 		if (slice && !looksLikePrompt(slice.text)) {
 			runtime.stallLastGrowthAt = this.now();
 			return;
@@ -539,15 +435,22 @@ export class BackgroundTaskRegistry {
 		}
 		if (runtime.stallNotified) return;
 		runtime.stallNotified = true;
-		this.onStall?.({
-			task,
-			tailText: sanitizeBinaryOutput(slice?.text ?? ""),
-			tailBytes: slice?.sliceBytes ?? 0,
-			totalBytes: slice?.totalBytes ?? task.outputBytes,
-			tailTruncated: slice?.truncated ?? false,
-			tailStartsMidLine: slice?.startsMidLine ?? false,
-			tailError,
-		});
+		this.emit("stall", task, slice, error);
+	}
+
+	/** The one place a notification payload is shaped, for either kind. */
+	private emit(kind: BgNotification["kind"], task: BgTask, slice: OutputSlice | undefined, tailError?: string): void {
+		try {
+			this.onNotify({
+				kind,
+				task,
+				tail: slice && { ...slice, text: sanitizeBinaryOutput(slice.text) },
+				tailError,
+			});
+		} catch {
+			// Notification failures must not undo task completion or prevent settlement;
+			// there is no retry path, so the delivery record stands.
+		}
 	}
 
 	private newTaskId(): string {
@@ -661,54 +564,7 @@ export class BackgroundTaskRegistry {
 	private async notifyCompletion(task: BgTask): Promise<void> {
 		if (this.shuttingDown || task.notified) return;
 		task.notified = true;
-
-		let tailText = "";
-		let tailBytes = 0;
-		let totalBytes = task.outputBytes;
-		let tailTruncated = false;
-		let tailStartsMidLine = false;
-		let tailError: string | undefined;
-		try {
-			const slice = await readOutputSlice(task.outputPath, { mode: "tail", maxBytes: this.notifyTailBytes });
-			tailText = sanitizeBinaryOutput(slice.text);
-			tailBytes = slice.sliceBytes;
-			totalBytes = slice.totalBytes;
-			tailTruncated = slice.truncated;
-			tailStartsMidLine = slice.startsMidLine;
-		} catch (error) {
-			tailError = error instanceof Error ? error.message : String(error);
-		}
-
-		try {
-			this.onNotify({ task, tailText, tailBytes, totalBytes, tailTruncated, tailStartsMidLine, tailError });
-		} catch {
-			// Notification failures must not undo task completion or prevent settlement;
-			// there is no retry path, so the delivery claim remains recorded.
-		}
+		const { slice, error } = await readTail(task.outputPath, this.notifyTailBytes);
+		this.emit("completion", task, slice, error);
 	}
-}
-
-/**
- * Create an empty output file exclusively ('wx'): fails on any existing path,
- * including a symlink, so creation can never truncate what the path points at.
- */
-export function createOutputFileExclusively(path: string): void {
-	const handle = openSync(path, "wx");
-	closeSync(handle);
-}
-
-/** First non-empty line of a command, trimmed — for one-line task labels. */
-export function firstCommandLine(command: string): string {
-	const line = command.split(/\r?\n/).find((candidate) => candidate.trim().length > 0) ?? command;
-	return line.trim();
-}
-
-/** Compact duration like Pi's own timers: 12s, 3m05s, 1h02m. */
-export function formatDuration(ms: number): string {
-	const totalSeconds = Math.max(0, Math.round(ms / 1000));
-	if (totalSeconds < 60) return `${totalSeconds}s`;
-	const minutes = Math.floor(totalSeconds / 60);
-	const seconds = totalSeconds % 60;
-	if (minutes < 60) return `${minutes}m${String(seconds).padStart(2, "0")}s`;
-	return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m`;
 }
