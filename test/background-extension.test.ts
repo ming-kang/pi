@@ -382,6 +382,30 @@ describe("background extension", () => {
 		expect(harness.sent[0]?.message.content).toContain('status="completed"');
 	});
 
+	it("delivers the completion exactly once when the wait aborts as the task settles", async () => {
+		const harness = createHarness();
+		await harness.startSession();
+
+		const started = await harness.execute("bg", { action: "create", command: "npm run build" });
+		const taskId = /bg-[0-9a-f]{6}/.exec(textOf(started))?.[0] ?? "";
+		harness.calls[0]?.emitData("building\n");
+
+		const controller = new AbortController();
+		const waitPromise = harness.execute("bg", { action: "wait", taskId, waitMs: 5_000 }, controller.signal);
+		// Settle and interrupt in the same tick. Nobody may claim delivery on the
+		// waiter's behalf: its result is discarded, so the followUp has to fire —
+		// exactly once, and carrying the terminal status rather than "running".
+		harness.calls[0]?.finish(0);
+		controller.abort();
+		await expect(waitPromise).rejects.toThrow("aborted");
+
+		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
+		expect(harness.sent[0]?.message.content).toContain('status="completed"');
+		// A second delivery would mean both finalize and the waiter sent one.
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(harness.sent).toHaveLength(1);
+	});
+
 	it("lists tasks with running first and the description in the label", async () => {
 		const harness = createHarness();
 		await harness.startSession();

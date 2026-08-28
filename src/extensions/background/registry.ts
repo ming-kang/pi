@@ -78,7 +78,7 @@ export interface BgTask {
 	outputTruncated: boolean;
 	error?: string;
 	timeoutSeconds?: number;
-	/** Delivery was claimed by a notification attempt, or a waiter took it over. */
+	/** Delivery happened: a notification was sent, or a waiter returned this task inline. */
 	notified: boolean;
 }
 
@@ -128,7 +128,7 @@ interface TaskRuntime {
 	overflow: boolean;
 	streamError?: string;
 	finalized: boolean;
-	/** Registered waitForResult callers; see the claim protocol in finalize(). */
+	/** Live waitForResult callers; the last one out sends the followUp if none delivered. */
 	waiters: number;
 	stallTimer: ReturnType<typeof setInterval> | undefined;
 	stallLastSize: number;
@@ -312,19 +312,17 @@ export class BackgroundTaskRegistry {
 	}
 
 	/**
-	 * Bounded model-facing wait with the claim protocol: a waiter registered
-	 * when the task finalizes takes over delivery — finalize sees waiters > 0
-	 * and suppresses the followUp notification, so the completion is delivered
-	 * exactly once, inline here. If the window expires first, the followUp
-	 * notification is left untouched and fires as usual.
+	 * Bounded model-facing wait. Delivery is claimed by whoever actually
+	 * delivers: a waiter that returns a terminal task marks it notified, so
+	 * finalize's followUp is skipped and the completion is delivered exactly
+	 * once, inline here.
 	 *
-	 * All interleavings are deterministic on JS's single thread: a waiter that
-	 * registers before finalize's synchronous claim check claims delivery; one
-	 * that arrives after sees a terminal status and returns it immediately
-	 * (the followUp may also arrive — an idempotent repeat, not a lie).
-	 *
-	 * An aborted wait (the turn was interrupted) hands the claim back: the
-	 * caller's result is discarded, so it must not also swallow the followUp.
+	 * Nothing claims on behalf of anyone else, which is what makes an
+	 * interrupted wait safe: an aborted waiter never marks the task notified,
+	 * and the last waiter to leave without delivering sends the followUp itself.
+	 * A waiter that arrives after the task already settled returns immediately
+	 * without registering — the followUp may also arrive, an idempotent repeat
+	 * rather than a lie.
 	 */
 	async waitForResult(id: string, timeoutMs: number, signal?: AbortSignal): Promise<WaitOutcome> {
 		const task = this.tasks.get(id);
@@ -335,22 +333,37 @@ export class BackgroundTaskRegistry {
 
 		runtime.waiters++;
 		let timer: ReturnType<typeof setTimeout> | undefined;
+		// Named so it can be removed: the signal outlives this wait, and one
+		// orphaned listener per bg wait trips Node's max-listeners warning.
+		let onAbort: (() => void) | undefined;
 		try {
 			const timedOut = await new Promise<boolean>((resolve) => {
 				timer = setTimeout(() => resolve(true), timeoutMs);
 				void runtime.done.then(() => resolve(false));
-				signal?.addEventListener("abort", () => resolve(true), { once: true });
+				onAbort = () => resolve(true);
+				signal?.addEventListener("abort", onAbort, { once: true });
 			});
-			// Throwing from inside `try` matters: `finally` drops the waiter count
-			// first, so finalize sees waiters === 0 and still sends the followUp.
 			if (signal?.aborted) throw new Error("aborted");
 			// done may resolve right after the timer fired (race window); a task
 			// that reached a terminal state during the wait is delivered here.
-			if (!timedOut || task.status !== "running") return { outcome: "terminal", task };
+			if (!timedOut || task.status !== "running") {
+				task.notified = true;
+				return { outcome: "terminal", task };
+			}
 			return { outcome: "timeout", task };
 		} finally {
 			runtime.waiters--;
+			// Last one out and nobody delivered — the task settled while this wait
+			// was in flight and the wait was then aborted, so send the followUp.
+			// Gated on the terminal status, not runtime.finalized: finalize sets
+			// that flag before the stream flush, while the task still reads as
+			// running. A wait aborted inside that window is left to finalize, which
+			// will see waiters === 0 by then.
+			if (runtime.waiters === 0 && task.status !== "running" && !task.notified) {
+				await this.notifyCompletion(task);
+			}
 			if (timer !== undefined) clearTimeout(timer);
+			if (onAbort !== undefined) signal?.removeEventListener("abort", onAbort);
 		}
 	}
 
@@ -523,13 +536,10 @@ export class BackgroundTaskRegistry {
 		task.exitCode = outcome.exitCode;
 		task.endedAt = this.now();
 		this.onChange();
-		// Claim protocol: at least one waitForResult caller is waiting on this
-		// completion, so it delivers the result inline. Mark notified to skip the
-		// followUp — the completion must be delivered exactly once.
-		if (runtime.waiters > 0) {
-			task.notified = true;
-		}
-		await this.notifyCompletion(task);
+		// Nothing is claimed on anyone's behalf: if a waiter is registered it gets
+		// first refusal, and whichever of them leaves last without having
+		// delivered sends the followUp from waitForResult's finally.
+		if (runtime.waiters === 0) await this.notifyCompletion(task);
 		runtime.resolveDone();
 	}
 
