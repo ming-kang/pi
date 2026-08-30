@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.84.12] - 2026-08-31
+
 ### Upstream sync: Pi v0.84.4
 
 - Added between-turn compaction: Pi now checks the compaction threshold after tools finish and their results are appended, and compacts inside the same agent run before starting the next assistant response. This replaces the Fork's own mid-turn compaction patch, which is retired along with its fail-closed stop, its stale-usage context estimate, and the `timing` field previously carried on `session_before_compact`. The Fork's cut-point fix is kept, and now also protects this new path from becoming a no-op after a large tool batch.
