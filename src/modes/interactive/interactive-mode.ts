@@ -2213,6 +2213,16 @@ export class InteractiveMode {
 		}
 	}
 
+	private showWorkingStatusIndicator(): void {
+		this.showStatusIndicator(
+			new WorkingStatusIndicator(
+				this.ui,
+				this.workingMessage ?? this.defaultWorkingMessage,
+				this.workingIndicatorOptions,
+			),
+		);
+	}
+
 	private setWorkingVisible(visible: boolean): void {
 		this.workingVisible = visible;
 		if (!visible) {
@@ -2221,13 +2231,7 @@ export class InteractiveMode {
 			return;
 		}
 		if (this.session.isStreaming && this.activeStatusIndicator?.kind !== "working") {
-			this.showStatusIndicator(
-				new WorkingStatusIndicator(
-					this.ui,
-					this.workingMessage ?? this.defaultWorkingMessage,
-					this.workingIndicatorOptions,
-				),
-			);
+			this.showWorkingStatusIndicator();
 		}
 		this.ui.requestRender();
 	}
@@ -3240,43 +3244,24 @@ export class InteractiveMode {
 		switch (event.type) {
 			case "agent_start":
 				this.clearPendingTools();
-				if (this.settingsManager.getShowTerminalProgress()) {
-					this.ui.terminal.setProgress(true);
-				}
 				// Restore main escape handler if retry handler is still active
 				// (retry success event fires later, but we need main handler now)
 				if (this.retryEscapeHandler) {
 					this.defaultEditor.onEscape = this.retryEscapeHandler;
 					this.retryEscapeHandler = undefined;
 				}
-				if (this.workingVisible) {
-					this.showStatusIndicator(
-						new WorkingStatusIndicator(
-							this.ui,
-							this.workingMessage ?? this.defaultWorkingMessage,
-							this.workingIndicatorOptions,
-						),
-					);
-				} else {
-					this.clearStatusIndicator();
-				}
-				this.ui.requestRender();
 				break;
 
 			case "turn_start":
-				// A mid-run compaction replaces the working indicator. Restore it before the
-				// next provider request without waiting for another agent_start event.
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
 				}
-				if (this.workingVisible && this.activeStatusIndicator?.kind !== "working") {
-					this.showStatusIndicator(
-						new WorkingStatusIndicator(
-							this.ui,
-							this.workingMessage ?? this.defaultWorkingMessage,
-							this.workingIndicatorOptions,
-						),
-					);
+				if (this.workingVisible) {
+					if (this.activeStatusIndicator?.kind !== "working") {
+						this.showWorkingStatusIndicator();
+					}
+				} else {
+					this.clearStatusIndicator();
 				}
 				this.ui.requestRender();
 				break;
@@ -3478,38 +3463,35 @@ export class InteractiveMode {
 					} else {
 						this.showStatus("Auto-compaction cancelled");
 					}
-				} else {
-					if (event.result) {
-						const entries = this.sessionManager.buildContextEntries();
-						if (entries[0]?.type !== "compaction") {
-							throw new Error("Completed compaction is missing from the session context");
-						}
-						this.clearChat();
-						// The latest compaction is prepended for model context; append it below at its chronological position.
-						this.renderSessionEntries(entries.slice(1));
-						this.addMessageToChat(
-							createCompactionSummaryMessage(
-								event.result.summary,
-								event.result.tokensBefore,
-								new Date().toISOString(),
-							),
-						);
-						if (event.result.usage) {
-							this.addCompactionCostNotice({
-								type: "compaction_cost",
-								kind: "compaction",
-								usage: event.result.usage,
-							});
-						}
-						this.footer.invalidate();
+				} else if (event.result) {
+					const entries = this.sessionManager.buildContextEntries();
+					if (entries[0]?.type !== "compaction") {
+						throw new Error("Completed compaction is missing from the session context");
 					}
-					if (event.errorMessage) {
-						if (event.reason === "manual") {
-							this.showError(event.errorMessage);
-						} else {
-							this.chatContainer.addChild(new Spacer(1));
-							this.chatContainer.addChild(new Text(theme.fg("error", event.errorMessage), 1, 0));
-						}
+					this.clearChat();
+					// The latest compaction is prepended for model context; append it below at its chronological position.
+					this.renderSessionEntries(entries.slice(1));
+					this.addMessageToChat(
+						createCompactionSummaryMessage(
+							event.result.summary,
+							event.result.tokensBefore,
+							new Date().toISOString(),
+						),
+					);
+					if (event.result.usage) {
+						this.addCompactionCostNotice({
+							type: "compaction_cost",
+							kind: "compaction",
+							usage: event.result.usage,
+						});
+					}
+					this.footer.invalidate();
+				} else if (event.errorMessage) {
+					if (event.reason === "manual") {
+						this.showError(event.errorMessage);
+					} else {
+						this.chatContainer.addChild(new Spacer(1));
+						this.chatContainer.addChild(new Text(theme.fg("error", event.errorMessage), 1, 0));
 					}
 				}
 				void this.flushCompactionQueue({ willRetry: event.willRetry });

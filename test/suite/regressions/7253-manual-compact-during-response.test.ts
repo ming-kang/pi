@@ -23,7 +23,7 @@ describe("issue #7253: manual compaction during an active response", () => {
 		}
 	});
 
-	it("runs only the requested manual compaction during an active response", async () => {
+	it("persists the aborted response before running the requested manual compaction", async () => {
 		let markSecondResponseStarted = () => {};
 		const secondResponseStarted = new Promise<void>((resolve) => {
 			markSecondResponseStarted = resolve;
@@ -33,13 +33,9 @@ describe("issue #7253: manual compaction during an active response", () => {
 			releaseSecondResponse = resolve;
 		});
 
-		// A realistic window/reserve keeps this small conversation below the auto-compaction
-		// threshold, so the second provider response stays in flight and the manual compaction
-		// below serializes against an active run. A crossed threshold would instead stop the
-		// run fail-closed before that response (mid-turn auto-compaction).
 		const harness = await createHarness({
-			models: [{ id: "faux-1", contextWindow: 1_000_000, maxTokens: 100 }],
-			settings: { compaction: { enabled: true, reserveTokens: 16384, keepRecentTokens: 2 } },
+			models: [{ id: "faux-1", contextWindow: 1000, maxTokens: 1000 }],
+			settings: { compaction: { enabled: true, reserveTokens: 200, keepRecentTokens: 2 } },
 			tools: [createNoopTool()],
 			extensionFactories: [
 				(pi) => {
@@ -60,7 +56,7 @@ describe("issue #7253: manual compaction during an active response", () => {
 			async () => {
 				markSecondResponseStarted();
 				await secondResponseReleased;
-				return fauxAssistantMessage("second response");
+				return fauxAssistantMessage(`second response:${"x".repeat(4000)}`);
 			},
 		]);
 
@@ -74,6 +70,14 @@ describe("issue #7253: manual compaction during an active response", () => {
 
 		expect(harness.eventsOfType("compaction_start").map((event) => event.reason)).toEqual(["manual"]);
 		expect(harness.eventsOfType("compaction_end").map((event) => event.reason)).toEqual(["manual"]);
-		expect(harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(1);
+		const entries = harness.sessionManager.getEntries();
+		const abortedResponseIndex = entries.findIndex(
+			(entry) =>
+				entry.type === "message" && entry.message.role === "assistant" && entry.message.stopReason === "aborted",
+		);
+		const compactionIndex = entries.findIndex((entry) => entry.type === "compaction");
+		expect(abortedResponseIndex).toBeGreaterThan(-1);
+		expect(compactionIndex).toBeGreaterThan(abortedResponseIndex);
+		expect(entries.filter((entry) => entry.type === "compaction")).toHaveLength(1);
 	});
 });

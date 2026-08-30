@@ -2,18 +2,10 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHarness, type Harness } from "../harness.ts";
 
-type CompactionInternals = {
-	checkCompaction: (assistantMessage: AssistantMessage) => Promise<boolean>;
-	_runAutoCompaction: (
-		reason: "overflow" | "threshold",
-		willRetry: boolean,
-		timing?: "midTurn" | "postRun" | "prePrompt",
-	) => Promise<boolean>;
+type SessionWithCompactionInternals = {
+	_checkCompaction: (assistantMessage: AssistantMessage) => Promise<boolean>;
+	_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
 };
-
-function compactionInternals(session: unknown): CompactionInternals {
-	return (session as { _compaction: unknown })._compaction as CompactionInternals;
-}
 
 function createZeroUsageAssistant(harness: Harness): AssistantMessage {
 	const model = harness.getModel();
@@ -62,13 +54,13 @@ describe("issue #8328 zero-usage auto-compaction", () => {
 			{ role: "user", content: [{ type: "text", text: "x".repeat(400) }], timestamp: Date.now() - 1 },
 			assistant,
 		];
-		const internals = compactionInternals(harness.session);
-		const runAutoCompactionSpy = vi.spyOn(internals, "_runAutoCompaction").mockResolvedValue(false);
+		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+		const runAutoCompactionSpy = vi.spyOn(sessionInternals, "_runAutoCompaction").mockResolvedValue(false);
 
-		await internals.checkCompaction(assistant);
+		await sessionInternals._checkCompaction(assistant);
 
 		expect(runAutoCompactionSpy).toHaveBeenCalledOnce();
-		expect(runAutoCompactionSpy).toHaveBeenCalledWith("threshold", false, "postRun");
+		expect(runAutoCompactionSpy).toHaveBeenCalledWith("threshold", false);
 	});
 
 	it("does not compact when the zero-usage message estimate is below the threshold", async () => {
@@ -78,10 +70,10 @@ describe("issue #8328 zero-usage auto-compaction", () => {
 			{ role: "user", content: [{ type: "text", text: "short" }], timestamp: Date.now() - 1 },
 			assistant,
 		];
-		const internals = compactionInternals(harness.session);
-		const runAutoCompactionSpy = vi.spyOn(internals, "_runAutoCompaction").mockResolvedValue(false);
+		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+		const runAutoCompactionSpy = vi.spyOn(sessionInternals, "_runAutoCompaction").mockResolvedValue(false);
 
-		await internals.checkCompaction(assistant);
+		await sessionInternals._checkCompaction(assistant);
 
 		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
 	});

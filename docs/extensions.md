@@ -457,14 +457,12 @@ Fired on compaction. See [compaction.md](compaction.md) for details.
 
 ```typescript
 pi.on("session_before_compact", async (event, ctx) => {
-  const { preparation, branchEntries, customInstructions, reason, timing, willRetry, signal } = event;
+  const { preparation, branchEntries, customInstructions, reason, willRetry, signal } = event;
 
   // reason - "manual" (/compact), "threshold", or "overflow"
-  // timing - "manual", "midTurn" (between tool batches), "postRun", or "prePrompt"
-  // willRetry - whether overflow recovery intends to retry if compaction produces a safe retained context
+  // willRetry - whether overflow recovery intends to retry after this compaction
 
-  // Cancel. A "midTurn" cancel skips compaction for the rest of the run and the
-  // run continues at your risk; other timings fail closed on the oversized context.
+  // Cancel:
   return { cancel: true };
 
   // Custom summary:

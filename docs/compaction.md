@@ -31,11 +31,9 @@ contextTokens > contextWindow - reserveTokens
 
 By default, `reserveTokens` is 16384 tokens (configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`). This leaves room for the LLM's response.
 
-During an active tool-calling run, Pi evaluates this threshold after each complete tool batch, including the newly appended tool results, and before another provider request. If compaction succeeds, Pi rebuilds the context and continues the same agent run without inserting a continuation prompt. A voluntary `session_before_compact` cancellation at `timing: "midTurn"` lets that run continue and suppresses further mid-turn compaction checks for the rest of the run. An abort, compaction failure, no safe cut point, or retained context that remains above the threshold fails closed before queue polling or another provider request. Cancellations at other timings likewise leave over-threshold context to fail closed before the next request. Because the upstream stateful Agent does not expose its low-level graceful turn-stop hook, a fail-closed path ends with an explicit error/aborted assistant lifecycle; the preceding `compaction_end` event contains the underlying warning or failure.
+During a multi-turn agent run, Pi checks this threshold after tools finish and their results are appended, before starting the next assistant response. If the threshold is crossed, Pi compacts inside the same agent run and resumes with the summary and retained messages. It skips this between-turn check when the completed tool batch terminates the run and no queued message requires another response. Pi also checks the threshold before a new user prompt and after a low-level agent run ends.
 
-This between-tool-batch trigger is separate from **split-turn compaction** below: the trigger determines *when* compaction runs, while split-turn support determines *where* a very long turn can be cut.
-
-Before a new user prompt, Pi also refuses to send an existing context whose estimate remains above the threshold after compaction. This check happens before adding the new prompt itself. Reduce `keepRecentTokens`, remove unusually large retained content, or switch to a model with a larger context window before continuing.
+This between-turn trigger is separate from **split-turn compaction** below: the trigger determines *when* compaction runs, while split-turn support determines *where* a very long turn can be cut.
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
 
@@ -45,7 +43,7 @@ You can also trigger manually with `/compact [instructions]`, where optional ins
 2. **Extract messages**: Collect messages from the previous kept boundary (or session start) up to the cut point
 3. **Generate summary**: Call LLM to summarize with structured format, passing the previous summary as iterative context when present
 4. **Append entry**: Save `CompactionEntry` with summary and `firstKeptEntryId`
-5. **Reload and verify**: Rebuild context using the summary plus messages from `firstKeptEntryId` onwards, then verify the estimated retained context is below the auto-compaction threshold before continuing automatically
+5. **Rebuilds context**: Session rebuilds the context for the next request, using summary + messages from `firstKeptEntryId` onwards
 
 ```
 Before compaction:
@@ -285,7 +283,7 @@ Fired before auto-compaction or `/compact`. Can cancel or provide custom summary
 
 ```typescript
 pi.on("session_before_compact", async (event, ctx) => {
-  const { preparation, branchEntries, customInstructions, reason, timing, willRetry, signal } = event;
+  const { preparation, branchEntries, customInstructions, reason, willRetry, signal } = event;
 
   // preparation.messagesToSummarize - messages to summarize
   // preparation.turnPrefixMessages - split turn prefix (if isSplitTurn)
@@ -297,14 +295,9 @@ pi.on("session_before_compact", async (event, ctx) => {
 
   // branchEntries - all entries on current branch (for custom state)
   // reason - "manual" (/compact), "threshold", or "overflow"
-  // timing - "manual", "midTurn" (between tool batches), "postRun", or "prePrompt"
-  // willRetry - whether overflow recovery intends to retry if compaction produces a safe retained context
+  // willRetry - whether overflow recovery intends to retry after this compaction
   // signal - AbortSignal (pass to LLM calls)
 
-  // A voluntary cancel at timing "midTurn" continues the current run and skips
-  // further mid-turn checks. An abort, failure, no safe cut, or unsafe retained
-  // context fails closed; at other timings, over-threshold context also fails
-  // closed before the next provider request.
   return { cancel: true };
 
   // Custom summary:

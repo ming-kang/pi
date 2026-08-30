@@ -605,14 +605,6 @@ export interface SessionBeforeForkEvent {
 	position: "before" | "at";
 }
 
-/**
- * When in the session lifecycle a compaction request fires.
- * Cancelling behaves differently per timing: `midTurn` skips compaction for the
- * rest of the run and the run continues at the extension's risk; `postRun` and
- * `prePrompt` leave the over-threshold context to fail closed before the next request.
- */
-export type CompactionTiming = "manual" | "midTurn" | "postRun" | "prePrompt";
-
 /** Fired before context compaction (can be cancelled or customized) */
 export interface SessionBeforeCompactEvent {
 	type: "session_before_compact";
@@ -621,8 +613,6 @@ export interface SessionBeforeCompactEvent {
 	customInstructions?: string;
 	/** What triggered the compaction: manual /compact, the context threshold, or context overflow recovery */
 	reason: "manual" | "threshold" | "overflow";
-	/** Where in the run lifecycle this compaction fires (see CompactionTiming for cancel semantics) */
-	timing: CompactionTiming;
 	/** True when the aborted turn is retried after this compaction (overflow recovery) */
 	willRetry: boolean;
 	signal: AbortSignal;

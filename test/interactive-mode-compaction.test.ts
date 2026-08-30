@@ -200,73 +200,17 @@ describe("InteractiveMode compaction events", () => {
 		expect(fakeThis.flushCompactionQueue).toHaveBeenCalledWith({ willRetry: false });
 	});
 
-	test("shows a retained-context warning after a successful compaction", async () => {
-		initTheme("dark");
-		const clearChat = vi.fn();
+	test("updates the working state when the same agent run resumes after compaction", async () => {
 		const fakeThis = {
 			isInitialized: true,
 			footer: { invalidate: vi.fn() },
-			autoCompactionEscapeHandler: undefined as (() => void) | undefined,
-			autoCompactionLoader: undefined,
-			defaultEditor: {},
-			statusContainer: { clear: vi.fn() },
-			chatContainer: { addChild: vi.fn() },
-			clearChat,
-			sessionManager: { buildContextEntries: vi.fn().mockReturnValue([{ type: "compaction" }]) },
-			renderSessionEntries: vi.fn(),
-			addMessageToChat: vi.fn(),
-			addCompactionCostNotice: vi.fn(),
-			showError: vi.fn(),
-			showStatus: vi.fn(),
+			activeStatusIndicator: undefined,
+			workingVisible: true,
+			showWorkingStatusIndicator: vi.fn(),
 			clearStatusIndicator: vi.fn(),
-			flushCompactionQueue: vi.fn().mockResolvedValue(undefined),
-			settingsManager: { getShowTerminalProgress: () => false },
-			ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
-		};
-
-		const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (
-			this: typeof fakeThis,
-			event: {
-				type: "compaction_end";
-				reason: "threshold";
-				result: { tokensBefore: number; summary: string };
-				aborted: false;
-				willRetry: false;
-				errorMessage: string;
-			},
-		) => Promise<void>;
-
-		await handleEvent.call(fakeThis, {
-			type: "compaction_end",
-			reason: "threshold",
-			result: { tokensBefore: 456, summary: "summary" },
-			aborted: false,
-			willRetry: false,
-			errorMessage: "Retained context is still too large",
-		});
-
-		expect(clearChat).toHaveBeenCalledTimes(1);
-		expect(fakeThis.addMessageToChat).toHaveBeenCalledTimes(1);
-		expect(fakeThis.chatContainer.addChild).toHaveBeenCalledTimes(2);
-		expect(fakeThis.showError).not.toHaveBeenCalled();
-		expect(fakeThis.flushCompactionQueue).toHaveBeenCalledWith({ willRetry: false });
-	});
-
-	test("restores the working indicator on the turn after mid-run compaction", async () => {
-		initTheme("dark");
-		const fakeThis = {
-			isInitialized: true,
-			footer: { invalidate: vi.fn() },
 			settingsManager: { getShowTerminalProgress: () => true },
 			ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
-			workingVisible: true,
-			workingMessage: undefined,
-			defaultWorkingMessage: "Working...",
-			workingIndicatorOptions: undefined,
-			activeStatusIndicator: { kind: "compaction" },
-			showStatusIndicator: vi.fn(),
 		};
-
 		const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (
 			this: typeof fakeThis,
 			event: { type: "turn_start" },
@@ -275,8 +219,16 @@ describe("InteractiveMode compaction events", () => {
 		await handleEvent.call(fakeThis, { type: "turn_start" });
 
 		expect(fakeThis.ui.terminal.setProgress).toHaveBeenCalledWith(true);
-		expect(fakeThis.showStatusIndicator).toHaveBeenCalledWith(expect.objectContaining({ kind: "working" }));
-		expect(fakeThis.ui.requestRender).toHaveBeenCalled();
+		expect(fakeThis.showWorkingStatusIndicator).toHaveBeenCalledTimes(1);
+		expect(fakeThis.clearStatusIndicator).not.toHaveBeenCalled();
+		expect(fakeThis.ui.requestRender).toHaveBeenCalledTimes(1);
+
+		fakeThis.workingVisible = false;
+		await handleEvent.call(fakeThis, { type: "turn_start" });
+
+		expect(fakeThis.showWorkingStatusIndicator).toHaveBeenCalledTimes(1);
+		expect(fakeThis.clearStatusIndicator).toHaveBeenCalledTimes(1);
+		expect(fakeThis.ui.requestRender).toHaveBeenCalledTimes(2);
 	});
 
 	test("preserves steering behavior when flushing into an active agent run", async () => {
