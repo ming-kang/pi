@@ -76,16 +76,15 @@
 		{
 			"path": "src/core/agent-session.ts",
 			"category": "bugfix",
-			"intent": "Auto-compaction delegated to CompactionController (fork-added src/core/compaction-controller.ts): mid-turn checks, fail-closed stop, overflow recovery",
+			"intent": "Captures the stream function before awaiting summarization auth, so a model switch during the await cannot resolve auth for one stream function and generate the summary with another; also invalidates extension contexts with STALE_EXTENSION_CONTEXT_MESSAGE",
 			"tests": [
-				"test/suite/agent-session-compaction.test.ts",
-				"test/agent-session-auto-compaction-queue.test.ts"
+				"test/suite/agent-session-compaction.test.ts"
 			]
 		},
 		{
 			"path": "src/core/compaction/compaction.ts",
 			"category": "bugfix",
-			"intent": "Cuts at the last valid point when trailing tool results exceed keepRecentTokens, instead of keeping everything and making auto-compaction a no-op",
+			"intent": "Cuts at the last valid point when trailing tool results exceed keepRecentTokens, instead of keeping everything and making compaction a no-op; this also keeps upstream's between-turn compaction from being a no-op after a large tool batch",
 			"tests": [
 				"test/compaction.test.ts"
 			]
@@ -93,7 +92,7 @@
 		{
 			"path": "src/core/extensions/index.ts",
 			"category": "extension-support",
-			"intent": "Re-exports CompactionTiming, ShellSettings, and stale-extension-context helpers"
+			"intent": "Re-exports ShellSettings and the stale-extension-context helpers"
 		},
 		{
 			"path": "src/core/extensions/loader.ts",
@@ -114,7 +113,7 @@
 		{
 			"path": "src/core/extensions/types.ts",
 			"category": "extension-support",
-			"intent": "Tool grouping/result render context, canonical ModelRuntime, CompactionTiming, stale-context helpers, and host ShellSettings access"
+			"intent": "Tool grouping/result render context, canonical ModelRuntime, stale-context helpers, and host ShellSettings access"
 		},
 		{
 			"path": "src/core/keybindings.ts",

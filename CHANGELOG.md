@@ -4,6 +4,20 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Upstream sync: Pi v0.84.4
+
+- Added between-turn compaction: Pi now checks the compaction threshold after tools finish and their results are appended, and compacts inside the same agent run before starting the next assistant response. This replaces the Fork's own mid-turn compaction patch, which is retired along with its fail-closed stop, its stale-usage context estimate, and the `timing` field previously carried on `session_before_compact`. The Fork's cut-point fix is kept, and now also protects this new path from becoming a no-op after a large tool batch.
+- Added terminal capability overrides for OSC 8 hyperlinks, the inline image protocol, and truecolor, configurable through `terminal.hyperlinks`, `terminal.images`, and `terminal.trueColor` or the matching `PI_HYPERLINKS`, `PI_IMAGE_PROTOCOL`, and `PI_TRUE_COLOR` environment variables, for terminals where auto-detection fails behind a proxy or multiplexer.
+- Added the `fullscreenCopyOnSelect` setting, on by default. Disabling it keeps a fullscreen selection highlighted and routes Ctrl+X to that selection instead of the last assistant message.
+- Added the `ui_prompt_start` and `ui_prompt_end` extension events, fired around blocking `ctx.ui` prompts so host integrations can report "waiting for user" rather than "running", with nested prompts coalesced into one span.
+- Added the RPC `clear_queue` command, which removes queued steering and follow-up messages and returns their text so a client can restore them in its editor.
+- Changed llama.cpp handling to auto-load the configured preset on first use and to report loading state more accurately.
+- Fixed summarization persisting a truncated summary when generation hit the token cap: a length stop no longer becomes a session checkpoint, for compaction, turn-prefix, and branch summaries alike.
+- Fixed a custom message appended during tool execution being ordered ahead of the tool results it followed.
+- Fixed toggling thinking-block visibility rebuilding the transcript, which discarded the output of a still-running bash tool.
+- Fixed session files with an unterminated final line failing to parse.
+- Fixed process-tree cleanup on Windows depending on `PATH` to find `taskkill`; it now uses the System32 absolute path and tolerates a failed spawn.
+
 ### Fixed
 
 - Fixed a `bg wait` losing its task's completion when the turn was interrupted in the same tick the task settled. Delivery was claimed on the waiter's behalf by the task's own finalization, so an abort arriving after that claim discarded the result while the `<background-task>` notification stayed suppressed — the finished task's status was never reported anywhere. Delivery is now claimed only by whoever actually delivers, and the last waiter to leave without delivering sends the notification itself. A related leak is gone too: each `bg wait` left an abort listener attached to the turn's signal, so a turn with many waits tripped Node's max-listeners warning.
