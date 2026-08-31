@@ -3,6 +3,7 @@
  */
 
 import type { AgentToolUpdateCallback } from "../../core/extensions/types.ts";
+import { WEB_SEARCH_DISABLED_MESSAGE } from "./constants.ts";
 import { searchDeepSeek } from "./providers/deepseek.ts";
 import { searchMiniMax } from "./providers/minimax.ts";
 import type { WebSearchParams } from "./schema.ts";
@@ -16,6 +17,7 @@ import type {
 
 const MAX_OUTPUT_HITS = 12;
 const MAX_SNIPPET_LENGTH = 200;
+const MAX_RELATED_SEARCHES = 8;
 
 /**
  * Normalize URL by removing common tracking parameters and fragments.
@@ -66,6 +68,7 @@ export function fuseSearchHits(results: ProviderSearchResult[]): {
 	for (const result of results) {
 		if (result.relatedSearches) {
 			for (const r of result.relatedSearches) {
+				if (relatedSet.size >= MAX_RELATED_SEARCHES) break;
 				if (r?.trim()) relatedSet.add(r.trim());
 			}
 		}
@@ -120,7 +123,7 @@ export function fuseSearchHits(results: ProviderSearchResult[]): {
  */
 export function formatSearchOutput(query: string, details: WebSearchDetails): string {
 	if (details.status === "disabled") {
-		return "Web search is disabled: Neither MiniMax nor DeepSeek API Key was found in auth.json or environment variables. Please configure a key to enable web search.";
+		return WEB_SEARCH_DISABLED_MESSAGE;
 	}
 
 	if (details.status === "error") {
@@ -186,6 +189,22 @@ export async function executeWebSearch(
 	const startTime = Date.now();
 	const query = params.query.trim();
 
+	if (!query) {
+		const details: WebSearchDetails = {
+			query: "",
+			durationMs: 0,
+			status: "error",
+			engine: credentials.mode,
+			totalHits: 0,
+			hits: [],
+			errorMessage: "Search query must not be empty.",
+		};
+		return {
+			formattedOutput: formatSearchOutput(query, details),
+			details,
+		};
+	}
+
 	if (credentials.mode === "none") {
 		const details: WebSearchDetails = {
 			query,
@@ -194,7 +213,7 @@ export async function executeWebSearch(
 			engine: "none",
 			totalHits: 0,
 			hits: [],
-			errorMessage: "No API keys configured",
+			errorMessage: WEB_SEARCH_DISABLED_MESSAGE,
 		};
 		return {
 			formattedOutput: formatSearchOutput(query, details),

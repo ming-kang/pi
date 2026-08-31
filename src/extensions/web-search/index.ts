@@ -52,36 +52,13 @@ export default function webSearch(pi: ExtensionAPI): void {
 		prepareArguments: normalizeWebSearchParams,
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			const credentials = resolveSearchCredentials(ctx.modelRuntime);
-
-			if (credentials.mode === "none") {
-				const disabledDetails: WebSearchDetails = {
-					query: params.query || "",
-					durationMs: 0,
-					status: "disabled",
-					engine: "none",
-					totalHits: 0,
-					hits: [],
-					errorMessage: "Neither MiniMax nor DeepSeek API Key found in auth.json or environment variables",
-				};
-				return {
-					content: [
-						{
-							type: "text",
-							text: "Web search is disabled: Neither MiniMax nor DeepSeek API Key was found in auth.json or environment variables. Please add credentials via auth.json or environment variables (MINIMAX_API_KEY, DEEPSEEK_API_KEY).",
-						},
-					],
-					details: disabledDetails,
-					isError: true,
-				};
-			}
-
+			const credentials = await resolveSearchCredentials(ctx.modelRuntime);
 			const execution = await executeWebSearch(params, credentials, signal, onUpdate);
 
 			return {
 				content: [{ type: "text", text: execution.formattedOutput }],
 				details: execution.details,
-				isError: execution.details.status === "error",
+				isError: execution.details.status !== "success",
 			};
 		},
 

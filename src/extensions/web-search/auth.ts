@@ -2,44 +2,68 @@
  * auth.ts — Credential discovery and engine mode resolution for web_search.
  */
 
-import { getAgentDir } from "../../config.ts";
+import { getAuthPath } from "../../config.ts";
 import { readStoredCredential } from "../../core/auth-storage.ts";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
+import { isCommandConfigValue, resolveConfigValue } from "../../core/resolve-config-value.ts";
 import type { ResolvedSearchCredentials, SearchEngineType } from "./types.ts";
 
 const MINIMAX_CN_HOST = "https://api.minimaxi.com";
 const MINIMAX_GLOBAL_HOST = "https://api.minimax.io";
 
+function trimValue(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	return trimmed || undefined;
+}
+
 /**
- * Resolve MiniMax search credentials from auth.json and environment variables.
+ * Resolve a provider API key through the runtime's canonical auth chain
+ * (runtime key → auth.json → models.json → environment). Returns undefined
+ * when the provider is unknown to the runtime or nothing is configured.
  */
-function resolveMiniMaxCredential(modelRuntime?: ModelRuntime): { key?: string; host?: string } {
-	// 1. Check auth.json via modelRuntime or direct read
-	const cnCred =
-		modelRuntime?.getProviderAuthStatus("minimax-cn") ||
-		readStoredCredential("minimax-cn", `${getAgentDir()}/auth.json`);
+async function runtimeApiKey(modelRuntime: ModelRuntime | undefined, providerId: string): Promise<string | undefined> {
+	if (!modelRuntime) return undefined;
+	try {
+		return trimValue((await modelRuntime.getAuth(providerId))?.auth.apiKey);
+	} catch {
+		return undefined;
+	}
+}
 
-	if (cnCred && "key" in cnCred && typeof cnCred.key === "string" && cnCred.key.trim()) {
-		return { key: cnCred.key.trim(), host: MINIMAX_CN_HOST };
+/**
+ * Direct auth.json read for contexts without a ModelRuntime. Resolves
+ * command-configured keys (e.g. "!op read ...") like AuthStorage does.
+ */
+function storedApiKey(providerId: string, authPath: string): string | undefined {
+	const credential = readStoredCredential(providerId, authPath);
+	if (!credential || credential.type !== "api_key" || typeof credential.key !== "string") return undefined;
+	const key = isCommandConfigValue(credential.key)
+		? resolveConfigValue(credential.key, credential.env)
+		: credential.key;
+	return trimValue(key);
+}
+
+/**
+ * Resolve MiniMax search credentials, preferring the CN account over global.
+ */
+async function resolveMiniMaxCredential(
+	modelRuntime: ModelRuntime | undefined,
+	authPath: string,
+): Promise<{ key?: string; host?: string }> {
+	const cnKey =
+		(await runtimeApiKey(modelRuntime, "minimax-cn")) ??
+		storedApiKey("minimax-cn", authPath) ??
+		trimValue(process.env.MINIMAX_CN_API_KEY);
+	if (cnKey) {
+		return { key: cnKey, host: MINIMAX_CN_HOST };
 	}
 
-	const globalCred =
-		modelRuntime?.getProviderAuthStatus("minimax") || readStoredCredential("minimax", `${getAgentDir()}/auth.json`);
-
-	if (globalCred && "key" in globalCred && typeof globalCred.key === "string" && globalCred.key.trim()) {
-		return { key: globalCred.key.trim(), host: MINIMAX_GLOBAL_HOST };
-	}
-
-	// 2. Check environment variables
-	const envCnKey = process.env.MINIMAX_CN_API_KEY?.trim();
-	if (envCnKey) {
-		return { key: envCnKey, host: MINIMAX_CN_HOST };
-	}
-
-	const envGlobalKey = process.env.MINIMAX_API_KEY?.trim();
-	if (envGlobalKey) {
-		const host = process.env.MINIMAX_API_HOST?.trim() || MINIMAX_GLOBAL_HOST;
-		return { key: envGlobalKey, host };
+	const globalKey =
+		(await runtimeApiKey(modelRuntime, "minimax")) ??
+		storedApiKey("minimax", authPath) ??
+		trimValue(process.env.MINIMAX_API_KEY);
+	if (globalKey) {
+		return { key: globalKey, host: trimValue(process.env.MINIMAX_API_HOST) ?? MINIMAX_GLOBAL_HOST };
 	}
 
 	return {};
@@ -48,30 +72,28 @@ function resolveMiniMaxCredential(modelRuntime?: ModelRuntime): { key?: string; 
 /**
  * Resolve DeepSeek search credentials from auth.json and environment variables.
  */
-function resolveDeepSeekCredential(modelRuntime?: ModelRuntime): { key?: string } {
-	// 1. Check auth.json
-	const dsCred =
-		modelRuntime?.getProviderAuthStatus("deepseek") || readStoredCredential("deepseek", `${getAgentDir()}/auth.json`);
-
-	if (dsCred && "key" in dsCred && typeof dsCred.key === "string" && dsCred.key.trim()) {
-		return { key: dsCred.key.trim() };
-	}
-
-	// 2. Check environment variables
-	const envDsKey = process.env.DEEPSEEK_API_KEY?.trim();
-	if (envDsKey) {
-		return { key: envDsKey };
-	}
-
-	return {};
+async function resolveDeepSeekCredential(
+	modelRuntime: ModelRuntime | undefined,
+	authPath: string,
+): Promise<{ key?: string }> {
+	const key =
+		(await runtimeApiKey(modelRuntime, "deepseek")) ??
+		storedApiKey("deepseek", authPath) ??
+		trimValue(process.env.DEEPSEEK_API_KEY);
+	return key ? { key } : {};
 }
 
 /**
  * Discover and resolve current active search engine credentials and execution mode.
  */
-export function resolveSearchCredentials(modelRuntime?: ModelRuntime): ResolvedSearchCredentials {
-	const mm = resolveMiniMaxCredential(modelRuntime);
-	const ds = resolveDeepSeekCredential(modelRuntime);
+export async function resolveSearchCredentials(
+	modelRuntime?: ModelRuntime,
+	authPath: string = getAuthPath(),
+): Promise<ResolvedSearchCredentials> {
+	const [mm, ds] = await Promise.all([
+		resolveMiniMaxCredential(modelRuntime, authPath),
+		resolveDeepSeekCredential(modelRuntime, authPath),
+	]);
 
 	let mode: SearchEngineType = "none";
 	if (mm.key && ds.key) {

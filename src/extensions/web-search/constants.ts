@@ -11,6 +11,9 @@ export const WEB_SEARCH_DESCRIPTION =
 export const WEB_SEARCH_PROMPT_SNIPPET =
 	"Search the web for real-time information, documentation, and external references";
 
+export const WEB_SEARCH_DISABLED_MESSAGE =
+	"Web search is disabled: Neither MiniMax nor DeepSeek API Key was found in auth.json or environment variables. Please add credentials via auth.json or environment variables (MINIMAX_API_KEY, DEEPSEEK_API_KEY).";
+
 export function getWebSearchPromptGuidelines(): string[] {
 	const currentYearMonth = new Date().toISOString().slice(0, 7);
 	return [

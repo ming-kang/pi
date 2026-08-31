@@ -16,6 +16,7 @@ These hidden built-ins use the same public Extension API available to external e
 | [Statusline](extensions/statusline.md) | Footer status | Show concise extension-managed activity state |
 | [Subagent](extensions/subagent.md) | `subagent`, `/agents` | Delegate bounded work to isolated child Pi sessions |
 | [Todo](extensions/todo.md) | `todo`, `/todos` | Track ordered multi-step work in a compact one-line widget |
+| [Web Search](extensions/web-search.md) | `web_search` | Search the live web through MiniMax and DeepSeek with fused results |
 
 ## Context safety
 

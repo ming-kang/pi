@@ -64,6 +64,7 @@ export function normalizeWebSearchParams(raw: unknown): WebSearchParams {
 	return {
 		query,
 		...(allowedDomains ? { allowed_domains: allowedDomains } : {}),
-		...(blockedDomains ? { blocked_domains: blockedDomains } : {}),
+		// allowed_domains and blocked_domains are mutually exclusive; allowed_domains wins.
+		...(blockedDomains && !allowedDomains ? { blocked_domains: blockedDomains } : {}),
 	};
 }
