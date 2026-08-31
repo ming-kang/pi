@@ -5,7 +5,7 @@ import { join } from "path";
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type { ModelRuntime } from "../src/core/model-runtime.ts";
-import { resolveSearchCredentials } from "../src/extensions/web-search/auth.ts";
+import { configuredEngine, resolveSearchCredentials } from "../src/extensions/web-search/auth.ts";
 import { formatSearchOutput, fuseSearchHits, normalizeUrl } from "../src/extensions/web-search/fusion.ts";
 import { renderWebSearchCall, renderWebSearchResult } from "../src/extensions/web-search/render.ts";
 import { normalizeWebSearchParams } from "../src/extensions/web-search/schema.ts";
@@ -103,10 +103,9 @@ describe("resolveSearchCredentials", () => {
 	test("resolves dual mode through the runtime auth chain", async () => {
 		const runtime = stubModelRuntime({ "minimax-cn": "mm-key", deepseek: "ds-key" });
 		const creds = await resolveSearchCredentials(runtime, missingAuthPath);
-		expect(creds.mode).toBe("dual");
-		expect(creds.minimaxKey).toBe("mm-key");
-		expect(creds.minimaxHost).toBe("https://api.minimaxi.com");
-		expect(creds.deepseekKey).toBe("ds-key");
+		expect(configuredEngine(creds)).toBe("dual");
+		expect(creds.minimax).toEqual({ key: "mm-key", host: "https://api.minimaxi.com" });
+		expect(creds.deepseek).toEqual({ key: "ds-key" });
 	});
 
 	test("resolves credentials even when getProviderAuthStatus reports unconfigured", async () => {
@@ -118,17 +117,18 @@ describe("resolveSearchCredentials", () => {
 			getProviderAuthStatus: () => ({ configured: false }),
 		} as unknown as ModelRuntime;
 		const creds = await resolveSearchCredentials(runtime, missingAuthPath);
-		expect(creds.mode).toBe("deepseek");
-		expect(creds.deepseekKey).toBe("ds-key");
+		expect(configuredEngine(creds)).toBe("deepseek");
+		expect(creds.minimax).toBeUndefined();
+		expect(creds.deepseek).toEqual({ key: "ds-key" });
 	});
 
 	test("falls back to auth.json when no runtime is available", async () => {
 		const authPath = join(tempDir, "auth.json");
 		writeFileSync(authPath, JSON.stringify({ "minimax-cn": { type: "api_key", key: "mm-file-key" } }));
 		const creds = await resolveSearchCredentials(undefined, authPath);
-		expect(creds.mode).toBe("minimax");
-		expect(creds.minimaxKey).toBe("mm-file-key");
-		expect(creds.minimaxHost).toBe("https://api.minimaxi.com");
+		expect(configuredEngine(creds)).toBe("minimax");
+		expect(creds.minimax).toEqual({ key: "mm-file-key", host: "https://api.minimaxi.com" });
+		expect(creds.deepseek).toBeUndefined();
 	});
 
 	test("falls back to environment variables when the runtime has nothing", async () => {
@@ -136,10 +136,9 @@ describe("resolveSearchCredentials", () => {
 		process.env.MINIMAX_API_HOST = "https://minimax.example.com/";
 		process.env.DEEPSEEK_API_KEY = "ds-env-key";
 		const creds = await resolveSearchCredentials(stubModelRuntime({}), missingAuthPath);
-		expect(creds.mode).toBe("dual");
-		expect(creds.minimaxKey).toBe("mm-env-key");
-		expect(creds.minimaxHost).toBe("https://minimax.example.com/");
-		expect(creds.deepseekKey).toBe("ds-env-key");
+		expect(configuredEngine(creds)).toBe("dual");
+		expect(creds.minimax).toEqual({ key: "mm-env-key", host: "https://minimax.example.com/" });
+		expect(creds.deepseek).toEqual({ key: "ds-env-key" });
 	});
 
 	test("survives getAuth failures and reports none when nothing is configured", async () => {
@@ -149,9 +148,9 @@ describe("resolveSearchCredentials", () => {
 			},
 		} as unknown as ModelRuntime;
 		const creds = await resolveSearchCredentials(runtime, missingAuthPath);
-		expect(creds.mode).toBe("none");
-		expect(creds.minimaxKey).toBeUndefined();
-		expect(creds.deepseekKey).toBeUndefined();
+		expect(configuredEngine(creds)).toBe("none");
+		expect(creds.minimax).toBeUndefined();
+		expect(creds.deepseek).toBeUndefined();
 	});
 });
 
@@ -308,7 +307,7 @@ describe("renderWebSearchCall & renderWebSearchResult", () => {
 		);
 
 		const lines = comp.render(120).map((l) => stripAnsi(l).trimEnd());
-		expect(lines[0]).toContain("5 results via MiniMax + DeepSeek · 1.2s");
+		expect(lines[0]).toContain("5 results via MiniMax & DeepSeek · 1.2s");
 		expect(lines[0]).toContain("ctrl+o to expand");
 	});
 

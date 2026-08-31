@@ -13,11 +13,7 @@ When both engines are configured, searches run concurrently and results are fuse
 
 ## Credentials
 
-Keys are resolved per provider in this order:
-
-1. The runtime's canonical auth chain (`ModelRuntime.getAuth`): runtime API key → `auth.json` → `models.json` → environment.
-2. Direct `auth.json` read (provider IDs `minimax-cn`, `minimax`, `deepseek`), including command-configured keys such as `"!op read ..."`.
-3. Environment variables: `MINIMAX_CN_API_KEY`, `MINIMAX_API_KEY`, `DEEPSEEK_API_KEY`.
+Keys are resolved per provider through the runtime's canonical auth chain (`ModelRuntime.getAuth`: runtime API key → `auth.json` → `models.json` → environment). When no runtime is available (or it does not know the provider), the extension falls back to reading `auth.json` directly (provider IDs `minimax-cn`, `minimax`, `deepseek`, including command-configured keys such as `"!op read ..."`) and then the environment variables `MINIMAX_CN_API_KEY`, `MINIMAX_API_KEY`, `DEEPSEEK_API_KEY`.
 
 The MiniMax CN account (`minimax-cn`) is preferred over the global one (`minimax`) and selects the `api.minimaxi.com` search host; the global account uses `api.minimax.io`, overridable via `MINIMAX_API_HOST`.
 
@@ -43,6 +39,7 @@ The model-facing payload is Markdown containing up to 12 verified sources (snipp
 - Engine failures are independent: if one engine errors, the other's results are still returned; the tool errors only when every configured engine fails.
 - MiniMax search uses the Coding Plan Search endpoint (`POST /v1/coding_plan/search`), which requires a Coding Plan key — a standard MiniMax API key may be rejected upstream.
 - DeepSeek search goes through the Anthropic-compatible endpoint (`/anthropic/v1/messages`, model `claude-sonnet-search`) with the server-side `web_search_20250305` tool; the synthesis text is bounded by the request's `max_tokens` (1024).
+- Requests time out after 60 seconds (MiniMax) or 90 seconds (DeepSeek) and surface as Pi tool errors; upstream error bodies are truncated to 200 characters.
 
 ## Implementation notes
 

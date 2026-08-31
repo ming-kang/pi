@@ -1,12 +1,12 @@
 /**
- * auth.ts — Credential discovery and engine mode resolution for web_search.
+ * auth.ts — Credential discovery for web_search, plus the engine label derived from it.
  */
 
 import { getAuthPath } from "../../config.ts";
 import { readStoredCredential } from "../../core/auth-storage.ts";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
 import { isCommandConfigValue, resolveConfigValue } from "../../core/resolve-config-value.ts";
-import type { ResolvedSearchCredentials, SearchEngineType } from "./types.ts";
+import type { MiniMaxSearchCredential, ResolvedSearchCredentials, SearchEngineType } from "./types.ts";
 
 const MINIMAX_CN_HOST = "https://api.minimaxi.com";
 const MINIMAX_GLOBAL_HOST = "https://api.minimax.io";
@@ -44,70 +44,68 @@ function storedApiKey(providerId: string, authPath: string): string | undefined 
 }
 
 /**
+ * Resolve one provider's API key. The runtime chain already covers auth.json,
+ * models.json, and environment variables; the direct file/env read is the
+ * fallback for contexts without a ModelRuntime (or a provider it doesn't know).
+ */
+async function resolveProviderKey(
+	modelRuntime: ModelRuntime | undefined,
+	authPath: string,
+	providerId: string,
+	envVar: string,
+): Promise<string | undefined> {
+	return (
+		(await runtimeApiKey(modelRuntime, providerId)) ??
+		storedApiKey(providerId, authPath) ??
+		trimValue(process.env[envVar])
+	);
+}
+
+/**
  * Resolve MiniMax search credentials, preferring the CN account over global.
  */
 async function resolveMiniMaxCredential(
 	modelRuntime: ModelRuntime | undefined,
 	authPath: string,
-): Promise<{ key?: string; host?: string }> {
-	const cnKey =
-		(await runtimeApiKey(modelRuntime, "minimax-cn")) ??
-		storedApiKey("minimax-cn", authPath) ??
-		trimValue(process.env.MINIMAX_CN_API_KEY);
-	if (cnKey) {
-		return { key: cnKey, host: MINIMAX_CN_HOST };
-	}
+): Promise<MiniMaxSearchCredential | undefined> {
+	const cnKey = await resolveProviderKey(modelRuntime, authPath, "minimax-cn", "MINIMAX_CN_API_KEY");
+	if (cnKey) return { key: cnKey, host: MINIMAX_CN_HOST };
 
-	const globalKey =
-		(await runtimeApiKey(modelRuntime, "minimax")) ??
-		storedApiKey("minimax", authPath) ??
-		trimValue(process.env.MINIMAX_API_KEY);
-	if (globalKey) {
-		return { key: globalKey, host: trimValue(process.env.MINIMAX_API_HOST) ?? MINIMAX_GLOBAL_HOST };
-	}
+	const globalKey = await resolveProviderKey(modelRuntime, authPath, "minimax", "MINIMAX_API_KEY");
+	if (globalKey) return { key: globalKey, host: trimValue(process.env.MINIMAX_API_HOST) ?? MINIMAX_GLOBAL_HOST };
 
-	return {};
+	return undefined;
 }
 
 /**
- * Resolve DeepSeek search credentials from auth.json and environment variables.
+ * Resolve DeepSeek search credentials.
  */
 async function resolveDeepSeekCredential(
 	modelRuntime: ModelRuntime | undefined,
 	authPath: string,
-): Promise<{ key?: string }> {
-	const key =
-		(await runtimeApiKey(modelRuntime, "deepseek")) ??
-		storedApiKey("deepseek", authPath) ??
-		trimValue(process.env.DEEPSEEK_API_KEY);
-	return key ? { key } : {};
+): Promise<{ key: string } | undefined> {
+	const key = await resolveProviderKey(modelRuntime, authPath, "deepseek", "DEEPSEEK_API_KEY");
+	return key ? { key } : undefined;
+}
+
+/** The engine set implied by the configured credentials. */
+export function configuredEngine(credentials: ResolvedSearchCredentials): SearchEngineType {
+	if (credentials.minimax && credentials.deepseek) return "dual";
+	if (credentials.minimax) return "minimax";
+	if (credentials.deepseek) return "deepseek";
+	return "none";
 }
 
 /**
- * Discover and resolve current active search engine credentials and execution mode.
+ * Discover and resolve current active search engine credentials.
  */
 export async function resolveSearchCredentials(
 	modelRuntime?: ModelRuntime,
 	authPath: string = getAuthPath(),
 ): Promise<ResolvedSearchCredentials> {
-	const [mm, ds] = await Promise.all([
+	const [minimax, deepseek] = await Promise.all([
 		resolveMiniMaxCredential(modelRuntime, authPath),
 		resolveDeepSeekCredential(modelRuntime, authPath),
 	]);
-
-	let mode: SearchEngineType = "none";
-	if (mm.key && ds.key) {
-		mode = "dual";
-	} else if (mm.key) {
-		mode = "minimax";
-	} else if (ds.key) {
-		mode = "deepseek";
-	}
-
-	return {
-		minimaxKey: mm.key,
-		minimaxHost: mm.host,
-		deepseekKey: ds.key,
-		mode,
-	};
+	return { minimax, deepseek };
 }

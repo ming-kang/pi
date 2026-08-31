@@ -3,14 +3,15 @@
  */
 
 import type { AgentToolUpdateCallback } from "../../core/extensions/types.ts";
-import { WEB_SEARCH_DISABLED_MESSAGE } from "./constants.ts";
+import { configuredEngine } from "./auth.ts";
+import { getEngineLabel, WEB_SEARCH_DISABLED_MESSAGE } from "./constants.ts";
 import { searchDeepSeek } from "./providers/deepseek.ts";
 import { searchMiniMax } from "./providers/minimax.ts";
 import type { WebSearchParams } from "./schema.ts";
 import type {
 	ProviderSearchResult,
 	ResolvedSearchCredentials,
-	SearchEngineSource,
+	SearchEngineType,
 	WebSearchDetails,
 	WebSearchHit,
 } from "./types.ts";
@@ -138,10 +139,7 @@ export function formatSearchOutput(query: string, details: WebSearchDetails): st
 	parts.push(`# Web Search Results for: "${query}"\n`);
 
 	if (details.hits.length > 0) {
-		const engineLabel =
-			details.engine === "dual" ? "MiniMax & DeepSeek" : details.engine === "minimax" ? "MiniMax" : "DeepSeek";
-
-		parts.push(`## Verified Web Sources (${details.hits.length} found via ${engineLabel})\n`);
+		parts.push(`## Verified Web Sources (${details.hits.length} found via ${getEngineLabel(details.engine)})\n`);
 
 		details.hits.forEach((hit, idx) => {
 			const sourceTag = hit.sources.length > 1 ? ` — *(verified by ${hit.sources.join(" & ")})*` : "";
@@ -188,13 +186,14 @@ export async function executeWebSearch(
 ): Promise<{ formattedOutput: string; details: WebSearchDetails }> {
 	const startTime = Date.now();
 	const query = params.query.trim();
+	const engine = configuredEngine(credentials);
 
 	if (!query) {
 		const details: WebSearchDetails = {
 			query: "",
 			durationMs: 0,
 			status: "error",
-			engine: credentials.mode,
+			engine,
 			totalHits: 0,
 			hits: [],
 			errorMessage: "Search query must not be empty.",
@@ -205,7 +204,7 @@ export async function executeWebSearch(
 		};
 	}
 
-	if (credentials.mode === "none") {
+	if (engine === "none") {
 		const details: WebSearchDetails = {
 			query,
 			durationMs: 0,
@@ -223,12 +222,12 @@ export async function executeWebSearch(
 
 	// Send initial progress update
 	onUpdate?.({
-		content: [{ type: "text", text: `Searching for "${query}" via ${credentials.mode.toUpperCase()}...` }],
+		content: [{ type: "text", text: `Searching for "${query}" via ${getEngineLabel(engine)}...` }],
 		details: {
 			query,
 			durationMs: 0,
 			status: "success",
-			engine: credentials.mode,
+			engine,
 			totalHits: 0,
 			hits: [],
 		},
@@ -236,12 +235,12 @@ export async function executeWebSearch(
 
 	const searchPromises: Promise<ProviderSearchResult>[] = [];
 
-	if (credentials.minimaxKey) {
+	if (credentials.minimax) {
 		searchPromises.push(
 			searchMiniMax({
 				query,
-				apiKey: credentials.minimaxKey,
-				apiHost: credentials.minimaxHost,
+				apiKey: credentials.minimax.key,
+				apiHost: credentials.minimax.host,
 				allowedDomains: params.allowed_domains,
 				blockedDomains: params.blocked_domains,
 				signal,
@@ -249,11 +248,11 @@ export async function executeWebSearch(
 		);
 	}
 
-	if (credentials.deepseekKey) {
+	if (credentials.deepseek) {
 		searchPromises.push(
 			searchDeepSeek({
 				query,
-				apiKey: credentials.deepseekKey,
+				apiKey: credentials.deepseek.key,
 				allowedDomains: params.allowed_domains,
 				blockedDomains: params.blocked_domains,
 				signal,
@@ -281,7 +280,7 @@ export async function executeWebSearch(
 			query,
 			durationMs,
 			status: "error",
-			engine: credentials.mode,
+			engine,
 			totalHits: 0,
 			hits: [],
 			errorMessage: errors.join(" | ") || "All search engines failed",
@@ -294,27 +293,16 @@ export async function executeWebSearch(
 
 	const { hits, relatedSearches, deepseekSynthesis } = fuseSearchHits(successfulResults);
 
-	// Determine actual contributing engines
-	const usedSources = new Set<SearchEngineSource>();
-	for (const h of hits) {
-		for (const s of h.sources) usedSources.add(s);
-	}
-	if (deepseekSynthesis) usedSources.add("DeepSeek");
-
-	let effectiveEngine: typeof credentials.mode = credentials.mode;
-	if (usedSources.has("MiniMax") && usedSources.has("DeepSeek")) {
-		effectiveEngine = "dual";
-	} else if (usedSources.has("MiniMax")) {
-		effectiveEngine = "minimax";
-	} else if (usedSources.has("DeepSeek")) {
-		effectiveEngine = "deepseek";
-	}
+	// Badge reflects the engines that actually responded, not just configuration.
+	const respondedSources = new Set(successfulResults.map((r) => r.source));
+	const contributingEngine: SearchEngineType =
+		respondedSources.size > 1 ? "dual" : respondedSources.has("MiniMax") ? "minimax" : "deepseek";
 
 	const details: WebSearchDetails = {
 		query,
 		durationMs,
 		status: "success",
-		engine: effectiveEngine,
+		engine: contributingEngine,
 		totalHits: hits.length,
 		hits,
 		relatedSearches,

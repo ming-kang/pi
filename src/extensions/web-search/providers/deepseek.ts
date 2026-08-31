@@ -3,6 +3,7 @@
  */
 
 import type { DeepSeekMessagesResponse, ProviderSearchResult, WebSearchHit } from "../types.ts";
+import { postJson } from "./http.ts";
 
 export interface DeepSeekSearchOptions {
 	query: string;
@@ -32,31 +33,24 @@ export async function searchDeepSeek(options: DeepSeekSearchOptions): Promise<Pr
 		toolConfig.blocked_domains = options.blockedDomains;
 	}
 
-	const response = await fetch(endpoint, {
-		method: "POST",
-		headers: {
+	const data = await postJson<DeepSeekMessagesResponse>(
+		endpoint,
+		{
 			"Content-Type": "application/json",
 			"x-api-key": options.apiKey,
 			Authorization: `Bearer ${options.apiKey}`,
 			"anthropic-version": "2023-06-01",
 		},
-		body: JSON.stringify({
+		{
 			model,
 			max_tokens: 1024,
 			messages: [{ role: "user", content: options.query }],
 			tools: [toolConfig],
-		}),
-		signal: options.signal,
-	});
-
-	if (!response.ok) {
-		const errorText = await response.text().catch(() => "");
-		throw new Error(
-			`DeepSeek Messages search API returned HTTP ${response.status} ${response.statusText}: ${errorText.slice(0, 200)}`,
-		);
-	}
-
-	const data = (await response.json()) as DeepSeekMessagesResponse;
+		},
+		options.signal,
+		90_000,
+		"DeepSeek Messages search API",
+	);
 
 	if (data.error) {
 		throw new Error(`DeepSeek search error: ${data.error.message || data.error.type || "Unknown error"}`);

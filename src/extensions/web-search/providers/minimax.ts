@@ -3,6 +3,7 @@
  */
 
 import type { MiniMaxSearchResponse, ProviderSearchResult, WebSearchHit } from "../types.ts";
+import { postJson } from "./http.ts";
 
 export interface MiniMaxSearchOptions {
 	query: string;
@@ -46,24 +47,17 @@ export async function searchMiniMax(options: MiniMaxSearchOptions): Promise<Prov
 	const host = options.apiHost?.replace(/\/+$/, "") || "https://api.minimaxi.com";
 	const effectiveQuery = buildSearchQuery(options.query, options.allowedDomains, options.blockedDomains);
 
-	const response = await fetch(`${host}/v1/coding_plan/search`, {
-		method: "POST",
-		headers: {
+	const data = await postJson<MiniMaxSearchResponse>(
+		`${host}/v1/coding_plan/search`,
+		{
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${options.apiKey}`,
 		},
-		body: JSON.stringify({ q: effectiveQuery }),
-		signal: options.signal,
-	});
-
-	if (!response.ok) {
-		const errorText = await response.text().catch(() => "");
-		throw new Error(
-			`MiniMax search API returned HTTP ${response.status} ${response.statusText}: ${errorText.slice(0, 200)}`,
-		);
-	}
-
-	const data = (await response.json()) as MiniMaxSearchResponse;
+		{ q: effectiveQuery },
+		options.signal,
+		60_000,
+		"MiniMax search API",
+	);
 
 	if (data.base_resp && data.base_resp.status_code !== 0) {
 		throw new Error(`MiniMax search failed: [${data.base_resp.status_code}] ${data.base_resp.status_msg}`);

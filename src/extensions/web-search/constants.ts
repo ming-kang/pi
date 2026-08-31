@@ -2,6 +2,8 @@
  * constants.ts — web_search tool identity, descriptions, and model-facing guidelines.
  */
 
+import type { SearchEngineType } from "./types.ts";
+
 export const WEB_SEARCH_TOOL_NAME = "web_search";
 export const WEB_SEARCH_LABEL = "Web Search";
 
@@ -13,6 +15,14 @@ export const WEB_SEARCH_PROMPT_SNIPPET =
 
 export const WEB_SEARCH_DISABLED_MESSAGE =
 	"Web search is disabled: Neither MiniMax nor DeepSeek API Key was found in auth.json or environment variables. Please add credentials via auth.json or environment variables (MINIMAX_API_KEY, DEEPSEEK_API_KEY).";
+
+/** Canonical display label for the contributing engine set ("" when none). */
+export function getEngineLabel(engine: SearchEngineType | undefined): string {
+	if (engine === "dual") return "MiniMax & DeepSeek";
+	if (engine === "minimax") return "MiniMax";
+	if (engine === "deepseek") return "DeepSeek";
+	return "";
+}
 
 export function getWebSearchPromptGuidelines(): string[] {
 	const currentYearMonth = new Date().toISOString().slice(0, 7);

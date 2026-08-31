@@ -25,11 +25,23 @@ export interface WebSearchDetails {
 	errorMessage?: string;
 }
 
+/**
+ * MiniMax search credential. `host` is always present alongside `key` so
+ * callers never guard the two separately.
+ */
+export interface MiniMaxSearchCredential {
+	key: string;
+	host: string;
+}
+
+/**
+ * Resolved credentials: presence of a group means that engine is configured,
+ * so impossible states (mode without key, key without host) are unrepresentable.
+ * Use `configuredEngine()` from auth.ts to derive the SearchEngineType label.
+ */
 export interface ResolvedSearchCredentials {
-	minimaxKey?: string;
-	minimaxHost?: string;
-	deepseekKey?: string;
-	mode: SearchEngineType;
+	minimax?: MiniMaxSearchCredential;
+	deepseek?: { key: string };
 }
 
 export interface MiniMaxOrganicHit {

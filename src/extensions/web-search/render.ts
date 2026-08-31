@@ -6,7 +6,7 @@ import { type Component, Container, Markdown, Spacer, Text } from "@earendil-wor
 import type { AgentToolResult, ToolRenderResultOptions } from "../../core/extensions/types.ts";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
-import { WEB_SEARCH_LABEL } from "./constants.ts";
+import { getEngineLabel, WEB_SEARCH_LABEL } from "./constants.ts";
 import type { WebSearchParams } from "./schema.ts";
 import type { WebSearchDetails } from "./types.ts";
 
@@ -23,13 +23,6 @@ function firstText(result: AgentToolResult<WebSearchDetails>): string {
 	for (const part of result.content ?? []) {
 		if (part.type === "text" && typeof part.text === "string") return part.text;
 	}
-	return "";
-}
-
-function formatEngineBadge(engine?: string): string {
-	if (engine === "dual") return "MiniMax + DeepSeek";
-	if (engine === "minimax") return "MiniMax";
-	if (engine === "deepseek") return "DeepSeek";
 	return "";
 }
 
@@ -65,7 +58,7 @@ export function renderWebSearchResult(
 
 	if (options.isPartial) {
 		const query = details?.query ? singleLine(details.query) : "";
-		const engine = formatEngineBadge(details?.engine);
+		const engine = getEngineLabel(details?.engine);
 		const enginePart = engine ? ` [${engine}]` : "";
 		const label = query ? `Searching${enginePart}: "${truncateText(query, 40)}"...` : "Searching web...";
 		const suffix =
@@ -87,7 +80,7 @@ export function renderWebSearchResult(
 
 	if (!options.expanded) {
 		const hitCount = details?.totalHits ?? details?.hits?.length ?? 0;
-		const engine = formatEngineBadge(details?.engine);
+		const engine = getEngineLabel(details?.engine);
 		const engineLabel = engine ? ` via ${engine}` : "";
 		const duration = details?.durationMs ? ` · ${(details.durationMs / 1000).toFixed(1)}s` : "";
 
