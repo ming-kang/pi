@@ -3,7 +3,7 @@
  */
 
 import type { ExtensionAPI, ToolRenderContext } from "../../core/extensions/types.ts";
-import { resolveSearchCredentials } from "./auth.ts";
+import { configuredEngine, resolveSearchCredentials } from "./auth.ts";
 import {
 	getWebSearchPromptGuidelines,
 	WEB_SEARCH_DESCRIPTION,
@@ -70,5 +70,20 @@ export default function webSearch(pi: ExtensionAPI): void {
 			const elapsedMs = trackQueryElapsed(context, options.isPartial);
 			return renderWebSearchResult(result, options, theme, context.isError, elapsedMs);
 		},
+	});
+
+	// Keep the tool out of the model's tool set (and system prompt) when no search
+	// credentials are configured. Re-evaluated on every session start (startup,
+	// /new, /reload, resume, fork), so /login takes effect from the next session
+	// onward; the tool stays registered for /tools and historical rendering.
+	pi.on("session_start", async (_event, ctx) => {
+		const credentials = await resolveSearchCredentials(ctx.modelRuntime);
+		const active = new Set(pi.getActiveTools());
+		if (configuredEngine(credentials) === "none") {
+			active.delete(WEB_SEARCH_TOOL_NAME);
+		} else {
+			active.add(WEB_SEARCH_TOOL_NAME);
+		}
+		pi.setActiveTools([...active]);
 	});
 }

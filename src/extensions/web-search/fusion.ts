@@ -120,23 +120,12 @@ export function fuseSearchHits(results: ProviderSearchResult[]): {
 }
 
 /**
- * Format search results into a clean, structured Markdown payload for the Main Agent.
+ * Sources, synthesis, and related-searches sections. Shared by the model-facing
+ * payload (formatSearchOutput) and the expanded TUI view, which adds no agent
+ * directives of its own.
  */
-export function formatSearchOutput(query: string, details: WebSearchDetails): string {
-	if (details.status === "disabled") {
-		return WEB_SEARCH_DISABLED_MESSAGE;
-	}
-
-	if (details.status === "error") {
-		return `Web search failed for "${query}": ${details.errorMessage || "Unknown search error"}`;
-	}
-
-	if (details.hits.length === 0 && !details.deepseekSynthesis) {
-		return `No search results found for "${query}". Try rephrasing with different keywords.`;
-	}
-
+export function formatResultsMarkdown(details: WebSearchDetails): string {
 	const parts: string[] = [];
-	parts.push(`# Web Search Results for: "${query}"\n`);
 
 	if (details.hits.length > 0) {
 		parts.push(`## Verified Web Sources (${details.hits.length} found via ${getEngineLabel(details.engine)})\n`);
@@ -167,12 +156,31 @@ export function formatSearchOutput(query: string, details: WebSearchDetails): st
 		parts.push("");
 	}
 
-	parts.push("---");
-	parts.push(
-		"**CRITICAL REQUIREMENT FOR MAIN AGENT:** Use the above search results to inform your response. You MUST include a `Sources:` section at the end of your response listing the relevant URLs as markdown links: `[Title](URL)`.",
-	);
-
 	return parts.join("\n");
+}
+
+/**
+ * Format search results into a clean, structured Markdown payload for the Main Agent.
+ */
+export function formatSearchOutput(query: string, details: WebSearchDetails): string {
+	if (details.status === "disabled") {
+		return WEB_SEARCH_DISABLED_MESSAGE;
+	}
+
+	if (details.status === "error") {
+		return `Web search failed for "${query}": ${details.errorMessage || "Unknown search error"}`;
+	}
+
+	if (details.hits.length === 0 && !details.deepseekSynthesis) {
+		return `No search results found for "${query}". Try rephrasing with different keywords.`;
+	}
+
+	return [
+		`# Web Search Results for: "${query}"\n`,
+		formatResultsMarkdown(details),
+		"---",
+		"**CRITICAL REQUIREMENT FOR MAIN AGENT:** Use the above search results to inform your response. You MUST include a `Sources:` section at the end of your response listing the relevant URLs as markdown links: `[Title](URL)`.",
+	].join("\n");
 }
 
 /**

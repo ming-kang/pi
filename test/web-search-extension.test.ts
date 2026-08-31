@@ -330,6 +330,132 @@ describe("renderWebSearchCall & renderWebSearchResult", () => {
 		);
 
 		const lines = comp.render(120).map((l) => stripAnsi(l).trimEnd());
-		expect(lines[0]).toContain("disabled · No MiniMax or DeepSeek API Key found");
+		expect(lines[0]).toContain("disabled · no MiniMax/DeepSeek key — /login minimax-cn");
+	});
+
+	test("renderWebSearchResult renders in-progress state without repeating the query", () => {
+		const comp = renderWebSearchResult(
+			{
+				content: [],
+				details: {
+					query: "TypeScript 7 release",
+					durationMs: 0,
+					status: "success",
+					engine: "dual",
+					totalHits: 0,
+					hits: [],
+				},
+			},
+			{ expanded: false, isPartial: true },
+			theme,
+			false,
+			3000,
+		);
+
+		const lines = comp.render(120).map((l) => stripAnsi(l).trimEnd());
+		expect(lines[0]).toContain("Searching via MiniMax & DeepSeek... (3s)");
+		expect(lines[0]).not.toContain("TypeScript 7 release");
+	});
+
+	test("renderWebSearchResult hides elapsed time below the 2s threshold", () => {
+		const comp = renderWebSearchResult(
+			{
+				content: [],
+				details: {
+					query: "q",
+					durationMs: 0,
+					status: "success",
+					engine: "minimax",
+					totalHits: 0,
+					hits: [],
+				},
+			},
+			{ expanded: false, isPartial: true },
+			theme,
+			false,
+			1200,
+		);
+
+		const lines = comp.render(120).map((l) => stripAnsi(l).trimEnd());
+		expect(lines[0]).toContain("Searching via MiniMax...");
+		expect(lines[0]).not.toContain("(1s)");
+	});
+
+	test("renderWebSearchResult collapsed summary previews top hit domains", () => {
+		const comp = renderWebSearchResult(
+			{
+				content: [{ type: "text", text: "payload" }],
+				details: {
+					query: "q",
+					durationMs: 800,
+					status: "success",
+					engine: "dual",
+					totalHits: 3,
+					hits: [
+						{ title: "A", url: "https://www.example.com/a", sources: ["MiniMax"] },
+						{ title: "B", url: "https://foo.org/b", sources: ["DeepSeek"] },
+						{ title: "C", url: "https://bar.net/c", sources: ["MiniMax"] },
+					],
+				},
+			},
+			{ expanded: false, isPartial: false },
+			theme,
+			false,
+		);
+
+		const lines = comp.render(120).map((l) => stripAnsi(l).trimEnd());
+		expect(lines[0]).toContain("3 results via MiniMax & DeepSeek · 0.8s · example.com, foo.org, +1");
+	});
+
+	test("renderWebSearchResult expanded renders structured sections without agent directives", () => {
+		const comp = renderWebSearchResult(
+			{
+				content: [
+					{
+						type: "text",
+						text: '# Web Search Results for: "q"\n\n...\n---\n**CRITICAL REQUIREMENT FOR MAIN AGENT:** ...',
+					},
+				],
+				details: {
+					query: "q",
+					durationMs: 100,
+					status: "success",
+					engine: "deepseek",
+					totalHits: 1,
+					hits: [
+						{ title: "Announcing X", url: "https://example.com/x", snippet: "A snippet", sources: ["DeepSeek"] },
+					],
+					deepseekSynthesis: "Synthesis text",
+					relatedSearches: ["related one"],
+				},
+			},
+			{ expanded: true, isPartial: false },
+			theme,
+			false,
+		);
+
+		const rendered = comp
+			.render(120)
+			.map((l) => stripAnsi(l))
+			.join("\n");
+		expect(rendered).toContain("Verified Web Sources (1 found via DeepSeek)");
+		expect(rendered).toContain("Announcing X");
+		expect(rendered).toContain("Key Technical Insights");
+		expect(rendered).toContain("Related Searches");
+		expect(rendered).not.toContain("CRITICAL REQUIREMENT");
+	});
+
+	test("renderWebSearchResult falls back to payload text when details are missing", () => {
+		const comp = renderWebSearchResult(
+			// Legacy sessions on disk may lack details even though the type requires it.
+			{ content: [{ type: "text", text: "Some legacy payload line" }], details: undefined as never },
+			{ expanded: false, isPartial: false },
+			theme,
+			false,
+		);
+
+		const lines = comp.render(120).map((l) => stripAnsi(l).trimEnd());
+		expect(lines[0]).toContain("Some legacy payload line");
+		expect(lines[0]).toContain("ctrl+o to expand");
 	});
 });

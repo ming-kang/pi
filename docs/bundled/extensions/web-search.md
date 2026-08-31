@@ -19,6 +19,8 @@ The MiniMax CN account (`minimax-cn`) is preferred over the global one (`minimax
 
 Configure with `/login minimax-cn` or `/login deepseek`, or by exporting the environment variables above.
 
+When no key is configured, `web_search` is removed from the model's tool set and system prompt entirely — the model never sees or calls it. This is re-evaluated on every session start (`startup`, `/new`, `/reload`, resume, fork), so a mid-session `/login` takes effect from the next session onward. The tool stays registered: it remains listed in `/tools` (where it can be force-enabled, in which case calls fail with the disabled message), and historical sessions render normally.
+
 ## Usage
 
 ### Parameters
@@ -35,7 +37,7 @@ The model-facing payload is Markdown containing up to 12 verified sources (snipp
 
 ## Limits
 
-- No configured key disables the tool with an explanatory message instead of failing the run.
+- With no configured key the tool is hidden from the model (see Credentials); the disabled message only appears when the tool was force-enabled via `/tools` without keys.
 - Engine failures are independent: if one engine errors, the other's results are still returned; the tool errors only when every configured engine fails.
 - MiniMax search uses the Coding Plan Search endpoint (`POST /v1/coding_plan/search`), which requires a Coding Plan key — a standard MiniMax API key may be rejected upstream.
 - DeepSeek search goes through the Anthropic-compatible endpoint (`/anthropic/v1/messages`, model `claude-sonnet-search`) with the server-side `web_search_20250305` tool; the synthesis text is bounded by the request's `max_tokens` (1024).
@@ -43,6 +45,6 @@ The model-facing payload is Markdown containing up to 12 verified sources (snipp
 
 ## Implementation notes
 
-The extension keeps presentation Pi-native: the call line shows the query and active domain filters, in-flight renders show the engine badge with elapsed time, the collapsed result shows hit count, engines, and duration with the configured expand hint, and expanding renders the full Markdown payload.
+The extension keeps presentation Pi-native: the call line shows the query and active domain filters, in-flight renders show the engine label with elapsed time past 2s, the collapsed result shows hit count, engines, duration, and a top-domain preview with the configured expand hint, and expanding renders the result sections from `details` — without the model-facing agent directives — falling back to the raw payload for legacy entries.
 
 Credential resolution never inspects `getProviderAuthStatus` — that probe returns a truthy `AuthStatus` object even when nothing is configured and carries no key. Only `getAuth` returns usable key material.
