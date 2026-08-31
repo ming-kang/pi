@@ -7,6 +7,7 @@ import routerExtension from "./router/index.ts";
 import statuslineExtension from "./statusline/index.ts";
 import subagentExtension from "./subagent/index.ts";
 import todoExtension from "./todo/index.ts";
+import webSearchExtension from "./web-search/index.ts";
 
 export const builtInExtensions: InlineExtension[] = [
 	{ name: "llama.cpp", factory: llamaExtension, hidden: true },
@@ -17,4 +18,5 @@ export const builtInExtensions: InlineExtension[] = [
 	{ name: "statusline", factory: statuslineExtension, hidden: true },
 	{ name: "subagent", factory: subagentExtension, hidden: true },
 	{ name: "todo", factory: todoExtension, hidden: true },
+	{ name: "web_search", factory: webSearchExtension, hidden: true },
 ];
