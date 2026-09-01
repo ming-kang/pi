@@ -2,6 +2,7 @@
  * deepseek.ts — DeepSeek Messages API search provider (claude-sonnet-search model with web_search_20250305).
  */
 
+import { MAX_PROVIDER_HIT_SCAN } from "../results.ts";
 import type { ProviderSearchResult, WebSearchHit } from "../types.ts";
 import { postJson } from "./http.ts";
 
@@ -46,6 +47,38 @@ function errorMessage(value: unknown): string | undefined {
 	return stringField(value, "message") || stringField(value, "type") || "Unknown error";
 }
 
+function searchToolErrorMessage(value: JsonRecord): string {
+	return (
+		stringField(value, "message")?.trim() ||
+		stringField(value, "error_code")?.trim() ||
+		stringField(value, "type")?.trim() ||
+		"Unknown search tool error"
+	);
+}
+
+function parseSearchToolContent(value: unknown): WebSearchHit[] {
+	if (Array.isArray(value)) {
+		const hits: WebSearchHit[] = [];
+		for (const item of value) {
+			const hit = parseSearchHit(item);
+			if (!hit) throw new Error("DeepSeek returned malformed web_search_tool_result content");
+			if (hits.length < MAX_PROVIDER_HIT_SCAN) hits.push(hit);
+		}
+		return hits;
+	}
+	if (isRecord(value)) {
+		if (
+			value.type === "web_search_tool_result_error" ||
+			value.error_code !== undefined ||
+			value.message !== undefined
+		) {
+			throw new Error(`DeepSeek web search failed: ${searchToolErrorMessage(value)}`);
+		}
+		throw new Error("DeepSeek returned malformed web_search_tool_result content");
+	}
+	throw new Error("DeepSeek returned malformed web_search_tool_result content");
+}
+
 export async function searchDeepSeek(options: DeepSeekSearchOptions): Promise<ProviderSearchResult> {
 	const endpoint = options.baseUrl || DEFAULT_DEEPSEEK_MESSAGES_ENDPOINT;
 	const model = options.model || DEFAULT_DEEPSEEK_SEARCH_MODEL;
@@ -73,14 +106,14 @@ export async function searchDeepSeek(options: DeepSeekSearchOptions): Promise<Pr
 
 	const hits: WebSearchHit[] = [];
 	const synthesisParts: string[] = [];
+	let sawStructuredResult = false;
 	const content = Array.isArray(data.content) ? data.content : [];
 	for (const value of content) {
 		if (!isRecord(value)) continue;
 		if (value.type === "web_search_tool_result") {
-			if (!Array.isArray(value.content)) continue;
-			for (const item of value.content) {
-				const hit = parseSearchHit(item);
-				if (hit) hits.push(hit);
+			sawStructuredResult = true;
+			for (const hit of parseSearchToolContent(value.content)) {
+				if (hits.length < MAX_PROVIDER_HIT_SCAN) hits.push(hit);
 			}
 			continue;
 		}
@@ -88,6 +121,9 @@ export async function searchDeepSeek(options: DeepSeekSearchOptions): Promise<Pr
 			const text = stringField(value, "text")?.trim();
 			if (text) synthesisParts.push(text);
 		}
+	}
+	if (!sawStructuredResult) {
+		throw new Error("DeepSeek returned no web_search_tool_result block");
 	}
 
 	return {

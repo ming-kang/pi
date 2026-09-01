@@ -40,7 +40,7 @@ export const DeepWikiParamsSchema = Type.Object({
 		}),
 	),
 	page: Type.Optional(
-		Type.Union([Type.String({ minLength: 1 }), Type.Number()], {
+		Type.Union([Type.String({ minLength: 1 }), Type.Integer({ minimum: 1 })], {
 			description:
 				'Only for action contents: one page by 1-based index or by title from structure (e.g. "Extension System") — titles do not include outline numbers like "4.4". Run structure first if unsure. Prefer page reads over omitting page.',
 		}),
@@ -81,8 +81,13 @@ function readString(record: Record<string, unknown>, keys: string[]): string | u
 function readPageRef(record: Record<string, unknown>): string | number | undefined {
 	for (const key of ["page", "pageName", "pageTitle"]) {
 		const value = record[key];
-		if (typeof value === "number" && Number.isFinite(value)) return value;
+		if (value === undefined || value === null) continue;
+		if (typeof value === "number") {
+			if (!Number.isInteger(value) || value < 1) throw new Error("page must be a positive 1-based integer");
+			return value;
+		}
 		if (typeof value === "string" && value.trim()) return normalizePageRef(value.trim());
+		throw new Error("page must be a non-empty title or positive 1-based integer");
 	}
 	return undefined;
 }

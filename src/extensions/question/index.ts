@@ -18,7 +18,7 @@ import { cancelResult, clarificationResult, errorResult, successResult } from ".
 import { QuestionParams, validateQuestions } from "./schema.ts";
 import type { DialogResult, Question, QuestionToolDetails } from "./types.ts";
 
-export default function question(pi: ExtensionAPI) {
+export default function question(pi: ExtensionAPI): void {
 	pi.registerTool<typeof QuestionParams, QuestionToolDetails>({
 		name: QUESTION_TOOL_NAME,
 		label: QUESTION_LABEL,
@@ -26,6 +26,7 @@ export default function question(pi: ExtensionAPI) {
 		promptSnippet: QUESTION_PROMPT_SNIPPET,
 		promptGuidelines: QUESTION_PROMPT_GUIDELINES,
 		parameters: QuestionParams,
+		executionMode: "sequential",
 		renderCall(args, theme, context) {
 			return renderQuestionCall(args, theme, context.expanded);
 		},
@@ -45,5 +46,11 @@ export default function question(pi: ExtensionAPI) {
 			if (result.outcome === "needs_clarification") return clarificationResult(result.answers);
 			return successResult(result.answers);
 		},
+	});
+
+	pi.on("tool_result", async (event) => {
+		if (event.toolName !== QUESTION_TOOL_NAME) return;
+		const details = event.details as QuestionToolDetails | undefined;
+		if (details?.outcome === "error") return { isError: true };
 	});
 }

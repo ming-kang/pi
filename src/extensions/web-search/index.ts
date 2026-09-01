@@ -58,7 +58,6 @@ export default function webSearch(pi: ExtensionAPI): void {
 			return {
 				content: [{ type: "text", text: execution.formattedOutput }],
 				details: execution.details,
-				isError: execution.details.status === "error",
 			};
 		},
 
@@ -78,12 +77,14 @@ export default function webSearch(pi: ExtensionAPI): void {
 	// onward; the tool stays registered for /tools and historical rendering.
 	pi.on("session_start", async (_event, ctx) => {
 		const credentials = await resolveSearchCredentials(ctx.modelRuntime);
+		if (configuredEngine(credentials) !== "none") return;
 		const active = new Set(pi.getActiveTools());
-		if (configuredEngine(credentials) === "none") {
-			active.delete(WEB_SEARCH_TOOL_NAME);
-		} else {
-			active.add(WEB_SEARCH_TOOL_NAME);
-		}
-		pi.setActiveTools([...active]);
+		if (active.delete(WEB_SEARCH_TOOL_NAME)) pi.setActiveTools([...active]);
+	});
+
+	pi.on("tool_result", async (event) => {
+		if (event.toolName !== WEB_SEARCH_TOOL_NAME) return;
+		const details = event.details as WebSearchDetails | undefined;
+		if (details?.status === "error") return { isError: true };
 	});
 }

@@ -7,6 +7,9 @@ import {
 	boundMultilineText,
 	boundSingleLineText,
 	MAX_ERROR_MESSAGE_LENGTH,
+	MAX_HISTORICAL_HIT_SCAN,
+	MAX_HISTORICAL_RELATED_SCAN,
+	MAX_HISTORICAL_SOURCE_SCAN,
 	MAX_OUTPUT_HITS,
 	MAX_QUERY_LENGTH,
 	MAX_RELATED_SEARCH_LENGTH,
@@ -34,25 +37,39 @@ function escapeMarkdownText(text: string): string {
 		.replace(/>/g, "\\>");
 }
 
-function formatHit(hit: WebSearchHit): FormattedHit | undefined {
+function canonicalSources(value: unknown): WebSearchHit["sources"] {
+	if (!Array.isArray(value)) return [];
+	const sources: WebSearchHit["sources"] = [];
+	const scanLimit = Math.min(value.length, MAX_HISTORICAL_SOURCE_SCAN);
+	for (let index = 0; index < scanLimit && sources.length < 2; index++) {
+		const source = value[index];
+		if ((source === "MiniMax" || source === "DeepSeek") && !sources.includes(source)) sources.push(source);
+	}
+	return sources;
+}
+
+function formatHit(value: unknown): FormattedHit | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const hit = value as Record<string, unknown>;
 	const url = normalizeUrl(hit.url);
 	if (!url) return undefined;
-	const sources = Array.isArray(hit.sources)
-		? [...new Set(hit.sources.filter((source) => source === "MiniMax" || source === "DeepSeek"))]
-		: [];
 	return {
 		title: escapeMarkdownText(boundSingleLineText(hit.title, MAX_TITLE_LENGTH) ?? url),
 		url,
 		snippet: boundSingleLineText(hit.snippet, MAX_SNIPPET_LENGTH),
-		sources,
+		sources: canonicalSources(hit.sources),
 	};
 }
 
 function usableHits(details: WebSearchDetails): FormattedHit[] {
-	return details.hits
-		.map(formatHit)
-		.filter((hit): hit is FormattedHit => hit !== undefined)
-		.slice(0, MAX_OUTPUT_HITS);
+	const hits = Array.isArray(details.hits) ? details.hits : [];
+	const formatted: FormattedHit[] = [];
+	const scanLimit = Math.min(hits.length, MAX_HISTORICAL_HIT_SCAN);
+	for (let index = 0; index < scanLimit && formatted.length < MAX_OUTPUT_HITS; index++) {
+		const hit = formatHit(hits[index]);
+		if (hit) formatted.push(hit);
+	}
+	return formatted;
 }
 
 /**
@@ -81,11 +98,14 @@ export function formatResultsMarkdown(details: WebSearchDetails): string {
 		parts.push("");
 	}
 
-	const relatedSearches = details.relatedSearches
-		?.map((related) => boundSingleLineText(related, MAX_RELATED_SEARCH_LENGTH))
-		.filter((related): related is string => related !== undefined)
-		.slice(0, MAX_RELATED_SEARCHES);
-	if (relatedSearches && relatedSearches.length > 0) {
+	const relatedSearches: string[] = [];
+	const historicalRelated = Array.isArray(details.relatedSearches) ? details.relatedSearches : [];
+	const relatedScanLimit = Math.min(historicalRelated.length, MAX_HISTORICAL_RELATED_SCAN);
+	for (let index = 0; index < relatedScanLimit && relatedSearches.length < MAX_RELATED_SEARCHES; index++) {
+		const related = boundSingleLineText(historicalRelated[index], MAX_RELATED_SEARCH_LENGTH);
+		if (related) relatedSearches.push(related);
+	}
+	if (relatedSearches.length > 0) {
 		parts.push("## Related Searches\n");
 		parts.push(relatedSearches.map((related) => `- ${escapeMarkdownText(related)}`).join("\n"));
 		parts.push("");

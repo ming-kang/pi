@@ -14,6 +14,13 @@ export const MAX_RELATED_SEARCHES = 8;
 export const MAX_RELATED_SEARCH_LENGTH = 200;
 export const MAX_SYNTHESIS_LENGTH = 6000;
 export const MAX_ERROR_MESSAGE_LENGTH = 500;
+/** Provider arrays are transport-bounded too, but avoid scanning an entire hostile payload. */
+export const MAX_PROVIDER_HIT_SCAN = 200;
+export const MAX_PROVIDER_RELATED_SCAN = 64;
+/** Historical session details predate the current bounds and may contain oversized arrays. */
+export const MAX_HISTORICAL_HIT_SCAN = MAX_OUTPUT_HITS * 20;
+export const MAX_HISTORICAL_SOURCE_SCAN = 32;
+export const MAX_HISTORICAL_RELATED_SCAN = MAX_RELATED_SEARCHES * 8;
 
 const RRF_K = 60;
 const TRACKING_PARAMS = new Set([
@@ -47,19 +54,22 @@ function truncateText(text: string, maxLength: number): string {
 }
 
 /** Normalize and bound a provider-controlled single-line text field. */
-export function boundSingleLineText(value: string | undefined, maxLength: number): string | undefined {
-	const normalized = value?.replace(/\s+/g, " ").trim();
+export function boundSingleLineText(value: unknown, maxLength: number): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const normalized = value.replace(/\s+/g, " ").trim();
 	return normalized ? truncateText(normalized, maxLength) : undefined;
 }
 
 /** Trim and bound provider-controlled text that intentionally preserves lines. */
-export function boundMultilineText(value: string | undefined, maxLength: number): string | undefined {
-	const normalized = value?.trim();
+export function boundMultilineText(value: unknown, maxLength: number): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const normalized = value.trim();
 	return normalized ? truncateText(normalized, maxLength) : undefined;
 }
 
 /** Normalize a usable HTTP(S) source URL without changing non-tracking query values. */
-export function normalizeUrl(rawUrl: string): string | undefined {
+export function normalizeUrl(rawUrl: unknown): string | undefined {
+	if (typeof rawUrl !== "string") return undefined;
 	const trimmed = rawUrl.trim();
 	if (!trimmed || trimmed.length > MAX_URL_LENGTH) return undefined;
 
@@ -115,15 +125,20 @@ export function fuseSearchHits(results: ProviderSearchResult[]): FusedSearchResu
 	let deepseekSynthesis: string | undefined;
 
 	for (const result of results) {
-		for (const related of result.relatedSearches ?? []) {
-			if (relatedSearches.size >= MAX_RELATED_SEARCHES) break;
-			const normalized = boundSingleLineText(related, MAX_RELATED_SEARCH_LENGTH);
+		const providerRelated = Array.isArray(result.relatedSearches) ? result.relatedSearches : [];
+		const relatedScanLimit = Math.min(providerRelated.length, MAX_PROVIDER_RELATED_SCAN);
+		for (let index = 0; index < relatedScanLimit && relatedSearches.size < MAX_RELATED_SEARCHES; index++) {
+			const normalized = boundSingleLineText(providerRelated[index], MAX_RELATED_SEARCH_LENGTH);
 			if (normalized) relatedSearches.add(normalized);
 		}
 		const synthesis = boundMultilineText(result.synthesisText, MAX_SYNTHESIS_LENGTH);
 		if (synthesis) deepseekSynthesis = synthesis;
 
-		for (const [index, rawHit] of result.hits.entries()) {
+		const providerHits = Array.isArray(result.hits) ? result.hits : [];
+		const hitScanLimit = Math.min(providerHits.length, MAX_PROVIDER_HIT_SCAN);
+		for (let index = 0; index < hitScanLimit; index++) {
+			const rawHit = providerHits[index];
+			if (!rawHit) continue;
 			const hit = normalizeHit(rawHit, result.source);
 			if (!hit) continue;
 			const rank = index + 1;

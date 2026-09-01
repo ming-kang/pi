@@ -108,7 +108,7 @@ There is **no migration** from any older models-manager config, and Pi updates d
 ## Limits
 
 - SSE only — no Codex WebSocket or zstd-compressed request body.
-- Catalog probe expects OpenAI-style `{ data: [{ id }] }` response format.
+- Catalog probe expects OpenAI-style `{ data: [{ id }] }` response format. Successful catalog bodies are streamed with a 4 MiB limit; oversized responses are cancelled, and non-OK response text is bounded before it is shown.
 - Empty model list → provider is not registered (nothing appears in `/model`).
 - Body is Codex-oriented for transparent gateways; auth and URL remain Platform Responses (`sk-` + `/responses`).
 - Replayed optional top-level `ResponseItem.id` identity fields are omitted from stateless requests, matching Codex CLI 0.145's default `store: false` wire behavior. Required semantic references such as `item_reference.id`, plus `call_id` and encrypted reasoning content, remain intact.

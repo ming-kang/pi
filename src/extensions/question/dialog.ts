@@ -25,6 +25,51 @@ const PREVIEW_MAX_LINES = 16;
  * Reserved so the preview clamps short of the terminal height.
  */
 const PREVIEW_CHROME_ROWS = 18;
+const VIEWPORT_SCROLL_STEP = 4;
+
+interface VerticalViewport {
+	lines: string[];
+	start: number;
+	maxStart: number;
+}
+
+function applyVerticalViewport(
+	lines: string[],
+	width: number,
+	terminalRows: number,
+	theme: Theme,
+	options: { anchorLine?: number; preferredStart?: number } = {},
+): VerticalViewport {
+	const maxRows = Math.max(1, Math.floor(terminalRows));
+	if (lines.length <= maxRows) return { lines, start: 0, maxStart: 0 };
+	if (maxRows < 5) {
+		const anchor = Math.max(0, Math.min(lines.length - 1, options.anchorLine ?? 0));
+		const start = Math.max(0, Math.min(lines.length - maxRows, anchor - Math.floor(maxRows / 2)));
+		return { lines: lines.slice(start, start + maxRows), start, maxStart: lines.length - maxRows };
+	}
+
+	const first = lines[0] ?? "";
+	const last = lines[lines.length - 1] ?? "";
+	const body = lines.slice(1, -1);
+	const contentRows = maxRows - 4;
+	const maxStart = Math.max(0, body.length - contentRows);
+	const anchorInBody = Math.max(0, Math.min(body.length - 1, (options.anchorLine ?? 1) - 1));
+	const requestedStart = options.preferredStart ?? Math.max(0, anchorInBody - Math.floor(contentRows / 2));
+	const start = Math.max(0, Math.min(maxStart, requestedStart));
+	const bottomHidden = Math.max(0, body.length - start - contentRows);
+	const indicator = (text: string) => theme.fg("dim", truncateToWidth(text, Math.max(1, width)));
+	return {
+		lines: [
+			first,
+			start > 0 ? indicator(`↑ ${start} rows hidden`) : "",
+			...body.slice(start, start + contentRows),
+			bottomHidden > 0 ? indicator(`↓ ${bottomHidden} rows hidden`) : "",
+			last,
+		],
+		start,
+		maxStart,
+	};
+}
 
 export function createQuestionDialog(questions: Question[], signal?: AbortSignal) {
 	return (tui: TUI, theme: Theme, keybindings: KeybindingsManager, done: (result: DialogResult) => void) => {
@@ -33,6 +78,8 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 		let inputMode: InputMode;
 		let noteTarget: string | undefined;
 		let notesSnapshot: { prior: QuestionAnswer | undefined } | undefined;
+		let reviewScrollOffset = 0;
+		let reviewMaxScrollOffset = 0;
 		let dialogFocused = false;
 		let footerFocused = false;
 		let finished = false;
@@ -97,6 +144,8 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 			view = "question";
 			inputMode = undefined;
 			noteTarget = undefined;
+			reviewScrollOffset = 0;
+			reviewMaxScrollOffset = 0;
 			notesSnapshot = undefined;
 			footerFocused = false;
 			editor.setText("");
@@ -123,6 +172,8 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 			view = "review";
 			inputMode = undefined;
 			noteTarget = undefined;
+			reviewScrollOffset = 0;
+			reviewMaxScrollOffset = 0;
 			footerFocused = false;
 			editor.setText("");
 			syncEditorFocus();
@@ -299,6 +350,16 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 		};
 
 		function handleReviewInput(data: string): void {
+			if (keyMatches(data, "tui.select.up")) {
+				reviewScrollOffset = Math.max(0, reviewScrollOffset - VIEWPORT_SCROLL_STEP);
+				refresh();
+				return;
+			}
+			if (keyMatches(data, "tui.select.down")) {
+				reviewScrollOffset = Math.min(reviewMaxScrollOffset, reviewScrollOffset + VIEWPORT_SCROLL_STEP);
+				refresh();
+				return;
+			}
 			if (keyMatches(data, "tui.editor.cursorLeft")) {
 				setCurrentIdx(questions.length - 1);
 				return;
@@ -498,6 +559,7 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 					joinHints(
 						keyAction("tui.select.confirm", "submit"),
 						keyAction("tui.select.cancel", "edit last question"),
+						keyGroupAction(["tui.select.up", "tui.select.down"], "scroll"),
 					),
 				),
 				renderWidth,
@@ -514,7 +576,12 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 			if (view === "review") {
 				renderReview(renderWidth, lines);
 				lines.push(ruleBorder(theme, renderWidth));
-				return lines;
+				const viewport = applyVerticalViewport(lines, renderWidth, terminalRows, theme, {
+					preferredStart: reviewScrollOffset,
+				});
+				reviewMaxScrollOffset = viewport.maxStart;
+				reviewScrollOffset = viewport.start;
+				return viewport.lines;
 			}
 
 			const question = currentQuestion();
@@ -531,7 +598,11 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 			lines.push("");
 
 			const optionLines: string[] = [];
-			const hasPreview = !isMulti && options.some((option) => option.kind === "option" && option.preview);
+			let focusedOptionStart = 0;
+			let focusedOptionEnd = 0;
+			let inputAnchorOffset: number | undefined;
+			const hasPreview =
+				inputMode === undefined && !isMulti && options.some((option) => option.kind === "option" && option.preview);
 			const showPreviewSideBySide = hasPreview && renderWidth >= 60;
 			const listWidth = showPreviewSideBySide ? Math.max(20, Math.floor(renderWidth * 0.4)) : renderWidth;
 
@@ -559,10 +630,12 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 				const labelText = customText ? `${option.label}  ✎ ${customText}` : option.label;
 				const label = `${index + 1}. ${labelText}${selectedSingle ? " ✓" : ""}${note}`;
 				const color = focused ? "accent" : selectedSingle || checked ? "success" : "text";
+				if (focused) focusedOptionStart = optionLines.length;
 				wrapWithPrefix(`${focusArrow} ${marker} `, theme.fg(color, label), listWidth, optionLines);
 				if (option.kind === "option" && option.description) {
 					wrapWithPrefix("       ", theme.fg("muted", option.description), listWidth, optionLines);
 				}
+				if (focused) focusedOptionEnd = optionLines.length;
 			}
 
 			if (inputMode) {
@@ -570,16 +643,19 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 				const label = inputMode === "notes" ? `Notes for ${noteTarget ?? "option"}:` : "Your answer:";
 				wrapWithPrefix(" ", theme.fg("muted", label), listWidth, optionLines);
 				for (const line of editor.render(Math.max(1, listWidth - 2))) optionLines.push(` ${line}`);
+				inputAnchorOffset = Math.max(0, optionLines.length - 1);
 			}
 
+			const optionListStartLine = lines.length;
 			if (showPreviewSideBySide) {
 				const gap = 2;
 				const rightWidth = renderWidth - listWidth - gap;
 				const focused = options[state.optionIndex];
 				const previewText = focused?.kind === "option" && focused.preview ? focused.preview : "";
-				const rightLines = previewText
+				const preview = previewText
 					? previewLines(previewText, rightWidth, terminalRows)
 					: [theme.fg("dim", "(no preview)")];
+				const rightLines = [...Array.from({ length: focusedOptionStart }, () => ""), ...preview];
 				const maxRows = Math.max(optionLines.length, rightLines.length);
 				const pad = " ".repeat(gap);
 				for (let row = 0; row < maxRows; row++) {
@@ -589,19 +665,24 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 					lines.push(`${leftPadded}${pad}${right}`);
 				}
 			} else {
-				lines.push(...optionLines);
 				if (hasPreview) {
 					const focused = options[state.optionIndex];
 					const previewText = focused?.kind === "option" && focused.preview ? focused.preview : "";
 					if (previewText) {
-						lines.push("");
-						lines.push(ruleBorder(theme, renderWidth, "dim"));
-						lines.push(...previewLines(previewText, renderWidth, terminalRows));
+						optionLines.splice(
+							focusedOptionEnd,
+							0,
+							"",
+							ruleBorder(theme, renderWidth, "dim"),
+							...previewLines(previewText, renderWidth, terminalRows),
+						);
 					}
 				}
+				lines.push(...optionLines);
 			}
 
 			lines.push("");
+			const chatLine = lines.length;
 			const chatPrefix = footerFocused ? theme.fg("accent", "→") : " ";
 			wrapWithPrefix(
 				`${chatPrefix} `,
@@ -609,8 +690,10 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 				renderWidth,
 				lines,
 			);
+			let warningLine: number | undefined;
 			if (state.warning) {
 				lines.push("");
+				warningLine = lines.length;
 				wrapWithPrefix(" ", theme.fg("warning", state.warning), renderWidth, lines);
 			}
 			lines.push("");
@@ -678,7 +761,11 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 				);
 			}
 			lines.push(ruleBorder(theme, renderWidth));
-			return lines;
+			let anchorLine = optionListStartLine + focusedOptionStart;
+			if (inputAnchorOffset !== undefined) anchorLine = optionListStartLine + inputAnchorOffset;
+			else if (warningLine !== undefined) anchorLine = warningLine;
+			else if (footerFocused) anchorLine = chatLine;
+			return applyVerticalViewport(lines, renderWidth, terminalRows, theme, { anchorLine }).lines;
 		}
 
 		return {

@@ -1,3 +1,8 @@
+import { readResponseTextBounded } from "../../utils/http-response.ts";
+
+export const DEEPWIKI_RESPONSE_BODY_BYTES = 8 * 1024 * 1024;
+const DEEPWIKI_RESPONSE_OVERFLOW_MESSAGE = `DeepWiki response exceeded ${DEEPWIKI_RESPONSE_BODY_BYTES} bytes`;
+
 export interface FetchRetryOptions {
 	timeoutMs: number;
 	retries?: number;
@@ -34,7 +39,7 @@ async function attemptOnce(
 	timeoutMs: number,
 	label: string,
 	signal: AbortSignal | undefined,
-): Promise<{ ok: true; response: Response; text: string } | { ok: false; error: Error }> {
+): Promise<{ ok: true; response: Response; text: string } | { ok: false; error: Error; retryable: boolean }> {
 	const controller = new AbortController();
 	let timedOut = false;
 	const abortFromParent = () => controller.abort(signal?.reason);
@@ -48,12 +53,21 @@ async function attemptOnce(
 
 	try {
 		const response = await fetch(url, { ...request, signal: controller.signal });
-		const text = await response.text();
+		const text = await readResponseTextBounded(response, {
+			maxBytes: DEEPWIKI_RESPONSE_BODY_BYTES,
+			overflowMessage: DEEPWIKI_RESPONSE_OVERFLOW_MESSAGE,
+			signal: controller.signal,
+		});
 		return { ok: true, response, text };
 	} catch (error) {
 		if (timedOut) throw new Error(`${label} request timed out after ${timeoutMs / 1000}s`);
 		if (signal?.aborted) throw new Error(`${label} request aborted`);
-		return { ok: false, error: error instanceof Error ? error : new Error(String(error)) };
+		const normalizedError = error instanceof Error ? error : new Error(String(error));
+		return {
+			ok: false,
+			error: normalizedError,
+			retryable: normalizedError.message !== DEEPWIKI_RESPONSE_OVERFLOW_MESSAGE,
+		};
 	} finally {
 		clearTimeout(timeout);
 		signal?.removeEventListener("abort", abortFromParent);
@@ -75,6 +89,7 @@ export async function fetchWithRetry(
 		const outcome = await attemptOnce(url, request, options.timeoutMs, label, options.signal);
 		if (!outcome.ok) {
 			lastError = outcome.error;
+			if (!outcome.retryable) throw outcome.error;
 			continue;
 		}
 

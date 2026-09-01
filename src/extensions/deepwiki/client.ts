@@ -183,6 +183,7 @@ function extractPageTitles(toolName: DeepWikiToolName, text: string): string[] {
 }
 
 export async function callDeepWiki(params: DeepWikiParams, signal: AbortSignal | undefined): Promise<DeepWikiResponse> {
+	signal?.throwIfAborted();
 	const normalizedParams = normalizeDeepWikiParams(params);
 	const key = cacheKey(normalizedParams);
 	const cached = responseCache.get(key);
@@ -217,6 +218,7 @@ export async function callDeepWiki(params: DeepWikiParams, signal: AbortSignal |
 		},
 		{ timeoutMs: REQUEST_TIMEOUT_MS, retries: MAX_RETRIES, signal, label: "DeepWiki" },
 	);
+	signal?.throwIfAborted();
 
 	if (!response.ok) {
 		throw new Error(`DeepWiki HTTP ${response.status}: ${truncate(text)}`);
@@ -235,6 +237,7 @@ export async function callDeepWiki(params: DeepWikiParams, signal: AbortSignal |
 		outputLength: resultText.length,
 		...(pageTitles.length ? { pageTitles } : {}),
 	};
+	signal?.throwIfAborted();
 	responseCache.set(key, { expiresAt: Date.now() + CACHE_TTL_MS, response: cloneResponse(result, false) });
 	while (responseCache.size > MAX_CACHE_ENTRIES) {
 		const oldest = responseCache.keys().next().value;

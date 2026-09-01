@@ -2,6 +2,7 @@
  * minimax.ts — MiniMax Coding Plan Search REST API provider.
  */
 
+import { MAX_PROVIDER_HIT_SCAN, MAX_PROVIDER_RELATED_SCAN, MAX_RELATED_SEARCHES } from "../results.ts";
 import type { ProviderSearchResult, WebSearchHit } from "../types.ts";
 import { postJson } from "./http.ts";
 
@@ -58,12 +59,22 @@ export async function searchMiniMax(options: MiniMaxSearchOptions): Promise<Prov
 		);
 	}
 
-	const hits = (Array.isArray(data.organic) ? data.organic : [])
-		.map(parseSearchHit)
-		.filter((hit): hit is WebSearchHit => hit !== undefined);
-	const relatedSearches = (Array.isArray(data.related_searches) ? data.related_searches : [])
-		.map((value) => (isRecord(value) ? stringField(value, "query")?.trim() : undefined))
-		.filter((query): query is string => Boolean(query));
+	const hits: WebSearchHit[] = [];
+	const organic = Array.isArray(data.organic) ? data.organic : [];
+	const hitScanLimit = Math.min(organic.length, MAX_PROVIDER_HIT_SCAN);
+	for (let index = 0; index < hitScanLimit; index++) {
+		const hit = parseSearchHit(organic[index]);
+		if (hit) hits.push(hit);
+	}
+
+	const relatedSearches: string[] = [];
+	const related = Array.isArray(data.related_searches) ? data.related_searches : [];
+	const relatedScanLimit = Math.min(related.length, MAX_PROVIDER_RELATED_SCAN);
+	for (let index = 0; index < relatedScanLimit && relatedSearches.length < MAX_RELATED_SEARCHES; index++) {
+		const value = related[index];
+		const query = isRecord(value) ? stringField(value, "query")?.trim() : undefined;
+		if (query) relatedSearches.push(query);
+	}
 
 	return {
 		source: "MiniMax",

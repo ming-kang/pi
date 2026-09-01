@@ -1,5 +1,6 @@
 /** Fetch OpenAI-compatible model catalog from a relay baseUrl. */
 
+import { readResponseTextBounded } from "../../utils/http-response.ts";
 import { DEFAULTS, formatError } from "./constants.ts";
 
 export interface ProbeModel {
@@ -39,13 +40,20 @@ export async function probeRelayModels(opts: {
 
 		const response = await fetch(url, { headers, signal: controller.signal });
 		if (!response.ok) {
-			const body = await readTextBounded(response, 4_096);
+			const body = await readResponseTextBounded(response, {
+				maxBytes: 4_096,
+				signal: controller.signal,
+			});
 			return {
 				ok: false,
 				error: `HTTP ${response.status}${body ? `: ${body.slice(0, 400)}` : ""}`,
 			};
 		}
-		const text = await readTextBounded(response, DEFAULTS.probeBodyBytes);
+		const text = await readResponseTextBounded(response, {
+			maxBytes: DEFAULTS.probeBodyBytes,
+			overflowMessage: `Response exceeds ${DEFAULTS.probeBodyBytes} bytes.`,
+			signal: controller.signal,
+		});
 		let json: unknown;
 		try {
 			json = JSON.parse(text);
@@ -106,29 +114,4 @@ function dedupeSort(models: ProbeModel[]): ProbeModel[] {
 		if (!map.has(model.id)) map.set(model.id, model);
 	}
 	return [...map.values()].sort((a, b) => a.id.localeCompare(b.id));
-}
-
-async function readTextBounded(response: Response, maxBytes: number): Promise<string> {
-	const reader = response.body?.getReader();
-	if (!reader) return await response.text();
-	const chunks: Uint8Array[] = [];
-	let total = 0;
-	while (true) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		if (!value) continue;
-		total += value.byteLength;
-		if (total > maxBytes) {
-			await reader.cancel();
-			throw new Error(`Response exceeds ${maxBytes} bytes.`);
-		}
-		chunks.push(value);
-	}
-	const merged = new Uint8Array(total);
-	let offset = 0;
-	for (const chunk of chunks) {
-		merged.set(chunk, offset);
-		offset += chunk.byteLength;
-	}
-	return new TextDecoder().decode(merged);
 }

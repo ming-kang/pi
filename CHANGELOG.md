@@ -8,6 +8,13 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 - Redesigned the bundled Subagent expanded transcript around one fixed per-task `#N Profile · model · effort · tokens · tool calls · time` header followed by indented Prompt, a three-call Activity tail, and a state-colored Outcome. The redundant Batch line, turns, cwd, aggregate cost, and separate Error/Report sections are gone; completed tasks retain their Activity tail, running tasks keep retry and compaction diagnostics under Outcome, and the collapsed flow and tool/result contracts are unchanged.
 
+### Fixed
+
+- Fixed `web_search` re-enabling itself over an explicit `/tools` or SDK-host disable whenever credentials were present. DeepSeek now requires a valid structured search-result block (including a valid empty result), discards text-only or malformed synthesis, and only terminal search failures become protocol-level tool errors; one successful provider still survives the other's failure.
+- Bounded DeepWiki transport responses to 8 MiB and every model-facing action to 120,000 characters, kept oversized and aborted calls out of its cache, checked cancellation before cache hits, and rejected non-positive, fractional, non-finite, or blank page references.
+- Serialized `question` tool calls so blocking dialogs cannot overlap, rejected whitespace-only visible fields, mapped only validation/UI failures to protocol-level errors, and added a focus-aware vertical viewport plus scrolling Review answers for short terminals.
+- Bounded `/router` model-catalog response bodies and non-OK response text before parsing or displaying relay-controlled content.
+
 ## [0.84.14] - 2026-09-01
 
 ### Changed

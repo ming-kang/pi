@@ -20,6 +20,9 @@ import { renderWebSearchCall, renderWebSearchResult } from "../src/extensions/we
 import {
 	fuseSearchHits,
 	MAX_ERROR_MESSAGE_LENGTH,
+	MAX_HISTORICAL_HIT_SCAN,
+	MAX_HISTORICAL_RELATED_SCAN,
+	MAX_HISTORICAL_SOURCE_SCAN,
 	MAX_RELATED_SEARCH_LENGTH,
 	MAX_SNIPPET_LENGTH,
 	MAX_SYNTHESIS_LENGTH,
@@ -357,14 +360,24 @@ describe("provider HTTP boundaries", () => {
 		expect(result.hits).toHaveLength(1);
 	});
 
-	test("keeps the DeepSeek tool request simple and ignores malformed result content", async () => {
+	test("keeps the DeepSeek tool request simple and accepts structured search results", async () => {
 		let requestBody = "";
 		vi.stubGlobal("fetch", async (_input: string | URL | Request, init?: RequestInit) => {
 			requestBody = String(init?.body ?? "");
 			return new Response(
 				JSON.stringify({
 					content: [
-						{ type: "web_search_tool_result", tool_use_id: "tool", content: { invalid: true } },
+						{
+							type: "web_search_tool_result",
+							tool_use_id: "tool",
+							content: [
+								{
+									type: "web_search_result",
+									title: "Current release",
+									url: "https://example.com/release",
+								},
+							],
+						},
 						{ type: "text", text: "Synthesis" },
 					],
 				}),
@@ -374,8 +387,60 @@ describe("provider HTTP boundaries", () => {
 		const result = await searchDeepSeek({ query: "current release", apiKey: "key" });
 		const body = JSON.parse(requestBody) as { tools: unknown[] };
 		expect(body.tools).toEqual([{ type: "web_search_20250305", name: "web_search" }]);
-		expect(result.hits).toEqual([]);
+		expect(result.hits).toEqual([
+			{
+				title: "Current release",
+				url: "https://example.com/release",
+				date: undefined,
+				sources: ["DeepSeek"],
+			},
+		]);
 		expect(result.synthesisText).toBe("Synthesis");
+	});
+
+	test("treats a structured empty DeepSeek result as a legitimate zero-result response", async () => {
+		vi.stubGlobal(
+			"fetch",
+			async () =>
+				new Response(
+					JSON.stringify({
+						content: [
+							{ type: "text", text: "No matching pages were found." },
+							{ type: "web_search_tool_result", tool_use_id: "tool", content: [] },
+						],
+					}),
+					{ status: 200 },
+				),
+		);
+		await expect(searchDeepSeek({ query: "missing release", apiKey: "key" })).resolves.toMatchObject({
+			hits: [],
+			synthesisText: "No matching pages were found.",
+		});
+	});
+
+	test("rejects text-only, malformed, and structured-error DeepSeek responses", async () => {
+		const payloads = [
+			{ content: [{ type: "text", text: "Unsupported synthesis" }] },
+			{
+				content: [
+					{ type: "web_search_tool_result", tool_use_id: "tool", content: { invalid: true } },
+					{ type: "text", text: "Must not survive" },
+				],
+			},
+			{
+				content: [
+					{
+						type: "web_search_tool_result",
+						tool_use_id: "tool",
+						content: { type: "web_search_tool_result_error", error_code: "max_uses_exceeded" },
+					},
+				],
+			},
+		];
+		for (const payload of payloads) {
+			vi.stubGlobal("fetch", async () => new Response(JSON.stringify(payload), { status: 200 }));
+			await expect(searchDeepSeek({ query: "current release", apiKey: "key" })).rejects.toThrow(/DeepSeek/);
+		}
 	});
 
 	test("rejects oversized successful response bodies", async () => {
@@ -424,6 +489,48 @@ describe("provider HTTP boundaries", () => {
 });
 
 describe("executeWebSearch", () => {
+	test("keeps a successful provider result when DeepSeek violates its structured contract", async () => {
+		vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+			const url = String(input);
+			if (url.includes("coding_plan/search")) {
+				return new Response(
+					JSON.stringify({ organic: [{ title: "MiniMax result", link: "https://example.com/result" }] }),
+					{ status: 200 },
+				);
+			}
+			return new Response(JSON.stringify({ content: [{ type: "text", text: "text only" }] }), { status: 200 });
+		});
+
+		const execution = await executeWebSearch(
+			{ query: "current release" },
+			{
+				minimax: { key: "mm", host: "https://minimax.example" },
+				deepseek: { key: "ds" },
+			},
+		);
+		expect(execution.details.status).toBe("success");
+		expect(execution.details.engine).toBe("minimax");
+		expect(execution.details.hits).toHaveLength(1);
+		expect(execution.formattedOutput).toContain("MiniMax result");
+		expect(execution.formattedOutput).not.toContain("text only");
+	});
+
+	test("returns a bounded tool error when every configured provider fails", async () => {
+		vi.stubGlobal("fetch", async () => {
+			throw new Error("provider unavailable");
+		});
+		const execution = await executeWebSearch(
+			{ query: "current release" },
+			{
+				minimax: { key: "mm", host: "https://minimax.example" },
+				deepseek: { key: "ds" },
+			},
+		);
+		expect(execution.details.status).toBe("error");
+		expect(execution.details.errorMessage).toContain("provider unavailable");
+		expect(execution.details.errorMessage?.length).toBeLessThanOrEqual(MAX_ERROR_MESSAGE_LENGTH);
+	});
+
 	test("propagates caller cancellation instead of returning a tool error", async () => {
 		const controller = new AbortController();
 		controller.abort();
@@ -539,6 +646,44 @@ describe("formatSearchOutput", () => {
 		});
 		expect(output).not.toContain("Injected");
 		expect(output.length).toBeLessThan(1000);
+	});
+
+	test("does not scan past historical hit, source, or related-search limits", () => {
+		const hits = Array.from({ length: MAX_HISTORICAL_HIT_SCAN }, () => null) as unknown[];
+		const related = Array.from({ length: MAX_HISTORICAL_RELATED_SCAN }, () => null) as unknown[];
+		Object.defineProperty(related, MAX_HISTORICAL_RELATED_SCAN, {
+			get: () => {
+				throw new Error("related scan exceeded");
+			},
+		});
+		const sources = Array.from({ length: MAX_HISTORICAL_SOURCE_SCAN }, () => "MiniMax") as unknown[];
+		Object.defineProperty(sources, MAX_HISTORICAL_SOURCE_SCAN, {
+			get: () => {
+				throw new Error("source scan exceeded");
+			},
+		});
+		hits[0] = {
+			title: "Release",
+			url: "https://example.com/release",
+			sources,
+		};
+		Object.defineProperty(hits, MAX_HISTORICAL_HIT_SCAN, {
+			get: () => {
+				throw new Error("hit scan exceeded");
+			},
+		});
+
+		expect(() =>
+			formatSearchOutput("release", {
+				query: "release",
+				durationMs: 10,
+				status: "success",
+				engine: "minimax",
+				totalHits: 1,
+				hits: hits as never,
+				relatedSearches: related as never,
+			}),
+		).not.toThrow();
 	});
 
 	test("escapes Markdown titles and normalizes multiline snippets", () => {
@@ -728,6 +873,33 @@ describe("renderWebSearchCall & renderWebSearchResult", () => {
 
 		const lines = comp.render(120).map((l) => stripAnsi(l).trimEnd());
 		expect(lines[0]).toContain("3 results via MiniMax & DeepSeek · 0.8s · example.com, foo.org, +1");
+	});
+
+	test("bounds historical domain scans in the collapsed renderer", () => {
+		const hits = Array.from({ length: MAX_HISTORICAL_HIT_SCAN }, () => null) as unknown[];
+		hits[0] = { title: "A", url: "https://example.com/a", sources: ["MiniMax"] };
+		Object.defineProperty(hits, MAX_HISTORICAL_HIT_SCAN, {
+			get: () => {
+				throw new Error("domain scan exceeded");
+			},
+		});
+		const comp = renderWebSearchResult(
+			{
+				content: [{ type: "text", text: "payload" }],
+				details: {
+					query: "q",
+					durationMs: 10,
+					status: "success",
+					engine: "minimax",
+					totalHits: 1,
+					hits: hits as never,
+				},
+			},
+			{ expanded: false, isPartial: false },
+			theme,
+			false,
+		);
+		expect(stripAnsi(comp.render(120).join("\n"))).toContain("example.com");
 	});
 
 	test("renderWebSearchResult expanded renders structured sections without agent directives", () => {

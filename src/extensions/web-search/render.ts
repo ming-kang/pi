@@ -8,7 +8,8 @@ import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts"
 import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
 import { getEngineLabel, WEB_SEARCH_LABEL } from "./constants.ts";
 import { formatResultsMarkdown } from "./format.ts";
-import type { WebSearchDetails, WebSearchHit } from "./types.ts";
+import { MAX_HISTORICAL_HIT_SCAN } from "./results.ts";
+import type { WebSearchDetails } from "./types.ts";
 
 /** Matches the bash/deepwiki progress display: sub-2s calls stay quiet. */
 const ELAPSED_DISPLAY_THRESHOLD_MS = 2000;
@@ -30,11 +31,17 @@ function firstText(result: AgentToolResult<WebSearchDetails>): string {
 }
 
 /** " · github.com, react.dev, +3" from the first-seen unique hit domains. */
-function domainSummary(hits: WebSearchHit[]): string {
+function domainSummary(value: unknown): string {
+	if (!Array.isArray(value)) return "";
 	const seen = new Set<string>();
-	for (const hit of hits) {
+	const scanLimit = Math.min(value.length, MAX_HISTORICAL_HIT_SCAN);
+	for (let index = 0; index < scanLimit; index++) {
+		const hit = value[index];
+		if (!hit || typeof hit !== "object") continue;
+		const url = (hit as Record<string, unknown>).url;
+		if (typeof url !== "string") continue;
 		try {
-			const host = new URL(hit.url).hostname.replace(/^www\./, "");
+			const host = new URL(url).hostname.replace(/^www\./, "");
 			if (host) seen.add(host);
 		} catch {
 			// ignore malformed URLs
@@ -110,14 +117,15 @@ export function renderWebSearchResult(
 			const line = truncateText(singleLine(text), 100) || "done";
 			return new Text(`${theme.fg("toolOutput", line)}${hint}`, 0, 0);
 		}
-		const hitCount = details.totalHits ?? details.hits.length;
+		const historicalHits = Array.isArray(details.hits) ? details.hits : [];
+		const hitCount = details.totalHits ?? historicalHits.length;
 		const engine = getEngineLabel(details.engine);
 		const engineLabel = engine ? ` via ${engine}` : "";
 		const duration = details.durationMs ? ` · ${(details.durationMs / 1000).toFixed(1)}s` : "";
 		const countText = hitCount === 1 ? "1 result" : hitCount === 0 ? "no results" : `${hitCount} results`;
 		const summary = theme.fg(
 			"toolOutput",
-			truncateText(`${countText}${engineLabel}${duration}${domainSummary(details.hits)}`, 100),
+			truncateText(`${countText}${engineLabel}${duration}${domainSummary(historicalHits)}`, 100),
 		);
 		return new Text(`${summary}${hint}`, 0, 0);
 	}

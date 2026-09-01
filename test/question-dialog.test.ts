@@ -8,6 +8,7 @@ import { stripAnsi } from "../src/utils/ansi.ts";
 
 const ENTER = "\r";
 const ESC = "\x1b";
+const UP = "\x1b[A";
 const DOWN = "\x1b[B";
 const LEFT = "\x1b[D";
 const TAB = "\t";
@@ -28,8 +29,9 @@ function createDialog(
 	questions: Question[],
 	signal?: AbortSignal,
 	keybindings: KeybindingsManager = new KeybindingsManager(),
+	dimensions: { rows: number; columns: number } = { rows: 40, columns: 120 },
 ) {
-	const tui = { requestRender: () => {}, terminal: { rows: 40, columns: 120 } } as unknown as TUI;
+	const tui = { requestRender: () => {}, terminal: dimensions } as unknown as TUI;
 	const results: DialogResult[] = [];
 	const component = createQuestionDialog(questions, signal)(tui, theme, keybindings, (result) => {
 		results.push(result);
@@ -172,6 +174,82 @@ describe("question dialog", () => {
 		const output = view();
 		expect(output).toContain("Beta ✓");
 		expect(output).toContain("+note");
+	});
+
+	it("keeps the focused option and footer visible inside a 24-row narrow viewport", () => {
+		const questions = [
+			question({
+				question: "Choose one approach for this deliberately narrow terminal layout?",
+				options: Array.from({ length: 4 }, (_, index) => ({
+					label: `Option ${index + 1}`,
+					description: `Description ${index + 1} ${"with enough detail to wrap ".repeat(4)}`,
+				})),
+			}),
+		];
+		const dialog = createDialog(questions, undefined, new KeybindingsManager(), { rows: 24, columns: 36 });
+		const initialLines = dialog.component.render(36);
+		expect(initialLines.length).toBeLessThanOrEqual(24);
+		expect(initialLines.every((line) => visibleWidth(line) <= 36)).toBe(true);
+		expect(stripAnsi(initialLines.join("\n"))).toContain("↓");
+
+		for (let index = 0; index < 4; index++) dialog.component.handleInput(DOWN);
+		const lastOption = dialog.viewAt(36);
+		expect(lastOption).toMatch(/→\s+5\. Type something/);
+		expect(lastOption).toContain("↑");
+
+		dialog.component.handleInput(DOWN);
+		const footer = dialog.viewAt(36);
+		expect(footer).toMatch(/→\s+Chat about this/);
+		expect(dialog.component.render(36).length).toBeLessThanOrEqual(24);
+	});
+
+	it("keeps the focused option beside its stacked preview in a short terminal", () => {
+		const dialog = createDialog(
+			[
+				question({
+					options: [
+						{
+							label: "Alpha",
+							description: "First option",
+							preview: Array.from({ length: 20 }, (_, index) => `PREVIEW-${index + 1}`).join("\n"),
+						},
+						{ label: "Beta", description: "Second option" },
+					],
+				}),
+			],
+			undefined,
+			new KeybindingsManager(),
+			{ rows: 24, columns: 40 },
+		);
+		const output = dialog.viewAt(40);
+		expect(output).toMatch(/→\s+1\. Alpha/);
+		expect(output).toContain("PREVIEW-1");
+		expect(output).toContain("preview lines hidden");
+		expect(dialog.component.render(40).length).toBeLessThanOrEqual(24);
+	});
+
+	it("scrolls long review content without losing submit and edit behavior", () => {
+		const questions = Array.from({ length: 4 }, (_, index) =>
+			question({
+				question: `Question ${index + 1}: ${"long decision context ".repeat(12)}?`,
+				header: `Q${index + 1}`,
+			}),
+		);
+		const dialog = createDialog(questions, undefined, new KeybindingsManager(), { rows: 24, columns: 34 });
+		for (let index = 0; index < questions.length; index++) dialog.component.handleInput(ENTER);
+		const initial = dialog.viewAt(34);
+		expect(initial).toContain("Review answers");
+		expect(initial).toContain("↓");
+		dialog.component.handleInput(DOWN);
+		const scrolled = dialog.viewAt(34);
+		expect(scrolled).not.toBe(initial);
+		expect(scrolled).toContain("↑");
+		expect(dialog.component.render(34).length).toBeLessThanOrEqual(24);
+		dialog.component.handleInput(UP);
+		expect(dialog.viewAt(34)).toContain("Review answers");
+		dialog.component.handleInput(ENTER);
+		expect(dialog.results).toHaveLength(1);
+		expect(dialog.results[0].outcome).toBe("answered");
 	});
 
 	it("cancels with partial answers when the abort signal fires, exactly once", () => {

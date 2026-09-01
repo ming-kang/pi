@@ -1,10 +1,13 @@
+import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
-import { validateQuestions } from "../src/extensions/question/schema.ts";
+import { QuestionParams, validateQuestions } from "../src/extensions/question/schema.ts";
 import type { Question, QuestionOption } from "../src/extensions/question/types.ts";
 
 function option(label: string, extra?: Partial<QuestionOption>): QuestionOption {
 	return { label, description: `${label} description`, ...extra };
 }
+
+const validateSchema = Compile(QuestionParams);
 
 function question(overrides?: Partial<Question>): Question {
 	return {
@@ -16,6 +19,47 @@ function question(overrides?: Partial<Question>): Question {
 }
 
 describe("validateQuestions", () => {
+	it("expresses non-empty visible strings in the TypeBox schema", () => {
+		expect(validateSchema.Check({ questions: [question()] })).toBe(true);
+		for (const invalid of [
+			question({ question: "" }),
+			question({ header: "" }),
+			question({ options: [option(""), option("Beta")] }),
+			question({ options: [option("Alpha", { description: "" }), option("Beta")] }),
+			question({ options: [option("Alpha", { preview: "" }), option("Beta")] }),
+		]) {
+			expect(validateSchema.Check({ questions: [invalid] })).toBe(false);
+		}
+	});
+
+	it("defensively rejects whitespace-only visible text with a path-specific error", () => {
+		const cases: Array<{ value: Question; path: string }> = [
+			{ value: question({ question: "   " }), path: "questions[0].question" },
+			{ value: question({ header: "\t" }), path: "questions[0].header" },
+			{
+				value: question({ options: [option("   "), option("Beta")] }),
+				path: "questions[0].options[0].label",
+			},
+			{
+				value: question({ options: [option("Alpha", { description: "\n" }), option("Beta")] }),
+				path: "questions[0].options[0].description",
+			},
+			{
+				value: question({ options: [option("Alpha", { preview: " \n " }), option("Beta")] }),
+				path: "questions[0].options[0].preview",
+			},
+		];
+		for (const testCase of cases) {
+			const result = validateQuestions([testCase.value]);
+			expect(result).toMatchObject({ ok: false, error: "blank_text" });
+			if (!result.ok) expect(result.message).toContain(testCase.path);
+		}
+	});
+
+	it("does not require question-mark punctuation", () => {
+		expect(validateQuestions([question({ question: "Choose the deployment target" })])).toEqual({ ok: true });
+	});
+
 	it("accepts a well-formed question", () => {
 		expect(validateQuestions([question()])).toEqual({ ok: true });
 	});

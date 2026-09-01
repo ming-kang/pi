@@ -7,8 +7,10 @@ It is intentionally not a general MCP bridge. The extension exposes one dedicate
 | Action | Behavior |
 |---|---|
 | `structure` | List the generated wiki topics for a repository. |
-| `contents` | Read the generated wiki — one page via `page` (recommended), or everything when `page` is omitted (truncated past ~120k chars). |
+| `contents` | Read the generated wiki — one page via `page` (recommended), or everything when `page` is omitted. |
 | `question` | Ask a focused question about a repository. |
+
+Every action has a hard model-facing limit of 120,000 characters. `contents` prefers page-aware cuts and reports omitted pages; `structure` and `question` use an action-specific truncation notice.
 
 ## Usage
 
@@ -17,7 +19,7 @@ It is intentionally not a general MCP bridge. The extension exposes one dedicate
 - `action`: `structure`, `contents`, or `question`
 - `repoName`: one `owner/repo` string for `structure` and `contents`; for `question`, one repo as a string, or 2–10 repos as an array (comma-separated string also accepted)
 - `question`: required only for `action: "question"`
-- `page`: optional, only for `action: "contents"` — 1-based index or page title from `structure` (plain titles such as `Extension System`, not numbered outline lines like `4.4 …`). Leading outline numbers on titles are stripped when matching. Unknown `page` fails with available titles listed.
+- `page`: optional, only for `action: "contents"` — a positive 1-based integer or page title from `structure` (plain titles such as `Extension System`, not numbered outline lines like `4.4 …`). Zero, negative, fractional, non-finite, and blank values are rejected. Leading outline numbers on titles are stripped when matching. Unknown `page` fails with available titles listed.
 
 `repoName` is normalized before validation (`owner/repo`, GitHub/DeepWiki URLs, JSON-array strings for multi-repo mistakes). `pageName`/`pageTitle` are accepted as `page` aliases. If `action` is omitted, defaults to `question` when a question is present, `contents` when `page` is present, else `structure`. Repositories not indexed on DeepWiki return repository-not-found errors — run `structure` first to detect that.
 
@@ -49,8 +51,8 @@ Avoid DeepWiki when the authoritative source is local or time-sensitive:
 ## Limits
 
 - A repository may not be indexed. DeepWiki can return that as normal text, so the extension treats repository-not-found messages as tool errors.
-- `contents` responses are truncated at a ~120k-character budget on `# Page:` boundaries (whole pages kept in order; at least the first page survives, cut mid-page if it alone exceeds the budget). A trailing notice reports shown/total pages, the full length, up to 20 omitted page titles, and points at `page` reads and `action: "question"` for the rest. Details carry `shownPages` / `truncatedChars` when this happens; `outputLength` always reflects the full untruncated response. Single-page reads set `requestedPage` / `pageIndex` instead and share the same budget.
-- Network requests time out after 45 seconds and surface as Pi tool errors.
+- All model-facing responses are capped at 120,000 characters. `contents` prefers `# Page:` boundaries (whole pages kept in order; at least the first page survives, cut mid-page if it alone exceeds the budget). Its trailing notice reports shown/total pages, the full length, up to 20 omitted page titles, and points at `page` reads and `action: "question"` for the rest. `structure` and `question` append a focused-request truncation notice. Details carry `shownPages` / `truncatedChars` when applicable; `outputLength` always reflects the full cached response. Single-page reads set `requestedPage` / `pageIndex` and share the same hard budget.
+- Each transport response is streamed with an 8 MiB byte limit before JSON/SSE parsing; oversized, failed, aborted, and timed-out responses never enter the cache. Network attempts time out after 45 seconds and surface as Pi tool errors.
 - Use local Pi tools (`read`, `grep`, `find`, `ls`) for workspace state. DeepWiki answers describe repository snapshots indexed by DeepWiki, not local uncommitted files.
 
 ## Implementation notes
@@ -59,4 +61,4 @@ DeepWiki's public MCP endpoint exposes exactly three operations: list a wiki's p
 
 DeepWiki may return generated explanations with source-file citations and "related pages" links. The TUI uses a local renderer (`render.ts`) rather than Pi's generic fallback, which would dump the full (often large) `content` text. Call questions, page names, and result titles are whitespace-normalized into bounded one-line summaries. Collapsed result text uses the quieter tool-output color and keeps the configured expand hint on the same logical line; expanding renders the complete response as Markdown. Historical malformed titles, requested pages, and error messages are bounded and fall back safely instead of breaking transcript rendering.
 
-Successful responses are cached in-process for 10 minutes, keyed by action, repo, and question. Failed, aborted, and timed-out requests are not cached. The cache stores the full response; `contents` truncation is recomputed per call, so cached and fresh calls return identical text.
+Successful responses are cached in-process for 10 minutes, keyed by action, repo, and question. Caller cancellation is checked before cache lookup as well as after transport, so an already-aborted call never receives a cached result. Failed, aborted, timed-out, and oversized requests are not cached. The cache stores the transport-bounded full response; `contents` page extraction and model-facing truncation are recomputed per call, so cached and fresh calls return identical text.

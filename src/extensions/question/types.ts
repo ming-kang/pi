@@ -15,6 +15,7 @@ export type InputMode = "custom" | "notes" | undefined;
 
 export type QuestionToolError =
 	| "no_ui"
+	| "blank_text"
 	| "duplicate_question"
 	| "duplicate_option_label"
 	| "reserved_label"
