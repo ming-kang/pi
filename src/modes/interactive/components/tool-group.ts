@@ -77,6 +77,14 @@ export class ToolGroupComponent implements Component {
 				break;
 			}
 		}
+		if (this.toolGroup === "explore") {
+			let error: string | undefined;
+			for (let index = this.tools.length - 1; index >= 0; index--) {
+				error = this.tools[index]?.getFinalErrorSummary();
+				if (error) break;
+			}
+			if (error) lines.push(truncateToWidth(theme.fg("error", `  ${error}`), width, "..."));
+		}
 		return lines;
 	}
 }

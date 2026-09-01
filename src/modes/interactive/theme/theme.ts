@@ -169,6 +169,17 @@ export type ThemeBg =
 	| "toolSuccessBg"
 	| "toolErrorBg";
 
+const THEME_BACKGROUND_KEYS: ReadonlySet<string> = new Set<ThemeBg>([
+	"selectedBg",
+	"scrollbarThumb",
+	"searchMatchBg",
+	"userMessageBg",
+	"customMessageBg",
+	"toolPendingBg",
+	"toolSuccessBg",
+	"toolErrorBg",
+]);
+
 type OptionalThemeColor = "thinkingMax" | "searchMatchText";
 type OptionalThemeBg = "scrollbarThumb" | "searchMatchBg";
 
@@ -632,18 +643,8 @@ function createTheme(themeJson: ThemeJson, mode?: ColorMode, sourcePath?: string
 	const resolvedColors = resolveThemeColors(withThemeColorFallbacks(themeJson.colors), themeJson.vars);
 	const fgColors: Record<ThemeColor, string | number> = {} as Record<ThemeColor, string | number>;
 	const bgColors: Record<ThemeBg, string | number> = {} as Record<ThemeBg, string | number>;
-	const bgColorKeys: Set<string> = new Set([
-		"selectedBg",
-		"scrollbarThumb",
-		"searchMatchBg",
-		"userMessageBg",
-		"customMessageBg",
-		"toolPendingBg",
-		"toolSuccessBg",
-		"toolErrorBg",
-	]);
 	for (const [key, value] of Object.entries(resolvedColors)) {
-		if (bgColorKeys.has(key)) {
+		if (THEME_BACKGROUND_KEYS.has(key)) {
 			bgColors[key as ThemeBg] = value;
 		} else {
 			fgColors[key as ThemeColor] = value;
@@ -1064,33 +1065,25 @@ function ansi256ToHex(index: number): string {
  */
 export function getResolvedThemeColors(themeName?: string): Record<string, string> {
 	const name = themeName ?? currentThemeName ?? getDefaultTheme();
-	const isLight = name === "light";
 	const themeJson = loadThemeJson(name);
 	const resolved = resolveThemeColors(withThemeColorFallbacks(themeJson.colors), themeJson.vars);
-
-	// Default text color for empty values (terminal uses default fg color)
-	const defaultText = isLight ? "#000000" : "#e5e5e7";
+	const resolvedText = resolved.text;
+	const defaultText =
+		typeof resolvedText === "number"
+			? ansi256ToHex(resolvedText)
+			: resolvedText || (name === "light" || name === "ice-cream-light" ? "#000000" : "#e5e5e7");
 
 	const cssColors: Record<string, string> = {};
 	for (const [key, value] of Object.entries(resolved)) {
 		if (typeof value === "number") {
 			cssColors[key] = ansi256ToHex(value);
 		} else if (value === "") {
-			// Empty means default terminal color - use sensible fallback for HTML
-			cssColors[key] = defaultText;
+			cssColors[key] = THEME_BACKGROUND_KEYS.has(key) ? "transparent" : defaultText;
 		} else {
 			cssColors[key] = value;
 		}
 	}
 	return cssColors;
-}
-
-/**
- * Check if a theme is a "light" theme (for CSS that needs light/dark variants).
- */
-export function isLightTheme(themeName?: string): boolean {
-	// Currently just check the name - could be extended to analyze colors
-	return themeName === "light";
 }
 
 /**

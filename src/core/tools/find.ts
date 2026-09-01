@@ -14,8 +14,8 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.ts";
 
 /** Convert native separators to posix for glob matching against fd output. */
-function toPosixPath(value: string): string {
-	return value.split(path.sep).join("/");
+function toPosixPath(value: string, pathModule: path.PlatformPath = path): string {
+	return value.split(pathModule.sep).join("/");
 }
 
 /** Relativize a find result against the search root and normalize it to posix separators. */
@@ -29,6 +29,26 @@ export function relativizeFindResultPath(
 	const relativePath = pathModule.isAbsolute(resultPath) ? pathModule.relative(searchPath, resultPath) : resultPath;
 	const posixPath = relativePath.split(pathModule.sep).join("/");
 	return hadTrailingSeparator && !posixPath.endsWith("/") ? `${posixPath}/` : posixPath;
+}
+
+/** Apply a POSIX-style path-segment glob to one fd result on any platform. */
+export function matchesFindResultPath(
+	resultPath: string,
+	searchPath: string,
+	pattern: string,
+	pathModule: path.PlatformPath = path,
+): boolean {
+	const normalizedResult = resultPath.replace(/\r$/, "").trim();
+	if (!normalizedResult) return false;
+	const candidate = pathModule.isAbsolute(pattern)
+		? toPosixPath(normalizedResult, pathModule)
+		: toPosixPath(pathModule.relative(searchPath, normalizedResult), pathModule);
+	const hadTrailingSeparator = normalizedResult.endsWith("/") || normalizedResult.endsWith("\\");
+	const candidateWithDirectoryMarker = hadTrailingSeparator && !candidate.endsWith("/") ? `${candidate}/` : candidate;
+	return minimatch(candidateWithDirectoryMarker, toPosixPath(pattern, pathModule), {
+		dot: true,
+		nocase: !/[A-Z]/u.test(pattern),
+	});
 }
 
 const findSchema = Type.Object({
@@ -305,22 +325,7 @@ export function createFindToolDefinition(
 						rl.on("line", (line) => {
 							if (needsWindowsPathFilter) {
 								if (lines.length >= effectiveLimit) return;
-								const normalizedLine = line.replace(/\r$/, "").trim();
-								if (!normalizedLine) return;
-								const hadTrailingSlash = normalizedLine.endsWith("/") || normalizedLine.endsWith("\\");
-								const candidate = path.isAbsolute(pattern)
-									? toPosixPath(normalizedLine)
-									: toPosixPath(path.relative(searchPath, normalizedLine));
-								const candidateWithDirectoryMarker =
-									hadTrailingSlash && !candidate.endsWith("/") ? `${candidate}/` : candidate;
-								if (
-									!minimatch(candidateWithDirectoryMarker, toPosixPath(pattern), {
-										dot: true,
-										nocase: !/[A-Z]/u.test(pattern),
-									})
-								) {
-									return;
-								}
+								if (!matchesFindResultPath(line, searchPath, pattern)) return;
 							}
 							lines.push(line);
 							if (needsWindowsPathFilter && lines.length >= effectiveLimit) stopChild?.();

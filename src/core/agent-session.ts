@@ -462,7 +462,7 @@ export class AgentSession {
 	 */
 	private async _getSummarizationRequestAuth(
 		model: Model<any>,
-		streamFunction: typeof this.agent.streamFunction = this.agent.streamFunction,
+		streamFunction: typeof this.agent.streamFunction,
 	): Promise<{
 		model: Model<any>;
 		apiKey?: string;
@@ -1915,7 +1915,7 @@ export class AgentSession {
 		signal: AbortSignal,
 		env: Record<string, string> | undefined,
 		reason: "manual" | "threshold" | "overflow",
-		streamFunction: typeof this.agent.streamFunction = this.agent.streamFunction,
+		streamFunction: typeof this.agent.streamFunction,
 	): Promise<CompactionResult> {
 		return compact(
 			preparation,
@@ -1959,7 +1959,13 @@ export class AgentSession {
 				throw new Error(formatNoModelSelectedMessage());
 			}
 
-			const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(this.model);
+			const streamFunction = this.agent.streamFunction;
+			const {
+				model: requestModel,
+				apiKey,
+				headers,
+				env,
+			} = await this._getSummarizationRequestAuth(this.model, streamFunction);
 
 			const pathEntries = this.sessionManager.getBranch();
 			const settings = this.settingsManager.getCompactionSettings();
@@ -2021,6 +2027,7 @@ export class AgentSession {
 					this._compactionAbortController.signal,
 					env,
 					"manual",
+					streamFunction,
 				);
 				summary = result.summary;
 				firstKeptEntryId = result.firstKeptEntryId;
@@ -2663,6 +2670,10 @@ export class AgentSession {
 				},
 				getSystemPrompt: () => this.systemPrompt,
 				getSystemPromptOptions: () => this._baseSystemPromptOptions,
+				getShellSettings: () => ({
+					shellPath: this.settingsManager.getShellPath(),
+					commandPrefix: this.settingsManager.getShellCommandPrefix(),
+				}),
 			},
 			{
 				registerProvider: (name, config) => {
@@ -3213,7 +3224,13 @@ export class AgentSession {
 			let summaryUsage: Usage | undefined;
 			if (options.summarize && entriesToSummarize.length > 0 && !extensionSummary) {
 				const model = this.model!;
-				const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(model);
+				const streamFunction = this.agent.streamFunction;
+				const {
+					model: requestModel,
+					apiKey,
+					headers,
+					env,
+				} = await this._getSummarizationRequestAuth(model, streamFunction);
 				const branchSummarySettings = this.settingsManager.getBranchSummarySettings();
 				const result = await generateBranchSummary(entriesToSummarize, {
 					model: requestModel,
@@ -3224,7 +3241,7 @@ export class AgentSession {
 					customInstructions,
 					replaceInstructions,
 					reserveTokens: branchSummarySettings.reserveTokens,
-					streamFn: this.agent.streamFunction,
+					streamFn: streamFunction,
 					retry: this.settingsManager.getRetrySettings(),
 					callbacks: this._summarizationRetryCallbacks({ source: "branchSummary" }),
 				});

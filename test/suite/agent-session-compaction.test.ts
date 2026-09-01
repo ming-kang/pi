@@ -403,7 +403,51 @@ describe("AgentSession compaction characterization", () => {
 		]);
 	});
 
-	it("keeps the captured custom streamFn when auth resolution is still pending", async () => {
+	it("keeps the captured manual-compaction streamFn when auth resolution is still pending", async () => {
+		const harness = await createHarness({ withConfiguredAuth: false });
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		const getCapturedStreamCallCount = useSummaryStreamFn(harness, "manual summary from captured stream");
+		let markAuthStarted: () => void = () => {};
+		const authStarted = new Promise<void>((resolve) => {
+			markAuthStarted = resolve;
+		});
+		let releaseAuth: () => void = () => {};
+		const authReleased = new Promise<void>((resolve) => {
+			releaseAuth = resolve;
+		});
+		vi.spyOn(harness.session.modelRuntime, "getAuth").mockImplementation(async () => {
+			markAuthStarted();
+			await authReleased;
+			return undefined;
+		});
+
+		const compaction = harness.session.compact();
+		await authStarted;
+		let replacementStreamCallCount = 0;
+		harness.session.agent.streamFunction = (model) => {
+			replacementStreamCallCount++;
+			const stream = createAssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message: AssistantMessage = {
+					...fauxAssistantMessage("manual summary from replacement stream"),
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+				};
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		};
+		releaseAuth();
+		const result = await compaction;
+
+		expect(getCapturedStreamCallCount()).toBe(1);
+		expect(replacementStreamCallCount).toBe(0);
+		expect(result.summary).toContain("manual summary from captured stream");
+	});
+
+	it("keeps the captured auto-compaction streamFn when auth resolution is still pending", async () => {
 		const harness = await createHarness({ withConfiguredAuth: false });
 		harnesses.push(harness);
 		seedCompactableSession(harness);

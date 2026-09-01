@@ -172,8 +172,12 @@ export function createLocalShellOperations(
  * This is useful for extensions that intercept user_bash and still want pi's
  * standard local shell behavior while wrapping or rewriting commands.
  */
+export function normalizeLocalBashCommand(command: string, platform: NodeJS.Platform = process.platform): string {
+	return platform === "win32" ? rewriteCmdNulRedirects(command) : command;
+}
+
 export function createLocalBashOperations(options?: { shellPath?: string }): BashOperations {
-	return createLocalShellOperations("bash", () => getShellConfig(options?.shellPath), rewriteCmdNulRedirects);
+	return createLocalShellOperations("bash", () => getShellConfig(options?.shellPath), normalizeLocalBashCommand);
 }
 
 export interface BashSpawnContext {

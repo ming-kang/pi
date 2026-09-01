@@ -315,6 +315,12 @@ export class ToolExecutionComponent extends Container {
 		this.updateDisplay();
 	}
 
+	getFinalErrorSummary(): string | undefined {
+		if (this.isPartial || !this.result?.isError) return undefined;
+		const summary = this.getTextOutput().replace(/\s+/gu, " ").trim();
+		return summary || undefined;
+	}
+
 	renderCallSummary(width: number): string[] {
 		const callRenderer = this.getCallRenderer();
 		let component: Component;

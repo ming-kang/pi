@@ -6,6 +6,7 @@ import { getThemesDir } from "../src/config.ts";
 import {
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
+	getResolvedThemeColors,
 	getThemeByName,
 	setRegisteredThemes,
 } from "../src/modes/interactive/theme/theme.ts";
@@ -42,6 +43,34 @@ describe("theme picker", () => {
 			});
 			expect(getThemeByName(name)?.name).toBe(name);
 		}
+	});
+
+	it("exports empty ice-cream backgrounds as transparent", () => {
+		for (const name of ["ice-cream-dark", "ice-cream-light"]) {
+			const colors = getResolvedThemeColors(name);
+			expect(colors.customMessageBg).toBe("transparent");
+			expect(colors.toolPendingBg).toBe("transparent");
+			expect(colors.toolSuccessBg).toBe("transparent");
+			expect(colors.toolErrorBg).toBe("transparent");
+			expect(colors.text).toMatch(/^#[0-9a-f]{6}$/i);
+		}
+	});
+
+	it("uses the resolved text color for empty foreground values", () => {
+		const darkTheme = JSON.parse(
+			readFileSync(new URL("../src/modes/interactive/theme/dark.json", import.meta.url), "utf-8"),
+		) as ThemeFile;
+		const customTheme: ThemeFile = {
+			...darkTheme,
+			name: "empty-foreground",
+			colors: { ...darkTheme.colors, text: "#123456", customMessageText: "" },
+		};
+		writeFileSync(
+			join(process.env.PI_CODING_AGENT_DIR!, "themes", "empty-foreground.json"),
+			JSON.stringify(customTheme, null, 2),
+		);
+
+		expect(getResolvedThemeColors("empty-foreground").customMessageText).toBe("#123456");
 	});
 
 	it("uses custom theme content names instead of file names", () => {

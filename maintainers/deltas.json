@@ -76,9 +76,11 @@
 		{
 			"path": "src/core/agent-session.ts",
 			"category": "bugfix",
-			"intent": "Captures the stream function before awaiting summarization auth, so a model switch during the await cannot resolve auth for one stream function and generate the summary with another; also invalidates extension contexts with STALE_EXTENSION_CONTEXT_MESSAGE",
+			"intent": "Uses one captured stream for manual, automatic, and branch summarization across async auth; binds live shell settings into canonical extension contexts; invalidates stale contexts",
 			"tests": [
-				"test/suite/agent-session-compaction.test.ts"
+				"test/suite/agent-session-compaction.test.ts",
+				"test/suite/agent-session-extension-context.test.ts",
+				"test/suite/regressions/6324-branch-summary-ambient-auth.test.ts"
 			]
 		},
 		{
@@ -161,9 +163,10 @@
 		{
 			"path": "src/core/tools/find.ts",
 			"category": "windows-compat",
-			"intent": "minimatch fallback for path-segment globs: fd 10.4.2 --full-path on Windows matches zero results for any pattern containing / (posix or backslash form); explore toolGroup",
+			"intent": "Keeps a minimatch fallback for Windows path-segment globs because fd 10.4.2/10.5.0 returns zero matches for slash-containing patterns; retire only after a fixed fd is the managed minimum and native slash/backslash regressions pass; explore toolGroup",
 			"tests": [
-				"test/suite/regressions/3302-find-path-glob.test.ts"
+				"test/suite/regressions/3302-find-path-glob.test.ts",
+				"test/suite/regressions/6104-find-root-relativization.test.ts"
 			]
 		},
 		{
@@ -210,7 +213,7 @@
 		{
 			"path": "src/extensions/index.ts",
 			"category": "distribution",
-			"intent": "Registers the bundled hidden extensions (llama, background, deepwiki, question, router, statusline, subagent, todo)"
+			"intent": "Registers the distribution's canonical bundled extension set as hidden built-ins"
 		},
 		{
 			"path": "src/index.ts",
@@ -294,7 +297,7 @@
 		{
 			"path": "src/modes/interactive/interactive-mode.ts",
 			"category": "ui",
-			"intent": "Tool grouping and dispose lifecycle, selector subtitle plumbing, canonical ModelRuntime on shortcut contexts, distribution constants for telemetry and update hints",
+			"intent": "Tool grouping and selector disposal, selector subtitle plumbing, canonical guarded ExtensionContext for shortcuts, distribution constants for telemetry and update hints",
 			"tests": [
 				"test/interactive-tui.test.ts",
 				"test/extensions-runner.test.ts"
@@ -303,7 +306,7 @@
 		{
 			"path": "src/modes/interactive/theme/theme.ts",
 			"category": "ui",
-			"intent": "Nested color restoration in fg/bg and bundled ice-cream themes",
+			"intent": "Nested color restoration in fg/bg, bundled ice-cream themes, and correct transparent/default color semantics for HTML export",
 			"tests": [
 				"test/theme-picker.test.ts"
 			]

@@ -71,7 +71,6 @@ import type {
 	AutocompleteProviderFactory,
 	EditorFactory,
 	ExtensionCommandContext,
-	ExtensionContext,
 	ExtensionRunner,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
@@ -2142,50 +2141,13 @@ export class InteractiveMode {
 		const shortcuts = extensionRunner.getShortcuts(this.keybindings.getEffectiveConfig());
 		if (shortcuts.size === 0) return;
 
-		// Create a context for shortcut handlers
-		const createContext = (): ExtensionContext => ({
-			ui: this.createExtensionUIContext(),
-			mode: "tui",
-			hasUI: true,
-			cwd: this.sessionManager.getCwd(),
-			sessionManager: this.sessionManager,
-			modelRegistry: extensionRunner.getModelRegistry(),
-			modelRuntime: extensionRunner.getModelRegistry().getRuntime(),
-			model: this.session.model,
-			scopedModels: this.session.scopedModels,
-			thinkingLevel: this.session.thinkingLevel,
-			isIdle: () => this.session.isIdle,
-			isProjectTrusted: () => this.settingsManager.isProjectTrusted(),
-			signal: this.session.agent.signal,
-			abort: () => {
-				this.restoreQueuedMessagesToEditor({ abort: true });
-			},
-			hasPendingMessages: () => this.session.pendingMessageCount > 0,
-			shutdown: () => {
-				this.shutdownRequested = true;
-			},
-			getContextUsage: () => this.session.getContextUsage(),
-			compact: (options) => {
-				void (async () => {
-					try {
-						const result = await this.session.compact(options?.customInstructions);
-						options?.onComplete?.(result);
-					} catch (error) {
-						const err = error instanceof Error ? error : new Error(String(error));
-						options?.onError?.(err);
-					}
-				})();
-			},
-			getSystemPrompt: () => this.session.systemPrompt,
-		});
-
 		// Set up the extension shortcut handler on the default editor
 		this.defaultEditor.onExtensionShortcut = (data: string) => {
 			for (const [shortcutStr, shortcut] of shortcuts) {
 				// Cast to KeyId - extension shortcuts use the same format
 				if (matchesKey(data, shortcutStr as KeyId)) {
 					// Run handler async, don't block input
-					Promise.resolve(shortcut.handler(createContext())).catch((err) => {
+					Promise.resolve(shortcut.handler(extensionRunner.createContext())).catch((err) => {
 						this.showError(`Shortcut handler error: ${err instanceof Error ? err.message : String(err)}`);
 					});
 					return true;
@@ -5366,7 +5328,7 @@ export class InteractiveMode {
 					this.showError(error instanceof Error ? error.message : String(error));
 				}
 			};
-			return { component: selector, focus: selector };
+			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
 	}
 
@@ -5404,7 +5366,7 @@ export class InteractiveMode {
 
 				this.sessionManager.getSessionFile(),
 			);
-			return { component: selector, focus: selector };
+			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
 	}
 

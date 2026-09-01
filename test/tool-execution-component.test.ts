@@ -872,6 +872,33 @@ describe("ToolExecutionComponent parity", () => {
 		expect(expanded).not.toContain("to expand");
 	});
 
+	test("shows one bounded final error under collapsed explore groups", () => {
+		const readDefinition = createReadToolDefinition(process.cwd());
+		const failedRead = new ToolExecutionComponent(
+			"read",
+			"tool-group-failed-read",
+			{ path: "missing.txt" },
+			{},
+			readDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		failedRead.updateResult(
+			{
+				content: [{ type: "text", text: `File not found: missing.txt\n${"x".repeat(500)}` }],
+				isError: true,
+			},
+			false,
+		);
+		const group = new ToolGroupComponent("explore", [failedRead]);
+
+		const lines = group.render(60);
+		const rendered = stripAnsi(lines.join("\n"));
+		expect(rendered).toContain("File not found: missing.txt");
+		expect(rendered).not.toContain("x".repeat(100));
+		expect(lines.every((line) => visibleWidth(line) <= 60)).toBe(true);
+	});
+
 	test("shows todo group result summaries and a bounded error in collapsed groups", () => {
 		const todoDefinition = createTodoToolDefinition();
 		const created = new ToolExecutionComponent(

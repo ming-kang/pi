@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createLocalBashOperations } from "../src/core/tools/bash.ts";
+import { createLocalBashOperations, normalizeLocalBashCommand } from "../src/core/tools/bash.ts";
 import { rewriteCmdNulRedirects } from "../src/utils/shell.ts";
 
 describe("rewriteCmdNulRedirects", () => {
@@ -85,6 +85,12 @@ describe("rewriteCmdNulRedirects", () => {
 		// `nul`, so a closing quote right behind it prevents the rewrite.
 		expect(rewriteCmdNulRedirects('echo "dir 2>nul"')).toBe('echo "dir 2>nul"');
 	});
+
+	it("only applies the compatibility rewrite to native Windows commands", () => {
+		expect(normalizeLocalBashCommand("echo ok 2>nul", "win32")).toBe("echo ok 2>/dev/null");
+		expect(normalizeLocalBashCommand("echo ok 2>nul", "linux")).toBe("echo ok 2>nul");
+		expect(normalizeLocalBashCommand("echo ok 2>nul", "darwin")).toBe("echo ok 2>nul");
+	});
 });
 
 describe("bash tool nul redirect integration", () => {
@@ -107,7 +113,7 @@ describe("bash tool nul redirect integration", () => {
 		rmSync(testDir, { recursive: true, force: true });
 	});
 
-	it("does not create a literal nul file for CMD-style redirects", async () => {
+	it.skipIf(process.platform !== "win32")("does not create a literal nul file for CMD-style redirects", async () => {
 		const ops = createLocalBashOperations();
 		let output = "";
 		const { exitCode } = await ops.exec("echo ok 2>nul >nul; echo visible 2> nul", testDir, {
@@ -122,5 +128,13 @@ describe("bash tool nul redirect integration", () => {
 		// existsSync cannot be used here: on Windows any path ending in `nul`
 		// resolves to the NUL device and always reports as existing.
 		expect(readdirSync(testDir)).not.toContain("nul");
+	});
+
+	it.skipIf(process.platform === "win32")("preserves ordinary POSIX files named nul", async () => {
+		const ops = createLocalBashOperations();
+		const { exitCode } = await ops.exec("printf ordinary >nul", testDir, { onData: () => {} });
+
+		expect(exitCode).toBe(0);
+		expect(readdirSync(testDir)).toContain("nul");
 	});
 });
