@@ -255,9 +255,6 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<void> {
 			noSkills: true,
 			noPromptTemplates: true,
 			noThemes: true,
-			// Read-only explorers skip AGENTS.md/CLAUDE.md: they don't need
-			// commit/PR/style rules, and the parent interprets their results.
-			noContextFiles: task.agent.omitContextFiles ?? false,
 			systemPromptOverride: (base) => workerSystemPrompt(base, task),
 		});
 		const initialization = (async (): Promise<InitializationOutcome> => {

@@ -50,12 +50,14 @@ function registry(models: Model<Api>[]) {
 }
 
 function baseContext(root: string, activeModel: Model<Api>) {
+	const modelRegistry = registry([activeModel]);
 	return {
 		cwd: root,
 		hasUI: true,
 		model: activeModel,
 		scopedModels: [],
-		modelRegistry: registry([activeModel]),
+		modelRegistry,
+		modelRuntime: { refresh: modelRegistry.refresh },
 		isProjectTrusted: () => false,
 	};
 }
@@ -374,13 +376,13 @@ describe("/agents command", () => {
 				void Promise.resolve(
 					factory({ requestRender: vi.fn() } as unknown as TUI, theme, new KeybindingsManager(), resolve),
 				)
-					.then((component) => {
+					.then(async (component) => {
 						const interactive = component as unknown as { handleInput(data: string): void };
 						interactive.handleInput("\r");
 						interactive.handleInput("\r");
 						expect(refreshSignal).toBeDefined();
 						interactive.handleInput("\x1b");
-						expect(refreshSignal?.aborted).toBe(true);
+						await vi.waitFor(() => expect(refreshSignal?.aborted).toBe(true));
 						interactive.handleInput("\x1b");
 						interactive.handleInput("\x1b");
 					})
@@ -389,7 +391,8 @@ describe("/agents command", () => {
 		const ctx = {
 			...baseContext(root, activeModel),
 			mode: "tui",
-			modelRegistry: { ...registry([activeModel]), refresh },
+			modelRegistry: registry([activeModel]),
+			modelRuntime: { refresh },
 			ui: { custom, select: vi.fn(), notify: vi.fn() },
 		} as unknown as ExtensionCommandContext;
 

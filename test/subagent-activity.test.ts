@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { addUsage, emptyUsage, mergeUsage, toNestedUsage } from "../src/extensions/subagent/activity.ts";
+import {
+	activityCallText,
+	addUsage,
+	emptyUsage,
+	isDisplayableActivity,
+	isSyntheticActivity,
+	mergeUsage,
+	toNestedUsage,
+} from "../src/extensions/subagent/activity.ts";
 import { boundSubagentDetails } from "../src/extensions/subagent/budget.ts";
 import {
 	DETAILS_ACTIVITY_LIMIT,
@@ -8,9 +16,31 @@ import {
 	TASK_OUTPUT_LIMIT,
 } from "../src/extensions/subagent/constants.ts";
 import { boundText } from "../src/extensions/subagent/text.ts";
-import type { SubagentDetails, SubagentUsage } from "../src/extensions/subagent/types.ts";
+import type { SubagentDetails, SubagentUsage, ToolActivity } from "../src/extensions/subagent/types.ts";
 
 describe("subagent output bounds", () => {
+	it("centralizes displayable activity classification and call-text formatting", () => {
+		const read: ToolActivity = {
+			id: "read-1",
+			toolName: "read",
+			summary: "read src/index.ts [Output truncated: 12 bytes omitted.]",
+			status: "succeeded",
+			startedAt: 0,
+		};
+		const compaction: ToolActivity = {
+			id: "compaction",
+			toolName: "compaction",
+			summary: "Compacted 100k → 20k",
+			status: "succeeded",
+			startedAt: 1,
+		};
+		expect(isDisplayableActivity(read)).toBe(true);
+		expect(isSyntheticActivity(read)).toBe(false);
+		expect(activityCallText(read)).toBe("Read(src/index.ts...)");
+		expect(isDisplayableActivity(compaction)).toBe(false);
+		expect(isSyntheticActivity(compaction)).toBe(true);
+	});
+
 	it("never exceeds the requested UTF-8 byte budget, including the truncation notice", () => {
 		for (const limit of [1, 8, 32, 64, 256]) {
 			const bounded = boundText("界".repeat(1_000), limit);

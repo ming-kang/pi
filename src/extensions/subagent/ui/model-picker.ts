@@ -2,6 +2,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { Container, type Focusable, type KeybindingsManager, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
 import type { ExtensionCommandContext } from "../../../core/extensions/types.ts";
 import { DynamicBorder } from "../../../modes/interactive/components/dynamic-border.ts";
+import { refreshModelCatalogs } from "../../../modes/interactive/model-catalog-refresh.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import { AGENT_PROFILE_LABELS } from "../agents.ts";
 import type { SubagentAgentName } from "../constants.ts";
@@ -143,7 +144,7 @@ export async function refreshPickerModels(ctx: ExtensionCommandContext, picker: 
 	}, MODEL_REFRESH_TIMEOUT_MS);
 	timeout.unref?.();
 	try {
-		const result = await ctx.modelRegistry.refresh({ signal: picker.refreshSignal });
+		const result = await refreshModelCatalogs(ctx.modelRuntime, picker.refreshSignal);
 		if (picker.isClosed || (picker.refreshSignal.aborted && !timedOut)) return;
 		picker.updateModels(ctx.modelRegistry.getAvailable());
 		if (result.aborted && timedOut) {

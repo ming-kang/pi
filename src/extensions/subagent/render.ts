@@ -9,6 +9,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { AgentToolResult, ToolRenderContext, ToolRenderResultOptions } from "../../core/extensions/types.ts";
 import { getMarkdownTheme, type Theme, type ThemeColor } from "../../modes/interactive/theme/theme.ts";
+import { activityCallText, isDisplayableActivity } from "./activity.ts";
 import { AGENT_PROFILE_LABELS } from "./agents.ts";
 import { COMPACTION_ACTIVITY_ID, DISPLAY_ACTIVITY_LIMIT, type SubagentAgentName } from "./constants.ts";
 import type { SubagentParams } from "./schema.ts";
@@ -112,53 +113,6 @@ function retryText(run: SubagentRunDetails): string | undefined {
 	return error ? `${state} · ${error}` : state;
 }
 
-function stripActivityPrefix(summary: string, prefixes: readonly string[]): string {
-	for (const prefix of prefixes) {
-		if (summary === prefix) return "";
-		if (summary.startsWith(`${prefix} `)) return summary.slice(prefix.length + 1).trim();
-	}
-	return summary;
-}
-
-function activityCallSummary(activity: ToolActivity): string {
-	const summary = displayLine(activity.summary);
-	let label: string;
-	let detail: string;
-	switch (activity.toolName) {
-		case "bash":
-			label = "Run";
-			detail = stripActivityPrefix(summary, ["Run", "bash"]);
-			break;
-		case "read":
-			label = "Read";
-			detail = stripActivityPrefix(summary, ["Read", "read"]);
-			break;
-		case "grep":
-			label = "Grep";
-			detail = stripActivityPrefix(summary, ["Grep", "grep", "Search"]);
-			break;
-		case "find":
-			label = "Find";
-			detail = stripActivityPrefix(summary, ["Find", "find"]);
-			break;
-		case "ls":
-			label = "List";
-			detail = stripActivityPrefix(summary, ["List", "ls"]) || ".";
-			break;
-		case "edit":
-			label = "Edit";
-			detail = stripActivityPrefix(summary, ["Edit", "edit"]);
-			break;
-		case "write":
-			label = "Write";
-			detail = stripActivityPrefix(summary, ["Write", "write"]);
-			break;
-		default:
-			return summary || activity.toolName;
-	}
-	return detail ? `${label}(${detail})` : label;
-}
-
 function latestRunningActivity(run: SubagentRunDetails, toolName: string): ToolActivity | undefined {
 	for (let index = run.activities.length - 1; index >= 0; index--) {
 		const activity = run.activities[index];
@@ -216,8 +170,9 @@ class CollapsedFlow implements Component {
 		const usable = Math.max(1, width);
 		const joined = this.segments.join(FLOW_SEPARATOR);
 		const packed = visibleWidth(joined);
-		if (this.cellWidth > usable || packed <= usable) {
-			return [packed <= usable ? joined : truncateToWidth(joined, usable, "...")];
+		if (packed <= usable) return [joined];
+		if (this.cellWidth > usable) {
+			return this.segments.map((segment) => truncateToWidth(segment, usable, "..."));
 		}
 		const columnCount = Math.max(
 			1,
@@ -273,7 +228,7 @@ function activityTitleSuffix(total: number, shown: number): string {
 function activityLine(activity: ToolActivity, theme: Theme): string {
 	const color: ThemeColor =
 		activity.status === "failed" ? "error" : activity.status === "running" ? "accent" : "toolOutput";
-	return `  ${theme.fg(color, activityCallSummary(activity))}`;
+	return `  ${theme.fg(color, activityCallText(activity))}`;
 }
 
 function addPrompt(
@@ -288,7 +243,7 @@ function addPrompt(
 }
 
 function addActivity(container: Container, run: SubagentRunDetails, theme: Theme): void {
-	const toolCalls = run.activities.filter((activity) => activity.toolName !== COMPACTION_ACTIVITY_ID);
+	const toolCalls = run.activities.filter(isDisplayableActivity);
 	const shown = toolCalls.slice(-DISPLAY_ACTIVITY_LIMIT);
 	const total = Math.max(run.usage.toolUses, toolCalls.length);
 	container.addChild(
@@ -382,47 +337,59 @@ export interface SubagentRenderState {
 	refreshTimer?: ReturnType<typeof setTimeout>;
 	/** Cadence the current timer was created with, used to detect changes. */
 	refreshInterval?: number;
+	/** Called by the shell when the transcript row is disposed. */
+	dispose?: () => void;
 }
 
 type SubagentToolRenderContext = ToolRenderContext<SubagentRenderState, SubagentParams, SubagentDetails>;
 
-// Only genuinely running runs justify spinner-cadence repaints; queued runs
-// show a static marker and pick the animation back up via runner updates.
-function hasRunningRuns(runs: SubagentRunDetails[]): boolean {
-	return runs.some((run) => run.status === "running");
+/** Pure refresh policy: schedule only while the current view contains changing text. */
+export function desiredRefreshInterval(
+	runs: readonly SubagentRunDetails[],
+	options: { isPartial: boolean; expanded: boolean },
+): number | undefined {
+	if (!options.isPartial) return undefined;
+	if (!options.expanded) {
+		return runs.some((run) => run.status === "running") ? SPINNER_INTERVAL_MS : undefined;
+	}
+	return runs.some((run) => run.status === "running" || run.retry !== undefined)
+		? ELAPSED_REFRESH_INTERVAL_MS
+		: undefined;
 }
 
-// Animate a collapsed flow at the spinner cadence while runs are active;
-// otherwise re-render timing and retry text once per second. The first
-// settled render clears the timer, and a cadence change (expand/collapse or
-// the last run finishing) reschedules immediately instead of waiting out
-// the previous interval.
+function clearLiveRefresh(state: SubagentRenderState): void {
+	if (state.refreshTimer !== undefined) clearTimeout(state.refreshTimer);
+	state.refreshTimer = undefined;
+	state.refreshInterval = undefined;
+}
+
+// One one-shot timer per row. A paint with the same cadence keeps the existing
+// deadline; expansion, settlement, or loss of dynamic content clears or
+// reschedules immediately.
 export function scheduleLiveRefresh(context: SubagentToolRenderContext, isPartial: boolean): void {
 	const state = context.state;
-	if (isPartial) {
-		const details = context.result?.details;
-		const interval =
-			!context.expanded && hasRunningRuns(details?.runs ?? []) ? SPINNER_INTERVAL_MS : ELAPSED_REFRESH_INTERVAL_MS;
-		if (state.refreshTimer !== undefined) {
-			// Keep a matching timer so unrelated re-renders cannot postpone the
-			// next tick; only reschedule when the desired cadence changes.
-			if (state.refreshInterval === interval) return;
-			clearTimeout(state.refreshTimer);
-		}
-		state.refreshInterval = interval;
-		state.refreshTimer = setTimeout(() => {
-			state.refreshTimer = undefined;
-			state.refreshInterval = undefined;
-			context.invalidate();
-		}, interval);
-		state.refreshTimer.unref?.();
+	state.dispose ??= () => clearLiveRefresh(state);
+	const interval = desiredRefreshInterval(context.result?.details?.runs ?? [], {
+		isPartial,
+		expanded: context.expanded,
+	});
+	if (interval === undefined) {
+		clearLiveRefresh(state);
 		return;
 	}
 	if (state.refreshTimer !== undefined) {
+		// Keep a matching timer so unrelated re-renders cannot postpone the
+		// next tick; only reschedule when the desired cadence changes.
+		if (state.refreshInterval === interval) return;
 		clearTimeout(state.refreshTimer);
+	}
+	state.refreshInterval = interval;
+	state.refreshTimer = setTimeout(() => {
 		state.refreshTimer = undefined;
 		state.refreshInterval = undefined;
-	}
+		context.invalidate();
+	}, interval);
+	state.refreshTimer.unref?.();
 }
 
 export function renderSubagentCall(args: SubagentParams, theme: Theme): Component {

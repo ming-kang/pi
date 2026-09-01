@@ -39,7 +39,7 @@ There are exactly two profiles:
 - **Explorer** (`explorer`, default): read-only investigation with `read`, `grep`, `find`, `ls`, and `bash`. Bash remains available for Git history and inspection commands such as `git log`, `git diff`, `git blame`, `git show`, `git status`, `wc`, `head`, and `tail`. Its system prompt forbids redirects, heredoc writes, temporary files, state-changing Git commands, installs, and network access.
 - **General** (`general`): implementation, file changes, and stateful verification with `read`, `bash`, `edit`, and `write`.
 
-There are no user or project profile files. Child sessions load no extensions, skills, prompt templates, or themes, so workers cannot recursively call `subagent` or inherit unrelated extension capabilities. Explorer continues to skip project context files such as `AGENTS.md`; General loads trusted project context normally.
+There are no user or project profile files. Child sessions load no extensions, skills, prompt templates, or themes, so workers cannot recursively call `subagent` or inherit unrelated extension capabilities. Both profiles load the applicable repository instructions for their working directory, including layered `AGENTS.md` or `CLAUDE.md` files. Explorer's tool set and system prompt remain strictly read-only.
 
 Worker contexts are isolated, but workers share the parent's checkout. Concurrent tasks therefore must be independent and must not perform overlapping writes.
 
@@ -67,7 +67,7 @@ Overrides are saved atomically in:
 ~/.pi/agent/subagent.json
 ```
 
-Only `explorer` and `general` keys are valid. A stale or invalid `subagent.json` (older formats, unknown profiles, or malformed JSON) is reset to an empty, fully inheriting config the first time it is loaded, so an old file never blocks the tool or `/agents`. Overrides affect future workers and never change the parent session's model or thinking level.
+Only `explorer` and `general` keys are valid. A malformed, unsupported, unreadable, or future-version `subagent.json` is never rewritten during load: workers temporarily inherit the parent settings and the UI reports the problem. On the first actual settings change, Pi backs up the original bytes to a collision-safe `.invalid-<timestamp>-<pid>.bak` file before writing a valid replacement; if the backup fails, the save is cancelled. Concurrent Pi processes lock, re-read, and merge profile changes before an atomic write, and no-op changes leave the file and its timestamp untouched. Overrides affect future workers and never change the parent session's model or thinking level.
 
 ## Lifecycle and retry
 
@@ -89,7 +89,7 @@ Pi's native tool chrome owns the aggregate `● Subagent` call marker and the di
 │ ✼ #1 Explorer · ○ #2 Explorer · ✓ #3 General · × #4 General
 ```
 
-`#N` is the task's stable one-based input position. Cells always remain in `#1` through `#N` order and contain only the task marker, ordinal, and profile. Running cells use the breathing dot-to-star bloom, queued cells use `○`, and completed, failed, or aborted cells use `✓`, `×`, or `■`. Wide batches wrap at cell boundaries with uniform columns; collapsed cards never expose prompts, activities, timings, token totals, costs, or failure text.
+`#N` is the task's stable one-based input position. Cells always remain in `#1` through `#N` order and contain only the task marker, ordinal, and profile. Running cells use the breathing dot-to-star bloom, queued cells use `○`, and completed, failed, or aborted cells use `✓`, `×`, or `■`. Wide batches wrap at cell boundaries with uniform columns. If the terminal is narrower than one complete cell, every task receives its own width-truncated row so all ordinals remain visible. Collapsed cards never expose prompts, activities, timings, token totals, costs, or failure text. Live repainting runs at 120ms only for visible collapsed blooms and at one second for expanded running durations or retry countdowns; queued, static, settled, and disposed rows keep no refresh timer.
 
 Expanding removes aggregate Batch chrome and gives every task the same four-part layout:
 

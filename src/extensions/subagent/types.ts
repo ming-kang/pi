@@ -5,15 +5,8 @@ import type { SubagentAgentName } from "./constants.ts";
 // Static built-in subagent profile; the only agents a task can select.
 export interface AgentProfile {
 	name: SubagentAgentName;
-	description: string;
 	tools: string[];
 	systemPrompt: string;
-	/**
-	 * Skip loading AGENTS.md/CLAUDE.md into the worker's system prompt.
-	 * Read-only exploration doesn't need commit/PR/style rules; the parent
-	 * has full context to interpret results.
-	 */
-	omitContextFiles?: boolean;
 }
 
 export interface SubagentProfileOverride {

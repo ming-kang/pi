@@ -91,8 +91,9 @@ Running and finished counts appear in the footer as `bg 2 running · 1 done`; ta
 
 - Background tasks inherit the session's `PI_*` environment variables (`PI_SESSION_ID`, `PI_MODEL`, …) just like the built-in bash tool, snapshotted when the task starts.
 - Tasks run through the session's configured shell (`shellPath`) and honor `shellCommandPrefix`, matching the built-in bash tool. The prefix is applied at execution time only — it never appears in task labels or notifications. Unlike the built-in bash tool, `bg` does not apply an SDK host's `spawnHook` — extensions have no access to it — so a host that rewrites or sandboxes commands through that hook does not cover background tasks.
-- Output streams directly to a system-temp file (`pi-bg-<id>.log`), never into the project or into memory. Memory holds only a byte counter.
+- Output streams directly to a system-temp file (`pi-bg-<id>.log`), never into the project or into memory. Memory holds only a byte counter. Task allocation creates the file exclusively and retries a new id on collisions, so a stale log is never overwritten.
 - Output is capped at 20MB. Hitting the cap kills the task and marks it `failed` rather than silently truncating.
+- The stall watchdog only reports `waiting for input` after it can read a stable prompt-like tail. A temporary tail-read error keeps the task running and eligible for later probes instead of producing a false stall; if the task finishes while its tail remains unreadable, the completion reports that read error.
 - At most 8 tasks may run concurrently; `create` reports the running tasks when the limit is reached.
 - Aborting the current turn (Esc) does not kill background tasks — that is what `kill` and `/bg` are for.
 - Session shutdown, `/reload`, new sessions, and session switches kill all running tasks; those kills are silent (no notification flood). There is no restart reattachment: finished-task records live only for the current session.

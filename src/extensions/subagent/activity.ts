@@ -1,8 +1,8 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai";
-import { TASK_OUTPUT_LIMIT } from "./constants.ts";
-import { boundText } from "./text.ts";
-import type { SubagentUsage } from "./types.ts";
+import { COMPACTION_ACTIVITY_ID, TASK_OUTPUT_LIMIT } from "./constants.ts";
+import { boundText, plainLine } from "./text.ts";
+import type { SubagentUsage, ToolActivity } from "./types.ts";
 
 /** The usage fields that are summed when aggregating. */
 export const USAGE_SUM_FIELDS = ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const;
@@ -72,6 +72,16 @@ export function finalAssistantText(messages: readonly AgentMessage[]): string {
 	return "";
 }
 
+/** Synthetic lifecycle entries stay persisted but do not count as worker tool calls. */
+export function isSyntheticActivity(activity: Pick<ToolActivity, "toolName">): boolean {
+	return activity.toolName === COMPACTION_ACTIVITY_ID;
+}
+
+/** Activity rows shown in the expanded worker UI. */
+export function isDisplayableActivity(activity: Pick<ToolActivity, "toolName">): boolean {
+	return !isSyntheticActivity(activity);
+}
+
 export function activitySummary(toolName: string, args: unknown): string {
 	if (!args || typeof args !== "object" || Array.isArray(args)) return toolName;
 	const input = args as Record<string, unknown>;
@@ -87,6 +97,60 @@ export function activitySummary(toolName: string, args: unknown): string {
 	if (path) return `${toolName} ${boundText(path, 180)}`;
 	if (toolName === "grep" && pattern) return `Search ${boundText(pattern, 120)}`;
 	return toolName;
+}
+
+const OUTPUT_TRUNCATION_NOTICE_PATTERN = /\s*\[Output truncated(?:: \d+ bytes omitted)?\.\]\s*$/u;
+
+function displayActivityLine(text: string): string {
+	return plainLine(text).replace(OUTPUT_TRUNCATION_NOTICE_PATTERN, "...").trim();
+}
+
+function stripActivityPrefix(summary: string, prefixes: readonly string[]): string {
+	for (const prefix of prefixes) {
+		if (summary === prefix) return "";
+		if (summary.startsWith(`${prefix} `)) return summary.slice(prefix.length + 1).trim();
+	}
+	return summary;
+}
+
+/** Convert one persisted activity summary into the compact call-shaped UI label. */
+export function activityCallText(activity: Pick<ToolActivity, "toolName" | "summary">): string {
+	const summary = displayActivityLine(activity.summary);
+	let label: string;
+	let detail: string;
+	switch (activity.toolName) {
+		case "bash":
+			label = "Run";
+			detail = stripActivityPrefix(summary, ["Run", "bash"]);
+			break;
+		case "read":
+			label = "Read";
+			detail = stripActivityPrefix(summary, ["Read", "read"]);
+			break;
+		case "grep":
+			label = "Grep";
+			detail = stripActivityPrefix(summary, ["Grep", "grep", "Search"]);
+			break;
+		case "find":
+			label = "Find";
+			detail = stripActivityPrefix(summary, ["Find", "find"]);
+			break;
+		case "ls":
+			label = "List";
+			detail = stripActivityPrefix(summary, ["List", "ls"]) || ".";
+			break;
+		case "edit":
+			label = "Edit";
+			detail = stripActivityPrefix(summary, ["Edit", "edit"]);
+			break;
+		case "write":
+			label = "Write";
+			detail = stripActivityPrefix(summary, ["Write", "write"]);
+			break;
+		default:
+			return summary || activity.toolName;
+	}
+	return detail ? `${label}(${detail})` : label;
 }
 
 export function formatTokens(value: number): string {

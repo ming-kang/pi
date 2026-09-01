@@ -1,6 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it } from "vitest";
-import { renderSubagentCall, renderSubagentResult } from "../src/extensions/subagent/render.ts";
+import { desiredRefreshInterval, renderSubagentCall, renderSubagentResult } from "../src/extensions/subagent/render.ts";
 import type { SubagentParams } from "../src/extensions/subagent/schema.ts";
 import type {
 	SubagentDetails,
@@ -452,7 +452,35 @@ describe("subagent rendering", () => {
 		expect(output).not.toContain("Thinking");
 	});
 
-	it.each([60, 80, 120])("stays width-safe while wrapping a wide batch at %i columns", (width) => {
+	it.each([12, 20])("keeps every task ordinal visible in a %i-column collapsed flow", (width) => {
+		const runs = Array.from({ length: 8 }, (_, index) => liveRun({ id: `r${index + 1}` }));
+		const lines = renderLines(details({ status: "running", endedAt: undefined, runs }), {
+			isPartial: true,
+			width,
+			args: {
+				tasks: runs.map((entry) => ({ agent: "explorer", prompt: `Prompt ${entry.id}` })),
+			},
+		});
+		expect(lines).toHaveLength(runs.length);
+		for (const [index, line] of lines.entries()) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			expect(line).toContain(`#${index + 1}`);
+		}
+	});
+
+	it("derives refresh cadence only from dynamic content visible in the current view", () => {
+		const running = liveRun();
+		const queued = liveRun({ status: "queued", startedAt: undefined });
+		const retrying = withRetry({ ...queued }, 1, 2, 8_000, "temporary failure");
+		expect(desiredRefreshInterval([running], { isPartial: true, expanded: false })).toBe(120);
+		expect(desiredRefreshInterval([running], { isPartial: true, expanded: true })).toBe(1_000);
+		expect(desiredRefreshInterval([retrying], { isPartial: true, expanded: false })).toBeUndefined();
+		expect(desiredRefreshInterval([retrying], { isPartial: true, expanded: true })).toBe(1_000);
+		expect(desiredRefreshInterval([queued], { isPartial: true, expanded: true })).toBeUndefined();
+		expect(desiredRefreshInterval([run()], { isPartial: false, expanded: true })).toBeUndefined();
+	});
+
+	it.each([40, 60, 80, 120])("stays width-safe while wrapping a wide batch at %i columns", (width) => {
 		const runs = Array.from({ length: 12 }, (_, index) => liveRun({ id: `r${index}` }));
 		const lines = renderLines(details({ status: "running", endedAt: undefined, runs }), {
 			isPartial: true,

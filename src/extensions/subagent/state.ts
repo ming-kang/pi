@@ -6,6 +6,7 @@ import {
 	compactionError,
 	compactionSummary,
 	emptyUsage,
+	isDisplayableActivity,
 	resultSummary,
 } from "./activity.ts";
 import {
@@ -155,7 +156,8 @@ function makeRetry(attempt: number, maxAttempts: number, deadline: number, error
 function oldestEvictableActivityIndex(activities: readonly ToolActivity[]): number {
 	const protectedIndexes = new Set<number>();
 	for (let index = activities.length - 1; index >= 0 && protectedIndexes.size < DISPLAY_ACTIVITY_LIMIT; index--) {
-		if (activities[index]?.toolName !== COMPACTION_ACTIVITY_ID) protectedIndexes.add(index);
+		const activity = activities[index];
+		if (activity && isDisplayableActivity(activity)) protectedIndexes.add(index);
 	}
 	const unprotected = activities.findIndex((_activity, index) => !protectedIndexes.has(index));
 	if (unprotected >= 0) return unprotected;

@@ -2294,7 +2294,7 @@ By default, tool output is wrapped in Pi's native call/result shell, which owns 
 
 Set `renderShell: "self"` when the tool should render its own shell instead of using the native shell. This is useful for tools that need complete control over framing or background behavior, for example large previews that must stay visually stable after the tool settles.
 
-For live progress UI (elapsed time, retry countdowns), schedule repaints from the renderer itself: store a timer handle in `context.state`, arm a `setTimeout` that calls `context.invalidate()` while `options.isPartial` is true, and clear it on the first settled render. `context.invalidate()` is a no-op after the row is disposed, so a trailing timeout is harmless.
+For live progress UI (elapsed time, retry countdowns), schedule repaints from the renderer itself: store a timer handle in `context.state`, arm a `setTimeout` that calls `context.invalidate()` only while the current view contains changing text, and clear it on the first static or settled render. Set `context.state.dispose` to the same idempotent cleanup function when a timer may still be armed; the shell invokes it when the row is disposed.
 
 Derive displayed time from an absolute timestamp or deadline (`Date.now()`), not by decrementing a counter on every refresh. A refresh is only a repaint opportunity; event-loop stalls and machine sleep must not extend a wall-clock timeout.
 
@@ -2316,7 +2316,7 @@ pi.registerTool({
 
 `renderCall` and `renderResult` each receive a `context` object with:
 - `args` - the current tool call arguments
-- `state` - shared row-local state across `renderCall` and `renderResult`
+- `state` - shared row-local state across `renderCall` and `renderResult`; an optional `dispose()` cleanup is called when the row is disposed
 - `lastComponent` - the previously returned component for that slot, if any
 - `invalidate()` - request a rerender of this tool row
 - `toolCallId`, `cwd`, `executionStarted`, `argsComplete`, `isPartial`, `expanded`, `showImages`, `isError`

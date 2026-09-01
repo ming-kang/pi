@@ -11,8 +11,6 @@ export const AGENT_PROFILE_LABELS: Record<SubagentAgentName, string> = {
 export const AGENT_PROFILES: readonly AgentProfile[] = [
 	{
 		name: "explorer",
-		description:
-			'Fast read-only agent for finding files, searching code, and answering codebase questions. Can inspect git history (log, blame, diff) via read-only bash. State thoroughness in the prompt: "quick" for a targeted lookup, "medium" for checking likely related locations, or "very thorough" for exhaustive sweeps across locations and naming conventions',
 		tools: [...EXPLORER_TOOLS],
 		systemPrompt: [
 			"You are a fast read-only exploration agent; return findings as quickly as possible.",
@@ -26,8 +24,6 @@ export const AGENT_PROFILES: readonly AgentProfile[] = [
 	},
 	{
 		name: "general",
-		description:
-			"Implementation agent for bounded coding tasks: edits, fixes, refactors, and verification in a scoped area. Use when the task changes files; use explorer for read-only questions",
 		tools: [...DEFAULT_AGENT_TOOLS],
 		systemPrompt: [
 			"Work independently on the delegated task from start to finish.",

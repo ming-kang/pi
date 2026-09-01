@@ -1,5 +1,5 @@
+import { isDisplayableActivity } from "./activity.ts";
 import {
-	COMPACTION_ACTIVITY_ID,
 	DETAILS_ACTIVITY_LIMIT,
 	DETAILS_OUTPUT_LIMIT,
 	DISPLAY_ACTIVITY_LIMIT,
@@ -59,7 +59,8 @@ function selectDetailsActivities(activities: SubagentRunDetails["activities"]): 
 
 	const required = new Set<number>();
 	for (let index = activities.length - 1; index >= 0 && required.size < DISPLAY_ACTIVITY_LIMIT; index--) {
-		if (activities[index]?.toolName !== COMPACTION_ACTIVITY_ID) required.add(index);
+		const activity = activities[index];
+		if (activity && isDisplayableActivity(activity)) required.add(index);
 	}
 
 	const selected = new Set<number>();

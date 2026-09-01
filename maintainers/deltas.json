@@ -115,7 +115,7 @@
 		{
 			"path": "src/core/extensions/types.ts",
 			"category": "extension-support",
-			"intent": "Tool grouping/result render context, canonical ModelRuntime, stale-context helpers, and host ShellSettings access"
+			"intent": "Tool grouping/result render context with disposable row-local state, canonical ModelRuntime, stale-context helpers, and host ShellSettings access"
 		},
 		{
 			"path": "src/core/keybindings.ts",
@@ -273,7 +273,7 @@
 		{
 			"path": "src/modes/interactive/components/tool-execution.ts",
 			"category": "ui",
-			"intent": "Dot/rail chrome assembly, tool grouping, bash progress row, image-conversion race fix, dispose lifecycle",
+			"intent": "Dot/rail chrome assembly, tool grouping, bash progress row, image-conversion race fix, and renderer-state dispose lifecycle",
 			"tests": [
 				"test/tool-execution-component.test.ts"
 			]

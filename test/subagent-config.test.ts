@@ -80,18 +80,17 @@ describe("subagent configuration", () => {
 		expect(AGENT_PROFILES.map((profile) => profile.name)).toEqual(["explorer", "general"]);
 		const [explorer, general] = AGENT_PROFILES;
 		expect(explorer?.name).toBe("explorer");
-		expect(explorer?.description).toContain('"quick" for a targeted lookup');
+		expect(explorer).not.toHaveProperty("description");
 		// Explorer carries bash for git history and similar inspection, but the
 		// prompt must pin it read-only, including the bash-native write paths
 		// (redirects, heredocs) that the tool list cannot block.
 		expect(explorer?.tools).toEqual(["read", "grep", "find", "ls", "bash"]);
 		expect(explorer?.systemPrompt).toContain("read-only inspection only");
 		expect(explorer?.systemPrompt).toContain("no redirect (>, >>) or heredoc writes");
-		expect(explorer?.omitContextFiles).toBeUndefined();
 		expect(general?.name).toBe("general");
+		expect(general).not.toHaveProperty("description");
 		expect(general?.tools).toEqual(["read", "bash", "edit", "write"]);
 		expect(general?.systemPrompt).toContain("never create documentation files unless the task explicitly asks");
-		expect(general?.description).toContain("use explorer for read-only questions");
 	});
 
 	it("keeps profile copy in the description and concurrency on the tasks parameter", () => {

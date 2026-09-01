@@ -36,10 +36,8 @@ function task(): ResolvedSubagentTask {
 	return {
 		agent: {
 			name: "explorer",
-			description: "Read-only exploration",
 			tools: ["read", "grep", "find", "ls", "bash"],
 			systemPrompt: "Inspect the code.",
-			omitContextFiles: true,
 		},
 		description: "Inspect the reducer",
 		prompt: "Inspect the reducer transitions.",

@@ -432,7 +432,10 @@ export interface ToolRenderContext<TState = any, TArgs = any, TDetails = unknown
 	invalidate: () => void;
 	/** Previously returned component for this render slot, if any. */
 	lastComponent: Component | undefined;
-	/** Shared renderer state for this tool row. Initialized by tool-execution.ts. */
+	/**
+	 * Shared renderer state for this tool row. Initialized by tool-execution.ts.
+	 * If the state exposes `dispose()`, the shell calls it when the row is disposed.
+	 */
 	state: TState;
 	/** Working directory for this tool execution. */
 	cwd: string;

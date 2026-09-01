@@ -9,6 +9,7 @@ import {
 	Text,
 	TruncatedText,
 } from "@earendil-works/pi-tui";
+import { getModelSelectorSearchText } from "../../../modes/interactive/model-search.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import { modelId, parseModelSpec } from "../model-selection.ts";
 import { compareModels } from "./choices.ts";
@@ -46,11 +47,9 @@ interface ModelChoiceItem extends ProfileModelChoice {
 
 function modelSearchText(item: ModelChoiceItem): string {
 	if (item.modelId === undefined) {
-		const inherited = item.model ? ` ${modelId(item.model)} ${item.model.name}` : "";
-		return `inherit${inherited}`;
+		return `inherit ${item.model ? getModelSelectorSearchText(item.model) : ""}`;
 	}
-	const name = item.name ? ` ${item.name}` : "";
-	return `${item.provider} ${item.provider}/${item.id} ${item.provider} ${item.id}${name}`;
+	return getModelSelectorSearchText(item);
 }
 
 /** Searchable /model-style model picker used by /agents; confirm reports the selected choice. */

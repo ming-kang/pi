@@ -40,6 +40,7 @@ CTX 2.1%/1.0M                    ↑13k ↓13k R440k CH99.4% $0.074
 - `↓` cumulative output tokens.
 - `R` cumulative cache-read tokens.
 - `W` cumulative cache-write tokens, omitted when zero.
+- Cumulative totals include assistant requests, usage-bearing tool results, compaction summaries, and branch summaries on the active branch.
 - `CH` cache-hit percentage for the latest assistant request, calculated as
   `cacheRead / (input + cacheRead + cacheWrite)` and shown only when that
   request used cache.

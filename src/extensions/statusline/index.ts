@@ -9,10 +9,11 @@
  * Pi does not expose auto-compaction state to custom footer factories, so the
  * native `(auto)` marker cannot be reproduced without depending on private APIs.
  */
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { Usage } from "@earendil-works/pi-ai";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "../../core/extensions/types.ts";
 import type { SessionEntry } from "../../core/session-manager.ts";
+import { addUsageToTotals, createUsageTotals, type UsageTotals } from "../../core/usage-totals.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 
 const CONTEXT_WARNING_PERCENT = 70;
@@ -21,13 +22,8 @@ const MIN_GAP = 1;
 
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
-interface UsageSummary {
-	inputTokens: number;
-	outputTokens: number;
-	cacheReadTokens: number;
-	cacheWriteTokens: number;
+interface UsageSummary extends UsageTotals {
 	latestCacheHitPercent?: number;
-	totalCost: number;
 }
 
 interface UsageFormatOptions {
@@ -96,41 +92,42 @@ interface BranchStats {
  * One pass over the branch: latest thinking level + cumulative usage.
  * Cached across footer paints while leaf identity + usage fingerprint hold.
  */
+function entryUsage(entry: SessionEntry): Usage | undefined {
+	if (entry.type === "message") {
+		if (entry.message.role === "assistant") return entry.message.usage;
+		if (entry.message.role === "toolResult") return entry.message.usage;
+		return undefined;
+	}
+	if (entry.type === "branch_summary" || entry.type === "compaction") return entry.usage;
+	return undefined;
+}
+
 function computeBranchStats(branchEntries: SessionEntry[]): BranchStats {
 	let thinkingLevel: ThinkingLevel = "off";
-	const usage: UsageSummary = {
-		inputTokens: 0,
-		outputTokens: 0,
-		cacheReadTokens: 0,
-		cacheWriteTokens: 0,
-		totalCost: 0,
-	};
+	const usageTotals = createUsageTotals();
+	let latestCacheHitPercent: number | undefined;
 
 	for (const entry of branchEntries) {
 		if (entry.type === "thinking_level_change") {
 			thinkingLevel = entry.thinkingLevel as ThinkingLevel;
 			continue;
 		}
-		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-		const assistantMessage = entry.message as AssistantMessage;
-		const inputTokens = assistantMessage.usage?.input ?? 0;
-		const outputTokens = assistantMessage.usage?.output ?? 0;
-		const cacheReadTokens = assistantMessage.usage?.cacheRead ?? 0;
-		const cacheWriteTokens = assistantMessage.usage?.cacheWrite ?? 0;
 
-		usage.inputTokens += inputTokens;
-		usage.outputTokens += outputTokens;
-		usage.cacheReadTokens += cacheReadTokens;
-		usage.cacheWriteTokens += cacheWriteTokens;
-		usage.totalCost += assistantMessage.usage?.cost?.total ?? 0;
+		const usage = entryUsage(entry);
+		if (!usage) continue;
+		addUsageToTotals(usageTotals, usage);
 
-		const latestPromptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
-		const latestRequestUsedCache = cacheReadTokens > 0 || cacheWriteTokens > 0;
-		usage.latestCacheHitPercent =
-			latestRequestUsedCache && latestPromptTokens > 0 ? (cacheReadTokens / latestPromptTokens) * 100 : undefined;
+		// Keep CH tied to the latest assistant request, matching the native
+		// footer; tool and summary usage contributes only to cumulative totals.
+		if (entry.type === "message" && entry.message.role === "assistant") {
+			const latestPromptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+			const latestRequestUsedCache = usage.cacheRead > 0 || usage.cacheWrite > 0;
+			latestCacheHitPercent =
+				latestRequestUsedCache && latestPromptTokens > 0 ? (usage.cacheRead / latestPromptTokens) * 100 : undefined;
+		}
 	}
 
-	return { thinkingLevel, usage };
+	return { thinkingLevel, usage: { ...usageTotals, latestCacheHitPercent } };
 }
 
 /**
@@ -138,17 +135,10 @@ function computeBranchStats(branchEntries: SessionEntry[]): BranchStats {
  * SessionEntry object identity is reused in place.
  */
 function leafUsageFingerprint(entry: SessionEntry | undefined): string {
-	if (!entry || entry.type !== "message" || entry.message.role !== "assistant") return "";
-	const assistantMessage = entry.message as AssistantMessage;
-	const usage = assistantMessage.usage;
+	if (!entry) return "";
+	const usage = entryUsage(entry);
 	if (!usage) return "";
-	return [
-		usage.input ?? 0,
-		usage.output ?? 0,
-		usage.cacheRead ?? 0,
-		usage.cacheWrite ?? 0,
-		usage.cost?.total ?? 0,
-	].join(":");
+	return [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.cost.total].join(":");
 }
 
 /** Cache keyed by branch length + leaf identity + usage fingerprint. */
@@ -217,19 +207,19 @@ function formatUsageSummary(
 	options: UsageFormatOptions = { includeCacheRead: true, includeCacheWrite: true },
 ): string {
 	const usageParts: string[] = [];
-	if (summary.inputTokens > 0) usageParts.push(`↑${formatTokenCount(summary.inputTokens)}`);
-	if (summary.outputTokens > 0) usageParts.push(`↓${formatTokenCount(summary.outputTokens)}`);
-	if (options.includeCacheRead && summary.cacheReadTokens > 0) {
-		usageParts.push(`R${formatTokenCount(summary.cacheReadTokens)}`);
+	if (summary.input > 0) usageParts.push(`↑${formatTokenCount(summary.input)}`);
+	if (summary.output > 0) usageParts.push(`↓${formatTokenCount(summary.output)}`);
+	if (options.includeCacheRead && summary.cacheRead > 0) {
+		usageParts.push(`R${formatTokenCount(summary.cacheRead)}`);
 	}
-	if (options.includeCacheWrite && summary.cacheWriteTokens > 0) {
-		usageParts.push(`W${formatTokenCount(summary.cacheWriteTokens)}`);
+	if (options.includeCacheWrite && summary.cacheWrite > 0) {
+		usageParts.push(`W${formatTokenCount(summary.cacheWrite)}`);
 	}
 	if (summary.latestCacheHitPercent !== undefined) {
 		usageParts.push(`CH${summary.latestCacheHitPercent.toFixed(1)}%`);
 	}
-	if (summary.totalCost > 0) {
-		usageParts.push(`$${summary.totalCost.toFixed(3)}${usesSubscription ? " (sub)" : ""}`);
+	if (summary.cost > 0) {
+		usageParts.push(`$${summary.cost.toFixed(3)}${usesSubscription ? " (sub)" : ""}`);
 	}
 	if (usageParts.length === 0) return "";
 	return theme.fg("dim", usageParts.join(" "));

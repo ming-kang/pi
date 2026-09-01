@@ -476,6 +476,7 @@ export class ToolExecutionComponent extends Container {
 		if (this.disposed) return;
 		this.disposed = true;
 		this.clearRefreshTimer();
+		(this.rendererState as { dispose?: () => void }).dispose?.();
 		this.pendingImageConversions.clear();
 	}
 }

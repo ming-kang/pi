@@ -10,6 +10,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Fixed
 
+- Counted usage-bearing tool results, compaction summaries, and branch summaries in the bundled Statusline totals while keeping `CH` tied to the latest assistant request.
+- Kept every Subagent task ordinal visible in ultra-narrow collapsed cards by falling back to one width-truncated row per task, and stopped scheduling refresh timers for queued, static, settled, or disposed views.
 - Fixed `web_search` re-enabling itself over an explicit `/tools` or SDK-host disable whenever credentials were present. DeepSeek now requires a valid structured search-result block (including a valid empty result), discards text-only or malformed synthesis, and only terminal search failures become protocol-level tool errors; one successful provider still survives the other's failure.
 - Bounded DeepWiki transport responses to 8 MiB and every model-facing action to 120,000 characters, kept oversized and aborted calls out of its cache, checked cancellation before cache hits, and rejected non-positive, fractional, non-finite, or blank page references.
 - Serialized `question` tool calls so blocking dialogs cannot overlap, rejected whitespace-only visible fields, mapped only validation/UI failures to protocol-level errors, and added a focus-aware vertical viewport plus scrolling Review answers for short terminals.

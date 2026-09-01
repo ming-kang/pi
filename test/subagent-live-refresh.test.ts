@@ -173,6 +173,33 @@ describe("Subagent shell-driven live refresh", () => {
 		component.dispose();
 	});
 
+	it("avoids static partial timers and clears an active refresh timer on dispose", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+		const definition = registeredSubagentTool();
+		const component = createComponent(definition, "subagent-live-dispose", {
+			tasks: [{ agent: "explorer", prompt: "Inspect silently." }],
+		});
+		component.markExecutionStarted();
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "starting" }],
+				details: { status: "running", startedAt: 0, runs: [], usage: usage(0) },
+				isError: false,
+			},
+			true,
+		);
+		expect(vi.getTimerCount()).toBe(0);
+
+		component.updateResult(
+			{ content: [{ type: "text", text: "running" }], details: runningDetails(0), isError: false },
+			true,
+		);
+		expect(vi.getTimerCount()).toBe(1);
+		component.dispose();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
 	it("keeps aggregate cost out of the expanded view and shows per-run timing", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
