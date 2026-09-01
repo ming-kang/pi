@@ -11,7 +11,7 @@ import {
 	WEB_SEARCH_PROMPT_SNIPPET,
 	WEB_SEARCH_TOOL_NAME,
 } from "./constants.ts";
-import { executeWebSearch } from "./fusion.ts";
+import { executeWebSearch } from "./execute.ts";
 import { renderWebSearchCall, renderWebSearchResult } from "./render.ts";
 import { normalizeWebSearchParams, WebSearchParamsSchema } from "./schema.ts";
 import type { WebSearchDetails } from "./types.ts";
@@ -58,7 +58,7 @@ export default function webSearch(pi: ExtensionAPI): void {
 			return {
 				content: [{ type: "text", text: execution.formattedOutput }],
 				details: execution.details,
-				isError: execution.details.status !== "success",
+				isError: execution.details.status === "error",
 			};
 		},
 

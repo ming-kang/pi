@@ -7,6 +7,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 ### Changed
 
 - Simplified `web_search` tool metadata so its capability description, session-wide routing guidance, and conditional result instructions live in their canonical prompt layers.
+- Reworked dual-provider result fusion to use reciprocal-rank scoring, preserving high-ranked unique results from both engines instead of allowing the first provider to fill the output cap.
 
 ### Removed
 
@@ -15,6 +16,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 ### Fixed
 
 - Scoped `web_search` citation guidance to successful tool results instead of injecting it into every session through `promptGuidelines`. Result payloads now ask naturally for relevant URL citations only when structured sources exist, without requiring a `Sources:` heading or Markdown link format.
+- Preserved caller cancellation across concurrent searches, fixed URL normalization around trailing path/query slashes, upgraded fallback URL titles during deduplication, and restored the warning renderer for disabled results.
 
 ## [0.84.13] - 2026-09-01
 

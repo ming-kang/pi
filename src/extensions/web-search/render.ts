@@ -7,7 +7,7 @@ import type { AgentToolResult, ToolRenderResultOptions } from "../../core/extens
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
 import { getEngineLabel, WEB_SEARCH_LABEL } from "./constants.ts";
-import { formatResultsMarkdown } from "./fusion.ts";
+import { formatResultsMarkdown } from "./format.ts";
 import type { WebSearchDetails, WebSearchHit } from "./types.ts";
 
 /** Matches the bash/deepwiki progress display: sub-2s calls stay quiet. */
@@ -85,11 +85,6 @@ export function renderWebSearchResult(
 	const text = firstText(result);
 	const errorMessage = details?.errorMessage;
 
-	if (isError || details?.status === "error") {
-		const line = truncateText(errorMessage ?? (singleLine(text) || "Search request failed"), 160);
-		return new Text(theme.fg("error", `failed · ${line}`), 0, 0);
-	}
-
 	if (details?.status === "disabled") {
 		// Only reachable when the tool was force-enabled without credentials, or in
 		// historical sessions: the session_start hook keeps it hidden otherwise.
@@ -101,6 +96,11 @@ export function renderWebSearchResult(
 			0,
 			0,
 		);
+	}
+
+	if (isError || details?.status === "error") {
+		const line = truncateText(errorMessage ?? (singleLine(text) || "Search request failed"), 160);
+		return new Text(theme.fg("error", `failed · ${line}`), 0, 0);
 	}
 
 	if (!options.expanded) {

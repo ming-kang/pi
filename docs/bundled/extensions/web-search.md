@@ -2,7 +2,7 @@
 
 `web_search` is a Pi-native tool for querying live web information through MiniMax and DeepSeek search engines.
 
-When both engines are configured, searches run concurrently and results are fused: URLs are normalized (tracking parameters and fragments stripped), duplicates merged, and hits verified by both engines rank first.
+When both engines are configured, searches run concurrently and results are fused with reciprocal-rank scoring: URLs are normalized (tracking parameters and fragments stripped), duplicates are merged, and high-ranked results from both engines remain represented.
 
 | Engine mode | Requirement |
 |---|---|

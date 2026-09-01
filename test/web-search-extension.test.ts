@@ -2,7 +2,7 @@ import { setKeybindings } from "@earendil-works/pi-tui";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type { ModelRuntime } from "../src/core/model-runtime.ts";
 import { configuredEngine, resolveSearchCredentials } from "../src/extensions/web-search/auth.ts";
@@ -11,8 +11,10 @@ import {
 	WEB_SEARCH_DESCRIPTION,
 	WEB_SEARCH_PROMPT_SNIPPET,
 } from "../src/extensions/web-search/constants.ts";
-import { formatSearchOutput, fuseSearchHits, normalizeUrl } from "../src/extensions/web-search/fusion.ts";
+import { executeWebSearch } from "../src/extensions/web-search/execute.ts";
+import { formatSearchOutput } from "../src/extensions/web-search/format.ts";
 import { renderWebSearchCall, renderWebSearchResult } from "../src/extensions/web-search/render.ts";
+import { fuseSearchHits, normalizeUrl } from "../src/extensions/web-search/results.ts";
 import { normalizeWebSearchParams } from "../src/extensions/web-search/schema.ts";
 import type { ProviderSearchResult, WebSearchHit } from "../src/extensions/web-search/types.ts";
 import { initTheme, type Theme } from "../src/modes/interactive/theme/theme.ts";
@@ -32,6 +34,7 @@ beforeEach(() => {
 	usedColors = [];
 	setKeybindings(new KeybindingsManager());
 });
+afterEach(() => vi.unstubAllGlobals());
 
 describe("web_search tool metadata", () => {
 	test("keeps the snippet concise and the description provider-facing", () => {
@@ -167,13 +170,16 @@ describe("normalizeUrl", () => {
 		expect(normalizeUrl(raw)).toBe("https://example.com/page");
 	});
 
-	test("preserves non-tracking query parameters", () => {
-		const raw = "https://example.com/search?q=hello&utm_source=test";
-		expect(normalizeUrl(raw)).toBe("https://example.com/search?q=hello");
+	test("preserves non-tracking query parameters, including trailing slashes in values", () => {
+		expect(normalizeUrl("https://example.com/search?q=hello&utm_source=test")).toBe(
+			"https://example.com/search?q=hello",
+		);
+		expect(normalizeUrl("https://example.com/search?q=foo/")).toBe("https://example.com/search?q=foo/");
 	});
 
-	test("strips trailing slashes on path", () => {
+	test("strips trailing slashes from the path even when a query is present", () => {
 		expect(normalizeUrl("https://example.com/docs/")).toBe("https://example.com/docs");
+		expect(normalizeUrl("https://example.com/docs/?tab=1")).toBe("https://example.com/docs?tab=1");
 		expect(normalizeUrl("https://example.com/")).toBe("https://example.com/");
 	});
 });
@@ -227,6 +233,55 @@ describe("fuseSearchHits", () => {
 		expect(fused.hits[0].snippet).toBe("DeepSeek longer snippet with more detailed context.");
 		expect(fused.deepseekSynthesis).toBe("Key takeaways about React 19...");
 	});
+	test("includes high-ranked unique results from both providers", () => {
+		const provider = (source: "MiniMax" | "DeepSeek", host: string): ProviderSearchResult => ({
+			source,
+			hits: Array.from({ length: 12 }, (_, index) => ({
+				title: `${source} ${index}`,
+				url: `https://${host}/${index}`,
+				sources: [source],
+			})),
+		});
+		const fused = fuseSearchHits([provider("MiniMax", "minimax.test"), provider("DeepSeek", "deepseek.test")]);
+		const sources = new Set(fused.hits.flatMap((hit) => hit.sources));
+		expect(fused.hits).toHaveLength(12);
+		expect(sources).toEqual(new Set(["MiniMax", "DeepSeek"]));
+	});
+
+	test("produces the same ranking regardless of provider input order", () => {
+		const minimax: ProviderSearchResult = {
+			source: "MiniMax",
+			hits: [
+				{ title: "M1", url: "https://m.test/1", sources: ["MiniMax"] },
+				{ title: "M2", url: "https://m.test/2", sources: ["MiniMax"] },
+			],
+		};
+		const deepseek: ProviderSearchResult = {
+			source: "DeepSeek",
+			hits: [
+				{ title: "D1", url: "https://d.test/1", sources: ["DeepSeek"] },
+				{ title: "D2", url: "https://d.test/2", sources: ["DeepSeek"] },
+			],
+		};
+		expect(fuseSearchHits([minimax, deepseek]).hits.map((hit) => hit.url)).toEqual(
+			fuseSearchHits([deepseek, minimax]).hits.map((hit) => hit.url),
+		);
+	});
+
+	test("upgrades a URL fallback title when another provider has a descriptive title", () => {
+		const fused = fuseSearchHits([
+			{
+				source: "MiniMax",
+				hits: [{ title: "https://example.com/docs", url: "https://example.com/docs", sources: ["MiniMax"] }],
+			},
+			{
+				source: "DeepSeek",
+				hits: [{ title: "Example documentation", url: "https://example.com/docs/", sources: ["DeepSeek"] }],
+			},
+		]);
+		expect(fused.hits[0].title).toBe("Example documentation");
+	});
+
 	test("caps related searches at 8 entries", () => {
 		const fused = fuseSearchHits([
 			{
@@ -236,6 +291,45 @@ describe("fuseSearchHits", () => {
 			},
 		]);
 		expect(fused.relatedSearches).toHaveLength(8);
+	});
+});
+
+describe("executeWebSearch", () => {
+	test("propagates caller cancellation instead of returning a tool error", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		await expect(
+			executeWebSearch(
+				{ query: "current release" },
+				{ minimax: { key: "key", host: "https://example.invalid" } },
+				controller.signal,
+			),
+		).rejects.toMatchObject({ name: "AbortError" });
+	});
+
+	test("propagates cancellation after provider requests have started", async () => {
+		const controller = new AbortController();
+		let markStarted: (() => void) | undefined;
+		const started = new Promise<void>((resolve) => {
+			markStarted = resolve;
+		});
+		vi.stubGlobal(
+			"fetch",
+			(_input: string | URL | Request, init?: RequestInit) =>
+				new Promise<Response>((_resolve, reject) => {
+					markStarted?.();
+					init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+				}),
+		);
+
+		const execution = executeWebSearch(
+			{ query: "current release" },
+			{ minimax: { key: "key", host: "https://example.test" } },
+			controller.signal,
+		);
+		await started;
+		controller.abort();
+		await expect(execution).rejects.toMatchObject({ name: "AbortError" });
 	});
 });
 
@@ -334,7 +428,7 @@ describe("renderWebSearchCall & renderWebSearchResult", () => {
 		expect(lines[0]).toContain("ctrl+o to expand");
 	});
 
-	test("renderWebSearchResult renders disabled status nicely", () => {
+	test("renderWebSearchResult renders disabled status nicely even with a legacy error flag", () => {
 		const comp = renderWebSearchResult(
 			{
 				content: [{ type: "text", text: "Disabled" }],
@@ -349,11 +443,13 @@ describe("renderWebSearchCall & renderWebSearchResult", () => {
 			},
 			{ expanded: false, isPartial: false },
 			theme,
-			false,
+			true,
 		);
 
 		const lines = comp.render(120).map((l) => stripAnsi(l).trimEnd());
 		expect(lines[0]).toContain("disabled · no MiniMax/DeepSeek key — /login minimax-cn");
+		expect(usedColors).toContain("warning");
+		expect(usedColors).not.toContain("error");
 	});
 
 	test("renderWebSearchResult renders in-progress state without repeating the query", () => {
