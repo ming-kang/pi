@@ -11,8 +11,6 @@ export interface DeepSeekSearchOptions {
 	baseUrl?: string;
 	model?: string;
 	signal?: AbortSignal;
-	allowedDomains?: string[];
-	blockedDomains?: string[];
 }
 
 const DEFAULT_DEEPSEEK_MESSAGES_ENDPOINT = "https://api.deepseek.com/anthropic/v1/messages";
@@ -22,16 +20,10 @@ export async function searchDeepSeek(options: DeepSeekSearchOptions): Promise<Pr
 	const endpoint = options.baseUrl || DEFAULT_DEEPSEEK_MESSAGES_ENDPOINT;
 	const model = options.model || DEFAULT_DEEPSEEK_SEARCH_MODEL;
 
-	const toolConfig: Record<string, unknown> = {
+	const toolConfig = {
 		type: "web_search_20250305",
 		name: "web_search",
 	};
-
-	if (options.allowedDomains && options.allowedDomains.length > 0) {
-		toolConfig.allowed_domains = options.allowedDomains;
-	} else if (options.blockedDomains && options.blockedDomains.length > 0) {
-		toolConfig.blocked_domains = options.blockedDomains;
-	}
 
 	const data = await postJson<DeepSeekMessagesResponse>(
 		endpoint,

@@ -13,7 +13,7 @@ import {
 } from "./constants.ts";
 import { executeWebSearch } from "./fusion.ts";
 import { renderWebSearchCall, renderWebSearchResult } from "./render.ts";
-import { normalizeWebSearchParams, type WebSearchParams, WebSearchParamsSchema } from "./schema.ts";
+import { normalizeWebSearchParams, WebSearchParamsSchema } from "./schema.ts";
 import type { WebSearchDetails } from "./types.ts";
 
 interface WebSearchRenderState {
@@ -63,7 +63,7 @@ export default function webSearch(pi: ExtensionAPI): void {
 		},
 
 		renderCall(args, theme) {
-			return renderWebSearchCall(args as WebSearchParams, theme);
+			return renderWebSearchCall(args, theme);
 		},
 
 		renderResult(result, options, theme, context) {

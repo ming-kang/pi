@@ -4,6 +4,18 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Simplified `web_search` tool metadata so its capability description, session-wide routing guidance, and conditional result instructions live in their canonical prompt layers.
+
+### Removed
+
+- Removed the `allowed_domains` and `blocked_domains` parameters from `web_search`, together with provider-specific query rewriting and local URL filtering.
+
+### Fixed
+
+- Scoped `web_search` citation guidance to successful tool results instead of injecting it into every session through `promptGuidelines`. Result payloads now ask naturally for relevant URL citations only when structured sources exist, without requiring a `Sources:` heading or Markdown link format.
+
 ## [0.84.13] - 2026-09-01
 
 ### Added

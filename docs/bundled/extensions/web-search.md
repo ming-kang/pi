@@ -25,15 +25,11 @@ When no key is configured, `web_search` is removed from the model's tool set and
 
 ### Parameters
 
-- `query`: the search query — 3–5 keywords work best.
-- `allowed_domains`: optional list of domains to include (e.g. `["github.com", "react.dev"]`).
-- `blocked_domains`: optional list of domains to exclude.
-
-`allowed_domains` and `blocked_domains` are mutually exclusive; if both are supplied, `allowed_domains` wins. Domain filters apply both in the upstream query and as a local post-filter on result URLs (subdomains included).
+- `query`: the search query — 3–5 keywords work best; include a year when freshness matters.
 
 ### Output
 
-The model-facing payload is Markdown containing up to 12 verified sources (snippets bounded to 200 characters each, dual-engine hits tagged), a DeepSeek synthesis section when available, and up to 8 related searches, followed by a requirement to cite a `Sources:` section.
+The model-facing payload is Markdown containing up to 12 verified sources (snippets bounded to 200 characters each, dual-engine hits tagged), a DeepSeek synthesis section when available, and up to 8 related searches. When structured source URLs are present, the tool result reminds the model to cite the relevant URLs without prescribing a heading or response format.
 
 ## Limits
 
@@ -45,6 +41,6 @@ The model-facing payload is Markdown containing up to 12 verified sources (snipp
 
 ## Implementation notes
 
-The extension keeps presentation Pi-native: the call line shows the query and active domain filters, in-flight renders show the engine label with elapsed time past 2s, the collapsed result shows hit count, engines, duration, and a top-domain preview with the configured expand hint, and expanding renders the result sections from `details` — without the model-facing agent directives — falling back to the raw payload for legacy entries.
+The extension keeps presentation Pi-native: the call line shows the query, in-flight renders show the engine label with elapsed time past 2s, the collapsed result shows hit count, engines, duration, and a top-domain preview with the configured expand hint, and expanding renders the result sections from `details` — without the model-facing agent directives — falling back to the raw payload for legacy entries.
 
 Credential resolution never inspects `getProviderAuthStatus` — that probe returns a truthy `AuthStatus` object even when nothing is configured and carries no key. Only `getAuth` returns usable key material.

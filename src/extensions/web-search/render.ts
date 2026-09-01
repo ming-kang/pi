@@ -8,7 +8,6 @@ import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts"
 import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
 import { getEngineLabel, WEB_SEARCH_LABEL } from "./constants.ts";
 import { formatResultsMarkdown } from "./fusion.ts";
-import type { WebSearchParams } from "./schema.ts";
 import type { WebSearchDetails, WebSearchHit } from "./types.ts";
 
 /** Matches the bash/deepwiki progress display: sub-2s calls stay quiet. */
@@ -47,17 +46,12 @@ function domainSummary(hits: WebSearchHit[]): string {
 	return domains.length > 2 ? ` · ${shown}, +${domains.length - 2}` : ` · ${shown}`;
 }
 
-export function renderWebSearchCall(args: WebSearchParams, theme: Theme): Component {
+export function renderWebSearchCall(args: unknown, theme: Theme): Component {
 	let line = theme.fg("toolTitle", theme.bold(`${WEB_SEARCH_LABEL} `));
-	const query = singleLine(args.query || "");
+	const query = singleLine(
+		args && typeof args === "object" && !Array.isArray(args) ? (args as { query?: unknown }).query : "",
+	);
 	line += theme.fg("accent", `"${truncateText(query, 60)}"`);
-
-	if (args.allowed_domains && args.allowed_domains.length > 0) {
-		line += ` ${theme.fg("muted", `[sites: ${args.allowed_domains.join(", ")}]`)}`;
-	} else if (args.blocked_domains && args.blocked_domains.length > 0) {
-		line += ` ${theme.fg("muted", `[-sites: ${args.blocked_domains.join(", ")}]`)}`;
-	}
-
 	return new Text(line, 0, 0);
 }
 

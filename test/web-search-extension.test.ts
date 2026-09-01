@@ -6,6 +6,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type { ModelRuntime } from "../src/core/model-runtime.ts";
 import { configuredEngine, resolveSearchCredentials } from "../src/extensions/web-search/auth.ts";
+import {
+	getWebSearchPromptGuidelines,
+	WEB_SEARCH_DESCRIPTION,
+	WEB_SEARCH_PROMPT_SNIPPET,
+} from "../src/extensions/web-search/constants.ts";
 import { formatSearchOutput, fuseSearchHits, normalizeUrl } from "../src/extensions/web-search/fusion.ts";
 import { renderWebSearchCall, renderWebSearchResult } from "../src/extensions/web-search/render.ts";
 import { normalizeWebSearchParams } from "../src/extensions/web-search/schema.ts";
@@ -28,11 +33,28 @@ beforeEach(() => {
 	setKeybindings(new KeybindingsManager());
 });
 
+describe("web_search tool metadata", () => {
+	test("keeps the snippet concise and the description provider-facing", () => {
+		expect(WEB_SEARCH_PROMPT_SNIPPET).toBe("Search the live web for current information");
+		expect(WEB_SEARCH_DESCRIPTION).toContain("MiniMax and DeepSeek");
+		expect(WEB_SEARCH_DESCRIPTION).toContain("partial provider failures");
+		expect(WEB_SEARCH_DESCRIPTION).not.toContain("allowed_domains");
+	});
+
+	test("keeps routing guidance tool-scoped and citation requirements result-scoped", () => {
+		const guidelines = getWebSearchPromptGuidelines().join("\n");
+		expect(guidelines).toContain("Use `web_search`");
+		expect(guidelines).toContain("When using `web_search`");
+		expect(guidelines).toMatch(/current date \(\d{4}-\d{2}\)/);
+		expect(guidelines).not.toContain("IMPORTANT");
+		expect(guidelines).not.toContain("Sources:");
+		expect(guidelines).not.toContain("cite");
+	});
+});
+
 describe("normalizeWebSearchParams", () => {
 	test("normalizes plain string query", () => {
-		const result = normalizeWebSearchParams("  react 19  ");
-		expect(result.query).toBe("react 19");
-		expect(result.allowed_domains).toBeUndefined();
+		expect(normalizeWebSearchParams("  react 19  ")).toEqual({ query: "react 19" });
 	});
 
 	test("normalizes aliased fields (q, search_query)", () => {
@@ -40,29 +62,14 @@ describe("normalizeWebSearchParams", () => {
 		expect(normalizeWebSearchParams({ search_query: "bun 1.1" }).query).toBe("bun 1.1");
 	});
 
-	test("parses domain filters", () => {
-		const res1 = normalizeWebSearchParams({
-			query: "nextjs",
-			allowed_domains: ["nextjs.org", "github.com"],
-		});
-		expect(res1.allowed_domains).toEqual(["nextjs.org", "github.com"]);
-		expect(res1.blocked_domains).toBeUndefined();
-
-		const res2 = normalizeWebSearchParams({
-			query: "nextjs",
-			blocked_domains: "spam.com",
-		});
-		expect(res2.blocked_domains).toEqual(["spam.com"]);
-	});
-
-	test("allowed_domains wins when both filters are provided", () => {
-		const res = normalizeWebSearchParams({
-			query: "nextjs",
-			allowed_domains: ["nextjs.org"],
-			blocked_domains: ["spam.com"],
-		});
-		expect(res.allowed_domains).toEqual(["nextjs.org"]);
-		expect(res.blocked_domains).toBeUndefined();
+	test("ignores removed domain-filter fields in legacy arguments", () => {
+		expect(
+			normalizeWebSearchParams({
+				query: "nextjs",
+				allowed_domains: ["nextjs.org"],
+				blocked_domains: ["spam.com"],
+			}),
+		).toEqual({ query: "nextjs" });
 	});
 });
 
@@ -269,23 +276,39 @@ describe("formatSearchOutput", () => {
 		expect(output).toContain("[React 19 Docs](https://react.dev)");
 		expect(output).toContain("verified by MiniMax & DeepSeek");
 		expect(output).toContain("Synthesis points here.");
-		expect(output).toContain("CRITICAL REQUIREMENT FOR MAIN AGENT");
-		expect(output).toContain("Sources:");
+		expect(output).toContain("cite the relevant source URLs in your response");
+		expect(output).not.toContain("CRITICAL REQUIREMENT");
+		expect(output).not.toContain("Sources:");
+	});
+
+	test("does not request citations when synthesis has no source URLs", () => {
+		const output = formatSearchOutput("react 19", {
+			query: "react 19",
+			durationMs: 1200,
+			status: "success",
+			engine: "deepseek",
+			totalHits: 0,
+			hits: [],
+			deepseekSynthesis: "Synthesis without structured sources.",
+		});
+
+		expect(output).toContain("Synthesis without structured sources.");
+		expect(output).not.toContain("cite the relevant source URLs");
+		expect(output).not.toContain("Sources:");
 	});
 });
 
 describe("renderWebSearchCall & renderWebSearchResult", () => {
 	test("renderWebSearchCall renders label and query", () => {
-		const comp = renderWebSearchCall(
-			{
-				query: "TypeScript 5.5",
-				allowed_domains: ["typescriptlang.org"],
-			},
-			theme,
-		);
+		const comp = renderWebSearchCall({ query: "TypeScript 5.5" }, theme);
 		const lines = comp.render(120).map((l) => stripAnsi(l).trimEnd());
 		expect(lines[0]).toContain('Web Search "TypeScript 5.5"');
-		expect(lines[0]).toContain("[sites: typescriptlang.org]");
+	});
+
+	test("renderWebSearchCall tolerates incomplete streaming arguments", () => {
+		const comp = renderWebSearchCall(undefined, theme);
+		const lines = comp.render(120).map((l) => stripAnsi(l).trimEnd());
+		expect(lines[0]).toContain('Web Search ""');
 	});
 
 	test("renderWebSearchResult renders collapsed summary with result counts and duration", () => {
@@ -413,7 +436,7 @@ describe("renderWebSearchCall & renderWebSearchResult", () => {
 				content: [
 					{
 						type: "text",
-						text: '# Web Search Results for: "q"\n\n...\n---\n**CRITICAL REQUIREMENT FOR MAIN AGENT:** ...',
+						text: '# Web Search Results for: "q"\n\n...\n---\nUse these search results to answer the user, and cite the relevant source URLs in your response.',
 					},
 				],
 				details: {
@@ -442,7 +465,7 @@ describe("renderWebSearchCall & renderWebSearchResult", () => {
 		expect(rendered).toContain("Announcing X");
 		expect(rendered).toContain("Key Technical Insights");
 		expect(rendered).toContain("Related Searches");
-		expect(rendered).not.toContain("CRITICAL REQUIREMENT");
+		expect(rendered).not.toContain("cite the relevant source URLs");
 	});
 
 	test("renderWebSearchResult falls back to payload text when details are missing", () => {

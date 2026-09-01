@@ -175,12 +175,14 @@ export function formatSearchOutput(query: string, details: WebSearchDetails): st
 		return `No search results found for "${query}". Try rephrasing with different keywords.`;
 	}
 
-	return [
-		`# Web Search Results for: "${query}"\n`,
-		formatResultsMarkdown(details),
-		"---",
-		"**CRITICAL REQUIREMENT FOR MAIN AGENT:** Use the above search results to inform your response. You MUST include a `Sources:` section at the end of your response listing the relevant URLs as markdown links: `[Title](URL)`.",
-	].join("\n");
+	const parts = [`# Web Search Results for: "${query}"\n`, formatResultsMarkdown(details)];
+	if (details.hits.length > 0) {
+		parts.push(
+			"---",
+			"Use these search results to answer the user, and cite the relevant source URLs in your response.",
+		);
+	}
+	return parts.join("\n");
 }
 
 /**
@@ -249,8 +251,6 @@ export async function executeWebSearch(
 				query,
 				apiKey: credentials.minimax.key,
 				apiHost: credentials.minimax.host,
-				allowedDomains: params.allowed_domains,
-				blockedDomains: params.blocked_domains,
 				signal,
 			}),
 		);
@@ -261,8 +261,6 @@ export async function executeWebSearch(
 			searchDeepSeek({
 				query,
 				apiKey: credentials.deepseek.key,
-				allowedDomains: params.allowed_domains,
-				blockedDomains: params.blocked_domains,
 				signal,
 			}),
 		);
