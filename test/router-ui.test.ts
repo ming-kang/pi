@@ -14,7 +14,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "../src/core/extensio
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { applyRouterFile } from "../src/extensions/router/register.ts";
 import { parseRouterFile } from "../src/extensions/router/store.ts";
-import { runRouterCommand } from "../src/extensions/router/ui.ts";
+import { mergeCatalogWithConfigured, runRouterCommand } from "../src/extensions/router/ui.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme, type Theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -138,6 +138,15 @@ function extensionApi(): ExtensionAPI {
 		unregisterProvider: vi.fn(),
 	} as unknown as ExtensionAPI;
 }
+
+describe("router model catalog merging", () => {
+	it("keeps an active model visible even when disk and catalog no longer contain it", () => {
+		expect(mergeCatalogWithConfigured([], [{ id: "catalog-model" }], "active-model")).toEqual([
+			{ id: "active-model", name: "active-model", unavailable: true },
+			{ id: "catalog-model", name: undefined },
+		]);
+	});
+});
 
 describe("/router UI lifecycle", () => {
 	const roots: string[] = [];
@@ -420,5 +429,26 @@ describe("/router UI lifecycle", () => {
 		expect(select).toHaveBeenCalledTimes(2);
 		expect(input).toHaveBeenCalledWith("Relay · alpha · base URL", "https://relay.example/v1");
 		expect(custom).not.toHaveBeenCalled();
+	});
+
+	it("never places a literal API key in an edit placeholder and blank input preserves it", async () => {
+		const root = temporaryAgentDir();
+		let menuCalls = 0;
+		const select = vi.fn(async (_title: string, options: string[]) => {
+			menuCalls++;
+			return menuCalls === 1 ? options.find((option) => option.startsWith("API key")) : undefined;
+		});
+		const input = vi.fn(async () => "");
+		const ctx = {
+			hasUI: true,
+			mode: "rpc",
+			model: undefined,
+			modelRegistry: { refresh: vi.fn() },
+			ui: { select, input, confirm: vi.fn(), custom: vi.fn(), notify: vi.fn() },
+		} as unknown as ExtensionCommandContext;
+
+		await runRouterCommand("alpha", ctx, extensionApi());
+		expect(input).toHaveBeenCalledWith("Relay · alpha · API key", "Enter a new key · blank keeps the current value");
+		expect(JSON.parse(readFileSync(join(root, "router.json"), "utf8")).relays[0].apiKey).toBe("secret");
 	});
 });

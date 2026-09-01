@@ -385,12 +385,15 @@ async function editRelayFlow(
 		}
 
 		if (choice === "apiKey") {
-			const next = await promptText(ctx, dialogs, `Relay · ${relay.id} · API key`, relay.apiKey, (value) =>
-				value.trim() ? undefined : "API key is required.",
+			const next = await promptText(
+				ctx,
+				dialogs,
+				`Relay · ${relay.id} · API key`,
+				"Enter a new key · blank keeps the current value",
 			);
 			if (next === undefined) continue;
 			const trimmed = next.trim();
-			if (trimmed === relay.apiKey) continue;
+			if (!trimmed || trimmed === relay.apiKey) continue;
 			relay.apiKey = trimmed;
 			await persistRelay(ctx, pi, relay);
 			continue;
@@ -671,12 +674,16 @@ async function fetchAndSelectModels(
 	if (!result || !result.ok) return;
 	if (result.truncated) ctx.ui.notify("Catalog truncated to 2,000 models.", "warning");
 
-	const catalog = mergeCatalogWithConfigured(relay.models, result.models);
-	const initiallySelected = new Set(relay.models.map((model) => model.id));
 	const activeModelId = ctx.model?.provider === relay.id ? ctx.model.id : undefined;
-	const currentModelId = activeModelId && initiallySelected.has(activeModelId) ? activeModelId : undefined;
+	const catalog = mergeCatalogWithConfigured(relay.models, result.models, activeModelId);
+	const initiallySelected = new Set(relay.models.map((model) => model.id));
+	if (activeModelId) initiallySelected.add(activeModelId);
+	const currentModelId = activeModelId;
 	const protectedIds = currentModelId ? new Set([currentModelId]) : undefined;
 	const preserved = new Map(relay.models.map((model) => [model.id, structuredClone(model)]));
+	if (activeModelId && !preserved.has(activeModelId)) {
+		preserved.set(activeModelId, createDefaultModelConfig(activeModelId));
+	}
 	const saver = new RelayAutoSaver(ctx, pi, relay);
 	const applySelection = (selectedIds: string[]) => {
 		if (currentModelId && !selectedIds.includes(currentModelId)) {
@@ -761,9 +768,10 @@ function mergeAddedModels(previous: RelayModelConfig[], additions: RelayModelCon
 	return result;
 }
 
-function mergeCatalogWithConfigured(
+export function mergeCatalogWithConfigured(
 	configured: ReadonlyArray<RelayModelConfig>,
 	catalog: ReadonlyArray<{ id: string; name?: string }>,
+	activeModelId?: string,
 ): ModelChecklistItem[] {
 	const items = new Map<string, ModelChecklistItem>();
 	const configuredById = new Map(configured.map((model) => [model.id, model]));
@@ -782,6 +790,9 @@ function mergeCatalogWithConfigured(
 				unavailable: true,
 			});
 		}
+	}
+	if (activeModelId && !items.has(activeModelId)) {
+		items.set(activeModelId, { id: activeModelId, name: activeModelId, unavailable: true });
 	}
 	return [...items.values()].sort((left, right) => left.id.localeCompare(right.id));
 }

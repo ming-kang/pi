@@ -24,7 +24,7 @@ import {
 	requireCommand,
 	requireTaskId,
 } from "./schema.ts";
-import { exitSuffix, hasExitCode, runtimeLabel, taskLabelWithin } from "./task-view.ts";
+import { exitSuffix, formatTaskCounts, hasExitCode, runtimeLabel, taskLabelWithin } from "./task-view.ts";
 import { formatDuration, noticeLine } from "./text.ts";
 import type { BgCreateDetails, BgKillDetails, BgListDetails, BgReadDetails, BgWaitDetails } from "./types.ts";
 
@@ -299,7 +299,8 @@ export function runList(registry: BackgroundTaskRegistry): AgentToolResult<BgLis
 	const finished = tasks.filter((task) => task.status !== "running");
 	const shownFinished = finished.slice(0, BG_LIST_FINISHED_SHOWN);
 	const hidden = finished.length - shownFinished.length;
-	const lines = [`${running.length} running · ${finished.length} finished`];
+	const stalled = running.filter((task) => task.stalled).length;
+	const lines = [formatTaskCounts({ running: running.length, stalled, total: tasks.length }) ?? "0 running"];
 	for (const task of [...running, ...shownFinished]) {
 		lines.push(describeTaskLine(task, now));
 	}

@@ -11,34 +11,46 @@ export interface RunCancellation {
 	/** Fires when the parent signal aborts or abort() is called. */
 	readonly signal: AbortSignal;
 	readonly aborted: boolean;
-	/** Idempotent: marks the scope aborted and awaits the registered handler. */
+	/** Idempotent: marks the scope aborted and awaits the current handler. */
 	abort(): Promise<void>;
 	/**
 	 * Single-slot abort handler; a later call replaces the earlier one.
-	 * Registering after an abort invokes the handler immediately. Returns an
-	 * unregister function that restores a no-op (the scope stays abortable).
+	 * Registering after an abort invokes that handler immediately and once by
+	 * function identity. The returned unregister function is idempotent.
 	 */
 	onAbort(handler: () => Promise<void>): () => void;
 	throwIfAborted(): void;
-	/** Drops the parent-signal listener and the handler; idempotent. */
+	/** Drops the parent-signal listener and the current handler; idempotent. */
 	dispose(): void;
 }
 
-const NO_OP_HANDLER = (): Promise<void> => Promise.resolve();
+interface HandlerRegistration {
+	id: number;
+	handler: () => Promise<void>;
+}
 
 export function createRunCancellation(parent: AbortSignal | undefined): RunCancellation {
 	const controller = new AbortController();
-	let handler: () => Promise<void> = NO_OP_HANDLER;
-	let inFlight: Promise<void> | undefined;
+	const executions = new Map<() => Promise<void>, Promise<void>>();
+	let current: HandlerRegistration | undefined;
+	let registrationId = 0;
 	let disposed = false;
+
+	const executeHandler = (handler: (() => Promise<void>) | undefined): Promise<void> => {
+		if (disposed || !handler) return Promise.resolve();
+		const existing = executions.get(handler);
+		if (existing) return existing;
+		const execution = Promise.resolve()
+			.then(handler)
+			.catch(() => undefined);
+		executions.set(handler, execution);
+		return execution;
+	};
 
 	const trigger = (): Promise<void> => {
 		if (disposed) return Promise.resolve();
 		if (!controller.signal.aborted) controller.abort();
-		inFlight ??= Promise.resolve()
-			.then(handler)
-			.catch(() => undefined);
-		return inFlight;
+		return executeHandler(current?.handler);
 	};
 
 	const parentListener = (): void => {
@@ -55,19 +67,25 @@ export function createRunCancellation(parent: AbortSignal | undefined): RunCance
 			return controller.signal.aborted;
 		},
 		abort: trigger,
-		onAbort(next: () => Promise<void>): () => void {
-			handler = next;
-			if (controller.signal.aborted) void trigger();
+		onAbort(handler: () => Promise<void>): () => void {
+			if (disposed) return () => {};
+			const registration: HandlerRegistration = { id: ++registrationId, handler };
+			current = registration;
+			if (controller.signal.aborted) void executeHandler(handler);
+			let unregistered = false;
 			return () => {
-				if (handler === next) handler = NO_OP_HANDLER;
+				if (unregistered) return;
+				unregistered = true;
+				if (current?.id === registration.id) current = undefined;
 			};
 		},
 		throwIfAborted(): void {
 			if (controller.signal.aborted) throw new Error("Subagent run was aborted.");
 		},
 		dispose(): void {
+			if (disposed) return;
 			disposed = true;
-			handler = NO_OP_HANDLER;
+			current = undefined;
 			parent?.removeEventListener("abort", parentListener);
 		},
 	};

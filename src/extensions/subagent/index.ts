@@ -54,6 +54,7 @@ export default function subagent(pi: ExtensionAPI): void {
 				onUpdate: (details) => {
 					onUpdate?.({ content: [{ type: "text", text: statusSummary(details) }], details });
 				},
+				onConfigWarning: (message) => ctx.ui.notify(message, "warning"),
 				registerAbort: (abort) => {
 					activeAborters.add(abort);
 					return () => activeAborters.delete(abort);

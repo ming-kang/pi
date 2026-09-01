@@ -1,22 +1,34 @@
+import { execFile } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { afterEach, describe, expect, it } from "vitest";
+import lockfile from "proper-lockfile";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AGENT_PROFILES, subagentToolDescription } from "../src/extensions/subagent/agents.ts";
 import { MAX_CONCURRENCY, MAX_TASKS, SUBAGENT_AGENT_NAMES } from "../src/extensions/subagent/constants.ts";
 import { resolveSubagentTask, resolveTaskCwd } from "../src/extensions/subagent/resolve.ts";
 import { SubagentParamsSchema, type SubagentTask } from "../src/extensions/subagent/schema.ts";
 import { loadSubagentConfig, parseSubagentConfig, updateProfileOverride } from "../src/extensions/subagent/settings.ts";
+
+const execFileAsync = promisify(execFile);
+const require = createRequire(import.meta.url);
+const tsxCli = require.resolve("tsx/cli");
+const configUpdateFixture = fileURLToPath(new URL("./fixtures/subagent-config-update.ts", import.meta.url));
 
 function model(provider: string, id: string, reasoning = true): Model<Api> {
 	return {
@@ -57,6 +69,7 @@ describe("subagent configuration", () => {
 	const temporaryDirectories: string[] = [];
 
 	afterEach(() => {
+		vi.restoreAllMocks();
 		for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 	});
 
@@ -74,7 +87,7 @@ describe("subagent configuration", () => {
 		expect(explorer?.tools).toEqual(["read", "grep", "find", "ls", "bash"]);
 		expect(explorer?.systemPrompt).toContain("read-only inspection only");
 		expect(explorer?.systemPrompt).toContain("no redirect (>, >>) or heredoc writes");
-		expect(explorer?.omitContextFiles).toBe(true);
+		expect(explorer?.omitContextFiles).toBeUndefined();
 		expect(general?.name).toBe("general");
 		expect(general?.tools).toEqual(["read", "bash", "edit", "write"]);
 		expect(general?.systemPrompt).toContain("never create documentation files unless the task explicitly asks");
@@ -122,27 +135,32 @@ describe("subagent configuration", () => {
 		);
 	});
 
-	it("resets stale or invalid config files to an empty inheriting config", async () => {
-		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-reset-"));
+	it("preserves invalid config bytes, warns, and backs them up on the first real save", async () => {
+		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-invalid-"));
 		temporaryDirectories.push(root);
-		for (const stale of [
-			JSON.stringify({ version: 1, profiles: { reviewer: {} } }),
-			JSON.stringify({ profiles: {} }),
-			"not json",
-			JSON.stringify({ version: 1, profiles: { explorer: { model: "inherit", thinking: "inherit" } } }),
-		]) {
-			writeFileSync(join(root, "subagent.json"), stale);
-			await expect(loadSubagentConfig(root)).resolves.toEqual({ version: 1, profiles: {} });
-			expect(parseSubagentConfig(readFileSync(join(root, "subagent.json"), "utf8"))).toEqual({
-				version: 1,
-				profiles: {},
-			});
-		}
-		// A later override update writes cleanly onto the reset config.
+		const filePath = join(root, "subagent.json");
+		const invalid = JSON.stringify({ version: 1, profiles: { reviewer: {} } });
+		writeFileSync(filePath, invalid);
+		const warnings: string[] = [];
+
+		await expect(loadSubagentConfig(root, (message) => warnings.push(message))).resolves.toEqual({
+			version: 1,
+			profiles: {},
+		});
+		expect(readFileSync(filePath, "utf8")).toBe(invalid);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("left unchanged");
+		expect(warnings[0]).toContain(filePath);
+
 		await updateProfileOverride("general", { thinking: "high" }, root);
-		expect(parseSubagentConfig(readFileSync(join(root, "subagent.json"), "utf8")).profiles).toEqual({
+		expect(parseSubagentConfig(readFileSync(filePath, "utf8")).profiles).toEqual({
 			general: { thinking: "high" },
 		});
+		const backups = readdirSync(root).filter(
+			(name) => name.startsWith("subagent.json.invalid-") && name.endsWith(".bak"),
+		);
+		expect(backups).toHaveLength(1);
+		expect(readFileSync(join(root, backups[0]!), "utf8")).toBe(invalid);
 	});
 
 	it("persists profile model and thinking overrides atomically", async () => {
@@ -163,6 +181,53 @@ describe("subagent configuration", () => {
 		expect(existsSync(join(root, "subagent.json"))).toBe(false);
 	});
 
+	it("does not rewrite a valid file for a no-op patch", async () => {
+		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-noop-mtime-"));
+		temporaryDirectories.push(root);
+		const filePath = join(root, "subagent.json");
+		await updateProfileOverride("explorer", { thinking: "high" }, root);
+		const before = statSync(filePath).mtimeMs;
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		await updateProfileOverride("explorer", { thinking: "high" }, root);
+		expect(statSync(filePath).mtimeMs).toBe(before);
+	});
+
+	it("times out without modifying the file when another process owns the lock", async () => {
+		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-lock-timeout-"));
+		temporaryDirectories.push(root);
+		const filePath = join(root, "subagent.json");
+		writeFileSync(filePath, `${JSON.stringify({ version: 1, profiles: {} })}\n`);
+		const before = readFileSync(filePath, "utf8");
+		const release = await lockfile.lock(filePath, { realpath: false, stale: 10_000 });
+		try {
+			await expect(updateProfileOverride("general", { thinking: "high" }, root)).rejects.toThrow(
+				/Timed out waiting to update subagent\.json/,
+			);
+			expect(readFileSync(filePath, "utf8")).toBe(before);
+		} finally {
+			await release();
+		}
+	});
+
+	it("cancels saving when an invalid-file backup path cannot be allocated", async () => {
+		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-backup-failure-"));
+		temporaryDirectories.push(root);
+		const filePath = join(root, "subagent.json");
+		const invalid = "not json";
+		writeFileSync(filePath, invalid);
+		vi.spyOn(Date, "now").mockReturnValue(1234);
+		for (let attempt = 0; attempt < 100; attempt++) {
+			const suffix = attempt === 0 ? "" : `-${attempt}`;
+			writeFileSync(`${filePath}.invalid-1234-${process.pid}${suffix}.bak`, "occupied");
+		}
+
+		await expect(updateProfileOverride("general", { thinking: "high" }, root)).rejects.toThrow(
+			/Could not allocate a backup path/,
+		);
+		expect(readFileSync(filePath, "utf8")).toBe(invalid);
+	});
+
 	it("serializes concurrent override updates without losing any profile", async () => {
 		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-concurrent-"));
 		temporaryDirectories.push(root);
@@ -175,6 +240,19 @@ describe("subagent configuration", () => {
 			explorer: { model: "test/sonnet" },
 			general: { thinking: "high" },
 		});
+	});
+
+	it("merges same-profile fields written by separate Node processes", async () => {
+		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-cross-process-"));
+		temporaryDirectories.push(root);
+		await Promise.all([
+			execFileAsync(process.execPath, [tsxCli, configUpdateFixture, root, "explorer", "model", "test/sonnet"]),
+			execFileAsync(process.execPath, [tsxCli, configUpdateFixture, root, "explorer", "thinking", "high"]),
+		]);
+
+		const config = parseSubagentConfig(readFileSync(join(root, "subagent.json"), "utf8"));
+		expect(config.profiles.explorer).toEqual({ model: "test/sonnet", thinking: "high" });
+		expect(readdirSync(root).some((name) => name.endsWith(".tmp") || name.endsWith(".lock"))).toBe(false);
 	});
 
 	it("resolves overrides above parent inheritance and keeps the parent session unchanged", async () => {

@@ -6,8 +6,12 @@ import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "../../config.ts";
 import { withFileMutationQueue } from "../../core/tools/file-mutation-queue.ts";
-import { CONFIG_VERSION, isValidRelayId } from "./constants.ts";
+import { CONFIG_VERSION, isValidRelayId, THINKING_LEVELS } from "./constants.ts";
 import type { RelayConfig, RelayModelConfig, RouterFile, ThinkingLevelMap } from "./types.ts";
+
+const ROOT_FIELDS = ["version", "relays"] as const;
+const RELAY_FIELDS = ["id", "baseUrl", "apiKey", "models"] as const;
+const MODEL_FIELDS = ["id", "name", "reasoning", "input", "contextWindow", "maxTokens", "thinkingLevelMap"] as const;
 
 export function getRouterConfigPath(): string {
 	return join(getAgentDir(), "router.json");
@@ -29,6 +33,32 @@ export async function loadRouterFile(): Promise<RouterFile> {
 	return parseRouterFile(raw);
 }
 
+function expectObject(value: unknown, path: string): Record<string, unknown> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		throw new Error(`${path} must be an object.`);
+	}
+	return value as Record<string, unknown>;
+}
+
+function rejectUnknownFields(record: Record<string, unknown>, allowed: readonly string[], path: string): void {
+	const unknown = Object.keys(record).filter((key) => !allowed.includes(key));
+	if (unknown.length > 0) throw new Error(`${path} has unsupported field(s): ${unknown.join(", ")}.`);
+}
+
+function expectString(value: unknown, path: string, allowEmpty = false): string {
+	if (typeof value !== "string") throw new Error(`${path} must be a string.`);
+	const trimmed = value.trim();
+	if (!allowEmpty && !trimmed) throw new Error(`${path} must not be empty.`);
+	return allowEmpty ? value : trimmed;
+}
+
+function expectPositiveInteger(value: unknown, path: string): number {
+	if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+		throw new Error(`${path} must be a positive integer.`);
+	}
+	return value;
+}
+
 export function parseRouterFile(raw: string): RouterFile {
 	let parsed: unknown;
 	try {
@@ -36,65 +66,99 @@ export function parseRouterFile(raw: string): RouterFile {
 	} catch {
 		throw new Error("router.json is not valid JSON.");
 	}
-	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-		throw new Error("router.json must be a JSON object.");
+	const root = expectObject(parsed, "router.json");
+	rejectUnknownFields(root, ROOT_FIELDS, "router.json");
+	const version = root.version ?? CONFIG_VERSION;
+	if (version !== CONFIG_VERSION) {
+		throw new Error(`router.json has unsupported version ${String(version)}.`);
 	}
-	const root = parsed as Record<string, unknown>;
-	const relaysRaw = root.relays;
-	if (relaysRaw !== undefined && !Array.isArray(relaysRaw)) {
+	if (root.relays !== undefined && !Array.isArray(root.relays)) {
 		throw new Error("router.json relays must be an array.");
 	}
-	const relays: RelayConfig[] = [];
-	for (const item of relaysRaw ?? []) {
-		const relay = normalizeRelay(item);
-		if (relay) relays.push(relay);
+
+	const relays = ((root.relays as unknown[] | undefined) ?? []).map((value, index) =>
+		parseRelay(value, `router.json relays[${index}]`),
+	);
+	const relayIds = new Set<string>();
+	for (const relay of relays) {
+		if (relayIds.has(relay.id)) throw new Error(`router.json contains duplicate relay id "${relay.id}".`);
+		relayIds.add(relay.id);
 	}
 	return { version: CONFIG_VERSION, relays };
 }
 
-function normalizeRelay(value: unknown): RelayConfig | undefined {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-	const record = value as Record<string, unknown>;
-	const id = typeof record.id === "string" ? record.id.trim() : "";
-	const baseUrl = typeof record.baseUrl === "string" ? record.baseUrl.trim() : "";
-	const apiKey = typeof record.apiKey === "string" ? record.apiKey : "";
-	if (!id || !isValidRelayId(id) || !baseUrl) return undefined;
-	const models: RelayModelConfig[] = [];
-	if (Array.isArray(record.models)) {
-		for (const model of record.models) {
-			const normalized = normalizeModel(model);
-			if (normalized) models.push(normalized);
-		}
+function parseRelay(value: unknown, path: string): RelayConfig {
+	const record = expectObject(value, path);
+	rejectUnknownFields(record, RELAY_FIELDS, path);
+	const id = expectString(record.id, `${path}.id`);
+	if (!isValidRelayId(id)) throw new Error(`${path}.id must be a valid provider id without '/'.`);
+	const baseUrl = expectString(record.baseUrl, `${path}.baseUrl`);
+	try {
+		const url = new URL(baseUrl);
+		if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("unsupported protocol");
+	} catch {
+		throw new Error(`${path}.baseUrl must be an http or https URL.`);
+	}
+	const apiKey = expectString(record.apiKey, `${path}.apiKey`, true);
+	if (record.models !== undefined && !Array.isArray(record.models)) {
+		throw new Error(`${path}.models must be an array.`);
+	}
+	const models = ((record.models as unknown[] | undefined) ?? []).map((model, index) =>
+		parseModel(model, `${path}.models[${index}]`),
+	);
+	const modelIds = new Set<string>();
+	for (const model of models) {
+		if (modelIds.has(model.id)) throw new Error(`${path}.models contains duplicate id "${model.id}".`);
+		modelIds.add(model.id);
 	}
 	return { id, baseUrl, apiKey, models };
 }
 
-function normalizeModel(value: unknown): RelayModelConfig | undefined {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-	const record = value as Record<string, unknown>;
-	const id = typeof record.id === "string" ? record.id.trim() : "";
-	if (!id) return undefined;
-	const model: RelayModelConfig = { id };
-	if (typeof record.name === "string" && record.name.trim()) model.name = record.name.trim();
-	if (typeof record.reasoning === "boolean") model.reasoning = record.reasoning;
-	if (Array.isArray(record.input)) {
-		const input = record.input.filter((item): item is "text" | "image" => item === "text" || item === "image");
-		if (input.includes("text")) model.input = input.includes("image") ? ["text", "image"] : ["text"];
+function parseModel(value: unknown, path: string): RelayModelConfig {
+	const record = expectObject(value, path);
+	rejectUnknownFields(record, MODEL_FIELDS, path);
+	const model: RelayModelConfig = { id: expectString(record.id, `${path}.id`) };
+	if (record.name !== undefined) {
+		const name = expectString(record.name, `${path}.name`, true).trim();
+		if (name) model.name = name;
 	}
-	if (typeof record.contextWindow === "number" && Number.isFinite(record.contextWindow) && record.contextWindow > 0) {
-		model.contextWindow = Math.floor(record.contextWindow);
+	if (record.reasoning !== undefined) {
+		if (typeof record.reasoning !== "boolean") throw new Error(`${path}.reasoning must be a boolean.`);
+		model.reasoning = record.reasoning;
 	}
-	if (typeof record.maxTokens === "number" && Number.isFinite(record.maxTokens) && record.maxTokens > 0) {
-		model.maxTokens = Math.floor(record.maxTokens);
+	if (record.input !== undefined) {
+		if (!Array.isArray(record.input) || record.input.some((item) => item !== "text" && item !== "image")) {
+			throw new Error(`${path}.input must contain only "text" and "image".`);
+		}
+		const input = new Set(record.input as Array<"text" | "image">);
+		if (!input.has("text")) throw new Error(`${path}.input must include "text".`);
+		model.input = input.has("image") ? ["text", "image"] : ["text"];
 	}
-	if (
-		record.thinkingLevelMap &&
-		typeof record.thinkingLevelMap === "object" &&
-		!Array.isArray(record.thinkingLevelMap)
-	) {
-		model.thinkingLevelMap = record.thinkingLevelMap as ThinkingLevelMap;
+	if (record.contextWindow !== undefined) {
+		model.contextWindow = expectPositiveInteger(record.contextWindow, `${path}.contextWindow`);
+	}
+	if (record.maxTokens !== undefined) {
+		model.maxTokens = expectPositiveInteger(record.maxTokens, `${path}.maxTokens`);
+	}
+	if (record.thinkingLevelMap !== undefined) {
+		model.thinkingLevelMap = parseThinkingLevelMap(record.thinkingLevelMap, `${path}.thinkingLevelMap`);
 	}
 	return model;
+}
+
+function parseThinkingLevelMap(value: unknown, path: string): ThinkingLevelMap {
+	const record = expectObject(value, path);
+	const map: ThinkingLevelMap = {};
+	for (const [level, target] of Object.entries(record)) {
+		if (!(THINKING_LEVELS as readonly string[]).includes(level)) {
+			throw new Error(`${path} has unsupported thinking level "${level}".`);
+		}
+		if (target !== null && (typeof target !== "string" || target.trim().length === 0)) {
+			throw new Error(`${path}.${level} must be a non-empty string or null.`);
+		}
+		map[level as keyof ThinkingLevelMap] = target === null ? null : target.trim();
+	}
+	return map;
 }
 
 export async function saveRouterFile(file: RouterFile): Promise<void> {
@@ -119,7 +183,7 @@ export async function saveRouterFile(file: RouterFile): Promise<void> {
 			try {
 				await unlink(tempPath);
 			} catch {
-				// ignore
+				// Ignore cleanup errors and preserve the original failure.
 			}
 			throw error;
 		}

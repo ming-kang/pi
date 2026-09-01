@@ -82,6 +82,7 @@ export interface SubagentInvocationOptions {
 	signal?: AbortSignal;
 	gate: ConcurrencyGate;
 	onUpdate?: (details: SubagentDetails) => void;
+	onConfigWarning?: (message: string) => void;
 	registerAbort?: (abort: () => Promise<void>) => () => void;
 	/** Test hook: overrides the task-retry backoff base delay. */
 	taskRetryBaseDelayMs?: number;
@@ -123,7 +124,7 @@ async function resolveTasks(
 	// One config load and one resolution pass for the whole batch: every
 	// task/profile/cwd/model is settled before any run is created or any
 	// worker starts, so a failing task cannot strand half-initialized runs.
-	const config = await loadSubagentConfig(options.agentDir);
+	const config = await loadSubagentConfig(options.agentDir, options.onConfigWarning);
 	return Promise.all(
 		tasks.map((task, index) =>
 			resolveSubagentTask(task, options.parentCwd, options.parent, options.agentDir, config).catch((error) => {
@@ -221,52 +222,61 @@ async function runWithGate(
 }
 
 export async function runSubagentInvocation(options: SubagentInvocationOptions): Promise<SubagentExecutionResult> {
-	// Defensive count check: the schema already enforces 1..MAX_TASKS, but
-	// strict providers can bypass minItems, so validate before any work.
-	const tasks = options.params.tasks ?? [];
-	const resolved = await resolveTasks(tasks, options);
-	const runs = resolved.map((task, index) => createRunState(task, index, options.batchId, options.parentCwd));
-	const startedAt = Date.now();
-	// Every run's cancellation scope exists and is registered before any
-	// gate work starts, so a shutdown snapshot can never miss a queued task.
-	const scopes = runs.map(() => createRunCancellation(options.signal));
-	const unregisterScopes = scopes.map((scope) => options.registerAbort?.(scope.abort));
-	let lastVersion = versionSum(runs);
-	const progress = (): void => {
-		const version = versionSum(runs);
-		if (version === lastVersion) return;
-		lastVersion = version;
-		emitDetails(runs, startedAt, options.onUpdate);
-	};
-	const dispatch = (index: number, event: SubagentRunEvent): void => {
-		runs[index] = reduceRun(runs[index]!, event);
-		progress();
-	};
-	let latestDetails = emitDetails(runs, startedAt, options.onUpdate);
-
-	// Every task runs concurrently through the shared gate; Promise.all keeps
-	// result order identical to input order. There is no single-task branch:
-	// one task is just a batch of one.
+	// Register one invocation-level scope before the first await so shutdown can
+	// never snapshot the active set between preflight and worker creation.
+	const invocationScope = createRunCancellation(options.signal);
+	const unregisterInvocation = options.registerAbort?.(invocationScope.abort);
 	try {
-		await Promise.all(
-			resolved.map((task, index) => {
-				const dispatchToRun = (event: SubagentRunEvent): void => dispatch(index, event);
-				return runWithGate(task, scopes[index]!, options, dispatchToRun, () => runs[index]!, progress);
-			}),
-		);
+		// Defensive count check: the schema already enforces 1..MAX_TASKS, but
+		// strict providers can bypass minItems, so validate before any work.
+		const tasks = options.params.tasks ?? [];
+		const resolved = await resolveTasks(tasks, options);
+		const runs = resolved.map((task, index) => createRunState(task, index, options.batchId, options.parentCwd));
+		const startedAt = Date.now();
+		const scopes = runs.map(() => createRunCancellation(invocationScope.signal));
+		const unregisterChildren = invocationScope.onAbort(async () => {
+			await Promise.allSettled(scopes.map((scope) => scope.abort()));
+		});
+		let lastVersion = versionSum(runs);
+		const progress = (): void => {
+			const version = versionSum(runs);
+			if (version === lastVersion) return;
+			lastVersion = version;
+			emitDetails(runs, startedAt, options.onUpdate);
+		};
+		const dispatch = (index: number, event: SubagentRunEvent): void => {
+			runs[index] = reduceRun(runs[index]!, event);
+			progress();
+		};
+		let latestDetails = emitDetails(runs, startedAt, options.onUpdate);
+
+		// Every task runs concurrently through the shared gate; Promise.all keeps
+		// result order identical to input order. There is no single-task branch:
+		// one task is just a batch of one.
+		try {
+			await Promise.all(
+				resolved.map((task, index) => {
+					const dispatchToRun = (event: SubagentRunEvent): void => dispatch(index, event);
+					return runWithGate(task, scopes[index]!, options, dispatchToRun, () => runs[index]!, progress);
+				}),
+			);
+		} finally {
+			unregisterChildren();
+			for (const scope of scopes) scope.dispose();
+		}
+		latestDetails = emitDetails(runs, startedAt, undefined);
+		latestDetails.endedAt = Date.now();
+		// Error classification lives in the tool_result handler (index.ts), the
+		// only channel that reaches the session transcript and export.
+		return {
+			content: resultContent(latestDetails),
+			details: boundSubagentDetails(latestDetails),
+			usage: toNestedUsage(latestDetails.usage),
+		};
 	} finally {
-		for (const unregister of unregisterScopes) unregister?.();
-		for (const scope of scopes) scope.dispose();
+		unregisterInvocation?.();
+		invocationScope.dispose();
 	}
-	latestDetails = emitDetails(runs, startedAt, undefined);
-	latestDetails.endedAt = Date.now();
-	// Error classification lives in the tool_result handler (index.ts), the
-	// only channel that reaches the session transcript and export.
-	return {
-		content: resultContent(latestDetails),
-		details: boundSubagentDetails(latestDetails),
-		usage: toNestedUsage(latestDetails.usage),
-	};
 }
 
 export { isSubagentError } from "./state.ts";

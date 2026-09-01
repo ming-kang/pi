@@ -26,6 +26,7 @@ export const DEFAULT_MAX_RUNNING_TASKS = 8;
 export const DEFAULT_NOTIFY_TAIL_BYTES = 4 * 1024;
 
 const SHUTDOWN_GRACE_MS = 2_000;
+const TASK_ID_ALLOCATION_ATTEMPTS = 100;
 
 /** Stall watchdog defaults, matching Claude Code's CC-1175 tuning. */
 export const STALL_POLL_INTERVAL_MS = 5_000;
@@ -119,6 +120,8 @@ export interface BackgroundRegistryOptions {
 	/** Called whenever a task starts or reaches a terminal state. */
 	onChange: () => void;
 	now?: () => number;
+	/** Test hook for deterministic collision coverage. */
+	createTaskId?: () => string;
 }
 
 interface TaskRuntime {
@@ -156,6 +159,7 @@ export class BackgroundTaskRegistry {
 	private readonly stallTailBytes: number;
 	private readonly onChange: () => void;
 	private readonly now: () => number;
+	private readonly createTaskId: () => string;
 
 	private readonly tasks = new Map<string, BgTask>();
 	private readonly runtimes = new Map<string, TaskRuntime>();
@@ -175,6 +179,7 @@ export class BackgroundTaskRegistry {
 		this.stallTailBytes = stall?.tailBytes ?? STALL_TAIL_BYTES;
 		this.onChange = options.onChange;
 		this.now = options.now ?? Date.now;
+		this.createTaskId = options.createTaskId ?? (() => `bg-${randomBytes(3).toString("hex")}`);
 	}
 
 	get isShuttingDown(): boolean {
@@ -199,7 +204,7 @@ export class BackgroundTaskRegistry {
 			);
 		}
 
-		const id = this.newTaskId();
+		const { id, outputPath } = this.allocateTaskOutput();
 		const task: BgTask = {
 			id,
 			command: input.command,
@@ -208,7 +213,7 @@ export class BackgroundTaskRegistry {
 			status: "running",
 			startedAt: this.now(),
 			exitCode: undefined,
-			outputPath: join(this.outputDir, `pi-${id}.log`),
+			outputPath,
 			outputBytes: 0,
 			outputTruncated: false,
 			timeoutSeconds: input.timeoutSeconds,
@@ -220,11 +225,6 @@ export class BackgroundTaskRegistry {
 		const done = new Promise<void>((resolve) => {
 			resolveDone = resolve;
 		});
-		// Create the file synchronously so read/wait and the /bg viewer never see
-		// ENOENT between task start and the stream's async open. The exclusive
-		// 'wx' flag fails on any existing path — including a symlink — so creation
-		// can never truncate a file a stale id (or an attacker-planted link) points at.
-		createOutputFileExclusively(task.outputPath);
 		const runtime: TaskRuntime = {
 			controller: new AbortController(),
 			stream: createWriteStream(task.outputPath, { flags: "a" }),
@@ -434,11 +434,14 @@ export class BackgroundTaskRegistry {
 		if (runtime.finalized || this.shuttingDown) return;
 		const { slice, error } = await readTail(task.outputPath, this.stallTailBytes);
 		if (runtime.finalized || this.shuttingDown) return;
-		// Merely slow: not prompt-shaped. Reset so the next check is a full
-		// threshold window out instead of re-probing on every tick. A tail that
-		// could not be read is reported, not dismissed as slow. Matched on the
-		// raw text — sanitizing is for delivery, not for detection.
-		if (slice && !looksLikePrompt(slice.text)) {
+		// A read failure is not evidence of an interactive prompt. Retry after a
+		// full threshold window without changing task state or notifying. Detection
+		// uses raw text; sanitizing is only for delivery.
+		if (error) {
+			runtime.stallLastGrowthAt = this.now();
+			return;
+		}
+		if (!slice || !looksLikePrompt(slice.text)) {
 			runtime.stallLastGrowthAt = this.now();
 			return;
 		}
@@ -466,11 +469,22 @@ export class BackgroundTaskRegistry {
 		}
 	}
 
-	private newTaskId(): string {
-		while (true) {
-			const id = `bg-${randomBytes(3).toString("hex")}`;
-			if (!this.tasks.has(id)) return id;
+	private allocateTaskOutput(): { id: string; outputPath: string } {
+		for (let attempt = 0; attempt < TASK_ID_ALLOCATION_ATTEMPTS; attempt++) {
+			const id = this.createTaskId();
+			if (this.tasks.has(id)) continue;
+			const outputPath = join(this.outputDir, `pi-${id}.log`);
+			try {
+				// Create synchronously before returning the task so read/wait and /bg
+				// never see ENOENT. `wx` also protects stale logs and symlinks.
+				createOutputFileExclusively(outputPath);
+				return { id, outputPath };
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
+				throw error;
+			}
 		}
+		throw new Error(`Could not allocate a unique background task id after ${TASK_ID_ALLOCATION_ATTEMPTS} attempts.`);
 	}
 
 	private async run(task: BgTask, runtime: TaskRuntime, env?: NodeJS.ProcessEnv): Promise<void> {

@@ -101,6 +101,53 @@ function start(signal?: AbortSignal): Harness {
 	return { scope, done, state: () => state };
 }
 
+describe("RunCancellation", () => {
+	it("runs a handler registered after abort exactly once", async () => {
+		const scope = createRunCancellation(undefined);
+		await scope.abort();
+		const handler = vi.fn(async () => {});
+		scope.onAbort(handler);
+		await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+
+		await scope.abort();
+		scope.onAbort(handler);
+		await Promise.resolve();
+		expect(handler).toHaveBeenCalledOnce();
+	});
+
+	it("only runs the current registration and keeps unregister idempotent", async () => {
+		const scope = createRunCancellation(undefined);
+		const first = vi.fn(async () => {});
+		const second = vi.fn(async () => {});
+		const unregisterFirst = scope.onAbort(first);
+		scope.onAbort(second);
+		unregisterFirst();
+		unregisterFirst();
+
+		await scope.abort();
+		expect(first).not.toHaveBeenCalled();
+		expect(second).toHaveBeenCalledOnce();
+	});
+
+	it("swallows handler rejection and ignores late registration after dispose", async () => {
+		const scope = createRunCancellation(undefined);
+		const failing = vi.fn(async () => {
+			throw new Error("worker already gone");
+		});
+		scope.onAbort(failing);
+		await expect(scope.abort()).resolves.toBeUndefined();
+		expect(scope.aborted).toBe(true);
+		expect(failing).toHaveBeenCalledOnce();
+
+		scope.dispose();
+		scope.dispose();
+		const late = vi.fn(async () => {});
+		scope.onAbort(late)();
+		await scope.abort();
+		expect(late).not.toHaveBeenCalled();
+	});
+});
+
 describe("Subagent SDK initialization aborts", () => {
 	beforeEach(() => {
 		sdkMocks.reload.mockReset();

@@ -13,7 +13,7 @@ import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
 import type { OutputSlice } from "./output-file.ts";
 import type { BgTask } from "./registry.ts";
-import { exitSuffix, runtimeLabel, statusColor, statusGlyph, taskLabel } from "./task-view.ts";
+import { exitSuffix, formatTaskCounts, runtimeLabel, statusColor, statusGlyph, taskLabel } from "./task-view.ts";
 import { fileNameOf } from "./text.ts";
 
 const POLL_INTERVAL_MS = 1000;
@@ -95,6 +95,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		this.selectedTaskId = this.tasks[0]?.id;
 		void this.tick();
 		this.pollTimer = setInterval(() => void this.tick(), this.pollIntervalMs);
+		this.pollTimer.unref?.();
 	}
 
 	get focused(): boolean {
@@ -253,12 +254,12 @@ export class BackgroundTasksMenu implements Component, Focusable {
 
 	private countsLabel(): string {
 		let running = 0;
-		for (const task of this.tasks) if (task.status === "running") running++;
-		const ended = this.tasks.length - running;
-		const parts: string[] = [];
-		if (running > 0) parts.push(`${running} running`);
-		if (ended > 0) parts.push(`${ended} done`);
-		return parts.join(" · ");
+		let stalled = 0;
+		for (const task of this.tasks) {
+			if (task.status === "running") running++;
+			if (task.stalled) stalled++;
+		}
+		return formatTaskCounts({ running, stalled, total: this.tasks.length }) ?? "";
 	}
 
 	// ── detail view ────────────────────────────────────────────────────────

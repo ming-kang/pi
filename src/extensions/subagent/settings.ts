@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import lockfile from "proper-lockfile";
 import { getAgentDir } from "../../config.ts";
 import { withFileMutationQueue } from "../../core/tools/file-mutation-queue.ts";
 import {
@@ -10,6 +11,10 @@ import {
 	THINKING_LEVELS,
 } from "./constants.ts";
 import type { SubagentConfigFile, SubagentProfileOverride } from "./types.ts";
+
+const LOCK_STALE_MS = 10_000;
+const LOCK_RETRY_OPTIONS = { retries: 5, factor: 2, minTimeout: 20, maxTimeout: 200 } as const;
+const BACKUP_ATTEMPTS = 100;
 
 function isThinkingLevel(value: unknown): boolean {
 	return typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value);
@@ -72,46 +77,40 @@ export function parseSubagentConfig(raw: string): SubagentConfigFile {
 	}
 	const profiles: Record<string, SubagentProfileOverride> = {};
 	for (const [name, value] of Object.entries((root.profiles as Record<string, unknown> | undefined) ?? {})) {
-		// The only profiles are the two built-in ones; unknown keys are rejected
-		// outright (no legacy aliases or compatibility mapping).
 		if (!(SUBAGENT_AGENT_NAMES as readonly string[]).includes(name)) {
 			throw new Error(`${SUBAGENT_CONFIG_FILE} contains unknown profile "${name}".`);
 		}
 		profiles[name] = normalizeOverride(value, name);
 	}
 	const unknownKeys = Object.keys(root).filter((key) => key !== "version" && key !== "profiles");
-	if (unknownKeys.length > 0)
+	if (unknownKeys.length > 0) {
 		throw new Error(`${SUBAGENT_CONFIG_FILE} has unsupported field(s): ${unknownKeys.join(", ")}.`);
+	}
 	return { version: SUBAGENT_CONFIG_VERSION, profiles };
 }
 
-// A stale or invalid config (older formats, unknown profiles, malformed
-// JSON) must not block every subagent call: reset it to an empty, fully
-// inheriting config. The reset is best-effort — when the write fails the
-// caller still gets the empty config and the next load retries the reset.
-async function resetSubagentConfigFile(filePath: string): Promise<void> {
-	try {
-		await writeSubagentConfigFile(filePath, emptySubagentConfig());
-	} catch {
-		// Keep the original failure invisible to callers; an unwritable config
-		// file is a setup problem, not a reason to fail the subagent call.
-	}
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
-export async function loadSubagentConfig(agentDir = getAgentDir()): Promise<SubagentConfigFile> {
+function configWarning(filePath: string, error: unknown): string {
+	return `Ignoring invalid Subagent settings at ${filePath}; the file was left unchanged. ${errorMessage(error)}`;
+}
+
+export async function loadSubagentConfig(
+	agentDir = getAgentDir(),
+	onWarning?: (message: string) => void,
+): Promise<SubagentConfigFile> {
 	const filePath = getSubagentConfigPath(agentDir);
 	try {
 		return parseSubagentConfig(await readFile(filePath, "utf8"));
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptySubagentConfig();
-		await resetSubagentConfigFile(filePath);
+		onWarning?.(configWarning(filePath, error));
 		return emptySubagentConfig();
 	}
 }
 
-// Queue-free write body: read-modify-write callers run their whole
-// transaction inside the queue, so saveSubagentConfig must not queue the
-// same path again — that would deadlock.
 async function writeSubagentConfigFile(filePath: string, config: SubagentConfigFile): Promise<void> {
 	const payload = `${JSON.stringify({ version: SUBAGENT_CONFIG_VERSION, profiles: config.profiles }, null, 2)}\n`;
 	await mkdir(dirname(filePath), { recursive: true });
@@ -129,6 +128,63 @@ async function writeSubagentConfigFile(filePath: string, config: SubagentConfigF
 	}
 }
 
+async function backUpInvalidConfig(filePath: string, raw: string): Promise<string> {
+	for (let attempt = 0; attempt < BACKUP_ATTEMPTS; attempt++) {
+		const suffix = attempt === 0 ? "" : `-${attempt}`;
+		const backupPath = `${filePath}.invalid-${Date.now()}-${process.pid}${suffix}.bak`;
+		try {
+			await writeFile(backupPath, raw, { encoding: "utf8", mode: 0o600, flag: "wx" });
+			return backupPath;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
+			throw new Error(`Could not back up invalid ${SUBAGENT_CONFIG_FILE}: ${errorMessage(error)}`);
+		}
+	}
+	throw new Error(`Could not allocate a backup path for invalid ${SUBAGENT_CONFIG_FILE}.`);
+}
+
+async function withSubagentConfigLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+	await mkdir(dirname(filePath), { recursive: true });
+	let release: (() => Promise<void>) | undefined;
+	try {
+		release = await lockfile.lock(filePath, {
+			realpath: false,
+			stale: LOCK_STALE_MS,
+			retries: LOCK_RETRY_OPTIONS,
+		});
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ELOCKED") {
+			throw new Error(`Timed out waiting to update ${SUBAGENT_CONFIG_FILE}; another Pi process is saving it.`);
+		}
+		throw error;
+	}
+	try {
+		return await fn();
+	} finally {
+		await release();
+	}
+}
+
+interface MutationConfigRead {
+	config: SubagentConfigFile;
+	invalidRaw?: string;
+}
+
+async function readConfigForMutation(filePath: string): Promise<MutationConfigRead> {
+	let raw: string;
+	try {
+		raw = await readFile(filePath, "utf8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { config: emptySubagentConfig() };
+		throw error;
+	}
+	try {
+		return { config: parseSubagentConfig(raw) };
+	} catch {
+		return { config: emptySubagentConfig(), invalidRaw: raw };
+	}
+}
+
 // Only keys present in the patch change; a key set to undefined clears
 // that override (back to inheriting the parent session).
 export async function updateProfileOverride(
@@ -137,30 +193,31 @@ export async function updateProfileOverride(
 	agentDir = getAgentDir(),
 ): Promise<SubagentConfigFile> {
 	const filePath = getSubagentConfigPath(agentDir);
-	// Load and write run inside one queue slot so concurrent updates to
-	// different profiles cannot overwrite each other.
-	return withFileMutationQueue(filePath, async () => {
-		const config = await loadSubagentConfig(agentDir);
-		const currentOverride = config.profiles[profile];
-		const current = currentOverride ?? {};
-		const next: SubagentProfileOverride = { ...current };
-		if ("model" in patch) {
-			if (patch.model === undefined) delete next.model;
-			else next.model = patch.model;
-		}
-		if ("thinking" in patch) {
-			if (patch.thinking === undefined) delete next.thinking;
-			else next.thinking = patch.thinking;
-		}
-		const hasNext = Object.keys(next).length > 0;
-		const changed =
-			(currentOverride !== undefined) !== hasNext ||
-			current.model !== next.model ||
-			current.thinking !== next.thinking;
-		if (!changed) return config;
-		if (hasNext) config.profiles[profile] = next;
-		else delete config.profiles[profile];
-		await writeSubagentConfigFile(filePath, config);
-		return config;
-	});
+	return withFileMutationQueue(filePath, () =>
+		withSubagentConfigLock(filePath, async () => {
+			const { config, invalidRaw } = await readConfigForMutation(filePath);
+			const currentOverride = config.profiles[profile];
+			const current = currentOverride ?? {};
+			const next: SubagentProfileOverride = { ...current };
+			if ("model" in patch) {
+				if (patch.model === undefined) delete next.model;
+				else next.model = patch.model;
+			}
+			if ("thinking" in patch) {
+				if (patch.thinking === undefined) delete next.thinking;
+				else next.thinking = patch.thinking;
+			}
+			const hasNext = Object.keys(next).length > 0;
+			const changed =
+				(currentOverride !== undefined) !== hasNext ||
+				current.model !== next.model ||
+				current.thinking !== next.thinking;
+			if (!changed) return config;
+			if (invalidRaw !== undefined) await backUpInvalidConfig(filePath, invalidRaw);
+			if (hasNext) config.profiles[profile] = next;
+			else delete config.profiles[profile];
+			await writeSubagentConfigFile(filePath, config);
+			return config;
+		}),
+	);
 }

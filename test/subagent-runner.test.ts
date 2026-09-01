@@ -114,12 +114,14 @@ describe("subagent SDK runner", () => {
 		expect(systemPrompt).toContain(general.systemPrompt);
 	});
 
-	it("skips project instruction files for agents marked omitContextFiles", async () => {
+	it("loads applicable project instructions for Explorer without granting write tools", async () => {
 		let systemPrompt: string | undefined;
+		let toolNames: string[] = [];
 		const faux = fauxProvider({ provider: `subagent-context-${Date.now()}-${Math.random()}` });
 		faux.setResponses([
 			(context) => {
 				systemPrompt = context.systemPrompt;
+				toolNames = context.tools?.map((tool) => tool.name) ?? [];
 				return fauxAssistantMessage("context checked");
 			},
 		]);
@@ -130,7 +132,10 @@ describe("subagent SDK runner", () => {
 
 		const explorer = AGENT_PROFILES.find((profile) => profile.name === "explorer")!;
 		expect(systemPrompt).toContain(explorer.systemPrompt);
-		expect(systemPrompt).not.toContain("<project_context>");
+		expect(systemPrompt).toContain("<project_context>");
+		expect(toolNames).toEqual(["read", "grep", "find", "ls", "bash"]);
+		expect(toolNames).not.toContain("edit");
+		expect(toolNames).not.toContain("write");
 	});
 
 	it("returns an explicit marker when a completed subagent has no output", async () => {
@@ -212,6 +217,30 @@ describe("subagent SDK runner", () => {
 		await extra;
 		expect(extraResolved).toBe(true);
 		for (const release of releases.slice(1)) release();
+	});
+
+	it("registers shutdown cancellation before preflight can start a worker", async () => {
+		const { modelRuntime, model } = await setup(["must not run"]);
+		const settingsCreate = vi.spyOn(SettingsManager, "create");
+		const unregister = vi.fn();
+
+		const result = await runSubagentInvocation({
+			params: { tasks: [{ agent: "explorer", prompt: "Do not start after shutdown." }] },
+			parentCwd: process.cwd(),
+			parent: createParentContext(model),
+			modelRuntime,
+			agentDir: process.cwd(),
+			projectTrusted: false,
+			gate: new ConcurrencyGate(1),
+			registerAbort: (abort) => {
+				void abort();
+				return unregister;
+			},
+		});
+
+		expect(settingsCreate).not.toHaveBeenCalled();
+		expect(result.details.runs[0]?.status).toBe("aborted");
+		expect(unregister).toHaveBeenCalledOnce();
 	});
 
 	it("does not start queued work after the parent signal aborts", async () => {

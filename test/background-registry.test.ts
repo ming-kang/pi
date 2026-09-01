@@ -48,6 +48,7 @@ function createFakeOperations(): { operations: BashOperations; calls: FakeExecCa
 }
 
 const tempDirs: string[] = [];
+const registries: BackgroundTaskRegistry[] = [];
 
 function makeRegistry(overrides?: Partial<BackgroundRegistryOptions>): {
 	registry: BackgroundTaskRegistry;
@@ -70,8 +71,10 @@ function makeRegistry(overrides?: Partial<BackgroundRegistryOptions>): {
 		outputDir,
 		onNotify,
 		onChange,
+		stall: false,
 		...overrides,
 	});
+	registries.push(registry);
 	return { registry, calls, notifications, onNotify, onChange, outputDir };
 }
 
@@ -110,7 +113,10 @@ function makeStallRegistry() {
 	return { ...base, notifications, onNotify, stalls, onStall, advance, setClock };
 }
 
-afterEach(() => {
+afterEach(async () => {
+	for (const registry of registries.splice(0)) {
+		await registry.shutdown();
+	}
 	for (const dir of tempDirs.splice(0)) {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -399,6 +405,26 @@ describe("BackgroundTaskRegistry", () => {
 		await expect(registry.waitForResult("bg-nope", 20)).rejects.toThrow(/Unknown background task/);
 	});
 
+	it("retries an id whose stale log already exists without overwriting it", async () => {
+		const ids = ["bg-aaaaaa", "bg-bbbbbb"];
+		const { registry, calls, outputDir } = makeRegistry({ createTaskId: () => ids.shift() ?? "bg-cccccc" });
+		const stalePath = join(outputDir, "pi-bg-aaaaaa.log");
+		writeFileSync(stalePath, "precious old log");
+
+		const task = registry.startTask({ command: "echo hi", cwd: "/w" });
+		expect(task.id).toBe("bg-bbbbbb");
+		expect(readFileSync(stalePath, "utf8")).toBe("precious old log");
+		expect(readFileSync(task.outputPath, "utf8")).toBe("");
+		calls[0]?.finish(0);
+		await registry.waitForTask(task.id);
+	});
+
+	it("propagates output-file errors other than EEXIST", () => {
+		const missingOutputDir = join(tmpdir(), `pi-bg-missing-${Date.now()}-${Math.random()}`, "nested");
+		const { registry } = makeRegistry({ outputDir: missingOutputDir, createTaskId: () => "bg-aaaaaa" });
+		expect(() => registry.startTask({ command: "echo hi", cwd: "/w" })).toThrow(/ENOENT|no such file/i);
+	});
+
 	it("creates the output file exclusively before the task is returned", async () => {
 		const { registry, calls } = makeRegistry();
 		const task = registry.startTask({ command: "echo hi", cwd: "/w" });
@@ -529,13 +555,19 @@ describe("stall watchdog", () => {
 		await advance(40);
 		await vi.waitFor(() => expect(stalls).toHaveLength(1));
 
+		const resumedBytes = task.outputBytes + Buffer.byteLength("resumed work\n");
 		calls[0]?.emitData("resumed work\n");
+		await vi.waitFor(() => expect(task.outputBytes).toBe(resumedBytes));
 		await advance(20);
-		expect(task.stalled).toBe(false);
+		await vi.waitFor(() => expect(task.stalled).toBe(false));
 
-		// Stall again: flag returns, notification does not.
+		// A prompt appears again and stalls: flag returns, notification does not.
+		const promptBytes = task.outputBytes + Buffer.byteLength("Proceed? (y/n) ");
+		calls[0]?.emitData("Proceed? (y/n) ");
+		await vi.waitFor(() => expect(task.outputBytes).toBe(promptBytes));
+		await advance(20); // Let the watchdog observe the new growth first.
 		await advance(100);
-		expect(task.stalled).toBe(true);
+		await vi.waitFor(() => expect(task.stalled).toBe(true));
 		expect(stalls).toHaveLength(1);
 	});
 
@@ -592,15 +624,23 @@ describe("stall watchdog", () => {
 		expect(stalls).toHaveLength(0);
 	});
 
-	it("still notifies with tailError when the output file cannot be read", async () => {
-		const { registry, stalls, outputDir, advance } = makeStallRegistry();
+	it("does not treat an unreadable tail as a stall and recovers on a later probe", async () => {
+		const { registry, calls, stalls, outputDir, advance } = makeStallRegistry();
 		const task = registry.startTask({ command: "npm install", cwd: "/w" });
-		// Redirect the recorded path so the stall probe hits ENOENT: a read
-		// failure still notifies (with tailError) even though no tail exists.
+		const originalPath = task.outputPath;
 		task.outputPath = join(outputDir, "missing.log");
 		await advance(60);
+		expect(stalls).toHaveLength(0);
+		expect(task.stalled).toBe(false);
+
+		task.outputPath = originalPath;
+		const promptBytes = Buffer.byteLength("Proceed? (y/n) ");
+		calls[0]?.emitData("Proceed? (y/n) ");
+		await vi.waitFor(() => expect(task.outputBytes).toBe(promptBytes));
+		await advance(20);
+		await advance(60);
 		await vi.waitFor(() => expect(stalls).toHaveLength(1));
-		expect(stalls[0]?.tailError).toMatch(/ENOENT|no such file/i);
+		expect(task.stalled).toBe(true);
 	});
 });
 

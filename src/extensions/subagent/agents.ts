@@ -23,7 +23,6 @@ export const AGENT_PROFILES: readonly AgentProfile[] = [
 			"Match the depth the caller requested: quick targets the direct question, medium checks likely related locations, and very thorough sweeps multiple locations and naming conventions.",
 			"Return concise findings with precise paths, symbols, relationships, and unresolved uncertainties.",
 		].join("\n"),
-		omitContextFiles: true,
 	},
 	{
 		name: "general",

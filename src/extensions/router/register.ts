@@ -8,8 +8,17 @@ import { toRegisterModel } from "./presets.ts";
 import { streamRouterCodex } from "./stream.ts";
 import type { RelayConfig, RouterFile } from "./types.ts";
 
-/** Provider ids currently registered by this extension in the process. */
-const registeredIds = new Set<string>();
+/** Provider ids registered by this extension, isolated to each SDK host. */
+const registeredIdsByApi = new WeakMap<ExtensionAPI, Set<string>>();
+
+function registeredIdsFor(pi: ExtensionAPI): Set<string> {
+	let ids = registeredIdsByApi.get(pi);
+	if (!ids) {
+		ids = new Set<string>();
+		registeredIdsByApi.set(pi, ids);
+	}
+	return ids;
+}
 
 export function toProviderConfig(relay: RelayConfig) {
 	return {
@@ -26,6 +35,7 @@ export function toProviderConfig(relay: RelayConfig) {
 }
 
 export function applyRouterFile(pi: ExtensionAPI, file: RouterFile): void {
+	const registeredIds = registeredIdsFor(pi);
 	const nextIds = new Set(file.relays.map((relay) => relay.id));
 
 	for (const id of [...registeredIds]) {
@@ -46,7 +56,7 @@ export function applyRouterFile(pi: ExtensionAPI, file: RouterFile): void {
 				try {
 					pi.unregisterProvider(relay.id);
 				} catch {
-					// ignore
+					// Ignore stale registrations after /reload.
 				}
 				registeredIds.delete(relay.id);
 			}
@@ -58,12 +68,13 @@ export function applyRouterFile(pi: ExtensionAPI, file: RouterFile): void {
 }
 
 export function registerOneRelay(pi: ExtensionAPI, relay: RelayConfig): void {
+	const registeredIds = registeredIdsFor(pi);
 	if (relay.models.length === 0) {
 		if (registeredIds.has(relay.id)) {
 			try {
 				pi.unregisterProvider(relay.id);
 			} catch {
-				// ignore
+				// Ignore stale registrations after /reload.
 			}
 			registeredIds.delete(relay.id);
 		}
@@ -77,7 +88,7 @@ export function unregisterOneRelay(pi: ExtensionAPI, id: string): void {
 	try {
 		pi.unregisterProvider(id);
 	} catch {
-		// ignore
+		// Ignore stale registrations after /reload.
 	}
-	registeredIds.delete(id);
+	registeredIdsFor(pi).delete(id);
 }

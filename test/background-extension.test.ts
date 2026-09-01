@@ -82,6 +82,7 @@ interface Harness {
 }
 
 const tempDirs: string[] = [];
+const harnesses: Harness[] = [];
 
 function createHarness(stall?: { pollIntervalMs: number; thresholdMs: number }): Harness {
 	const outputDir = mkdtempSync(join(tmpdir(), "pi-bg-ext-"));
@@ -133,9 +134,9 @@ function createHarness(stall?: { pollIntervalMs: number; thresholdMs: number }):
 		},
 	} as unknown as ExtensionContext;
 
-	createBackgroundExtension({ operations, outputDir, ...(stall ? { stall } : {}) })(pi);
+	createBackgroundExtension({ operations, outputDir, stall: stall ?? false })(pi);
 
-	return {
+	const harness: Harness = {
 		tools,
 		handlers,
 		commands,
@@ -157,9 +158,14 @@ function createHarness(stall?: { pollIntervalMs: number; thresholdMs: number }):
 			return definition.execute("call-1", params, signal, undefined, ctx);
 		},
 	};
+	harnesses.push(harness);
+	return harness;
 }
 
-afterEach(() => {
+afterEach(async () => {
+	for (const harness of harnesses.splice(0)) {
+		await harness.shutdownSession();
+	}
 	for (const dir of tempDirs.splice(0)) {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -265,7 +271,7 @@ describe("background extension", () => {
 		expect(harness.statusUpdates.at(-1)).toBe("bg 1 running");
 
 		harness.calls[0]?.finish(0);
-		await vi.waitFor(() => expect(harness.statusUpdates.at(-1)).toBe("bg 1 done"));
+		await vi.waitFor(() => expect(harness.statusUpdates.at(-1)).toBe("bg 1 finished"));
 
 		await harness.shutdownSession();
 		expect(harness.statusUpdates.at(-1)).toBeUndefined();
@@ -415,7 +421,7 @@ describe("background extension", () => {
 
 		await harness.execute("bg", { action: "create", command: "npm run dev", description: "dev server" });
 		const listing = textOf(await harness.execute("bg", { action: "list" }));
-		expect(listing).toContain("1 running · 0 finished");
+		expect(listing).toContain("1 running");
 		expect(listing).toContain("dev server — npm run dev");
 
 		harness.calls[0]?.finish(0);
@@ -433,7 +439,7 @@ describe("background extension", () => {
 		await vi.waitFor(() => expect(harness.sent).toHaveLength(7));
 
 		const text = textOf(await harness.execute("bg", { action: "list" }));
-		expect(text).toContain("0 running · 7 finished");
+		expect(text).toContain("7 finished");
 		expect(text).toContain("(+2 more finished");
 	});
 
@@ -474,7 +480,7 @@ describe("background extension", () => {
 		harness.calls[0]?.finish(0);
 		await vi.waitFor(() => {
 			expect(harness.sent).toHaveLength(2);
-			expect(harness.statusUpdates.at(-1)).toBe("bg 1 done");
+			expect(harness.statusUpdates.at(-1)).toBe("bg 1 finished");
 		});
 	});
 
@@ -921,13 +927,13 @@ describe("renderBgResult summaries", () => {
 });
 
 describe("formatStatusline", () => {
-	it("reports running and done counts", () => {
-		expect(formatStatusline({ running: 2, total: 3, stalled: 0 })).toBe("bg 2 running · 1 done");
+	it("reports running and finished counts", () => {
+		expect(formatStatusline({ running: 2, total: 3, stalled: 0 })).toBe("bg 2 running · 1 finished");
 	});
 
 	it("splits stalled tasks out of the running count so the counts add up", () => {
 		expect(formatStatusline({ running: 3, total: 4, stalled: 1 })).toBe(
-			"bg 2 running · 1 waiting for input · 1 done",
+			"bg 2 running · 1 waiting for input · 1 finished",
 		);
 	});
 

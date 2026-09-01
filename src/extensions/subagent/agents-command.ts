@@ -263,7 +263,7 @@ class AgentsMenuComponent extends Container implements Focusable {
 }
 
 async function showTuiAgentsCommand(ctx: ExtensionCommandContext, currentThinking: ThinkingLevel): Promise<void> {
-	const config = await loadSubagentConfig(getAgentDir());
+	const config = await loadSubagentConfig(getAgentDir(), (message) => ctx.ui.notify(message, "warning"));
 	await ctx.ui.custom<void>(
 		(tui, theme, keybindings, done) =>
 			new AgentsMenuComponent({

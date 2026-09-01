@@ -93,7 +93,7 @@ async function runDialogProfileSettings(
 ): Promise<void> {
 	const agentDir = getAgentDir();
 	while (true) {
-		const config = await loadSubagentConfig(agentDir);
+		const config = await loadSubagentConfig(agentDir, (message) => ctx.ui.notify(message, "warning"));
 		const override = config.profiles[profile.name];
 		const action = await showDialogSettingsMenu(ctx, profile, override, currentThinking);
 		if (!action) return;

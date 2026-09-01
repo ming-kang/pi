@@ -21,6 +21,8 @@ interface FakeTui {
 	terminal: { rows: number; columns: number };
 }
 
+const components: BackgroundTasksMenu[] = [];
+
 interface Harness {
 	component: BackgroundTasksMenu;
 	tui: FakeTui;
@@ -89,6 +91,7 @@ function createHarness(options?: {
 		onClose,
 	};
 	const component = new BackgroundTasksMenu(componentOptions);
+	components.push(component);
 	const width = options?.width ?? 100;
 	return {
 		component,
@@ -129,6 +132,7 @@ describe("BackgroundTasksMenu", () => {
 	});
 
 	afterEach(() => {
+		for (const component of components.splice(0)) component.dispose();
 		vi.useRealTimers();
 	});
 
@@ -155,6 +159,7 @@ describe("BackgroundTasksMenu", () => {
 
 		const listLines = harness.render();
 		expect(listLines.some((line) => line.includes("…"))).toBe(true);
+		expect(listLines.some((line) => line.includes("1 waiting for input"))).toBe(true);
 
 		await harness.enterDetail();
 		const detailLines = harness.render();
