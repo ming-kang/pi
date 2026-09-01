@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.84.14] - 2026-09-01
+
 ### Changed
 
 - Simplified `web_search` tool metadata so its capability description, session-wide routing guidance, and conditional result instructions live in their canonical prompt layers.
