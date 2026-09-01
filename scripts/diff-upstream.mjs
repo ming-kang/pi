@@ -6,7 +6,13 @@ import { join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { prerelease, satisfies, valid, validRange } from "semver";
 
-const runtimeDependencyNames = ["@earendil-works/pi-agent-core", "@earendil-works/pi-ai", "@earendil-works/pi-tui"];
+const runtimeDependencyNames = [
+	"@earendil-works/pi-agent-core",
+	"@earendil-works/pi-ai",
+	"@earendil-works/pi-client",
+	"@earendil-works/pi-protocol",
+	"@earendil-works/pi-tui",
+];
 const manifestKeys = ["repository", "tag", "commit", "sourceSubtree", "sourceTree"];
 const deltaRequiredKeys = ["path", "category", "intent"];
 const deltaAllowedKeys = [...deltaRequiredKeys, "tests"];
@@ -502,9 +508,9 @@ export function runDiffUpstream({
 		return 1;
 	}
 
-	// Target mode classifies the upstream release diff against the ledger and
-	// never inspects the worktree: it answers "which upstream changes collide
-	// with registered deviations" during synchronization triage.
+	// Target mode classifies the upstream release diff against both the ledger
+	// and additions already owned by the clean HEAD tree. It never inspects
+	// staged, unstaged, or untracked worktree state.
 	if (targetTag !== undefined) {
 		const targetCommit = tryGit("rev-parse", "--verify", "--quiet", `refs/tags/${targetTag}^{commit}`);
 		if (!targetCommit) {
@@ -516,6 +522,10 @@ export function runDiffUpstream({
 		if (targetCommit && !targetTree) {
 			failures.push(`target tag ${targetTag} does not contain source subtree ${manifest.sourceSubtree}`);
 		}
+		const headTree = tryGit("rev-parse", "--verify", "--quiet", "HEAD^{tree}");
+		if (!headTree) {
+			failures.push("HEAD does not resolve to a tree; commit the distribution before target triage");
+		}
 		if (failures.length > 0) {
 			for (const w of warnings) writeLine(stderr, `warning: ${w}`);
 			printFailures(failures, stderr);
@@ -525,15 +535,28 @@ export function runDiffUpstream({
 		const ledgerFailures = [];
 		const deltaEntries = loadDeltaEntries(root, ledgerFailures);
 		for (const w of warnings) writeLine(stderr, `warning: ${w}`);
-		for (const f of ledgerFailures) writeLine(stderr, `warning: ${f}`);
+		if (ledgerFailures.length > 0) {
+			printFailures(ledgerFailures, stderr);
+			return 1;
+		}
 
+		const localAdditionPaths = new Set(
+			parseNameStatus(git("diff", "--name-status", "-z", "--no-renames", manifest.sourceTree, headTree))
+				.filter((entry) => entry.status === "A")
+				.map((entry) => entry.path),
+		);
 		const changes = parseNameStatus(
 			git("diff", "--name-status", "-z", "--no-renames", manifest.sourceTree, targetTree),
 		);
 		const removed = changes.filter((entry) => entry.status === "D");
 		const surviving = changes.filter((entry) => entry.status !== "D");
-		const colliding = surviving.filter((entry) => findDelta(deltaEntries, entry.path) !== undefined);
-		const clean = surviving.filter((entry) => findDelta(deltaEntries, entry.path) === undefined);
+		const registeredCollisions = surviving.filter((entry) => findDelta(deltaEntries, entry.path) !== undefined);
+		const additionCollisions = surviving.filter(
+			(entry) => findDelta(deltaEntries, entry.path) === undefined && localAdditionPaths.has(entry.path),
+		);
+		const clean = surviving.filter(
+			(entry) => findDelta(deltaEntries, entry.path) === undefined && !localAdditionPaths.has(entry.path),
+		);
 
 		writeLine(
 			stdout,
@@ -542,13 +565,21 @@ export function runDiffUpstream({
 		writeLine(stdout, `Target: ${targetTag} ${manifest.sourceSubtree} (tree ${targetTree.slice(0, 12)})`);
 		writeLine(stdout, "");
 		writeLine(stdout, `Upstream changes from ${manifest.tag} to ${targetTag} (${changes.length} total):`);
-		writeLine(stdout, `  ${String(colliding.length).padStart(4)} touching registered deviations (re-review each)`);
+		writeLine(
+			stdout,
+			`  ${String(registeredCollisions.length).padStart(4)} touching registered deviations (re-review each)`,
+		);
+		writeLine(
+			stdout,
+			`  ${String(additionCollisions.length).padStart(4)} colliding with fork-owned additions (re-review each)`,
+		);
 		writeLine(stdout, `  ${String(clean.length).padStart(4)} clear of fork deviations (adoption candidates)`);
 		writeLine(stdout, `  ${String(removed.length).padStart(4)} removed upstream`);
 
 		printGroups(
 			[
-				["Changes touching registered deviations", colliding],
+				["Changes touching registered deviations", registeredCollisions],
+				["Changes colliding with fork-owned additions", additionCollisions],
 				["Changes clear of fork deviations", clean],
 				["Removed upstream", removed],
 			],

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
@@ -21,6 +21,15 @@ const expectedRuntimePackages = [
 	"@earendil-works/pi-protocol",
 	"@earendil-works/pi-tui",
 ];
+const sourceExtensionsDirectory = new URL("../src/extensions/", import.meta.url);
+const expectedExtensionEntrypoints = readdirSync(sourceExtensionsDirectory, { withFileTypes: true })
+	.filter(
+		(entry) =>
+			entry.isDirectory() &&
+			existsSync(new URL(`${encodeURIComponent(entry.name)}/index.ts`, sourceExtensionsDirectory)),
+	)
+	.map((entry) => `dist/extensions/${entry.name}/index.js`)
+	.sort();
 const installPath = resolve(process.cwd(), installSpec);
 const resolvedInstallSpec = existsSync(installPath) ? installPath : installSpec;
 const installDirectory = mkdtempSync(join(tmpdir(), "astralyn-pi-package-smoke-"));
@@ -105,28 +114,25 @@ try {
 		"dist/index.js",
 		"dist/rpc-entry.js",
 		"dist/core/export-html/template.html",
-		"dist/extensions/deepwiki/index.js",
-		"dist/extensions/llama/index.js",
-		"dist/extensions/question/index.js",
-		"dist/extensions/router/index.js",
-		"dist/extensions/statusline/index.js",
-		"dist/extensions/subagent/index.js",
-		"dist/extensions/todo/index.js",
+		...expectedExtensionEntrypoints,
 		"dist/modes/interactive/assets/clankolas.png",
 		"dist/modes/interactive/theme/dark.json",
 		"dist/modes/interactive/theme/ice-cream-dark.json",
 		"dist/modes/interactive/theme/ice-cream-light.json",
 		"dist/modes/interactive/theme/light.json",
 		"docs/bundled/README.md",
+		"docs/bundled/extensions/background.md",
 		"docs/bundled/extensions/deepwiki.md",
 		"docs/bundled/extensions/question.md",
 		"docs/bundled/extensions/router.md",
 		"docs/bundled/extensions/statusline.md",
 		"docs/bundled/extensions/subagent.md",
 		"docs/bundled/extensions/todo.md",
+		"docs/bundled/extensions/web-search.md",
 		"docs/bundled/themes.md",
 		"docs/bundled/tool-presentation.md",
 		"docs/docs.json",
+		"docs/llama-cpp.md",
 		"docs/index.md",
 		"examples/sdk/01-minimal.ts",
 		"examples/sdk/README.md",

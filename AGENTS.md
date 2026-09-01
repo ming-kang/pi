@@ -5,7 +5,7 @@ This is the private standalone distribution of Pi's coding-agent package. It pub
 ## Non-negotiable boundaries
 
 - The repository contains one coding-agent package; runtime source is under `src/**`.
-- Consume AI, Agent core, and TUI through the exact `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, and `@earendil-works/pi-tui` npm dependencies. Never vendor, patch, monkey-patch, or recreate them.
+- Consume AI, Agent core, Client, Protocol, and TUI through the exact `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-client`, `@earendil-works/pi-protocol`, and `@earendil-works/pi-tui` npm dependencies. Never vendor, patch, monkey-patch, or recreate them.
 - Do not recreate a monorepo, workspace aliases, hidden bundled dependencies, a Fork framework, feature registry, or another publishable package.
 - Keep native tool presentation in `src/modes/interactive/components/tool-execution.ts` and the relevant built-in renderers. Prefer Pi-native presentation; use `renderShell: "self"` only when a tool intentionally owns its complete UI.
 - Extensions are self-contained under `src/extensions/`, use the Extension API, and never import another extension's internals. Prefer small domain-neutral duplication to coupling.
@@ -22,7 +22,7 @@ This is the private standalone distribution of Pi's coding-agent package. It pub
 ## Verification and repository safety
 
 - Run `npm run check` after code changes; run focused tests for changed tests or behavior, and build when exports, package metadata, TypeScript configuration, or bundled assets change. Do not run the complete suite unless requested or doing release verification.
-- On native Windows, use `npm run test:isolated` for a complete local suite. Treat focused failures as real; Ubuntu CI is authoritative for POSIX-sensitive complete-suite coverage. Verify interactive changes in a real TTY, including their affected pending, settled, collapsed, expanded, `/reload`, and `/tree` states.
+- On native Windows, use `npm run test:isolated` for a complete local suite. It preflights `fd`/`fdfind` and `rg` and reuses Pi-managed copies from the real agent bin while keeping credentials and settings isolated. Treat focused failures as real; Ubuntu CI is authoritative for POSIX-sensitive complete-suite coverage. Verify interactive changes in a real TTY, including their affected pending, settled, collapsed, expanded, `/reload`, and `/tree` states.
 - Never use `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, `git add -A`, or `git add .`. Stage explicit paths, inspect status before committing, and do not commit without an owner-requested checkpoint or release. Use concise `feat`, `fix`, or `docs` Conventional Commit messages.
 - Keep the upstream repository as the `upstream` remote; synchronize only from its release tags, never `upstream/main`, and never merge an upstream monorepo tag into this branch.
 

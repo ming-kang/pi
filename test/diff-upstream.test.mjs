@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -13,6 +13,8 @@ import {
 const runtimeDependencies = {
 	"@earendil-works/pi-agent-core": "1.2.3",
 	"@earendil-works/pi-ai": "1.2.3",
+	"@earendil-works/pi-client": "1.2.3",
+	"@earendil-works/pi-protocol": "1.2.3",
 	"@earendil-works/pi-tui": "1.2.3",
 };
 
@@ -32,6 +34,10 @@ function git(root, ...args) {
 function writeJson(path, value) {
 	mkdirSync(join(path, ".."), { recursive: true });
 	writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function readJson(path) {
+	return JSON.parse(readFileSync(path, "utf8"));
 }
 
 function baseManifest() {
@@ -103,6 +109,29 @@ function createTestRepo({ sourceDependencies = runtimeDependencies } = {}) {
 	});
 
 	return { root, manifest, commit, sourceTree };
+}
+
+function createTargetTag(repo, additions = {}) {
+	const sourceDir = join(repo.root, "packages", "coding-agent");
+	mkdirSync(join(sourceDir, "sub"), { recursive: true });
+	writeJson(join(sourceDir, "package.json"), {
+		name: "test-agent",
+		version: "1.2.4",
+		dependencies: runtimeDependencies,
+	});
+	for (const name of ["mod.txt", "drop.txt"]) {
+		writeFileSync(join(sourceDir, name), `${name}\n`);
+	}
+	for (const name of ["a.txt", "b.txt"]) {
+		writeFileSync(join(sourceDir, "sub", name), `${name}\n`);
+	}
+	for (const [name, contents] of Object.entries(additions)) {
+		writeFileSync(join(sourceDir, name), contents);
+	}
+	writeFileSync(join(sourceDir, ".gitignore"), "maintainers/\nignored.txt\n");
+	git(repo.root, "add", "packages");
+	git(repo.root, "commit", "-m", "upstream v1.2.4");
+	git(repo.root, "tag", "v1.2.4");
 }
 
 function invoke(root, args = []) {
@@ -193,6 +222,39 @@ describe("diff-upstream manifest and dependency validation", () => {
 		const result = invoke(repo.root, ["--check"]);
 		expect(result.code).toBe(1);
 		expect(result.stderr).toContain("does not satisfy upstream coding-agent range");
+	});
+
+	test("validates client and protocol ranges, root specs, and installed versions", () => {
+		const rangeRepo = createTestRepo({
+			sourceDependencies: { ...runtimeDependencies, "@earendil-works/pi-client": "^2.0.0" },
+		});
+		const rangeResult = invoke(rangeRepo.root, ["--check"]);
+		expect(rangeResult.code).toBe(1);
+		expect(rangeResult.stderr).toContain(
+			"local dependency @earendil-works/pi-client@1.2.3 does not satisfy upstream coding-agent range ^2.0.0",
+		);
+
+		const rootSpecRepo = createTestRepo();
+		const rootSpecShrinkwrapPath = join(rootSpecRepo.root, "npm-shrinkwrap.json");
+		const rootSpecShrinkwrap = readJson(rootSpecShrinkwrapPath);
+		rootSpecShrinkwrap.packages[""].dependencies["@earendil-works/pi-protocol"] = "1.2.4";
+		writeJson(rootSpecShrinkwrapPath, rootSpecShrinkwrap);
+		const rootSpecResult = invoke(rootSpecRepo.root, ["--check"]);
+		expect(rootSpecResult.code).toBe(1);
+		expect(rootSpecResult.stderr).toContain(
+			"npm-shrinkwrap.json root spec for @earendil-works/pi-protocol (1.2.4) does not match package.json (1.2.3)",
+		);
+
+		const installedRepo = createTestRepo();
+		const installedShrinkwrapPath = join(installedRepo.root, "npm-shrinkwrap.json");
+		const installedShrinkwrap = readJson(installedShrinkwrapPath);
+		installedShrinkwrap.packages["node_modules/@earendil-works/pi-client"].version = "1.2.4";
+		writeJson(installedShrinkwrapPath, installedShrinkwrap);
+		const installedResult = invoke(installedRepo.root, ["--check"]);
+		expect(installedResult.code).toBe(1);
+		expect(installedResult.stderr).toContain(
+			"npm-shrinkwrap.json installed version for @earendil-works/pi-client (1.2.4) does not match package.json (1.2.3)",
+		);
 	});
 });
 
@@ -287,23 +349,56 @@ describe("diff-upstream worktree collection and CLI execution", () => {
 		git(repo.root, "commit", "-m", "upstream v1.2.4");
 		git(repo.root, "tag", "v1.2.4");
 		writeJson(join(repo.root, "maintainers", "deltas.json"), {
-			deltas: [{ path: "mod.txt", category: "bugfix", intent: "Local fix" }],
+			deltas: [
+				{ path: "mod.txt", category: "bugfix", intent: "Local fix" },
+				{ path: "sub/", category: "distribution", intent: "Local subtree" },
+			],
 		});
 
 		const result = invoke(repo.root, ["--target", "v1.2.4"]);
 		expect(result.code).toBe(0);
 		expect(result.stdout).toContain("Target: v1.2.4 packages/coding-agent");
-		expect(result.stdout).toContain("1 touching registered deviations");
-		expect(result.stdout).toContain("3 clear of fork deviations");
+		expect(result.stdout).toContain("2 touching registered deviations");
+		expect(result.stdout).toContain("0 colliding with fork-owned additions");
+		expect(result.stdout).toContain("2 clear of fork deviations");
 		expect(result.stdout).toContain("1 removed upstream");
 		expect(result.stdout).toContain("M mod.txt  [bugfix] Local fix");
-		expect(result.stdout).toContain("M sub/a.txt");
+		expect(result.stdout).toContain("M sub/ (1 file)  [distribution] Local subtree");
 		expect(result.stdout).toContain("A new.txt");
 		expect(result.stdout).toContain("D drop.txt");
 
 		const missingTag = invoke(repo.root, ["--target", "v9.9.9"]);
 		expect(missingTag.code).toBe(1);
 		expect(missingTag.stderr).toContain("not available locally");
+	});
+
+	test("--target keeps fork-owned additions out of adoption candidates", () => {
+		const repo = createTestRepo();
+		writeFileSync(join(repo.root, "collision.txt"), "local implementation\n");
+		git(repo.root, "add", "collision.txt");
+		git(repo.root, "commit", "-m", "local addition");
+		createTargetTag(repo, { "collision.txt": "upstream implementation\n" });
+
+		const result = invoke(repo.root, ["--target", "v1.2.4"]);
+		expect(result.code).toBe(0);
+		expect(result.stdout).toContain("1 colliding with fork-owned additions");
+		expect(result.stdout).toContain("Changes colliding with fork-owned additions:");
+		expect(result.stdout).toContain("A collision.txt");
+		const adoptionSection = result.stdout.split("Changes clear of fork deviations:")[1] ?? "";
+		expect(adoptionSection).not.toContain("collision.txt");
+	});
+
+	test("--target fails closed when the deviation ledger is invalid", () => {
+		const repo = createTestRepo();
+		createTargetTag(repo);
+		writeJson(join(repo.root, "maintainers", "deltas.json"), {
+			deltas: [{ path: "mod.txt", category: "unknown", intent: "Invalid ledger" }],
+		});
+
+		const result = invoke(repo.root, ["--target", "v1.2.4"]);
+		expect(result.code).toBe(1);
+		expect(result.stderr).toContain("category must be one of");
+		expect(result.stdout).not.toContain("adoption candidates");
 	});
 });
 

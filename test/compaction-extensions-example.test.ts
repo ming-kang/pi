@@ -3,14 +3,8 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import customCompactionExtension from "../examples/extensions/custom-compaction.ts";
 import type { ExtensionAPI, SessionBeforeCompactEvent, SessionCompactEvent } from "../src/core/extensions/index.ts";
-
-vi.mock("@earendil-works/pi-coding-agent", () => ({
-	convertToLlm: (messages: unknown) => messages,
-	serializeConversation: () => "conversation",
-}));
-
-const { default: customCompactionExtension } = await import("../examples/extensions/custom-compaction.ts");
 
 describe("Documentation example", () => {
 	it("custom compaction example should type-check correctly", () => {
