@@ -8,18 +8,16 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { AgentToolResult, ToolRenderContext, ToolRenderResultOptions } from "../../core/extensions/types.ts";
-import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
+import { getMarkdownTheme, type Theme, type ThemeColor } from "../../modes/interactive/theme/theme.ts";
 import { AGENT_PROFILE_LABELS } from "./agents.ts";
-import { COMPACTION_ACTIVITY_ID, type SubagentAgentName } from "./constants.ts";
+import { COMPACTION_ACTIVITY_ID, DISPLAY_ACTIVITY_LIMIT, type SubagentAgentName } from "./constants.ts";
 import type { SubagentParams } from "./schema.ts";
 import { getSubagentRetryView } from "./state.ts";
 import { plainLine, truncate } from "./text.ts";
 import type { SubagentDetails, SubagentRunDetails, SubagentRunStatus, ToolActivity } from "./types.ts";
 
-const ACTIVITY_RESULT_LIMIT = 96;
 const RETRY_ERROR_LIMIT = 160;
 const FALLBACK_OUTPUT_LIMIT = 4_000;
-const ACTIVITY_DURATION_MIN_MS = 10_000;
 const OUTPUT_TRUNCATION_NOTICE_PATTERN = /\s*\[Output truncated(?:: \d+ bytes omitted)?\.\]\s*$/u;
 
 // A breathing dot-to-star bloom: the sequence plays forward to full bloom
@@ -99,14 +97,6 @@ function statusMarker(status: SubagentRunStatus, theme: Theme): string {
 	return theme.fg(statusColor(status), glyph);
 }
 
-function statusWord(status: SubagentRunStatus): string {
-	if (status === "completed") return "Completed";
-	if (status === "failed") return "Failed";
-	if (status === "aborted") return "Aborted";
-	if (status === "running") return "Thinking...";
-	return "Queued";
-}
-
 function displayLine(text: string): string {
 	return plainLine(text).replace(OUTPUT_TRUNCATION_NOTICE_PATTERN, "...").trim();
 }
@@ -122,60 +112,68 @@ function retryText(run: SubagentRunDetails): string | undefined {
 	return error ? `${state} · ${error}` : state;
 }
 
-function replaceToolPrefix(text: string, toolName: string, label: string, emptyLabel = label): string {
-	if (text === toolName) return emptyLabel;
-	if (text.startsWith(`${toolName} `)) return `${label}${text.slice(toolName.length)}`;
-	return text;
-}
-
-function activitySummary(activity: ToolActivity): string {
-	const summary = displayLine(activity.summary);
-	if (activity.toolName === COMPACTION_ACTIVITY_ID) {
-		return activity.status === "running" ? "Compacting..." : summary;
+function stripActivityPrefix(summary: string, prefixes: readonly string[]): string {
+	for (const prefix of prefixes) {
+		if (summary === prefix) return "";
+		if (summary.startsWith(`${prefix} `)) return summary.slice(prefix.length + 1).trim();
 	}
-	if (activity.toolName === "bash") return summary === "bash" ? "Run" : summary;
-	if (activity.toolName === "read") return replaceToolPrefix(summary, "read", "Read");
-	if (activity.toolName === "grep") return replaceToolPrefix(summary, "grep", "Search");
-	if (activity.toolName === "find") return replaceToolPrefix(summary, "find", "Find");
-	if (activity.toolName === "ls") return replaceToolPrefix(summary, "ls", "List", "List .");
-	if (activity.toolName === "edit") return replaceToolPrefix(summary, "edit", "Edit");
-	if (activity.toolName === "write") return replaceToolPrefix(summary, "write", "Write");
-	return summary || activity.toolName;
+	return summary;
 }
 
-function latestRunningActivity(run: SubagentRunDetails, toolName?: string): ToolActivity | undefined {
+function activityCallSummary(activity: ToolActivity): string {
+	const summary = displayLine(activity.summary);
+	let label: string;
+	let detail: string;
+	switch (activity.toolName) {
+		case "bash":
+			label = "Run";
+			detail = stripActivityPrefix(summary, ["Run", "bash"]);
+			break;
+		case "read":
+			label = "Read";
+			detail = stripActivityPrefix(summary, ["Read", "read"]);
+			break;
+		case "grep":
+			label = "Grep";
+			detail = stripActivityPrefix(summary, ["Grep", "grep", "Search"]);
+			break;
+		case "find":
+			label = "Find";
+			detail = stripActivityPrefix(summary, ["Find", "find"]);
+			break;
+		case "ls":
+			label = "List";
+			detail = stripActivityPrefix(summary, ["List", "ls"]) || ".";
+			break;
+		case "edit":
+			label = "Edit";
+			detail = stripActivityPrefix(summary, ["Edit", "edit"]);
+			break;
+		case "write":
+			label = "Write";
+			detail = stripActivityPrefix(summary, ["Write", "write"]);
+			break;
+		default:
+			return summary || activity.toolName;
+	}
+	return detail ? `${label}(${detail})` : label;
+}
+
+function latestRunningActivity(run: SubagentRunDetails, toolName: string): ToolActivity | undefined {
 	for (let index = run.activities.length - 1; index >= 0; index--) {
 		const activity = run.activities[index];
-		if (activity?.status === "running" && (toolName === undefined || activity.toolName === toolName)) return activity;
+		if (activity?.status === "running" && activity.toolName === toolName) return activity;
 	}
 	return undefined;
 }
 
-function fallbackCurrentActivity(run: SubagentRunDetails): string | undefined {
-	if (!run.currentActivity) return undefined;
-	const current = displayLine(run.currentActivity);
-	if (/^Compacting(?: context)?(?:…|\.\.\.)?$/u.test(current)) return "Compacting...";
-	return current;
-}
-
-function runStateText(run: SubagentRunDetails): string {
-	if (run.status === "completed" || run.status === "failed" || run.status === "aborted") {
-		const duration = elapsed(run.startedAt, run.endedAt);
-		return duration ? `${statusWord(run.status)} · ${duration}` : statusWord(run.status);
-	}
-
-	const retry = retryText(run);
-	if (retry) return retry;
-	if (run.status === "queued") return "Queued";
-
-	const compaction = latestRunningActivity(run, COMPACTION_ACTIVITY_ID);
-	if (compaction) return "Compacting...";
-	const activity = latestRunningActivity(run);
-	if (activity) return activitySummary(activity);
-	const current = fallbackCurrentActivity(run);
-	if (current) return current;
-	if (run.status === "running" && run.usage.turns === 0 && run.usage.toolUses === 0) return "Starting...";
-	return statusWord(run.status);
+function formatTotalTokens(value: number): string {
+	const count = Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+	if (count < 1_000) return String(count);
+	const divisor = count < 999_950 ? 1_000 : 1_000_000;
+	const suffix = divisor === 1_000 ? "k" : "M";
+	const rounded = Math.round((count / divisor) * 10) / 10;
+	return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)}${suffix}`;
 }
 
 function spinnerGlyph(now: number): string {
@@ -244,32 +242,38 @@ class CollapsedFlow implements Component {
 	invalidate(): void {}
 }
 
+function toolCallLabel(count: number): string {
+	return `${count} tool call${count === 1 ? "" : "s"}`;
+}
+
 function runHeader(run: SubagentRunDetails, index: number, theme: Theme): string {
-	const metrics = [run.model];
-	if (run.thinking !== "off") metrics.push(run.thinking);
-	if (run.cwd) metrics.push(`cwd: ${run.cwd}`);
-	if (run.usage.toolUses) metrics.push(`${run.usage.toolUses} tool use${run.usage.toolUses === 1 ? "" : "s"}`);
-	if (run.usage.turns) metrics.push(`${run.usage.turns} turn${run.usage.turns === 1 ? "" : "s"}`);
-	const duration = elapsed(run.startedAt, run.endedAt);
-	if (duration) metrics.push(duration);
-	return `${theme.fg("dim", `── #${index + 1} `)}${theme.fg("accent", profileLabel(run.agent))}${theme.fg("dim", ` · ${metrics.join(" · ")}`)}`;
+	const separator = theme.fg("dim", " · ");
+	const duration = elapsed(run.startedAt, run.endedAt) ?? "0.0s";
+	const metrics = [
+		run.model,
+		run.thinking,
+		`${formatTotalTokens(run.usage.totalTokens)} tok`,
+		toolCallLabel(run.usage.toolUses),
+		duration,
+	].map((metric) => theme.fg("muted", metric));
+	return [theme.fg("accent", theme.bold(`#${index + 1} ${profileLabel(run.agent)}`)), ...metrics].join(separator);
+}
+
+function sectionTitle(title: string, theme: Theme, color: ThemeColor, suffix?: string): string {
+	const heading = theme.fg(color, theme.bold(title));
+	return suffix ? `${heading}${theme.fg("dim", ` · ${suffix}`)}` : heading;
+}
+
+function activityTitleSuffix(total: number, shown: number): string {
+	if (total <= DISPLAY_ACTIVITY_LIMIT && shown >= total) return toolCallLabel(total);
+	if (shown > 0) return `last ${shown} of ${total} tool calls`;
+	return toolCallLabel(total);
 }
 
 function activityLine(activity: ToolActivity, theme: Theme): string {
-	const summary = activitySummary(activity);
-	let line =
-		activity.status === "failed"
-			? `${theme.fg("error", "×")} ${theme.fg("toolOutput", summary)}`
-			: activity.status === "running"
-				? `${theme.fg("accent", "›")} ${theme.fg("toolOutput", summary)}`
-				: `  ${theme.fg("toolOutput", summary)}`;
-	if (activity.status === "failed" && activity.resultSummary) {
-		line += theme.fg("error", ` · ${truncate(displayLine(activity.resultSummary), ACTIVITY_RESULT_LIMIT)}`);
-	}
-	if (activity.endedAt !== undefined && activity.endedAt - activity.startedAt >= ACTIVITY_DURATION_MIN_MS) {
-		line += theme.fg("dim", ` · ${formatDuration((activity.endedAt - activity.startedAt) / 1_000)}`);
-	}
-	return line;
+	const color: ThemeColor =
+		activity.status === "failed" ? "error" : activity.status === "running" ? "accent" : "toolOutput";
+	return `  ${theme.fg(color, activityCallSummary(activity))}`;
 }
 
 function addPrompt(
@@ -279,52 +283,91 @@ function addPrompt(
 	args: SubagentParams,
 	theme: Theme,
 ): void {
-	container.addChild(new Spacer(1));
-	container.addChild(new Text(theme.fg("muted", "Prompt"), 0, 0));
-	container.addChild(new Text(theme.fg("toolOutput", taskPrompt(args, index, run)), 0, 0));
+	container.addChild(new Text(sectionTitle("Prompt", theme, "toolTitle"), 0, 0));
+	container.addChild(new Text(theme.fg("toolOutput", taskPrompt(args, index, run)), 2, 0));
 }
 
-function renderRunningRun(run: SubagentRunDetails, index: number, args: SubagentParams, theme: Theme): Component {
-	const container = new Container();
-	container.addChild(new SingleLineText(runHeader(run, index, theme)));
-	addPrompt(container, run, index, args, theme);
-	container.addChild(new Spacer(1));
-	const total = Math.max(run.usage.toolUses, run.activities.length);
-	const label = total > run.activities.length ? `Activity · last ${run.activities.length} of ${total}` : "Activity";
-	container.addChild(new Text(theme.fg("muted", label), 0, 0));
-
-	const retry = retryText(run);
-	if (retry) {
-		container.addChild(new SingleLineText(`${statusMarker(run.status, theme)} ${theme.fg("toolOutput", retry)}`));
+function addActivity(container: Container, run: SubagentRunDetails, theme: Theme): void {
+	const toolCalls = run.activities.filter((activity) => activity.toolName !== COMPACTION_ACTIVITY_ID);
+	const shown = toolCalls.slice(-DISPLAY_ACTIVITY_LIMIT);
+	const total = Math.max(run.usage.toolUses, toolCalls.length);
+	container.addChild(
+		new Text(sectionTitle("Activity", theme, "toolTitle", activityTitleSuffix(total, shown.length)), 0, 0),
+	);
+	if (shown.length === 0) {
+		const empty = total === 0 ? "No tool calls yet." : "Activity unavailable.";
+		container.addChild(new Text(theme.fg("muted", empty), 2, 0));
+		return;
 	}
-	for (const activity of run.activities) container.addChild(new SingleLineText(activityLine(activity, theme)));
-	if (!retry && run.activities.length === 0) {
-		container.addChild(new SingleLineText(theme.fg("dim", `  ${runStateText(run)}`)));
-	}
-	return container;
+	for (const activity of shown) container.addChild(new SingleLineText(activityLine(activity, theme)));
 }
 
-function renderSettledRun(run: SubagentRunDetails, index: number, args: SubagentParams, theme: Theme): Component {
-	const container = new Container();
-	container.addChild(new SingleLineText(runHeader(run, index, theme)));
-	addPrompt(container, run, index, args, theme);
-	if (run.error) {
+function outcomeColor(status: SubagentRunStatus): ThemeColor {
+	if (status === "completed") return "success";
+	if (status === "failed") return "error";
+	if (status === "aborted") return "warning";
+	return "accent";
+}
+
+function outcomeReport(run: SubagentRunDetails): string {
+	if (typeof run.report === "string") return run.report;
+	const legacyOutput = (run as SubagentRunDetails & { finalOutput?: unknown }).finalOutput;
+	return typeof legacyOutput === "string" ? legacyOutput : "";
+}
+
+function hasOutcome(report: string): boolean {
+	return report.trim().length > 0;
+}
+
+function addOutcomeMarkdown(container: Container, report: string, theme: Theme): void {
+	container.addChild(
+		new Markdown(report, 2, 0, getMarkdownTheme(), {
+			color: (text) => theme.fg("toolOutput", text),
+		}),
+	);
+}
+
+function addOutcome(container: Container, run: SubagentRunDetails, theme: Theme): void {
+	const color = outcomeColor(run.status);
+	const report = outcomeReport(run);
+	container.addChild(new Text(sectionTitle("Outcome", theme, color), 0, 0));
+
+	if (run.status === "queued" || run.status === "running") {
+		container.addChild(new Text(theme.fg("muted", "Still running..."), 2, 0));
+		const retry = retryText(run);
+		if (retry) {
+			container.addChild(new Text(theme.fg("warning", retry), 2, 0));
+		} else if (latestRunningActivity(run, COMPACTION_ACTIVITY_ID)) {
+			container.addChild(new Text(theme.fg("accent", "Compacting context..."), 2, 0));
+		}
+		return;
+	}
+
+	if (run.status === "completed") {
+		if (hasOutcome(report)) addOutcomeMarkdown(container, report, theme);
+		else container.addChild(new Text(theme.fg("muted", "No outcome returned."), 2, 0));
+		return;
+	}
+
+	const verdict = run.status === "failed" ? "Failed" : "Aborted";
+	const reason = run.error ? `${verdict}: ${run.error}` : `${verdict}.`;
+	container.addChild(new Text(theme.fg(color, reason), 2, 0));
+	if (hasOutcome(report)) {
 		container.addChild(new Spacer(1));
-		container.addChild(new Text(theme.fg("muted", "Error"), 0, 0));
-		container.addChild(new Text(theme.fg("error", run.error), 0, 0));
+		container.addChild(new Text(theme.fg("muted", "Partial outcome:"), 2, 0));
+		addOutcomeMarkdown(container, report, theme);
 	}
+}
+
+function renderRun(run: SubagentRunDetails, index: number, args: SubagentParams, theme: Theme): Component {
+	const container = new Container();
+	container.addChild(new SingleLineText(runHeader(run, index, theme)));
 	container.addChild(new Spacer(1));
-	const reportLabel = run.status !== "completed" && run.report ? "Report · partial" : "Report";
-	container.addChild(new Text(theme.fg("muted", reportLabel), 0, 0));
-	if (run.report) {
-		container.addChild(
-			new Markdown(run.report, 0, 0, getMarkdownTheme(), {
-				color: (text) => theme.fg("toolOutput", text),
-			}),
-		);
-	} else {
-		container.addChild(new Text(theme.fg("muted", "(No report.)"), 0, 0));
-	}
+	addPrompt(container, run, index, args, theme);
+	container.addChild(new Spacer(1));
+	addActivity(container, run, theme);
+	container.addChild(new Spacer(1));
+	addOutcome(container, run, theme);
 	return container;
 }
 
@@ -388,17 +431,6 @@ export function renderSubagentCall(args: SubagentParams, theme: Theme): Componen
 	return new Text(title, 0, 0);
 }
 
-/** Batch-level timing and cost live only in the expanded view. */
-function batchSummaryLine(details: SubagentDetails, theme: Theme, isPartial: boolean): string {
-	const parts: string[] = [];
-	const duration = elapsed(details.startedAt, details.endedAt);
-	if (duration) parts.push(duration);
-	const cost = details.usage?.cost;
-	if (!isPartial && typeof cost === "number" && Number.isFinite(cost) && cost > 0) parts.push(`$${cost.toFixed(3)}`);
-	const tasks = `${details.runs.length} task${details.runs.length === 1 ? "" : "s"}`;
-	return `${theme.fg("dim", `── Batch · ${tasks}`)}${parts.length > 0 ? `${theme.fg("dim", ` · ${parts.join(" · ")}`)}` : ""}`;
-}
-
 export function renderSubagentResult(
 	result: AgentToolResult<SubagentDetails>,
 	options: ToolRenderResultOptions,
@@ -417,14 +449,9 @@ export function renderSubagentResult(
 		return container;
 	}
 
-	container.addChild(new SingleLineText(batchSummaryLine(details, theme, options.isPartial)));
-	container.addChild(new Spacer(1));
 	for (const [index, run] of details.runs.entries()) {
 		if (index > 0) container.addChild(new Spacer(1));
-		const settled = run.status === "completed" || run.status === "failed" || run.status === "aborted";
-		container.addChild(
-			settled ? renderSettledRun(run, index, args, theme) : renderRunningRun(run, index, args, theme),
-		);
+		container.addChild(renderRun(run, index, args, theme));
 	}
 	return container;
 }

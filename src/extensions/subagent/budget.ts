@@ -1,6 +1,8 @@
 import {
+	COMPACTION_ACTIVITY_ID,
 	DETAILS_ACTIVITY_LIMIT,
 	DETAILS_OUTPUT_LIMIT,
+	DISPLAY_ACTIVITY_LIMIT,
 	RETRY_ERROR_TEXT_LIMIT,
 	TASK_OUTPUT_LIMIT,
 	TOTAL_OUTPUT_LIMIT,
@@ -49,6 +51,30 @@ function detailsSize(details: SubagentDetails): number {
 	return Buffer.byteLength(JSON.stringify(details), "utf8");
 }
 
+// Keep the normal newest-activity tail while guaranteeing that synthetic
+// compaction entries cannot evict the three real tool calls the expanded UI
+// promises to show. The count and byte caps remain unchanged.
+function selectDetailsActivities(activities: SubagentRunDetails["activities"]): SubagentRunDetails["activities"] {
+	if (activities.length <= DETAILS_ACTIVITY_LIMIT) return activities;
+
+	const required = new Set<number>();
+	for (let index = activities.length - 1; index >= 0 && required.size < DISPLAY_ACTIVITY_LIMIT; index--) {
+		if (activities[index]?.toolName !== COMPACTION_ACTIVITY_ID) required.add(index);
+	}
+
+	const selected = new Set<number>();
+	for (let index = activities.length - DETAILS_ACTIVITY_LIMIT; index < activities.length; index++) selected.add(index);
+	for (const index of required) selected.add(index);
+
+	const ordered = [...selected].sort((left, right) => left - right);
+	while (ordered.length > DETAILS_ACTIVITY_LIMIT) {
+		const removable = ordered.findIndex((index) => !required.has(index));
+		if (removable === -1) break;
+		ordered.splice(removable, 1);
+	}
+	return ordered.map((index) => activities[index]!);
+}
+
 function boundRuns(details: SubagentDetails, reportLimit: number): SubagentDetails {
 	return {
 		...details,
@@ -57,7 +83,7 @@ function boundRuns(details: SubagentDetails, reportLimit: number): SubagentDetai
 			cwd: boundText(run.cwd, 1_024),
 			currentActivity: run.currentActivity ? boundText(run.currentActivity, 512) : undefined,
 			retry: run.retry ? { ...run.retry, error: boundText(run.retry.error, RETRY_ERROR_TEXT_LIMIT) } : undefined,
-			activities: run.activities.slice(-DETAILS_ACTIVITY_LIMIT).map((activity) => ({
+			activities: selectDetailsActivities(run.activities).map((activity) => ({
 				...activity,
 				summary: boundText(activity.summary, 256),
 				resultSummary: activity.resultSummary ? boundText(activity.resultSummary, 256) : undefined,

@@ -89,6 +89,49 @@ describe("subagent output bounds", () => {
 		expect(boundSubagentDetails(small)).toEqual(small);
 	});
 
+	it("retains the latest three real tool calls when compactions fill the bounded tail", () => {
+		const details: SubagentDetails = {
+			status: "completed",
+			startedAt: 0,
+			usage: emptyUsage(),
+			runs: [
+				{
+					id: "subagent-1",
+					agent: "explorer",
+					description: "Inspect",
+					cwd: "",
+					model: "provider/model",
+					thinking: "low",
+					status: "completed",
+					activities: [
+						...Array.from({ length: 4 }, (_, index) => ({
+							id: `read-${index + 1}`,
+							toolName: "read",
+							summary: `read file-${index + 1}.ts`,
+							status: "succeeded" as const,
+							startedAt: index,
+						})),
+						...Array.from({ length: 20 }, (_, index) => ({
+							id: `compaction-${index + 1}`,
+							toolName: "compaction",
+							summary: "Compact context",
+							status: "succeeded" as const,
+							startedAt: index + 4,
+						})),
+					],
+					report: "Done.",
+					usage: { ...emptyUsage(), toolUses: 4 },
+				},
+			],
+		};
+		const activities = boundSubagentDetails(details).runs[0]!.activities;
+		expect(activities).toHaveLength(DETAILS_ACTIVITY_LIMIT);
+		expect(
+			activities.filter((activity) => activity.toolName !== "compaction").map((activity) => activity.id),
+		).toEqual(["read-2", "read-3", "read-4"]);
+		expect(activities.at(-1)?.id).toBe("compaction-20");
+	});
+
 	it("bounds aggregate details even when every worker produces large evidence", () => {
 		const details: SubagentDetails = {
 			status: "failed",

@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Redesigned the bundled Subagent expanded transcript around one fixed per-task `#N Profile · model · effort · tokens · tool calls · time` header followed by indented Prompt, a three-call Activity tail, and a state-colored Outcome. The redundant Batch line, turns, cwd, aggregate cost, and separate Error/Report sections are gone; completed tasks retain their Activity tail, running tasks keep retry and compaction diagnostics under Outcome, and the collapsed flow and tool/result contracts are unchanged.
+
 ## [0.84.14] - 2026-09-01
 
 ### Changed

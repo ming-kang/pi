@@ -169,6 +169,18 @@ describe("subagent rendering", () => {
 		expect(expandedOutput).not.toContain("Old shape");
 	});
 
+	it("restores a legacy finalOutput as the expanded Outcome", () => {
+		const legacyRun = {
+			...run(),
+			report: undefined,
+			finalOutput: "Legacy worker outcome.",
+		} as unknown as SubagentRunDetails;
+		const output = expanded(details({ runs: [legacyRun] }));
+		expect(output).toContain("Outcome");
+		expect(output).toContain("Legacy worker outcome.");
+		expect(output).not.toContain("No outcome returned.");
+	});
+
 	it("collapses settled results to ordered status rows without an aggregate line", () => {
 		const output = collapsed(
 			details({
@@ -252,9 +264,9 @@ describe("subagent rendering", () => {
 				],
 			}),
 		);
-		expect(output).toContain("── #1 Explorer · test/model · low · 2 tool uses · 1 turn · 1m 15s");
-		expect(output).toContain("── #2 General · test/model · low · 2 tool uses · 1 turn · 2m 0s");
-		expect(output).toContain("── #3 General · test/model · low · 2 tool uses · 1 turn · 1m 0s");
+		expect(output).toContain("#1 Explorer · test/model · low · 60 tok · 2 tool calls · 1m 15s");
+		expect(output).toContain("#2 General · test/model · low · 60 tok · 2 tool calls · 2m 0s");
+		expect(output).toContain("#3 General · test/model · low · 60 tok · 2 tool calls · 1m 0s");
 		expect(output).not.toMatch(/\b60s\b/u);
 	});
 
@@ -273,7 +285,7 @@ describe("subagent rendering", () => {
 		expect(output).not.toContain("Prompt");
 	});
 
-	it("normalizes every built-in worker tool to a direct activity verb", () => {
+	it("normalizes every built-in worker tool to a parenthesized activity call", () => {
 		const activities = [
 			runningActivity("bash", "bash", "Run npm test"),
 			runningActivity("read", "read", "read src/index.ts"),
@@ -292,13 +304,37 @@ describe("subagent rendering", () => {
 				tasks: runs.map((entry) => ({ agent: entry.agent as "explorer" | "general", prompt: "Hidden" })),
 			},
 		});
-		expect(output).toContain("› Run npm test");
-		expect(output).toContain("› Read src/index.ts");
-		expect(output).toContain("› Search normalizeState");
-		expect(output).toContain("› Find **/*.test.ts");
-		expect(output).toContain("› List src");
-		expect(output).toContain("› Edit src/index.ts");
-		expect(output).toContain("› Write docs/design.md");
+		expect(output).toContain("  Run(npm test)");
+		expect(output).toContain("  Read(src/index.ts)");
+		expect(output).toContain("  Grep(normalizeState)");
+		expect(output).toContain("  Find(**/*.test.ts)");
+		expect(output).toContain("  List(src)");
+		expect(output).toContain("  Edit(src/index.ts)");
+		expect(output).toContain("  Write(docs/design.md)");
+	});
+
+	it("shows only the last three tool calls while preserving the total count", () => {
+		const activities: ToolActivity[] = ["a", "b", "c", "d", "e"].map((name, index) => ({
+			id: `read-${name}`,
+			toolName: "read",
+			summary: `read ${name}.ts`,
+			status: "succeeded",
+			startedAt: index,
+		}));
+		const output = expanded(
+			details({
+				status: "running",
+				endedAt: undefined,
+				runs: [liveRun({ activities, usage: usage({ toolUses: 60 }) })],
+			}),
+			{ isPartial: true },
+		);
+		expect(output).toContain("Activity · last 3 of 60 tool calls");
+		expect(output).not.toContain("Read(a.ts)");
+		expect(output).not.toContain("Read(b.ts)");
+		expect(output).toContain("Read(c.ts)");
+		expect(output).toContain("Read(d.ts)");
+		expect(output).toContain("Read(e.ts)");
 	});
 
 	it("shows auto-compaction as its own running state", () => {
@@ -315,10 +351,12 @@ describe("subagent rendering", () => {
 		const open = expanded(details({ status: "running", endedAt: undefined, runs: [compacting] }), {
 			isPartial: true,
 		});
-		expect(open).toContain("› Compacting...");
+		expect(open).toContain("Outcome");
+		expect(open).toContain("Still running...");
+		expect(open).toContain("Compacting context...");
 	});
 
-	it("shows settled compaction sizes and failed reasons in live Activity history", () => {
+	it("keeps synthetic compaction entries out of the three tool-call Activity rows", () => {
 		const output = expanded(
 			details({
 				status: "running",
@@ -334,6 +372,7 @@ describe("subagent rendering", () => {
 								startedAt: 0,
 								endedAt: 12_000,
 							},
+							{ id: "read-1", toolName: "read", summary: "read a.ts", status: "succeeded", startedAt: 1 },
 							{
 								id: "compaction-2",
 								toolName: "compaction",
@@ -343,14 +382,18 @@ describe("subagent rendering", () => {
 								endedAt: 15_000,
 								resultSummary: "Auto-compaction failed: Nothing to compact",
 							},
+							{ id: "grep-1", toolName: "grep", summary: "grep src", status: "succeeded", startedAt: 2 },
 						],
 					}),
 				],
 			}),
 			{ isPartial: true },
 		);
-		expect(output).toContain("Compacted 244k → 48k · 12s");
-		expect(output).toContain("× Compact context · Auto-compaction failed: Nothing to compact");
+		expect(output).toContain("Activity · 2 tool calls");
+		expect(output).toContain("Read(a.ts)");
+		expect(output).toContain("Grep(src)");
+		expect(output).not.toContain("Compacted 244k");
+		expect(output).not.toContain("Nothing to compact");
 	});
 
 	it("keeps every mixed-state row in original ordinal order", () => {
@@ -467,7 +510,9 @@ describe("subagent rendering", () => {
 		const open = expanded(details({ status: "running", endedAt: undefined, runs: [retrying] }), {
 			isPartial: true,
 		});
-		expect(open).toContain("› Retrying (1/3) in 8s · fetch failed");
+		expect(open).toContain("Outcome");
+		expect(open).toContain("Still running...");
+		expect(open).toContain("Retrying (1/3) in 8s · fetch failed");
 	});
 
 	it("keeps task-level retry backoff out of collapsed rows", () => {
@@ -479,7 +524,9 @@ describe("subagent rendering", () => {
 		const open = expanded(details({ status: "running", endedAt: undefined, runs: [retrying] }), {
 			isPartial: true,
 		});
-		expect(open).toContain("○ Retrying (1/2) in 8s · fetch failed");
+		expect(open).toContain("Outcome");
+		expect(open).toContain("Still running...");
+		expect(open).toContain("Retrying (1/2) in 8s · fetch failed");
 	});
 
 	it("keeps terminal failure reasons out of compact rows", () => {
@@ -506,7 +553,7 @@ describe("subagent rendering", () => {
 		expect(output).not.toContain(omitted);
 	});
 
-	it("keeps batch timing and cost out of collapsed rows and shows them expanded", () => {
+	it("keeps aggregate batch timing and cost out of both views", () => {
 		const data = details({
 			status: "failed",
 			startedAt: 0,
@@ -519,10 +566,13 @@ describe("subagent rendering", () => {
 		expect(folded).not.toContain("$0.420");
 		expect(folded).not.toContain("4.0s");
 		const open = expanded(data);
-		expect(open).toContain("── Batch · 2 tasks · 4.0s · $0.420");
+		expect(open).toContain("#1 Explorer · test/model · low · 60 tok · 2 tool calls · 1.5s");
+		expect(open).toContain("#2 General · test/model · low · 60 tok · 2 tool calls · 1.5s");
+		expect(open).not.toContain("Batch");
+		expect(open).not.toContain("$0.420");
 	});
 
-	it("expands a settled task into compact metadata, full prompt, and report", () => {
+	it("expands a settled task into fixed metadata, full Prompt, Activity, and Outcome", () => {
 		const output = expanded(
 			details({
 				startedAt: 0,
@@ -536,16 +586,95 @@ describe("subagent rendering", () => {
 				],
 			}),
 		);
-		expect(output).toContain("── Batch · 1 task · 4.0s");
-		expect(output).toContain("── #1 Explorer · test/model · low · 2 tool uses · 1 turn · 4.0s");
+		expect(output).toContain("#1 Explorer · test/model · low · 60 tok · 2 tool calls · 4.0s");
 		expect(output).toContain("Prompt");
 		expect(output).toContain("Inspect the code.");
-		expect(output).toContain("Report");
+		expect(output).toContain("Activity · 2 tool calls");
+		expect(output).toContain("Outcome");
 		expect(output).toContain("Summary: found entry.ts");
-		expect(output).not.toContain("low thinking");
-		expect(output).not.toContain("60 tok");
+		expect(output).not.toContain("Batch");
+		expect(output).not.toContain("turn");
 		expect(output).not.toContain("$0.");
-		expect(output).not.toContain("✓ Explorer");
+		expect(output).not.toContain("Report");
+	});
+
+	it("formats fixed header metadata and compact token totals", () => {
+		const tokenTotals = [999, 1_000, 1_250, 99_900, 128_400, 1_250_000];
+		const runs = tokenTotals.map((totalTokens, index) =>
+			run({
+				id: `token-${index + 1}`,
+				agent: index === 0 ? "explorer" : "general",
+				thinking: index === 0 ? "off" : "max",
+				cwd: "nested",
+				usage: usage({ turns: 27, toolUses: index === 0 ? 1 : 63, totalTokens, cost: 0.42 }),
+			}),
+		);
+		const output = expanded(details({ runs }), {
+			args: {
+				tasks: runs.map((entry) => ({ agent: entry.agent as "explorer" | "general", prompt: "Inspect." })),
+			},
+		});
+		expect(output).toContain("#1 Explorer · test/model · off · 999 tok · 1 tool call · 1.5s");
+		expect(output).toContain("1k tok");
+		expect(output).toContain("1.3k tok");
+		expect(output).toContain("99.9k tok");
+		expect(output).toContain("128.4k tok");
+		expect(output).toContain("1.3M tok");
+		expect(output).not.toContain("27 turns");
+		expect(output).not.toContain("cwd:");
+		expect(output).not.toContain("$0.42");
+	});
+
+	it("uses identity, section, and outcome-state semantic colors", () => {
+		const colors: string[] = [];
+		const trackingTheme = {
+			...theme,
+			fg: (color: string, text: string) => {
+				colors.push(`${color}:${text}`);
+				return text;
+			},
+		} as Theme;
+		const runs = [
+			liveRun({ usage: usage({ turns: 0, toolUses: 0, totalTokens: 0 }) }),
+			run({ id: "completed", agent: "general" }),
+			run({ id: "failed", status: "failed", error: "failed", report: "" }),
+			run({ id: "aborted", status: "aborted", error: "aborted", report: "" }),
+		];
+		renderSubagentResult(
+			{ content: [{ type: "text", text: "mixed" }], details: details({ status: "running", runs }) },
+			{ expanded: true, isPartial: true },
+			trackingTheme,
+			{
+				tasks: runs.map((entry) => ({ agent: entry.agent as "explorer" | "general", prompt: "Inspect." })),
+			},
+			false,
+		).render(120);
+		expect(colors).toContain("accent:#1 Explorer");
+		expect(colors).toContain("toolTitle:Prompt");
+		expect(colors).toContain("toolTitle:Activity");
+		expect(colors).toContain("accent:Outcome");
+		expect(colors).toContain("success:Outcome");
+		expect(colors).toContain("error:Outcome");
+		expect(colors).toContain("warning:Outcome");
+	});
+
+	it("indents Prompt, Activity, and Outcome bodies by two columns", () => {
+		const lines = renderLines(
+			details({
+				runs: [
+					run({
+						activities: [
+							{ id: "read-1", toolName: "read", summary: "read entry.ts", status: "succeeded", startedAt: 0 },
+						],
+						report: "Outcome body.",
+					}),
+				],
+			}),
+			{ expanded: true, args: { tasks: [{ agent: "explorer", prompt: "Prompt body." }] } },
+		);
+		expect(lines).toContain("  Prompt body.");
+		expect(lines).toContain("  Read(entry.ts)");
+		expect(lines).toContain("  Outcome body.");
 	});
 
 	it("renders the complete original prompt from call args when expanded", () => {
@@ -589,7 +718,26 @@ describe("subagent rendering", () => {
 		expect(colors).toContain("toolOutput");
 	});
 
-	it("labels a failed run's partial report and separates its error", () => {
+	it("labels a completed task that returned no outcome", () => {
+		const output = expanded(details({ runs: [run({ report: " \n\t " })] }));
+		expect(output).toContain("Outcome");
+		expect(output).toContain("No outcome returned.");
+	});
+
+	it("combines an aborted reason and partial report under Outcome", () => {
+		const output = expanded(
+			details({
+				status: "aborted",
+				runs: [run({ status: "aborted", error: "parent stopped", report: "Partial findings." })],
+			}),
+		);
+		expect(output).toContain("Outcome");
+		expect(output).toContain("Aborted: parent stopped");
+		expect(output).toContain("Partial outcome:");
+		expect(output).toContain("Partial findings.");
+	});
+
+	it("combines a failed run's error and partial report under Outcome", () => {
 		const output = expanded(
 			details({
 				status: "failed",
@@ -603,24 +751,26 @@ describe("subagent rendering", () => {
 			}),
 			{ isError: true },
 		);
-		expect(output).toContain("── #1 Explorer · test/model · low · 2 tool uses · 1 turn · 1.5s");
-		expect(output).toContain("Error");
-		expect(output).toContain("worker crashed mid-flight");
-		expect(output).toContain("Report · partial");
+		expect(output).toContain("#1 Explorer · test/model · low · 60 tok · 2 tool calls · 1.5s");
+		expect(output).toContain("Outcome");
+		expect(output).toContain("Failed: worker crashed mid-flight");
+		expect(output).toContain("Partial outcome:");
 		expect(output).toContain("Got halfway through the migration.");
+		expect(output).not.toContain("Report");
 	});
 
-	it("does not label an empty failed report as partial", () => {
+	it("renders an empty failed outcome without a partial label", () => {
 		const output = expanded(
 			details({
 				status: "failed",
-				runs: [run({ status: "failed", error: "worker failed", report: "" })],
+				runs: [run({ status: "failed", error: "worker failed", report: " \n\t " })],
 			}),
 			{ isError: true },
 		);
-		expect(output).toContain("Report");
-		expect(output).toContain("(No report.)");
-		expect(output).not.toContain("Report · partial");
+		expect(output).toContain("Outcome");
+		expect(output).toContain("Failed: worker failed");
+		expect(output).not.toContain("Partial outcome:");
+		expect(output).not.toContain("Report");
 	});
 
 	it("numbers expanded batch sections without repeating prompt summaries", () => {
@@ -637,10 +787,10 @@ describe("subagent rendering", () => {
 				},
 			},
 		);
-		expect(output).toContain("── #1 Explorer · test/model · low · 2 tool uses · 1 turn · 1.5s");
-		expect(output).toContain("── #2 General · test/model · low · 2 tool uses · 1 turn · 1.5s");
+		expect(output).toContain("#1 Explorer · test/model · low · 60 tok · 2 tool calls · 1.5s");
+		expect(output).toContain("#2 General · test/model · low · 60 tok · 2 tool calls · 1.5s");
 		expect(output.match(/Prompt/gu)).toHaveLength(2);
-		expect(output.match(/Report/gu)).toHaveLength(2);
+		expect(output.match(/Outcome/gu)).toHaveLength(2);
 		expect(output.match(/Inspect the code\./gu)).toHaveLength(1);
 		expect(output.match(/Review the design\./gu)).toHaveLength(1);
 	});
@@ -678,21 +828,22 @@ describe("subagent rendering", () => {
 				},
 			},
 		);
-		expect(output).toContain("── #1 Explorer · test/model · low · 3 tool uses · 1 turn");
+		expect(output).toContain("#1 Explorer · test/model · low · 1.3k tok · 3 tool calls");
 		expect(output).toContain("Inspect the renderer fully.");
-		expect(output).toContain("Activity · last 2 of 3");
-		expect(output).toContain("Read a.ts");
-		expect(output).toContain("› Run check");
-		expect(output).toContain("── #2 General · test/model · low");
+		expect(output).toContain("Activity · last 2 of 3 tool calls");
+		expect(output).toContain("Read(a.ts)");
+		expect(output).toContain("Run(check)");
+		expect(output).toContain("#2 General · test/model · low · 0 tok · 0 tool calls · 0.0s");
 		expect(output).toContain("Review the renderer fully.");
-		expect(output).toContain("  Queued");
+		expect(output.match(/Still running\.\.\./gu)).toHaveLength(2);
+		expect(output).toContain("No tool calls yet.");
 		expect(output).not.toContain("0/2 done");
 		expect(output).not.toContain("ctx:");
 		expect(output).not.toContain("$0.012");
 		expect(output).not.toContain("Report");
 	});
 
-	it("shows a terminal run's Report immediately while sibling tasks remain active", () => {
+	it("shows a terminal run's Outcome immediately while sibling tasks remain active", () => {
 		const output = expanded(
 			details({
 				status: "running",
@@ -715,23 +866,23 @@ describe("subagent rendering", () => {
 		expect(output).toContain("Activity");
 	});
 
-	it("shows a retry exactly once under Activity when no tool has started", () => {
+	it("shows a retry exactly once under Outcome when no tool has started", () => {
 		const retrying = withRetry(liveRun({ activities: [] }), 1, 2, 8_000, "temporary failure");
 		const output = expanded(details({ status: "running", endedAt: undefined, runs: [retrying] }), {
 			isPartial: true,
 		});
 		expect(output.match(/Retrying \(1\/2\) in 8s/gu)).toHaveLength(1);
-		expect(output).toContain("› Retrying (1/2) in 8s · temporary failure");
+		expect(output).toContain("Outcome");
+		expect(output).toContain("Still running...");
+		expect(output).toContain("Retrying (1/2) in 8s · temporary failure");
 		expect(output).toContain("Prompt");
 	});
 
-	it("keeps settled Activity rows quiet and annotates only long ones", () => {
+	it("retains completed Activity rows as quiet parenthesized tool calls", () => {
 		const output = expanded(
 			details({
-				status: "running",
-				endedAt: undefined,
 				runs: [
-					liveRun({
+					run({
 						activities: [
 							{
 								id: "call-1",
@@ -754,64 +905,55 @@ describe("subagent rendering", () => {
 					}),
 				],
 			}),
-			{ isPartial: true },
 		);
-		expect(output).toContain("  Run ls -la");
-		expect(output).toContain("  Read entry.ts · 12s");
-		expect(output).not.toContain("✓ Run ls -la");
+		expect(output).toContain("  Run(ls -la)");
+		expect(output).toContain("  Read(entry.ts)");
 		expect(output).not.toContain("total 383");
 		expect(output).not.toContain("Output truncated");
 		expect(output).not.toContain("· 1.2s");
+		expect(output).not.toContain("· 12s");
 	});
 
-	it("shows a bounded failed Activity excerpt and preserves literal truncation markers", () => {
-		const output = expanded(
-			details({
-				status: "running",
-				endedAt: undefined,
-				runs: [
-					liveRun({
-						activities: [
-							{
-								id: "fail-1",
-								toolName: "bash",
-								summary: "Run check",
-								status: "failed",
-								startedAt: 0,
-								resultSummary: "exit 1: The marker [Output truncated.] is part of this failure.",
-							},
-						],
-					}),
-				],
-			}),
-			{ isPartial: true },
-		);
-		expect(output).toContain("× Run check");
-		expect(output).toContain("exit 1: The marker [Output truncated.] is part of this failure.");
-
-		const bounded = expanded(
-			details({
-				status: "running",
-				endedAt: undefined,
-				runs: [
-					liveRun({
-						activities: [
-							{
-								id: "fail-2",
-								toolName: "bash",
-								summary: "Run check",
-								status: "failed",
-								startedAt: 0,
-								resultSummary: "error ".repeat(40),
-							},
-						],
-					}),
-				],
-			}),
-			{ isPartial: true },
-		);
-		expect(bounded).toContain("…");
-		expect(bounded).not.toContain("�");
+	it("colors failed Activity calls without rendering their result excerpts", () => {
+		const colors: string[] = [];
+		const trackingTheme = {
+			...theme,
+			fg: (color: string, text: string) => {
+				colors.push(`${color}:${text}`);
+				return text;
+			},
+		} as Theme;
+		const data = details({
+			status: "running",
+			endedAt: undefined,
+			runs: [
+				liveRun({
+					activities: [
+						{
+							id: "fail-1",
+							toolName: "bash",
+							summary: "Run check",
+							status: "failed",
+							startedAt: 0,
+							resultSummary: "exit 1: The marker [Output truncated.] is part of this failure.",
+						},
+					],
+				}),
+			],
+		});
+		const output = renderSubagentResult(
+			{ content: [{ type: "text", text: "running" }], details: data },
+			{ expanded: true, isPartial: true },
+			trackingTheme,
+			defaultArgs,
+			false,
+		)
+			.render(120)
+			.join("\n");
+		expect(output).toContain("  Run(check)");
+		expect(output).not.toContain("exit 1");
+		expect(output).not.toContain("Output truncated");
+		expect(colors).toContain("error:Run(check)");
 	});
 
 	it("falls back to bounded result text and labels empty details as Starting", () => {

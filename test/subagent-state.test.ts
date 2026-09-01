@@ -278,6 +278,27 @@ describe("subagent run state reducer", () => {
 		expect(deriveCurrentActivity(run)).toBe("read a.ts");
 	});
 
+	it("uses a find pattern rather than its search root in Activity", () => {
+		let run = state();
+		run = reduceRun(run, { type: "slot_acquired", startedAt: 0 });
+		run = reduceRun(run, {
+			type: "tool_started",
+			toolCallId: "find-1",
+			toolName: "find",
+			args: { pattern: "**/*.test.ts", path: "src" },
+			startedAt: 1,
+		});
+		expect(run.activities[0]?.summary).toBe("Find **/*.test.ts");
+		expect(run.currentActivity).toBe("Find **/*.test.ts");
+		run = reduceRun(run, {
+			type: "tool_updated",
+			toolCallId: "find-1",
+			toolName: "find",
+			args: { pattern: " ", path: "src" },
+		});
+		expect(run.activities[0]?.summary).toBe('Find ""');
+	});
+
 	it("updates the matching running activity for tool updates", () => {
 		let run = state();
 		run = reduceRun(run, { type: "slot_acquired", startedAt: 0 });
@@ -316,6 +337,33 @@ describe("subagent run state reducer", () => {
 		expect(run.activities.at(-1)?.id).toBe("tool-199");
 	});
 
+	it("does not let repeated compactions evict the latest three real tool calls", () => {
+		const activities: ToolActivity[] = [];
+		for (let index = 0; index < 4; index++) {
+			appendActivity(activities, {
+				id: `read-${index + 1}`,
+				toolName: "read",
+				summary: `read file-${index + 1}.ts`,
+				status: "succeeded",
+				startedAt: index,
+			});
+		}
+		for (let index = 0; index < 100; index++) {
+			appendActivity(activities, {
+				id: `compaction-${index + 1}`,
+				toolName: "compaction",
+				summary: "Compact context",
+				status: "succeeded",
+				startedAt: index + 4,
+			});
+		}
+		expect(activities.length).toBeLessThanOrEqual(ACTIVITY_LIMIT);
+		expect(
+			activities.filter((activity) => activity.toolName !== "compaction").map((activity) => activity.id),
+		).toEqual(["read-2", "read-3", "read-4"]);
+		expect(activities.at(-1)?.id).toBe("compaction-100");
+	});
+
 	it("keeps the activity text budget by evicting oldest entries (defensive path)", () => {
 		// Real events bound every summary, so the text budget is driven
 		// directly through the shared appendActivity helper.
@@ -332,6 +380,33 @@ describe("subagent run state reducer", () => {
 		const total = activities.reduce((sum, activity) => sum + activity.summary.length, 0);
 		expect(total).toBeLessThanOrEqual(ACTIVITY_TEXT_LIMIT);
 		expect(activities[0]?.id).not.toBe("tool-0");
+	});
+
+	it("reapplies the activity text budget when tool result summaries arrive", () => {
+		let run = state();
+		run = reduceRun(run, { type: "slot_acquired", startedAt: 0 });
+		for (let index = 0; index < 80; index++) {
+			run = reduceRun(run, {
+				type: "tool_started",
+				toolCallId: `tool-${index}`,
+				toolName: "read",
+				args: { path: `${"p".repeat(175)}-${index}` },
+				startedAt: index,
+			});
+			run = reduceRun(run, {
+				type: "tool_ended",
+				toolCallId: `tool-${index}`,
+				result: { content: [{ type: "text", text: "r".repeat(1_000) }] },
+				isError: false,
+				endedAt: index + 1,
+			});
+		}
+		const total = run.activities.reduce(
+			(sum, activity) => sum + activity.summary.length + (activity.resultSummary?.length ?? 0),
+			0,
+		);
+		expect(total).toBeLessThanOrEqual(ACTIVITY_TEXT_LIMIT);
+		expect(run.activities.at(-1)?.id).toBe("tool-79");
 	});
 
 	it("maps task retry scheduling onto the historical reset matrix", () => {

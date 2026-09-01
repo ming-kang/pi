@@ -40,6 +40,7 @@ export const THINKING_LEVELS = [
 
 export const ACTIVITY_LIMIT = 80;
 export const ACTIVITY_TEXT_LIMIT = 24 * 1024;
+export const DISPLAY_ACTIVITY_LIMIT = 3;
 // Auto-compaction enters the activity log as a synthetic entry so the worker's
 // context maintenance is visible alongside its tool calls. Only one compaction
 // can run at a time, so a single fixed id is enough to pair start with end.

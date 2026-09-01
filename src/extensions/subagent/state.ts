@@ -12,6 +12,7 @@ import {
 	ACTIVITY_LIMIT,
 	ACTIVITY_TEXT_LIMIT,
 	COMPACTION_ACTIVITY_ID,
+	DISPLAY_ACTIVITY_LIMIT,
 	ERROR_TEXT_LIMIT,
 	RETRY_ERROR_TEXT_LIMIT,
 	TASK_OUTPUT_LIMIT,
@@ -147,21 +148,45 @@ function makeRetry(attempt: number, maxAttempts: number, deadline: number, error
 	};
 }
 
-// The in-memory activity log keeps the newest entries within both the count
-// and text budgets; a bounded O(ACTIVITY_LIMIT) rescan per event replaces
-// incremental byte bookkeeping. Exported for direct budget tests: real
-// events bound every summary, so the text-budget eviction is otherwise
-// purely defensive.
+// Prefer evicting entries outside the latest three real tool calls so a run
+// with repeated synthetic compactions still retains the Activity tail the UI
+// promises. The defensive fallback preserves the hard text budget when an
+// adversarial caller bypasses normal per-event summary bounds.
+function oldestEvictableActivityIndex(activities: readonly ToolActivity[]): number {
+	const protectedIndexes = new Set<number>();
+	for (let index = activities.length - 1; index >= 0 && protectedIndexes.size < DISPLAY_ACTIVITY_LIMIT; index--) {
+		if (activities[index]?.toolName !== COMPACTION_ACTIVITY_ID) protectedIndexes.add(index);
+	}
+	const unprotected = activities.findIndex((_activity, index) => !protectedIndexes.has(index));
+	if (unprotected >= 0) return unprotected;
+	return activities.length > 1 ? 0 : -1;
+}
+
+function activityTextSize(activities: readonly ToolActivity[]): number {
+	return activities.reduce((total, item) => total + item.summary.length + (item.resultSummary?.length ?? 0), 0);
+}
+
+// The in-memory activity log stays within both count and text budgets; a
+// bounded O(ACTIVITY_LIMIT) rescan per event replaces incremental byte
+// bookkeeping. Real events bound every individual summary, so retaining one
+// oversized adversarial entry is the only permitted budget exception.
+function enforceActivityLimits(activities: ToolActivity[]): void {
+	while (activities.length > ACTIVITY_LIMIT) {
+		const index = oldestEvictableActivityIndex(activities);
+		if (index < 0) break;
+		activities.splice(index, 1);
+	}
+	while (activityTextSize(activities) > ACTIVITY_TEXT_LIMIT) {
+		const index = oldestEvictableActivityIndex(activities);
+		if (index < 0) break;
+		activities.splice(index, 1);
+	}
+}
+
+/** Append one bounded activity while preserving the display tail. */
 export function appendActivity(activities: ToolActivity[], activity: ToolActivity): void {
 	activities.push(activity);
-	while (activities.length > ACTIVITY_LIMIT) activities.shift();
-	while (
-		activities.reduce((total, item) => total + item.summary.length + (item.resultSummary?.length ?? 0), 0) >
-		ACTIVITY_TEXT_LIMIT
-	) {
-		if (activities.length <= 1) break;
-		activities.shift();
-	}
+	enforceActivityLimits(activities);
 }
 
 function isTerminal(state: SubagentRunState): boolean {
@@ -275,7 +300,10 @@ function handleToolUpdated(draft: SubagentRunState, event: Extract<SubagentRunEv
 	const activity =
 		draft.activities.find((candidate) => candidate.id === event.toolCallId && candidate.status === "running") ??
 		[...draft.activities].reverse().find((candidate) => candidate.status === "running");
-	if (activity) activity.summary = summary;
+	if (activity) {
+		activity.summary = summary;
+		enforceActivityLimits(draft.activities);
+	}
 }
 
 function handleToolEnded(draft: SubagentRunState, event: Extract<SubagentRunEvent, { type: "tool_ended" }>): void {
@@ -284,6 +312,7 @@ function handleToolEnded(draft: SubagentRunState, event: Extract<SubagentRunEven
 		activity.status = event.isError ? "failed" : "succeeded";
 		activity.endedAt = event.endedAt;
 		activity.resultSummary = resultSummary(event.result) || undefined;
+		enforceActivityLimits(draft.activities);
 	}
 }
 
@@ -312,6 +341,7 @@ function handleCompactionEnded(
 		activity.endedAt = event.endedAt;
 		activity.summary = compactionSummary(event.tokensBefore, event.tokensAfter);
 		activity.resultSummary = event.error ? compactionError(event.error) : undefined;
+		enforceActivityLimits(draft.activities);
 	}
 }
 

@@ -73,7 +73,7 @@ Only `explorer` and `general` keys are valid. A stale or invalid `subagent.json`
 
 - The parent call waits until every worker reaches a terminal state.
 - Parent abort, `/reload`, `/new`, `/resume`, `/fork`, and session shutdown abort active and queued workers.
-- Provider auto-retry remains visible as `Retrying (n/m) in Xs`.
+- Provider auto-retry remains visible under the expanded task Outcome as `Retrying (n/m) in Xs`.
 - A retryable failure that produced no turns or tool use may be retried at task level up to two more times. Runs with partial work are never restarted.
 - Retry backoff does not hold a concurrency slot; another queued worker can run while the failed task waits.
 - A parent abort or session shutdown interrupts queued and retrying workers immediately.
@@ -82,56 +82,46 @@ Child sessions share the parent's canonical model/authentication runtime, so ext
 
 ## Transcript UI
 
-The native tool title owns whole-call elapsed time. While running, the collapsed view lists one width-bounded physical row per task:
+Pi's native tool chrome owns the aggregate `● Subagent` call marker and the dim continuation rail. The collapsed view is a compact flow containing one cell per task:
 
 ```text
-● Subagent · 12s
-│ › #1 Explorer · Thinking...
-│ › #2 Explorer · Run git log
-│ ○ #3 Explorer · Queued
-│ › #4 General · Compacting...
+● Subagent
+│ ✼ #1 Explorer · ○ #2 Explorer · ✓ #3 General · × #4 General
 ```
 
-`#N` is the task's stable one-based input position. Rows always remain in `#1` through `#N` order: there is no progress header, prompt excerpt, row cap, active-first reordering, or `+N more` truncation. A row reports the task's current state directly:
+`#N` is the task's stable one-based input position. Cells always remain in `#1` through `#N` order and contain only the task marker, ordinal, and profile. Running cells use the breathing dot-to-star bloom, queued cells use `○`, and completed, failed, or aborted cells use `✓`, `×`, or `■`. Wide batches wrap at cell boundaries with uniform columns; collapsed cards never expose prompts, activities, timings, token totals, costs, or failure text.
 
-- `Starting...` before the worker has begun a turn;
-- `Thinking...` while the model is active without a tool;
-- `Read`, `Search`, `Find`, `List`, `Run`, `Edit`, or `Write` for the current tool;
-- `Compacting...` during worker auto-compaction;
-- `Queued` while waiting for a worker slot;
-- `Retrying (n/m) in Xs` during retry backoff;
-- `Completed`, `Failed`, or `Aborted`, with duration when the task started.
-
-Long states and activities are truncated by visible terminal width, including ANSI styling and wide CJK characters, instead of wrapping onto continuation rows.
-
-Once settled, aggregate cost joins the frozen duration in the native title, and the ordered task rows become the complete collapsed outcome summary:
+Expanding removes aggregate Batch chrome and gives every task the same four-part layout:
 
 ```text
-● Subagent · 1m 24s · $0.042
-│ ✓ #1 Explorer · Completed · 48s
-│ ✓ #2 Explorer · Completed · 1m 3s
-│ × #3 General · Failed · 36s
-│ ✓ #4 Explorer · Completed · 1m 20s
+● Subagent
+│ #1 Explorer · anthropic/claude-opus-5 · max · 99.9k tok · 60 tool calls · 12m 47s
+│
+│ Prompt
+│   Inspect the renderer and report the exact data flow.
+│
+│ Activity · last 3 of 60 tool calls
+│   Read(src/extensions/subagent/render.ts)
+│   Grep(src/extensions/subagent)
+│   Run(npm test -- test/subagent-render.test.ts)
+│
+│ Outcome
+│   Still running...
 ```
 
-Zero cost is omitted. There is no separate aggregate count line; the per-task markers show the mixed outcome directly.
+The single-line task header always shows the profile, exact `provider/model` ID, raw thinking level (including `off`), cumulative provider-reported token usage, tool-call count, and task duration. Tokens use compact `k`/`M` notation with at most one decimal. The header omits working directory, turns, per-run cost, and aggregate Batch timing or cost, and truncates rather than wraps when the terminal is narrow.
 
-Expanded sections also remain in input order. Their single-line header contains only identity and compact runtime metadata:
+Prompt contains the complete original task briefing and remains visible in every state. Prompt, Activity, and Outcome bodies use a two-column inset under their section labels.
 
-```text
-── #1 Explorer · anthropic/claude-sonnet-4-5 · medium · 3 tool uses · 2 turns · 1m 5s
+Activity retains only the latest three actual tool calls, in execution order. Its denominator is the run's total tool-call count; small histories use `Activity · N tool calls`, and an empty history says `No tool calls yet.` Calls use compact `Read(path)`, `Grep(path)`, `Find(pattern)`, `List(path)`, `Run(command)`, `Edit(path)`, or `Write(path)` presentation. Synthetic compaction entries do not increment or occupy the tool-call history.
 
-Prompt
-<complete original task briefing>
+Outcome stays in the same position throughout the task lifecycle:
 
-Activity
-  Read .github/workflows/ci.yml
-› Run npm test
-```
+- queued or running: `Still running...`, followed by a retry countdown or active compaction state when applicable;
+- completed: the worker's final Markdown report, or `No outcome returned.`;
+- failed or aborted: the terminal reason, followed by `Partial outcome:` and the bounded report when useful output survived.
 
-The thinking level is shown as its raw value (`medium`, not `medium thinking`) and omitted when it is `off`; a non-parent working directory appears as `cwd: ...`. Per-run token, context, and cost fields are omitted from this header.
-
-Every expanded task shows the complete original Prompt, including while the batch is still running. Active and queued tasks show bounded Activity history and retry state. A completed, failed, or aborted task immediately switches to Error/Report presentation even if sibling tasks are still active; failed or aborted workers with useful output use `Report · partial`. Streaming assistant text is not copied into the parent transcript.
+A terminal task exposes its Outcome immediately even while sibling tasks remain active. Profile identity, section headings, activity states, and outcomes use semantic theme colors; report Markdown keeps its normal Markdown palette instead of inheriting a blanket success or error color.
 
 Full child transcripts are not stored separately. Activity, errors, reports, usage, and model-facing output remain bounded, and completed calls restore through the parent session tree.
 

@@ -77,11 +77,15 @@ export function activitySummary(toolName: string, args: unknown): string {
 	const input = args as Record<string, unknown>;
 	const path =
 		typeof input.path === "string" ? input.path : typeof input.file_path === "string" ? input.file_path : undefined;
+	const pattern = typeof input.pattern === "string" ? input.pattern : undefined;
 	if (toolName === "bash" && typeof input.command === "string")
 		return `Run ${boundText(input.command.replace(/\s+/gu, " "), 160)}`;
+	if (toolName === "find" && pattern !== undefined) {
+		const displayPattern = pattern.trim() || '""';
+		return `Find ${boundText(displayPattern, 120)}`;
+	}
 	if (path) return `${toolName} ${boundText(path, 180)}`;
-	if (toolName === "grep" && typeof input.pattern === "string") return `Search ${boundText(input.pattern, 120)}`;
-	if (toolName === "find" && typeof input.pattern === "string") return `Find ${boundText(input.pattern, 120)}`;
+	if (toolName === "grep" && pattern) return `Search ${boundText(pattern, 120)}`;
 	return toolName;
 }
 

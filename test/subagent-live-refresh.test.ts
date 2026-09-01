@@ -149,8 +149,8 @@ describe("Subagent shell-driven live refresh", () => {
 
 		component.setExpanded(true);
 		const expanded = render(component);
-		expect(expanded).toContain("3.0s");
-		expect(expanded).toContain("── Batch · 1 task");
+		expect(expanded).toContain("#1 Explorer · test/model · low · 30 tok · 1 tool call · 3.0s");
+		expect(expanded).not.toContain("Batch");
 		expect(expanded).not.toContain("Running…");
 
 		component.updateResult(
@@ -173,7 +173,7 @@ describe("Subagent shell-driven live refresh", () => {
 		component.dispose();
 	});
 
-	it("moves aggregate timing and cost into the expanded batch summary", () => {
+	it("keeps aggregate cost out of the expanded view and shows per-run timing", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
 		const definition = registeredSubagentTool();
@@ -210,12 +210,15 @@ describe("Subagent shell-driven live refresh", () => {
 		expect(render(component)).toContain("✓ #1 Explorer");
 		component.setExpanded(true);
 		const settled = render(component);
-		expect(settled).toContain("── Batch · 1 task · 2.0s · $0.042");
-		expect(settled).not.toContain("1 completed");
+		expect(settled).toContain("#1 Explorer · test/model · low · 30 tok · 1 tool call · 2.0s");
+		expect(settled).toContain("Outcome");
+		expect(settled).toContain("Completed report.");
+		expect(settled).not.toContain("Batch");
+		expect(settled).not.toContain("$0.042");
 		component.dispose();
 	});
 
-	it("reconstructs batch timing and cost from a settled result without prior partial state", () => {
+	it("reconstructs the per-run header from a settled result without prior partial state", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(10_000);
 		const definition = registeredSubagentTool();
@@ -230,8 +233,10 @@ describe("Subagent shell-driven live refresh", () => {
 		expect(render(component)).toContain("✓ #1 Explorer");
 		component.setExpanded(true);
 		const output = render(component);
-		expect(output).toContain("── Batch · 1 task · 3.0s · $0.007");
-		expect(output).toContain("── #1 Explorer · test/model · low");
+		expect(output).toContain("#1 Explorer · test/model · low · 30 tok · 1 tool call · 3.0s");
+		expect(output).toContain("Outcome");
+		expect(output).not.toContain("Batch");
+		expect(output).not.toContain("$0.007");
 		component.dispose();
 	});
 
@@ -291,7 +296,9 @@ describe("Subagent shell-driven live refresh", () => {
 		expect(folded).toContain("○ #4 Explorer");
 		expect(folded).not.toContain("Retrying");
 		component.setExpanded(true);
-		expect(render(component)).toContain("○ Retrying (1/2) in 8s · fetch failed");
+		expect(render(component)).toContain("Outcome");
+		expect(render(component)).toContain("Still running...");
+		expect(render(component)).toContain("Retrying (1/2) in 8s · fetch failed");
 		vi.advanceTimersByTime(1000);
 		component.invalidate();
 		expect(render(component)).toContain("Retrying (1/2) in 7s · fetch failed");
@@ -343,7 +350,9 @@ describe("Subagent shell-driven live refresh", () => {
 
 		second.setExpanded(true);
 		const batchExpanded = render(second);
-		expect(batchExpanded).toContain("── Batch · 2 tasks · 2.0s");
+		expect(batchExpanded).toContain("#1 Explorer · test/model · low · 30 tok · 1 tool call · 2.0s");
+		expect(batchExpanded).toContain("#2 Explorer · test/model · low · 30 tok · 1 tool call · 2.0s");
+		expect(batchExpanded).not.toContain("Batch");
 		expect(batchExpanded).not.toContain("Running…");
 		first.dispose();
 		second.dispose();
