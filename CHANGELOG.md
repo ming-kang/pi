@@ -8,6 +8,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 - Simplified `web_search` tool metadata so its capability description, session-wide routing guidance, and conditional result instructions live in their canonical prompt layers.
 - Reworked dual-provider result fusion to use reciprocal-rank scoring, preserving high-ranked unique results from both engines instead of allowing the first provider to fill the output cap.
+- Reworded search-result trust labels: provider overlap is now described as `found by MiniMax & DeepSeek`, and generated analysis is explicitly labeled `DeepSeek Search Synthesis`, avoiding claims of independent verification or authority.
 
 ### Removed
 

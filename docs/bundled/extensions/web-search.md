@@ -29,7 +29,7 @@ When no key is configured, `web_search` is removed from the model's tool set and
 
 ### Output
 
-The model-facing payload is Markdown containing up to 12 verified HTTP(S) sources. Titles and snippets are bounded to 200 characters each, source URLs to 2048 characters, DeepSeek synthesis to 6000 characters, and up to 8 related searches to 200 characters each. Dual-engine hits are tagged. When structured source URLs are present, the tool result reminds the model to cite the relevant URLs without prescribing a heading or response format.
+The model-facing payload is Markdown containing up to 12 HTTP(S) source results. Titles and snippets are bounded to 200 characters each, source URLs to 2048 characters, DeepSeek synthesis to 6000 characters, and up to 8 related searches to 200 characters each. Results found by both providers are tagged as such; this means the URL appeared in both result sets, not that its claims were independently verified. When structured source URLs are present, the tool result reminds the model to cite the relevant URLs without prescribing a heading or response format.
 
 ## Limits
 

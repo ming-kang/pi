@@ -203,7 +203,7 @@ describe("normalizeUrl", () => {
 });
 
 describe("fuseSearchHits", () => {
-	test("deduplicates overlapping URLs and ranks dual-verified hits first", () => {
+	test("deduplicates overlapping URLs and ranks cross-provider hits first", () => {
 		const provider1: ProviderSearchResult = {
 			source: "MiniMax",
 			hits: [
@@ -244,7 +244,7 @@ describe("fuseSearchHits", () => {
 		const fused = fuseSearchHits([provider1, provider2]);
 
 		expect(fused.hits).toHaveLength(3);
-		// First hit should be the dual-verified one
+		// First hit should be the one found by both providers
 		expect(fused.hits[0].url).toBe("https://react.dev/blog/react-19");
 		expect(fused.hits[0].sources).toEqual(["MiniMax", "DeepSeek"]);
 		// Prefers longer snippet
@@ -491,7 +491,7 @@ describe("formatSearchOutput", () => {
 		expect(message.endsWith("...")).toBe(true);
 	});
 
-	test("formats dual search output with verified sources and synthesis", () => {
+	test("formats dual search output with provider-overlap labels and synthesis provenance", () => {
 		const hits: WebSearchHit[] = [
 			{
 				title: "React 19 Docs",
@@ -512,8 +512,11 @@ describe("formatSearchOutput", () => {
 
 		expect(output).toContain('# Web Search Results for: "react 19"');
 		expect(output).toContain("[React 19 Docs](<https://react.dev/>)");
-		expect(output).toContain("verified by MiniMax & DeepSeek");
+		expect(output).toContain("Web Sources (1 found via MiniMax & DeepSeek)");
+		expect(output).toContain("found by MiniMax & DeepSeek");
+		expect(output).toContain("DeepSeek Search Synthesis");
 		expect(output).toContain("Synthesis points here.");
+		expect(output).not.toContain("verified by");
 		expect(output).toContain("cite the relevant source URLs in your response");
 		expect(output).not.toContain("CRITICAL REQUIREMENT");
 		expect(output).not.toContain("Sources:");
@@ -758,9 +761,9 @@ describe("renderWebSearchCall & renderWebSearchResult", () => {
 			.render(120)
 			.map((l) => stripAnsi(l))
 			.join("\n");
-		expect(rendered).toContain("Verified Web Sources (1 found via DeepSeek)");
+		expect(rendered).toContain("Web Sources (1 found via DeepSeek)");
 		expect(rendered).toContain("Announcing X");
-		expect(rendered).toContain("Key Technical Insights");
+		expect(rendered).toContain("DeepSeek Search Synthesis");
 		expect(rendered).toContain("Related Searches");
 		expect(rendered).not.toContain("cite the relevant source URLs");
 	});

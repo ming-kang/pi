@@ -64,10 +64,10 @@ export function formatResultsMarkdown(details: WebSearchDetails): string {
 	const hits = usableHits(details);
 
 	if (hits.length > 0) {
-		parts.push(`## Verified Web Sources (${hits.length} found via ${getEngineLabel(details.engine)})\n`);
+		parts.push(`## Web Sources (${hits.length} found via ${getEngineLabel(details.engine)})\n`);
 
 		hits.forEach((hit, index) => {
-			const sourceTag = hit.sources.length > 1 ? ` — *(verified by ${hit.sources.join(" & ")})*` : "";
+			const sourceTag = hit.sources.length > 1 ? ` — *(found by ${hit.sources.join(" & ")})*` : "";
 			parts.push(`${index + 1}. **[${hit.title}](<${hit.url}>)**${sourceTag}`);
 			if (hit.snippet) parts.push(`   - ${escapeMarkdownText(hit.snippet)}`);
 		});
@@ -76,7 +76,7 @@ export function formatResultsMarkdown(details: WebSearchDetails): string {
 
 	const synthesis = boundMultilineText(details.deepseekSynthesis, MAX_SYNTHESIS_LENGTH);
 	if (synthesis) {
-		parts.push("## Key Technical Insights & Synthesis\n");
+		parts.push("## DeepSeek Search Synthesis\n");
 		parts.push(escapeMarkdownText(synthesis));
 		parts.push("");
 	}
