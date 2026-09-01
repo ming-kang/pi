@@ -3,9 +3,57 @@
  */
 
 import { getEngineLabel, WEB_SEARCH_DISABLED_MESSAGE } from "./constants.ts";
-import type { WebSearchDetails } from "./types.ts";
+import {
+	boundMultilineText,
+	boundSingleLineText,
+	MAX_ERROR_MESSAGE_LENGTH,
+	MAX_OUTPUT_HITS,
+	MAX_QUERY_LENGTH,
+	MAX_RELATED_SEARCH_LENGTH,
+	MAX_RELATED_SEARCHES,
+	MAX_SNIPPET_LENGTH,
+	MAX_SYNTHESIS_LENGTH,
+	MAX_TITLE_LENGTH,
+	normalizeUrl,
+} from "./results.ts";
+import type { WebSearchDetails, WebSearchHit } from "./types.ts";
 
-const MAX_SNIPPET_LENGTH = 200;
+interface FormattedHit {
+	title: string;
+	url: string;
+	snippet?: string;
+	sources: WebSearchHit["sources"];
+}
+
+function escapeMarkdownText(text: string): string {
+	return text
+		.replace(/\\/g, "\\\\")
+		.replace(/\[/g, "\\[")
+		.replace(/\]/g, "\\]")
+		.replace(/</g, "\\<")
+		.replace(/>/g, "\\>");
+}
+
+function formatHit(hit: WebSearchHit): FormattedHit | undefined {
+	const url = normalizeUrl(hit.url);
+	if (!url) return undefined;
+	const sources = Array.isArray(hit.sources)
+		? [...new Set(hit.sources.filter((source) => source === "MiniMax" || source === "DeepSeek"))]
+		: [];
+	return {
+		title: escapeMarkdownText(boundSingleLineText(hit.title, MAX_TITLE_LENGTH) ?? url),
+		url,
+		snippet: boundSingleLineText(hit.snippet, MAX_SNIPPET_LENGTH),
+		sources,
+	};
+}
+
+function usableHits(details: WebSearchDetails): FormattedHit[] {
+	return details.hits
+		.map(formatHit)
+		.filter((hit): hit is FormattedHit => hit !== undefined)
+		.slice(0, MAX_OUTPUT_HITS);
+}
 
 /**
  * Sources, synthesis, and related-search sections shared by model output and
@@ -13,33 +61,33 @@ const MAX_SNIPPET_LENGTH = 200;
  */
 export function formatResultsMarkdown(details: WebSearchDetails): string {
 	const parts: string[] = [];
+	const hits = usableHits(details);
 
-	if (details.hits.length > 0) {
-		parts.push(`## Verified Web Sources (${details.hits.length} found via ${getEngineLabel(details.engine)})\n`);
+	if (hits.length > 0) {
+		parts.push(`## Verified Web Sources (${hits.length} found via ${getEngineLabel(details.engine)})\n`);
 
-		details.hits.forEach((hit, index) => {
+		hits.forEach((hit, index) => {
 			const sourceTag = hit.sources.length > 1 ? ` — *(verified by ${hit.sources.join(" & ")})*` : "";
-			parts.push(`${index + 1}. **[${hit.title}](${hit.url})**${sourceTag}`);
-			if (hit.snippet) {
-				const snippet =
-					hit.snippet.length > MAX_SNIPPET_LENGTH
-						? `${hit.snippet.slice(0, MAX_SNIPPET_LENGTH).trim()}...`
-						: hit.snippet.trim();
-				parts.push(`   - ${snippet}`);
-			}
+			parts.push(`${index + 1}. **[${hit.title}](<${hit.url}>)**${sourceTag}`);
+			if (hit.snippet) parts.push(`   - ${escapeMarkdownText(hit.snippet)}`);
 		});
 		parts.push("");
 	}
 
-	if (details.deepseekSynthesis) {
+	const synthesis = boundMultilineText(details.deepseekSynthesis, MAX_SYNTHESIS_LENGTH);
+	if (synthesis) {
 		parts.push("## Key Technical Insights & Synthesis\n");
-		parts.push(details.deepseekSynthesis.trim());
+		parts.push(escapeMarkdownText(synthesis));
 		parts.push("");
 	}
 
-	if (details.relatedSearches && details.relatedSearches.length > 0) {
+	const relatedSearches = details.relatedSearches
+		?.map((related) => boundSingleLineText(related, MAX_RELATED_SEARCH_LENGTH))
+		.filter((related): related is string => related !== undefined)
+		.slice(0, MAX_RELATED_SEARCHES);
+	if (relatedSearches && relatedSearches.length > 0) {
 		parts.push("## Related Searches\n");
-		parts.push(details.relatedSearches.map((related) => `- ${related}`).join("\n"));
+		parts.push(relatedSearches.map((related) => `- ${escapeMarkdownText(related)}`).join("\n"));
 		parts.push("");
 	}
 
@@ -50,16 +98,21 @@ export function formatResultsMarkdown(details: WebSearchDetails): string {
 export function formatSearchOutput(query: string, details: WebSearchDetails): string {
 	if (details.status === "disabled") return WEB_SEARCH_DISABLED_MESSAGE;
 
+	const boundedQuery = boundSingleLineText(query, MAX_QUERY_LENGTH) ?? "";
 	if (details.status === "error") {
-		return `Web search failed for "${query}": ${details.errorMessage || "Unknown search error"}`;
+		const errorMessage =
+			boundSingleLineText(details.errorMessage, MAX_ERROR_MESSAGE_LENGTH) ?? "Unknown search error";
+		return `Web search failed for "${boundedQuery}": ${errorMessage}`;
 	}
 
-	if (details.hits.length === 0 && !details.deepseekSynthesis) {
-		return `No search results found for "${query}". Try rephrasing with different keywords.`;
+	const hasSources = usableHits(details).length > 0;
+	const hasSynthesis = boundMultilineText(details.deepseekSynthesis, MAX_SYNTHESIS_LENGTH) !== undefined;
+	if (!hasSources && !hasSynthesis) {
+		return `No search results found for "${boundedQuery}". Try rephrasing with different keywords.`;
 	}
 
-	const parts = [`# Web Search Results for: "${query}"\n`, formatResultsMarkdown(details)];
-	if (details.hits.length > 0) {
+	const parts = [`# Web Search Results for: "${boundedQuery}"\n`, formatResultsMarkdown(details)];
+	if (hasSources) {
 		parts.push(
 			"---",
 			"Use these search results to answer the user, and cite the relevant source URLs in your response.",

@@ -8,7 +8,7 @@ export const WEB_SEARCH_TOOL_NAME = "web_search";
 export const WEB_SEARCH_LABEL = "Web Search";
 
 export const WEB_SEARCH_DESCRIPTION =
-	"Search the live web through configured MiniMax and DeepSeek providers. When both are available, searches run concurrently and results are deduplicated and fused. Returns up to 12 source URLs with snippets, plus related searches and optional synthesis; partial provider failures still return successful results.";
+	"Search the live web through configured MiniMax and DeepSeek providers. When both are available, searches run concurrently and results are deduplicated and fused. Returns up to 12 source URLs with bounded titles and snippets, plus related searches and optional synthesis; partial provider failures still return successful results.";
 
 export const WEB_SEARCH_PROMPT_SNIPPET = "Search the live web for current information";
 

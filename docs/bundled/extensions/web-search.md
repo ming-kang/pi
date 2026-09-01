@@ -25,19 +25,19 @@ When no key is configured, `web_search` is removed from the model's tool set and
 
 ### Parameters
 
-- `query`: the search query — 3–5 keywords work best; include a year when freshness matters.
+- `query`: the search query, up to 500 characters — 3–5 keywords work best; include a year when freshness matters.
 
 ### Output
 
-The model-facing payload is Markdown containing up to 12 verified sources (snippets bounded to 200 characters each, dual-engine hits tagged), a DeepSeek synthesis section when available, and up to 8 related searches. When structured source URLs are present, the tool result reminds the model to cite the relevant URLs without prescribing a heading or response format.
+The model-facing payload is Markdown containing up to 12 verified HTTP(S) sources. Titles and snippets are bounded to 200 characters each, source URLs to 2048 characters, DeepSeek synthesis to 6000 characters, and up to 8 related searches to 200 characters each. Dual-engine hits are tagged. When structured source URLs are present, the tool result reminds the model to cite the relevant URLs without prescribing a heading or response format.
 
 ## Limits
 
 - With no configured key the tool is hidden from the model (see Credentials); the disabled message only appears when the tool was force-enabled via `/tools` without keys.
 - Engine failures are independent: if one engine errors, the other's results are still returned; the tool errors only when every configured engine fails.
 - MiniMax search uses the Coding Plan Search endpoint (`POST /v1/coding_plan/search`), which requires a Coding Plan key — a standard MiniMax API key may be rejected upstream.
-- DeepSeek search goes through the Anthropic-compatible endpoint (`/anthropic/v1/messages`, model `claude-sonnet-search`) with the server-side `web_search_20250305` tool; the synthesis text is bounded by the request's `max_tokens` (1024).
-- Requests time out after 60 seconds (MiniMax) or 90 seconds (DeepSeek) and surface as Pi tool errors; upstream error bodies are truncated to 200 characters.
+- DeepSeek search goes through the Anthropic-compatible endpoint (`/anthropic/v1/messages`, model `claude-sonnet-search`) with the server-side `web_search_20250305` tool; the request uses `max_tokens: 1024`, followed by the local output bound above.
+- Requests time out after 60 seconds (MiniMax) or 90 seconds (DeepSeek) and surface as Pi tool errors. Successful upstream response bodies are limited to 2 MiB, error bodies to 200 bytes, and model-facing error messages to 500 characters.
 
 ## Implementation notes
 

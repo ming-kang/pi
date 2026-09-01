@@ -1,11 +1,20 @@
 /**
- * Result normalization, deduplication, and ranking for web_search providers.
+ * Result normalization, bounding, deduplication, and ranking for web_search providers.
  */
 
 import type { ProviderSearchResult, SearchEngineSource, WebSearchHit } from "./types.ts";
 
-const MAX_OUTPUT_HITS = 12;
-const MAX_RELATED_SEARCHES = 8;
+export const MAX_OUTPUT_HITS = 12;
+export const MAX_QUERY_LENGTH = 500;
+export const MAX_TITLE_LENGTH = 200;
+export const MAX_URL_LENGTH = 2048;
+export const MAX_SNIPPET_LENGTH = 200;
+export const MAX_DATE_LENGTH = 100;
+export const MAX_RELATED_SEARCHES = 8;
+export const MAX_RELATED_SEARCH_LENGTH = 200;
+export const MAX_SYNTHESIS_LENGTH = 6000;
+export const MAX_ERROR_MESSAGE_LENGTH = 500;
+
 const RRF_K = 60;
 const TRACKING_PARAMS = new Set([
 	"utm_source",
@@ -31,10 +40,32 @@ export interface FusedSearchResults {
 	deepseekSynthesis?: string;
 }
 
-/** Normalize URL identity without changing non-tracking query values. */
-export function normalizeUrl(rawUrl: string): string {
+function truncateText(text: string, maxLength: number): string {
+	if (text.length <= maxLength) return text;
+	if (maxLength <= 3) return text.slice(0, maxLength);
+	return `${text.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
+/** Normalize and bound a provider-controlled single-line text field. */
+export function boundSingleLineText(value: string | undefined, maxLength: number): string | undefined {
+	const normalized = value?.replace(/\s+/g, " ").trim();
+	return normalized ? truncateText(normalized, maxLength) : undefined;
+}
+
+/** Trim and bound provider-controlled text that intentionally preserves lines. */
+export function boundMultilineText(value: string | undefined, maxLength: number): string | undefined {
+	const normalized = value?.trim();
+	return normalized ? truncateText(normalized, maxLength) : undefined;
+}
+
+/** Normalize a usable HTTP(S) source URL without changing non-tracking query values. */
+export function normalizeUrl(rawUrl: string): string | undefined {
+	const trimmed = rawUrl.trim();
+	if (!trimmed || trimmed.length > MAX_URL_LENGTH) return undefined;
+
 	try {
-		const url = new URL(rawUrl);
+		const url = new URL(trimmed);
+		if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
 		url.hash = "";
 		for (const parameter of TRACKING_PARAMS) {
 			if (url.searchParams.has(parameter)) url.searchParams.delete(parameter);
@@ -42,21 +73,34 @@ export function normalizeUrl(rawUrl: string): string {
 		if (url.pathname.length > 1 && url.pathname.endsWith("/")) {
 			url.pathname = url.pathname.replace(/\/+$/, "");
 		}
-		return url.toString();
+		const normalized = url.toString();
+		return normalized.length <= MAX_URL_LENGTH ? normalized : undefined;
 	} catch {
-		return rawUrl.trim();
+		return undefined;
 	}
 }
 
+function normalizeHit(hit: WebSearchHit, source: SearchEngineSource): WebSearchHit | undefined {
+	const url = normalizeUrl(hit.url);
+	if (!url) return undefined;
+
+	return {
+		title: boundSingleLineText(hit.title, MAX_TITLE_LENGTH) ?? url,
+		url,
+		snippet: boundSingleLineText(hit.snippet, MAX_SNIPPET_LENGTH),
+		date: boundSingleLineText(hit.date, MAX_DATE_LENGTH),
+		sources: [...new Set([...hit.sources, source])],
+	};
+}
+
 function isUrlFallbackTitle(title: string, url: string): boolean {
-	return normalizeUrl(title) === normalizeUrl(url);
+	const normalizedTitle = normalizeUrl(title);
+	return normalizedTitle !== undefined && normalizedTitle === normalizeUrl(url);
 }
 
 function reciprocalRankScore(candidate: FusionCandidate): number {
 	let score = 0;
-	for (const rank of candidate.ranks.values()) {
-		score += 1 / (RRF_K + rank);
-	}
+	for (const rank of candidate.ranks.values()) score += 1 / (RRF_K + rank);
 	return score;
 }
 
@@ -64,7 +108,7 @@ function bestRank(candidate: FusionCandidate): number {
 	return Math.min(...candidate.ranks.values());
 }
 
-/** Deduplicate provider hits and rank them with reciprocal-rank fusion. */
+/** Bound provider results, deduplicate URLs, and rank them with reciprocal-rank fusion. */
 export function fuseSearchHits(results: ProviderSearchResult[]): FusedSearchResults {
 	const candidates = new Map<string, FusionCandidate>();
 	const relatedSearches = new Set<string>();
@@ -73,30 +117,26 @@ export function fuseSearchHits(results: ProviderSearchResult[]): FusedSearchResu
 	for (const result of results) {
 		for (const related of result.relatedSearches ?? []) {
 			if (relatedSearches.size >= MAX_RELATED_SEARCHES) break;
-			const normalized = related.trim();
+			const normalized = boundSingleLineText(related, MAX_RELATED_SEARCH_LENGTH);
 			if (normalized) relatedSearches.add(normalized);
 		}
-		if (result.synthesisText) deepseekSynthesis = result.synthesisText;
+		const synthesis = boundMultilineText(result.synthesisText, MAX_SYNTHESIS_LENGTH);
+		if (synthesis) deepseekSynthesis = synthesis;
 
-		for (const [index, hit] of result.hits.entries()) {
-			const normalizedUrl = normalizeUrl(hit.url);
+		for (const [index, rawHit] of result.hits.entries()) {
+			const hit = normalizeHit(rawHit, result.source);
+			if (!hit) continue;
 			const rank = index + 1;
-			const existing = candidates.get(normalizedUrl);
+			const existing = candidates.get(hit.url);
 
 			if (!existing) {
-				const sources = [...new Set([...hit.sources, result.source])];
-				candidates.set(normalizedUrl, {
-					hit: { ...hit, url: normalizedUrl, sources },
-					ranks: new Map([[result.source, rank]]),
-				});
+				candidates.set(hit.url, { hit, ranks: new Map([[result.source, rank]]) });
 				continue;
 			}
 
 			const previousRank = existing.ranks.get(result.source);
-			if (previousRank === undefined || rank < previousRank) {
-				existing.ranks.set(result.source, rank);
-			}
-			for (const source of [...hit.sources, result.source]) {
+			if (previousRank === undefined || rank < previousRank) existing.ranks.set(result.source, rank);
+			for (const source of hit.sources) {
 				if (!existing.hit.sources.includes(source)) existing.hit.sources.push(source);
 			}
 			if (isUrlFallbackTitle(existing.hit.title, existing.hit.url) && !isUrlFallbackTitle(hit.title, hit.url)) {

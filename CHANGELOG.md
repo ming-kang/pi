@@ -17,6 +17,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 - Scoped `web_search` citation guidance to successful tool results instead of injecting it into every session through `promptGuidelines`. Result payloads now ask naturally for relevant URL citations only when structured sources exist, without requiring a `Sources:` heading or Markdown link format.
 - Preserved caller cancellation across concurrent searches, fixed URL normalization around trailing path/query slashes, upgraded fallback URL titles during deduplication, and restored the warning renderer for disabled results.
+- Added strict local bounds and Markdown-safe formatting for provider-controlled titles, URLs, snippets, synthesis, related searches, and errors; oversized or malformed source responses no longer flow unbounded into the model context.
 
 ## [0.84.13] - 2026-09-01
 

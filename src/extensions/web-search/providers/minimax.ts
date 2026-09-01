@@ -2,7 +2,7 @@
  * minimax.ts — MiniMax Coding Plan Search REST API provider.
  */
 
-import type { MiniMaxSearchResponse, ProviderSearchResult, WebSearchHit } from "../types.ts";
+import type { ProviderSearchResult, WebSearchHit } from "../types.ts";
 import { postJson } from "./http.ts";
 
 export interface MiniMaxSearchOptions {
@@ -12,10 +12,33 @@ export interface MiniMaxSearchOptions {
 	signal?: AbortSignal;
 }
 
+type JsonRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is JsonRecord {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringField(record: JsonRecord, key: string): string | undefined {
+	const value = record[key];
+	return typeof value === "string" ? value : undefined;
+}
+
+function parseSearchHit(value: unknown): WebSearchHit | undefined {
+	if (!isRecord(value)) return undefined;
+	const url = stringField(value, "link")?.trim();
+	if (!url) return undefined;
+	return {
+		title: stringField(value, "title")?.trim() || url,
+		url,
+		snippet: stringField(value, "snippet")?.trim() || undefined,
+		date: stringField(value, "date")?.trim() || undefined,
+		sources: ["MiniMax"],
+	};
+}
+
 export async function searchMiniMax(options: MiniMaxSearchOptions): Promise<ProviderSearchResult> {
 	const host = options.apiHost?.replace(/\/+$/, "") || "https://api.minimaxi.com";
-
-	const data = await postJson<MiniMaxSearchResponse>(
+	const rawData = await postJson<unknown>(
 		`${host}/v1/coding_plan/search`,
 		{
 			"Content-Type": "application/json",
@@ -26,33 +49,25 @@ export async function searchMiniMax(options: MiniMaxSearchOptions): Promise<Prov
 		60_000,
 		"MiniMax search API",
 	);
-
-	if (data.base_resp && data.base_resp.status_code !== 0) {
-		throw new Error(`MiniMax search failed: [${data.base_resp.status_code}] ${data.base_resp.status_msg}`);
+	const data = isRecord(rawData) ? rawData : {};
+	const baseResponse = isRecord(data.base_resp) ? data.base_resp : undefined;
+	const statusCode = baseResponse?.status_code;
+	if (baseResponse && typeof statusCode === "number" && statusCode !== 0) {
+		throw new Error(
+			`MiniMax search failed: [${statusCode}] ${stringField(baseResponse, "status_msg") ?? "Unknown error"}`,
+		);
 	}
 
-	const rawHits = data.organic || [];
-	const hits: WebSearchHit[] = [];
-
-	for (const item of rawHits) {
-		if (!item.link || !item.link.trim()) continue;
-		const cleanLink = item.link.trim();
-		hits.push({
-			title: item.title?.trim() || cleanLink,
-			url: cleanLink,
-			snippet: item.snippet?.trim() || undefined,
-			date: item.date?.trim() || undefined,
-			sources: ["MiniMax"],
-		});
-	}
-
-	const relatedSearches = data.related_searches
-		?.map((r) => r.query?.trim())
-		.filter((q): q is string => Boolean(q && q.length > 0));
+	const hits = (Array.isArray(data.organic) ? data.organic : [])
+		.map(parseSearchHit)
+		.filter((hit): hit is WebSearchHit => hit !== undefined);
+	const relatedSearches = (Array.isArray(data.related_searches) ? data.related_searches : [])
+		.map((value) => (isRecord(value) ? stringField(value, "query")?.trim() : undefined))
+		.filter((query): query is string => Boolean(query));
 
 	return {
 		source: "MiniMax",
 		hits,
-		relatedSearches: relatedSearches && relatedSearches.length > 0 ? relatedSearches : undefined,
+		relatedSearches: relatedSearches.length > 0 ? relatedSearches : undefined,
 	};
 }

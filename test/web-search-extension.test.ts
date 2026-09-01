@@ -13,8 +13,20 @@ import {
 } from "../src/extensions/web-search/constants.ts";
 import { executeWebSearch } from "../src/extensions/web-search/execute.ts";
 import { formatSearchOutput } from "../src/extensions/web-search/format.ts";
+import { searchDeepSeek } from "../src/extensions/web-search/providers/deepseek.ts";
+import { postJson } from "../src/extensions/web-search/providers/http.ts";
+import { searchMiniMax } from "../src/extensions/web-search/providers/minimax.ts";
 import { renderWebSearchCall, renderWebSearchResult } from "../src/extensions/web-search/render.ts";
-import { fuseSearchHits, normalizeUrl } from "../src/extensions/web-search/results.ts";
+import {
+	fuseSearchHits,
+	MAX_ERROR_MESSAGE_LENGTH,
+	MAX_RELATED_SEARCH_LENGTH,
+	MAX_SNIPPET_LENGTH,
+	MAX_SYNTHESIS_LENGTH,
+	MAX_TITLE_LENGTH,
+	MAX_URL_LENGTH,
+	normalizeUrl,
+} from "../src/extensions/web-search/results.ts";
 import { normalizeWebSearchParams } from "../src/extensions/web-search/schema.ts";
 import type { ProviderSearchResult, WebSearchHit } from "../src/extensions/web-search/types.ts";
 import { initTheme, type Theme } from "../src/modes/interactive/theme/theme.ts";
@@ -182,6 +194,12 @@ describe("normalizeUrl", () => {
 		expect(normalizeUrl("https://example.com/docs/?tab=1")).toBe("https://example.com/docs?tab=1");
 		expect(normalizeUrl("https://example.com/")).toBe("https://example.com/");
 	});
+
+	test("rejects malformed, non-HTTP, and oversized source URLs", () => {
+		expect(normalizeUrl("not a url")).toBeUndefined();
+		expect(normalizeUrl("file:///tmp/result")).toBeUndefined();
+		expect(normalizeUrl(`https://example.com/${"x".repeat(MAX_URL_LENGTH)}`)).toBeUndefined();
+	});
 });
 
 describe("fuseSearchHits", () => {
@@ -282,6 +300,31 @@ describe("fuseSearchHits", () => {
 		expect(fused.hits[0].title).toBe("Example documentation");
 	});
 
+	test("bounds provider-controlled fields and drops unusable source URLs", () => {
+		const fused = fuseSearchHits([
+			{
+				source: "MiniMax",
+				hits: [
+					{
+						title: `Title\n${"x".repeat(MAX_TITLE_LENGTH + 20)}`,
+						url: "https://example.com/result",
+						snippet: `Snippet\n${"y".repeat(MAX_SNIPPET_LENGTH + 20)}`,
+						sources: ["MiniMax"],
+					},
+					{ title: "Local", url: "file:///tmp/result", sources: ["MiniMax"] },
+				],
+				relatedSearches: [`Related\n${"z".repeat(MAX_RELATED_SEARCH_LENGTH + 20)}`],
+				synthesisText: "s".repeat(MAX_SYNTHESIS_LENGTH + 20),
+			},
+		]);
+		expect(fused.hits).toHaveLength(1);
+		expect(fused.hits[0].title).not.toContain("\n");
+		expect(fused.hits[0].title.length).toBeLessThanOrEqual(MAX_TITLE_LENGTH);
+		expect(fused.hits[0].snippet?.length).toBeLessThanOrEqual(MAX_SNIPPET_LENGTH);
+		expect(fused.relatedSearches?.[0].length).toBeLessThanOrEqual(MAX_RELATED_SEARCH_LENGTH);
+		expect(fused.deepseekSynthesis?.length).toBeLessThanOrEqual(MAX_SYNTHESIS_LENGTH);
+	});
+
 	test("caps related searches at 8 entries", () => {
 		const fused = fuseSearchHits([
 			{
@@ -291,6 +334,92 @@ describe("fuseSearchHits", () => {
 			},
 		]);
 		expect(fused.relatedSearches).toHaveLength(8);
+	});
+});
+
+describe("provider HTTP boundaries", () => {
+	test("sends query-only MiniMax requests and parses results", async () => {
+		let requestBody = "";
+		vi.stubGlobal("fetch", async (_input: string | URL | Request, init?: RequestInit) => {
+			requestBody = String(init?.body ?? "");
+			return new Response(
+				JSON.stringify({
+					organic: [
+						{ title: "Result", link: "https://example.com/result" },
+						{ title: "Malformed without a link" },
+					],
+				}),
+				{ status: 200 },
+			);
+		});
+		const result = await searchMiniMax({ query: "  current release  ", apiKey: "key" });
+		expect(JSON.parse(requestBody)).toEqual({ q: "current release" });
+		expect(result.hits).toHaveLength(1);
+	});
+
+	test("keeps the DeepSeek tool request simple and ignores malformed result content", async () => {
+		let requestBody = "";
+		vi.stubGlobal("fetch", async (_input: string | URL | Request, init?: RequestInit) => {
+			requestBody = String(init?.body ?? "");
+			return new Response(
+				JSON.stringify({
+					content: [
+						{ type: "web_search_tool_result", tool_use_id: "tool", content: { invalid: true } },
+						{ type: "text", text: "Synthesis" },
+					],
+				}),
+				{ status: 200 },
+			);
+		});
+		const result = await searchDeepSeek({ query: "current release", apiKey: "key" });
+		const body = JSON.parse(requestBody) as { tools: unknown[] };
+		expect(body.tools).toEqual([{ type: "web_search_20250305", name: "web_search" }]);
+		expect(result.hits).toEqual([]);
+		expect(result.synthesisText).toBe("Synthesis");
+	});
+
+	test("rejects oversized successful response bodies", async () => {
+		vi.stubGlobal("fetch", async () => new Response(`"${"x".repeat(2 * 1024 * 1024)}"`, { status: 200 }));
+		await expect(postJson("https://example.test", {}, {}, undefined, 1000, "Search API")).rejects.toThrow(
+			"Search API response exceeded 2097152 bytes",
+		);
+	});
+
+	test("bounds non-OK response bodies before surfacing them", async () => {
+		vi.stubGlobal("fetch", async () => new Response("x".repeat(1000), { status: 500, statusText: "Failed" }));
+		await expect(postJson("https://example.test", {}, {}, undefined, 1000, "Search API")).rejects.toThrow(
+			`Search API returned HTTP 500 Failed: ${"x".repeat(200)}`,
+		);
+	});
+
+	test("preserves cancellation while reading a non-OK response body", async () => {
+		const controller = new AbortController();
+		let markBodyRead: (() => void) | undefined;
+		const bodyRead = new Promise<void>((resolve) => {
+			markBodyRead = resolve;
+		});
+		vi.stubGlobal("fetch", async (_input: string | URL | Request, init?: RequestInit) => {
+			const requestSignal = init?.signal;
+			return new Response(
+				new ReadableStream<Uint8Array>({
+					start(streamController) {
+						requestSignal?.addEventListener("abort", () => streamController.error(requestSignal.reason), {
+							once: true,
+						});
+					},
+					pull() {
+						markBodyRead?.();
+						return new Promise<void>(() => {});
+					},
+				}),
+				{ status: 500, statusText: "Failed" },
+			);
+		});
+
+		const request = postJson("https://example.test", {}, {}, controller.signal, 1000, "Search API");
+		await bodyRead;
+		controller.abort();
+		await expect(request).rejects.toMatchObject({ name: "AbortError" });
 	});
 });
 
@@ -347,6 +476,21 @@ describe("formatSearchOutput", () => {
 		expect(output).toContain("auth.json");
 	});
 
+	test("bounds model-facing structured error messages", () => {
+		const output = formatSearchOutput("query", {
+			query: "query",
+			durationMs: 10,
+			status: "error",
+			engine: "minimax",
+			totalHits: 0,
+			hits: [],
+			errorMessage: "x".repeat(MAX_ERROR_MESSAGE_LENGTH + 100),
+		});
+		const message = output.slice(output.indexOf(": ") + 2);
+		expect(message.length).toBeLessThanOrEqual(MAX_ERROR_MESSAGE_LENGTH);
+		expect(message.endsWith("...")).toBe(true);
+	});
+
 	test("formats dual search output with verified sources and synthesis", () => {
 		const hits: WebSearchHit[] = [
 			{
@@ -367,12 +511,69 @@ describe("formatSearchOutput", () => {
 		});
 
 		expect(output).toContain('# Web Search Results for: "react 19"');
-		expect(output).toContain("[React 19 Docs](https://react.dev)");
+		expect(output).toContain("[React 19 Docs](<https://react.dev/>)");
 		expect(output).toContain("verified by MiniMax & DeepSeek");
 		expect(output).toContain("Synthesis points here.");
 		expect(output).toContain("cite the relevant source URLs in your response");
 		expect(output).not.toContain("CRITICAL REQUIREMENT");
 		expect(output).not.toContain("Sources:");
+	});
+
+	test("bounds and canonicalizes source labels from historical details", () => {
+		const output = formatSearchOutput("release", {
+			query: "release",
+			durationMs: 10,
+			status: "success",
+			engine: "minimax",
+			totalHits: 1,
+			hits: [
+				{
+					title: "Release",
+					url: "https://example.com/release",
+					sources: [...Array.from({ length: 1000 }, () => "MiniMax"), "**Injected**"] as never,
+				},
+			],
+		});
+		expect(output).not.toContain("Injected");
+		expect(output.length).toBeLessThan(1000);
+	});
+
+	test("escapes Markdown titles and normalizes multiline snippets", () => {
+		const output = formatSearchOutput("release", {
+			query: "release",
+			durationMs: 10,
+			status: "success",
+			engine: "minimax",
+			totalHits: 1,
+			hits: [
+				{
+					title: "[Release]\\notes\n2026",
+					url: "https://example.com/release",
+					snippet: "First line\n[open](javascript:alert(1))",
+					sources: ["MiniMax"],
+				},
+			],
+		});
+		expect(output).toContain("[\\[Release\\]\\\\notes 2026](<https://example.com/release>)");
+		expect(output).toContain("First line \\[open\\](javascript:alert(1))");
+		expect(output).not.toContain("First line [open](javascript:alert(1))");
+	});
+
+	test("neutralizes Markdown links in synthesis and related searches", () => {
+		const output = formatSearchOutput("release", {
+			query: "release",
+			durationMs: 10,
+			status: "success",
+			engine: "deepseek",
+			totalHits: 0,
+			hits: [],
+			deepseekSynthesis: "[open](javascript:alert(1)) and <file:///tmp/source>",
+			relatedSearches: ["[related](javascript:alert(2))"],
+		});
+		expect(output).toContain("\\[open\\](javascript:alert(1))");
+		expect(output).toContain("\\<file:///tmp/source\\>");
+		expect(output).toContain("\\[related\\](javascript:alert(2))");
+		expect(output).not.toContain("[open](javascript:alert(1))");
 	});
 
 	test("does not request citations when synthesis has no source URLs", () => {

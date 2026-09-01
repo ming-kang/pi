@@ -8,7 +8,7 @@ import { getEngineLabel, WEB_SEARCH_DISABLED_MESSAGE } from "./constants.ts";
 import { formatSearchOutput } from "./format.ts";
 import { searchDeepSeek } from "./providers/deepseek.ts";
 import { searchMiniMax } from "./providers/minimax.ts";
-import { fuseSearchHits } from "./results.ts";
+import { boundSingleLineText, fuseSearchHits, MAX_ERROR_MESSAGE_LENGTH, MAX_QUERY_LENGTH } from "./results.ts";
 import type { WebSearchParams } from "./schema.ts";
 import type { ProviderSearchResult, ResolvedSearchCredentials, SearchEngineType, WebSearchDetails } from "./types.ts";
 
@@ -25,7 +25,7 @@ export async function executeWebSearch(
 	onUpdate?: AgentToolUpdateCallback<WebSearchDetails>,
 ): Promise<WebSearchExecution> {
 	const startTime = Date.now();
-	const query = params.query.trim();
+	const query = boundSingleLineText(params.query, MAX_QUERY_LENGTH) ?? "";
 	const engine = configuredEngine(credentials);
 
 	if (!query) {
@@ -101,7 +101,7 @@ export async function executeWebSearch(
 			engine,
 			totalHits: 0,
 			hits: [],
-			errorMessage: errors.join(" | ") || "All search engines failed",
+			errorMessage: boundSingleLineText(errors.join(" | "), MAX_ERROR_MESSAGE_LENGTH) ?? "All search engines failed",
 		};
 		return { formattedOutput: formatSearchOutput(query, details), details };
 	}

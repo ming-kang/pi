@@ -3,10 +3,12 @@
  */
 
 import { type Static, Type } from "typebox";
+import { MAX_QUERY_LENGTH } from "./results.ts";
 
 export const WebSearchParamsSchema = Type.Object({
 	query: Type.String({
 		minLength: 1,
+		maxLength: MAX_QUERY_LENGTH,
 		description: "The search query. Aim for 3-5 keywords; include a year when freshness matters.",
 	}),
 });
