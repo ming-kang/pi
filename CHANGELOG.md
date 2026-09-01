@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Background-task completion and stall notifications now steer into the current run at the next turn boundary instead of queueing behind it as follow-ups, so a task that finishes while the agent keeps working reaches the model promptly rather than after the whole run settles; idle wake-ups are unchanged.
+
 ## [0.84.15] - 2026-09-01
 
 ### Changed

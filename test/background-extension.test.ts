@@ -213,7 +213,7 @@ describe("background extension", () => {
 
 		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
 		const sent = harness.sent[0];
-		expect(sent?.options).toEqual({ deliverAs: "followUp", triggerTurn: true });
+		expect(sent?.options).toEqual({ deliverAs: "steer", triggerTurn: true });
 		expect(sent?.message.customType).toBe("background-task");
 		expect(sent?.message.display).toBe(true);
 
@@ -320,7 +320,7 @@ describe("background extension", () => {
 		expect(harness.calls).toHaveLength(0);
 	});
 
-	it("wait delivers a completion inline and suppresses the followUp notification", async () => {
+	it("wait delivers a completion inline and suppresses the completion notification", async () => {
 		const harness = createHarness();
 		await harness.startSession();
 
@@ -338,7 +338,7 @@ describe("background extension", () => {
 		expect(text).toContain("completed");
 		expect(text).toContain("building");
 		expect(text).toContain("+9B new output");
-		// The claim protocol suppresses the followUp: this result is the single delivery.
+		// The claim protocol suppresses the notification: this result is the single delivery.
 		expect(harness.sent).toHaveLength(0);
 
 		const details = result.details as BgWaitDetails;
@@ -348,7 +348,7 @@ describe("background extension", () => {
 		expect(details.status).toBe("completed");
 	});
 
-	it("wait times out while the task keeps running; the followUp still fires later", async () => {
+	it("wait times out while the task keeps running; the notification still fires later", async () => {
 		const harness = createHarness();
 		await harness.startSession();
 
@@ -368,7 +368,7 @@ describe("background extension", () => {
 		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
 	});
 
-	it("an aborted wait hands the claim back so the followUp still fires", async () => {
+	it("an aborted wait hands the claim back so the notification still fires", async () => {
 		const harness = createHarness();
 		await harness.startSession();
 
@@ -399,7 +399,7 @@ describe("background extension", () => {
 		const controller = new AbortController();
 		const waitPromise = harness.execute("bg", { action: "wait", taskId, waitMs: 5_000 }, controller.signal);
 		// Settle and interrupt in the same tick. Nobody may claim delivery on the
-		// waiter's behalf: its result is discarded, so the followUp has to fire —
+		// waiter's behalf: its result is discarded, so the notification has to fire —
 		// exactly once, and carrying the terminal status rather than "running".
 		harness.calls[0]?.finish(0);
 		controller.abort();
@@ -464,7 +464,7 @@ describe("background extension", () => {
 
 		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
 		const sent = harness.sent[0];
-		expect(sent?.options).toEqual({ deliverAs: "followUp", triggerTurn: true });
+		expect(sent?.options).toEqual({ deliverAs: "steer", triggerTurn: true });
 		const content = sent?.message.content ?? "";
 		expect(content).toContain('status="running"');
 		expect(content).toContain('waiting-for-input="true"');

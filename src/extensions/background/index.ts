@@ -3,10 +3,11 @@
  *
  * Tools: a single `bg` tool with five actions. create starts a task and
  * returns immediately; the result arrives as a <background-task> notification
- * (queued behind the current run while streaming, waking the agent when
- * idle). read returns a bounded slice of a task's output file; wait blocks
- * (bounded) for a task's completion and delivers it inline — the followUp
- * notification is suppressed so the completion is delivered exactly once;
+ * (steered into the run at the next turn boundary while streaming, waking the
+ * agent when idle). read returns a bounded slice of a task's output file;
+ * wait blocks (bounded) for a task's completion and delivers it inline — the
+ * completion notification is suppressed so the completion is delivered exactly
+ * once;
  * kill stops a single task; list enumerates known tasks. /bg opens the
  * interactive task manager. Running counts surface in the footer via
  * ctx.ui.setStatus.
@@ -117,7 +118,9 @@ export function createBackgroundExtension(overrides?: BackgroundExtensionOverrid
 							display: true,
 							details: toNotificationDetails(notification),
 						},
-						{ deliverAs: "followUp", triggerTurn: true },
+						// steer, not followUp: a task that finishes mid-run must reach the
+						// model at the next turn boundary, not after the whole run ends.
+						{ deliverAs: "steer", triggerTurn: true },
 					),
 				onChange: updateStatus,
 			});

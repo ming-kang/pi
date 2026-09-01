@@ -41,7 +41,7 @@ Blocks until a task finishes, within a bound:
 - `waitMs` defaults to 20000 and clamps between 1000 and 60000.
 - `sinceBytes` (taken from a previous read/wait result) restricts the returned output to what was written after that offset; without it the last 32KB is returned. Offsets past EOF (for example after output truncation) fall back to the tail and say so.
 
-If the task finishes within the window, the result is delivered inline — status, exit code, runtime, and the bounded output delta — and the followUp notification is suppressed, so the completion is delivered exactly once. Interrupting the turn during a wait releases that claim, so the notification arrives normally instead. If the window expires, the result says the task is still running, includes a small tail peek so progress stays visible, and the notification fires later as usual. This is the only sanctioned way to wait; sleeping to emulate it is never correct.
+If the task finishes within the window, the result is delivered inline — status, exit code, runtime, and the bounded output delta — and the completion notification is suppressed, so the completion is delivered exactly once. Interrupting the turn during a wait releases that claim, so the notification arrives normally instead. If the window expires, the result says the task is still running, includes a small tail peek so progress stays visible, and the notification fires later as usual. This is the only sanctioned way to wait; sleeping to emulate it is never correct.
 
 ### kill
 
@@ -65,7 +65,7 @@ Task ids accept a unique prefix (with or without the `bg-` part); an ambiguous p
 
 ## Completion delivery
 
-When a task ends, the extension sends a `background-task` notification: a small XML message carrying the task id, terminal status, exit code, runtime, output file path, the optional description, and the sanitized last ~4KB of output. While the agent is streaming, the notification queues behind the current run and is delivered when the run settles; when the agent is idle, it wakes a new turn so the result is acted on immediately.
+When a task ends, the extension sends a `background-task` notification: a small XML message carrying the task id, terminal status, exit code, runtime, output file path, the optional description, and the sanitized last ~4KB of output. While the agent is streaming, the notification is steered into the run at the next turn boundary — after the in-flight tool calls finish, before the next model call — so a task that finishes mid-run reaches the model while it is still working, not after the whole run settles; when the agent is idle, it wakes a new turn so the result is acted on immediately.
 
 The transcript renders this notification as a one-line summary (`✓ bg-3f2a91 npm run build — completed, exit 0 in 34s`; with a description: `✓ bg-3f2a91 dev server (npm run build) — completed, exit 0 in 34s`) with the output file's name below; expanding it shows the full output path and the embedded output tail.
 
