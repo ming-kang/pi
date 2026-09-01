@@ -4,6 +4,16 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.84.13] - 2026-09-01
+
+### Added
+
+- Added a bundled `web_search` extension: a Pi-native tool for querying live web information through MiniMax and DeepSeek search engines. When both engines are configured, searches run concurrently and results are fused — URLs normalized (tracking parameters and fragments stripped), duplicates merged, and hits verified by both engines ranked first. The model-facing payload is Markdown containing up to 12 verified sources (snippets bounded to 200 characters each, dual-engine hits tagged), a DeepSeek synthesis section when available, and up to 8 related searches, followed by a requirement to cite a `Sources:` section. Optional `allowed_domains`/`blocked_domains` filters apply both in the upstream query and as a local post-filter on result URLs (subdomains included); when both are supplied, `allowed_domains` wins.
+- Engine failures are independent: if one engine errors, the other's results are still returned, and the tool errors only when every configured engine fails. Requests time out after 60 seconds (MiniMax) or 90 seconds (DeepSeek), and upstream error bodies are truncated to 200 characters. MiniMax search uses the Coding Plan Search endpoint (`POST /v1/coding_plan/search`), which requires a Coding Plan key; DeepSeek search goes through the Anthropic-compatible endpoint with the server-side `web_search_20250305` tool.
+- Keys resolve per provider through the runtime's canonical auth chain (`ModelRuntime.getAuth`: runtime API key → `auth.json` → `models.json` → environment), with a direct `auth.json` fallback (provider IDs `minimax-cn`, `minimax`, `deepseek`, including command-configured keys such as `"!op read ..."`) and then the `MINIMAX_CN_API_KEY`, `MINIMAX_API_KEY`, and `DEEPSEEK_API_KEY` environment variables. The MiniMax CN account is preferred and selects the `api.minimaxi.com` search host; the global account uses `api.minimax.io`, overridable via `MINIMAX_API_HOST`. Configure with `/login minimax-cn` or `/login deepseek`.
+- When no key is configured, `web_search` is removed from the model's tool set and system prompt entirely — the model never sees or calls it. This is re-evaluated on every session start (`startup`, `/new`, `/reload`, resume, fork), so a mid-session `/login` takes effect from the next session onward. The tool stays registered: it remains listed in `/tools` (where it can be force-enabled, in which case calls fail with the disabled message), and historical sessions render normally.
+- Presentation is Pi-native: the call line shows the query and active domain filters, in-flight renders show the engine label with elapsed time past 2s, the collapsed result shows hit count, engines, duration, and a top-domain preview, and expanding renders the result sections from `details` — without the model-facing agent directives — falling back to the raw payload for legacy entries.
+
 ## [0.84.12] - 2026-08-31
 
 ### Upstream sync: Pi v0.84.4
