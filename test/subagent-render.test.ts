@@ -304,13 +304,13 @@ describe("subagent rendering", () => {
 				tasks: runs.map((entry) => ({ agent: entry.agent as "explorer" | "general", prompt: "Hidden" })),
 			},
 		});
-		expect(output).toContain("  Run(npm test)");
-		expect(output).toContain("  Read(src/index.ts)");
-		expect(output).toContain("  Grep(normalizeState)");
-		expect(output).toContain("  Find(**/*.test.ts)");
-		expect(output).toContain("  List(src)");
-		expect(output).toContain("  Edit(src/index.ts)");
-		expect(output).toContain("  Write(docs/design.md)");
+		expect(output).toContain("› Run(npm test)");
+		expect(output).toContain("› Read(src/index.ts)");
+		expect(output).toContain("› Grep(normalizeState)");
+		expect(output).toContain("› Find(**/*.test.ts)");
+		expect(output).toContain("› List(src)");
+		expect(output).toContain("› Edit(src/index.ts)");
+		expect(output).toContain("› Write(docs/design.md)");
 	});
 
 	it("shows only the last three tool calls while preserving the total count", () => {
@@ -978,10 +978,40 @@ describe("subagent rendering", () => {
 		)
 			.render(120)
 			.join("\n");
-		expect(output).toContain("  Run(check)");
+		expect(output).toContain("× Run(check)");
 		expect(output).not.toContain("exit 1");
 		expect(output).not.toContain("Output truncated");
-		expect(colors).toContain("error:Run(check)");
+		expect(colors).toContain("error:×");
+		expect(colors).toContain("toolOutput:Run(check)");
+	});
+
+	it("colors only the status marker of a running Activity call", () => {
+		const colors: string[] = [];
+		const trackingTheme = {
+			...theme,
+			fg: (color: string, text: string) => {
+				colors.push(`${color}:${text}`);
+				return text;
+			},
+		} as Theme;
+		const data = details({
+			status: "running",
+			endedAt: undefined,
+			runs: [liveRun({ activities: [runningActivity("bash-1", "bash", "Run npm test")] })],
+		});
+		const output = renderSubagentResult(
+			{ content: [{ type: "text", text: "running" }], details: data },
+			{ expanded: true, isPartial: true },
+			trackingTheme,
+			defaultArgs,
+			false,
+		)
+			.render(120)
+			.join("\n");
+		expect(output).toContain("› Run(npm test)");
+		expect(colors).toContain("accent:›");
+		expect(colors).toContain("toolOutput:Run(npm test)");
+		expect(colors).not.toContain("accent:Run(npm test)");
 	});
 
 	it("falls back to bounded result text and labels empty details as Starting", () => {

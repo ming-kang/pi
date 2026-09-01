@@ -121,7 +121,7 @@ Outcome stays in the same position throughout the task lifecycle:
 - completed: the worker's final Markdown report, or `No outcome returned.`;
 - failed or aborted: the terminal reason, followed by `Partial outcome:` and the bounded report when useful output survived.
 
-A terminal task exposes its Outcome immediately even while sibling tasks remain active. Profile identity, section headings, activity states, and outcomes use semantic theme colors; report Markdown keeps its normal Markdown palette instead of inheriting a blanket success or error color.
+A terminal task exposes its Outcome immediately even while sibling tasks remain active. Profile identity, section headings, activity state markers, and outcomes use semantic theme colors; report Markdown keeps its normal Markdown palette instead of inheriting a blanket success or error color.
 
 Full child transcripts are not stored separately. Activity, errors, reports, usage, and model-facing output remain bounded, and completed calls restore through the parent session tree.
 

@@ -226,9 +226,13 @@ function activityTitleSuffix(total: number, shown: number): string {
 }
 
 function activityLine(activity: ToolActivity, theme: Theme): string {
-	const color: ThemeColor =
-		activity.status === "failed" ? "error" : activity.status === "running" ? "accent" : "toolOutput";
-	return `  ${theme.fg(color, activityCallText(activity))}`;
+	// State color stays on the two-column status marker; the call text itself
+	// keeps the quiet toolOutput color so a running row does not flash a whole
+	// accent-colored command line on every refresh.
+	const text = theme.fg("toolOutput", activityCallText(activity));
+	if (activity.status === "failed") return `${theme.fg("error", "×")} ${text}`;
+	if (activity.status === "running") return `${theme.fg("accent", "›")} ${text}`;
+	return `  ${text}`;
 }
 
 function addPrompt(
