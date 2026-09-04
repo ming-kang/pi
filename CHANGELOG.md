@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.84.16] - 2026-09-04
+
 ### Changed
 
 - Shipped the `pi` executable entrypoints (`dist/cli.js`, `dist/rpc-entry.js`, and the image-resize worker) as self-contained esbuild single-file bundles on top of the unchanged `tsc` SDK output, so startup reads one file instead of hundreds of small modules. This fixes slow first launches on native Windows, where real-time antivirus scanning charged every module file on a cold start; SDK consumers and user-extension loading are unchanged.
