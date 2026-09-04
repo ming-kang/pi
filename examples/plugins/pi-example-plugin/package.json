@@ -1,0 +1,10 @@
+{
+	"name": "@earendil-works/pi-example-plugin",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"peerDependencies": {
+		"@astralyn/pi": "^0.85.0",
+		"@earendil-works/chord": "^0.85.0"
+	}
+}

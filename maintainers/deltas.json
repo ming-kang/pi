@@ -146,7 +146,7 @@
 		{
 			"path": "src/core/tools/bash.ts",
 			"category": "ui",
-			"intent": "Syntax-highlighted collapsed command line, shared hints, Windows nul rewriting, and execution helpers consumed by the background extension",
+			"intent": "Exported timeout/spawn helpers and Windows nul-redirect normalization consumed by the background extension; fork rendering lives in renderers/bash.ts",
 			"tests": [
 				"test/bash-tool-rendering.test.ts",
 				"test/bash-nul-redirect.test.ts"
@@ -155,7 +155,7 @@
 		{
 			"path": "src/core/tools/edit.ts",
 			"category": "ui",
-			"intent": "Native chrome with diff stat and bounded collapsed diff body",
+			"intent": "Drops renderShell self so edits use the native chrome; fork rendering lives in renderers/edit.ts",
 			"tests": [
 				"test/edit-tool-no-full-redraw.test.ts"
 			]
@@ -172,7 +172,7 @@
 		{
 			"path": "src/core/tools/grep.ts",
 			"category": "ui",
-			"intent": "Call-line flag badges, shared path/hint rendering, explore toolGroup",
+			"intent": "Explore toolGroup on the definition; fork rendering (flag badges, shared path/hint) lives in renderers/grep.ts",
 			"tests": [
 				"test/tools.test.ts"
 			]
@@ -180,12 +180,12 @@
 		{
 			"path": "src/core/tools/ls.ts",
 			"category": "ui",
-			"intent": "Shared collapsed-lines hint and explore toolGroup"
+			"intent": "Explore toolGroup on the definition; fork collapsed-lines hint lives in renderers/ls.ts"
 		},
 		{
 			"path": "src/core/tools/read.ts",
 			"category": "ui",
-			"intent": "Shared collapsed-lines hint, muted range colors, explore toolGroup, group-summary rendering"
+			"intent": "Explore toolGroup on the definition; fork rendering (muted range colors, group-summary expand hint) lives in renderers/read.ts"
 		},
 		{
 			"path": "src/core/tools/render-utils.ts",
@@ -193,14 +193,18 @@
 			"intent": "Shared collapsedLinesHint helper consumed by all built-in tool renderers"
 		},
 		{
+			"path": "src/core/tools/renderers/",
+			"category": "ui",
+			"intent": "Fork rendering layered on upstream's extracted renderers: syntax-highlighted bash call line, edit diff stat and bounded collapsed body, shared collapsedLinesHint everywhere, find/grep path rendering, read muted ranges and group-summary hint, write total count",
+			"tests": [
+				"test/bash-tool-rendering.test.ts",
+				"test/edit-tool-no-full-redraw.test.ts"
+			]
+		},
+		{
 			"path": "src/core/tools/tool-definition-wrapper.ts",
 			"category": "extension-support",
 			"intent": "Propagates toolGroup through tool wrapping and tightens generics"
-		},
-		{
-			"path": "src/core/tools/write.ts",
-			"category": "ui",
-			"intent": "Shared collapsed-lines hint with total count"
 		},
 		{
 			"path": "src/core/trust-manager.ts",
@@ -209,6 +213,11 @@
 			"tests": [
 				"test/trust-manager.test.ts"
 			]
+		},
+		{
+			"path": "src/experimental/plugins/bundled.ts",
+			"category": "distribution",
+			"intent": "resolvePluginExternal also maps this distribution's @astralyn/pi/experimental/plugin specifier to the local plugin module, not only upstream's package name"
 		},
 		{
 			"path": "src/extensions/index.ts",
@@ -273,7 +282,7 @@
 		{
 			"path": "src/modes/interactive/components/tool-execution.ts",
 			"category": "ui",
-			"intent": "Dot/rail chrome assembly, tool grouping, bash progress row, image-conversion race fix, and renderer-state dispose lifecycle",
+			"intent": "Dot/rail chrome assembly, tool grouping (including the toolGroup field on the ToolRenderers interface), bash progress row, image-conversion race fix, and renderer-state dispose lifecycle",
 			"tests": [
 				"test/tool-execution-component.test.ts"
 			]

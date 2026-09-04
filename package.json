@@ -22,6 +22,10 @@
 		"./client": {
 			"types": "./dist/client/index.d.ts",
 			"import": "./dist/client/index.js"
+		},
+		"./experimental/plugin": {
+			"types": "./dist/experimental/plugin.d.ts",
+			"import": "./dist/experimental/plugin.js"
 		}
 	},
 	"files": [
@@ -53,11 +57,13 @@
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {
-		"@earendil-works/pi-agent-core": "0.84.4",
-		"@earendil-works/pi-ai": "0.84.4",
-		"@earendil-works/pi-client": "0.84.4",
-		"@earendil-works/pi-protocol": "0.84.4",
-		"@earendil-works/pi-tui": "0.84.4",
+		"@earendil-works/chord": "0.85.0",
+		"@earendil-works/pi-agent-core": "0.85.0",
+		"@earendil-works/pi-ai": "0.85.0",
+		"@earendil-works/pi-client": "0.85.0",
+		"@earendil-works/pi-protocol": "0.85.0",
+		"@earendil-works/pi-server": "0.85.0",
+		"@earendil-works/pi-tui": "0.85.0",
 		"@silvia-odwyer/photon-node": "0.3.4",
 		"chalk": "5.6.2",
 		"cross-spawn": "7.0.6",

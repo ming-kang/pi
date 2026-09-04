@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Synchronized upstream Pi v0.85.0: adopts the upstream renderer extraction (fork rendering now layers on `src/core/tools/renderers/`), the new experimental Chord-based server/client/plugin runtime (adding exact `@earendil-works/chord` and `@earendil-works/pi-server` dependencies and an `./experimental/plugin` package export), click-to-expand tool results, and the theme schema's scrollbar/search-match colors. The experimental durable server is POSIX-only upstream and its tests skip on native Windows.
+
 ## [0.84.16] - 2026-09-04
 
 ### Changed

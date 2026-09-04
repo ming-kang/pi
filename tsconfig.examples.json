@@ -6,6 +6,7 @@
 		"moduleResolution": "NodeNext",
 		"paths": {
 			"@astralyn/pi": ["./src/index.ts"],
+			"@astralyn/pi/experimental/plugin": ["./src/experimental/plugin.ts"],
 			"@astralyn/pi/*": ["./src/*"]
 		}
 	},
