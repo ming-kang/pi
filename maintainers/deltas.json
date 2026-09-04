@@ -220,6 +220,11 @@
 			"intent": "resolvePluginExternal also maps this distribution's @astralyn/pi/experimental/plugin specifier to the local plugin module, not only upstream's package name"
 		},
 		{
+			"path": "src/experimental/source-resolver.ts",
+			"category": "distribution",
+			"intent": "repositoryRoot climbs two levels instead of four because this distribution's src tree sits two levels shallower than the upstream monorepo package"
+		},
+		{
 			"path": "src/extensions/index.ts",
 			"category": "distribution",
 			"intent": "Registers the distribution's canonical bundled extension set as hidden built-ins"
