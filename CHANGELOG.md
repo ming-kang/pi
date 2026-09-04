@@ -6,6 +6,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Changed
 
+- Shipped the `pi` executable entrypoints (`dist/cli.js`, `dist/rpc-entry.js`, and the image-resize worker) as self-contained esbuild single-file bundles on top of the unchanged `tsc` SDK output, so startup reads one file instead of hundreds of small modules. This fixes slow first launches on native Windows, where real-time antivirus scanning charged every module file on a cold start; SDK consumers and user-extension loading are unchanged.
 - Confined the Subagent expanded Activity state color to the two-column status marker (`›` running, `×` failed) and kept the call text itself in the quiet tool-output color, so a running call no longer flashes a whole accent-colored command line on every refresh; succeeded rows stay marker-free and aligned.
 - Background-task completion and stall notifications now steer into the current run at the next turn boundary instead of queueing behind it as follow-ups, so a task that finishes while the agent keeps working reaches the model promptly rather than after the whole run settles; idle wake-ups are unchanged.
 

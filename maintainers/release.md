@@ -25,7 +25,7 @@ npm run diff:upstream -- --check
 npm pack --dry-run
 ```
 
-Inspect the dry-run tarball: it must contain built `dist`, shipped documentation and examples, README, changelog, and `npm-shrinkwrap.json`, but not `maintainers/**`, source workspaces, or local configuration. For a stronger smoke test, install a real tarball outside the repository and run `pi --version` and `pi --list-models`.
+Inspect the dry-run tarball: it must contain built `dist`, shipped documentation and examples, README, changelog, and `npm-shrinkwrap.json`, but not `maintainers/**`, source workspaces, or local configuration. For a stronger smoke test, install a real tarball outside the repository and run `pi --version` and `pi --list-models`. The executable entrypoints are esbuild single-file bundles: confirm `dist/cli.js` is a multi-megabyte file starting with the shebang (`npm run verify:package-install -- <tarball>` asserts this automatically), and time a cold first launch of the installed `pi` — it should be in the same range as a warm relaunch.
 
 ## Publish and tag
 

@@ -144,6 +144,26 @@ try {
 			throw new Error(`Installed package is missing ${relativePath}.`);
 		}
 	}
+
+	// The bin entrypoints must be the esbuild single-file bundles, not the
+	// tsc output (a few hundred bytes); otherwise cold starts regress to
+	// reading hundreds of files.
+	const bundledCliPath = join(packageDirectory, "dist", "cli.js");
+	const bundledCliSize = statSync(bundledCliPath).size;
+	if (bundledCliSize < 5 * 1024 * 1024) {
+		throw new Error(
+			`Installed dist/cli.js is only ${bundledCliSize} bytes; expected the esbuild single-file bundle.`,
+		);
+	}
+	if (!readFileSync(bundledCliPath, "utf8").startsWith("#!/usr/bin/env node")) {
+		throw new Error("Installed dist/cli.js is missing its shebang.");
+	}
+	for (const bundledPath of ["dist/rpc-entry.js", "dist/image-resize-worker.js"]) {
+		const requiredPath = join(packageDirectory, ...bundledPath.split("/"));
+		if (!existsSync(requiredPath) || !statSync(requiredPath).isFile()) {
+			throw new Error(`Installed package is missing ${bundledPath}.`);
+		}
+	}
 	for (const forbiddenPath of [
 		"dist/extensions/biu",
 		"dist/extensions/plan",

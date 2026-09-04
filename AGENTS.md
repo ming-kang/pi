@@ -17,6 +17,7 @@ This is the private standalone distribution of Pi's coding-agent package. It pub
 - Read files completely before broad changes. Use top-level imports only; do not use dynamic imports or inline type imports. Use `.ts` relative TypeScript imports, practical types instead of `any`, and erasable TypeScript syntax only.
 - Add configurable key defaults to `KEYBINDINGS` and use the `KeybindingsManager`; never hard-code key checks.
 - Pin direct npm dependencies exactly and intentionally regenerate `npm-shrinkwrap.json` when they change.
+- `npm run build` emits the full `tsc` output and then overwrites the executable entrypoints (`dist/cli.js`, `dist/rpc-entry.js`, `dist/image-resize-worker.js`) with esbuild single-file bundles via `scripts/build-bundle.mjs`; keep `PI_BUNDLED_NODE` defined there so user-extension loading uses embedded virtual modules. Bundling inlines the published dependency artifacts unchanged — it is not vendoring, patching, or recreating them.
 - Never commit credentials, provider tokens, local configuration, or machine-specific paths.
 
 ## Verification and repository safety
