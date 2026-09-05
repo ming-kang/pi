@@ -52,7 +52,8 @@ export function toProviderConfig(relay: RelayConfig, state = new RouterRequestSt
 	const models = structuredClone(relay.models);
 	return {
 		name: relay.name ?? relay.id,
-		headers: relay.headers,
+		// Named registrations merge defined fields; an empty snapshot clears prior router headers.
+		headers: { ...relay.headers },
 		baseUrl: relay.baseUrl.replace(/\/+$/, ""),
 		apiKey: relay.apiKey,
 		api: ROUTER_API,

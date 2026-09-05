@@ -1,9 +1,16 @@
+import { createHash } from "node:crypto";
 import { createServer, type IncomingHttpHeaders, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AuthStorage } from "../src/core/auth-storage.ts";
+import { ModelRuntime } from "../src/core/model-runtime.ts";
+import { InMemoryCodingAgentModelsStore } from "../src/core/models-store.ts";
+import { probeRelayModels } from "../src/extensions/router/probe.ts";
+import { toProviderConfig } from "../src/extensions/router/register.ts";
 import { RouterRequestState } from "../src/extensions/router/state.ts";
+import { parseRouterFile } from "../src/extensions/router/store.ts";
 import { sanitizeInputItemsForCodex, streamRouterCodex } from "../src/extensions/router/stream.ts";
 import type { CodexModelConfig } from "../src/extensions/router/types.ts";
 
@@ -200,9 +207,14 @@ describe("router Codex API-key SSE wire contract (public pi-ai adapter)", () => 
 			request.on("end", () => {
 				requests.push({
 					headers: request.headers,
-					body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+					body: chunks.length > 0 ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {},
 					url: request.url,
 				});
+				if (request.method === "GET" && request.url === "/v1/models") {
+					response.writeHead(200, { "content-type": "application/json" });
+					response.end(JSON.stringify({ data: [{ id: "synthetic-model" }] }));
+					return;
+				}
 				reply(response, requests.length - 1);
 			});
 		});
@@ -289,6 +301,165 @@ describe("router Codex API-key SSE wire contract (public pi-ai adapter)", () => 
 			status: 200,
 			headers: { "x-codex-turn-state": "fixture-turn-token" },
 		});
+	});
+
+	it("sends explicit non-strict function tools without normalizing optional or nested parameters", async () => {
+		await listen();
+		const parameters = Type.Object({
+			path: Type.String(),
+			offset: Type.Optional(Type.Integer()),
+			filter: Type.Optional(Type.Object({ prefix: Type.Optional(Type.String()) })),
+		});
+		const before = structuredClone(parameters);
+		const result = await streamRouterCodex(
+			model,
+			{ ...context, tools: [{ name: "read", description: "Read fixture", parameters }] },
+			options,
+		).result();
+		expect(result.stopReason).toBe("stop");
+		expect(requests[0].body.tools).toEqual([
+			{ type: "function", name: "read", description: "Read fixture", parameters: before, strict: false },
+		]);
+		expect(parameters).toEqual(before);
+	});
+
+	it("leaves explicitly requested strict JSON-schema tools with the public adapter", async () => {
+		await listen();
+		const result = await streamRouterCodex(
+			model,
+			{
+				...context,
+				tools: [
+					{
+						name: "report",
+						description: "Report fixture",
+						parameters: Type.Object({ status: Type.String() }),
+						constrainedSampling: { type: "json_schema", strict: "require" },
+					},
+				],
+			},
+			options,
+		).result();
+		expect(result.stopReason).toBe("stop");
+		expect(requests[0].body.tools).toEqual([
+			{
+				type: "function",
+				name: "report",
+				description: "Report fixture",
+				parameters: {
+					type: "object",
+					properties: { status: { type: "string" } },
+					required: ["status"],
+					additionalProperties: false,
+				},
+				strict: true,
+			},
+		]);
+	});
+
+	it.each<{
+		label: string;
+		apiKey: string;
+		headers: NonNullable<SimpleStreamOptions["headers"]>;
+		expected: string | undefined;
+	}>([
+		{ label: "API key", apiKey: "synthetic-key", headers: {}, expected: "Bearer synthetic-key" },
+		{
+			label: "header only",
+			apiKey: "",
+			headers: { aUtHoRiZaTiOn: "Bearer synthetic-header-key" },
+			expected: "Bearer synthetic-header-key",
+		},
+		{
+			label: "header overrides API key",
+			apiKey: "synthetic-key",
+			headers: { Authorization: "Bearer synthetic-header-key" },
+			expected: "Bearer synthetic-header-key",
+		},
+		{
+			label: "explicit Authorization removal",
+			apiKey: "synthetic-key",
+			headers: { Authorization: null },
+			expected: undefined,
+		},
+	])("delegates resolved authentication ($label)", async ({ apiKey, headers, expected }) => {
+		await listen();
+		const result = await streamRouterCodex(model, context, { ...options, apiKey, headers }).result();
+		expect(result.stopReason).toBe("stop");
+		expect(requests).toHaveLength(1);
+		expect(requests[0].headers.authorization).toBe(expected);
+	});
+
+	it.each([undefined, null, "", "   "])(
+		"rejects missing credentials without a request (Authorization=%s)",
+		async (value) => {
+			await listen();
+			const result = await streamRouterCodex(model, context, {
+				...options,
+				apiKey: undefined,
+				headers: value === undefined ? {} : { Authorization: value },
+			}).result();
+			expect(result.stopReason).toBe("error");
+			expect(result.errorMessage).toContain(`No API key for provider: ${model.provider}`);
+			expect(requests).toHaveLength(0);
+		},
+	);
+
+	it("uses the same header-only credentials for catalog discovery and a registered Responses request", async () => {
+		await listen();
+		const relay = parseRouterFile(
+			JSON.stringify({
+				version: 1,
+				relays: [
+					{
+						id: "header-only-relay",
+						baseUrl: model.baseUrl,
+						apiKey: "",
+						headers: { Authorization: "Bearer synthetic-header-key" },
+						models: [],
+					},
+				],
+			}),
+		).relays[0];
+		const catalog = await probeRelayModels(relay);
+		expect(catalog.ok).toBe(true);
+		if (!catalog.ok) throw new Error(catalog.error);
+		relay.models = catalog.models.map(({ id }) => ({ id, reasoning: false }));
+		const runtime = await ModelRuntime.create({
+			credentials: AuthStorage.inMemory(),
+			modelsPath: null,
+			modelsStore: new InMemoryCodingAgentModelsStore(),
+			allowModelNetwork: false,
+		});
+		runtime.registerProvider(relay.id, toProviderConfig(relay));
+		const registered = runtime.getModel(relay.id, "synthetic-model");
+		expect(registered).toBeDefined();
+		const result = await runtime.completeSimple(registered!, context, { maxRetries: 0 });
+		expect(result.stopReason).toBe("stop");
+		expect(requests.map((request) => request.url)).toEqual(["/v1/models", "/v1/responses"]);
+		for (const request of requests) expect(request.headers.authorization).toBe("Bearer synthetic-header-key");
+	});
+
+	it.each([
+		"s".repeat(64),
+		"s".repeat(65),
+		"s".repeat(256),
+		"s".repeat(257),
+		" leading space",
+		"trailing space ",
+		"   ",
+		"\u4f1a\u8bdd",
+		"line\nbreak",
+	])("bounds the actual cache key and keeps wire identities consistent (%#)", async (sessionId) => {
+		await listen();
+		const expected = sessionId === "s".repeat(64) ? sessionId : createHash("sha256").update(sessionId).digest("hex");
+		const result = await streamRouterCodex(model, context, { ...options, sessionId }).result();
+		expect(result.stopReason).toBe("stop");
+		const { body, headers } = requests[0];
+		expect(body.prompt_cache_key).toBe(expected);
+		expect(String(body.prompt_cache_key).length).toBeLessThanOrEqual(64);
+		for (const name of ["session-id", "thread-id", "x-client-request-id"]) expect(headers[name]).toBe(expected);
+		expect(body.client_metadata).toMatchObject({ session_id: expected, thread_id: expected });
 	});
 
 	it("isolates SDK process headers while preserving explicitly configured routing headers", async () => {
@@ -402,6 +573,7 @@ describe("router Codex API-key SSE wire contract (public pi-ai adapter)", () => 
 				name: "read",
 				description: "Read fixture",
 				parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+				strict: false,
 			},
 		]);
 		expect(requests[1].body.input).toEqual(
@@ -441,6 +613,27 @@ describe("router Codex API-key SSE wire contract (public pi-ai adapter)", () => 
 		).result();
 		expect(requests[3].headers).not.toHaveProperty("x-codex-turn-state");
 		expect(requests[3].body.client_metadata).not.toEqual(requests[0].body.client_metadata);
+	});
+
+	it("allows payload hooks to override the shaped function tool profile", async () => {
+		await listen();
+		const tools = [{ name: "read", description: "Read fixture", parameters: Type.Object({ path: Type.String() }) }];
+		const replacement = [{ type: "function", ...tools[0], strict: true }];
+		const result = await streamRouterCodex(
+			model,
+			{ ...context, tools },
+			{
+				...options,
+				onPayload: (payload) => {
+					expect((payload as Record<string, unknown>).tools).toEqual([
+						{ type: "function", ...tools[0], strict: false },
+					]);
+					return { ...(payload as Record<string, unknown>), tools: replacement };
+				},
+			},
+		).result();
+		expect(result.stopReason).toBe("stop");
+		expect(requests[0].body.tools).toEqual(replacement);
 	});
 
 	it("honors async before-request payload replacement after shaping", async () => {

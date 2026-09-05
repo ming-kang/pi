@@ -27,6 +27,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Fixed
 
+- Fixed bundled router function tools omitting Codex's explicit `strict: false`, header-only Authorization being rejected before Responses requests, and `/router reload` retaining removed relay headers and stale credentials. Tool schemas and credential validation remain with the public pi-ai adapter.
+- Fixed router session identities exceeding the 64-character prompt-cache key limit by hashing long or unsafe ids consistently across wire metadata. Serialized installation identity initialization across processes and atomically published complete JSON without replacing corrupt existing identities.
 - Fixed custom-rendered transcript messages not expanding on fullscreen left-click. Message-local toggling now uses the public TUI mouse region, preserves child mouse handlers and keyboard expansion, and leaves static fallback messages alone. Background completion cards now reuse the native status-dot/title/continuation-rail presentation while retaining their separate completion identity and structured expanded details.
 
 ## [0.85.0] - 2026-09-04

@@ -27,7 +27,7 @@ API relays                  ← relays first; add / reload at bottom
                               reasoning · image input · Codex settings · remove
 ```
 
-Edits **auto-save** to `router.json` and re-register the provider. Text fields save when confirmed; catalog selections and completed thinking-map edits save immediately. There is no Save or Apply step, and Back never discards a completed change.
+Edits **auto-save** to `router.json` and re-register the provider. Text fields save when confirmed; catalog selections and completed thinking-map edits save immediately. There is no Save or Apply step, and Back never discards a completed change. `/router reload` applies a complete router header snapshot: deleting a relay's `headers` field (or setting it to `{}`) clears its previously registered router headers, including custom Authorization. Independently configured model headers and other Pi configuration layers still follow normal provider composition.
 
 TUI model search follows Pi's `/model` behavior: the search field is always visible, typing fuzzy-filters results, arrows wrap, Enter opens the highlighted item, and Esc goes back. Catalog checkboxes use Space to toggle live; Enter or Esc returns to the model list. The active model and its provider cannot be disabled or removed; switch with `/model` first. Interactive `/router` requires `ctx.hasUI`; without it, the command warns and does not open. In a UI host without the TUI checklist, catalog import instead asks to import the full catalog.
 
@@ -123,6 +123,8 @@ The format remains **version 1**, with additive optional fields. The file is str
 
 Relay `name`, `headers`, and `catalog` are optional. Model `name`, `headers`, `cost`, and `codex` are optional alongside the existing capability and thinking fields. Config headers have string values; nullable header removals are available through Pi's runtime header hooks/options, not this JSON schema. Cost defaults to zero for all four Pi cost categories (rates per million tokens); it is accounting metadata, not a relay pricing lookup. Headers and cost can be edited in the file; the UI does not expose editors for them.
 
+For header-only Bearer authentication, set `"apiKey": ""` and configure `headers.Authorization` in the file, for example `"Authorization": "Bearer $RELAY_KEY"` for a registered relay. Both catalog discovery and Responses requests accept resolved Authorization without a duplicate API key; the new/empty-relay discovery fallback still has the limited value-resolution rules above. When an API key and custom Authorization are both present, the header wins. Credential validation belongs to the public Responses adapter; missing credentials still fail without sending a Responses request, and runtime `null` header removals are not restored.
+
 | `codex` field | Supported values | When omitted |
 |---|---|---|
 | `reasoningSummary` | `"auto"`, `"concise"`, `"detailed"`, `null` | `auto` for reasoning models; otherwise omitted from the wire |
@@ -151,9 +153,9 @@ Defaults include `Accept: text/event-stream` and `Content-Type: application/json
 
 ### Installation, session, and user-task state
 
-- `router-client.json` contains `{ "version": 1, "installationId": "…" }`. The UUID persists across extension reloads/processes and is not a credential. An invalid existing identity file produces a load error rather than being silently replaced.
+- `router-client.json` contains `{ "version": 1, "installationId": "…" }`. The UUID persists across extension reloads/processes and is not a credential. Initialization reads and creates it under a dedicated cross-process lock, waits up to about five seconds on contention, and publishes complete JSON from a same-directory temporary file. Concurrent initializers reuse the winning identity rather than reading a half-written file. An invalid existing identity file or an unresolved lock error produces a load error rather than silently replacing the identity; retry `/router reload` after resolving the error.
 - A window UUID lives for one extension runtime, not one HTTP request. A full extension `/reload` creates a new window identity; `/router reload` re-registers providers and clears turn state without recreating the runtime.
-- Pi's supplied session identity is used for both session and thread, and for `prompt_cache_key`. Unsafe/non-ASCII or overlong supplied ids are hashed; absent ids receive a fresh UUID. Nested callers need their own session id.
+- Pi's supplied session identity is used for both session and thread, and for `prompt_cache_key`. Nonempty printable ASCII ids up to **64 characters** without surrounding spaces are preserved. Longer or unsafe/non-ASCII ids (including surrounding spaces that HTTP headers would trim) become a stable SHA-256 hexadecimal digest across headers, client metadata, and the cache key; absent ids receive a fresh UUID. This changes the wire/cache identity of previously unbounded 65–256-character ids, but not persisted Pi sessions or normal UUID session ids. Long ids are hashed rather than truncated so shared prefixes do not collapse distinct sessions. Nested callers need their own session id.
 - Headers include `session-id`, `thread-id`, `x-client-request-id` (thread id), `x-codex-window-id`, and JSON `x-codex-turn-metadata`. Body `client_metadata` carries installation, session, thread, window, and user-task turn identifiers and turn-start time.
 - Turn scope is keyed by session, provider, base URL, model, and latest user message. A tool-loop continuation keeps the same turn id/start time. The first valid successful response `x-codex-turn-state` token is retained and sent on subsequent requests in that scope; tokens are opaque, printable, bounded to 8 KiB, and never persisted.
 - User-task start, session navigation/start (including `/tree`), model selection, shutdown, and provider re-registration clear turn scopes. This is not a fresh turn for each Pi tool-loop iteration.
@@ -161,6 +163,8 @@ Defaults include `Accept: text/event-stream` and `Content-Type: application/json
 ### Payload and replay
 
 The router moves only the leading system/developer prompt to `instructions`; later developer messages stay ordered in input. It sets `store: false`, `stream: true`, `tools` (empty if absent), `tool_choice: "auto"`, configured parallel tools, `include: ["reasoning.encrypted_content"]`, the cache key, and client metadata. Summary follows the table above; adapter-provided effort mappings remain intact, with `persistent` translated to `disabled`. Verbosity is sent only when configured.
+
+Ordinary function tools explicitly send **`strict: false`**, matching Codex rather than relying on the Responses API's automatic strict-schema normalization when the field is omitted. The router enables the public adapter's strict-tool compatibility; pi-ai still owns schema serialization and preserves optional/nested parameters for ordinary tools. Explicit Pi JSON-schema constrained-sampling tools can still request `strict: true`, and user payload hooks may override the shaped tools. Those are deliberate customizations beyond the ordinary Codex tool profile.
 
 Normal Codex DTO exclusions are removed: `prompt_cache_retention`, `prompt_cache_options`, `max_output_tokens`, `temperature`, `top_p`, `user`, `metadata`, `truncation`, `context_management`, `safety_identifier`, and `stream_options`.
 
@@ -186,6 +190,7 @@ The reference is the released **`rust-v0.153.4`**, commit **`3d2ee51ca2d5db578f3
 
 - [Codex 0.153.4 release](https://github.com/openai/codex/releases/tag/rust-v0.153.4)
 - [Commit-pinned source tree](https://github.com/openai/codex/tree/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs) — client identity, Responses request/response types, terminal detection, and model catalog behavior.
+- [Function tool serialization](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/tools/src/responses_api.rs) — explicit non-strict tool definitions.
 - [HTTP retry implementation](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/codex-client/src/retry.rs)
 - [Provider defaults](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/model-provider-info/src/lib.rs)
 

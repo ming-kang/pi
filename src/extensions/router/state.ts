@@ -1,53 +1,81 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Api, Context, Model, ProviderHeaders, ProviderResponse } from "@earendil-works/pi-ai";
+import lockfile from "proper-lockfile";
 import { getAgentDir } from "../../config.ts";
 import { withFileMutationQueue } from "../../core/tools/file-mutation-queue.ts";
 
 /** Non-secret installation identity. Never read Codex credentials or invent an account/attestation. */
 export async function loadRouterInstallationId(): Promise<string> {
-	const path = join(getAgentDir(), "router-client.json");
+	const directory = getAgentDir();
+	const path = join(directory, "router-client.json");
 	return withFileMutationQueue(path, async () => {
+		await mkdir(directory, { recursive: true });
+		let compromised: Error | undefined;
+		const assertLock = () => {
+			if (compromised) throw compromised;
+		};
+		// A dedicated identity lock also covers the missing-file case. Never read before acquiring it:
+		// another process may still be publishing the identity. Bound contention to about five seconds.
+		const release = await lockfile.lock(path, {
+			realpath: false,
+			stale: 30_000,
+			retries: { retries: 50, factor: 1, minTimeout: 100, maxTimeout: 100, randomize: false },
+			onCompromised: (error) => {
+				compromised = error;
+			},
+		});
+		let temporary: string | undefined;
 		try {
-			const value: unknown = JSON.parse(await readFile(path, "utf8"));
-			if (
-				value &&
-				typeof value === "object" &&
-				"installationId" in value &&
-				typeof value.installationId === "string" &&
-				/^[0-9a-f-]{36}$/i.test(value.installationId)
-			) {
+			assertLock();
+			let current: string | undefined;
+			try {
+				current = await readFile(path, "utf8");
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			}
+			assertLock();
+			if (current !== undefined) {
+				const value: unknown = JSON.parse(current);
+				if (
+					!value ||
+					typeof value !== "object" ||
+					!("installationId" in value) ||
+					typeof value.installationId !== "string" ||
+					value.installationId.length !== 36 ||
+					!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value.installationId)
+				)
+					throw new Error("router-client.json has an invalid installation identity.");
 				return value.installationId;
 			}
-			throw new Error("router-client.json has an invalid installation identity.");
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-		}
-		await mkdir(getAgentDir(), { recursive: true });
-		const installationId = randomUUID();
-		try {
-			await writeFile(path, `${JSON.stringify({ version: 1, installationId }, null, 2)}\n`, {
-				encoding: "utf8",
-				mode: 0o600,
-				flag: "wx",
-			});
-		} catch (error) {
-			// A second process may have created the identity after our read; do not overwrite it.
-			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-			const value: unknown = JSON.parse(await readFile(path, "utf8"));
-			if (
-				!value ||
-				typeof value !== "object" ||
-				!("installationId" in value) ||
-				typeof value.installationId !== "string" ||
-				!/^[0-9a-f-]{36}$/i.test(value.installationId)
-			) {
-				throw new Error("router-client.json has an invalid installation identity.");
+			const installationId = randomUUID();
+			temporary = join(directory, `.router-client.${randomUUID()}.tmp`);
+			try {
+				await writeFile(temporary, `${JSON.stringify({ version: 1, installationId }, null, 2)}\n`, {
+					encoding: "utf8",
+					mode: 0o600,
+					flag: "wx",
+				});
+			} catch (error) {
+				// Do not remove a pre-existing file in the extremely unlikely event of a UUID collision.
+				if ((error as NodeJS.ErrnoException).code === "EEXIST") temporary = undefined;
+				throw error;
 			}
-			return value.installationId;
+			assertLock();
+			await rename(temporary, path);
+			assertLock();
+			return installationId;
+		} finally {
+			try {
+				if (temporary) await rm(temporary, { force: true });
+			} finally {
+				await release().catch((error: unknown) => {
+					// A compromised lock is already released by proper-lockfile; retain the original error.
+					if (!compromised) throw error;
+				});
+			}
 		}
-		return installationId;
 	});
 }
 
@@ -81,8 +109,12 @@ export class RouterRequestState {
 	}
 
 	request(model: Model<Api>, context: Context, suppliedSessionId?: string): CodexRequestSnapshot {
+		// Cache keys are limited to 64 characters; HTTP headers also trim surrounding spaces.
 		const sessionId =
-			suppliedSessionId && /^[\x20-\x7e]{1,256}$/.test(suppliedSessionId)
+			suppliedSessionId &&
+			suppliedSessionId.length <= 64 &&
+			suppliedSessionId.trim() === suppliedSessionId &&
+			!/[^\x20-\x7e]/.test(suppliedSessionId)
 				? suppliedSessionId
 				: suppliedSessionId
 					? createHash("sha256").update(suppliedSessionId).digest("hex")

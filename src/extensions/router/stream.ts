@@ -25,8 +25,6 @@ export function streamRouterCodex(
 	const stream = createAssistantMessageEventStream();
 	void (async () => {
 		try {
-			const apiKey = options?.apiKey;
-			if (!apiKey) throw new Error(`No API key for provider: ${model.provider}`);
 			const baseUrl = new URL(model.baseUrl);
 			if (!["http:", "https:"].includes(baseUrl.protocol) || baseUrl.username || baseUrl.password || baseUrl.hash) {
 				throw new Error("Router base URL must be HTTP(S) without embedded credentials or a fragment.");
@@ -42,6 +40,9 @@ export function streamRouterCodex(
 					sessionAffinityFormat: "openai-nosession",
 					supportsLongCacheRetention: false,
 					supportsMaxOutputTokens: false,
+					// Codex explicitly sends strict:false for ordinary function tools; omission is not equivalent.
+					// The public adapter still owns schemas and explicit constrained-sampling requests.
+					supportsStrictMode: true,
 				},
 			} as Model<"openai-responses">;
 			const snapshot = (configuration?.state ?? new RouterRequestState()).request(
@@ -71,9 +72,9 @@ export function streamRouterCodex(
 					await options?.onResponse?.({ status: response.status, headers: responseHeaders }, requestModel);
 				},
 			});
+			// Delegate credential validation too: the adapter supports resolved header-only authentication.
 			const inner = responsesApi.streamSimple(requestModel, context, {
 				...options,
-				apiKey,
 				headers,
 				fetch,
 				// Own only Codex HTTP retry policy. Disable the adapter's different HTTP retry layer.
