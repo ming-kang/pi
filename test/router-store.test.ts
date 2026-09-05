@@ -3,7 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
-import { parseRouterFile, upsertRelay } from "../src/extensions/router/store.ts";
+import {
+	loadRouterFile,
+	parseRouterFile,
+	removeRelay,
+	saveRouterFile,
+	upsertRelay,
+} from "../src/extensions/router/store.ts";
 
 describe("router config persistence", () => {
 	const roots: string[] = [];
@@ -11,6 +17,89 @@ describe("router config persistence", () => {
 	afterEach(() => {
 		vi.unstubAllEnvs();
 		for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+	});
+
+	it("round trips additive settings and never rewrites on load", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-router-fields-"));
+		roots.push(root);
+		vi.stubEnv(ENV_AGENT_DIR, root);
+		const file = parseRouterFile(
+			JSON.stringify({
+				version: 1,
+				relays: [
+					{
+						id: "alpha",
+						name: "Display",
+						baseUrl: "https://relay.example",
+						apiKey: "",
+						catalog: "codex",
+						headers: { "X-Relay": "$HEADER" },
+						models: [
+							{
+								id: "m",
+								reasoning: false,
+								input: ["text"],
+								contextWindow: 1000,
+								maxTokens: 500,
+								thinkingLevelMap: { off: "none", minimal: null, high: "custom" },
+								headers: { "X-Model": "route" },
+								cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0.5 },
+								codex: { reasoningSummary: null, verbosity: "low", parallelToolCalls: false },
+							},
+						],
+					},
+				],
+			}),
+		);
+		await saveRouterFile(file);
+		const before = readFileSync(join(root, "router.json"), "utf8");
+		expect(await loadRouterFile()).toEqual(file);
+		expect(readFileSync(join(root, "router.json"), "utf8")).toBe(before);
+	});
+
+	it("validates nested settings and resolved token limits", () => {
+		const parseModel = (model: object) =>
+			parseRouterFile(
+				JSON.stringify({
+					relays: [{ id: "a", baseUrl: "https://relay.example", apiKey: "", models: [{ id: "m", ...model }] }],
+				}),
+			);
+		for (const model of [
+			{ contextWindow: Number.MAX_SAFE_INTEGER + 1 },
+			{ contextWindow: 100, maxTokens: 101 },
+			{ maxTokens: 300000 },
+			{ codex: { extra: true } },
+			{ codex: { reasoningSummary: "none" } },
+			{ codex: { verbosity: true } },
+			{ codex: { parallelToolCalls: null } },
+			{ headers: { test: 1 } },
+			{ cost: { input: -1, output: 0, cacheRead: 0, cacheWrite: 0 } },
+			{ cost: { input: 0 } },
+		])
+			expect(() => parseModel(model)).toThrow();
+		expect(() => parseModel({ contextWindow: 100, maxTokens: 100, codex: { verbosity: null } })).not.toThrow();
+		const legacy = parseModel({ contextWindow: 32768 }).relays[0].models[0];
+		expect(legacy).toEqual({ id: "m", contextWindow: 32768 });
+	});
+
+	it("serializes whole read-modify-write mutations without lost relays", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-router-queue-"));
+		roots.push(root);
+		vi.stubEnv(ENV_AGENT_DIR, root);
+		await Promise.all(
+			Array.from({ length: 12 }, (_, i) =>
+				upsertRelay({ id: `r${i}`, baseUrl: "https://relay.example", apiKey: "", models: [] }),
+			),
+		);
+		expect((await loadRouterFile()).relays).toHaveLength(12);
+		await Promise.all([
+			removeRelay("r0"),
+			upsertRelay({ id: "new", baseUrl: "https://relay.example", apiKey: "", models: [] }),
+		]);
+		const ids = (await loadRouterFile()).relays.map((relay) => relay.id);
+		expect(ids).toHaveLength(12);
+		expect(ids).not.toContain("r0");
+		expect(ids).toContain("new");
 	});
 
 	it("accepts versionless legacy v1 files and rejects future versions", () => {

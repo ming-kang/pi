@@ -4,6 +4,11 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Updated bundled `/router` to a Codex 0.153.4 normal API-key Responses/SSE request profile with scoped identity, user-task turn state, final SDK-header cleanup, and HTTP retries for 5xx/network errors (not 429); the public pi-ai adapter still owns streaming, and outer retries/compaction remain Pi behavior. Added local coverage; official-binary comparison and target-gateway compatibility remain unverified.
+- Expanded router version-1 configuration and UI with OpenAI/Codex catalog selection, model context/output metadata, capability and Codex request settings, and all seven Pi thinking mappings. Existing explicit mappings are preserved and omissions now follow Pi semantics; newly added models default to low/medium/high only. Catalog imports preserve configured models, and output-token metadata remains local rather than a server generation cap.
+
 ## [0.85.0] - 2026-09-04
 
 ### Added

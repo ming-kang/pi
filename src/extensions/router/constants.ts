@@ -1,8 +1,8 @@
 export const COMMAND_NAME = "router";
 export const COMMAND_DESCRIPTION = "Manage Codex-style API relays";
 
-/** Custom api tag; routes to our streamSimple, not Pi built-in handlers. */
-export const ROUTER_API = "router-codex" as const;
+/** Responses protocol identity; streaming is provider-owned. */
+export const ROUTER_API = "openai-responses" as const;
 
 export const CONFIG_VERSION = 1 as const;
 
@@ -19,8 +19,8 @@ export const DEFAULTS = {
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
-/** Thinking levels exposed by every router model (GPT Gateway policy). */
-export const ROUTER_THINKING_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+/** All editable Pi thinking levels. */
+export const ROUTER_THINKING_LEVELS = THINKING_LEVELS;
 
 export const NO_UI_WARNING = "/router requires an interactive UI.";
 

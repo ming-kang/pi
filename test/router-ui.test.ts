@@ -12,9 +12,9 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 import type { ExtensionAPI, ExtensionCommandContext } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
-import { applyRouterFile } from "../src/extensions/router/register.ts";
+import { applyRouterFile, initializeRouterState, routerStateFor } from "../src/extensions/router/register.ts";
 import { parseRouterFile } from "../src/extensions/router/store.ts";
-import { mergeCatalogWithConfigured, runRouterCommand } from "../src/extensions/router/ui.ts";
+import { mergeCatalogWithConfigured, modelFromCatalog, runRouterCommand } from "../src/extensions/router/ui.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme, type Theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -140,6 +140,29 @@ function extensionApi(): ExtensionAPI {
 }
 
 describe("router model catalog merging", () => {
+	it("imports discovered capabilities and caps local output metadata without inventing a wire limit", () => {
+		expect(
+			modelFromCatalog({
+				id: "small",
+				name: "Small",
+				metadata: {
+					contextWindow: 4096,
+					reasoning: true,
+					input: ["text"],
+					thinkingLevelMap: { off: null, high: "custom", max: null },
+					codex: { reasoningSummary: null, verbosity: "high" },
+				},
+			}),
+		).toMatchObject({
+			id: "small",
+			name: "Small",
+			contextWindow: 4096,
+			maxTokens: 4096,
+			thinkingLevelMap: { off: null, high: "custom", max: null },
+			codex: { reasoningSummary: null, verbosity: "high" },
+		});
+	});
+
 	it("keeps an active model visible even when disk and catalog no longer contain it", () => {
 		expect(mergeCatalogWithConfigured([], [{ id: "catalog-model" }], "active-model")).toEqual([
 			{ id: "active-model", name: "active-model", unavailable: true },
@@ -187,6 +210,84 @@ describe("/router UI lifecycle", () => {
 		);
 		return root;
 	}
+
+	it("initializes persistent identity before first reload registers any provider closures", async () => {
+		const root = temporaryAgentDir();
+		const file = parseRouterFile(readFileSync(join(root, "router.json"), "utf8"));
+		file.relays.push({ ...file.relays[0], id: "beta" });
+		writeFileSync(join(root, "router.json"), JSON.stringify(file));
+		const pi = extensionApi();
+		const harness = createTuiHarness();
+		try {
+			await runRouterCommand("reload", harness.ctx, pi);
+			const capturedState = routerStateFor(pi);
+			expect(JSON.parse(readFileSync(join(root, "router-client.json"), "utf8")).installationId).toMatch(
+				/^[0-9a-f-]{36}$/,
+			);
+			await initializeRouterState(pi);
+			expect(routerStateFor(pi)).toBe(capturedState);
+			expect(pi.registerProvider).toHaveBeenCalledWith(
+				"alpha",
+				expect.objectContaining({ api: "openai-responses" }),
+			);
+			expect(pi.registerProvider).toHaveBeenCalledWith("beta", expect.objectContaining({ api: "openai-responses" }));
+		} finally {
+			harness.stop();
+		}
+	});
+
+	it("imports Codex metadata with canonical auth without overwriting existing models", async () => {
+		const root = temporaryAgentDir();
+		const file = parseRouterFile(readFileSync(join(root, "router.json"), "utf8"));
+		file.relays[0].catalog = "codex";
+		file.relays[0].apiKey = "!not-executed-by-this-test";
+		file.relays[0].models[0].codex = { verbosity: "high" };
+		writeFileSync(join(root, "router.json"), JSON.stringify(file));
+		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			Response.json({
+				models: [
+					{ slug: "worker", context_window: 4096, support_verbosity: false },
+					{
+						slug: "small",
+						context_window: 4096,
+						supported_reasoning_levels: [{ effort: "high" }],
+						supports_reasoning_summary_parameter: false,
+					},
+				],
+			}),
+		);
+		const choices = ["Models", "Fetch catalog", undefined, undefined];
+		const ctx = {
+			hasUI: true,
+			mode: "rpc",
+			modelRegistry: {
+				refresh: vi.fn(),
+				getProviderAuth: vi.fn(async () => ({
+					auth: { apiKey: "canonical-key", headers: { Authorization: "Bearer canonical-override" } },
+				})),
+			},
+			ui: {
+				select: vi.fn(async (_title: string, labels: string[]) => {
+					const prefix = choices.shift();
+					return prefix ? labels.find((label) => label.startsWith(prefix)) : undefined;
+				}),
+				confirm: vi.fn(async () => true),
+				notify: vi.fn(),
+				input: vi.fn(),
+			},
+		} as unknown as ExtensionCommandContext;
+		await runRouterCommand("alpha", ctx, extensionApi());
+		expect(String(fetch.mock.calls[0][0])).toBe("https://relay.example/v1/models?client_version=0.153.4");
+		expect(new Headers(fetch.mock.calls[0][1]?.headers).get("authorization")).toBe("Bearer canonical-override");
+		const models = parseRouterFile(readFileSync(join(root, "router.json"), "utf8")).relays[0].models;
+		expect(models.find((model) => model.id === "worker")).toEqual(file.relays[0].models[0]);
+		expect(models.find((model) => model.id === "small")).toMatchObject({
+			contextWindow: 4096,
+			maxTokens: 4096,
+			codex: { reasoningSummary: null },
+			thinkingLevelMap: { high: "high", low: null, off: null },
+		});
+	});
 
 	it("keeps deep menu navigation inside one custom lifecycle", async () => {
 		temporaryAgentDir();
@@ -326,7 +427,7 @@ describe("/router UI lifecycle", () => {
 			await harness.waitForScreen("Relay · alpha", "Relay · alpha · base URL");
 			expect(harness.editor.renderCount).toBe(0);
 
-			for (let index = 0; index < 3; index++) await harness.sendInput("\x1b[B");
+			await harness.sendInput("Remove relay");
 			await harness.sendInput("\r");
 			await harness.waitForScreen('Remove relay "alpha"?');
 			await harness.sendInput("\x1b");
@@ -406,6 +507,49 @@ describe("/router UI lifecycle", () => {
 		} finally {
 			harness.stop();
 		}
+	});
+
+	it("edits model metadata and request controls through native RPC pages", async () => {
+		const root = temporaryAgentDir();
+		const choices = [
+			"Models",
+			"worker",
+			"Reasoning",
+			"Image input",
+			"Output tokens",
+			"Context window",
+			"Codex request settings",
+			"Reasoning summary",
+			"Omit",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+		];
+		const inputs = ["500", "1000"];
+		const select = vi.fn(async (_title: string, options: string[]) => {
+			const choice = choices.shift();
+			if (choice === undefined) return undefined;
+			const selected = options.find((option) => option.startsWith(choice));
+			expect(selected).toBeDefined();
+			return selected;
+		});
+		const ctx = {
+			hasUI: true,
+			mode: "rpc",
+			modelRegistry: { refresh: vi.fn() },
+			ui: { select, input: vi.fn(async () => inputs.shift()), confirm: vi.fn(), custom: vi.fn(), notify: vi.fn() },
+		} as unknown as ExtensionCommandContext;
+		await runRouterCommand("alpha", ctx, extensionApi());
+		const model = parseRouterFile(readFileSync(join(root, "router.json"), "utf8")).relays[0]?.models[0];
+		expect(model).toMatchObject({
+			reasoning: false,
+			input: ["text"],
+			maxTokens: 500,
+			contextWindow: 1000,
+			codex: { reasoningSummary: null },
+		});
+		expect(ctx.ui.custom).not.toHaveBeenCalled();
 	});
 
 	it("keeps RPC dialogs on the native UI methods", async () => {

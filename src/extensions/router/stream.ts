@@ -1,25 +1,18 @@
-/**
- * Codex-oriented Responses client for API relays.
- *
- * Follows Pi's documented custom-provider pattern (see coding-agent docs
- * providers.md / custom-provider.md and examples/custom-provider-gitlab-duo):
- * wrap a built-in pi-ai stream API from `@earendil-works/pi-ai/compat` instead of
- * reimplementing SSE or deep-importing internal modules.
- *
- * We use openAIResponsesApi (works with relay sk- keys) and reshape the request
- * payload toward Codex CLI style so transparent gateways receive a friendlier body.
- */
-
+/** Codex 0.153.4 normal Responses/SSE request adaptation; pi-ai owns conversion and stream parsing. */
 import {
 	type Api,
 	type Context,
 	createAssistantMessageEventStream,
+	type FetchFunction,
 	type Model,
 	openAIResponsesApi,
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai/compat";
-
-import { DEFAULTS, formatError } from "./constants.ts";
+import { formatError, ROUTER_API } from "./constants.ts";
+import { buildCodexHeaders, createCodexFetch } from "./identity.ts";
+import { type CodexRequestSnapshot, RouterRequestState } from "./state.ts";
+import { createCodexTransport } from "./transport.ts";
+import type { CodexModelConfig } from "./types.ts";
 
 const responsesApi = openAIResponsesApi();
 
@@ -27,60 +20,85 @@ export function streamRouterCodex(
 	model: Model<Api>,
 	context: Context,
 	options?: SimpleStreamOptions,
+	configuration?: { state?: RouterRequestState; codex?: CodexModelConfig },
 ): ReturnType<typeof createAssistantMessageEventStream> {
 	const stream = createAssistantMessageEventStream();
-
 	void (async () => {
 		try {
 			const apiKey = options?.apiKey;
 			if (!apiKey) throw new Error(`No API key for provider: ${model.provider}`);
-
-			// Built-in Responses stream expects api "openai-responses" on the model object.
+			const baseUrl = new URL(model.baseUrl);
+			if (!["http:", "https:"].includes(baseUrl.protocol) || baseUrl.username || baseUrl.password || baseUrl.hash) {
+				throw new Error("Router base URL must be HTTP(S) without embedded credentials or a fragment.");
+			}
+			const query = baseUrl.search;
+			baseUrl.search = "";
 			const requestModel = {
 				...model,
-				api: "openai-responses" as const,
+				baseUrl: baseUrl.href.replace(/\/+$/, ""),
+				api: ROUTER_API,
 				compat: {
-					supportsDeveloperRole: true,
-					// Avoid underscore session_id header that strict proxies reject.
-					sessionAffinityFormat: "openai-nosession" as const,
-					// Codex-style upstreams reject prompt_cache_retention: "24h".
-					supportsLongCacheRetention: false,
 					...(model.compat ?? {}),
+					sessionAffinityFormat: "openai-nosession",
+					supportsLongCacheRetention: false,
+					supportsMaxOutputTokens: false,
 				},
 			} as Model<"openai-responses">;
-
-			const headers: Record<string, string> = {
-				originator: DEFAULTS.originator,
-				...(options?.headers as Record<string, string> | undefined),
+			const snapshot = (configuration?.state ?? new RouterRequestState()).request(
+				model,
+				context,
+				options?.sessionId,
+			);
+			const headers = buildCodexHeaders({ ...snapshot.headers, ...options?.headers });
+			const codexFetch = createCodexFetch(options?.fetch);
+			// OpenAI SDK concatenates baseURL and /responses before parsing. Keep query parameters
+			// out of that concatenation, then restore them at the scoped HTTP boundary.
+			const send: FetchFunction = (input, init) => {
+				if (!query) return codexFetch(input, init);
+				const url = new URL(input instanceof Request ? input.url : String(input));
+				url.search = query;
+				return codexFetch(input instanceof Request ? new Request(url, input) : url, init);
 			};
-
-			// Prefer hyphenated Codex-style session affinity when we have a session id.
-			const sessionId = clampCacheKey(options?.sessionId);
-			if (sessionId) {
-				if (!headers["session-id"]) headers["session-id"] = sessionId;
-				if (!headers["x-client-request-id"]) headers["x-client-request-id"] = sessionId;
-			}
-
+			const fetch = createCodexTransport(send, {
+				maxRetries: options?.maxRetries,
+				maxRetryDelayMs: options?.maxRetryDelayMs,
+				signal: options?.signal,
+				onErrorResponse: async (response) => {
+					const responseHeaders: Record<string, string> = {};
+					response.headers.forEach((value, name) => {
+						responseHeaders[name] = value;
+					});
+					await options?.onResponse?.({ status: response.status, headers: responseHeaders }, requestModel);
+				},
+			});
 			const inner = responsesApi.streamSimple(requestModel, context, {
 				...options,
 				apiKey,
 				headers,
-				onPayload: (payload) => reshapePayloadForRelay(payload, context, options?.onPayload, requestModel),
+				fetch,
+				// Own only Codex HTTP retry policy. Disable the adapter's different HTTP retry layer.
+				maxRetries: 0,
+				onPayload: async (payload) => {
+					const shaped = reshapePayloadForCodex(payload, context, requestModel, snapshot, configuration?.codex);
+					const replacement = await options?.onPayload?.(shaped, requestModel);
+					return replacement === undefined ? shaped : replacement;
+				},
+				onResponse: async (response, responseModel) => {
+					snapshot.acceptResponse(response);
+					await options?.onResponse?.(response, responseModel);
+				},
 			});
-
-			for await (const event of inner) {
-				stream.push(event);
-			}
+			for await (const event of inner) stream.push(event);
 			stream.end();
 		} catch (error) {
-			// Match examples/custom-provider-gitlab-duo error event shape.
+			const reason = options?.signal?.aborted ? "aborted" : "error";
 			stream.push({
 				type: "error",
-				reason: options?.signal?.aborted ? "aborted" : "error",
+				reason,
 				error: {
 					role: "assistant",
 					content: [],
-					api: model.api,
+					api: ROUTER_API,
 					provider: model.provider,
 					model: model.id,
 					usage: {
@@ -91,7 +109,7 @@ export function streamRouterCodex(
 						totalTokens: 0,
 						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 					},
-					stopReason: options?.signal?.aborted ? "aborted" : "error",
+					stopReason: reason,
 					errorMessage: formatError(error),
 					timestamp: Date.now(),
 				},
@@ -99,86 +117,69 @@ export function streamRouterCodex(
 			stream.end();
 		}
 	})();
-
 	return stream;
 }
 
-/**
- * Nudge the OpenAI Responses payload toward Codex CLI request shape for
- * transparent relays: instructions + input, store:false, no max_output_tokens /
- * prompt_cache_retention, verbosity + parallel_tool_calls.
- */
-async function reshapePayloadForRelay(
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function reshapePayloadForCodex(
 	payload: unknown,
 	context: Context,
-	userOnPayload: SimpleStreamOptions["onPayload"],
 	model: Model<"openai-responses">,
-): Promise<unknown> {
-	const base =
-		payload && typeof payload === "object" && !Array.isArray(payload)
-			? { ...(payload as Record<string, unknown>) }
-			: ({} as Record<string, unknown>);
-
-	// Always safe for ChatGPT/Codex-style backends.
-	base.store = false;
-	base.stream = true;
-
-	// Codex CLI sends system prompt as `instructions`, not as a role message in input.
+	snapshot: CodexRequestSnapshot,
+	configuration: CodexModelConfig = {},
+): Record<string, unknown> {
+	if (!isRecord(payload)) throw new Error("Responses payload must be an object.");
+	// Do not mutate signatures/history or the adapter's original payload.
+	const base = structuredClone(payload);
 	const { instructions, input } = extractInstructions(base.input, context.systemPrompt);
 	if (instructions) base.instructions = instructions;
-	if (input !== undefined) base.input = input;
-
-	// Released Codex CLI defaults omit replayed ResponseItem ids from store:false
-	// requests. It also never emits `status` on the item types below, and its
-	// output_text content has no `annotations`.
+	else delete base.instructions;
+	base.input = input;
 	sanitizeInputItemsForCodex(base.input);
+	base.store = false;
+	base.stream = true;
+	base.tools ??= [];
+	base.tool_choice = "auto";
+	base.parallel_tool_calls = configuration.parallelToolCalls ?? true;
+	base.include = ["reasoning.encrypted_content"];
+	base.prompt_cache_key = snapshot.promptCacheKey;
+	base.client_metadata = snapshot.clientMetadata;
 
-	// Fields common on Codex CLI / rejected by many transparent Codex upstreams.
-	if (!base.text || typeof base.text !== "object") {
-		base.text = { verbosity: "low" };
-	}
-	if (base.tool_choice === undefined) base.tool_choice = "auto";
-	if (base.parallel_tool_calls === undefined) base.parallel_tool_calls = true;
+	const reasoning = model.reasoning && isRecord(base.reasoning) ? base.reasoning : {};
+	// Summary/verbosity support comes from catalog metadata or explicit model settings, not its id.
+	const summary =
+		configuration.reasoningSummary === undefined ? (model.reasoning ? "auto" : null) : configuration.reasoningSummary;
+	if (summary !== null) reasoning.summary = summary;
+	else delete reasoning.summary;
+	if (reasoning.effort === "persistent") reasoning.effort = "disabled";
+	base.reasoning = reasoning;
+	const text = isRecord(base.text) ? base.text : {};
+	if (configuration.verbosity != null) text.verbosity = configuration.verbosity;
+	else delete text.verbosity;
+	if (Object.keys(text).length) base.text = text;
+	else delete base.text;
 
-	// Prefer encrypted reasoning content for multi-turn store:false sessions.
-	const include = Array.isArray(base.include) ? [...(base.include as unknown[])] : [];
-	if (!include.includes("reasoning.encrypted_content")) {
-		include.push("reasoning.encrypted_content");
-	}
-	base.include = include;
-
-	// Drop Platform-only fields that Codex OAuth endpoints often 400 on.
-	delete base.prompt_cache_retention;
-	delete base.prompt_cache_options;
-	delete base.max_output_tokens;
-	delete base.temperature;
-	delete base.top_p;
-	delete base.user;
-	delete base.metadata;
-	delete base.service_tier;
-	delete base.truncation;
-	delete base.context_management;
-	delete base.safety_identifier;
-	delete base.stream_options;
-
-	if (userOnPayload) {
-		const next = await userOnPayload(base, model);
-		if (next !== undefined) return next;
-	}
+	// These are absent from normal Codex Responses DTOs. maxTokens remains local model metadata.
+	for (const name of [
+		"prompt_cache_retention",
+		"prompt_cache_options",
+		"max_output_tokens",
+		"temperature",
+		"top_p",
+		"user",
+		"metadata",
+		"truncation",
+		"context_management",
+		"safety_identifier",
+		"stream_options",
+	])
+		delete base[name];
 	return base;
 }
 
-/**
- * Match the released Codex CLI's default stateless request preparation:
- * optional ResponseItem identity ids are omitted from store:false requests,
- * while semantic ids, call_id, and encrypted_content remain available for
- * reference, tool, and reasoning continuity.
- *
- * These are the tagged variants handled by ResponseItem::set_id in Codex CLI
- * 0.145. Unknown input variants must retain `id`: for example,
- * item_reference.id and local_shell_call_output.id are required references,
- * not optional ResponseItem identities.
- */
 const RESPONSE_ITEM_ID_TYPES = new Set([
 	"additional_tools",
 	"message",
@@ -197,15 +198,6 @@ const RESPONSE_ITEM_ID_TYPES = new Set([
 	"compaction_summary",
 	"context_compaction",
 ]);
-
-/**
- * Codex ResponseItem serialization has NO `status` field on Message,
- * Reasoning, FunctionCall, FunctionCallOutput, or CustomToolCallOutput
- * (codex-rs/protocol/src/models.rs). Other item types either require `status`
- * (local_shell_call, tool_search_output, image_generation_call) or accept it
- * optionally (tool_search_call, custom_tool_call, web_search_call), so we must
- * not strip it there.
- */
 const STATUS_LESS_ITEM_TYPES = new Set([
 	"message",
 	"reasoning",
@@ -214,28 +206,21 @@ const STATUS_LESS_ITEM_TYPES = new Set([
 	"custom_tool_call_output",
 ]);
 
+/** Codex0.153.4 ResponseItemId::is_prefixed checks only nonempty sides of the first underscore. */
 export function sanitizeInputItemsForCodex(input: unknown): void {
 	if (!Array.isArray(input)) return;
 	for (const item of input) {
-		if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-		const record = item as Record<string, unknown>;
-		const type = typeof record.type === "string" ? record.type : undefined;
-		if (type && RESPONSE_ITEM_ID_TYPES.has(type)) {
-			delete record.id;
+		if (!isRecord(item)) continue;
+		if (item.type === undefined && typeof item.role === "string") item.type = "message";
+		const type = typeof item.type === "string" ? item.type : undefined;
+		if (type && RESPONSE_ITEM_ID_TYPES.has(type) && typeof item.id === "string") {
+			const separator = item.id.indexOf("_");
+			if (separator <= 0 || separator === item.id.length - 1) delete item.id;
 		}
-		if (type && STATUS_LESS_ITEM_TYPES.has(type) && "status" in record) {
-			delete record.status;
-		}
-		if (Array.isArray(record.content)) {
-			for (const part of record.content) {
-				if (
-					part &&
-					typeof part === "object" &&
-					(part as { type?: string }).type === "output_text" &&
-					"annotations" in part
-				) {
-					delete (part as Record<string, unknown>).annotations;
-				}
+		if (type && STATUS_LESS_ITEM_TYPES.has(type)) delete item.status;
+		if (Array.isArray(item.content)) {
+			for (const part of item.content) {
+				if (isRecord(part) && part.type === "output_text") delete part.annotations;
 			}
 		}
 	}
@@ -245,61 +230,20 @@ function extractInstructions(
 	input: unknown,
 	systemPrompt: string | undefined,
 ): { instructions?: string; input: unknown } {
-	// Prefer context.systemPrompt (matches Codex stream path).
-	if (systemPrompt && systemPrompt.length > 0) {
-		const stripped = stripLeadingSystemRoles(input);
-		return { instructions: systemPrompt, input: stripped ?? input };
-	}
-
-	if (!Array.isArray(input) || input.length === 0) {
-		return { input };
-	}
-
-	const first = input[0];
-	if (
-		first &&
-		typeof first === "object" &&
-		!Array.isArray(first) &&
-		"role" in first &&
-		((first as { role?: string }).role === "system" || (first as { role?: string }).role === "developer")
-	) {
-		const content = (first as { content?: unknown }).content;
+	if (!Array.isArray(input)) return { instructions: systemPrompt, input };
+	const first: unknown = input[0];
+	if (isRecord(first) && (first.role === "system" || first.role === "developer")) {
+		const content = first.content;
 		const text =
 			typeof content === "string"
 				? content
 				: Array.isArray(content)
 					? content
-							.map((part) =>
-								part && typeof part === "object" && "text" in part
-									? String((part as { text: unknown }).text)
-									: "",
-							)
+							.map((part: unknown) => (isRecord(part) && typeof part.text === "string" ? part.text : ""))
 							.join("")
 					: "";
-		return {
-			instructions: text || undefined,
-			input: input.slice(1),
-		};
+		// Only the adapter's leading system prompt moves. Later developer messages remain ordered input.
+		return { instructions: systemPrompt || text || undefined, input: input.slice(1) };
 	}
-
-	return { input };
-}
-
-function stripLeadingSystemRoles(input: unknown): unknown {
-	if (!Array.isArray(input) || input.length === 0) return input;
-	const first = input[0];
-	if (
-		first &&
-		typeof first === "object" &&
-		!Array.isArray(first) &&
-		((first as { role?: string }).role === "system" || (first as { role?: string }).role === "developer")
-	) {
-		return input.slice(1);
-	}
-	return input;
-}
-
-function clampCacheKey(sessionId: string | undefined): string | undefined {
-	if (!sessionId) return undefined;
-	return sessionId.length <= 64 ? sessionId : sessionId.slice(0, 64);
+	return { instructions: systemPrompt, input };
 }

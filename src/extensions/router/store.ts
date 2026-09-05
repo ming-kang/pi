@@ -6,12 +6,23 @@ import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "../../config.ts";
 import { withFileMutationQueue } from "../../core/tools/file-mutation-queue.ts";
-import { CONFIG_VERSION, isValidRelayId, THINKING_LEVELS } from "./constants.ts";
+import { CONFIG_VERSION, DEFAULTS, isValidRelayId, THINKING_LEVELS } from "./constants.ts";
 import type { RelayConfig, RelayModelConfig, RouterFile, ThinkingLevelMap } from "./types.ts";
 
 const ROOT_FIELDS = ["version", "relays"] as const;
-const RELAY_FIELDS = ["id", "baseUrl", "apiKey", "models"] as const;
-const MODEL_FIELDS = ["id", "name", "reasoning", "input", "contextWindow", "maxTokens", "thinkingLevelMap"] as const;
+const RELAY_FIELDS = ["id", "name", "baseUrl", "apiKey", "models", "headers", "catalog"] as const;
+const MODEL_FIELDS = [
+	"id",
+	"name",
+	"reasoning",
+	"input",
+	"contextWindow",
+	"maxTokens",
+	"thinkingLevelMap",
+	"codex",
+	"headers",
+	"cost",
+] as const;
 
 export function getRouterConfigPath(): string {
 	return join(getAgentDir(), "router.json");
@@ -53,7 +64,7 @@ function expectString(value: unknown, path: string, allowEmpty = false): string 
 }
 
 function expectPositiveInteger(value: unknown, path: string): number {
-	if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+	if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
 		throw new Error(`${path} must be a positive integer.`);
 	}
 	return value;
@@ -96,8 +107,9 @@ function parseRelay(value: unknown, path: string): RelayConfig {
 	try {
 		const url = new URL(baseUrl);
 		if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("unsupported protocol");
+		if (url.username || url.password || url.hash) throw new Error("credentials or fragment");
 	} catch {
-		throw new Error(`${path}.baseUrl must be an http or https URL.`);
+		throw new Error(`${path}.baseUrl must be an http or https URL without embedded credentials or a fragment.`);
 	}
 	const apiKey = expectString(record.apiKey, `${path}.apiKey`, true);
 	if (record.models !== undefined && !Array.isArray(record.models)) {
@@ -111,7 +123,15 @@ function parseRelay(value: unknown, path: string): RelayConfig {
 		if (modelIds.has(model.id)) throw new Error(`${path}.models contains duplicate id "${model.id}".`);
 		modelIds.add(model.id);
 	}
-	return { id, baseUrl, apiKey, models };
+	const relay: RelayConfig = { id, baseUrl, apiKey, models };
+	if (record.name !== undefined) relay.name = expectString(record.name, `${path}.name`);
+	if (record.headers !== undefined) relay.headers = parseHeaders(record.headers, `${path}.headers`);
+	if (record.catalog !== undefined) {
+		if (record.catalog !== "openai" && record.catalog !== "codex")
+			throw new Error(`${path}.catalog must be openai or codex.`);
+		relay.catalog = record.catalog;
+	}
+	return relay;
 }
 
 function parseModel(value: unknown, path: string): RelayModelConfig {
@@ -143,6 +163,34 @@ function parseModel(value: unknown, path: string): RelayModelConfig {
 	if (record.thinkingLevelMap !== undefined) {
 		model.thinkingLevelMap = parseThinkingLevelMap(record.thinkingLevelMap, `${path}.thinkingLevelMap`);
 	}
+	if (model.maxTokens !== undefined && model.maxTokens > (model.contextWindow ?? DEFAULTS.contextWindow))
+		throw new Error(`${path}.maxTokens must not exceed contextWindow.`);
+	if (record.headers !== undefined) model.headers = parseHeaders(record.headers, `${path}.headers`);
+	if (record.codex !== undefined) {
+		const codex = expectObject(record.codex, `${path}.codex`);
+		rejectUnknownFields(codex, ["reasoningSummary", "verbosity", "parallelToolCalls"], `${path}.codex`);
+		for (const field of ["reasoningSummary", "verbosity"] as const) {
+			const value = codex[field];
+			const allowed = field === "reasoningSummary" ? ["auto", "concise", "detailed"] : ["low", "medium", "high"];
+			if (value === undefined) continue;
+			if (value !== null && (typeof value !== "string" || !allowed.includes(value)))
+				throw new Error(`${path}.codex.${field} has an invalid value.`);
+		}
+		if (codex.parallelToolCalls !== undefined && typeof codex.parallelToolCalls !== "boolean")
+			throw new Error(`${path}.codex.parallelToolCalls must be a boolean.`);
+		model.codex = codex as NonNullable<RelayModelConfig["codex"]>;
+	}
+	if (record.cost !== undefined) {
+		const cost = expectObject(record.cost, `${path}.cost`);
+		const fields = ["input", "output", "cacheRead", "cacheWrite"] as const;
+		rejectUnknownFields(cost, fields, `${path}.cost`);
+		for (const field of fields) {
+			const value = cost[field];
+			if (typeof value !== "number" || !Number.isFinite(value) || value < 0)
+				throw new Error(`${path}.cost.${field} must be a finite non-negative number.`);
+		}
+		model.cost = cost as NonNullable<RelayModelConfig["cost"]>;
+	}
 	return model;
 }
 
@@ -161,60 +209,60 @@ function parseThinkingLevelMap(value: unknown, path: string): ThinkingLevelMap {
 	return map;
 }
 
-export async function saveRouterFile(file: RouterFile): Promise<void> {
-	const filePath = getRouterConfigPath();
-	const payload: RouterFile = {
-		version: CONFIG_VERSION,
-		relays: file.relays.map((relay) => ({
-			id: relay.id,
-			baseUrl: relay.baseUrl,
-			apiKey: relay.apiKey,
-			models: relay.models.map((model) => serializeModel(model)),
-		})),
-	};
-	const serialized = `${JSON.stringify(payload, null, 2)}\n`;
-	await mkdir(dirname(filePath), { recursive: true });
-	await withFileMutationQueue(filePath, async () => {
-		const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-		try {
-			await writeFile(tempPath, serialized, { encoding: "utf8", mode: 0o600 });
-			await rename(tempPath, filePath);
-		} catch (error) {
-			try {
-				await unlink(tempPath);
-			} catch {
-				// Ignore cleanup errors and preserve the original failure.
-			}
-			throw error;
-		}
-	});
+function parseHeaders(value: unknown, path: string): Record<string, string> {
+	const record = expectObject(value, path);
+	for (const [key, value] of Object.entries(record)) {
+		if (
+			!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(key) ||
+			typeof value !== "string" ||
+			[...value].some((char) => [0, 10, 13].includes(char.charCodeAt(0)))
+		)
+			throw new Error(`${path}.${key} must be a valid header with a string value.`);
+	}
+	return record as Record<string, string>;
 }
 
-function serializeModel(model: RelayModelConfig): RelayModelConfig {
-	const out: RelayModelConfig = { id: model.id };
-	if (model.name) out.name = model.name;
-	if (model.reasoning !== undefined) out.reasoning = model.reasoning;
-	if (model.input) out.input = model.input;
-	if (model.contextWindow !== undefined) out.contextWindow = model.contextWindow;
-	if (model.maxTokens !== undefined) out.maxTokens = model.maxTokens;
-	if (model.thinkingLevelMap && Object.keys(model.thinkingLevelMap).length > 0) {
-		out.thinkingLevelMap = model.thinkingLevelMap;
+export async function saveRouterFile(file: RouterFile): Promise<void> {
+	const snapshot = parseRouterFile(JSON.stringify(file));
+	await withFileMutationQueue(getRouterConfigPath(), () => writeRouterFile(snapshot));
+}
+
+async function writeRouterFile(file: RouterFile): Promise<void> {
+	const filePath = getRouterConfigPath();
+	const serialized = `${JSON.stringify(parseRouterFile(JSON.stringify(file)), null, 2)}
+`;
+	await mkdir(dirname(filePath), { recursive: true });
+	const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+	try {
+		await writeFile(tempPath, serialized, { encoding: "utf8", mode: 0o600 });
+		await rename(tempPath, filePath);
+	} catch (error) {
+		try {
+			await unlink(tempPath);
+		} catch {
+			/* Preserve original failure. */
+		}
+		throw error;
 	}
-	return out;
 }
 
 export async function upsertRelay(relay: RelayConfig): Promise<RouterFile> {
-	const file = await loadRouterFile();
-	const index = file.relays.findIndex((entry) => entry.id === relay.id);
-	if (index >= 0) file.relays[index] = relay;
-	else file.relays.push(relay);
-	await saveRouterFile(file);
-	return file;
+	const snapshot = structuredClone(relay);
+	return withFileMutationQueue(getRouterConfigPath(), async () => {
+		const file = await loadRouterFile();
+		const index = file.relays.findIndex((entry) => entry.id === snapshot.id);
+		if (index >= 0) file.relays[index] = snapshot;
+		else file.relays.push(snapshot);
+		await writeRouterFile(file);
+		return file;
+	});
 }
 
 export async function removeRelay(id: string): Promise<RouterFile> {
-	const file = await loadRouterFile();
-	file.relays = file.relays.filter((entry) => entry.id !== id);
-	await saveRouterFile(file);
-	return file;
+	return withFileMutationQueue(getRouterConfigPath(), async () => {
+		const file = await loadRouterFile();
+		file.relays = file.relays.filter((entry) => entry.id !== id);
+		await writeRouterFile(file);
+		return file;
+	});
 }

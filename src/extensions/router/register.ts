@@ -1,15 +1,43 @@
-/**
- * Apply router.json relays to Pi via registerProvider (config form + streamSimple).
- */
-
-import type { ExtensionAPI } from "../../core/extensions/types.ts";
+/** Apply router.json using provider-scoped public Responses stream wrappers. */
+import type { ExtensionAPI, ProviderConfig } from "../../core/extensions/types.ts";
 import { ROUTER_API } from "./constants.ts";
 import { toRegisterModel } from "./presets.ts";
+import { loadRouterInstallationId, RouterRequestState } from "./state.ts";
 import { streamRouterCodex } from "./stream.ts";
 import type { RelayConfig, RouterFile } from "./types.ts";
 
-/** Provider ids registered by this extension, isolated to each SDK host. */
 const registeredIdsByApi = new WeakMap<ExtensionAPI, Set<string>>();
+const requestStates = new WeakMap<ExtensionAPI, RouterRequestState>();
+const initializations = new WeakMap<ExtensionAPI, Promise<void>>();
+
+export function initializeRouterState(pi: ExtensionAPI): Promise<void> {
+	let initialization = initializations.get(pi);
+	if (!initialization) {
+		initialization = loadRouterInstallationId()
+			.then((id) => {
+				setRouterState(pi, new RouterRequestState(id));
+			})
+			.catch((error: unknown) => {
+				initializations.delete(pi);
+				throw error;
+			});
+		initializations.set(pi, initialization);
+	}
+	return initialization;
+}
+
+export function routerStateFor(pi: ExtensionAPI): RouterRequestState {
+	let state = requestStates.get(pi);
+	if (!state) {
+		state = new RouterRequestState();
+		requestStates.set(pi, state);
+	}
+	return state;
+}
+
+export function setRouterState(pi: ExtensionAPI, state: RouterRequestState): void {
+	requestStates.set(pi, state);
+}
 
 function registeredIdsFor(pi: ExtensionAPI): Set<string> {
 	let ids = registeredIdsByApi.get(pi);
@@ -20,71 +48,46 @@ function registeredIdsFor(pi: ExtensionAPI): Set<string> {
 	return ids;
 }
 
-export function toProviderConfig(relay: RelayConfig) {
+export function toProviderConfig(relay: RelayConfig, state = new RouterRequestState()): ProviderConfig {
+	const models = structuredClone(relay.models);
 	return {
-		name: relay.id,
+		name: relay.name ?? relay.id,
+		headers: relay.headers,
 		baseUrl: relay.baseUrl.replace(/\/+$/, ""),
 		apiKey: relay.apiKey,
 		api: ROUTER_API,
-		models: relay.models.map((model) => ({
-			...toRegisterModel(model),
-			api: ROUTER_API,
-		})),
-		streamSimple: streamRouterCodex,
+		models: models.map((model) => ({ ...toRegisterModel(model), api: ROUTER_API })),
+		streamSimple: (model, context, options) =>
+			streamRouterCodex(model, context, options, {
+				state,
+				codex: models.find((entry) => entry.id === model.id)?.codex,
+			}),
 	};
 }
 
 export function applyRouterFile(pi: ExtensionAPI, file: RouterFile): void {
+	routerStateFor(pi).reset();
 	const registeredIds = registeredIdsFor(pi);
 	const nextIds = new Set(file.relays.map((relay) => relay.id));
-
 	for (const id of [...registeredIds]) {
-		if (!nextIds.has(id)) {
-			try {
-				pi.unregisterProvider(id);
-			} catch {
-				// Provider may already be gone after /reload.
-			}
-			registeredIds.delete(id);
-		}
+		if (!nextIds.has(id)) unregisterOneRelay(pi, id);
 	}
-
-	for (const relay of file.relays) {
-		// Only register relays that have at least one model; empty catalog is not selectable.
-		if (relay.models.length === 0) {
-			if (registeredIds.has(relay.id)) {
-				try {
-					pi.unregisterProvider(relay.id);
-				} catch {
-					// Ignore stale registrations after /reload.
-				}
-				registeredIds.delete(relay.id);
-			}
-			continue;
-		}
-		pi.registerProvider(relay.id, toProviderConfig(relay));
-		registeredIds.add(relay.id);
-	}
+	for (const relay of file.relays) registerOneRelay(pi, relay);
 }
 
 export function registerOneRelay(pi: ExtensionAPI, relay: RelayConfig): void {
+	routerStateFor(pi).reset();
 	const registeredIds = registeredIdsFor(pi);
 	if (relay.models.length === 0) {
-		if (registeredIds.has(relay.id)) {
-			try {
-				pi.unregisterProvider(relay.id);
-			} catch {
-				// Ignore stale registrations after /reload.
-			}
-			registeredIds.delete(relay.id);
-		}
+		if (registeredIds.has(relay.id)) unregisterOneRelay(pi, relay.id);
 		return;
 	}
-	pi.registerProvider(relay.id, toProviderConfig(relay));
+	pi.registerProvider(relay.id, toProviderConfig(relay, routerStateFor(pi)));
 	registeredIds.add(relay.id);
 }
 
 export function unregisterOneRelay(pi: ExtensionAPI, id: string): void {
+	routerStateFor(pi).reset();
 	try {
 		pi.unregisterProvider(id);
 	} catch {

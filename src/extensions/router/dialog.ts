@@ -14,7 +14,7 @@ import { DynamicBorder } from "../../modes/interactive/components/dynamic-border
 import { keyHint, rawKeyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { ROUTER_THINKING_LEVELS, type ThinkingLevel, truncate } from "./constants.ts";
-import { resolveRouterThinkingMap, toggleThinkingLevel } from "./presets.ts";
+import { resolveRouterThinkingMap } from "./presets.ts";
 import type { ThinkingLevelMap } from "./types.ts";
 
 export interface SelectItem<T extends string = string> {
@@ -345,87 +345,113 @@ export function createThinkingMapEditor(opts: {
 ) => Container {
 	return (tui, theme, keybindings, done) => {
 		const levels = [...(opts.levels ?? ROUTER_THINKING_LEVELS)];
-		let working: ThinkingLevelMap = resolveRouterThinkingMap(opts.map);
+		const working = resolveRouterThinkingMap(opts.map);
 		let index = 0;
-		const list = new Container();
-		const footer = new Text("", 1, 0);
-		const container = new Container() as Container & {
-			handleInput: (data: string) => void;
-			focused: boolean;
-		};
-
-		const status = (level: ThinkingLevel): string => {
-			const value = working[level];
-			if (value === null) return "hidden";
-			if (value === undefined) return "default";
-			return value === level ? "on" : `→ ${value}`;
-		};
-
+		let mode: "levels" | "choice" | "target" = "levels";
+		let choice = 0;
+		const input = new Input();
+		const container = new Container() as Container & { handleInput(data: string): void; focused: boolean };
+		let focused = false;
 		const refresh = () => {
-			list.clear();
-			for (let i = 0; i < levels.length; i++) {
-				const level = levels[i]!;
-				const active = i === index;
-				const prefix = active ? theme.fg("accent", "→ ") : "  ";
-				const label = theme.fg(active ? "accent" : "text", level.padEnd(8));
-				const st = status(level);
-				const color = st === "hidden" ? "muted" : st === "default" ? "dim" : "success";
-				list.addChild(new Text(`${prefix}${label} ${theme.fg(color, st)}`, 1, 0));
+			container.clear();
+			container.addChild(new DynamicBorder((text) => theme.fg("border", text)));
+			container.addChild(new Text(theme.fg("accent", opts.title), 1, 1));
+			if (mode === "levels") {
+				for (const [i, level] of levels.entries()) {
+					const value = working[level];
+					const status = value === undefined ? "Inherit" : value === null ? "Hidden" : `→ ${value}`;
+					container.addChild(
+						new TruncatedText(
+							theme.fg(i === index ? "accent" : "text", `${i === index ? "→" : " "} ${level} · ${status}`),
+							1,
+							0,
+						),
+					);
+				}
+			} else if (mode === "choice") {
+				container.addChild(new Text(theme.fg("muted", `${levels[index]} · mapping`), 1, 0));
+				for (const [i, label] of [
+					"Inherit (Pi default)",
+					"String target (provider effort)",
+					"Hidden (null)",
+				].entries()) {
+					container.addChild(
+						new Text(theme.fg(i === choice ? "accent" : "text", `${i === choice ? "→" : " "} ${label}`), 1, 0),
+					);
+				}
+			} else {
+				container.addChild(new Text(theme.fg("muted", `${levels[index]} · non-empty provider effort`), 1, 0));
+				container.addChild(input);
 			}
-
-			const hints = [
-				keyHint("app.list.toggle", "toggle"),
-				keyHint("tui.select.confirm", "toggle"),
-				keyHint("tui.select.cancel", "back"),
-			];
-			footer.setText(`${theme.fg("muted", `${levels.length} levels available`)}\n${hints.join("  ")}`);
+			input.focused = focused && mode === "target";
+			container.addChild(
+				new Text(
+					`${keyHint("tui.select.confirm", mode === "target" ? "save" : "edit")}  ${keyHint("tui.select.cancel", "back")}`,
+					1,
+					1,
+				),
+			);
+			container.addChild(new DynamicBorder((text) => theme.fg("border", text)));
 			container.invalidate();
 			tui.requestRender();
 		};
-
-		const toggle = () => {
+		const save = (value: string | null | undefined) => {
 			const level = levels[index]!;
-			working = toggleThinkingLevel(working, level);
+			if (value === undefined) delete working[level];
+			else working[level] = value;
 			opts.onChange?.({ ...working });
+			mode = "levels";
 			refresh();
 		};
-
-		container.addChild(new DynamicBorder((text) => theme.fg("border", text)));
-		container.addChild(new Spacer(1));
-		container.addChild(new TruncatedText(theme.fg("accent", theme.bold(opts.title)), 1, 0));
-		container.addChild(new Text(theme.fg("muted", "  Toggle which Pi thinking levels this model exposes."), 1, 0));
-		container.addChild(new Spacer(1));
-		container.addChild(list);
-		container.addChild(new Spacer(1));
-		container.addChild(footer);
-		container.addChild(new Spacer(1));
-		container.addChild(new DynamicBorder((text) => theme.fg("border", text)));
-
 		Object.defineProperty(container, "focused", {
-			get: () => true,
-			set: () => {},
+			get: () => focused,
+			set: (value: boolean) => {
+				focused = value;
+				input.focused = value && mode === "target";
+			},
 		});
-
-		container.handleInput = (data: string) => {
-			if (keybindings.matches(data, "tui.select.up")) {
-				index = index === 0 ? levels.length - 1 : index - 1;
-				refresh();
-				return;
-			}
-			if (keybindings.matches(data, "tui.select.down")) {
-				index = index === levels.length - 1 ? 0 : index + 1;
-				refresh();
-				return;
-			}
-			if (keybindings.matches(data, "app.list.toggle") || keybindings.matches(data, "tui.select.confirm")) {
-				toggle();
-				return;
-			}
+		container.handleInput = (data) => {
 			if (keybindings.matches(data, "tui.select.cancel")) {
-				done(undefined);
+				if (mode === "levels") done(undefined);
+				else {
+					mode = mode === "target" ? "choice" : "levels";
+					refresh();
+				}
+				return;
+			}
+			if (keybindings.matches(data, "tui.select.confirm")) {
+				if (mode === "levels") {
+					mode = "choice";
+					choice = 0;
+				} else if (mode === "choice") {
+					if (choice === 0) return save(undefined);
+					if (choice === 2) return save(null);
+					mode = "target";
+					input.setValue(working[levels[index]!] ?? "");
+				} else {
+					const value = input.getValue().trim();
+					if (value) save(value);
+					return;
+				}
+				refresh();
+				return;
+			}
+			if (mode === "target") {
+				input.handleInput(data);
+				tui.requestRender();
+				return;
+			}
+			const delta = keybindings.matches(data, "tui.select.up")
+				? -1
+				: keybindings.matches(data, "tui.select.down")
+					? 1
+					: 0;
+			if (delta) {
+				if (mode === "levels") index = (index + delta + levels.length) % levels.length;
+				else choice = (choice + delta + 3) % 3;
+				refresh();
 			}
 		};
-
 		refresh();
 		return container;
 	};

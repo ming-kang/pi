@@ -5,6 +5,7 @@
  * Searchable pickers follow Pi's native /model interaction pattern.
  */
 
+import type { ProviderHeaders } from "@earendil-works/pi-ai";
 import type { TUI } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionCommandContext } from "../../core/extensions/types.ts";
 import { BorderedLoader } from "../../modes/interactive/components/bordered-loader.ts";
@@ -30,8 +31,8 @@ import {
 	resolveRouterThinkingMap,
 	summarizeThinkingMap,
 } from "./presets.ts";
-import { probeRelayModels } from "./probe.ts";
-import { applyRouterFile, registerOneRelay, unregisterOneRelay } from "./register.ts";
+import { type ProbeModel, probeRelayModels } from "./probe.ts";
+import { applyRouterFile, initializeRouterState, registerOneRelay, unregisterOneRelay } from "./register.ts";
 import { loadRouterFile, removeRelay, upsertRelay } from "./store.ts";
 import type { RelayConfig, RelayModelConfig } from "./types.ts";
 
@@ -112,6 +113,8 @@ export async function runRouterCommand(args: string, ctx: ExtensionCommandContex
 		ctx.ui.notify(NO_UI_WARNING, "warning");
 		return;
 	}
+	// Initialize before any provider closure can capture request state, including first /router reload.
+	await initializeRouterState(pi);
 	const trimmed = args.trim().toLowerCase();
 	if (trimmed === "reload") {
 		const file = await loadRouterFile();
@@ -294,6 +297,7 @@ async function addRelayFlow(
 			try {
 				const url = new URL(trimmed);
 				if (url.protocol !== "http:" && url.protocol !== "https:") return "Use http or https.";
+				if (url.username || url.password || url.hash) return "Do not embed credentials or a fragment in the URL.";
 			} catch {
 				return "Invalid URL.";
 			}
@@ -361,16 +365,40 @@ async function editRelayFlow(
 			},
 			{ value: "baseUrl", label: "Base URL", description: relay.baseUrl },
 			{ value: "apiKey", label: "API key", description: maskKey(relay.apiKey) },
+			{ value: "catalog", label: "Catalog format", description: relay.catalog ?? "openai" },
+			{ value: "providerName", label: "Provider display name", description: relay.name ?? relay.id },
 			{ value: "remove", label: "Remove relay", description: "Delete from router.json" },
 			{ value: "back", label: "Back", description: "Return to relays" },
 		]);
 		if (choice === undefined || choice === "back") return;
 
+		if (choice === "catalog") {
+			const next = await selectRouterItem(dialogs, "Catalog format", [
+				{ value: "openai", label: "OpenAI", description: "GET /models · data[].id" },
+				{ value: "codex", label: "Codex", description: "GET /models?client_version=… · models[].slug" },
+			]);
+			if (next) {
+				relay.catalog = next;
+				await persistRelay(ctx, pi, relay);
+			}
+			continue;
+		}
+		if (choice === "providerName") {
+			const next = await dialogs.input("Provider display name · empty uses id", relay.name ?? "");
+			if (next !== undefined) {
+				if (next.trim()) relay.name = next.trim();
+				else delete relay.name;
+				await persistRelay(ctx, pi, relay);
+			}
+			continue;
+		}
 		if (choice === "baseUrl") {
 			const next = await promptText(ctx, dialogs, `Relay · ${relay.id} · base URL`, relay.baseUrl, (value) => {
 				try {
 					const url = new URL(value.trim());
 					if (url.protocol !== "http:" && url.protocol !== "https:") return "Use http or https.";
+					if (url.username || url.password || url.hash)
+						return "Do not embed credentials or a fragment in the URL.";
 				} catch {
 					return "Invalid URL.";
 				}
@@ -511,10 +539,54 @@ async function editModelFlow(
 				label: "Thinking levels",
 				description: summarizeThinkingMap(resolved.thinkingLevelMap),
 			},
+			{ value: "contextWindow", label: "Context window", description: String(resolved.contextWindow) },
+			{
+				value: "maxTokens",
+				label: "Output tokens (local metadata, not wire cap)",
+				description: String(resolved.maxTokens),
+			},
+			{ value: "reasoning", label: "Reasoning", description: resolved.reasoning ? "Enabled" : "Disabled" },
+			{
+				value: "image",
+				label: "Image input",
+				description: resolved.input.includes("image") ? "Enabled" : "Disabled",
+			},
+			{ value: "codex", label: "Codex request settings", description: "Summary · verbosity · parallel tools" },
 			{ value: "remove", label: "Remove model", description: "Delete this model from the relay" },
 			{ value: "back", label: "Back", description: "Return to models" },
 		]);
 		if (action === undefined || action === "back") return;
+
+		if (action === "contextWindow" || action === "maxTokens") {
+			const next = await promptText(
+				ctx,
+				dialogs,
+				action === "maxTokens" ? "Output tokens · local metadata, not wire cap" : "Context window",
+				String(resolved[action]),
+				(value) => {
+					const number = Number(value);
+					if (!Number.isSafeInteger(number) || number <= 0) return "Use a safe positive integer.";
+					if (action === "maxTokens" ? number > resolved.contextWindow : number < resolved.maxTokens)
+						return "Output tokens must not exceed context window.";
+					return undefined;
+				},
+			);
+			if (next !== undefined) {
+				model[action] = Number(next);
+				await persistRelay(ctx, pi, relay);
+			}
+			continue;
+		}
+		if (action === "reasoning" || action === "image") {
+			if (action === "reasoning") model.reasoning = !resolved.reasoning;
+			else model.input = resolved.input.includes("image") ? ["text"] : ["text", "image"];
+			await persistRelay(ctx, pi, relay);
+			continue;
+		}
+		if (action === "codex") {
+			await editCodexSettings(dialogs, model, () => persistRelay(ctx, pi, relay));
+			continue;
+		}
 
 		if (action === "name") {
 			const next = await promptText(
@@ -544,7 +616,6 @@ async function editModelFlow(
 						levels: ROUTER_THINKING_LEVELS,
 						onChange: (nextMap) => {
 							model.thinkingLevelMap = nextMap;
-							model.reasoning = true;
 							saver.save();
 						},
 					}),
@@ -552,7 +623,6 @@ async function editModelFlow(
 			} else {
 				await editThinkingMapNative(dialogs, resolved.thinkingLevelMap, (nextMap) => {
 					model.thinkingLevelMap = nextMap;
-					model.reasoning = true;
 					saver.save();
 				});
 			}
@@ -578,14 +648,53 @@ async function editModelFlow(
 	}
 }
 
+async function editCodexSettings(
+	dialogs: RouterDialogs,
+	model: RelayModelConfig,
+	save: () => Promise<void>,
+): Promise<void> {
+	while (true) {
+		const field = await selectRouterItem(dialogs, "Codex request settings", [
+			{ value: "reasoningSummary", label: "Reasoning summary", description: String(model.codex?.reasoningSummary) },
+			{ value: "verbosity", label: "Verbosity", description: String(model.codex?.verbosity) },
+			{
+				value: "parallelToolCalls",
+				label: "Parallel tool calls",
+				description: String(model.codex?.parallelToolCalls),
+			},
+		]);
+		if (!field) return;
+		const values =
+			field === "reasoningSummary"
+				? ["auto", "concise", "detailed"]
+				: field === "verbosity"
+					? ["low", "medium", "high"]
+					: ["true", "false"];
+		const choice = await selectRouterItem(dialogs, field, [
+			{ value: "inherit", label: "Inherit" },
+			...(field === "parallelToolCalls" ? [] : [{ value: "omit", label: "Omit (null)" }]),
+			...values.map((value) => ({ value, label: value })),
+		]);
+		if (!choice) continue;
+		model.codex ??= {};
+		const codex = model.codex;
+		if (choice === "inherit") delete codex[field];
+		else if (field === "parallelToolCalls") codex.parallelToolCalls = choice === "true";
+		else if (field === "reasoningSummary")
+			codex.reasoningSummary = choice === "omit" ? null : (choice as "auto" | "concise" | "detailed");
+		else codex.verbosity = choice === "omit" ? null : (choice as "low" | "medium" | "high");
+		await save();
+	}
+}
+
 async function editThinkingMapNative(
 	dialogs: RouterDialogs,
 	map: RelayModelConfig["thinkingLevelMap"],
 	onChange: (map: RelayModelConfig["thinkingLevelMap"]) => void,
 ): Promise<void> {
-	let working = resolveRouterThinkingMap(map);
+	const working = resolveRouterThinkingMap(map);
 	while (true) {
-		const choice = await selectRouterItem(dialogs, "Toggle thinking level", [
+		const choice = await selectRouterItem(dialogs, "Edit thinking level", [
 			...ROUTER_THINKING_LEVELS.map((level) => ({
 				value: level,
 				label: level,
@@ -597,12 +706,19 @@ async function editThinkingMapNative(
 		if (choice === undefined || choice === "back") return;
 		if (!ROUTER_THINKING_LEVELS.includes(choice as (typeof ROUTER_THINKING_LEVELS)[number])) continue;
 		const level = choice as (typeof ROUTER_THINKING_LEVELS)[number];
-		working = {
-			...working,
-			[level]: working[level] === null ? level : null,
-			off: null,
-			minimal: null,
-		};
+		const mode = await selectRouterItem(dialogs, `${level} · mapping`, [
+			{ value: "inherit", label: "Inherit", description: "Pi default" },
+			{ value: "target", label: "String target", description: "Provider effort" },
+			{ value: "hidden", label: "Hidden", description: "null" },
+		]);
+		if (mode === undefined) continue;
+		if (mode === "inherit") delete working[level];
+		else if (mode === "hidden") working[level] = null;
+		else {
+			const target = await dialogs.input(`${level} · provider effort`, working[level] ?? level);
+			if (!target?.trim()) continue;
+			working[level] = target.trim();
+		}
 		onChange({ ...working });
 	}
 }
@@ -613,16 +729,21 @@ async function fetchAndSelectModels(
 	dialogs: RouterDialogs,
 	relay: RelayConfig,
 ): Promise<void> {
-	const key = resolveProbeApiKey(relay.apiKey);
-	if (key.error) {
-		ctx.ui.notify(key.error, "warning");
+	const connection = await resolveProbeConnection(relay, ctx);
+	if (connection.error) {
+		ctx.ui.notify(connection.error, "warning");
 		await recoverWithManualModels(ctx, pi, dialogs, relay);
 		return;
 	}
 
 	let result: Awaited<ReturnType<typeof probeRelayModels>> | undefined;
 	while (true) {
-		const probeOptions = { baseUrl: relay.baseUrl, apiKey: key.value };
+		const probeOptions = {
+			baseUrl: relay.baseUrl,
+			apiKey: connection.apiKey,
+			headers: connection.headers,
+			catalog: relay.catalog,
+		};
 		if (dialogs.kind === "tui") {
 			result = await dialogs.show<Awaited<ReturnType<typeof probeRelayModels>> | undefined>(
 				(tui, theme, _kb, done) => {
@@ -674,6 +795,7 @@ async function fetchAndSelectModels(
 	if (!result || !result.ok) return;
 	if (result.truncated) ctx.ui.notify("Catalog truncated to 2,000 models.", "warning");
 
+	const discovered = new Map(result.models.map((model) => [model.id, model]));
 	const activeModelId = ctx.model?.provider === relay.id ? ctx.model.id : undefined;
 	const catalog = mergeCatalogWithConfigured(relay.models, result.models, activeModelId);
 	const initiallySelected = new Set(relay.models.map((model) => model.id));
@@ -693,7 +815,7 @@ async function fetchAndSelectModels(
 		relay.models = selectedIds.map((id) => {
 			const previous = preserved.get(id);
 			if (previous) return structuredClone(previous);
-			const next = createDefaultModelConfig(id);
+			const next = modelFromCatalog(discovered.get(id) ?? { id });
 			preserved.set(id, next);
 			return structuredClone(next);
 		});
@@ -722,6 +844,40 @@ async function fetchAndSelectModels(
 	}
 	await saver.flush();
 	if (relay.models.length === 0) ctx.ui.notify(`No models enabled for "${relay.id}".`, "warning");
+}
+
+export function modelFromCatalog(entry: ProbeModel): RelayModelConfig {
+	const model: RelayModelConfig = { ...createDefaultModelConfig(entry.id, entry.name), ...entry.metadata };
+	model.maxTokens = Math.min(model.maxTokens!, model.contextWindow!);
+	return model;
+}
+
+async function resolveProbeConnection(
+	relay: RelayConfig,
+	ctx: ExtensionCommandContext,
+): Promise<{ apiKey?: string; headers?: ProviderHeaders; error?: string }> {
+	try {
+		// Registered relays use Pi's canonical credential precedence and dynamic resolution.
+		// A new, empty relay is not registered yet: use the bounded literal/env fallback below.
+		const resolved = relay.models.length > 0 ? await ctx.modelRegistry.getProviderAuth?.(relay.id) : undefined;
+		const key = resolved?.auth.apiKey ? { value: resolved.auth.apiKey } : resolveProbeApiKey(relay.apiKey);
+		if (key.error) return { error: key.error };
+		const headers: ProviderHeaders = { ...resolved?.auth.headers };
+		for (const [name, raw] of Object.entries(relay.headers ?? {})) {
+			if (Object.keys(headers).some((key) => key.toLowerCase() === name.toLowerCase())) continue;
+			const value = resolveProbeApiKey(raw);
+			if (value.error)
+				return {
+					error: `Cannot resolve catalog header ${name}. Configure a model first for Pi's dynamic auth resolution.`,
+				};
+			headers[name] = value.value ?? "";
+		}
+		return { apiKey: key.value, headers };
+	} catch {
+		return {
+			error: "Cannot resolve relay credentials for catalog discovery. Check provider authentication and configured values.",
+		};
+	}
 }
 
 async function manualModelEntry(
@@ -808,6 +964,7 @@ function applySelectionIfChanged(
 }
 
 async function persistRelay(ctx: ExtensionCommandContext, pi: ExtensionAPI, relay: RelayConfig): Promise<void> {
+	await initializeRouterState(pi);
 	await upsertRelay(relay);
 	registerOneRelay(pi, relay);
 	await ctx.modelRegistry.refresh();

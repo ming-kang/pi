@@ -106,7 +106,7 @@ describe("router dialogs", () => {
 		expect(changes).toEqual([["gpt-5"]]);
 	});
 
-	it("shows only the five GPT Gateway thinking levels and toggles live", () => {
+	it("edits all seven thinking levels with inherit, arbitrary target and hidden values", () => {
 		const changes: Array<Record<string, string | null | undefined>> = [];
 		const results: unknown[] = [];
 		const keybindings = new KeybindingsManager();
@@ -124,11 +124,23 @@ describe("router dialogs", () => {
 		expect(output).toContain("high");
 		expect(output).toContain("xhigh");
 		expect(output).toContain("max");
-		expect(output).not.toContain("minimal");
-		expect(output).not.toContain("off");
+		expect(output).toContain("minimal");
+		expect(output).toContain("off");
 
-		component.handleInput(SPACE);
-		expect(changes[0]?.low).toBeNull();
+		component.handleInput(ENTER);
+		component.handleInput(ENTER);
+		expect(Object.hasOwn(changes[0]!, "off")).toBe(false);
+		component.handleInput(ENTER);
+		component.handleInput(DOWN);
+		component.handleInput(ENTER);
+		component.handleInput("custom-effort");
+		component.handleInput(ENTER);
+		expect(changes[1]?.off).toBe("custom-effort");
+		component.handleInput(ENTER);
+		component.handleInput(DOWN);
+		component.handleInput(DOWN);
+		component.handleInput(ENTER);
+		expect(changes[2]?.off).toBeNull();
 		component.handleInput(ESC);
 		expect(results).toHaveLength(1);
 	});

@@ -9,18 +9,15 @@
 import { DEFAULTS, ROUTER_THINKING_LEVELS, THINKING_LEVELS, type ThinkingLevel } from "./constants.ts";
 import type { RelayModelConfig, ThinkingLevelMap } from "./types.ts";
 
-/**
- * GPT Gateway defaults: off/minimal are never exposed; all five supported
- * router levels start enabled and can be disabled individually.
- */
+/** Conservative defaults for newly added models only. */
 export const DEFAULT_THINKING_LEVEL_MAP: ThinkingLevelMap = {
 	off: null,
 	minimal: null,
 	low: "low",
 	medium: "medium",
 	high: "high",
-	xhigh: "xhigh",
-	max: "max",
+	xhigh: null,
+	max: null,
 };
 
 /** Optional custom label only — never invent a default name; empty means show id. */
@@ -62,11 +59,8 @@ export function resolveModelConfig(entry: RelayModelConfig): {
 		reasoning: entry.reasoning ?? base.reasoning!,
 		input: entry.input ?? base.input!,
 		contextWindow: entry.contextWindow ?? base.contextWindow!,
-		maxTokens: entry.maxTokens ?? base.maxTokens!,
-		// Apply the GPT Gateway policy in memory without rewriting legacy router.json
-		// files. Legacy off/minimal values therefore become unavailable at runtime,
-		// while explicit choices for the five visible levels remain intact.
-		thinkingLevelMap: resolveRouterThinkingMap(entry.thinkingLevelMap ?? base.thinkingLevelMap),
+		maxTokens: entry.maxTokens ?? Math.min(base.maxTokens!, entry.contextWindow ?? base.contextWindow!),
+		thinkingLevelMap: resolveRouterThinkingMap(entry.thinkingLevelMap),
 	};
 }
 
@@ -81,19 +75,9 @@ export function normalizeThinkingMap(map: ThinkingLevelMap | undefined): Thinkin
 	return result;
 }
 
-/** Apply the router-wide GPT policy without mutating the stored object. */
+/** Preserve Pi omitted semantics; do not impose new-model defaults on existing maps. */
 export function resolveRouterThinkingMap(map: ThinkingLevelMap | undefined): ThinkingLevelMap {
-	const result = normalizeThinkingMap(DEFAULT_THINKING_LEVEL_MAP);
-	if (map) {
-		for (const level of THINKING_LEVELS) {
-			if (!Object.hasOwn(map, level)) continue;
-			const value = map[level];
-			if (value !== undefined) result[level] = value;
-		}
-	}
-	result.off = null;
-	result.minimal = null;
-	return result;
+	return normalizeThinkingMap(map);
 }
 
 export function summarizeThinkingMap(map: ThinkingLevelMap | undefined): string {
@@ -102,7 +86,7 @@ export function summarizeThinkingMap(map: ThinkingLevelMap | undefined): string 
 	const hidden: string[] = [];
 	for (const level of ROUTER_THINKING_LEVELS) {
 		const value = resolved[level];
-		if (value === null) hidden.push(level);
+		if (value === null || (value === undefined && (level === "xhigh" || level === "max"))) hidden.push(level);
 		else if (value === undefined) enabled.push(level);
 		else enabled.push(level === value ? level : `${level}→${value}`);
 	}
@@ -131,6 +115,7 @@ export function toRegisterModel(entry: RelayModelConfig) {
 		contextWindow: resolved.contextWindow,
 		maxTokens: resolved.maxTokens,
 		thinkingLevelMap: resolved.thinkingLevelMap,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		cost: entry.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		...(entry.headers ? { headers: entry.headers } : {}),
 	};
 }
