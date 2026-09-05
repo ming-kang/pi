@@ -136,7 +136,7 @@ describe("BackgroundTasksMenu public service", () => {
 		expect(
 			h
 				.render()
-				.map((line) => line.split("│")[0])
+				.map((line) => line.split("│")[1] ?? "")
 				.join("\n"),
 		).toContain("#2 Explorer");
 		for (const text of [
@@ -211,11 +211,11 @@ describe("BackgroundTasksMenu public service", () => {
 		await h.open();
 		h.menu.handleInput("\x1b[A");
 		const before = h.render().join("\n");
-		expect(before).toContain("line-25");
+		expect(before).toContain("line-34");
 		expect(before).not.toContain("line-40");
 		h.setText(`${Array.from({ length: 41 }, (_, i) => `line-${String(i + 1).padStart(2, "0")}`).join("\n")}`);
 		await vi.advanceTimersByTimeAsync(1000);
-		expect(h.render().join("\n")).toContain("line-25");
+		expect(h.render().join("\n")).toContain("line-34");
 		h.menu.handleInput("\x1b[6~");
 		expect(h.render().join("\n")).toContain("line-41");
 	});
@@ -248,7 +248,7 @@ describe("BackgroundTasksMenu public service", () => {
 		expect(h.render().join("\n")).toContain("(30/30)");
 		expect(h.render().join("\n")).toContain("task-29");
 	});
-	it.each([1, 20, 60, 100, 140])("fits ANSI and CJK output at width %i", async (width) => {
+	it.each([1, 2, 3, 20, 60, 100, 109, 110, 140])("fits ANSI and CJK output at width %i", async (width) => {
 		const h = harness([task("wide", { title: "界".repeat(200) })], width, 12);
 		h.setText(`\x1b[31mred\x1b[0m\n${"界".repeat(200)}`);
 		await h.open();
@@ -328,5 +328,247 @@ describe("BackgroundTasksMenu public service", () => {
 		expect(h.unsubscribe).toHaveBeenCalledOnce();
 		expect(h.releases).toEqual(["bash-1"]);
 		expect(vi.getTimerCount()).toBe(0);
+	});
+	it.each([60, 140])(
+		"routes arrows and pages to explicit focus at width %i without changing execution",
+		async (width) => {
+			const h = harness(
+				Array.from({ length: 30 }, (_, i) => task(`task-${i}`)),
+				width,
+			);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(h.render().join("\n")).toContain("› Background tasks (1/30)");
+			h.menu.handleInput("\x1b[6~");
+			expect(h.render().join("\n")).toContain("(11/30)");
+			h.menu.handleInput("\x1b[C");
+			await vi.advanceTimersByTimeAsync(0);
+			let frame = h.render().join("\n");
+			expect(frame).toContain("› Preview");
+			expect(frame).toContain("Lines 35–40/40 · following");
+			h.menu.handleInput("\x1b[5~");
+			frame = h.render().join("\n");
+			expect(frame).toContain("Lines 29–34/40 · browsing");
+			expect(frame).toContain("line-29");
+			h.menu.handleInput("\x1b[A");
+			expect(h.render().join("\n")).toContain("Lines 28–33/40");
+			h.menu.handleInput("\x1b[D");
+			expect(h.render().join("\n")).toContain("› Background tasks (11/30)");
+			h.menu.handleInput("\x1b[C");
+			expect(h.render().join("\n")).toContain("Lines 28–33/40 · browsing");
+			h.menu.handleInput("\x1b");
+			expect(h.onClose).not.toHaveBeenCalled();
+			h.menu.handleInput("\x1b");
+			expect(h.onClose).toHaveBeenCalledOnce();
+			expect(h.host.kill).not.toHaveBeenCalled();
+			expect(h.tasks.every((t) => t.mode === "foreground" && t.status === "running")).toBe(true);
+		},
+	);
+	it("honors rebound focus, selection and independent list/preview page actions", async () => {
+		const h = harness([task("a"), task("b")], 140);
+		h.keybindings.setUserBindings({
+			"app.backgroundTasks.focusList": "h",
+			"app.backgroundTasks.focusPreview": "l",
+			"tui.select.up": "u",
+			"tui.select.down": "d",
+			"tui.select.pageUp": "g",
+			"tui.select.pageDown": "t",
+			"tui.editor.pageUp": "p",
+			"tui.editor.pageDown": "n",
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		h.menu.handleInput("\x1b[C");
+		expect(h.render().join("\n")).toContain("› Background tasks");
+		h.menu.handleInput("l");
+		expect(h.render().join("\n")).toContain("› Preview");
+		expect(h.render().join("\n")).toContain("H list · L/Enter preview · U/D scroll · P/N page");
+		h.menu.handleInput("\x1b[5~");
+		expect(h.render().join("\n")).toContain("following");
+		h.menu.handleInput("g");
+		expect(h.render().join("\n")).toContain("following");
+		h.menu.handleInput("p");
+		expect(h.render().join("\n")).toContain("Lines 29–34/40 · browsing");
+		h.menu.handleInput("n");
+		expect(h.render().join("\n")).toContain("following");
+		h.menu.handleInput("h");
+		h.menu.handleInput("n");
+		expect(h.render().join("\n")).toContain("(1/2)");
+		h.menu.handleInput("t");
+		expect(h.render().join("\n")).toContain("(2/2)");
+		h.menu.handleInput("g");
+		h.menu.handleInput("d");
+		expect(h.render().join("\n")).toContain("(2/2)");
+	});
+	it("retains separate row positions across selection, updates, content shrink/grow and resize", async () => {
+		const h = harness([task("a"), task("b")], 140);
+		await h.open();
+		h.menu.handleInput("\x1b[5~");
+		expect(h.render().join("\n")).toContain("Lines 29–34/40");
+		h.menu.handleInput("\x1b[D");
+		h.menu.handleInput("\x1b[B");
+		await h.open();
+		expect(h.render().join("\n")).toContain("following");
+		h.menu.handleInput("\x1b[A");
+		h.menu.handleInput("\x1b[D");
+		h.menu.handleInput("\x1b[A");
+		await h.open();
+		expect(h.render().join("\n")).toContain("Lines 29–34/40 · browsing");
+		h.tui.terminal.rows = 30;
+		expect(h.menu.render(60).join("\n")).toContain("Lines 29–38/40 · browsing");
+		h.tui.terminal.rows = 24;
+		expect(h.menu.render(140).join("\n")).toContain("Lines 29–34/40 · browsing");
+		h.setText("short");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.render().join("\n")).toContain("Lines 1–1/1 · browsing");
+		h.setText(Array.from({ length: 50 }, (_, i) => `line-${i + 1}`).join("\n"));
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.render().join("\n")).toContain("Lines 29–34/50 · browsing");
+	});
+	it("keeps a wrapped source-line anchor when resizing a browsed preview", async () => {
+		const h = harness(undefined, 140);
+		h.setText(Array.from({ length: 40 }, (_, i) => `entry-${i}: ${"界".repeat(60)}`).join("\n"));
+		await h.open();
+		await vi.advanceTimersByTimeAsync(1000);
+		h.menu.handleInput("\x1b[5~");
+		const before = h
+			.render()
+			.filter((line) => line.includes("entry-"))[0]!
+			.match(/entry-\d+/)![0];
+		expect(h.menu.render(60).join("\n")).toContain(before);
+		expect(h.menu.render(140).join("\n")).toContain(before);
+		expect(h.render().join("\n")).toContain("browsing");
+	});
+	it("captures deterministic wide and narrow rendered frames", async () => {
+		vi.setSystemTime(0);
+		const h = harness(undefined, 110);
+		await vi.advanceTimersByTimeAsync(0);
+		const wideList = h.render().join("\n");
+		h.menu.handleInput("\x1b[C");
+		h.menu.handleInput("\x1b[5~");
+		const widePreview = h.render().join("\n");
+		const narrowPreview = h.menu.render(60).join("\n");
+		h.menu.handleInput("\x1b[D");
+		const narrowList = h.menu.render(60).join("\n");
+		expect({ wideList, widePreview, narrowPreview, narrowList }).toMatchInlineSnapshot(`
+			{
+			  "narrowList": "╭──────────────────────────────────────────────────────────╮
+			│› Background tasks (1/1)                                  │
+			│→ ● bash-1 · running (foreground) · build                 │
+			│                                                          │
+			│                                                          │
+			│                                                          │
+			│                                                          │
+			│                                                          │
+			│                                                          │
+			│                                                          │
+			│                                                          │
+			│                                                          │
+			│Rows 1–1/1                                                │
+			│← list · →/Enter preview · ↑/↓ select · PgUp/PgDn page    │
+			│Esc close · K stop group                                  │
+			╰──────────────────────────────────────────────────────────╯",
+			  "narrowPreview": "╭──────────────────────────────────────────────────────────╮
+			│› Preview                                                 │
+			│running · foreground · 0s · bash-1                        │
+			│npm run build                                             │
+			│cwd: /work                                                │
+			│Output: /tmp/build.log                                    │
+			│line-29                                                   │
+			│line-30                                                   │
+			│line-31                                                   │
+			│line-32                                                   │
+			│line-33                                                   │
+			│line-34                                                   │
+			│Lines 29–34/40 · browsing                                 │
+			│← list · →/Enter preview · ↑/↓ scroll · PgUp/PgDn page    │
+			│Esc back to list · K stop group                           │
+			╰──────────────────────────────────────────────────────────╯",
+			  "wideList": "╭────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+			│› Background tasks (1/1)                   │  Preview                                                       │
+			│→ ● bash-1 · running (foreground) · build  │running · foreground · 0s · bash-1                              │
+			│                                           │npm run build                                                   │
+			│                                           │cwd: /work                                                      │
+			│                                           │Output: /tmp/build.log                                          │
+			│                                           │line-35                                                         │
+			│                                           │line-36                                                         │
+			│                                           │line-37                                                         │
+			│                                           │line-38                                                         │
+			│                                           │line-39                                                         │
+			│                                           │line-40                                                         │
+			│Rows 1–1/1                                 │Lines 35–40/40 · following                                      │
+			│← list · →/Enter preview · ↑/↓ select · PgUp/PgDn page                                                      │
+			│Esc close · K stop group                                                                                    │
+			╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯",
+			  "widePreview": "╭────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+			│  Background tasks (1/1)                   │› Preview                                                       │
+			│→ ● bash-1 · running (foreground) · build  │running · foreground · 0s · bash-1                              │
+			│                                           │npm run build                                                   │
+			│                                           │cwd: /work                                                      │
+			│                                           │Output: /tmp/build.log                                          │
+			│                                           │line-29                                                         │
+			│                                           │line-30                                                         │
+			│                                           │line-31                                                         │
+			│                                           │line-32                                                         │
+			│                                           │line-33                                                         │
+			│                                           │line-34                                                         │
+			│Rows 1–1/1                                 │Lines 29–34/40 · browsing                                       │
+			│← list · →/Enter preview · ↑/↓ scroll · PgUp/PgDn page                                                      │
+			│Esc back to list · K stop group                                                                             │
+			╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯",
+			}
+		`);
+	});
+	it("uses semantic focus cues and keeps inactive selection visible", async () => {
+		const fg = vi.spyOn(theme, "fg");
+		const bg = vi.spyOn(theme, "bg");
+		try {
+			const h = harness(undefined, 140);
+			await vi.advanceTimersByTimeAsync(0);
+			h.render();
+			expect(fg).toHaveBeenCalledWith("accent", "› Background tasks (1/1)");
+			expect(fg).toHaveBeenCalledWith("muted", "  Preview");
+			expect(bg).toHaveBeenCalledWith("selectedBg", expect.stringContaining("→"));
+			fg.mockClear();
+			bg.mockClear();
+			h.menu.handleInput("\x1b[C");
+			h.render();
+			expect(fg).toHaveBeenCalledWith("accent", "› Preview");
+			expect(fg).toHaveBeenCalledWith("muted", expect.stringContaining("→ ● bash-1"));
+			expect(bg).not.toHaveBeenCalled();
+		} finally {
+			fg.mockRestore();
+			bg.mockRestore();
+		}
+	});
+	it("scrolls long worker content from the top without shell follow labels", async () => {
+		const h = harness(
+			[
+				task("group", {
+					kind: "subagent",
+					projection: {
+						workers: [
+							{
+								id: "long-worker-id",
+								label: "#1 Explorer",
+								status: "running",
+								prompt: Array.from({ length: 40 }, (_, i) => `prompt-${i}`).join("\n"),
+								activity: "activity",
+								outcome: "outcome",
+							},
+						],
+					},
+				}),
+			],
+			140,
+		);
+		h.menu.handleInput("\x1b[B");
+		await h.open();
+		expect(h.render().join("\n")).toContain("prompt-0");
+		expect(h.render().join("\n")).not.toMatch(/paused|following|browsing|long-worker-id/);
+		h.menu.handleInput("\x1b[6~");
+		expect(h.render().join("\n")).not.toContain("prompt-0");
+		h.change();
+		h.menu.handleInput("\x1b[D");
+		h.menu.handleInput("\x1b[C");
+		expect(h.render().join("\n")).toContain("prompt-7");
 	});
 });

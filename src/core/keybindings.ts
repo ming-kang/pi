@@ -55,6 +55,8 @@ export interface AppKeybindings {
 	"app.tree.filter.all": true;
 	"app.tree.filter.cycleForward": true;
 	"app.tree.filter.cycleBackward": true;
+	"app.backgroundTasks.focusList": true;
+	"app.backgroundTasks.focusPreview": true;
 	"app.backgroundTasks.kill": true;
 	"app.backgroundTasks.detach": true;
 }
@@ -244,6 +246,14 @@ export const KEYBINDINGS = {
 	"app.backgroundTasks.detach": {
 		defaultKeys: "ctrl+b",
 		description: "Move foreground Bash and Subagent executions to the background",
+	},
+	"app.backgroundTasks.focusList": {
+		defaultKeys: "left",
+		description: "Focus the background task list",
+	},
+	"app.backgroundTasks.focusPreview": {
+		defaultKeys: "right",
+		description: "Focus the background task preview",
 	},
 	"app.backgroundTasks.kill": {
 		defaultKeys: "k",

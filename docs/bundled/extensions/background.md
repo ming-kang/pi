@@ -66,7 +66,7 @@ All model-facing management responses, including listings and error messages, ar
 
 ## `/bg` panel
 
-The inline panel replaces the editor without hiding the transcript. Terminals at least 110 columns wide show a list beside the selected detail; narrower terminals drill from list into detail.
+The inline panel replaces the editor without hiding the transcript. Terminals at least 110 columns wide show a list beside the selected preview, inside one rounded border with a central divider; narrower terminals show the focused pane. The active pane title is accented; an inactive selected row retains a muted selection marker. The panel stays compact (at most 20 rows), leaving room for the transcript.
 
 - Bash rows and Subagent group/worker rows retain stable selection as status and ordering change.
 - Foreground/background mode is explicit on group rows.
@@ -77,14 +77,17 @@ The inline panel replaces the editor without hiding the transcript. Terminals at
 
 | Default key | Action |
 |---|---|
-| Up / Down | Select a row; scroll when detail is focused |
-| Enter | Focus/open detail |
-| Page Up / Page Down | Scroll visible detail; reaching the Bash output bottom resumes following |
+| Left / Right | Focus the list / selected preview (also on narrow terminals) |
+| Up / Down | Select a row in the list; scroll the focused preview |
+| Enter | Focus/open preview |
+| Page Up / Page Down | Page the focused list or preview independently |
 | `k` | Request cancellation of the selected task or whole group, including when a worker is selected |
 | Escape | Return from detail, then close |
 | Ctrl+B | Detach eligible foreground executions through the host |
 
-Controls follow `tui.select.*`, `app.backgroundTasks.kill`, and `app.backgroundTasks.detach`. Theme colors are semantic. Only visible selected output is read, at most once per second and within a 128KB request budget (the service may impose a smaller bound), with at most 2,000 viewport lines. Settled output is read once. Unselected work continues collecting progress independently of the panel.
+Preview positions are retained per row while the panel is open, including across focus changes, updates and resizes. Worker previews start at the top. Shell previews initially follow the tail; scrolling up switches to **browsing**, and only explicit downward scrolling to the bottom resumes **following**. Neither mode pauses execution. Range counters describe the visible rows/lines within the bounded preview, not the entire log. Metadata stays above the scrolling content; on very short terminals, status and diagnostics take priority over other metadata.
+
+Controls follow `app.backgroundTasks.focusList`, `app.backgroundTasks.focusPreview`, `tui.select.*`, `app.backgroundTasks.kill`, and `app.backgroundTasks.detach`. List paging uses `tui.select.pageUp`/`pageDown`; preview paging uses `tui.editor.pageUp`/`pageDown`, so the two can be rebound independently. Theme colors are semantic. Only visible selected output is read, at most once per second and within a 128KB request budget (the service may impose a smaller bound), with at most 2,000 viewport lines. Settled output is read once. Unselected work continues collecting progress independently of the panel.
 
 Outside TUI mode, `/bg` sends a bounded summary through the host notification UI rather than mounting a component (print/JSON notification UI is a no-op). Whether background startup is supported is an explicit host capability; a panel is never required for execution.
 

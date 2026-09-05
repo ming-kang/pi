@@ -4,6 +4,7 @@ import {
 	type Focusable,
 	stripTerminalSequences,
 	truncateToWidth,
+	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import {
@@ -32,6 +33,11 @@ interface Row {
 	task: BackgroundTask;
 	worker?: BackgroundWorker;
 }
+interface PreviewPosition {
+	scroll: number;
+	follow: boolean;
+	anchor?: { line: number; column: number };
+}
 const clean = (text: string) => sanitizeBinaryOutput(stripTerminalSequences(text));
 const pad = (text: string, width: number) => truncateToWidth(text, width, "…", true);
 
@@ -45,10 +51,9 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	private unsubscribe: () => void;
 	private timer: ReturnType<typeof setInterval>;
 	private disposed = false;
-	private detail = false;
+	private focus: "list" | "preview" = "list";
+	private readonly positions = new Map<string, PreviewPosition>();
 	private width: number;
-	private scroll = 0;
-	private follow = true;
 	private text = "";
 	private readKey?: string;
 	private readError?: string;
@@ -86,7 +91,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		return this.width >= 110;
 	}
 	private height(): number {
-		return Math.min(20, Math.max(4, this.options.tui.terminal.rows - 8));
+		return Math.min(20, Math.max(10, this.options.tui.terminal.rows - 8));
 	}
 	private sync(): void {
 		if (this.disposed) return;
@@ -98,9 +103,9 @@ export class BackgroundTasksMenu implements Component, Focusable {
 			]);
 		if (!this.current()) {
 			this.selected = this.rows[0]?.key;
-			this.follow = !this.current()?.worker;
-			this.scroll = 0;
 		}
+		const keys = new Set(this.rows.map((row) => row.key));
+		for (const key of this.positions.keys()) if (!keys.has(key)) this.positions.delete(key);
 		const id = this.current()?.task.id;
 		if (id !== this.pinned) {
 			// Acquire before releasing so history eviction cannot steal the selection.
@@ -114,7 +119,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	private async tick(): Promise<void> {
 		if (this.disposed) return;
 		this.sync();
-		if (this.wide() || this.detail) await this.refresh();
+		if (this.wide() || this.focus === "preview") await this.refresh();
 		if (this.disposed) return;
 		const frame = this.render(this.width).join("\n");
 		if (frame !== this.lastFrame) {
@@ -148,7 +153,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const kb = this.options.keybindings;
 		this.feedback = undefined;
 		if (kb.matches(data, "tui.select.cancel")) {
-			if (this.detail) this.detail = false;
+			if (this.focus === "preview") this.focus = "list";
 			else {
 				this.dispose();
 				this.options.onClose();
@@ -162,24 +167,31 @@ export class BackgroundTasksMenu implements Component, Focusable {
 						? `stopping ${row.task.id}… (whole group)`
 						: `${row.task.id}: no new cancellation requested`;
 				} catch (error) {
-					this.feedback = clean(String(error));
+					this.feedback = clean(String(error)).replace(/\s+/g, " ");
 				}
 			}
-		} else if (kb.matches(data, "tui.select.confirm")) {
-			this.detail = true;
+		} else if (kb.matches(data, "app.backgroundTasks.focusList")) {
+			this.focus = "list";
+		} else if (kb.matches(data, "app.backgroundTasks.focusPreview") || kb.matches(data, "tui.select.confirm")) {
+			this.focus = "preview";
 			void this.tick();
-		} else if (kb.matches(data, "tui.select.pageUp")) {
-			this.scrollDetail(-this.height());
-		} else if (kb.matches(data, "tui.select.pageDown")) {
-			this.scrollDetail(this.height());
 		} else {
-			const delta = kb.matches(data, "tui.select.up") ? -1 : kb.matches(data, "tui.select.down") ? 1 : 0;
-			if (delta && this.detail) this.scrollDetail(delta);
+			const pageUp = kb.matches(data, this.focus === "list" ? "tui.select.pageUp" : "tui.editor.pageUp");
+			const pageDown = kb.matches(data, this.focus === "list" ? "tui.select.pageDown" : "tui.editor.pageDown");
+			const direction =
+				pageUp || kb.matches(data, "tui.select.up") ? -1 : pageDown || kb.matches(data, "tui.select.down") ? 1 : 0;
+			const layout = this.layout();
+			const delta =
+				direction *
+				(pageUp || pageDown ? (this.focus === "preview" ? layout.contentHeight : layout.bodyHeight) : 1);
+			if (delta && this.focus === "preview") this.scrollPreview(delta);
 			else if (delta && this.rows.length) {
 				const index = this.rows.findIndex((row) => row.key === this.selected);
-				this.selected = this.rows[(index + delta + this.rows.length) % this.rows.length]?.key;
-				this.scroll = 0;
-				this.follow = !this.current()?.worker;
+				const next =
+					pageUp || pageDown
+						? Math.max(0, Math.min(this.rows.length - 1, index + delta))
+						: (index + delta + this.rows.length) % this.rows.length;
+				this.selected = this.rows[next]?.key;
 				this.text = "";
 				this.readKey = undefined;
 				this.readError = undefined;
@@ -190,55 +202,103 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		}
 		this.options.tui.requestRender();
 	}
-	private wrapDetail(text: string): string {
-		const width = this.wide() ? this.width - Math.floor(this.width * 0.4) - 3 : this.width;
-		return wrapTextWithAnsi(clean(text), Math.max(1, width)).slice(0, 2000).join("\n");
-	}
-	private detailLines(): string[] {
-		const row = this.current();
-		if (!row) return ["No managed executions."];
-		const { task, worker } = row;
-		if (worker)
-			return clean(
-				[
-					`${worker.label} · ${worker.status} · group ${task.id}`,
-					`Model: ${worker.model ?? "—"} · Usage: ${worker.usage ?? "—"}`,
-					"",
-					"Prompt",
-					this.wrapDetail(worker.prompt),
-					"",
-					"Activity",
-					this.wrapDetail(worker.activity || "—"),
-					"",
-					"Outcome",
-					this.wrapDetail(worker.outcome || "Still running…"),
-				].join("\n"),
-			)
-				.split("\n")
-				.slice(0, 2000);
-		return clean(
-			[
-				`${task.status} · ${task.mode} · ${runtimeLabel(task)} · ${task.id}`,
-				this.wrapDetail(task.command ?? task.title),
-				task.cwd ? this.wrapDetail(`cwd: ${task.cwd}`) : "",
-				task.outputPath ? this.wrapDetail(`Output: ${task.outputPath}`) : "",
-				...this.diagnostics().map((text) => this.wrapDetail(text)),
-				this.readKey === row.key ? this.text : (task.projection?.text ?? "Loading…"),
-			].join("\n"),
-		).split("\n");
+	private position(): PreviewPosition {
+		const key = this.selected ?? "";
+		let position = this.positions.get(key);
+		if (!position) {
+			position = { scroll: 0, follow: this.current()?.task.kind === "bash" && !this.current()?.worker };
+			if (this.selected) this.positions.set(key, position);
+		}
+		return position;
 	}
 	private diagnostics(): string[] {
 		const row = this.current();
-		if (!row || row.worker) return [];
+		if (!row) return [];
 		return [
 			row.task.error ? `Task error: ${row.task.error}` : "",
-			this.readKey === row.key && this.readError ? `Output read error: ${this.readError}` : "",
+			!row.worker && this.readKey === row.key && this.readError ? `Output read error: ${this.readError}` : "",
 		].filter(Boolean);
 	}
-	private scrollDetail(delta: number): void {
-		const max = Math.max(0, this.detailLines().length - this.height() + this.diagnostics().length);
-		this.scroll = Math.min(max, Math.max(0, (this.follow ? max : this.scroll) + delta));
-		this.follow = this.scroll === max && !this.current()?.worker;
+	/** One geometry calculation shared by rendering and page/line navigation. */
+	private layout() {
+		const innerWidth = Math.max(0, this.width - 2);
+		const listWidth = this.wide() ? Math.floor(innerWidth * 0.4) : innerWidth;
+		const previewWidth = this.wide() ? innerWidth - listWidth - 1 : innerWidth;
+		// Borders, pane titles, range, and two hint rows are outside the pane body.
+		const bodyHeight = this.height() - 6;
+		const row = this.current();
+		const metadata: string[] = [];
+		let text = "No managed executions.";
+		if (row) {
+			const { task, worker } = row;
+			metadata.push(
+				worker
+					? `${worker.label} · ${worker.status} · group ${task.id}`
+					: `${task.status} · ${task.mode} · ${runtimeLabel(task)} · ${task.id}`,
+			);
+			metadata.push(...this.diagnostics());
+			if (worker) {
+				metadata.push(`Model: ${worker.model ?? "—"} · Usage: ${worker.usage ?? "—"}`);
+				text = [
+					"Prompt",
+					worker.prompt,
+					"",
+					"Activity",
+					worker.activity || "—",
+					"",
+					"Outcome",
+					worker.outcome || "Still running…",
+				].join("\n");
+			} else {
+				metadata.push(task.command ?? task.title);
+				if (task.cwd) metadata.push(`cwd: ${task.cwd}`);
+				if (task.outputPath) metadata.push(`Output: ${task.outputPath}`);
+				text = this.readKey === row.key ? this.text : (task.projection?.text ?? "Loading…");
+			}
+		}
+		// On very short terminals prioritize status and diagnostics, leaving one output row.
+		const header = metadata.slice(0, bodyHeight - 1).map((line) => clean(line).replace(/\s+/g, " "));
+		const wrapped = clean(text)
+			.split("\n")
+			.flatMap((line, lineIndex) => {
+				let column = 0;
+				return wrapTextWithAnsi(line, Math.max(1, previewWidth)).map((text) => {
+					const entry = { text, line: lineIndex, column };
+					column += visibleWidth(text);
+					return entry;
+				});
+			});
+		const entries = row?.task.kind === "bash" && !row.worker ? wrapped.slice(-2000) : wrapped.slice(0, 2000);
+		const content = entries.map((entry) => entry.text);
+		const contentHeight = bodyHeight - header.length;
+		const max = Math.max(0, content.length - contentHeight);
+		const position = this.position();
+		let offset = position.scroll;
+		if (position.anchor) {
+			const anchor = position.anchor;
+			const first = entries.findIndex((entry) => entry.line === anchor.line);
+			if (first >= 0) {
+				offset = first;
+				while (
+					offset + 1 < entries.length &&
+					entries[offset + 1]!.line === anchor.line &&
+					entries[offset + 1]!.column <= anchor.column
+				)
+					offset++;
+			}
+		}
+		const start = position.follow ? max : Math.min(offset, max);
+		return { innerWidth, listWidth, previewWidth, bodyHeight, header, content, contentHeight, max, start, entries };
+	}
+	private scrollPreview(delta: number): void {
+		const { start, max, entries } = this.layout();
+		const position = this.position();
+		position.scroll = Math.min(max, Math.max(0, start + delta));
+		const entry = entries[position.scroll];
+		position.anchor = entry ? { line: entry.line, column: entry.column } : undefined;
+		// Only an explicit downward movement resumes shell following, never resize/update.
+		position.follow =
+			delta > 0 && position.scroll === max && this.current()?.task.kind === "bash" && !this.current()?.worker;
 	}
 	render(width: number): string[] {
 		if (width < 1) return [];
@@ -246,48 +306,72 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		this.width = width;
 		if (!wasWide && this.wide()) void this.tick();
 		const { theme, keybindings } = this.options;
-		const height = this.height();
-		const listWidth = this.wide() ? Math.floor(width * 0.4) : width;
-		const detailWidth = this.wide() ? width - listWidth - 3 : width;
+		const { innerWidth, listWidth, previewWidth, bodyHeight, header, content, contentHeight, start } = this.layout();
 		const index = Math.max(
 			0,
 			this.rows.findIndex((row) => row.key === this.selected),
 		);
-		const first = Math.max(0, index - height + 1);
-		const list = this.rows.slice(first, first + height).map((row) => {
+		const first = Math.max(0, index - bodyHeight + 1);
+		const list = this.rows.slice(first, first + bodyHeight).map((row) => {
 			const status = row.worker?.status ?? row.task.status;
 			const label = row.worker
 				? `  ${row.worker.label} · ${status}`
 				: `${statusGlyph(row.task.status)} ${row.task.id.slice(0, row.task.kind.length + 9)} · ${row.task.status} (${row.task.mode}) · ${row.task.title}`;
-			const text = pad(`${row.key === this.selected ? "→" : " "} ${clean(label)}`, listWidth);
-			return row.key === this.selected
-				? theme.bg("selectedBg", theme.fg("text", text))
+			const selected = row.key === this.selected;
+			const text = pad(`${selected ? "→" : " "} ${clean(label)}`, listWidth);
+			return selected
+				? this.focus === "list"
+					? theme.bg("selectedBg", theme.fg("accent", text))
+					: theme.fg("muted", text)
 				: theme.fg(statusColor(row.task.status), text);
 		});
 		if (!list.length) list.push(pad("No managed executions.", listWidth));
-		const [header = "", ...content] = this.detailLines();
-		// Diagnostics stay visible even while following a long output tail. Their full
-		// wrapped text also remains in the scrollable metadata above the raw log.
-		const diagnostics = this.diagnostics().map((text) => clean(text).replace(/\s+/g, " "));
-		const contentHeight = Math.max(1, height - 1 - diagnostics.length);
-		const max = Math.max(0, content.length - contentHeight);
-		const start = this.follow ? max : Math.min(this.scroll, max);
-		const detail = [header, ...diagnostics, ...content.slice(start, start + contentHeight)].map((line) =>
-			theme.fg("toolOutput", pad(line, detailWidth)),
-		);
-		const body = Array.from({ length: height }, (_, i) =>
+		const preview = [
+			...header.map((line) => theme.fg("muted", line)),
+			...content.slice(start, start + contentHeight).map((line) => theme.fg("toolOutput", line)),
+		];
+		const border = (text: string) => theme.fg("border", text);
+		const frame = (text: string) => pad(border("│") + pad(text, innerWidth) + border("│"), width);
+		const panes = (left: string, right: string) =>
 			this.wide()
-				? `${list[i] ?? pad("", listWidth)} ${theme.fg("border", "│")} ${detail[i] ?? pad("", detailWidth)}`
-				: ((this.detail ? detail[i] : list[i]) ?? pad("", width)),
-		);
+				? pad(left, listWidth) + border("│") + pad(right, previewWidth)
+				: pad(this.focus === "list" ? left : right, innerWidth);
+		const title = (pane: "list" | "preview", text: string) =>
+			theme.fg(this.focus === pane ? "accent" : "muted", `${this.focus === pane ? "›" : " "} ${text}`);
+		const range = (offset: number, count: number, total: number) =>
+			`${total ? offset + 1 : 0}–${Math.min(offset + count, total)}/${total}`;
+		const shell = this.current()?.task.kind === "bash" && !this.current()?.worker;
+		const previewRange = `Lines ${range(start, contentHeight, content.length)}${shell ? (this.position().follow ? " · following" : " · browsing") : ""}`;
 		const hint = (id: Parameters<typeof keybindings.getKeys>[0]) => keyLabel(id, { keybindings });
-		const footer =
-			this.feedback ??
-			`${hint("tui.select.up")}/${hint("tui.select.down")} ${this.detail ? "scroll" : "select"} · ${hint("tui.select.confirm")} detail · ${hint("tui.select.pageUp")}/${hint("tui.select.pageDown")} page · ${hint("app.backgroundTasks.kill")} stop group · ${hint("tui.select.cancel")} ${this.detail ? "back" : "close"}${!this.follow ? " · paused" : ""}`;
 		return [
-			pad(theme.fg("accent", `Background tasks (${this.rows.length ? index + 1 : 0}/${this.rows.length})`), width),
-			...body,
-			pad(theme.fg("muted", footer), width),
+			pad(border(`╭${"─".repeat(innerWidth)}╮`), width),
+			frame(
+				panes(
+					title("list", `Background tasks (${this.rows.length ? index + 1 : 0}/${this.rows.length})`),
+					title("preview", "Preview"),
+				),
+			),
+			...Array.from({ length: bodyHeight }, (_, i) => frame(panes(list[i] ?? "", preview[i] ?? ""))),
+			frame(
+				panes(
+					theme.fg("muted", `Rows ${range(first, bodyHeight, this.rows.length)}`),
+					theme.fg("muted", previewRange),
+				),
+			),
+			frame(
+				theme.fg(
+					"muted",
+					`${hint("app.backgroundTasks.focusList")} list · ${hint("app.backgroundTasks.focusPreview")}/${hint("tui.select.confirm")} preview · ${hint("tui.select.up")}/${hint("tui.select.down")} ${this.focus === "list" ? "select" : "scroll"} · ${hint(this.focus === "list" ? "tui.select.pageUp" : "tui.editor.pageUp")}/${hint(this.focus === "list" ? "tui.select.pageDown" : "tui.editor.pageDown")} page`,
+				),
+			),
+			frame(
+				theme.fg(
+					"muted",
+					this.feedback ??
+						`${hint("tui.select.cancel")} ${this.focus === "preview" ? "back to list" : "close"} · ${hint("app.backgroundTasks.kill")} stop group`,
+				),
+			),
+			pad(border(`╰${"─".repeat(innerWidth)}╯`), width),
 		];
 	}
 }
