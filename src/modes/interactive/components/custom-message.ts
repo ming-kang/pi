@@ -1,6 +1,6 @@
 import type { TextContent } from "@earendil-works/pi-ai";
 import type { Component } from "@earendil-works/pi-tui";
-import { Box, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
+import { Box, Container, Markdown, type MarkdownTheme, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
 import type { MessageRenderer } from "../../../core/extensions/types.ts";
 import type { CustomMessage } from "../../../core/messages.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
@@ -75,8 +75,12 @@ export class CustomMessageComponent extends Container {
 				);
 				if (component) {
 					// Custom renderer provides its own styled component
-					this.customComponent = component;
-					this.addChild(component);
+					this.customComponent = new MouseRegion(component, (event) => {
+						if (event.type !== "click" || event.button !== "left") return undefined;
+						this.setExpanded(!this._expanded);
+						return { handled: true };
+					});
+					this.addChild(this.customComponent);
 					return;
 				}
 			} catch {

@@ -14,6 +14,7 @@ Every rendered component implements the public `Component` interface:
 interface Component {
   render(width: number): string[];
   handleInput?(data: string): void;
+  handleMouse?(event: TuiMouseEvent): TuiMouseEventResult | undefined;
   wantsKeyRelease?: boolean;
   invalidate(): void;
 }
@@ -23,6 +24,7 @@ interface Component {
 |---|---|
 | `render(width)` | Return one string per line. Every line must be at most `width` terminal columns wide. |
 | `handleInput?(data)` | Receives raw terminal input while this component has focus. |
+| `handleMouse?(event)` | Receives normalized local mouse events; see [Mouse Regions](#mouse-regions). |
 | `wantsKeyRelease?` | Set to `true` only when the component needs Kitty keyboard key-release events. Releases are otherwise filtered. |
 | `invalidate()` | Clear cached render state. TUI calls it when the theme changes; call it yourself before rendering changed cached state. |
 
@@ -256,6 +258,29 @@ class MyDialog {
 ```
 
 Pi supplies `tui.*` IDs such as `tui.select.up`, `tui.select.confirm`, and `tui.select.cancel`, along with `app.*` IDs such as `app.interrupt`. Use Pi's `keyHint()` helper when displaying a configured binding in UI text; it formats the current binding rather than hard-coding a key label.
+
+## Mouse Regions
+
+Fullscreen mode supports normalized mouse events through the public `MouseRegion` wrapper or an optional `Component.handleMouse(event)` method. Import these APIs from `@earendil-works/pi-tui`; do not parse terminal mouse sequences yourself.
+
+```typescript
+import { MouseRegion, Text } from "@earendil-works/pi-tui";
+
+const label = new Text("Click to toggle", 0, 0);
+let enabled = false;
+const toggle = new MouseRegion(label, (event) => {
+  if (event.type !== "click" || event.button !== "left") return undefined;
+  enabled = !enabled;
+  label.setText(enabled ? "Enabled" : "Disabled");
+  return { handled: true };
+});
+```
+
+Events include zero-based local `x`/`y`, absolute `screenX`/`screenY`, component `width`/`height`, button and modifier state. `Container` routes mouse events using the child bounds from its latest render. `MouseRegion` delegates to the child's mouse handler first, so a handled child control takes priority over the wrapper.
+
+Return `undefined` for events you do not own, preserving selection and scrolling. `{ handled: true }` stops propagation; handled clicks request a render by default. The optional `render` flag overrides that default. `capture` requests subsequent drag/release events, and `focus` requests keyboard focus; neither is needed for a simple click toggle. State changes outside mouse dispatch still need `tui.requestRender()`.
+
+Pi wraps successful custom-message renderer output with a local left-click expansion toggle. Renderers receive the updated `options.expanded`, shared with the configured tool-output expansion binding (default Ctrl+O). The leading message spacer and default fallback card are not expansion targets. A renderer's own handled mouse events take priority.
 
 ## Line Width
 

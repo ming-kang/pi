@@ -38,6 +38,50 @@ function render(value: CustomMessage<unknown>, expanded = false, width = 120, ou
 beforeEach(() => initTheme("dark"));
 
 describe("background completion transcript rendering", () => {
+	it("uses native dot, title and continuous result rail rather than a separate notification skin", () => {
+		for (const expanded of [false, true]) {
+			const lines = renderBackgroundCompletion(shell(), { expanded, outputPad: 1 }, theme).render(100);
+			expect(lines[0]).toContain(theme.fg("success", "●"));
+			expect(lines[0]).toContain(theme.fg("toolTitle", theme.bold("Bash")));
+			const plain = lines.map(stripTerminalSequences);
+			expect(plain[0]).toMatch(/^● Bash · Background completed/);
+			for (const line of plain.slice(1)) expect(line.startsWith("│")).toBe(true);
+			expect(plain.join("\n")).not.toContain("Ctrl+O details");
+		}
+	});
+
+	it("expands and collapses a real completion card through its native mouse region", () => {
+		const value = shell("click reveals this output");
+		const original = JSON.stringify(value);
+		const component = new CustomMessageComponent(value, renderBackgroundCompletion);
+		const click = (y: number) => {
+			const rendered = component.render(100);
+			return component.handleMouse({
+				type: "click",
+				button: "left",
+				x: 0,
+				y,
+				screenX: 0,
+				screenY: y,
+				width: 100,
+				height: rendered.length,
+				shift: false,
+				alt: false,
+				ctrl: false,
+				clickCount: 1,
+			});
+		};
+		expect(component.render(100).join("\n")).not.toContain("click reveals this output");
+		expect(click(0)).toBeUndefined(); // Message spacer is not part of the card.
+		expect(click(1)?.handled).toBe(true);
+		const expanded = component.render(100).map(stripTerminalSequences);
+		const outputRow = expanded.findIndex((line) => line.includes("click reveals this output"));
+		expect(outputRow).toBeGreaterThan(1);
+		expect(click(outputRow)?.handled).toBe(true);
+		expect(component.render(100).join("\n")).not.toContain("click reveals this output");
+		expect(JSON.stringify(value)).toBe(original);
+	});
+
 	it("summarizes shell outcomes without leaking log paths or output until expanded", () => {
 		const value = shell();
 		const collapsed = render(value);
@@ -259,7 +303,10 @@ describe("background completion transcript rendering", () => {
 			.render(100)
 			.map(stripTerminalSequences)
 			.filter((line) => line.trim());
-		expect(padded[0]).toBe(`   ${collapsed[0]!.trimEnd()}`.padEnd(padded[0]!.length));
+		// Padding belongs inside the native chrome; the status dot/rail remain aligned.
+		expect(collapsed[0]).toMatch(/^● Bash/);
+		expect(padded[0]).toBe(`●   ${collapsed[0]!.slice(2).trimEnd()}`.padEnd(padded[0]!.length));
+		expect(padded[1]).toMatch(/^│ {3}/);
 		component.setExpanded(true);
 		const dark = component.render(100);
 		expect(dark.map(stripTerminalSequences).join("\n")).toContain("persisted output");

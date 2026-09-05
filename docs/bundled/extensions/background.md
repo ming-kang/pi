@@ -93,7 +93,7 @@ Outside TUI mode, `/bg` sends a bounded summary through the host notification UI
 
 ## Completion notifications
 
-Interactive `background-completion` messages have a compact collapsed summary: outcome, execution kind, short ID, and a command or group brief. Failures retain a short reason; log paths, output and worker reports stay out of the collapsed view. Expand with the configured tool-output expansion binding (default Ctrl+O).
+Interactive `background-completion` messages have a compact collapsed summary: outcome, execution kind, short ID, and a command or group brief. Failures retain a short reason; log paths, output and worker reports stay out of the collapsed view. In fullscreen mode, left-click the notification to expand or collapse that message independently. The blank spacer above it is not a click target. The configured tool-output expansion binding (default Ctrl+O) remains available for toggling output expansion across the transcript.
 
 Expanded shell notifications separate **Command**, **Result** or **Error**, a bounded plain-text **Output** tail, **Log** and the full execution ID. Expanded Subagent completions show numbered worker profiles and statuses, a short description when useful, and Markdown **Report** sections; failures distinguish the error from any partial report instead of repeating the generated prompt-heading wrapper. Long metadata wraps, visual output is bounded, and source truncation notices remain visible. These are previews of the saved bounded completion, not live log readers.
 

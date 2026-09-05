@@ -8,7 +8,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { MessageRenderOptions } from "../../core/extensions/types.ts";
 import type { CustomMessage } from "../../core/messages.ts";
-import { keyLabel } from "../../modes/interactive/components/keybinding-hints.ts";
+import { ToolChromeComponent } from "../../modes/interactive/components/tool-chrome.ts";
 import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
 
@@ -216,13 +216,25 @@ class CompletionCard implements Component {
 	invalidate(): void {}
 	render(width: number): string[] {
 		if (width < 1) return [];
+		const theme = this.theme;
+		const chrome = new ToolChromeComponent(
+			{ render: (contentWidth) => this.renderContent(contentWidth), invalidate() {} },
+			`${theme.fg(color(this.view.status), "●")} `,
+			{ continuationPrefix: theme.fg("dim", "│ "), blankLinePrefix: theme.fg("dim", "│") },
+		);
+		// Native chrome reserves two cells; clip defensively for one-cell terminals.
+		return chrome.render(width).map((line) => truncateToWidth(line, width, ""));
+	}
+	private renderContent(width: number): string[] {
 		const view = this.view;
 		const theme = this.theme;
 		const options = this.options;
-		const padding = Math.min(Math.max(0, Math.floor(options.outputPad || 0)), Math.floor((width - 1) / 2));
+		// The native dot/rail replaces the default one-cell custom-message inset.
+		// Additional configured padding stays inside the chrome, never shifting the dot.
+		const padding = Math.min(Math.max(0, Math.floor(options.outputPad || 0) - 1), Math.floor((width - 1) / 2));
 		const inner = width - padding * 2;
-		const rail = inner >= 4 ? "│ " : "";
-		const bodyWidth = Math.max(1, inner - rail.length);
+		const indent = inner >= 3 ? "  " : "";
+		const bodyWidth = Math.max(1, inner - indent.length);
 		const lines: string[] = [];
 		const status = view.status ? statusName(view.status) : "Result received";
 		const kind =
@@ -233,10 +245,8 @@ class CompletionCard implements Component {
 						? "PowerShell"
 						: "Bash"
 					: "Notification";
-		const glyph = view.status === "completed" ? "✓" : view.status === "failed" ? "×" : view.status ? "○" : "·";
-		const expandKey = keyLabel("app.tools.expand");
 		lines.push(
-			`${theme.fg(color(view.status), `${glyph} ${kind} · ${status}`)}${view.id ? theme.fg("muted", ` · ${shortId(view.id)}`) : ""}${!options.expanded && expandKey ? theme.fg("dim", ` · ${expandKey} details`) : ""}`,
+			`${theme.fg("toolTitle", theme.bold(kind))}${theme.fg("muted", ` · Background ${status.toLowerCase()}`)}${view.id ? theme.fg("dim", ` · ${shortId(view.id)}`) : ""}`,
 		);
 		if (!options.expanded) {
 			if (view.command) lines.push(theme.fg("toolOutput", `$ ${view.command.split("\n")[0]}`));
@@ -271,15 +281,15 @@ class CompletionCard implements Component {
 				tail = false,
 				error = false,
 			) => {
-				lines.push("", theme.fg("accent", theme.bold(title)));
+				lines.push("", theme.fg("muted", theme.bold(title)));
 				const rendered = markdown
 					? new Markdown(text, 0, 0, getMarkdownTheme()).render(bodyWidth)
 					: wrapTextWithAnsi(text, bodyWidth).map((line) => theme.fg(error ? "error" : "toolOutput", line));
 				const omitted = Math.max(0, rendered.length - limit);
 				const selected = tail ? rendered.slice(-limit) : rendered.slice(0, limit);
-				if (tail && omitted) lines.push(theme.fg("dim", `${rail}… ${omitted} earlier display lines omitted`));
-				for (const line of selected) lines.push(theme.fg("border", rail) + line);
-				if (!tail && omitted) lines.push(theme.fg("dim", `${rail}… ${omitted} more display lines omitted`));
+				if (tail && omitted) lines.push(theme.fg("dim", `${indent}… ${omitted} earlier display lines omitted`));
+				for (const line of selected) lines.push(indent + line);
+				if (!tail && omitted) lines.push(theme.fg("dim", `${indent}… ${omitted} more display lines omitted`));
 			};
 			if (view.kind === "bash" && !view.ambiguous) {
 				if (view.command) section("Command", view.command, 8);
