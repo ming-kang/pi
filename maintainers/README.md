@@ -6,7 +6,7 @@ These repository-only notes are excluded from the npm package.
 
 This repository publishes one standalone package, `@astralyn/pi`, with the `pi` executable. Runtime source is under `src/**`; it does not recreate upstream workspaces or publish another package.
 
-AI, Agent core, Client, Protocol, and TUI behavior come from the exact published `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-client`, `@earendil-works/pi-protocol`, and `@earendil-works/pi-tui` dependencies. Do not vendor or patch them. Core owns global lifecycle, native tool presentation, renderer integration, and configurable keybindings. Extensions are self-contained `src/extensions/**` users of the public Extension API; they do not import each other's internals. Keep functional UI with its extension and preserve tool schemas, protocols, and result structures for display-only work.
+AI, Agent core, Client, Protocol, and TUI behavior come from the exact published `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-client`, `@earendil-works/pi-protocol`, and `@earendil-works/pi-tui` dependencies; the experimental Chord runtime adds the exact `@earendil-works/chord` and `@earendil-works/pi-server` dependencies. Do not vendor or patch them. Core owns global lifecycle, native tool presentation, renderer integration, and configurable keybindings. Extensions are self-contained `src/extensions/**` users of the public Extension API; they do not import each other's internals. Keep functional UI with its extension and preserve tool schemas, protocols, and result structures for display-only work.
 
 ## Local development
 

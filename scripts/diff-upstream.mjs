@@ -7,12 +7,18 @@ import { fileURLToPath } from "node:url";
 import { prerelease, satisfies, valid, validRange } from "semver";
 
 const runtimeDependencyNames = [
+	"@earendil-works/chord",
 	"@earendil-works/pi-agent-core",
 	"@earendil-works/pi-ai",
 	"@earendil-works/pi-client",
 	"@earendil-works/pi-protocol",
+	"@earendil-works/pi-server",
 	"@earendil-works/pi-tui",
 ];
+// Upstream references pi-server only as a workspace sibling, so the baseline
+// package.json declares no dependency range for it; the exact-pin and
+// shrinkwrap gates above still apply.
+const distributionOnlyRuntimeDependencyNames = ["@earendil-works/pi-server"];
 const manifestKeys = ["repository", "tag", "commit", "sourceSubtree", "sourceTree"];
 const deltaRequiredKeys = ["path", "category", "intent"];
 const deltaAllowedKeys = [...deltaRequiredKeys, "tests"];
@@ -339,6 +345,9 @@ function verifyRuntimeDependencies(upstreamPackage, manifest, failures, root) {
 				for (const dep of runtimeDependencyNames) {
 					const localVer = localVersions[dep];
 					const upstreamRange = upstreamPackage.dependencies[dep];
+					if (upstreamRange === undefined && distributionOnlyRuntimeDependencyNames.includes(dep)) {
+						continue;
+					}
 					if (typeof upstreamRange !== "string" || !validRange(upstreamRange)) {
 						failures.push(
 							`baseline package.json dependency ${dep} must be a valid semver range; found ${JSON.stringify(upstreamRange)}`,

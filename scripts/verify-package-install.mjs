@@ -15,10 +15,12 @@ if (!installSpec) {
 const sourcePackage = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const expectedVersion = expectedVersionArgument ?? sourcePackage.version;
 const expectedRuntimePackages = [
+	"@earendil-works/chord",
 	"@earendil-works/pi-ai",
 	"@earendil-works/pi-agent-core",
 	"@earendil-works/pi-client",
 	"@earendil-works/pi-protocol",
+	"@earendil-works/pi-server",
 	"@earendil-works/pi-tui",
 ];
 const sourceExtensionsDirectory = new URL("../src/extensions/", import.meta.url);

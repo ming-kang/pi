@@ -5,7 +5,7 @@ This is the private standalone distribution of Pi's coding-agent package. It pub
 ## Non-negotiable boundaries
 
 - The repository contains one coding-agent package; runtime source is under `src/**`.
-- Consume AI, Agent core, Client, Protocol, and TUI through the exact `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-client`, `@earendil-works/pi-protocol`, and `@earendil-works/pi-tui` npm dependencies. Never vendor, patch, monkey-patch, or recreate them.
+- Consume AI, Agent core, Client, Protocol, and TUI through the exact `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-client`, `@earendil-works/pi-protocol`, and `@earendil-works/pi-tui` npm dependencies; the experimental runtime also consumes the exact `@earendil-works/chord` and `@earendil-works/pi-server` dependencies. Never vendor, patch, monkey-patch, or recreate them.
 - Do not recreate a monorepo, workspace aliases, hidden bundled dependencies, a Fork framework, feature registry, or another publishable package.
 - Keep native tool presentation in `src/modes/interactive/components/tool-execution.ts` and the relevant built-in renderers. Prefer Pi-native presentation; use `renderShell: "self"` only when a tool intentionally owns its complete UI.
 - Extensions are self-contained under `src/extensions/`, use the Extension API, and never import another extension's internals. Prefer small domain-neutral duplication to coupling.

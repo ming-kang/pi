@@ -8,7 +8,7 @@ This repository is the standalone distribution of `@astralyn/pi`. It publishes o
 - npm
 - `fd` (or `fdfind`) and `rg` for the complete test suite; Pi-managed copies are reused when available
 
-The package consumes the published `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-client`, `@earendil-works/pi-protocol`, and `@earendil-works/pi-tui` dependencies. It does not recreate the upstream monorepo or vendor those packages.
+The package consumes the published `@earendil-works/chord`, `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-client`, `@earendil-works/pi-protocol`, `@earendil-works/pi-server`, and `@earendil-works/pi-tui` dependencies. It does not recreate the upstream monorepo or vendor those packages.
 
 ## Install and run
 
@@ -62,7 +62,7 @@ npm run test:isolated
 
 The runner keeps credentials and settings isolated, prepends the real Pi managed-bin when present, and preflights `fd`/`fdfind` plus `rg` before starting Vitest.
 
-Validate the exact upstream release baseline, all five upstream runtime dependencies, and local deviations:
+Validate the exact upstream release baseline, all seven upstream runtime dependencies, and local deviations:
 
 ```bash
 npm run diff:upstream -- --check
