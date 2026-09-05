@@ -6,9 +6,46 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [0.85.0] - 2026-09-04
 
+### Added
+
+- Added inherited `SessionManager.inMemory()` support for restoring externally managed session entries through the SDK.
+- Added inherited persistent Claude thinking effort: supported Anthropic transports preserve per-turn effort and recover safely from signed-thinking mismatches.
+- Added inherited OpenAI-compatible `vllmPriority` and `supportsMaxOutputTokens` model settings for vLLM scheduler priority and OpenAI Responses output-token limits.
+- Added inherited LaTeX rendering for relational algebra join symbols.
+- Added an inherited clickable "Jump to latest message" label with the `tui.altScreen.bottom` shortcut on the scrolled-up fullscreen transcript.
+- Added inherited click-to-expand tool results and the theme schema's scrollbar and search-match (`searchMatchBg`/`searchMatchText`) colors.
+
 ### Changed
 
-- Synchronized upstream Pi v0.85.0: adopts the upstream renderer extraction (fork rendering now layers on `src/core/tools/renderers/`), the new experimental Chord-based server/client/plugin runtime (adding exact `@earendil-works/chord` and `@earendil-works/pi-server` dependencies and an `./experimental/plugin` package export), click-to-expand tool results, and the theme schema's scrollbar/search-match colors. The experimental durable server is POSIX-only upstream and its tests skip on native Windows.
+- Followed upstream Pi `v0.85.0`, updating the exact `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-tui`, `@earendil-works/pi-client`, and `@earendil-works/pi-protocol` runtime dependencies to `0.85.0`; added exact `@earendil-works/chord` and `@earendil-works/pi-server` `0.85.0` dependencies and the `./experimental/plugin` package export for the new experimental Chord-based server/client/plugin runtime. The experimental durable server is POSIX-only upstream and its tests skip on native Windows.
+- Adopted the upstream renderer extraction: fork rendering now layers on `src/core/tools/renderers/`.
+- Moved the inherited streaming working indicator into the default editor border and matched its default spinner and label to the thinking-level border color; custom editors retain the standalone indicator unless they opt in to embedding it.
+- Reduced inherited fullscreen transcript search latency on large transcripts by caching unchanged search results, indexing ASCII runs, and limiting highlight work to visible matches.
+
+### Fixed
+
+- Fixed inherited managed `fd` and ripgrep downloads on Linux musl systems, and fixed those downloads requiring the GitHub Releases API.
+- Removed the unavailable inherited Grok Build 0.1 model from `/model`.
+- Fixed inherited provider streams emitting incompatible event sequences and custom tool-call deltas.
+- Restored the inherited client compatibility entry point, published in this distribution as `@astralyn/pi/client`.
+- Fixed the inherited Qwen Token Plan Individual catalog to include Qwen3.8 Flash.
+- Fixed inherited OpenAI Codex SSE parsing to process terminal events that are not followed by a blank line.
+- Fixed inherited GitHub Copilot Claude Fable 5 requests so selected reasoning levels are sent.
+- Fixed inherited Baseten GLM-5.2 models incorrectly advertising image input support.
+- Fixed skills being unavailable when Bash is the only enabled tool.
+- Fixed concurrent session shares overwriting one another.
+- Fixed image orientation detection skipping EXIF data after non-EXIF APP1 segments.
+- Fixed imported sessions overwriting an existing session with the same filename.
+- Fixed session forks losing their compaction boundary, and fixed in-memory session forks before an active turn settled.
+- Fixed inherited Fireworks GLM models using the wrong API adapter.
+- Fixed inherited `NO_PROXY` matching for root domains and subdomains.
+- Fixed `bash`, `edit`, `find`, `grep`, `ls`, `read`, and `write` tools ignoring `ctx.cwd`.
+- Fixed inherited terminal startup under restricted seccomp policies that reject the `SIGWINCH` self-signal, and fixed inherited Zed terminal image capability detection.
+- Fixed drag selection continuing over the fullscreen editor.
+- Fixed branch summaries failing when reasoning consumes the previous 2048-token output cap.
+- Fixed the write tool reporting UTF-16 code-unit counts as byte counts by removing the misleading count.
+- Fixed proxied plain-HTTP provider requests hanging after a tool call by tunneling them with CONNECT.
+- Fixed RPC `abort` reporting success without cancelling an in-progress manual compaction.
 
 ## [0.84.16] - 2026-09-04
 
