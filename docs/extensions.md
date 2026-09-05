@@ -816,7 +816,7 @@ pi.on("tool_call", async (event, ctx) => {
 
   // Built-in tools: no type params needed
   if (isToolCallEventType("bash", event)) {
-    // event.input is { command: string; timeout?: number }
+    // event.input is { command: string; timeout?: number; background?: boolean }
     event.input.command = `source ~/.profile\n${event.input.command}`;
 
     if (event.input.command.includes("rm -rf")) {
@@ -1058,9 +1058,104 @@ pi.on("tool_result", async (event, ctx) => {
 });
 ```
 
+### ctx.background
+
+Session-bound `BackgroundContext` for supervising shell tasks and whole Subagent invocations. The host owns execution lifetime; a tool can either wait for its final result or return a background reference. Check `ctx.background.enabled` before offering background work. Interactive mode enables it; ordinary SDK sessions and built-in print/JSON/RPC hosts leave it disabled. See [SDK host policy](sdk.md#background-execution) and [Background behavior](bundled/extensions/background.md).
+
+Public types are exported from `@astralyn/pi`: `BackgroundContext`, `BackgroundExecution<T>`, `BackgroundControl<T>`, `BackgroundCompletion<T>`, `BackgroundToolOutcome<T>`, `BackgroundTask`, `BackgroundRead`, `BackgroundProjection`, `BackgroundWorker`, `BackgroundKind`, `BackgroundMode`, `BackgroundStatus`, and `BackgroundTerminalStatus`.
+
+| Member | Contract |
+|---|---|
+| `enabled` | Whether this runtime/role permits managed execution |
+| `execute<T>(execution)` | Returns `Promise<BackgroundToolOutcome<T>>`: `{ kind: "result", result }` or `{ kind: "background", task }` |
+| `list()` / `get(id)` | Serializable retained `BackgroundTask` snapshots, not live handles |
+| `read(id, options?)` | Bounded `BackgroundRead` with `task`, `text`, `totalBytes`, `truncated`, optional `fromByte` and `readError`; options: `mode`, `bytes`, `sinceBytes` |
+| `wait(id, timeoutMs?, signal?)` | Bounded observational wait (default 20s, maximum 60s); expiry/abort does not kill execution, and returning a terminal snapshot does not itself acknowledge model delivery |
+| `kill(id)` | Requests cancellation of one task or whole group; returns whether a new request was made |
+| `subscribe(listener)` | Observation only; returns an `off()` function |
+| `pin(id)` | Temporarily defers retained-record eviction; returns an idempotent release function |
+
+`BackgroundExecution<T>` supplies `kind` (`"bash"` or `"subagent"`), `title`, `toolCallId`, optional `command`, `cwd`, `background`, `signal`, `onUpdate`, and `run(control)`. This is supervision, not a generic executor registry: the extension still implements its own domain execution. `run` returns `{ result, status?, error?, usage? }`. Optional `error` is a bounded terminal diagnostic kept independently of log slices; optional `usage` is authoritative cumulative usage. Explicit terminal statuses are `completed`, `partial`, `failed`, `cancelled`, or `timeout`. Status and foreground/background mode are separate dimensions.
+
+Inside `run`, perform whole-invocation preflight, then call **`control.accept()`** before a handoff can return. Start no partial worker batch on failed preflight. Use **`control.signal`**, not the original parent signal, for ongoing work; detach releases the parent wait/cancellation link without restarting execution. `control.publish(result, projection?)` updates observers and forwards foreground progress only while the caller still waits. `control.setOutputPath(path, cleanup?)` registers one exclusively created, executor-owned output file. Never register a shared or pre-existing path. The optional cleanup callback must close its writer before removing only that file; the host invokes it on record eviction or runtime shutdown. A saved path is not a durable attachment. `control.id` and `control.mode` identify the execution and its current wait mode.
+
+Minimal supervised tool (a bounded result, no persistent log):
+
+```typescript
+import type { ExtensionAPI } from "@astralyn/pi";
+import { truncateHead } from "@astralyn/pi";
+import { Type } from "typebox";
+
+export default function (pi: ExtensionAPI) {
+  pi.registerTool({
+    name: "git_status_task",
+    label: "Git status task",
+    description: "Read Git status through the session Background host",
+    parameters: Type.Object({ background: Type.Optional(Type.Boolean()) }),
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      if (!ctx.background.enabled) throw new Error("This tool requires an enabled Background host");
+      const outcome = await ctx.background.execute({
+        kind: "bash",
+        title: "Git status",
+        toolCallId,
+        background: params.background,
+        signal,
+        onUpdate,
+        async run(control) {
+          control.signal.throwIfAborted();
+          // All fixed-input preflight is complete; allow handoff.
+          control.accept();
+          const command = await pi.exec("git", ["status", "--short"], {
+            cwd: ctx.cwd,
+            signal: control.signal,
+            timeout: 10_000,
+          });
+          return {
+            status: command.code === 0 ? "completed" : "failed",
+            result: {
+              content: [{ type: "text", text: truncateHead(command.stdout + command.stderr).content }],
+              details: {},
+            },
+          };
+        },
+      });
+      if (outcome.kind === "result") return outcome.result;
+      return {
+        content: [{ type: "text", text: `Accepted: ${outcome.task.id}; use bg to read, wait, or stop.` }],
+        details: { taskId: outcome.task.id },
+      };
+    },
+  });
+}
+```
+
+Return nested LLM `usage` on the completion (`completion.usage` or `completion.result.usage`), not on the submission reference. `completion.usage` takes precedence over result usage, which takes precedence over published partial usage. When publishing partial results, supply cumulative usage accrued by the whole execution, not per-update deltas; the latest published usage is the fallback if execution rejects without a final result. Include retries, failures, cancellation and provider-supplied worker compaction usage, but do not fabricate missing provider usage. The host persists independent usage once and removes it from the managed foreground return, so do not add it back or charge again from a notification/read. Keep results and projections bounded and serializable; never put SDK sessions, processes, abort controllers, functions, or timers into snapshot details. Shell commands should normally use the native Bash/PowerShell tool, which also preserves shell settings, session environment, output limits, and process-tree cleanup.
+
+A read can fall back to the stored bounded result when the log is unreadable or expired. Inspect `readError` separately from `text`, `fromByte` and `totalBytes`: a diagnostic is not log data and must not be hidden by byte-offset paging. Read failure does not turn a completed execution into a failed one.
+
+Subscriptions and pins have a lifetime independent of tool waiting. Release them when the view closes or the extension shuts down; capture only cleanup functions, not an old session context for later use:
+
+```typescript
+let off: (() => void) | undefined;
+pi.on("session_start", (_event, ctx) => {
+  off?.();
+  const background = ctx.background;
+  off = background.subscribe(() => {
+    // Read snapshots or invalidate a visible view; do not inject progress messages.
+    background.list();
+  });
+});
+pi.on("session_shutdown", () => {
+  off?.();
+  off = undefined;
+});
+```
+
+Captured capabilities belong to one runtime. Reload/replacement closes old execution admission and cancels its work; obtain a fresh `ctx.background` on the new `session_start`. A pin does not keep a runtime alive. A worker role cannot enable background execution even if its model supplies `background: true`; built-in workers also receive a no-background prompt rule. This is not an OS sandbox or a daemon, and persisted snapshots do not resume execution.
+
 ### ctx.isIdle() / ctx.abort() / ctx.hasPendingMessages()
 
-Control flow helpers. `ctx.isIdle()` is false while Pi is processing an agent run, automatic retry, auto-compaction retry, or queued continuation.
+Control flow helpers. `ctx.isIdle()` is false while Pi is processing an agent run, automatic retry, auto-compaction retry, or queued continuation. Idle and `agent_settled` do not mean that all Background executions have ended.
 
 ### ctx.shutdown()
 
@@ -2071,7 +2166,7 @@ pi.registerTool(myTool);
 
 **Tool groups:** `toolGroup: "my-group"` is a freeform display identifier. Adjacent default-shell tool rows with the same identifier collapse together in the interactive transcript; it does not change execution. In the collapsed group header, `renderCall` receives `context.toolGroupSummary === true`. Tools with `renderShell: "self"` are not grouped.
 
-**Usage accounting:** If a tool makes nested LLM calls, return their combined `Usage` as `usage`. Pi persists it on the tool result and includes it in footer, `/session`, and RPC session totals. `tool_result` handlers can inspect or replace this value.
+**Usage accounting:** For unmanaged tools, if a tool makes nested LLM calls, return their combined `Usage` as `usage`. Pi persists it on the tool result and includes it in footer, `/session`, and RPC session totals. `tool_result` handlers can inspect or replace this value. Managed executions instead settle usage independently through [`ctx.background`](#ctxbackground); do not duplicate it on the handoff or managed foreground result.
 
 **Signaling errors:** To mark a tool execution as failed (sets `isError: true` on the result and reports it to the LLM), throw an error from `execute`. Returning a value never sets the error flag regardless of what properties you include in the return object.
 

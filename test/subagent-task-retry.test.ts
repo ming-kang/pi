@@ -477,3 +477,63 @@ describe("subagent task-level retry", () => {
 		expect(result.content).toContain("recovered");
 	});
 });
+
+it("retains billed failed-attempt usage across retry without changing retry eligibility", async () => {
+	runSdkTaskMock.mockReset();
+	const billed = {
+		input: 10,
+		output: 2,
+		cacheRead: 3,
+		cacheWrite: 4,
+		totalTokens: 19,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.25 },
+	};
+	runSdkTaskMock
+		.mockImplementationOnce(async (options) => {
+			options.dispatch({ type: "assistant_message_settled", usage: billed });
+			await failRun(options, "fetch failed");
+		})
+		.mockImplementationOnce(async (options) => {
+			options.dispatch({ type: "assistant_message_settled", usage: billed });
+			await succeedRun(options, "recovered");
+		});
+	const result = await invoke();
+	expect(runSdkTaskMock).toHaveBeenCalledTimes(2);
+	expect(result.usage).toMatchObject({
+		input: 20,
+		output: 4,
+		cacheRead: 6,
+		cacheWrite: 8,
+		totalTokens: 38,
+		cost: { total: 0.5 },
+	});
+	expect(result.details.usage.turns).toBe(1);
+});
+
+it("accepts only after the full initial batch is published and before any worker starts", async () => {
+	runSdkTaskMock.mockReset();
+	let published: SubagentDetails | undefined;
+	const accepted = vi.fn(() => {
+		expect(published?.runs).toHaveLength(2);
+		expect(published?.runs.every((run) => run.status === "queued")).toBe(true);
+		expect(runSdkTaskMock).not.toHaveBeenCalled();
+	});
+	runSdkTaskMock.mockImplementation(async (options) => {
+		expect(accepted).toHaveBeenCalledTimes(1);
+		await succeedRun(options, "done");
+	});
+	await runSubagentInvocation({
+		params: { tasks: [{ prompt: "first" }, { prompt: "second" }] },
+		parentCwd: process.cwd(),
+		parent: parentContext(model()),
+		modelRuntime: {} as ModelRuntime,
+		agentDir: process.cwd(),
+		projectTrusted: false,
+		gate: new ConcurrencyGate(),
+		onUpdate: (details) => {
+			published = details;
+		},
+		onAccepted: accepted,
+	});
+	expect(accepted).toHaveBeenCalledTimes(1);
+});

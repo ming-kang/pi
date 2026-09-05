@@ -17,6 +17,7 @@ export {
 	type AgentSessionConfig,
 	type AgentSessionEvent,
 	type AgentSessionEventListener,
+	type ExtensionBindings,
 	type ModelCycleResult,
 	type ParsedSkillBlock,
 	type PromptOptions,
@@ -24,6 +25,23 @@ export {
 	type SessionStats,
 } from "./core/agent-session.ts";
 export { readStoredCredential } from "./core/auth-storage.ts";
+export { BackgroundService } from "./core/background/service.ts";
+export type {
+	BackgroundCompletion,
+	BackgroundContext,
+	BackgroundControl,
+	BackgroundExecution,
+	BackgroundKind,
+	BackgroundMode,
+	BackgroundProjection,
+	BackgroundRead,
+	BackgroundServiceOptions,
+	BackgroundStatus,
+	BackgroundTask,
+	BackgroundTerminalStatus,
+	BackgroundToolOutcome,
+	BackgroundWorker,
+} from "./core/background/types.ts";
 // Compaction
 export {
 	type BranchPreparation,

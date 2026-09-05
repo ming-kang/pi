@@ -1,100 +1,111 @@
-# background — background bash tasks
+# Background tasks and groups
 
-Adds the `bg` tool (actions: `create`, `read`, `wait`, `kill`, `list`) plus the `/bg` command. Long-running commands (dev servers, watch builds, slow tests) run in the background while the agent keeps working; when a task ends, its status, exit code, and a tail of its output arrive automatically as a notification.
+The `background` extension provides the `bg` management tool and `/bg` panel. The session's core Background service owns execution, cancellation, output, history and completion delivery. The extension does not launch commands or run a second task registry.
 
-## Tool
+## Start or detach work
 
-All five operations share one tool. Every call sets `action`; the remaining parameters belong to that action.
-
-### create
-
-Starts a command in the background and returns immediately with a task id and an output file path:
+Start Bash through the native `bash` tool (the optional native Windows `powershell` tool accepts the same fields and follows the same lifecycle):
 
 ```json
-{ "action": "create", "command": "npm run build", "description": "build", "timeout": 300 }
+{ "command": "npm run build", "timeout": 120, "background": true }
 ```
 
-- `description` is a short model-written label (e.g. `dev server`) shown in `/bg`, task listings, and the completion notification.
-- `timeout` is in seconds; on expiry the task is killed and reported as `timeout`.
-- The command runs detached — appending `&` is never needed and would lose exit-code tracking.
-
-The tool result only reports the start. The completion notification is the single source of truth for the outcome, so there is never a need to poll with sleep loops or repeated reads.
-
-### read
-
-Reads a bounded slice of a task's output file while it runs or after it ends:
+Start a whole Subagent invocation through its native tool:
 
 ```json
-{ "action": "read", "taskId": "bg-3f2a91", "mode": "tail", "bytes": 8192 }
+{
+  "background": true,
+  "tasks": [{ "agent": "explorer", "prompt": "Inspect the build configuration and report findings." }]
+}
 ```
 
-`mode` defaults to `tail`; `bytes` defaults to 8KB and clamps between 256 bytes and 50KB. Truncated reads state the omission up front and always include the full output path; reads of a running task say `still running`. The output file is a plain file — the built-in read tool also works on it for line-based paging.
+Omitting `background` keeps the normal foreground wait. A background submission returns an execution reference, not a successful final outcome. `bg create` has been removed; old stored create results and background notifications still render in transcripts.
 
-### wait
+In interactive mode, **Ctrl+B** moves all eligible foreground shell tasks and Subagent invocations to the background. It works even when `/bg` owns focus. The same execution continues: no cancellation, restart, new worker or timeout reset. It does not detach individual workers, ordinary file tools, or user `!` shell commands.
 
-Blocks until a task finishes, within a bound:
+If nothing is eligible, Pi reports:
 
-```json
-{ "action": "wait", "taskId": "bg-3f2a91", "waitMs": 20000, "sinceBytes": 4096 }
-```
+> No foreground Bash or Subagent execution can be moved to the background.
 
-- `waitMs` defaults to 20000 and clamps between 1000 and 60000.
-- `sinceBytes` (taken from a previous read/wait result) restricts the returned output to what was written after that offset; without it the last 32KB is returned. Offsets past EOF (for example after output truncation) fall back to the tail and say so.
+Configure `app.backgroundTasks.detach` in `keybindings.json` to change or disable the shortcut. The default `tui.editor.cursorLeft` is now `left`, freeing Ctrl+B. To restore Emacs cursor behavior, disable or rebind detach before assigning Ctrl+B to cursor-left.
 
-If the task finishes within the window, the result is delivered inline — status, exit code, runtime, and the bounded output delta — and the completion notification is suppressed, so the completion is delivered exactly once. Interrupting the turn during a wait releases that claim, so the notification arrives normally instead. If the window expires, the result says the task is still running, includes a small tail peek so progress stays visible, and the notification fires later as usual. This is the only sanctioned way to wait; sleeping to emulate it is never correct.
+Workers cannot start background work themselves. Their system prompt forbids it and the host-assigned worker role rejects `background: true` before command startup; the shared schema remains unchanged. Foreground commands still work. Workers have no `bg` tool and must not bypass the restriction with shell detachment. Only the parent agent or user can background the whole Subagent invocation.
 
-### kill
+## Management tool
 
-Stops a single running task by killing its whole process tree:
+`bg` observes existing Bash tasks and whole Subagent groups:
 
-```json
-{ "action": "kill", "taskId": "bg-3f2a91" }
-```
-
-Killing does not bypass the normal pipeline: the task still finalizes as `killed` and its completion is delivered wherever it was awaited — inline via `wait`, or as the notification otherwise.
-
-### list
-
-Lists currently known tasks — running tasks first, then the five most recently finished, with any overflow folded into a trailing note:
-
-```json
-{ "action": "list" }
-```
-
-Task ids accept a unique prefix (with or without the `bg-` part); an ambiguous prefix is an error listing the candidates.
-
-## Completion delivery
-
-When a task ends, the extension sends a `background-task` notification: a small XML message carrying the task id, terminal status, exit code, runtime, output file path, the optional description, and the sanitized last ~4KB of output. While the agent is streaming, the notification is steered into the run at the next turn boundary — after the in-flight tool calls finish, before the next model call — so a task that finishes mid-run reaches the model while it is still working, not after the whole run settles; when the agent is idle, it wakes a new turn so the result is acted on immediately.
-
-The transcript renders this notification as a one-line summary (`✓ bg-3f2a91 npm run build — completed, exit 0 in 34s`; with a description: `✓ bg-3f2a91 dev server (npm run build) — completed, exit 0 in 34s`) with the output file's name below; expanding it shows the full output path and the embedded output tail.
-
-## /bg
-
-`/bg` opens an inline task menu in the editor slot (like `/model`); the chat transcript stays visible above it. The list shows each task's status glyph, id, duration, and label (the description over the first command line); `Enter` opens the selected task's live output view, which replaces the menu.
-
-| Key | In the task list | In the output view |
+| Action | Parameters | Behavior |
 |---|---|---|
-| `↑` / `↓` | Select task | Scroll one line (freezes following) |
-| `Enter` | Open the selected task's output | — |
-| `k` | Kill the selected running task | Kill the viewed task |
-| `PgUp` / `PgDn` | — | Scroll a page; `PgUp` freezes following, scrolling back to the bottom resumes it |
-| `Esc` | Close the menu | Back to the task list |
+| `list` | — | Lists active and up to five retained finished records, at most 100 rows |
+| `read` | `taskId`, optional `mode`, `bytes` | Reads bounded output/report while running or after completion |
+| `wait` | `taskId`, optional `waitMs`, `sinceBytes` | Waits within a deadline and returns status plus bounded output/report |
+| `kill` | `taskId` | Requests cancellation of the Bash task or entire Subagent group |
 
-While a `bg wait` call is pending, its transcript row refreshes once per second (`bg wait bg-3f · waiting 12s/20s · +3.2KB new output`) until the result settles. The task list separates running tasks from finished ones with a `── finished ──` divider and adapts its visible rows to short terminal windows. The output view polls the output file once per second and only ever reads the last 128KB — and only when the task's output actually grew; a finished task's output is read once. Outside an interactive TUI, `/bg` prints a bounded task summary instead.
+Use the execution ID returned by the native tool or `bg list`. Worker IDs are display identities, not independent management targets.
 
-## Statusline
+```json
+{ "action": "read", "taskId": "<execution-id>", "mode": "tail", "bytes": 8192 }
+```
 
-Running and finished counts appear in the footer as `bg 2 running · 1 done`; tasks the stall watchdog has flagged are reported separately as `bg 2 running · 1 waiting for input · 1 done` (flagged tasks are running tasks, so the counts add up); the segment disappears when no tasks exist.
+Reads default to an 8KB tail. `bytes` clamps between 256 bytes and 50KB at the tool boundary (the core currently limits the actual slice to 48KB); `mode` can be `head` or `tail`. A Bash output path is included when available. Subagent reads use the authoritative bounded report rather than raw worker transcripts.
 
-## Limits and lifecycle
+```json
+{ "action": "wait", "taskId": "<execution-id>", "waitMs": 20000, "sinceBytes": 4096 }
+```
 
-- Background tasks inherit the session's `PI_*` environment variables (`PI_SESSION_ID`, `PI_MODEL`, …) just like the built-in bash tool, snapshotted when the task starts.
-- Tasks run through the session's configured shell (`shellPath`) and honor `shellCommandPrefix`, matching the built-in bash tool. The prefix is applied at execution time only — it never appears in task labels or notifications. Unlike the built-in bash tool, `bg` does not apply an SDK host's `spawnHook` — extensions have no access to it — so a host that rewrites or sandboxes commands through that hook does not cover background tasks.
-- Output streams directly to a system-temp file (`pi-bg-<id>.log`), never into the project or into memory. Memory holds only a byte counter. Task allocation creates the file exclusively and retries a new id on collisions, so a stale log is never overwritten.
-- Output is capped at 20MB. Hitting the cap kills the task and marks it `failed` rather than silently truncating.
-- The stall watchdog only reports `waiting for input` after it can read a stable prompt-like tail. A temporary tail-read error keeps the task running and eligible for later probes instead of producing a false stall; if the task finishes while its tail remains unreadable, the completion reports that read error.
-- At most 8 tasks may run concurrently; `create` reports the running tasks when the limit is reached.
-- Aborting the current turn (Esc) does not kill background tasks — that is what `kill` and `/bg` are for.
-- Session shutdown, `/reload`, new sessions, and session switches kill all running tasks; those kills are silent (no notification flood). There is no restart reattachment: finished-task records live only for the current session.
-- Output files outlive the session for later inspection (the `read` action and notifications keep pointing at them); Pi never deletes them automatically — the system temp directory's own cleanup policy applies. That policy varies by platform: Linux usually clears `/tmp` on reboot and macOS after a few days, but Windows never clears `%TEMP%` on its own.
+`waitMs` defaults to 20 seconds and clamps between 1 and 60 seconds. Wait output is limited to 32KB, optionally starting after `sinceBytes`. Expiry or cancellation ends only the wait, not execution. Continue independent work instead of sleep-polling or repeatedly reading; wait when the next step genuinely depends on the result.
+
+```json
+{ "action": "kill", "taskId": "<execution-id>" }
+```
+
+A cancellation request is not proof that execution has stopped. The task can remain `stopping` during cleanup. Read its later terminal status for the outcome. Partial, failed, cancelled and timeout outcomes are not displayed as successful completion.
+
+All model-facing management responses, including listings and error messages, are bounded to 50KB and 2,000 lines overall. Repeated reads do not add usage or restart execution. Completion delivery and usage accounting belong to the host, not panel refreshes.
+
+## `/bg` panel
+
+The inline panel replaces the editor without hiding the transcript. Terminals at least 110 columns wide show a list beside the selected detail; narrower terminals drill from list into detail.
+
+- Bash rows and Subagent group/worker rows retain stable selection as status and ordering change.
+- Foreground/background mode is explicit on group rows.
+- Worker detail shows identity/profile, group, model, usage, Prompt, Activity and Outcome from the public projection.
+- Opening a view does not reattach the parent wait. Closing it never kills execution.
+- Selected groups are pinned against history eviction until selection changes or the panel closes.
+- Completed detail stays open. The panel releases its subscriptions, pin and timers on close or session shutdown.
+
+| Default key | Action |
+|---|---|
+| Up / Down | Select a row; scroll when detail is focused |
+| Enter | Focus/open detail |
+| Page Up / Page Down | Scroll visible detail; reaching the Bash output bottom resumes following |
+| `k` | Request cancellation of the selected task or whole group, including when a worker is selected |
+| Escape | Return from detail, then close |
+| Ctrl+B | Detach eligible foreground executions through the host |
+
+Controls follow `tui.select.*`, `app.backgroundTasks.kill`, and `app.backgroundTasks.detach`. Theme colors are semantic. Only visible selected output is read, at most once per second and within a 128KB request budget (the service may impose a smaller bound), with at most 2,000 viewport lines. Settled output is read once. Unselected work continues collecting progress independently of the panel.
+
+Outside TUI mode, `/bg` sends a bounded summary through the host notification UI rather than mounting a component (print/JSON notification UI is a no-op). Whether background startup is supported is an explicit host capability; a panel is never required for execution.
+
+## Lifetime
+
+Background execution belongs to the current session runtime, not a daemon. Parent-turn cancellation still cancels foreground-owned work; after detach it does not cancel background work. Shutdown, `/reload`, `/new`, `/resume`, and `/fork` close admission, stop delivery, cancel work and perform bounded cleanup. `/tree` cancels executions whose launch anchor is absent from the destination branch and suppresses their completion delivery there; ordinary conversation progress along the same branch does not cancel them. Active processes and workers are not reattached across process restart or copied into a fork.
+
+The panel is an observer, not a cleanup engine. Admission, bounded history/output retention, completion delivery and headless exit policy are enforced by the core service and hosting mode.
+
+Interactive mode enables Background. Built-in print, JSON, and RPC modes and ordinary SDK sessions leave it disabled and reject `background: true`; normal foreground execution remains available. An SDK embedding can explicitly enable it via `session.bindExtensions({ backgroundEnabled: true })`, but must own cancellation, bounded draining, result-driven turns, and shutdown. See [SDK Background execution](../../sdk.md#background-execution).
+
+Managed shell output is collected continuously from startup, including before detach. Background shell output is capped at 20 MiB; crossing the cap fails and stops the command. Foreground output retains its existing uncapped log behavior: detaching a command already over the background budget stops it without deleting the prior bytes. No timeout is supplied by default, and a supplied timeout remains measured from command startup, in seconds, across detach.
+
+Managed logs are ephemeral: they are retained with the runtime record and cleaned up when that record is evicted or the runtime shuts down. Save needed output elsewhere before then. The core defaults to eight active managed executions, with bounded terminal history (32 records plus a separate bounded pending-notification allowance); pins temporarily defer history eviction, not runtime shutdown. These are service limits, not new user settings.
+
+Terminal bounded text snapshots persist as `background-task-result` custom entries, and usage as independent `background-usage` entries. A saved log path is not a durable attachment. `/bg` restores bounded terminal history from the selected branch's valid saved snapshots. This is observation only: live execution never resumes after restart, and restoration does not replay accounting or completion events. See [session format](../../session-format.md#background-records).
+
+Completion delivery waits for a safe idle boundary, respects queued user work, and sends one bounded completion at a time. A Subagent group produces one summary, not a separate wake-up per worker. A terminal `bg wait` coordinates with automatic delivery only after its tool result is persisted; aborting during output reading does not lose the pending completion. Direct SDK waits remain observational until explicitly acknowledged. Progress and repeated reads do not inject messages or add usage. `agent_settled` still describes the main agent, not the end of all background executions.
+
+Failed completion delivery leaves the terminal result available for inspection rather than silently discarding it. SDK hosts can explicitly call `session.retryBackgroundNotifications()` after resolving the failure; there is no infinite timer retry loop.
+
+If an executor ignores cancellation and settles after bounded cleanup has retired its runtime or branch, the old session quarantines its bounded result and reported usage: the latest 32 records remain in memory, and persisted sessions also append `<session-file>.background-late.jsonl`. These audit records are excluded from active totals and are not automatically reconciled. A completed cleanup grace period is not proof that an uncooperative executor stopped.
+
+The previous extension-owned interactive-prompt stall watchdog was not ported. Pi no longer automatically flags a prompt-looking shell tail as `waiting for input` or sends stall remediation notifications. Use non-interactive commands and inspect/stop stalled work manually; legacy stall notifications still render from saved transcripts.

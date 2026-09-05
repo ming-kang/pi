@@ -98,6 +98,22 @@ function syncAgentMessages(session: AgentSession, sessionManager: SessionManager
 }
 
 describe("AgentSession.getSessionStats", () => {
+	it("counts each background ledger identity once without changing message counts", async () => {
+		const { session, sessionManager } = await createSession();
+		try {
+			const record = { version: 1, taskId: "background-group", usage: createUsage(123) };
+			sessionManager.appendCustomEntry("background-usage", record);
+			sessionManager.appendCustomEntry("background-usage", record);
+			sessionManager.appendCustomEntry("background-task-result", { version: 1, task: { id: record.taskId } });
+			const stats = session.getSessionStats();
+			expect(stats.tokens.total).toBe(123);
+			expect(stats.totalMessages).toBe(0);
+			expect(stats.toolResults).toBe(0);
+		} finally {
+			session.dispose();
+		}
+	});
+
 	it("exposes the current context usage alongside token totals", async () => {
 		const { session, sessionManager } = await createSession();
 

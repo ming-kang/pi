@@ -1,474 +1,293 @@
-/**
- * /bg task manager — an inline, /model-style menu that mounts in the editor
- * slot. Two views in one component: a task list, and a live output viewport
- * for the selected task (Enter to open, Esc to go back). The host dependency
- * is narrowed to three callbacks so the component stays testable.
- */
-
-import { type Component, type Focusable, stripTerminalSequences, truncateToWidth } from "@earendil-works/pi-tui";
+/** Inline observer: selecting or closing a view never changes execution ownership. */
+import {
+	type Component,
+	type Focusable,
+	stripTerminalSequences,
+	truncateToWidth,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
+import {
+	type BackgroundContext,
+	type BackgroundTask,
+	type BackgroundWorker,
+	isBackgroundTerminal,
+} from "../../core/background/types.ts";
 import type { KeybindingsManager } from "../../core/keybindings.ts";
-import { formatSize } from "../../core/tools/truncate.ts";
 import { keyLabel } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
-import type { OutputSlice } from "./output-file.ts";
-import type { BgTask } from "./registry.ts";
-import { exitSuffix, formatTaskCounts, runtimeLabel, statusColor, statusGlyph, taskLabel } from "./task-view.ts";
-import { fileNameOf } from "./text.ts";
+import { runtimeLabel, statusColor, statusGlyph } from "./task-view.ts";
 
-const POLL_INTERVAL_MS = 1000;
-const VIEW_TAIL_BYTES = 128 * 1024;
-const MAX_VIEW_LINES = 2000;
-const LIST_MAX_VISIBLE = 10;
-const LIST_MIN_VISIBLE = 3;
-/** Rows outside the task list itself (borders, title, counter, footer, padding). */
-const LIST_RESERVED_ROWS = 14;
-
-export interface BackgroundManagerHost {
-	listTasks(): BgTask[];
-	killTask(id: string): { killed: boolean };
-	readSlice(filePath: string, options: { mode: "tail"; maxBytes: number }): Promise<OutputSlice>;
-}
-
-interface MenuTui {
-	requestRender(): void;
-	terminal: { rows: number; columns: number };
-}
-
+export type BackgroundManagerHost = Pick<BackgroundContext, "list" | "read" | "kill" | "subscribe" | "pin">;
 export interface BackgroundTasksMenuOptions {
-	tui: MenuTui;
+	tui: { requestRender(): void; terminal: { rows: number; columns: number } };
 	theme: Theme;
 	keybindings: Pick<KeybindingsManager, "matches" | "getKeys">;
 	host: BackgroundManagerHost;
-	onClose: () => void;
+	onClose(): void;
 	pollIntervalMs?: number;
 }
-
-interface TailCache {
-	taskId: string;
-	lines: string[];
-	totalBytes: number;
-	/** True once a terminal task's final output has been read; skips re-reads. */
-	settledRead?: boolean;
-	error?: string;
+interface Row {
+	key: string;
+	task: BackgroundTask;
+	worker?: BackgroundWorker;
 }
-
-/** Truncate to an exact visible width, padding short lines with spaces. */
-function padLine(line: string, width: number): string {
-	return truncateToWidth(line, width, "…", true);
-}
+const clean = (text: string) => sanitizeBinaryOutput(stripTerminalSequences(text));
+const pad = (text: string, width: number) => truncateToWidth(text, width, "…", true);
 
 export class BackgroundTasksMenu implements Component, Focusable {
-	private readonly tui: MenuTui;
-	private readonly theme: Theme;
-	private readonly keybindings: Pick<KeybindingsManager, "matches" | "getKeys">;
-	private readonly host: BackgroundManagerHost;
-	private readonly onClose: () => void;
-	private readonly pollIntervalMs: number;
-
-	private view: "list" | "detail" = "list";
-	private tasks: BgTask[] = [];
-	private selectedTaskId: string | undefined;
-	private listScrollTop = 0;
-	private follow = true;
-	private tailOffsetLines = 0;
-	private tailCache: TailCache | undefined;
-	private killFeedback: string | undefined;
-	/** Task whose settle expires killFeedback; undefined = persists until the next key. */
-	private killFeedbackTaskId: string | undefined;
-	/** Last tick's render signature; unchanged means nothing visible moved. */
-	private lastSignature = "";
-	private pollTimer: ReturnType<typeof setInterval> | undefined;
-	private readBusy = false;
+	focused = false;
+	private readonly options: BackgroundTasksMenuOptions;
+	private rows: Row[] = [];
+	private selected?: string;
+	private pinned?: string;
+	private releasePin?: () => void;
+	private unsubscribe: () => void;
+	private timer: ReturnType<typeof setInterval>;
 	private disposed = false;
-	private _focused = false;
+	private detail = false;
+	private width: number;
+	private scroll = 0;
+	private follow = true;
+	private text = "";
+	private readKey?: string;
+	private readError?: string;
+	private finalRead = false;
+	private busy = false;
+	private feedback?: string;
+	private lastFrame = "";
 
 	constructor(options: BackgroundTasksMenuOptions) {
-		this.tui = options.tui;
-		this.theme = options.theme;
-		this.keybindings = options.keybindings;
-		this.host = options.host;
-		this.onClose = options.onClose;
-		this.pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
-
-		this.tasks = this.host.listTasks();
-		this.selectedTaskId = this.tasks[0]?.id;
+		this.options = options;
+		this.width = options.tui.terminal.columns;
+		this.sync();
+		this.unsubscribe = options.host.subscribe(() => {
+			this.sync();
+			// Coalesce high-frequency progress; the timer reads only visible output.
+		});
+		this.timer = setInterval(() => void this.tick(), options.pollIntervalMs ?? 1000);
+		this.timer.unref?.();
 		void this.tick();
-		this.pollTimer = setInterval(() => void this.tick(), this.pollIntervalMs);
-		this.pollTimer.unref?.();
 	}
-
-	get focused(): boolean {
-		return this._focused;
-	}
-
-	set focused(value: boolean) {
-		this._focused = value;
-	}
-
 	invalidate(): void {
-		// No cached render state; the poller drives refresh.
+		this.lastFrame = "";
 	}
-
 	dispose(): void {
+		if (this.disposed) return;
 		this.disposed = true;
-		if (this.pollTimer !== undefined) {
-			clearInterval(this.pollTimer);
-			this.pollTimer = undefined;
+		clearInterval(this.timer);
+		this.unsubscribe();
+		this.releasePin?.();
+	}
+	private current(): Row | undefined {
+		return this.rows.find((row) => row.key === this.selected);
+	}
+	private wide(): boolean {
+		return this.width >= 110;
+	}
+	private height(): number {
+		return Math.min(20, Math.max(4, this.options.tui.terminal.rows - 8));
+	}
+	private sync(): void {
+		if (this.disposed) return;
+		this.rows = this.options.host
+			.list()
+			.flatMap((task): Row[] => [
+				{ key: task.id, task },
+				...(task.projection?.workers ?? []).map((worker) => ({ key: `${task.id}/${worker.id}`, task, worker })),
+			]);
+		if (!this.current()) {
+			this.selected = this.rows[0]?.key;
+			this.follow = !this.current()?.worker;
+			this.scroll = 0;
+		}
+		const id = this.current()?.task.id;
+		if (id !== this.pinned) {
+			// Acquire before releasing so history eviction cannot steal the selection.
+			const release = id ? this.options.host.pin(id) : undefined;
+			const previous = this.releasePin;
+			this.pinned = id;
+			this.releasePin = release;
+			previous?.();
 		}
 	}
-
-	handleInput(data: string): void {
-		if (this.killFeedback !== undefined) {
-			this.killFeedback = undefined;
-			this.killFeedbackTaskId = undefined;
-			this.tui.requestRender();
-		}
-		if (this.keybindings.matches(data, "tui.select.cancel")) {
-			if (this.view === "detail") {
-				this.view = "list";
-				this.tui.requestRender();
-			} else {
-				this.onClose();
-			}
-			return;
-		}
-		if (this.keybindings.matches(data, "app.backgroundTasks.kill")) {
-			this.killSelected();
-			return;
-		}
-		if (this.view === "list") this.handleListInput(data);
-		else this.handleDetailInput(data);
-	}
-
-	private handleListInput(data: string): void {
-		if (this.keybindings.matches(data, "tui.select.up")) {
-			this.moveSelection(-1);
-			return;
-		}
-		if (this.keybindings.matches(data, "tui.select.down")) {
-			this.moveSelection(1);
-			return;
-		}
-		if (this.keybindings.matches(data, "tui.select.confirm")) {
-			if (!this.selectedTask()) return;
-			this.view = "detail";
-			this.resetFollow();
-			this.tui.requestRender();
-		}
-	}
-
-	private handleDetailInput(data: string): void {
-		if (this.keybindings.matches(data, "tui.select.pageUp")) {
-			this.scrollDetail(Math.max(1, this.detailBodyHeight()));
-			return;
-		}
-		if (this.keybindings.matches(data, "tui.select.pageDown")) {
-			if (!this.follow) this.scrollDetail(-Math.max(1, this.detailBodyHeight()));
-			return;
-		}
-		if (this.keybindings.matches(data, "tui.select.up")) {
-			this.scrollDetail(1);
-			return;
-		}
-		if (this.keybindings.matches(data, "tui.select.down")) {
-			if (!this.follow) this.scrollDetail(-1);
-		}
-	}
-
-	/** Scroll the detail viewport by `lines` (positive = back through history). */
-	private scrollDetail(lines: number): void {
-		if (lines > 0) {
-			const max = this.maxTailOffset();
-			if (max === 0) return; // Nothing above the viewport to scroll back to.
-			this.follow = false;
-			this.tailOffsetLines = Math.min(max, this.tailOffsetLines + lines);
-		} else {
-			if (this.follow) return;
-			this.tailOffsetLines = Math.max(0, this.tailOffsetLines + lines);
-			if (this.tailOffsetLines === 0) {
-				this.follow = true;
-				void this.refreshViewport();
-			}
-		}
-		this.tui.requestRender();
-	}
-
-	render(width: number): string[] {
-		const body = this.view === "list" ? this.renderList(width) : this.renderDetail(width);
-		const border = this.theme.fg("border", "─".repeat(Math.max(1, width)));
-		return [border, ...body, padLine(this.footerLine(), width), border];
-	}
-
-	// ── list view ──────────────────────────────────────────────────────────
-
-	/** Task rows the terminal can spare; short windows trade rows for the transcript. */
-	private listMaxVisible(): number {
-		return Math.min(LIST_MAX_VISIBLE, Math.max(LIST_MIN_VISIBLE, this.tui.terminal.rows - LIST_RESERVED_ROWS));
-	}
-
-	private renderList(width: number): string[] {
-		const lines: string[] = [];
-		const counts = this.countsLabel();
-		const title = counts ? `Background tasks — ${counts}` : "Background tasks";
-		lines.push(padLine(this.theme.fg("accent", this.theme.bold(title)), width));
-
-		if (this.tasks.length === 0) {
-			lines.push(padLine(this.theme.fg("muted", "  (no tasks)"), width));
-			return lines;
-		}
-
-		const selected = this.selectedTask();
-		const maxVisible = this.listMaxVisible();
-		const visible = this.tasks.slice(this.listScrollTop, this.listScrollTop + maxVisible);
-		let seenRunning = false;
-		for (const task of visible) {
-			// listTasks() orders running first, finished after: one separator at the boundary.
-			if (seenRunning && task.status !== "running") {
-				lines.push(padLine(this.theme.fg("muted", "  ── finished ──"), width));
-				seenRunning = false;
-			}
-			if (task.status === "running") seenRunning = true;
-			lines.push(this.renderTaskRow(task, task === selected, width));
-		}
-		if (this.tasks.length > maxVisible) {
-			const index = this.tasks.findIndex((task) => task.id === this.selectedTaskId);
-			lines.push(padLine(this.theme.fg("muted", `  (${index + 1}/${this.tasks.length})`), width));
-		}
-		return lines;
-	}
-
-	private renderTaskRow(task: BgTask, isSelected: boolean, width: number): string {
-		const duration = runtimeLabel(task);
-		const label = taskLabel(task);
-		if (isSelected) {
-			// Pad to full width before styling so the selection background spans the row.
-			const plain = padLine(`→ ${statusGlyph(task.status, task.stalled)} ${task.id} ${duration} ${label}`, width);
-			return this.theme.bg("selectedBg", this.theme.fg("text", plain));
-		}
-		const glyph = this.theme.fg(statusColor(task.status, task.stalled), statusGlyph(task.status, task.stalled));
-		const id = this.theme.fg("accent", task.id);
-		const rest = this.theme.fg("muted", `${duration} ${label}`);
-		return padLine(`  ${glyph} ${id} ${rest}`, width);
-	}
-
-	private countsLabel(): string {
-		let running = 0;
-		let stalled = 0;
-		for (const task of this.tasks) {
-			if (task.status === "running") running++;
-			if (task.stalled) stalled++;
-		}
-		return formatTaskCounts({ running, stalled, total: this.tasks.length }) ?? "";
-	}
-
-	// ── detail view ────────────────────────────────────────────────────────
-
-	private renderDetail(width: number): string[] {
-		const task = this.selectedTask();
-		const lines: string[] = [padLine(this.detailHeader(task), width)];
-		const height = this.detailBodyHeight();
-		const cache = task && this.tailCache?.taskId === task.id ? this.tailCache : undefined;
-		if (cache?.error) {
-			lines.push(padLine(this.theme.fg("error", `Cannot read output: ${cache.error}`), width));
-			for (let row = 1; row < height; row++) lines.push(padLine("", width));
-			return lines;
-		}
-		const content = cache?.lines ?? [];
-		const fromEnd = this.follow ? 0 : this.tailOffsetLines;
-		const start = content.length - height - fromEnd;
-		for (let row = 0; row < height; row++) {
-			const line = content[start + row];
-			lines.push(line === undefined ? padLine("", width) : padLine(this.theme.fg("toolOutput", line), width));
-		}
-		return lines;
-	}
-
-	private detailHeader(task: BgTask | undefined): string {
-		if (!task) return this.theme.fg("muted", "(no task selected)");
-		const duration = runtimeLabel(task);
-		const exit = exitSuffix(task.exitCode, " ");
-		const resumeLabel = keyLabel("tui.select.pageDown", { keybindings: this.keybindings });
-		const paused = this.follow ? "" : resumeLabel ? ` — paused (${resumeLabel} to follow)` : " — paused";
-		const fileName = fileNameOf(task.outputPath);
-		const glyph = this.theme.fg(statusColor(task.status, task.stalled), statusGlyph(task.status, task.stalled));
-		const statusLabel = task.stalled ? "running, waiting for input" : task.status;
-		const header = `${task.id} · ${statusLabel}${exit} · ${duration} · ${formatSize(task.outputBytes)} · ${fileName}${paused}`;
-		return `${glyph} ${this.theme.fg("muted", header)}`;
-	}
-
-	private detailBodyHeight(): number {
-		// Inline component: keep the chat transcript visible above the menu.
-		return Math.min(20, Math.max(4, this.tui.terminal.rows - 8));
-	}
-
-	// ── shared behavior ────────────────────────────────────────────────────
-
-	private footerLine(): string {
-		if (this.killFeedback) return this.theme.fg("warning", this.killFeedback);
-		const opts = { keybindings: this.keybindings };
-		const parts =
-			this.view === "list"
-				? [
-						`${keyLabel("tui.select.up", opts)}/${keyLabel("tui.select.down", opts)} select`,
-						`${keyLabel("tui.select.confirm", opts)} output`,
-						`${keyLabel("app.backgroundTasks.kill", opts)} kill`,
-						`${keyLabel("tui.select.cancel", opts)} close`,
-					]
-				: [
-						`${keyLabel("tui.select.up", opts)}/${keyLabel("tui.select.down", opts)} scroll`,
-						`${keyLabel("tui.select.pageUp", opts)}/${keyLabel("tui.select.pageDown", opts)} page`,
-						`${keyLabel("app.backgroundTasks.kill", opts)} kill`,
-						`${keyLabel("tui.select.cancel", opts)} back`,
-					];
-		return this.theme.fg("dim", parts.join(" · "));
-	}
-
-	private selectedTask(): BgTask | undefined {
-		return this.tasks.find((task) => task.id === this.selectedTaskId);
-	}
-
-	private moveSelection(offset: -1 | 1): void {
-		if (this.tasks.length === 0) return;
-		const current = this.tasks.findIndex((task) => task.id === this.selectedTaskId);
-		const next = (current + offset + this.tasks.length) % this.tasks.length;
-		const task = this.tasks[next];
-		if (!task) return;
-		this.selectedTaskId = task.id;
-		if (next < this.listScrollTop) this.listScrollTop = next;
-		if (next >= this.listScrollTop + this.listMaxVisible()) {
-			this.listScrollTop = next - this.listMaxVisible() + 1;
-		}
-		this.resetFollow();
-		this.tui.requestRender();
-	}
-
-	private resetFollow(): void {
-		this.follow = true;
-		this.tailOffsetLines = 0;
-		this.tailCache = undefined;
-		void this.refreshViewport();
-	}
-
-	private currentLines(): string[] {
-		const task = this.selectedTask();
-		const cache = this.tailCache;
-		return task && cache && cache.taskId === task.id ? cache.lines : [];
-	}
-
-	private maxTailOffset(): number {
-		return Math.max(0, this.currentLines().length - this.detailBodyHeight());
-	}
-
-	private killSelected(): void {
-		const task = this.selectedTask();
-		if (!task) return;
-		if (task.status !== "running") {
-			this.killFeedback = `${task.id} is not running`;
-			this.tui.requestRender();
-			return;
-		}
-		this.host.killTask(task.id);
-		// Terminal state lands on the next poll; the feedback expires with it (tick).
-		this.killFeedback = `stopping ${task.id}…`;
-		this.killFeedbackTaskId = task.id;
-		this.tui.requestRender();
-	}
-
 	private async tick(): Promise<void> {
 		if (this.disposed) return;
-		this.tasks = this.host.listTasks();
-		if (!this.selectedTask() && this.tasks[0]) this.selectedTaskId = this.tasks[0].id;
-		this.expireKillFeedback();
-		// A pending re-read counts as a change: refreshViewport may skip this tick
-		// (readBusy), and the signature alone would let that retry be dropped.
-		const needsRead = this.view === "detail" && this.follow && this.detailOutputChanged();
-		if (!needsRead && this.renderSignature() === this.lastSignature) return; // Nothing visible changed.
-		if (needsRead) await this.refreshViewport();
-		this.lastSignature = this.renderSignature();
-		this.tui.requestRender();
-	}
-
-	/** Drop "stopping" feedback once its task has settled. */
-	private expireKillFeedback(): void {
-		if (this.killFeedbackTaskId === undefined) return;
-		const task = this.tasks.find((candidate) => candidate.id === this.killFeedbackTaskId);
-		if (!task || task.status !== "running") {
-			this.killFeedback = undefined;
-			this.killFeedbackTaskId = undefined;
+		this.sync();
+		if (this.wide() || this.detail) await this.refresh();
+		if (this.disposed) return;
+		const frame = this.render(this.width).join("\n");
+		if (frame !== this.lastFrame) {
+			this.lastFrame = frame;
+			this.options.tui.requestRender();
 		}
 	}
-
-	/** Everything the rendered output depends on; equal signatures need no redraw. */
-	private renderSignature(): string {
-		const parts = [
-			this.view,
-			this.selectedTaskId ?? "",
-			String(this.listScrollTop),
-			String(this.follow),
-			String(this.tailOffsetLines),
-			this.killFeedback ?? "",
-			this.tailCache
-				? `${this.tailCache.taskId}:${this.tailCache.lines.length}:${this.tailCache.totalBytes}:${this.tailCache.error ?? ""}:${String(this.tailCache.settledRead ?? false)}`
-				: "",
-		];
-		for (const task of this.tasks) {
-			const duration = runtimeLabel(task);
-			parts.push(
-				`${task.id}:${task.status}:${String(task.stalled)}:${task.outputBytes}:${task.exitCode ?? ""}:${duration}`,
-			);
-		}
-		return parts.join("|");
-	}
-
-	/** True when the detail viewport must re-read the output file this tick. */
-	private detailOutputChanged(): boolean {
-		const task = this.selectedTask();
-		if (!task) return false;
-		const cache = this.tailCache;
-		if (!cache || cache.taskId !== task.id) return true;
-		if (cache.error !== undefined) return true; // Keep retrying; failed reads are cheap.
-		if (task.status !== "running") {
-			// Terminal task: the file is final — read it once, then never again.
-			return cache.settledRead !== true;
-		}
-		return cache.totalBytes !== task.outputBytes;
-	}
-
-	private async refreshViewport(): Promise<void> {
-		if (this.readBusy) return;
-		const task = this.selectedTask();
-		if (!task) return;
-		this.readBusy = true;
+	private async refresh(): Promise<void> {
+		const row = this.current();
+		if (!row || row.worker || this.busy || (this.readKey === row.key && this.finalRead)) return;
+		this.busy = true;
 		try {
-			const slice = await this.host.readSlice(task.outputPath, { mode: "tail", maxBytes: VIEW_TAIL_BYTES });
-			if (this.disposed || this.selectedTaskId !== task.id || !this.follow) return;
-			this.tailCache = {
-				taskId: task.id,
-				lines: toViewLines(slice.text),
-				totalBytes: slice.totalBytes,
-				settledRead: task.status !== "running",
-			};
+			const slice = await this.options.host.read(row.task.id, { mode: "tail", bytes: 128 * 1024 });
+			if (this.disposed || this.selected !== row.key) return;
+			this.text = clean(slice.text).split("\n").slice(-2000).join("\n");
+			this.readKey = row.key;
+			this.readError = slice.readError ? clean(slice.readError).slice(0, 4096) : undefined;
+			this.finalRead = isBackgroundTerminal(slice.task.status);
 		} catch (error) {
-			if (this.disposed || this.selectedTaskId !== task.id) return;
-			this.tailCache = {
-				taskId: task.id,
-				lines: [],
-				totalBytes: task.outputBytes,
-				error: error instanceof Error ? error.message : String(error),
-			};
+			if (!this.disposed && this.selected === row.key) {
+				this.text = "";
+				this.readError = `Cannot read output: ${clean(String(error)).slice(0, 1000)}`;
+				this.readKey = row.key;
+			}
 		} finally {
-			this.readBusy = false;
+			this.busy = false;
 		}
 	}
-}
-
-function toViewLines(text: string): string[] {
-	// Strip ANSI first: sanitize would remove the escape bytes alone, leaving
-	// orphaned "[31m" fragments that strip can no longer see.
-	const lines = sanitizeBinaryOutput(stripTerminalSequences(text)).split("\n");
-	// Drop the trailing empty line produced by a final newline, then bound the
-	// window: a 128KB slice of one-byte lines must never become 128k rows.
-	while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-	return lines.slice(-MAX_VIEW_LINES);
+	handleInput(data: string): void {
+		if (this.disposed) return;
+		const kb = this.options.keybindings;
+		this.feedback = undefined;
+		if (kb.matches(data, "tui.select.cancel")) {
+			if (this.detail) this.detail = false;
+			else {
+				this.dispose();
+				this.options.onClose();
+				return;
+			}
+		} else if (kb.matches(data, "app.backgroundTasks.kill")) {
+			const row = this.current();
+			if (row) {
+				try {
+					this.feedback = this.options.host.kill(row.task.id)
+						? `stopping ${row.task.id}… (whole group)`
+						: `${row.task.id}: no new cancellation requested`;
+				} catch (error) {
+					this.feedback = clean(String(error));
+				}
+			}
+		} else if (kb.matches(data, "tui.select.confirm")) {
+			this.detail = true;
+			void this.tick();
+		} else if (kb.matches(data, "tui.select.pageUp")) {
+			this.scrollDetail(-this.height());
+		} else if (kb.matches(data, "tui.select.pageDown")) {
+			this.scrollDetail(this.height());
+		} else {
+			const delta = kb.matches(data, "tui.select.up") ? -1 : kb.matches(data, "tui.select.down") ? 1 : 0;
+			if (delta && this.detail) this.scrollDetail(delta);
+			else if (delta && this.rows.length) {
+				const index = this.rows.findIndex((row) => row.key === this.selected);
+				this.selected = this.rows[(index + delta + this.rows.length) % this.rows.length]?.key;
+				this.scroll = 0;
+				this.follow = !this.current()?.worker;
+				this.text = "";
+				this.readKey = undefined;
+				this.readError = undefined;
+				this.finalRead = false;
+				this.sync();
+				void this.tick();
+			}
+		}
+		this.options.tui.requestRender();
+	}
+	private wrapDetail(text: string): string {
+		const width = this.wide() ? this.width - Math.floor(this.width * 0.4) - 3 : this.width;
+		return wrapTextWithAnsi(clean(text), Math.max(1, width)).slice(0, 2000).join("\n");
+	}
+	private detailLines(): string[] {
+		const row = this.current();
+		if (!row) return ["No managed executions."];
+		const { task, worker } = row;
+		if (worker)
+			return clean(
+				[
+					`${worker.label} · ${worker.status} · group ${task.id}`,
+					`Model: ${worker.model ?? "—"} · Usage: ${worker.usage ?? "—"}`,
+					"",
+					"Prompt",
+					this.wrapDetail(worker.prompt),
+					"",
+					"Activity",
+					this.wrapDetail(worker.activity || "—"),
+					"",
+					"Outcome",
+					this.wrapDetail(worker.outcome || "Still running…"),
+				].join("\n"),
+			)
+				.split("\n")
+				.slice(0, 2000);
+		return clean(
+			[
+				`${task.status} · ${task.mode} · ${runtimeLabel(task)} · ${task.id}`,
+				this.wrapDetail(task.command ?? task.title),
+				task.cwd ? this.wrapDetail(`cwd: ${task.cwd}`) : "",
+				task.outputPath ? this.wrapDetail(`Output: ${task.outputPath}`) : "",
+				...this.diagnostics().map((text) => this.wrapDetail(text)),
+				this.readKey === row.key ? this.text : (task.projection?.text ?? "Loading…"),
+			].join("\n"),
+		).split("\n");
+	}
+	private diagnostics(): string[] {
+		const row = this.current();
+		if (!row || row.worker) return [];
+		return [
+			row.task.error ? `Task error: ${row.task.error}` : "",
+			this.readKey === row.key && this.readError ? `Output read error: ${this.readError}` : "",
+		].filter(Boolean);
+	}
+	private scrollDetail(delta: number): void {
+		const max = Math.max(0, this.detailLines().length - this.height() + this.diagnostics().length);
+		this.scroll = Math.min(max, Math.max(0, (this.follow ? max : this.scroll) + delta));
+		this.follow = this.scroll === max && !this.current()?.worker;
+	}
+	render(width: number): string[] {
+		if (width < 1) return [];
+		const wasWide = this.wide();
+		this.width = width;
+		if (!wasWide && this.wide()) void this.tick();
+		const { theme, keybindings } = this.options;
+		const height = this.height();
+		const listWidth = this.wide() ? Math.floor(width * 0.4) : width;
+		const detailWidth = this.wide() ? width - listWidth - 3 : width;
+		const index = Math.max(
+			0,
+			this.rows.findIndex((row) => row.key === this.selected),
+		);
+		const first = Math.max(0, index - height + 1);
+		const list = this.rows.slice(first, first + height).map((row) => {
+			const status = row.worker?.status ?? row.task.status;
+			const label = row.worker
+				? `  ${row.worker.label} · ${status}`
+				: `${statusGlyph(row.task.status)} ${row.task.id.slice(0, row.task.kind.length + 9)} · ${row.task.status} (${row.task.mode}) · ${row.task.title}`;
+			const text = pad(`${row.key === this.selected ? "→" : " "} ${clean(label)}`, listWidth);
+			return row.key === this.selected
+				? theme.bg("selectedBg", theme.fg("text", text))
+				: theme.fg(statusColor(row.task.status), text);
+		});
+		if (!list.length) list.push(pad("No managed executions.", listWidth));
+		const [header = "", ...content] = this.detailLines();
+		// Diagnostics stay visible even while following a long output tail. Their full
+		// wrapped text also remains in the scrollable metadata above the raw log.
+		const diagnostics = this.diagnostics().map((text) => clean(text).replace(/\s+/g, " "));
+		const contentHeight = Math.max(1, height - 1 - diagnostics.length);
+		const max = Math.max(0, content.length - contentHeight);
+		const start = this.follow ? max : Math.min(this.scroll, max);
+		const detail = [header, ...diagnostics, ...content.slice(start, start + contentHeight)].map((line) =>
+			theme.fg("toolOutput", pad(line, detailWidth)),
+		);
+		const body = Array.from({ length: height }, (_, i) =>
+			this.wide()
+				? `${list[i] ?? pad("", listWidth)} ${theme.fg("border", "│")} ${detail[i] ?? pad("", detailWidth)}`
+				: ((this.detail ? detail[i] : list[i]) ?? pad("", width)),
+		);
+		const hint = (id: Parameters<typeof keybindings.getKeys>[0]) => keyLabel(id, { keybindings });
+		const footer =
+			this.feedback ??
+			`${hint("tui.select.up")}/${hint("tui.select.down")} ${this.detail ? "scroll" : "select"} · ${hint("tui.select.confirm")} detail · ${hint("tui.select.pageUp")}/${hint("tui.select.pageDown")} page · ${hint("app.backgroundTasks.kill")} stop group · ${hint("tui.select.cancel")} ${this.detail ? "back" : "close"}${!this.follow ? " · paused" : ""}`;
+		return [
+			pad(theme.fg("accent", `Background tasks (${this.rows.length ? index + 1 : 0}/${this.rows.length})`), width),
+			...body,
+			pad(theme.fg("muted", footer), width),
+		];
+	}
 }

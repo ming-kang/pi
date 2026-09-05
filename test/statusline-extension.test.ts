@@ -134,6 +134,29 @@ describe("statusline usage", () => {
 		footer.dispose();
 	});
 
+	it("refreshes after a ledger append and branch change, counting duplicates once without changing parent CH or CTX", async () => {
+		const entries = usageEntries();
+		const footer = await createFooter(entries);
+		expect(footer.render(200)[1]).toContain("$1.000");
+		const record = entry({
+			type: "custom",
+			id: "ledger",
+			parentId: "branch",
+			timestamp: "2026-01-01T00:00:04.000Z",
+			customType: "background-usage",
+			data: { version: 1, taskId: "group", usage: usage(500, 100, 900, 0, 2) },
+		});
+		entries.push(record);
+		expect(footer.render(200)[1]).toContain("↑720 ↓135 R968 W31 CH31.3% $3.000");
+		expect(footer.render(200)[1]).toContain("CTX 10.0%/1.0k");
+		entries.push(entry({ ...record, id: "duplicate", parentId: "ledger" }));
+		expect(footer.render(200)[1]).toContain("$3.000");
+		entries.splice(4);
+		footer.invalidate();
+		expect(footer.render(200)[1]).toContain("↑220 ↓35 R68 W31 CH31.3% $1.000");
+		footer.dispose();
+	});
+
 	it.each([12, 20, 40, 80, 120])("keeps both footer lines width-safe at %i columns", async (width) => {
 		const footer = await createFooter(
 			usageEntries(),

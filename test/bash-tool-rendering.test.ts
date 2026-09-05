@@ -1,6 +1,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
+import { createPowerShellToolDefinition } from "../src/core/tools/powershell.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -155,6 +156,45 @@ describe("bash tool call rendering", () => {
 		expect(completed).not.toContain("Running");
 		expect(completed).not.toContain("Took");
 	});
+
+	test.each([createBashToolDefinition, createPowerShellToolDefinition])(
+		"renders handoff as settled native output without a stale timer (%#)",
+		(factory) => {
+			vi.useFakeTimers();
+			const tool = factory(process.cwd(), { operations: { exec: async () => ({ exitCode: 0 }) } });
+			const component = new ToolExecutionComponent(
+				tool.name,
+				"handoff",
+				{ command: "work", background: true },
+				{},
+				tool,
+				{ requestRender: () => {} } as never,
+				process.cwd(),
+			);
+			component.setArgsComplete();
+			component.markExecutionStarted();
+			component.updateResult({ content: [], isError: false }, true);
+			vi.advanceTimersByTime(3000);
+			if (tool.name === "bash") expect(renderCall(component, 120)).toContain("Running");
+			component.updateResult(
+				{
+					content: [{ type: "text", text: "Command running in background" }],
+					details: { background: { kind: "background", taskId: "bash-task" }, fullOutputPath: "output.log" },
+					isError: false,
+				},
+				false,
+			);
+			vi.advanceTimersByTime(5000);
+			for (const expanded of [false, true]) {
+				component.setExpanded(expanded);
+				const rendered = renderCall(component, 120);
+				expect(rendered).toContain("Moved to background · bash-task");
+				expect(rendered).toContain("Full output: output.log");
+				expect(rendered).not.toContain("Running");
+				expect(rendered).not.toContain("exit code");
+			}
+		},
+	);
 
 	test("preserves empty and invalid argument fallbacks", () => {
 		const empty = createRenderer("");

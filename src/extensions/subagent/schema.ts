@@ -31,6 +31,10 @@ export const TaskSchema = Type.Object(
 
 export const SubagentParamsSchema = Type.Object(
 	{
+		background: nullable(
+			Type.Boolean(),
+			"Run the entire invocation in the background; false, null or omit to wait in the foreground",
+		),
 		tasks: Type.Array(TaskSchema, {
 			minItems: 1,
 			maxItems: MAX_TASKS,

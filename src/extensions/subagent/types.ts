@@ -85,6 +85,8 @@ export interface SubagentRunDetails {
 }
 
 export interface SubagentDetails {
+	/** Settled submission snapshot; live state belongs to Background. */
+	background?: { id: string; submittedAt: number };
 	status: SubagentBatchStatus;
 	runs: SubagentRunDetails[];
 	startedAt: number;

@@ -1,9 +1,4 @@
-/**
- * background — string helpers with no dependencies of their own.
- *
- * Kept apart from task-view.ts so registry.ts can use them without importing a
- * module that type-imports registry.ts back. Nothing here knows about BgTask.
- */
+/** Small presentation-only string helpers, including historical transcript formatting. */
 
 /** First non-empty line of a command, trimmed — for one-line task labels. */
 export function firstCommandLine(command: string): string {

@@ -14,7 +14,10 @@
  * that has to know.
  */
 
-import type { BgTaskStatus } from "./registry.ts";
+import type { BackgroundKind, BackgroundStatus } from "../../core/background/types.ts";
+
+/** Historical transcripts used killed rather than cancelled. */
+export type BgTaskStatus = BackgroundStatus | "killed";
 
 export interface BgCreateDetails {
 	action: "create";
@@ -25,6 +28,8 @@ export interface BgCreateDetails {
 }
 
 export interface BgReadDetails {
+	kind?: BackgroundKind;
+	status?: BackgroundStatus;
 	action: "read";
 	taskId: string;
 	mode: "head" | "tail";
@@ -34,6 +39,9 @@ export interface BgReadDetails {
 }
 
 export interface BgWaitDetails {
+	/** Host acknowledges this terminal outcome only after its tool result is persisted. */
+	backgroundTaskId?: string;
+	kind?: BackgroundKind;
 	action: "wait";
 	taskId: string;
 	/** True when the wait window expired and the task is still running. */
@@ -48,6 +56,8 @@ export interface BgWaitDetails {
 }
 
 export interface BgKillDetails {
+	requested?: boolean;
+	status?: BackgroundStatus;
 	action: "kill";
 	taskId: string;
 	command: string;

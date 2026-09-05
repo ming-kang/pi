@@ -22,6 +22,7 @@ See the [bundled features overview](docs/bundled/README.md) for the complete shi
 
 - [Using Pi](docs/usage.md) covers interactive commands, context files, CLI usage, and the `--` end-of-options delimiter.
 - [Windows setup](docs/windows.md) covers Git Bash and the optional PowerShell tool.
+- [Background tasks](docs/bundled/extensions/background.md) covers native shell and whole-Subagent background execution, Ctrl+B handoff, and `/bg` management in interactive mode.
 - [Sessions](docs/sessions.md) and [Compaction](docs/compaction.md) cover saved work and context management.
 - [Extensions](docs/extensions.md), [Skills](docs/skills.md), [Prompt templates](docs/prompt-templates.md), [Themes](docs/themes.md), and [Pi packages](docs/packages.md) cover customization.
 - [SDK](docs/sdk.md), [JSON mode](docs/json.md), and [RPC mode](docs/rpc.md) cover programmatic use.

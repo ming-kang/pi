@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { BackgroundService } from "../src/core/background/service.ts";
+import type { BackgroundControl } from "../src/core/background/types.ts";
 import type {
 	AgentToolResult,
 	ExtensionAPI,
@@ -11,596 +12,259 @@ import type {
 	ToolDefinition,
 	ToolRenderContext,
 } from "../src/core/extensions/types.ts";
+import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type { CustomMessage } from "../src/core/messages.ts";
-import type { BashOperations } from "../src/core/tools/bash.ts";
-import { createBackgroundExtension, prependCommandPrefix } from "../src/extensions/background/index.ts";
-import { buildNotificationContent, toNotificationDetails } from "../src/extensions/background/notify.ts";
-import type { BgNotification, BgTask } from "../src/extensions/background/registry.ts";
+import { runKill, runList, runRead, runWait } from "../src/extensions/background/actions.ts";
+import { createBackgroundExtension } from "../src/extensions/background/index.ts";
 import {
 	type BgRenderState,
 	renderBackgroundNotification,
 	renderBgCall,
 	renderBgResult,
+	scheduleWaitRefresh,
 } from "../src/extensions/background/render.ts";
+import type { bgSchema } from "../src/extensions/background/schema.ts";
 import { formatStatusline } from "../src/extensions/background/task-view.ts";
-import type { BgNotificationDetails, BgWaitDetails } from "../src/extensions/background/types.ts";
+import type { BgDetails, BgNotificationDetails } from "../src/extensions/background/types.ts";
 import type { Theme } from "../src/modes/interactive/theme/theme.ts";
 
 function textOf(result: AgentToolResult<unknown>): string {
-	const first = result.content[0];
-	return first?.type === "text" ? first.text : "";
+	return result.content
+		.filter((part) => part.type === "text")
+		.map((part) => part.text)
+		.join("\n");
 }
-
-interface FakeExecCall {
-	command: string;
-	cwd: string;
-	env: NodeJS.ProcessEnv | undefined;
-	signal: AbortSignal | undefined;
-	emitData: (text: string) => void;
-	finish: (exitCode: number | null) => void;
-	fail: (error: Error) => void;
-}
-
-function createFakeOperations(): { operations: BashOperations; calls: FakeExecCall[] } {
-	const calls: FakeExecCall[] = [];
-	const operations: BashOperations = {
-		exec: (command, cwd, options) =>
-			new Promise((resolve, reject) => {
-				options.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
-				calls.push({
-					command,
-					cwd,
-					env: options.env,
-					signal: options.signal,
-					emitData: (text) => options.onData(Buffer.from(text)),
-					finish: (exitCode) => resolve({ exitCode }),
-					fail: (error) => reject(error),
-				});
-			}),
-	};
-	return { operations, calls };
-}
-
-interface FakeSentMessage {
-	message: { customType: string; content: string; display: boolean; details: unknown };
-	options: { triggerTurn?: boolean; deliverAs?: string } | undefined;
-}
-
-interface Harness {
-	tools: Map<string, ToolDefinition<any, any, any>>;
-	handlers: Map<string, (event: unknown, ctx: ExtensionContext) => Promise<unknown> | unknown>;
-	commands: Map<string, { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }>;
-	sent: FakeSentMessage[];
-	calls: FakeExecCall[];
-	ctx: ExtensionContext;
-	statusUpdates: (string | undefined)[];
-	notifications: string[];
-	customCalls: { factory: unknown; options: unknown }[];
-	startSession: () => Promise<void>;
-	shutdownSession: () => Promise<void>;
-	execute: (tool: string, params: unknown, signal?: AbortSignal) => Promise<AgentToolResult<unknown>>;
-}
-
-const tempDirs: string[] = [];
-const harnesses: Harness[] = [];
-
-function createHarness(stall?: { pollIntervalMs: number; thresholdMs: number }): Harness {
-	const outputDir = mkdtempSync(join(tmpdir(), "pi-bg-ext-"));
-	tempDirs.push(outputDir);
-	const { operations, calls } = createFakeOperations();
-
-	const tools = new Map<string, ToolDefinition<any, any, any>>();
-	const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => Promise<unknown> | unknown>();
-	const commands = new Map<string, { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }>();
-	const sent: FakeSentMessage[] = [];
-	const statusUpdates: (string | undefined)[] = [];
-	const notifications: string[] = [];
-	const customCalls: { factory: unknown; options: unknown }[] = [];
-
-	const pi = {
-		registerTool: (tool: ToolDefinition<any, any, any>) => tools.set(tool.name, tool),
-		registerCommand: (
-			name: string,
-			options: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> },
-		) => commands.set(name, { handler: options.handler }),
-		registerMessageRenderer: () => {},
-		on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => Promise<unknown> | unknown) =>
-			handlers.set(event, handler),
-		sendMessage: (message: FakeSentMessage["message"], options: FakeSentMessage["options"]) => {
-			sent.push({ message, options });
-		},
-	} as unknown as ExtensionAPI;
-
-	const ctx = {
-		mode: "tui",
-		hasUI: true,
-		cwd: outputDir,
-		isProjectTrusted: () => true,
-		// resolveSpawnContext reads these for the PI_* environment injection.
-		sessionManager: { getSessionId: () => "sess-test", getSessionFile: () => undefined },
-		model: { provider: "test-provider", id: "test-model" },
-		thinkingLevel: undefined,
-		ui: {
-			setStatus: (_key: string, text: string | undefined) => {
-				statusUpdates.push(text);
-			},
-			notify: (message: string) => {
-				notifications.push(message);
-			},
-			custom: (factory: unknown, options?: unknown) => {
-				customCalls.push({ factory, options });
-				return Promise.resolve(undefined);
-			},
-		},
-	} as unknown as ExtensionContext;
-
-	createBackgroundExtension({ operations, outputDir, stall: stall ?? false })(pi);
-
-	const harness: Harness = {
-		tools,
-		handlers,
-		commands,
-		sent,
-		calls,
-		ctx,
-		statusUpdates,
-		notifications,
-		customCalls,
-		startSession: async () => {
-			await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-		},
-		shutdownSession: async () => {
-			await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, ctx);
-		},
-		execute: async (tool, params, signal) => {
-			const definition = tools.get(tool);
-			if (!definition) throw new Error(`tool not registered: ${tool}`);
-			return definition.execute("call-1", params, signal, undefined, ctx);
-		},
-	};
-	harnesses.push(harness);
-	return harness;
-}
-
+const services: BackgroundService[] = [];
 afterEach(async () => {
-	for (const harness of harnesses.splice(0)) {
-		await harness.shutdownSession();
-	}
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
+	for (const service of services.splice(0)) await service.shutdown();
+	vi.useRealTimers();
 });
-
-describe("background extension", () => {
-	it("registers the single bg tool and the /bg command", () => {
-		const harness = createHarness();
-		expect([...harness.tools.keys()]).toEqual(["bg"]);
-		expect(harness.commands.has("bg")).toBe(true);
-		const tool = harness.tools.get("bg");
-		expect(tool?.description).toContain("create:");
-		expect(tool?.description).toContain("wait:");
-		expect(tool?.description).toContain("Do NOT append '&'");
-		expect(tool?.promptGuidelines?.[1]).toContain("Never wait");
-		expect((tool?.parameters as { type?: string }).type).toBe("object");
+function running(kind: "bash" | "subagent" = "bash") {
+	const service = new BackgroundService({ enabled: true });
+	services.push(service);
+	let finish!: () => void;
+	let control!: BackgroundControl<undefined>;
+	const done = new Promise<void>((resolve) => {
+		finish = resolve;
 	});
-
-	it("starts a task immediately and ignores the turn abort signal", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		const turnAbort = new AbortController();
-		const result = await harness.execute("bg", { action: "create", command: "npm run build" }, turnAbort.signal);
-		const text = textOf(result);
-		expect(text).toMatch(/Started background task bg-[0-9a-f]{6}/);
-		expect(text).toContain("Output file:");
-		expect(text).toContain("do NOT poll");
-
-		// Aborting the turn must not abort the background task.
-		turnAbort.abort();
-		expect(harness.calls[0]?.signal?.aborted).toBe(false);
-
-		harness.calls[0]?.finish(0);
-		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
+	const outcome = service.execute({
+		kind,
+		title: "build",
+		toolCallId: "call",
+		background: true,
+		async run(ctx) {
+			control = ctx;
+			ctx.accept();
+			ctx.publish({ content: [{ type: "text", text: "progress" }], details: undefined });
+			await done;
+			return { result: { content: [{ type: "text", text: "final report" }], details: undefined } };
+		},
 	});
-
-	it("notifies with an escaped XML payload and embedded tail on completion", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		await harness.execute("bg", { action: "create", command: 'echo "a<b" && true' });
-		harness.calls[0]?.emitData("value is a<b\ndone\n");
-		harness.calls[0]?.finish(0);
-
-		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
-		const sent = harness.sent[0];
-		expect(sent?.options).toEqual({ deliverAs: "steer", triggerTurn: true });
-		expect(sent?.message.customType).toBe("background-task");
-		expect(sent?.message.display).toBe(true);
-
-		const content = sent?.message.content ?? "";
-		expect(content).toContain('status="completed"');
-		expect(content).toContain('exitCode="0"');
-		expect(content).toContain("<command>echo &quot;a&lt;b&quot; &amp;&amp; true</command>");
-		expect(content).toContain("value is a&lt;b\ndone");
-		expect(content).toContain("<output-file>");
-
-		const details = sent?.message.details as { taskId: string; status: string; tailText: string };
-		expect(details.status).toBe("completed");
-		expect(details.tailText).toBe("value is a<b\ndone\n");
+	return {
+		service,
+		outcome,
+		finish,
+		get control() {
+			return control;
+		},
+	};
+}
+describe("public Background management", () => {
+	it("registers management only, with native presentation", () => {
+		let tool: ToolDefinition<typeof bgSchema, BgDetails, BgRenderState> | undefined;
+		const pi = {
+			on: vi.fn(),
+			registerTool: (value: typeof tool) => {
+				tool = value;
+			},
+			registerMessageRenderer: vi.fn(),
+			registerCommand: vi.fn(),
+		} as unknown as ExtensionAPI;
+		createBackgroundExtension()(pi);
+		expect(tool?.name).toBe("bg");
+		expect(tool?.renderShell).toBeUndefined();
+		expect(JSON.stringify(tool?.parameters)).not.toContain('"create"');
+		expect(JSON.stringify(tool?.parameters)).not.toContain('"command"');
 	});
-
-	it("strips XML-illegal characters from command and error fields", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		// Lone surrogate (U+D800), non-characters (U+FFFE/U+FFFF), C0 control (U+0001).
-		await harness.execute("bg", { action: "create", command: "x\uD800y\uFFFEz\uFFFFw\u0001v" });
-		harness.calls[0]?.fail(new Error("boom\u0007"));
-
-		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
-		const content = harness.sent[0]?.message.content ?? "";
-		expect(content).toContain("<command>xyzwv</command>");
-		expect(content).toContain("<error>boom</error>");
-		expect(content).not.toMatch(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/);
-		expect(content).not.toMatch(/[\ud800-\udfff\ufffe\uffff]/);
-	});
-
-	it("keeps XML-legal whitespace in command fields and filters the output tail too", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		await harness.execute("bg", { action: "create", command: "echo\tline" });
-		harness.calls[0]?.emitData("out\uFFFEput\n");
-		harness.calls[0]?.finish(0);
-
-		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
-		const content = harness.sent[0]?.message.content ?? "";
-		expect(content).toContain("<command>echo\tline</command>");
-		expect(content).not.toMatch(/[\ud800-\udfff\ufffe\uffff]/);
-		// The tail is part of the same XML document and goes through the same filter.
-		expect(content).toContain("output");
-		expect(content).not.toContain("\uFFFE");
-	});
-
-	it("tracks the footer status through the task lifecycle and shutdown", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-		expect(harness.statusUpdates.at(-1)).toBeUndefined();
-
-		await harness.execute("bg", { action: "create", command: "sleep 5" });
-		expect(harness.statusUpdates.at(-1)).toBe("bg 1 running");
-
-		harness.calls[0]?.finish(0);
-		await vi.waitFor(() => expect(harness.statusUpdates.at(-1)).toBe("bg 1 finished"));
-
-		await harness.shutdownSession();
-		expect(harness.statusUpdates.at(-1)).toBeUndefined();
-	});
-
-	it("reads logs by prefix with clamped bounds and mode selection", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		const started = await harness.execute("bg", { action: "create", command: "npm test" });
-		const taskId = /bg-[0-9a-f]{6}/.exec(textOf(started))?.[0] ?? "";
-		harness.calls[0]?.emitData(`${"x".repeat(600)}\nhello tail\n`);
-
-		// The write stream flushes asynchronously; poll until the tail is visible.
-		await vi.waitFor(async () => {
-			const tail = await harness.execute("bg", { action: "read", taskId: taskId.slice(0, 6), bytes: 300 });
-			const tailText = textOf(tail);
-			expect(tailText).toContain("hello tail");
-			expect(tailText).toContain(`task ${taskId} running`);
-			expect(tailText).toContain("still running");
-			expect(tailText).toContain("full output:");
-		});
-
-		const head = await harness.execute("bg", { action: "read", taskId, mode: "head", bytes: 300 });
-		expect(textOf(head)).toContain("x".repeat(100));
-		expect(textOf(head)).not.toContain("hello tail");
-
-		await expect(harness.execute("bg", { action: "read", taskId: "bg-zzz" })).rejects.toThrow(/No background task/);
-
-		await harness.execute("bg", { action: "create", command: "second" });
-		await expect(harness.execute("bg", { action: "read", taskId: "bg-" })).rejects.toThrow(/ambiguous/i);
-
-		harness.calls[0]?.finish(0);
-		harness.calls[1]?.finish(0);
-		await vi.waitFor(() => expect(harness.sent).toHaveLength(2));
-	});
-
-	it("rejects actions that miss their required fields", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		await expect(harness.execute("bg", { action: "create" })).rejects.toThrow(/requires 'command'/);
-		await expect(harness.execute("bg", { action: "read" })).rejects.toThrow(/requires 'taskId'/);
-		await expect(harness.execute("bg", { action: "wait" })).rejects.toThrow(/requires 'taskId'/);
-		await expect(harness.execute("bg", { action: "kill" })).rejects.toThrow(/requires 'taskId'/);
-		expect(harness.calls).toHaveLength(0);
-	});
-
-	it("wait delivers a completion inline and suppresses the completion notification", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		const started = await harness.execute("bg", { action: "create", command: "npm run build", description: "build" });
-		const taskId = /bg-[0-9a-f]{6}/.exec(textOf(started))?.[0] ?? "";
-		harness.calls[0]?.emitData("building\n");
-
-		// waitForResult registers its waiter synchronously up to the first await,
-		// so finishing right after the call starts is a deterministic claim.
-		const waitPromise = harness.execute("bg", { action: "wait", taskId, waitMs: 5_000, sinceBytes: 0 });
-		harness.calls[0]?.finish(0);
-		const result = await waitPromise;
-
-		const text = textOf(result);
-		expect(text).toContain("completed");
-		expect(text).toContain("building");
-		expect(text).toContain("+9B new output");
-		// The claim protocol suppresses the notification: this result is the single delivery.
-		expect(harness.sent).toHaveLength(0);
-
-		const details = result.details as BgWaitDetails;
-		expect(details.action).toBe("wait");
-		expect(details.timedOut).toBe(false);
-		expect(details.deltaBytes).toBe(9);
-		expect(details.status).toBe("completed");
-	});
-
-	it("wait times out while the task keeps running; the notification still fires later", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		const started = await harness.execute("bg", { action: "create", command: "npm run dev" });
-		const taskId = /bg-[0-9a-f]{6}/.exec(textOf(started))?.[0] ?? "";
-		harness.calls[0]?.emitData("progress line\n");
-
-		const result = await harness.execute("bg", { action: "wait", taskId, waitMs: 1_100 });
-		const text = textOf(result);
-		expect(text).toContain("still running");
-		expect(text).toContain("Do not sleep-poll");
-		expect(text).toContain("progress line");
-		expect((result.details as BgWaitDetails).timedOut).toBe(true);
-		expect(harness.sent).toHaveLength(0);
-
-		harness.calls[0]?.finish(0);
-		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
-	});
-
-	it("an aborted wait hands the claim back so the notification still fires", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		const started = await harness.execute("bg", { action: "create", command: "npm run build" });
-		const taskId = /bg-[0-9a-f]{6}/.exec(textOf(started))?.[0] ?? "";
-		harness.calls[0]?.emitData("building\n");
-
-		const controller = new AbortController();
-		const waitPromise = harness.execute("bg", { action: "wait", taskId, waitMs: 5_000 }, controller.signal);
-		// The turn is interrupted, so this result is discarded. The wait must not
-		// keep the delivery claim it registered, or the completion is lost.
-		controller.abort();
-		await expect(waitPromise).rejects.toThrow("aborted");
-
-		harness.calls[0]?.finish(0);
-		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
-		expect(harness.sent[0]?.message.content).toContain('status="completed"');
-	});
-
-	it("delivers the completion exactly once when the wait aborts as the task settles", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		const started = await harness.execute("bg", { action: "create", command: "npm run build" });
-		const taskId = /bg-[0-9a-f]{6}/.exec(textOf(started))?.[0] ?? "";
-		harness.calls[0]?.emitData("building\n");
-
-		const controller = new AbortController();
-		const waitPromise = harness.execute("bg", { action: "wait", taskId, waitMs: 5_000 }, controller.signal);
-		// Settle and interrupt in the same tick. Nobody may claim delivery on the
-		// waiter's behalf: its result is discarded, so the notification has to fire —
-		// exactly once, and carrying the terminal status rather than "running".
-		harness.calls[0]?.finish(0);
-		controller.abort();
-		await expect(waitPromise).rejects.toThrow("aborted");
-
-		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
-		expect(harness.sent[0]?.message.content).toContain('status="completed"');
-		// A second delivery would mean both finalize and the waiter sent one.
-		await new Promise((resolve) => setTimeout(resolve, 20));
-		expect(harness.sent).toHaveLength(1);
-	});
-
-	it("lists tasks with running first and the description in the label", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		const empty = await harness.execute("bg", { action: "list" });
-		expect(textOf(empty)).toContain("No background tasks");
-
-		await harness.execute("bg", { action: "create", command: "npm run dev", description: "dev server" });
-		const listing = textOf(await harness.execute("bg", { action: "list" }));
-		expect(listing).toContain("1 running");
-		expect(listing).toContain("dev server — npm run dev");
-
-		harness.calls[0]?.finish(0);
-		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
-	});
-
-	it("caps the finished entries in list output", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		for (let i = 0; i < 7; i++) {
-			await harness.execute("bg", { action: "create", command: `cmd-${i}` });
-			harness.calls[i]?.finish(0);
+	it("reads and lists both kinds using the same service", async () => {
+		for (const kind of ["bash", "subagent"] as const) {
+			const h = running(kind);
+			const outcome = await h.outcome;
+			expect(outcome.kind).toBe("background");
+			const id = h.service.list()[0]!.id;
+			expect(textOf(runList(h.service))).toContain(kind);
+			expect(textOf(await runRead(h.service, { action: "read", taskId: id }))).toContain("progress");
+			h.finish();
+			await h.service.wait(id, 1000);
+			expect(textOf(await runWait(h.service, { action: "wait", taskId: id }))).toContain("final report");
 		}
-		await vi.waitFor(() => expect(harness.sent).toHaveLength(7));
-
-		const text = textOf(await harness.execute("bg", { action: "list" }));
-		expect(text).toContain("7 finished");
-		expect(text).toContain("(+2 more finished");
 	});
-
-	it("carries the description into the completion notification", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		await harness.execute("bg", { action: "create", command: "npm run dev", description: "dev <server>" });
-		harness.calls[0]?.finish(0);
-
-		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
-		const content = harness.sent[0]?.message.content ?? "";
-		expect(content).toContain("<description>dev &lt;server&gt;</description>");
+	it("marks only terminal wait outcomes, never an expired window or a read", async () => {
+		const h = running();
+		await h.outcome;
+		const id = h.service.list()[0]!.id;
+		const expired = await runWait(h.service, { action: "wait", taskId: id, waitMs: 0 });
+		expect(expired.details.timedOut).toBe(true);
+		expect(expired.details).not.toHaveProperty("backgroundTaskId");
+		h.finish();
+		const finished = await runWait(h.service, { action: "wait", taskId: id });
+		expect(finished.details.backgroundTaskId).toBe(id);
+		expect(h.service.pendingNotifications()).toMatchObject([{ id }]);
+		expect((await runRead(h.service, { action: "read", taskId: id })).details).not.toHaveProperty("backgroundTaskId");
 	});
-
-	it("sends a one-shot stalled-task notification with advice when output blocks on a prompt", async () => {
-		const harness = createHarness({ pollIntervalMs: 5, thresholdMs: 15 });
-		await harness.startSession();
-
-		await harness.execute("bg", { action: "create", command: "npm install" });
-		harness.calls[0]?.emitData("Proceed? (y/n) ");
-
-		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
-		const sent = harness.sent[0];
-		expect(sent?.options).toEqual({ deliverAs: "steer", triggerTurn: true });
-		const content = sent?.message.content ?? "";
-		expect(content).toContain('status="running"');
-		expect(content).toContain('waiting-for-input="true"');
-		expect(content).toContain("(y/n)");
-		expect(content).toContain("<advice>");
-		expect(content).toContain("bg action kill");
-		const details = sent?.message.details as { stalled?: boolean; status: string };
-		expect(details.stalled).toBe(true);
-		expect(details.status).toBe("running");
-
-		// Statusline reflects the waiting-for-input state and clears on completion.
-		await vi.waitFor(() => expect(harness.statusUpdates.at(-1)).toBe("bg 1 waiting for input"));
-		harness.calls[0]?.finish(0);
-		await vi.waitFor(() => {
-			expect(harness.sent).toHaveLength(2);
-			expect(harness.statusUpdates.at(-1)).toBe("bg 1 finished");
+	it("wait cancellation only cancels the waiter, then final output remains readable", async () => {
+		const h = running("subagent");
+		await h.outcome;
+		const id = h.service.list()[0]!.id;
+		const abort = new AbortController();
+		const wait = runWait(h.service, { action: "wait", taskId: id }, abort.signal);
+		abort.abort();
+		await expect(wait).rejects.toThrow();
+		expect(h.control.signal.aborted).toBe(false);
+		h.finish();
+		await h.service.wait(id, 1000);
+		expect(textOf(await runRead(h.service, { action: "read", taskId: id }))).toContain("final report");
+	});
+	it("reports cancellation requested, never falsely stopped, and targets the whole group", async () => {
+		const h = running("subagent");
+		await h.outcome;
+		const id = h.service.list()[0]!.id;
+		const result = runKill(h.service, { action: "kill", taskId: id });
+		expect(textOf(result)).toContain("Cancellation requested");
+		expect(result.details.status).toBe("stopping");
+		expect(h.control.signal.aborted).toBe(true);
+		h.finish();
+	});
+	it("keeps missing-log and terminal diagnostics ahead of a long fallback, including waits with no delta", async () => {
+		const service = new BackgroundService({ enabled: true });
+		services.push(service);
+		await service.execute({
+			kind: "bash",
+			title: "missing log",
+			toolCallId: "missing",
+			background: true,
+			async run(control) {
+				control.setOutputPath(join(process.cwd(), `missing-${randomUUID()}.log`));
+				control.accept();
+				return {
+					status: "failed",
+					error: "Command exited with code 42",
+					result: { content: [{ type: "text", text: "fallback output\n".repeat(6000) }], details: undefined },
+				};
+			},
 		});
+		const id = service.list()[0]!.id;
+		await service.wait(id);
+		const slice = await service.read(id, { mode: "tail", bytes: 1024 });
+		expect(slice.readError).toContain("ENOENT");
+		expect(slice.text).toContain("fallback output");
+		for (const result of [
+			await runRead(service, { action: "read", taskId: id, bytes: 50 * 1024 }),
+			await runWait(service, { action: "wait", taskId: id, sinceBytes: slice.totalBytes }),
+		]) {
+			const text = textOf(result);
+			expect(text).toContain("Task error: Command exited with code 42");
+			expect(text).toContain("Output read error:");
+			expect(text).toContain("ENOENT");
+			expect(Buffer.byteLength(text)).toBeLessThanOrEqual(50 * 1024);
+			if (text.includes("fallback output"))
+				expect(text.indexOf("ENOENT")).toBeLessThan(text.indexOf("fallback output"));
+		}
 	});
 
-	it("kills a running task and rejects a second kill", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		const started = await harness.execute("bg", { action: "create", command: "npm run dev" });
-		const taskId = /bg-[0-9a-f]{6}/.exec(textOf(started))?.[0] ?? "";
-
-		const killed = await harness.execute("bg", { action: "kill", taskId });
-		expect(textOf(killed)).toContain(`Killed task ${taskId}`);
-		expect(harness.calls[0]?.signal?.aborted).toBe(true);
-
-		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
-		expect(harness.sent[0]?.message.content).toContain('status="killed"');
-
-		await expect(harness.execute("bg", { action: "kill", taskId })).rejects.toThrow(/not running/);
-	});
-
-	it("refuses new tasks after shutdown and stays silent for killed ones", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		await harness.execute("bg", { action: "create", command: "sleep 100" });
-		await harness.shutdownSession();
-
-		expect(harness.calls[0]?.signal?.aborted).toBe(true);
-		expect(harness.sent).toHaveLength(0);
-		await expect(harness.execute("bg", { action: "create", command: "echo" })).rejects.toThrow(
-			/not available|shutting down/,
+	it("bounds list output including oversized titles", async () => {
+		const h = running();
+		await h.outcome;
+		const original = h.service.list()[0]!;
+		vi.spyOn(h.service, "list").mockReturnValue(
+			Array.from({ length: 150 }, () => ({ ...original, title: "界".repeat(50000) })),
 		);
+		expect(Buffer.byteLength(textOf(runList(h.service)))).toBeLessThanOrEqual(50 * 1024);
+		h.finish();
 	});
-
-	it("reports spawn failures through the notification channel", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		await harness.execute("bg", { action: "create", command: "boom" });
-		harness.calls[0]?.fail(new Error("Working directory does not exist: /missing"));
-
-		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
-		const content = harness.sent[0]?.message.content ?? "";
-		expect(content).toContain('status="failed"');
-		expect(content).toContain("Working directory does not exist");
+	it("releases renderer timers when a pending wait row is disposed", () => {
+		vi.useFakeTimers();
+		const state: BgRenderState = {};
+		const invalidate = vi.fn();
+		const ctx = { state, invalidate } as unknown as ToolRenderContext<BgRenderState>;
+		scheduleWaitRefresh(ctx, true);
+		expect(vi.getTimerCount()).toBe(1);
+		state.dispose?.();
+		vi.advanceTimersByTime(2000);
+		expect(invalidate).not.toHaveBeenCalled();
+		expect(vi.getTimerCount()).toBe(0);
 	});
-
-	it("injects PI_* session variables like the built-in bash tool", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		await harness.execute("bg", { action: "create", command: "env" });
-		expect(harness.calls[0]?.env).toMatchObject({
-			PI_SESSION_ID: "sess-test",
-			PI_PROVIDER: "test-provider",
-			PI_MODEL: "test-model",
-		});
-
-		harness.calls[0]?.finish(0);
-		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
+	it("closes an open /bg via done on session shutdown without cancelling execution", async () => {
+		const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
+		let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
+		const pi = {
+			on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => void) => handlers.set(event, handler),
+			registerTool: vi.fn(),
+			registerMessageRenderer: vi.fn(),
+			registerCommand: (_name: string, value: typeof command) => {
+				command = value;
+			},
+		} as unknown as ExtensionAPI;
+		createBackgroundExtension()(pi);
+		const h = running();
+		await h.outcome;
+		const done = vi.fn();
+		let menu: { dispose?(): void } | undefined;
+		const ctx = {
+			background: h.service,
+			mode: "tui",
+			ui: {
+				setStatus: vi.fn(),
+				custom: (factory: Parameters<ExtensionContext["ui"]["custom"]>[0]) =>
+					new Promise<void>((resolve) => {
+						const component = factory(
+							{ requestRender: vi.fn(), terminal: { columns: 80, rows: 24 } } as unknown as TUI,
+							{
+								fg: (_color: string, text: string) => text,
+								bg: (_color: string, text: string) => text,
+							} as unknown as Theme,
+							new KeybindingsManager(),
+							() => {
+								done();
+								menu?.dispose?.();
+								resolve();
+							},
+						);
+						void Promise.resolve(component).then((value) => {
+							menu = value;
+						});
+					}),
+			},
+		} as unknown as ExtensionCommandContext;
+		const pending = command!.handler("", ctx);
+		await Promise.resolve();
+		handlers.get("session_shutdown")?.({}, ctx);
+		await pending;
+		expect(done).toHaveBeenCalledOnce();
+		expect(h.control.signal.aborted).toBe(false);
+		h.finish();
 	});
-
-	it("rejects a non-positive timeout synchronously without starting a task", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		// Same rule and same wording as the built-in bash tool.
-		await expect(harness.execute("bg", { action: "create", command: "x", timeout: 0 })).rejects.toThrow(
-			/Invalid timeout/,
-		);
-		await expect(harness.execute("bg", { action: "create", command: "x", timeout: -5 })).rejects.toThrow(
-			/Invalid timeout/,
-		);
-		expect(harness.calls).toHaveLength(0);
-		expect(harness.statusUpdates.at(-1)).toBeUndefined();
-	});
-
-	it("rejects an over-limit timeout synchronously without starting a task", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		await expect(harness.execute("bg", { action: "create", command: "x", timeout: 3_000_000_000 })).rejects.toThrow(
-			/maximum/,
-		);
-		expect(harness.calls).toHaveLength(0);
-		expect(harness.statusUpdates.at(-1)).toBeUndefined();
-	});
-
-	it("opens /bg as an inline component without overlay options", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		await harness.execute("bg", { action: "create", command: "npm run dev" });
-		const bg = harness.commands.get("bg");
-		await bg?.handler("", harness.ctx as unknown as ExtensionCommandContext);
-
-		expect(harness.customCalls).toHaveLength(1);
-		expect(harness.customCalls[0]?.options).toBeUndefined();
-
-		harness.calls[0]?.finish(0);
-		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
-	});
-
-	it("summarizes tasks via /bg outside the TUI", async () => {
-		const harness = createHarness();
-		await harness.startSession();
-
-		const bg = harness.commands.get("bg");
-		const rpcCtx = { ...harness.ctx, mode: "rpc" } as unknown as ExtensionCommandContext;
-
-		await bg?.handler("", rpcCtx);
-		expect(harness.notifications.at(-1)).toBe("No background tasks.");
-
-		await harness.execute("bg", { action: "create", command: "npm run dev" });
-		await bg?.handler("", rpcCtx);
-		expect(harness.notifications.at(-1)).toContain("running");
-		expect(harness.notifications.at(-1)).toContain("action kill");
-
-		harness.calls[0]?.finish(0);
-		await vi.waitFor(() => expect(harness.sent).toHaveLength(1));
+	it("subscribes status to the public service and unsubscribes on shutdown", async () => {
+		const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
+		const pi = {
+			on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => void) => handlers.set(event, handler),
+			registerTool: vi.fn(),
+			registerMessageRenderer: vi.fn(),
+			registerCommand: vi.fn(),
+		} as unknown as ExtensionAPI;
+		createBackgroundExtension()(pi);
+		const h = running();
+		await h.outcome;
+		const setStatus = vi.fn();
+		const ctx = { background: h.service, ui: { setStatus } } as unknown as ExtensionContext;
+		handlers.get("session_start")?.({}, ctx);
+		expect(setStatus).toHaveBeenLastCalledWith("background", "bg 1 active · 0 finished");
+		handlers.get("session_shutdown")?.({}, ctx);
+		expect(setStatus).toHaveBeenLastCalledWith("background", undefined);
+		const calls = setStatus.mock.calls.length;
+		h.finish();
+		await h.service.wait(h.service.list()[0]!.id, 1000);
+		expect(setStatus).toHaveBeenCalledTimes(calls);
 	});
 });
 
@@ -709,35 +373,6 @@ describe("renderBackgroundNotification", () => {
 		const expandedText = (expanded?.render(120) ?? []).map(stripTerminalSequences).join("\n");
 		expect(expandedText).toContain("Proceed? (y/n)");
 		expect(expandedText).toContain("kill");
-	});
-});
-
-describe("prependCommandPrefix", () => {
-	it("prepends the configured prefix to every executed command, passing options through", async () => {
-		const seen: { command: string; cwd: string; timeout?: number }[] = [];
-		const base: BashOperations = {
-			exec: async (command, cwd, options) => {
-				seen.push({ command, cwd, timeout: options.timeout });
-				return { exitCode: 0 };
-			},
-		};
-		const wrapped = prependCommandPrefix(base, "shopt -s expand_aliases");
-
-		const result = await wrapped.exec("npm run build", "/work", {
-			onData: () => {},
-			signal: undefined,
-			timeout: 5,
-			env: { FOO: "bar" },
-		});
-
-		expect(result).toEqual({ exitCode: 0 });
-		expect(seen).toEqual([{ command: "shopt -s expand_aliases\nnpm run build", cwd: "/work", timeout: 5 }]);
-	});
-
-	it("returns the same operations without a prefix", () => {
-		const base: BashOperations = { exec: async () => ({ exitCode: 0 }) };
-		expect(prependCommandPrefix(base, undefined)).toBe(base);
-		expect(prependCommandPrefix(base, "")).toBe(base);
 	});
 });
 
@@ -943,134 +578,5 @@ describe("formatStatusline", () => {
 
 	it("hides the segment when no tasks exist", () => {
 		expect(formatStatusline({ running: 0, total: 0, stalled: 0 })).toBeUndefined();
-	});
-});
-
-describe("buildNotificationContent", () => {
-	const task: BgTask = {
-		id: "bg-abc123",
-		command: "npm run build",
-		cwd: "/w",
-		status: "completed",
-		startedAt: 1_000,
-		endedAt: 13_000,
-		stalled: false,
-		exitCode: 0,
-		outputPath: "/tmp/pi-bg-abc123.log",
-		outputBytes: 200,
-		outputTruncated: false,
-		notified: false,
-	};
-
-	const tail = { text: "done\n", sliceBytes: 5, totalBytes: 200, truncated: true, startsMidLine: true };
-
-	function notification(overrides?: Partial<BgNotification>): BgNotification {
-		return { kind: "completion", task, tail, ...overrides };
-	}
-
-	it("renders a completion with its exit code, runtime, and tail metadata", () => {
-		const xml = buildNotificationContent(notification());
-		expect(xml).toContain('<background-task id="bg-abc123" status="completed" exitCode="0" runtime="12s">');
-		expect(xml).toContain("<command>npm run build</command>");
-		expect(xml).toContain("<output-file>/tmp/pi-bg-abc123.log</output-file>");
-		expect(xml).toContain('<output-tail bytes="5" totalBytes="200" truncated="true" startsMidLine="true">');
-		expect(xml).not.toContain("waiting-for-input");
-		expect(xml).not.toContain("<advice>");
-	});
-
-	it("omits exitCode when the task produced none and includes the error and description", () => {
-		const failed = {
-			...task,
-			status: "failed" as const,
-			exitCode: null,
-			error: "Command was terminated by a signal.",
-		};
-		const xml = buildNotificationContent(notification({ task: { ...failed, description: "build" } }));
-		expect(xml).toContain('status="failed"');
-		expect(xml).not.toContain("exitCode=");
-		expect(xml).toContain("<description>build</description>");
-		expect(xml).toContain("<error>Command was terminated by a signal.</error>");
-	});
-
-	it("renders a stall as a still-running task with advice and no exit code or error", () => {
-		const stalled = {
-			...task,
-			status: "running" as const,
-			endedAt: undefined,
-			exitCode: undefined,
-			error: "ignored",
-		};
-		const xml = buildNotificationContent(notification({ kind: "stall", task: stalled }));
-		expect(xml).toContain('status="running" waiting-for-input="true"');
-		expect(xml).not.toContain("exitCode=");
-		expect(xml).not.toContain("<error>");
-		expect(xml).toContain("<advice>");
-		expect(xml).toContain("non-interactive flag");
-	});
-
-	it("escapes markup and strips XML-illegal characters from every text field", () => {
-		const hostile = { ...task, command: 'echo "a<b" && c>d \u0000\uFFFE', description: "it's <b>" };
-		const xml = buildNotificationContent(notification({ task: hostile }));
-		expect(xml).toContain("<command>echo &quot;a&lt;b&quot; &amp;&amp; c&gt;d </command>");
-		expect(xml).toContain("<description>it&apos;s &lt;b&gt;</description>");
-		expect(xml).not.toContain("\u0000");
-		expect(xml).not.toContain("\uFFFE");
-	});
-
-	it("reports an unreadable tail instead of an empty one", () => {
-		const xml = buildNotificationContent(notification({ tail: undefined, tailError: "ENOENT: no such file" }));
-		expect(xml).toContain('<output-tail unavailable="ENOENT: no such file"/>');
-	});
-
-	it("falls back to (no output) for an empty tail", () => {
-		const xml = buildNotificationContent(notification({ tail: { ...tail, text: "", truncated: false } }));
-		expect(xml).toContain("(no output)");
-	});
-});
-
-describe("toNotificationDetails", () => {
-	const task: BgTask = {
-		id: "bg-abc123",
-		command: "npm run build",
-		cwd: "/w",
-		status: "failed",
-		startedAt: 1_000,
-		endedAt: 13_000,
-		stalled: false,
-		exitCode: 2,
-		error: "Command exited with code 2",
-		outputPath: "/tmp/pi-bg-abc123.log",
-		outputBytes: 200,
-		outputTruncated: false,
-		notified: false,
-	};
-	const tail = { text: "boom\n", sliceBytes: 5, totalBytes: 200, truncated: true, startsMidLine: false };
-
-	it("projects a completion onto the persisted shape", () => {
-		const details = toNotificationDetails({ kind: "completion", task, tail });
-		expect(details).toMatchObject({
-			taskId: "bg-abc123",
-			status: "failed",
-			exitCode: 2,
-			runtimeMs: 12_000,
-			totalBytes: 200,
-			tailText: "boom\n",
-			tailTruncated: true,
-			error: "Command exited with code 2",
-		});
-		expect(details.stalled).toBeUndefined();
-	});
-
-	it("keeps the historical `stalled` flag rather than leaking the kind discriminant", () => {
-		const running = { ...task, status: "running" as const, endedAt: undefined };
-		const details = toNotificationDetails({ kind: "stall", task: running, tail });
-		// The persisted shape is a compatibility surface: older transcripts are
-		// rendered by this build, so the flag it has always carried must stay.
-		expect(details.stalled).toBe(true);
-		expect(details).not.toHaveProperty("kind");
-		expect(details.status).toBe("running");
-		// A stall is informational: no terminal exit code, no error of its own.
-		expect(details.exitCode).toBeUndefined();
-		expect(details.error).toBeUndefined();
 	});
 });

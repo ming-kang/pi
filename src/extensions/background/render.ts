@@ -15,11 +15,17 @@ import type {
 import type { CustomMessage } from "../../core/messages.ts";
 import { formatSize } from "../../core/tools/truncate.ts";
 import { highlightCode, type Theme } from "../../modes/interactive/theme/theme.ts";
-import type { BgTaskStatus } from "./registry.ts";
 import { type BgInput, clampWaitMs } from "./schema.ts";
 import { commandLabel, exitSuffix, statusColor, statusGlyph } from "./task-view.ts";
 import { fileNameOf, firstCommandLine, formatDuration } from "./text.ts";
-import type { BgDetails, BgNotificationDetails } from "./types.ts";
+import type { BgDetails, BgNotificationDetails, BgTaskStatus } from "./types.ts";
+
+type BgRenderInput = Omit<BgInput, "action"> & {
+	action?: string;
+	command?: string;
+	description?: string;
+	timeout?: number;
+};
 
 const COMMAND_PREVIEW_LIMIT = 120;
 /** Command budget inside a notification label that also carries a description. */
@@ -30,7 +36,7 @@ const RESULT_EXPAND_LIMIT = 4000;
 /** Live pending-wait line refresh cadence; the first settled render clears the timer. */
 const WAIT_REFRESH_MS = 1000;
 
-/** Live peek at a waited-on task, fed from the registry by the call renderer. */
+/** Live peek at a waited-on task, optionally supplied by the host call renderer. */
 export interface BgTaskLive {
 	status: BgTaskStatus;
 	outputBytes: number;
@@ -40,6 +46,7 @@ export type WaitLiveProbe = (taskId: string) => BgTaskLive | undefined;
 
 /** Per-call live-refresh state owned by the shell's render context. */
 export interface BgRenderState {
+	dispose?: () => void;
 	refreshTimer?: ReturnType<typeof setTimeout>;
 	/** First pending render of a wait call; anchors the elapsed display. */
 	waitStartedAt?: number;
@@ -57,6 +64,7 @@ export function scheduleWaitRefresh(context: ToolRenderContext<BgRenderState>, p
 	const state = context.state;
 	if (state === undefined) return; // Standalone render without shell state: nothing to schedule.
 	if (pending) {
+		state.dispose = () => scheduleWaitRefresh(context, false);
 		if (state.refreshTimer === undefined) {
 			state.refreshTimer = setTimeout(() => {
 				state.refreshTimer = undefined;
@@ -90,7 +98,7 @@ function capForTranscript(text: string, limit: number): string {
 // ── tool call ─────────────────────────────────────────────────────────────
 
 export function renderBgCall(
-	args: BgInput,
+	args: BgRenderInput,
 	theme: Theme,
 	context: ToolRenderContext<BgRenderState>,
 	getTaskLive?: WaitLiveProbe,
@@ -137,7 +145,7 @@ export function renderBgCall(
  * result settles and takes over the row.
  */
 function renderWaitCall(
-	args: BgInput,
+	args: BgRenderInput,
 	theme: Theme,
 	context: ToolRenderContext<BgRenderState>,
 	getTaskLive: WaitLiveProbe | undefined,
@@ -181,7 +189,7 @@ function renderWaitCall(
 	);
 }
 
-function renderCreateCall(command: string, args: BgInput, theme: Theme, context: ToolRenderContext): Component {
+function renderCreateCall(command: string, args: BgRenderInput, theme: Theme, context: ToolRenderContext): Component {
 	const lines = command.split(/\r?\n/).filter((line) => line.trim().length > 0);
 	const label = args.description ? theme.fg("muted", ` · ${args.description}`) : "";
 	const suffix = theme.fg("muted", " &") + timeoutSuffix(args.timeout, theme) + label;
@@ -246,7 +254,7 @@ function resultSummaryLine(details: BgDetails, theme: Theme): string {
 			return `${theme.fg(statusColor(details.status), statusGlyph(details.status))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", ` ${details.status}${exit} · waited ${formatDuration(details.waitedMs)} · +${formatSize(details.deltaBytes)}`)}`;
 		}
 		case "kill":
-			return `${theme.fg(statusColor("killed"), statusGlyph("killed"))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", " stopped")}`;
+			return `${theme.fg(statusColor("killed"), statusGlyph("killed"))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", details.requested === undefined ? " stopped" : details.requested ? " cancellation requested" : ` ${details.status ?? "unchanged"}`)}`;
 		case "list": {
 			const hidden = details.hidden > 0 ? ` · ${details.hidden} more finished` : "";
 			return theme.fg("muted", `${details.running} running · ${details.finished} finished${hidden}`);

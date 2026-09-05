@@ -603,3 +603,20 @@ describe("subagent run state reducer", () => {
 		expect(isSubagentError({ status: "completed", runs: [toRunDetails(completed)] })).toBe(false);
 	});
 });
+
+it("accounts supported compaction usage without treating it as conversation context or a tool call", () => {
+	let run = reduceRun(state(), { type: "assistant_message_settled", usage: usage() });
+	run = reduceRun(run, { type: "compaction_started", startedAt: 1 });
+	run = reduceRun(run, {
+		type: "compaction_ended",
+		usage: usage({ totalTokens: 100 }),
+		tokensBefore: 150,
+		tokensAfter: 50,
+		error: undefined,
+		endedAt: 2,
+	});
+	expect(run.usage.totalTokens).toBe(115);
+	expect(run.usage.cost).toBeCloseTo(0.06);
+	expect(run.usage.contextTokens).toBe(15);
+	expect(run.usage.toolUses).toBe(0);
+});

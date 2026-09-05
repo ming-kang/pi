@@ -9,8 +9,8 @@
  */
 
 import { truncateToWidth } from "@earendil-works/pi-tui";
-import type { BgTaskStatus } from "./registry.ts";
 import { firstCommandLine, formatDuration } from "./text.ts";
+import type { BgTaskStatus } from "./types.ts";
 /** How long a task has run, or ran. A running task has no `endedAt`, so it measures to `now`. */
 export function runtimeMs(task: { startedAt: number; endedAt?: number }, now = Date.now()): number {
 	return (task.endedAt ?? now) - task.startedAt;
@@ -58,6 +58,9 @@ export function statusGlyph(status: BgTaskStatus, stalled?: boolean): string {
 		case "failed":
 		case "timeout":
 			return "✗";
+		case "cancelled":
+		case "partial":
+		case "stopping":
 		case "killed":
 			return "○";
 		default:
@@ -73,6 +76,9 @@ export function statusColor(status: BgTaskStatus, stalled?: boolean): "success" 
 		case "failed":
 			return "error";
 		case "timeout":
+		case "cancelled":
+		case "partial":
+		case "stopping":
 		case "killed":
 			return "warning";
 		default:

@@ -4,8 +4,22 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Added session-owned Background execution for native `bash` and Windows `powershell` with `background: true`, plus a top-level `subagent.background` flag for whole invocation groups. Interactive Ctrl+B moves all eligible current foreground executions to the background without restarting commands/workers or resetting shell timeouts. Workers retain foreground shell access but cannot create background work: both their prompt and trusted execution-role checks enforce the restriction.
+- Exposed `ctx.background` supervision, snapshots, bounded reads/waits, cancellation, subscriptions, and history pins through the public Extension API. SDK sessions keep background execution disabled by default; interactive mode enables it, while embeddings can explicitly opt in and own host lifecycle. Built-in print, JSON, and RPC modes still reject background startup. See [Background](docs/bundled/extensions/background.md) and [SDK](docs/sdk.md#background-execution).
+- Added explicit `session.retryBackgroundNotifications()` recovery for failed completion delivery, retaining inspectable results without infinite timer retries. Late settlements from executors that ignore cancellation are quarantined on the originating session (latest 32 bounded in-memory records and a persisted `.background-late.jsonl` audit sidecar), excluded from active totals rather than automatically reconciled.
+- Added independent persisted usage settlement for managed executions, including accrued worker retries, failures, cancellations, and provider-supplied compaction usage; missing provider usage is not fabricated. Session totals and footers count the ledger without requiring a panel visit or result read and without double-counting foreground results; Statusline keeps its active-branch scope and parent context/cache-hit semantics.
+
+### Removed
+
+- Removed `bg create` and the extension-owned shell registry. Start work with the native shell or Subagent tool; `bg` now only lists, reads, waits for, and kills existing tasks/groups. The old interactive-prompt stall watchdog and its automatic `waiting for input` notifications were not ported; stored legacy results and notifications remain renderable.
+- Removed Ctrl+B from the default cursor-left bindings to reserve it for `app.backgroundTasks.detach`; cursor-left defaults to Left. Emacs-style configs can disable/rebind detach before restoring Ctrl+B.
+
 ### Changed
 
+- Unified `/bg` around foreground/background shell tasks and Subagent groups, with side-by-side list/detail at wide widths and drill-down detail on narrow terminals. Individual workers can be inspected, but wait/stop operates on the whole group. Handoff transcript rows remain historical snapshots; group completion is delivered once at a safe idle boundary after queued user work rather than steering into an active run.
+- Background work is runtime-local, not a daemon: reload, session replacement/fork, and shutdown cancel and clean up owned executions, and tree navigation cancels work outside the destination branch. Managed logs are ephemeral until record eviction or runtime shutdown; `/bg` restores bounded terminal branch history without resuming live execution or replaying accounting/completion events. No automatic background timeout is added; supplied shell timeouts remain unchanged across handoff.
 - Updated bundled `/router` to a Codex 0.153.4 normal API-key Responses/SSE request profile with scoped identity, user-task turn state, final SDK-header cleanup, and HTTP retries for 5xx/network errors (not 429); the public pi-ai adapter still owns streaming, and outer retries/compaction remain Pi behavior. Added local coverage; official-binary comparison and target-gateway compatibility remain unverified.
 - Expanded router version-1 configuration and UI with OpenAI/Codex catalog selection, model context/output metadata, capability and Codex request settings, and all seven Pi thinking mappings. Existing explicit mappings are preserved and omissions now follow Pi semantics; newly added models default to low/medium/high only. Catalog imports preserve configured models, and output-token metadata remains local rather than a server generation cap.
 

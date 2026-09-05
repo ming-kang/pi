@@ -1,505 +1,332 @@
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { BackgroundService } from "../src/core/background/service.ts";
+import type { BackgroundTask } from "../src/core/background/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
-import {
-	type BackgroundManagerHost,
-	BackgroundTasksMenu,
-	type BackgroundTasksMenuOptions,
-} from "../src/extensions/background/manager.ts";
-import type { BgTask } from "../src/extensions/background/registry.ts";
+import { type BackgroundManagerHost, BackgroundTasksMenu } from "../src/extensions/background/manager.ts";
 import type { Theme } from "../src/modes/interactive/theme/theme.ts";
 
-// Theme stub: pass styling through untouched so width assertions see plain text.
-const plainTheme = {
-	fg: (_color: string, text: string) => text,
-	bg: (_color: string, text: string) => text,
-	bold: (text: string) => text,
-} as unknown as Theme;
-
-interface FakeTui {
-	requestRender: ReturnType<typeof vi.fn<() => void>>;
-	terminal: { rows: number; columns: number };
-}
-
-const components: BackgroundTasksMenu[] = [];
-
-interface Harness {
-	component: BackgroundTasksMenu;
-	tui: FakeTui;
-	host: BackgroundManagerHost;
-	keybindings: KeybindingsManager;
-	sliceFor: Record<string, string>;
-	killed: string[];
-	onClose: ReturnType<typeof vi.fn>;
-	render: () => string[];
-	enterDetail: () => Promise<void>;
-}
-
-function makeTask(id: string, status: BgTask["status"] = "running", overrides?: Partial<BgTask>): BgTask {
-	// Align with the faked clock so durations read 0s instead of epoch gaps.
-	const startedAt = Date.now();
+const theme = { fg: (_: string, text: string) => text, bg: (_: string, text: string) => text } as unknown as Theme;
+const menus: BackgroundTasksMenu[] = [];
+function task(id: string, overrides: Partial<BackgroundTask> = {}): BackgroundTask {
 	return {
 		id,
-		command: "npm run dev",
+		title: "build",
+		kind: "bash",
+		mode: "foreground",
+		status: "running",
+		startedAt: Date.now(),
+		toolCallId: "call",
+		anchorId: null,
+		command: "npm run build",
 		cwd: "/work",
-		status,
-		startedAt,
-		exitCode: status === "running" ? undefined : 0,
-		outputPath: `/tmp/pi-${id}.log`,
-		outputBytes: 64,
-		outputTruncated: false,
-		stalled: false,
-		notified: false,
+		outputPath: "/tmp/build.log",
 		...overrides,
 	};
 }
-
-function createHarness(options?: {
-	tasks?: BgTask[];
-	sliceFor?: Record<string, string>;
-	rows?: number;
-	columns?: number;
-	width?: number;
-}): Harness {
-	const keybindings = new KeybindingsManager();
-	const tui: FakeTui = {
-		requestRender: vi.fn<() => void>(),
-		terminal: { rows: options?.rows ?? 24, columns: options?.columns ?? 100 },
-	};
-	const killed: string[] = [];
-	const sliceFor: Record<string, string> = options?.sliceFor ?? {};
+function harness(tasks = [task("bash-1")], width = 100, rows = 24) {
+	let listener = () => {};
+	let text = Array.from({ length: 40 }, (_, i) => `line-${String(i + 1).padStart(2, "0")}`).join("\n");
+	const releases: string[] = [];
+	const pins: string[] = [];
+	const unsubscribe = vi.fn();
 	const host: BackgroundManagerHost = {
-		listTasks: () => [...(options?.tasks ?? [])],
-		killTask: (id) => {
-			killed.push(id);
-			return { killed: true };
-		},
-		readSlice: async (filePath, _sliceOptions) => ({
-			text: sliceFor[filePath] ?? "",
-			sliceBytes: (sliceFor[filePath] ?? "").length,
-			totalBytes: (sliceFor[filePath] ?? "").length,
+		list: () => [...tasks],
+		read: vi.fn(async (id) => ({
+			task: tasks.find((t) => t.id === id)!,
+			text,
+			totalBytes: text.length,
 			truncated: false,
-			startsMidLine: false,
+		})),
+		kill: vi.fn((id) => {
+			const t = tasks.find((t) => t.id === id)!;
+			if (t.status !== "running" && t.status !== "queued") return false;
+			t.status = "stopping";
+			return true;
 		}),
+		subscribe: (fn) => {
+			listener = fn;
+			return unsubscribe;
+		},
+		pin: (id) => {
+			pins.push(id);
+			return () => {
+				releases.push(id);
+			};
+		},
 	};
-	const onClose = vi.fn<() => void>();
-	const componentOptions: BackgroundTasksMenuOptions = {
-		tui,
-		theme: plainTheme,
-		keybindings,
-		host,
-		onClose,
-	};
-	const component = new BackgroundTasksMenu(componentOptions);
-	components.push(component);
-	const width = options?.width ?? 100;
+	const tui = { requestRender: vi.fn(), terminal: { columns: width, rows } };
+	const onClose = vi.fn();
+	const keybindings = new KeybindingsManager();
+	const menu = new BackgroundTasksMenu({ tui, host, theme, keybindings, onClose });
+	menus.push(menu);
 	return {
-		component,
-		tui,
+		menu,
 		host,
-		keybindings,
-		sliceFor,
-		killed,
+		tasks,
+		tui,
 		onClose,
-		render: () => component.render(width),
-		enterDetail: async () => {
-			component.handleInput(rawKey("tui.select.confirm"));
+		keybindings,
+		pins,
+		releases,
+		unsubscribe,
+		change: () => listener(),
+		setText: (value: string) => {
+			text = value;
+		},
+		render: () => menu.render(width).map(stripTerminalSequences),
+		open: async () => {
+			menu.handleInput("\r");
 			await vi.advanceTimersByTimeAsync(0);
 		},
 	};
 }
-
-/** Raw terminal sequences accepted by matchesKey for the bindings the menu uses. */
-const RAW_KEYS: Record<string, string> = {
-	"tui.select.up": "\x1b[A",
-	"tui.select.down": "\x1b[B",
-	"tui.select.confirm": "\r",
-	"tui.select.pageUp": "\x1b[5~",
-	"tui.select.pageDown": "\x1b[6~",
-	"tui.select.cancel": "\x1b",
-	"app.backgroundTasks.kill": "k",
-};
-
-function rawKey(binding: string): string {
-	const key = RAW_KEYS[binding];
-	if (key === undefined) throw new Error(`no raw key for ${binding}`);
-	return key;
-}
-
-describe("BackgroundTasksMenu", () => {
-	beforeEach(() => {
-		vi.useFakeTimers();
-	});
-
+describe("BackgroundTasksMenu public service", () => {
+	beforeEach(() => vi.useFakeTimers());
 	afterEach(() => {
-		for (const component of components.splice(0)) component.dispose();
+		for (const menu of menus.splice(0)) menu.dispose();
 		vi.useRealTimers();
 	});
-
-	it("renders the list view at the exact width with task rows and hints", async () => {
-		const task = makeTask("bg-aaa111");
-		const harness = createHarness({ tasks: [task], sliceFor: { [task.outputPath]: "hidden output\n" } });
-		await vi.advanceTimersByTimeAsync(0);
-
-		const lines = harness.render();
-		expect(lines.length).toBeGreaterThan(3);
-		for (const line of lines) {
-			expect(visibleWidth(line)).toBe(100);
-		}
-		expect(lines.some((line) => line.includes("bg-aaa111"))).toBe(true);
-		expect(lines.some((line) => line.includes("select"))).toBe(true);
-		// The list view never shows task output.
-		expect(lines.some((line) => line.includes("hidden output"))).toBe(false);
+	it("does not read hidden output in a narrow list; drilldown and ordinary close never kill", async () => {
+		const h = harness();
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(h.host.read).not.toHaveBeenCalled();
+		expect(h.render().join("\n")).toContain("foreground");
+		await h.open();
+		expect(h.render().join("\n")).toContain("line-40");
+		h.menu.handleInput("\x1b");
+		expect(h.onClose).not.toHaveBeenCalled();
+		h.menu.handleInput("\x1b");
+		expect(h.onClose).toHaveBeenCalledOnce();
+		expect(h.host.kill).not.toHaveBeenCalled();
 	});
-
-	it("marks stalled tasks in the list and detail header", async () => {
-		const task = makeTask("bg-aaa111", "running", { stalled: true });
-		const harness = createHarness({ tasks: [task], sliceFor: { [task.outputPath]: "Proceed? (y/n)\n" } });
+	it("shows list and selected detail simultaneously in wide terminals", async () => {
+		const h = harness(undefined, 140);
 		await vi.advanceTimersByTimeAsync(0);
-
-		const listLines = harness.render();
-		expect(listLines.some((line) => line.includes("…"))).toBe(true);
-		expect(listLines.some((line) => line.includes("1 waiting for input"))).toBe(true);
-
-		await harness.enterDetail();
-		const detailLines = harness.render();
-		expect(detailLines.some((line) => line.includes("waiting for input"))).toBe(true);
+		const frame = h.render().join("\n");
+		expect(frame).toContain("bash-1");
+		expect(frame).toContain("line-40");
+		expect(frame).toContain("│");
 	});
-
-	it("opens the output view on enter and steps back on cancel", async () => {
-		const task = makeTask("bg-aaa111");
-		const harness = createHarness({ tasks: [task], sliceFor: { [task.outputPath]: "line one\nline two\n" } });
-		await vi.advanceTimersByTimeAsync(0);
-
-		await harness.enterDetail();
-		let lines = harness.render();
-		expect(lines.some((line) => line.includes("line two"))).toBe(true);
-		expect(lines.some((line) => line.includes("scroll"))).toBe(true);
-		for (const line of lines) {
-			expect(visibleWidth(line)).toBe(100);
-		}
-
-		// First cancel returns to the list without closing.
-		harness.component.handleInput(rawKey("tui.select.cancel"));
-		lines = harness.render();
-		expect(harness.onClose).not.toHaveBeenCalled();
-		expect(lines.some((line) => line.includes("line two"))).toBe(false);
-		expect(lines.some((line) => line.includes("select"))).toBe(true);
-
-		// Second cancel closes the menu.
-		harness.component.handleInput(rawKey("tui.select.cancel"));
-		expect(harness.onClose).toHaveBeenCalledTimes(1);
-	});
-
-	it("moves the selection with wrap-around and opens the selected task", async () => {
-		const first = makeTask("bg-aaa111");
-		const second = makeTask("bg-bbb222");
-		const harness = createHarness({
-			tasks: [first, second],
-			sliceFor: { [first.outputPath]: "first out\n", [second.outputPath]: "second out\n" },
+	it("renders group and worker rows and worker projections, killing only the group", async () => {
+		const group = task("group-1", {
+			kind: "subagent",
+			projection: {
+				workers: [
+					{
+						id: `subagent-${randomUUID()}-worker-2`,
+						label: "#2 Explorer",
+						status: "running",
+						model: "model/thinking",
+						usage: "1k tokens",
+						prompt: "Inspect module",
+						activity: "Read file.ts",
+						outcome: "",
+					},
+				],
+			},
 		});
+		const h = harness([group], 140);
 		await vi.advanceTimersByTimeAsync(0);
-		expect(harness.render().some((line) => line.includes("→") && line.includes("bg-aaa111"))).toBe(true);
-
-		// Up wraps to the last task.
-		harness.component.handleInput(rawKey("tui.select.up"));
-		expect(harness.render().some((line) => line.includes("→") && line.includes("bg-bbb222"))).toBe(true);
-
-		await harness.enterDetail();
-		expect(harness.render().some((line) => line.includes("second out"))).toBe(true);
+		h.menu.handleInput("\x1b[B");
+		await vi.advanceTimersByTimeAsync(0);
+		const frame = h.render().join("\n");
+		expect(
+			h
+				.render()
+				.map((line) => line.split("│")[0])
+				.join("\n"),
+		).toContain("#2 Explorer");
+		for (const text of [
+			"Explorer",
+			"Prompt",
+			"Inspect module",
+			"Activity",
+			"Read file.ts",
+			"Outcome",
+			"Still running",
+			"1k tokens",
+			"model/thinking",
+		])
+			expect(frame).toContain(text);
+		h.menu.handleInput("k");
+		expect(h.host.kill).toHaveBeenCalledWith("group-1");
+		expect(h.pins).toEqual(["group-1"]);
 	});
-
-	it("freezes the viewport on page-up and resumes following at the bottom", async () => {
-		const task = makeTask("bg-aaa111");
-		const before = Array.from({ length: 30 }, (_, i) => `before-${i + 1}`).join("\n");
-		const harness = createHarness({ tasks: [task], sliceFor: { [task.outputPath]: `${before}\n` } });
-		await vi.advanceTimersByTimeAsync(0);
-		await harness.enterDetail();
-		expect(harness.render().some((line) => line.includes("before-30"))).toBe(true);
-
-		harness.component.handleInput(rawKey("tui.select.pageUp"));
-		harness.sliceFor[task.outputPath] = `${before}\nafter\n`;
-		await vi.advanceTimersByTimeAsync(1000);
-		// Frozen: the newly appended line must not appear while paused.
-		expect(harness.render().some((line) => line.includes("after"))).toBe(false);
-		expect(harness.render().some((line) => line.includes("paused"))).toBe(true);
-
-		// Paging back down to the bottom resumes following and refreshes.
-		harness.component.handleInput(rawKey("tui.select.pageDown"));
-		await vi.advanceTimersByTimeAsync(0);
-		expect(harness.render().some((line) => line.includes("after"))).toBe(true);
-		expect(harness.render().some((line) => line.includes("paused"))).toBe(false);
-	});
-
-	it("clamps page-up at the top of the buffer", async () => {
-		const task = makeTask("bg-aaa111");
-		const content = Array.from({ length: 40 }, (_, i) => `line-${i + 1}`).join("\n");
-		const harness = createHarness({ tasks: [task], sliceFor: { [task.outputPath]: `${content}\n` } });
-		await vi.advanceTimersByTimeAsync(0);
-		await harness.enterDetail();
-
-		for (let i = 0; i < 5; i++) {
-			harness.component.handleInput(rawKey("tui.select.pageUp"));
-		}
-		// Over-scrolling stops at the top instead of running into blank space.
-		const lines = harness.render();
-		expect(lines.some((line) => line.includes("line-1"))).toBe(true);
-	});
-
-	it("ignores page-up when the output fits the viewport", async () => {
-		const task = makeTask("bg-aaa111");
-		const harness = createHarness({ tasks: [task], sliceFor: { [task.outputPath]: "one\ntwo\n" } });
-		await vi.advanceTimersByTimeAsync(0);
-		await harness.enterDetail();
-
-		harness.component.handleInput(rawKey("tui.select.pageUp"));
-		const lines = harness.render();
-		expect(lines.some((line) => line.includes("paused"))).toBe(false);
-		expect(lines.some((line) => line.includes("two"))).toBe(true);
-	});
-
-	it("omits the resume hint when pageDown is unbound", async () => {
-		const task = makeTask("bg-aaa111");
-		const content = Array.from({ length: 30 }, (_, i) => `line-${i + 1}`).join("\n");
-		const harness = createHarness({ tasks: [task], sliceFor: { [task.outputPath]: `${content}\n` } });
-		harness.keybindings.setUserBindings({ "tui.select.pageDown": [] });
-		await vi.advanceTimersByTimeAsync(0);
-		await harness.enterDetail();
-
-		// Frozen via the raw sequence so unbinding pageDown does not block scrolling.
-		harness.component.handleInput("\x1b[5~");
-		const lines = harness.render();
-		expect(lines.some((line) => line.includes("paused"))).toBe(true);
-		expect(lines.some((line) => line.includes("( to follow)"))).toBe(false);
-		expect(lines.some((line) => line.includes("to follow"))).toBe(false);
-	});
-
-	it("kills only running tasks and shows feedback", async () => {
-		const running = makeTask("bg-aaa111");
-		const done = makeTask("bg-bbb222", "completed", { endedAt: 5000 });
-		const harness = createHarness({ tasks: [running, done] });
-		await vi.advanceTimersByTimeAsync(0);
-
-		harness.component.handleInput("k");
-		expect(harness.killed).toEqual([running.id]);
-		expect(harness.render().some((line) => line.includes(`stopping ${running.id}…`))).toBe(true);
-
-		// "stopping" feedback expires once the task settles (next poll sees the terminal status).
-		const settling = makeTask("bg-ccc333");
-		const expiring = createHarness({ tasks: [settling] });
-		await vi.advanceTimersByTimeAsync(0);
-		expiring.component.handleInput("k");
-		expect(expiring.render().some((line) => line.includes("stopping bg-ccc333…"))).toBe(true);
-		settling.status = "killed";
-		settling.endedAt = Date.now();
-		await vi.advanceTimersByTimeAsync(1000);
-		expect(expiring.render().some((line) => line.includes("stopping"))).toBe(false);
-
-		// Move to the finished task; kill must be a no-op with feedback.
-		harness.component.handleInput(rawKey("tui.select.down"));
-		harness.component.handleInput("k");
-		expect(harness.killed).toEqual([running.id]);
-		expect(harness.render().some((line) => line.includes("is not running"))).toBe(true);
-	});
-
-	it("clears the poll timer on dispose", async () => {
-		const harness = createHarness({ tasks: [makeTask("bg-aaa111")] });
-		await vi.advanceTimersByTimeAsync(0);
-		expect(vi.getTimerCount()).toBeGreaterThan(0);
-
-		harness.component.dispose();
-		expect(vi.getTimerCount()).toBe(0);
-	});
-
-	it("renders ANSI output with sequences stripped and stays within width", async () => {
-		const task = makeTask("bg-aaa111");
-		const colored = "\x1b[31mred line\x1b[0m with trailing\n\x1b[0m";
-		const harness = createHarness({ tasks: [task], sliceFor: { [task.outputPath]: colored } });
-		await vi.advanceTimersByTimeAsync(0);
-		await harness.enterDetail();
-
-		const lines = harness.render();
-		for (const line of lines) {
-			expect(visibleWidth(line)).toBe(100);
-		}
-		const joined = lines.map((line) => stripTerminalSequences(line)).join("\n");
-		expect(joined).toContain("red line with trailing");
-	});
-
-	it("keeps every row at the exact width with wide CJK content", async () => {
-		const task = makeTask("bg-aaa111", "running", {
-			command: "构建整个项目并运行全部端到端测试用例然后部署到预发布环境 && 再次构建整个项目并运行全部测试",
+	it("preserves stable selected worker identity as statuses reorder groups", async () => {
+		const first = task("first");
+		const second = task("second", {
+			kind: "subagent",
+			projection: {
+				workers: [
+					{
+						id: "worker-7",
+						label: "General",
+						status: "running",
+						prompt: "unique prompt",
+						activity: "",
+						outcome: "",
+					},
+				],
+			},
 		});
-		const cjkLine = "第一阶段：正在编译所有模块，请耐心等待，输出行会超过视口宽度以验证等宽填充逻辑。".repeat(2);
-		const harness = createHarness({ tasks: [task], sliceFor: { [task.outputPath]: `${cjkLine}\n完成\n` } });
-		await vi.advanceTimersByTimeAsync(0);
-
-		// List view: the selected row (padded before styling) and every other row.
-		for (const line of harness.render()) {
-			expect(visibleWidth(line)).toBe(100);
-		}
-
-		await harness.enterDetail();
-		const lines = harness.render();
-		for (const line of lines) {
-			expect(visibleWidth(line)).toBe(100);
-		}
-		expect(lines.some((line) => line.includes("完成"))).toBe(true);
+		const h = harness([first, second], 140);
+		h.menu.handleInput("\x1b[B");
+		h.menu.handleInput("\x1b[B");
+		h.tasks.reverse();
+		h.change();
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.render().join("\n")).toContain("unique prompt");
+		expect(h.pins).toEqual(["first", "second"]);
+		expect(h.releases).toEqual(["first"]);
 	});
-
-	it("windows the task list beyond ten entries with a position indicator", async () => {
-		const tasks = Array.from({ length: 12 }, (_, i) => makeTask(`bg-t${String(i + 1).padStart(2, "0")}xx`));
-		const harness = createHarness({ tasks });
-		await vi.advanceTimersByTimeAsync(0);
-
-		let lines = harness.render();
-		expect(lines.some((line) => line.includes("(1/12)"))).toBe(true);
-		expect(lines.some((line) => line.includes("bg-t01xx"))).toBe(true);
-		expect(lines.some((line) => line.includes("bg-t12xx"))).toBe(false);
-
-		// Up wraps to the last task and scrolls the window.
-		harness.component.handleInput(rawKey("tui.select.up"));
-		lines = harness.render();
-		expect(lines.some((line) => line.includes("(12/12)"))).toBe(true);
-		expect(lines.some((line) => line.includes("bg-t12xx"))).toBe(true);
-		expect(lines.some((line) => line.includes("bg-t01xx"))).toBe(false);
-		for (const line of lines) {
-			expect(visibleWidth(line)).toBe(100);
+	it("retains selected final detail and stops reading/redrawing settled tasks", async () => {
+		const h = harness();
+		await h.open();
+		h.tasks[0]!.status = "completed";
+		h.tasks[0]!.endedAt = Date.now();
+		h.setText("final outcome");
+		h.change();
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.render().join("\n")).toContain("final outcome");
+		const reads = vi.mocked(h.host.read).mock.calls.length;
+		const renders = h.tui.requestRender.mock.calls.length;
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(h.host.read).toHaveBeenCalledTimes(reads);
+		expect(h.tui.requestRender).toHaveBeenCalledTimes(renders);
+		expect(h.onClose).not.toHaveBeenCalled();
+	});
+	it("reads only the selected visible output with a bounded budget", async () => {
+		const h = harness([task("a"), task("b")], 140);
+		await vi.advanceTimersByTimeAsync(2000);
+		for (const [id, options] of vi.mocked(h.host.read).mock.calls) {
+			expect(id).toBe("a");
+			expect(options?.bytes).toBe(128 * 1024);
 		}
 	});
-
-	it("survives a tiny terminal in both views", async () => {
-		const task = makeTask("bg-aaa111");
-		const harness = createHarness({ tasks: [task], rows: 12, columns: 60, width: 60 });
-		await vi.advanceTimersByTimeAsync(0);
-
-		for (const line of harness.render()) {
-			expect(visibleWidth(line)).toBe(60);
-		}
-		await harness.enterDetail();
-		const lines = harness.render();
-		expect(lines.length).toBeGreaterThan(4);
-		for (const line of lines) {
-			expect(visibleWidth(line)).toBe(60);
-		}
+	it("preserves manual scroll position on output growth and follows again at the bottom", async () => {
+		const h = harness();
+		await h.open();
+		h.menu.handleInput("\x1b[A");
+		const before = h.render().join("\n");
+		expect(before).toContain("line-25");
+		expect(before).not.toContain("line-40");
+		h.setText(`${Array.from({ length: 41 }, (_, i) => `line-${String(i + 1).padStart(2, "0")}`).join("\n")}`);
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.render().join("\n")).toContain("line-25");
+		h.menu.handleInput("\x1b[6~");
+		expect(h.render().join("\n")).toContain("line-41");
 	});
-
-	it("shows a read error instead of crashing", async () => {
-		const task = makeTask("bg-aaa111");
-		const harness = createHarness({ tasks: [task] });
-		harness.host.readSlice = async () => {
-			throw new Error("ENOENT: no such file");
-		};
-		await vi.advanceTimersByTimeAsync(0);
-		await harness.enterDetail();
-
-		const lines = harness.render();
-		expect(lines.some((line) => line.includes("Cannot read output"))).toBe(true);
-		for (const line of lines) {
-			expect(visibleWidth(line)).toBe(100);
-		}
+	it("clamps paging at the top and ignores extra scrolling beyond short content", async () => {
+		const h = harness();
+		await h.open();
+		for (let i = 0; i < 8; i++) h.menu.handleInput("\x1b[5~");
+		expect(h.render().join("\n")).toContain("line-01");
+		h.setText("one\ntwo");
+		await vi.advanceTimersByTimeAsync(1000);
+		h.menu.handleInput("\x1b[5~");
+		expect(h.render().join("\n")).toContain("two");
 	});
-
-	it("stops redrawing entirely once every task has settled", async () => {
-		const task = makeTask("bg-aaa111", "completed", { endedAt: Date.now(), exitCode: 0 });
-		const harness = createHarness({ tasks: [task], sliceFor: { [task.outputPath]: "done\n" } });
-		await vi.advanceTimersByTimeAsync(0);
-		await harness.enterDetail();
-		await vi.advanceTimersByTimeAsync(1000); // Stabilize: the post-enter tick lands.
-
-		const rendersBefore = harness.tui.requestRender.mock.calls.length;
-		let reads = 0;
-		const originalRead = harness.host.readSlice;
-		harness.host.readSlice = async (filePath, options) => {
-			reads += 1;
-			return originalRead(filePath, options);
-		};
-
-		await vi.advanceTimersByTimeAsync(1000);
-		await vi.advanceTimersByTimeAsync(1000);
-		await vi.advanceTimersByTimeAsync(1000);
-		expect(reads).toBe(0);
-		expect(harness.tui.requestRender.mock.calls.length).toBe(rendersBefore);
+	it("uses configurable controls and gives honest stopping feedback", async () => {
+		const h = harness();
+		h.keybindings.setUserBindings({ "app.backgroundTasks.kill": "x" });
+		h.menu.handleInput("k");
+		expect(h.host.kill).not.toHaveBeenCalled();
+		h.menu.handleInput("x");
+		expect(h.render().join("\n")).toContain("stopping bash-1");
+		h.tasks[0]!.status = "completed";
+		h.menu.handleInput("x");
+		expect(h.render().join("\n")).toContain("no new cancellation");
 	});
-
-	it("re-reads a running task's output only when it actually grew", async () => {
-		const content = Array.from({ length: 30 }, (_, i) => `line-${i + 1}`).join("\n");
-		const task = makeTask("bg-aaa111", "running", { outputBytes: content.length + 1 });
-		const harness = createHarness({ tasks: [task], sliceFor: { [task.outputPath]: `${content}\n` } });
-		await vi.advanceTimersByTimeAsync(0);
-		await harness.enterDetail();
-		await vi.advanceTimersByTimeAsync(1000); // Stabilize: one read has landed.
-
-		let reads = 0;
-		const originalRead = harness.host.readSlice;
-		harness.host.readSlice = async (filePath, options) => {
-			reads += 1;
-			return originalRead(filePath, options);
-		};
-
-		// Idle ticks: the duration keeps the UI live, but the file is not touched.
-		await vi.advanceTimersByTimeAsync(1000);
-		await vi.advanceTimersByTimeAsync(1000);
-		expect(reads).toBe(0);
-
-		// Output grows: exactly one re-read on the next poll, new line visible.
-		harness.sliceFor[task.outputPath] = `${content}\nextra line\n`;
-		task.outputBytes += "extra line\n".length;
-		await vi.advanceTimersByTimeAsync(1000);
-		expect(reads).toBe(1);
-		expect(harness.render().some((line) => line.includes("extra line"))).toBe(true);
+	it("windows long lists and wraps selection", () => {
+		const h = harness(Array.from({ length: 30 }, (_, i) => task(`task-${i}`)));
+		expect(h.render().join("\n")).toContain("(1/30)");
+		expect(h.render().join("\n")).not.toContain("task-29");
+		h.menu.handleInput("\x1b[A");
+		expect(h.render().join("\n")).toContain("(30/30)");
+		expect(h.render().join("\n")).toContain("task-29");
 	});
-
-	it("separates finished tasks from running ones in the list", async () => {
-		const harness = createHarness({
-			tasks: [
-				makeTask("bg-aaa111"),
-				makeTask("bg-bbb222"),
-				makeTask("bg-ccc333", "completed", { endedAt: Date.now(), exitCode: 0 }),
-			],
-		});
-		await vi.advanceTimersByTimeAsync(0);
-		expect(harness.render().some((line) => line.includes("── finished ──"))).toBe(true);
-
-		// No boundary, no separator — and never for an empty finished group.
-		const onlyRunning = createHarness({ tasks: [makeTask("bg-aaa111")] });
-		await vi.advanceTimersByTimeAsync(0);
-		expect(onlyRunning.render().some((line) => line.includes("── finished ──"))).toBe(false);
+	it.each([1, 20, 60, 100, 140])("fits ANSI and CJK output at width %i", async (width) => {
+		const h = harness([task("wide", { title: "界".repeat(200) })], width, 12);
+		h.setText(`\x1b[31mred\x1b[0m\n${"界".repeat(200)}`);
+		await h.open();
+		for (const line of h.render()) expect(visibleWidth(line)).toBe(width);
 	});
-
-	it("narrows the visible list rows on short terminals", async () => {
-		const tasks = Array.from({ length: 5 }, (_, i) =>
-			makeTask(`bg-s${i}00aa`, "completed", { endedAt: Date.now(), exitCode: 0 }),
+	it.each([100, 140])(
+		"keeps actual missing-log and task errors visible while following a long fallback at width %i",
+		async (width) => {
+			vi.useRealTimers();
+			const service = new BackgroundService({ enabled: true });
+			try {
+				await service.execute({
+					kind: "bash",
+					title: "missing log",
+					toolCallId: "call",
+					background: true,
+					async run(control) {
+						control.setOutputPath(join(process.cwd(), `missing-${randomUUID()}.log`));
+						control.accept();
+						return {
+							status: "failed",
+							error: "Command exited with code 42",
+							result: {
+								content: [{ type: "text", text: `${"fallback line\n".repeat(3000)}TAIL` }],
+								details: undefined,
+							},
+						};
+					},
+				});
+				await service.wait(service.list()[0]!.id);
+				const read = await service.read(service.list()[0]!.id);
+				expect(read.readError).toContain("ENOENT");
+				const menu = new BackgroundTasksMenu({
+					tui: { requestRender: vi.fn(), terminal: { columns: width, rows: 24 } },
+					host: service,
+					theme,
+					keybindings: new KeybindingsManager(),
+					onClose: vi.fn(),
+				});
+				menus.push(menu);
+				menu.handleInput("\r");
+				await vi.waitFor(() => {
+					const frame = menu.render(width).map(stripTerminalSequences).join("\n");
+					expect(frame).toContain("Command exited with code 42");
+					expect(frame).toContain("Output read error:");
+					expect(frame).toContain("fallback line");
+				});
+				menu.handleInput("\x1b[5~");
+				expect(menu.render(width).join("\n")).toContain("Command exited with code 42");
+				menu.dispose();
+			} finally {
+				await service.shutdown();
+			}
+		},
+	);
+	it("renders output read failures without rejecting UI work", async () => {
+		const h = harness();
+		vi.mocked(h.host.read).mockRejectedValue(new Error("ENOENT"));
+		await h.open();
+		expect(h.render().join("\n")).toContain("Cannot read output");
+	});
+	it("disposes subscriptions, pin leases and timers; late reads cannot repaint", async () => {
+		const h = harness();
+		let resolve!: (value: Awaited<ReturnType<BackgroundManagerHost["read"]>>) => void;
+		vi.mocked(h.host.read).mockImplementation(
+			() =>
+				new Promise((r) => {
+					resolve = r;
+				}),
 		);
-		const harness = createHarness({ tasks, rows: 16 });
+		h.menu.handleInput("\r");
+		h.menu.dispose();
+		const renders = h.tui.requestRender.mock.calls.length;
+		resolve({ task: h.tasks[0]!, text: "late", totalBytes: 4, truncated: false });
 		await vi.advanceTimersByTimeAsync(0);
-
-		const lines = harness.render();
-		expect(lines.filter((line) => line.includes("bg-s")).length).toBe(3);
-		expect(lines.some((line) => line.includes("(1/5)"))).toBe(true);
-	});
-
-	it("scrolls the output view one line at a time with up/down", async () => {
-		const task = makeTask("bg-aaa111", "completed", { endedAt: Date.now(), exitCode: 0 });
-		const content = Array.from({ length: 30 }, (_, i) => `line-${String(i + 1).padStart(2, "0")}`).join("\n");
-		const harness = createHarness({ tasks: [task], sliceFor: { [task.outputPath]: `${content}\n` } });
-		await vi.advanceTimersByTimeAsync(0);
-		await harness.enterDetail();
-
-		// Following shows the bottom 16 lines: 15–30.
-		let lines = harness.render();
-		expect(lines.some((line) => line.includes("line-15"))).toBe(true);
-		expect(lines.some((line) => line.includes("line-14"))).toBe(false);
-
-		harness.component.handleInput(rawKey("tui.select.up"));
-		lines = harness.render();
-		expect(lines.some((line) => line.includes("paused"))).toBe(true);
-		expect(lines.some((line) => line.includes("line-14"))).toBe(true);
-		expect(lines.some((line) => line.includes("line-30"))).toBe(false);
-
-		harness.component.handleInput(rawKey("tui.select.down"));
-		lines = harness.render();
-		expect(lines.some((line) => line.includes("paused"))).toBe(false);
-		expect(lines.some((line) => line.includes("line-30"))).toBe(true);
+		expect(h.tui.requestRender).toHaveBeenCalledTimes(renders);
+		expect(h.unsubscribe).toHaveBeenCalledOnce();
+		expect(h.releases).toEqual(["bash-1"]);
+		expect(vi.getTimerCount()).toBe(0);
 	});
 });

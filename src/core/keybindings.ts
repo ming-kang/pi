@@ -56,6 +56,7 @@ export interface AppKeybindings {
 	"app.tree.filter.cycleForward": true;
 	"app.tree.filter.cycleBackward": true;
 	"app.backgroundTasks.kill": true;
+	"app.backgroundTasks.detach": true;
 }
 
 export type AppKeybinding = keyof AppKeybindings;
@@ -75,6 +76,10 @@ const windowsKeybindings = useWindowsKeybindings();
 
 export const KEYBINDINGS = {
 	...TUI_KEYBINDINGS,
+	"tui.editor.cursorLeft": {
+		...TUI_KEYBINDINGS["tui.editor.cursorLeft"],
+		defaultKeys: "left",
+	},
 	"tui.editor.undo": {
 		...TUI_KEYBINDINGS["tui.editor.undo"],
 		defaultKeys: process.platform === "win32" ? "ctrl+z" : windowsKeybindings ? "alt+z" : "ctrl+-",
@@ -235,6 +240,10 @@ export const KEYBINDINGS = {
 	"app.tree.filter.cycleBackward": {
 		defaultKeys: "shift+ctrl+o",
 		description: "Tree filter: cycle backward",
+	},
+	"app.backgroundTasks.detach": {
+		defaultKeys: "ctrl+b",
+		description: "Move foreground Bash and Subagent executions to the background",
 	},
 	"app.backgroundTasks.kill": {
 		defaultKeys: "k",

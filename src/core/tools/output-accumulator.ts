@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { createWriteStream, type WriteStream } from "node:fs";
+import { closeSync, createWriteStream, openSync, type WriteStream, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type TruncationResult, truncateTail } from "./truncate.ts";
@@ -8,6 +8,8 @@ export interface OutputAccumulatorOptions {
 	maxLines?: number;
 	maxBytes?: number;
 	tempFilePrefix?: string;
+	/** Managed executions persist from the first byte, without an unbounded stream write queue. */
+	persistFromStart?: boolean;
 }
 
 export interface OutputSnapshot {
@@ -52,6 +54,7 @@ export class OutputAccumulator {
 	private finished = false;
 
 	private tempFilePath: string | undefined;
+	private tempFileFd: number | undefined;
 	private tempFileStream: WriteStream | undefined;
 
 	constructor(options: OutputAccumulatorOptions = {}) {
@@ -59,6 +62,11 @@ export class OutputAccumulator {
 		this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
 		this.maxRollingBytes = Math.max(this.maxBytes * 2, 1);
 		this.tempFilePrefix = options.tempFilePrefix ?? "pi-output";
+		if (options.persistFromStart) {
+			const path = defaultTempFilePath(this.tempFilePrefix);
+			this.tempFileFd = openSync(path, "wx", 0o600);
+			this.tempFilePath = path;
+		}
 	}
 
 	append(data: Buffer): void {
@@ -69,7 +77,14 @@ export class OutputAccumulator {
 		this.totalRawBytes += data.length;
 		this.appendDecodedText(this.decoder.decode(data, { stream: true }));
 
-		if (this.tempFileStream || this.shouldUseTempFile()) {
+		if (this.tempFileFd !== undefined) {
+			let offset = 0;
+			while (offset < data.length) {
+				const written = writeSync(this.tempFileFd, data, offset, data.length - offset);
+				if (written === 0) throw new Error("Output file write made no progress");
+				offset += written;
+			}
+		} else if (this.tempFileStream || this.shouldUseTempFile()) {
 			this.ensureTempFile();
 			this.tempFileStream?.write(data);
 		} else if (data.length > 0) {
@@ -88,14 +103,15 @@ export class OutputAccumulator {
 		}
 	}
 
-	snapshot(options: { persistIfTruncated?: boolean } = {}): OutputSnapshot {
+	snapshot(options: { persistIfTruncated?: boolean; maxBytes?: number } = {}): OutputSnapshot {
+		const maxBytes = Math.min(this.maxBytes, options.maxBytes ?? this.maxBytes);
 		const tailTruncation = truncateTail(this.getSnapshotText(), {
 			maxLines: this.maxLines,
-			maxBytes: this.maxBytes,
+			maxBytes,
 		});
-		const truncated = this.totalLines > this.maxLines || this.totalDecodedBytes > this.maxBytes;
+		const truncated = this.totalLines > this.maxLines || this.totalDecodedBytes > maxBytes;
 		const truncatedBy = truncated
-			? (tailTruncation.truncatedBy ?? (this.totalDecodedBytes > this.maxBytes ? "bytes" : "lines"))
+			? (tailTruncation.truncatedBy ?? (this.totalDecodedBytes > maxBytes ? "bytes" : "lines"))
 			: null;
 		const truncation: TruncationResult = {
 			...tailTruncation,
@@ -104,7 +120,7 @@ export class OutputAccumulator {
 			totalLines: this.totalLines,
 			totalBytes: this.totalDecodedBytes,
 			maxLines: this.maxLines,
-			maxBytes: this.maxBytes,
+			maxBytes,
 		};
 
 		if (options.persistIfTruncated && truncation.truncated) {
@@ -118,7 +134,16 @@ export class OutputAccumulator {
 		};
 	}
 
+	getTotalBytes(): number {
+		return this.totalRawBytes;
+	}
+
 	async closeTempFile(): Promise<void> {
+		if (this.tempFileFd !== undefined) {
+			const fd = this.tempFileFd;
+			this.tempFileFd = undefined;
+			closeSync(fd);
+		}
 		if (!this.tempFileStream) {
 			return;
 		}

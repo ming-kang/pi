@@ -40,7 +40,7 @@ CTX 2.1%/1.0M                    ↑13k ↓13k R440k CH99.4% $0.074
 - `↓` cumulative output tokens.
 - `R` cumulative cache-read tokens.
 - `W` cumulative cache-write tokens, omitted when zero.
-- Cumulative totals include assistant requests, usage-bearing tool results, compaction summaries, and branch summaries on the active branch.
+- Cumulative totals include assistant requests, usage-bearing tool results, compaction summaries, branch summaries, and independently settled Background usage records on the active branch.
 - `CH` cache-hit percentage for the latest assistant request, calculated as
   `cacheRead / (input + cacheRead + cacheWrite)` and shown only when that
   request used cache.
@@ -56,8 +56,11 @@ CTX 2.1%/1.0M                    ↑13k ↓13k R440k CH99.4% $0.074
   out it is dropped so CTX and usage stay readable. Plain text is muted;
   strings that already carry ANSI color are left unchanged.
 
-Zero-value usage fields are omitted. Before the first assistant response, the
-right side of line 2 is empty; extension status stays centered either way.
+Background billing uses the first valid `background-usage` record per execution ID; managed foreground results omit duplicate `usage`. Opening `/bg`, detaching, or repeating `bg read`/`wait` does not add billing. Accrued worker retry, cancellation, failure, and provider-supplied compaction usage is included when settled; missing usage is not fabricated. Quarantined late settlements are excluded from active totals. This does not change the footer's active-branch scope (session-wide statistics can include other branches), parent CTX estimate, or latest-parent-request `CH`. See the [persisted record format](../../session-format.md#background-records).
+
+The Background extension can supply centered status text such as `bg 2 active · 1 finished`. These counts cover managed executions, including foreground ones; worker rows are not separate groups. The old prompt-stall watchdog and `waiting for input` counts are no longer generated.
+
+Zero-value usage fields are omitted. Without any accounted usage, the right side of line 2 is empty; extension status stays centered either way.
 
 ## Narrow-width drop order
 

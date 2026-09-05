@@ -285,6 +285,29 @@ Extension state persistence. Does NOT participate in LLM context.
 
 Use `customType` to identify your extension's entries on reload. Interactive mode can render custom entries via `pi.registerEntryRenderer(customType, renderer)`, but they still do not participate in LLM context.
 
+### Background records
+
+Managed execution uses ordinary version-3 custom entries; it does not add a new session-file version or persist live execution handles.
+
+| `customType` | `data` | Purpose |
+|---|---|---|
+| `background-usage` | `{ version: 1, taskId, usage }` | Independent settlement of provider-reported nested usage |
+| `background-task-result` | `{ version: 1, task }` | Bounded terminal `BackgroundTask` snapshot for history |
+
+`taskId` is the execution/group ID, not a worker display number. `usage` has the `Usage` shape above. Consumers count only the first valid usage record per ID within the entries they aggregate; malformed records, unsupported versions, blank IDs, and non-finite or negative usage/cost values are ignored. A later valid duplicate is not an adjustment. Do not create these host-owned entries yourself or bill again from a result/read/notification.
+
+A `BackgroundTask` has `id`, `kind` (`bash` or `subagent`; PowerShell shares the shell kind), `title`, `toolCallId`, `anchorId`, `mode`, `status`, and numeric millisecond `startedAt`; optional fields include `endedAt`, `command`, `cwd`, `outputPath`, `projection`, `result`, and `error`. Mode (`foreground` or `background`) is independent of status. Persisted terminal statuses are `completed`, `partial`, `failed`, `cancelled`, or `timeout`; live snapshots can also be `queued`, `running`, or `stopping`.
+
+`projection` contains optional bounded `text` and worker summaries, not worker sessions. The retained result contains bounded text (up to 48 KiB) and bounded serializable details (up to 120 KiB, otherwise omitted); images are replaced with a text omission marker. It is not the full output log. `outputPath`, if present, points to an ephemeral executor-owned file which may already have been removed on eviction or runtime shutdown. Save important output separately.
+
+Terminal history is restored only from the selected branch's valid retained snapshots. This is read-only history, not live execution recovery: no processes or workers are restarted or reattached, and restoration does not replay usage settlement or completion events. Normal branch accounting still reads the independent ledger. Forks can carry historical entries on their copied path, never live execution handles.
+
+These `custom` entries do not enter model context. Automatic delivery instead creates a `custom_message` with `customType: "background-completion"`, a bounded text summary, `display: true`, and `details: { taskId }`. A Subagent group produces one completion summary. A terminal `bg wait` result includes `details.backgroundTaskId`; only persisting that tool result acknowledges delivery, so aborting during an output read cannot consume a notification. Direct `BackgroundContext.wait()` is observational. Observing results does not create more usage. Historical extension-owned `background-task` notifications and old `bg create` tool results remain transcript history, not new runnable tasks.
+
+Session-wide statistics aggregate the ledger across all entries; the bundled Statusline uses the active branch. Accrued retries, failures, cancellations and worker compaction count when usage is reported. No usage is invented for a provider that does not expose it, and worker billing does not occupy the parent's context window. See [SDK session statistics](sdk.md#session-statistics).
+
+**Late settlement quarantine:** an executor that ignores cancellation and settles after its runtime or launch branch is retired cannot append to the replacement session or move its active leaf. The originating session retains the latest 32 bounded quarantine records in memory. For persisted sessions it also appends audit JSONL to `<session-file>.background-late.jsonl`, with `{ version: 1, sessionId, generation, task, usage? }`. A sidecar write failure is reported and leaves only the bounded in-memory record. This sidecar is separate from the session tree and active totals; it is not automatically reconciled, replayed or used to resume execution. Preserve it if you need to audit late provider costs, and manage its disk retention separately from the session file.
+
 ### CustomMessageEntry
 
 Extension-injected messages that DO participate in LLM context.

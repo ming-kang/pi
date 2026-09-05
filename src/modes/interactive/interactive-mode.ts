@@ -841,6 +841,7 @@ export class InteractiveMode {
 		if (!startRenderer) return true;
 		nextUi.start();
 		this.themeController.rebindTui();
+		this.setupBackgroundInputListener();
 		this.rebindExtensionTerminalInputListeners();
 		if (
 			restoreProgress &&
@@ -1860,6 +1861,7 @@ export class InteractiveMode {
 		await this.session.bindExtensions({
 			uiContext,
 			mode: "tui",
+			backgroundEnabled: true,
 			abortHandler: () => {
 				this.restoreQueuedMessagesToEditor({ abort: true });
 			},
@@ -2879,7 +2881,26 @@ export class InteractiveMode {
 	// Key Handlers
 	// =========================================================================
 
+	private backgroundInputUnsubscribe?: () => void;
+
+	private setupBackgroundInputListener(): void {
+		this.backgroundInputUnsubscribe?.();
+		this.backgroundInputUnsubscribe = this.ui.addInputListener((data) => {
+			if (!this.keybindings.matches(data, "app.backgroundTasks.detach")) return undefined;
+			if (!this.isShuttingDown) {
+				const count = this.session.background.detachForeground();
+				this.showStatus(
+					count > 0
+						? `Moved ${count} execution${count === 1 ? "" : "s"} to the background. Use /bg to manage tasks.`
+						: "No foreground Bash or Subagent execution can be moved to the background.",
+				);
+			}
+			return { consume: true };
+		});
+	}
+
 	private setupKeyHandlers(): void {
+		this.setupBackgroundInputListener();
 		// Set up handlers on defaultEditor - they use this.editor for text access
 		// so they work correctly regardless of which editor is active
 		this.defaultEditor.onEscape = () => {
@@ -3954,6 +3975,7 @@ export class InteractiveMode {
 	private async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
+		this.session.background.close();
 		// Keep signal handlers registered until terminal cleanup has completed.
 		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
 		// dispatch and re-sends the signal if only its own listeners remain.
@@ -6575,6 +6597,8 @@ export class InteractiveMode {
 	}
 
 	stop(fullscreenExitOutput = this.settingsManager.getFullscreenExitOutput()): void {
+		this.backgroundInputUnsubscribe?.();
+		this.backgroundInputUnsubscribe = undefined;
 		this.disposeActiveSelector();
 		if (this.settingsManager.getShowTerminalProgress()) {
 			this.ui.terminal.setProgress(false);

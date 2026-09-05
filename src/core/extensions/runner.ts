@@ -6,6 +6,8 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ImageContent, Model, Provider, ProviderHeaders } from "@earendil-works/pi-ai";
 import type { KeyId } from "@earendil-works/pi-tui";
 import { type Theme, theme } from "../../modes/interactive/theme/theme.ts";
+import { BackgroundService } from "../background/service.ts";
+import type { BackgroundContext } from "../background/types.ts";
 import type { ResourceDiagnostic } from "../diagnostics.ts";
 import type { KeybindingsConfig } from "../keybindings.ts";
 import type { ModelRegistry } from "../model-registry.ts";
@@ -72,6 +74,7 @@ import type {
 // Only editor-global shortcuts are reserved here. Picker-specific bindings are not.
 const RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS = [
 	"app.interrupt",
+	"app.backgroundTasks.detach",
 	"app.clear",
 	"app.exit",
 	"app.suspend",
@@ -268,6 +271,8 @@ const noOpUIContext: ExtensionUIContext = {
 };
 
 export class ExtensionRunner {
+	private readonly unboundBackground = new BackgroundService();
+	private getBackground: () => BackgroundContext = () => this.unboundBackground;
 	private extensions: Extension[];
 	private runtime: ExtensionRuntime;
 	private uiContext: ExtensionUIContext;
@@ -340,6 +345,8 @@ export class ExtensionRunner {
 		this.runtime.setModel = actions.setModel;
 		this.runtime.getThinkingLevel = actions.getThinkingLevel;
 		this.runtime.setThinkingLevel = actions.setThinkingLevel;
+
+		this.getBackground = contextActions.getBackground ?? (() => this.unboundBackground);
 
 		// Context actions (required)
 		this.getModel = contextActions.getModel;
@@ -597,6 +604,7 @@ export class ExtensionRunner {
 		message = "This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 	): void {
 		if (!this.staleMessage) {
+			this.unboundBackground.close();
 			this.staleMessage = message;
 			this.runtime.invalidate(message);
 		}
@@ -728,6 +736,10 @@ export class ExtensionRunner {
 		const getModel = this.getModel;
 		const getScopedModels = this.getScopedModels;
 		return {
+			get background() {
+				runner.assertActive();
+				return runner.getBackground();
+			},
 			get ui() {
 				runner.assertActive();
 				return runner.uiContext;

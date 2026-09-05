@@ -37,6 +37,8 @@ import {
 setDefaultStreamFn(streamSimple);
 
 export interface CreateAgentSessionOptions {
+	/** Host-assigned execution identity. Subagents cannot enable background execution. */
+	executionRole?: "main" | "subagent";
 	/** Working directory for project-local discovery. Default: process.cwd() */
 	cwd?: string;
 	/** Global config directory. Default: ~/.pi/agent */
@@ -399,6 +401,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		excludedToolNames,
 		extensionRunnerRef,
 		sessionStartEvent: options.sessionStartEvent,
+		executionRole: options.executionRole,
 	});
 	const extensionsResult = resourceLoader.getExtensions();
 

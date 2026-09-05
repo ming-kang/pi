@@ -1,13 +1,14 @@
-# subagent — isolated foreground delegation
+# subagent — isolated delegation
 
-Adds the `subagent` tool and `/agents` settings command. It delegates bounded work to isolated in-process `AgentSession` workers; it is not a background-worker or fleet-management system.
+Adds the `subagent` tool and `/agents` settings command. It delegates bounded work to isolated in-process `AgentSession` workers; the parent can wait in the foreground or hand the entire invocation to the session-owned [Background service](background.md). This is not a persistent fleet-management system.
 
 ## Tool contract
 
-Every call supplies one ordered `tasks` array with 1–8 items:
+Every call supplies one ordered `tasks` array with 1–8 items and an optional top-level `background` flag:
 
 ```json
 {
+  "background": true,
   "tasks": [
     {
       "prompt": "Locate the provider retry implementation and report exact symbols.",
@@ -17,6 +18,8 @@ Every call supplies one ordered `tasks` array with 1–8 items:
   ]
 }
 ```
+
+`background: true` hands off the whole group after successful preflight. Omit it, or use `false` or `null`, to wait in the foreground. It is not a `tasks[]` field; individual workers cannot be detached. A handoff returns a group reference, not a completed report.
 
 Each item has:
 
@@ -40,6 +43,8 @@ There are exactly two profiles:
 - **General** (`general`): implementation, file changes, and stateful verification with `read`, `bash`, `edit`, and `write`.
 
 There are no user or project profile files. Child sessions load no extensions, skills, prompt templates, or themes, so workers cannot recursively call `subagent` or inherit unrelated extension capabilities. Both profiles load the applicable repository instructions for their working directory, including layered `AGENTS.md` or `CLAUDE.md` files. Explorer's tool set and system prompt remain strictly read-only.
+
+Workers are told not to set `background: true` or bypass the restriction through shell detachment. Their trusted host-assigned execution role also rejects background requests before starting a command or allocating execution resources; the shared shell schema is not dynamically trimmed, and requests are not silently downgraded. Foreground Bash remains available. Workers have no `bg` tool and must report long-lived service requirements to the parent. This is a prompt/execution capability boundary, not an OS sandbox.
 
 Worker contexts are isolated, but workers share the parent's checkout. Concurrent tasks therefore must be independent and must not perform overlapping writes.
 
@@ -71,16 +76,23 @@ Only `explorer` and `general` keys are valid. A malformed, unsupported, unreadab
 
 ## Lifecycle and retry
 
-- The parent call waits until every worker reaches a terminal state.
-- Parent abort, `/reload`, `/new`, `/resume`, `/fork`, and session shutdown abort active and queued workers.
+- By default, the parent call waits until every worker reaches a terminal state. In interactive mode, Ctrl+B hands all eligible foreground invocations to Background without restarting workers or releasing occupied gate slots.
+- Parent abort cancels foreground-owned work, but detached work continues. `bg kill` stops an entire group, including queued workers.
+- `/reload`, `/new`, `/resume`, `/fork`, and session shutdown cancel and clean up owned active and queued workers; forks never copy live execution handles. `/tree` cancels work whose launch anchor is outside the destination branch.
 - Provider auto-retry remains visible under the expanded task Outcome as `Retrying (n/m) in Xs`.
 - A retryable failure that produced no turns or tool use may be retried at task level up to two more times. Runs with partial work are never restarted.
 - Retry backoff does not hold a concurrency slot; another queued worker can run while the failed task waits.
-- A parent abort or session shutdown interrupts queued and retrying workers immediately.
+- Cancellation of the owning execution interrupts queued and retrying workers immediately.
+- Background completion is delivered as one bounded group summary, with reports in input order, at a safe idle boundary after queued user work. `bg wait` can deliver the terminal result instead; repeated `bg read` calls do not trigger notifications or billing.
+- Managed worker usage settles through an independent persisted ledger, not through panel visits or result reads. Accrued usage from retries, failures, cancellations, and provider-supplied worker compaction is retained; missing provider usage is not fabricated. Worker tokens do not count as parent context occupancy.
 
 Child sessions share the parent's canonical model/authentication runtime, so extension-registered providers and current credentials do not need to be mirrored into a second runtime.
 
+Background support is enabled by interactive mode. Built-in print, JSON, and RPC hosts reject background startup; SDK embeddings must explicitly enable it and own the host lifetime. See [SDK](../../sdk.md#background-execution). No daemon, restart recovery of live workers, or Subagent wall-clock timeout parameter is provided.
+
 ## Transcript UI
+
+After handoff, the transcript row is a settled submission snapshot, not a still-pending worker view. Use `/bg` for live group/worker progress and outcomes: wide terminals show list and detail side by side, narrow terminals enter detail from the list. Worker display numbers there are stable within the extension runtime; transcript ordinals below remain local input positions. Opening detail only observes work and does not make the parent wait again.
 
 Pi's native tool chrome owns the aggregate `● Subagent` call marker and the dim continuation rail. The collapsed view is a compact flow containing one cell per task:
 
@@ -127,4 +139,4 @@ Full child transcripts are not stored separately. Activity, errors, reports, usa
 
 ## Deliberate non-features
 
-There are no custom profiles, background agents, persistent worker IDs, unread state, fleet panel, statusline widget, send/stop/resume control plane, completion notifications, chain mode, swarm/coordinator, worktree isolation, nested agents, MCP, hooks, or agent memory.
+There are no custom profiles, independently backgrounded workers, cross-session persistent worker identities, unread state, fleet panel, per-worker send/stop/resume control plane, chain mode, swarm/coordinator, worktree isolation, nested agents, MCP, hooks, or agent memory. The shared `/bg` panel and whole-group cancellation/completion summaries are the supported background controls.

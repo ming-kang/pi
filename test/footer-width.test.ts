@@ -25,6 +25,7 @@ function createSession(options: {
 	branchUsage?: AssistantUsage;
 	compactionUsage?: AssistantUsage;
 	toolUsage?: AssistantUsage;
+	backgroundEntries?: Array<Record<string, unknown>>;
 	usingSubscription?: boolean;
 }): AgentSession {
 	const usage = options.usage;
@@ -63,6 +64,8 @@ function createSession(options: {
 			},
 		});
 	}
+
+	entries.push(...(options.backgroundEntries ?? []));
 
 	const session = {
 		state: {
@@ -189,6 +192,40 @@ describe("FooterComponent width handling", () => {
 
 		const statsLine = stripAnsi(footer.render(120)[1]);
 		expect(statsLine).toContain("$1.250");
+	});
+
+	it("counts background ledger costs once across all entries and keeps parent context and cache hit rate", () => {
+		const record = {
+			type: "custom",
+			customType: "background-usage",
+			data: {
+				version: 1,
+				taskId: "group",
+				usage: {
+					input: 500,
+					output: 100,
+					cacheRead: 900,
+					cacheWrite: 0,
+					totalTokens: 1500,
+					cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+				},
+			},
+		};
+		const session = createSession({
+			sessionName: "",
+			usage: {
+				input: 100,
+				output: 10,
+				cacheRead: 50,
+				cacheWrite: 50,
+				cost: { total: 0.5 },
+			},
+			backgroundEntries: [record, record, { ...record, data: { ...record.data, version: 2 } }],
+		});
+		const footer = new FooterComponent(session, createFooterData(1));
+		const stats = stripAnsi(footer.render(200)[1]);
+		expect(stats).toContain("↑600 ↓110 R950 W50 CH25.0% $2.500");
+		expect(stats).toContain("12.3%/200k");
 	});
 
 	it("shows the latest cache hit rate when cache usage is present", () => {

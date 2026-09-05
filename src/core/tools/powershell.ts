@@ -24,6 +24,7 @@ export type PowerShellOperations = BashOperations;
 export type PowerShellSpawnContext = BashSpawnContext;
 export type PowerShellSpawnHook = BashSpawnHook;
 export type PowerShellToolDetails = BashToolDetails;
+/** PowerShell deliberately shares Bash's managed background lifecycle and output limits. */
 export type PowerShellToolInput = BashToolInput;
 
 export interface PowerShellToolOptions

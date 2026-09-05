@@ -45,6 +45,7 @@ export function subagentToolDescription(): string {
 		"Delegate bounded work to isolated one-shot subagents. Workers cannot see the parent conversation: each task needs a complete self-contained briefing, and you receive only their final reports.",
 		"",
 		`Provide 1-${MAX_TASKS} independent tasks; for sequential work, call this tool again with the previous result folded into the next briefing.`,
+		"By default, wait for the whole invocation. In an enabled host, top-level background: true returns a group reference after preflight, not completed reports. Use it when you have independent work to continue; use bg read/wait/kill to inspect, await, or stop the entire group. Individual workers cannot be backgrounded independently or start background work themselves.",
 		"",
 		"Agent profiles:",
 		"- explorer (default): read-only investigation — finding files, searching code, and answering codebase questions; bash is restricted to read-only inspection (git log/diff/blame, ls, cat, and similar). Never use for changes.",

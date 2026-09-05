@@ -1,8 +1,10 @@
 import { Compile } from "typebox/compile";
 import { describe, expect, it, vi } from "vitest";
-import type { ExtensionAPI, ToolDefinition } from "../src/core/extensions/types.ts";
+import { BackgroundService } from "../src/core/background/service.ts";
+import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
 import subagent from "../src/extensions/subagent/index.ts";
 import { SubagentParamsSchema, TaskSchema } from "../src/extensions/subagent/schema.ts";
+import type { SdkRunnerOptions } from "../src/extensions/subagent/sdk-runner.ts";
 import type { SubagentDetails, SubagentExecutionResult } from "../src/extensions/subagent/types.ts";
 
 const validateParams = Compile(SubagentParamsSchema);
@@ -108,6 +110,12 @@ describe("subagent extension registration", () => {
 			toolName: "subagent",
 			details: { status: "completed", runs: [{ status: "completed" }] },
 		});
+		expect(
+			await toolResultHandler?.({
+				toolName: "subagent",
+				details: { status: "failed", runs: [{ status: "failed" }], background: { id: "group" } },
+			}),
+		).toBeUndefined();
 		expect(failed).toEqual({ isError: true });
 		expect(partial).toBeUndefined();
 		expect(completed).toBeUndefined();
@@ -209,8 +217,11 @@ describe("subagent extension registration", () => {
 		};
 		expect(paramsSchema.type).toBe("object");
 		expect(paramsSchema.required).toEqual(["tasks"]);
-		expect(Object.keys(paramsSchema.properties)).toEqual(["tasks"]);
+		expect(Object.keys(paramsSchema.properties)).toEqual(["background", "tasks"]);
 		expect(paramsSchema.additionalProperties).toBe(false);
+		expect(validateParams.Check({ background: true, tasks: [{ prompt: "Work" }] })).toBe(true);
+		expect(validateParams.Check({ background: false, tasks: [{ prompt: "Work" }] })).toBe(true);
+		expect(validateParams.Check({ tasks: [{ prompt: "Work", background: true }] })).toBe(false);
 		// No legacy top-level mode or description fields survive.
 		expect(paramsSchema.properties).not.toHaveProperty("mode");
 		expect(paramsSchema.properties).not.toHaveProperty("description");
@@ -236,3 +247,198 @@ describe("subagent extension registration", () => {
 		expect(stringValues(agentSchema).sort()).toEqual(["explorer", "general"]);
 	});
 });
+
+function managedHarness(enabled = true) {
+	let tool!: ToolDefinition<typeof SubagentParamsSchema, SubagentDetails>;
+	const settled = vi.fn();
+	const service = new BackgroundService({ enabled, onSettled: settled });
+	const execute = vi.spyOn(service, "execute");
+	const shutdown: Array<() => Promise<void>> = [];
+	subagent({
+		registerTool: (definition: typeof tool) => {
+			tool = definition;
+		},
+		registerCommand: () => {},
+		getThinkingLevel: () => "off",
+		on: (name: string, handler: () => Promise<void>) => {
+			if (name === "session_shutdown") shutdown.push(handler);
+		},
+	} as unknown as ExtensionAPI);
+	const ctx = {
+		background: service,
+		cwd: process.cwd(),
+		model: { id: "m", provider: "test", reasoning: false },
+		modelRegistry: {},
+		modelRuntime: {},
+		isProjectTrusted: () => false,
+		ui: { notify: vi.fn() },
+	} as unknown as ExtensionContext;
+	return { tool, ctx, service, execute, settled, shutdown };
+}
+
+it.each([true, false])(
+	"manages one entire invocation, background=%s, without restarting workers on detach",
+	async (background) => {
+		runSdkTaskMock.mockReset();
+		const workers: Array<{ options: SdkRunnerOptions; finish: () => void }> = [];
+		runSdkTaskMock.mockImplementation(
+			(options: SdkRunnerOptions) =>
+				new Promise<void>((resolve) => {
+					workers.push({
+						options,
+						finish: () => {
+							options.dispatch({
+								type: "assistant_message_settled",
+								usage: {
+									input: 1,
+									output: 1,
+									cacheRead: 0,
+									cacheWrite: 0,
+									totalTokens: 2,
+									cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.1 },
+								},
+							});
+							options.dispatch({
+								type: "settle",
+								verdict: "completed",
+								report: options.task.prompt,
+								error: undefined,
+								endedAt: Date.now(),
+							});
+							resolve();
+						},
+					});
+				}),
+		);
+		const h = managedHarness();
+		const parent = new AbortController();
+		const updates = vi.fn();
+		const submitted = h.tool.execute(
+			"call-managed",
+			{ background, tasks: Array.from({ length: 7 }, (_, i) => ({ prompt: `task ${i}` })) },
+			parent.signal,
+			updates,
+			h.ctx,
+		);
+		await vi.waitFor(() => expect(workers).toHaveLength(6));
+		if (!background) expect(h.service.detachForeground()).toBe(1);
+		const result = await submitted;
+		expect(result.details?.background?.id).toBe(h.service.list()[0]?.id);
+		expect(h.execute).toHaveBeenCalledTimes(1);
+		expect(h.service.detachForeground()).toBe(0);
+		const callsAtHandoff = updates.mock.calls.length;
+		parent.abort();
+		for (const cleanup of h.shutdown) await cleanup(); // Managed executions are not owned by this closure.
+		for (const worker of workers) expect(worker.options.scope.signal.aborted).toBe(false);
+		const initial = h.service.list()[0]!;
+		expect(initial.projection?.workers).toHaveLength(7);
+		expect(initial.projection?.workers?.[0]).toMatchObject({ label: "#1 explorer", prompt: "task 0" });
+		for (const worker of workers.slice(0, 6)) worker.finish();
+		await vi.waitFor(() => expect(workers).toHaveLength(7));
+		workers[6]!.finish();
+		const final = await h.service.wait(initial.id, 1000);
+		expect(final.status).toBe("completed");
+		expect(final.projection?.workers?.map((worker) => worker.id)).toEqual(
+			initial.projection?.workers?.map((worker) => worker.id),
+		);
+		expect(updates).toHaveBeenCalledTimes(callsAtHandoff);
+		expect(h.settled).toHaveBeenCalledTimes(1);
+		expect(h.settled.mock.calls[0]?.[1]).toMatchObject({ totalTokens: 14, cost: { total: expect.closeTo(0.7) } });
+		expect(final.result?.usage).toBeUndefined();
+		expect(result.details?.runs[6]?.status).toBe("queued"); // Historical snapshot stays unchanged.
+		await h.service.shutdown();
+	},
+);
+
+it("rejects a background batch before accepting or starting any worker when preflight fails", async () => {
+	runSdkTaskMock.mockReset();
+	const h = managedHarness();
+	await expect(
+		h.tool.execute(
+			"bad-preflight",
+			{ background: true, tasks: [{ prompt: "valid" }, { prompt: "invalid", cwd: "nonexistent-subagent-cwd" }] },
+			undefined,
+			undefined,
+			h.ctx,
+		),
+	).rejects.toThrow("tasks[1] failed to resolve");
+	expect(runSdkTaskMock).not.toHaveBeenCalled();
+	expect(h.service.list()[0]?.status).toBe("failed");
+	expect(h.service.pendingNotifications()).toEqual([]);
+	await h.service.shutdown();
+});
+
+it("keeps disabled-host foreground fallback, while explicit background reaches host rejection", async () => {
+	runSdkTaskMock.mockReset();
+	runSdkTaskMock.mockImplementation(async (options: SdkRunnerOptions) => {
+		options.dispatch({
+			type: "settle",
+			verdict: "completed",
+			report: "legacy",
+			error: undefined,
+			endedAt: Date.now(),
+		});
+	});
+	const h = managedHarness(false);
+	const result = await h.tool.execute(
+		"legacy",
+		{ background: false, tasks: [{ prompt: "work" }] },
+		undefined,
+		undefined,
+		h.ctx,
+	);
+	expect(result.details?.status).toBe("completed");
+	expect(h.execute).not.toHaveBeenCalled();
+	await expect(
+		h.tool.execute("disabled", { background: true, tasks: [{ prompt: "work" }] }, undefined, undefined, h.ctx),
+	).rejects.toThrow("not available");
+	expect(h.execute).toHaveBeenCalledTimes(1);
+	expect(runSdkTaskMock).toHaveBeenCalledTimes(1);
+	await expect(
+		h.tool.execute("missing", { background: true, tasks: [{ prompt: "work" }] }, undefined, undefined, {
+			...h.ctx,
+			background: undefined,
+		} as unknown as ExtensionContext),
+	).rejects.toThrow("Background host");
+});
+
+it.each([
+	["completed", "failed", "partial"],
+	["failed", "failed", "failed"],
+	["aborted", "aborted", "cancelled"],
+] as const)(
+	"preserves ordered %s/%s reports and maps the managed terminal status to %s",
+	async (first, second, status) => {
+		runSdkTaskMock.mockReset();
+		runSdkTaskMock.mockImplementation(async (options: SdkRunnerOptions) => {
+			const verdict = options.task.prompt === "first" ? first : second;
+			options.dispatch({
+				type: "settle",
+				verdict,
+				report: `${options.task.prompt} report`,
+				error: verdict === "completed" ? undefined : "reason",
+				endedAt: Date.now(),
+			});
+		});
+		const h = managedHarness();
+		const result = await h.tool.execute(
+			"statuses",
+			{ tasks: [{ prompt: "first" }, { prompt: "second" }] },
+			undefined,
+			undefined,
+			h.ctx,
+		);
+		expect(h.service.list()[0]?.status).toBe(status);
+		expect(result.details?.runs.map((run) => run.status)).toEqual([first, second]);
+		const text = result.content
+			.filter((part) => part.type === "text")
+			.map((part) => part.text)
+			.join(" ");
+		expect(text.indexOf("first report")).toBeLessThan(text.indexOf("second report"));
+		expect(text).toContain("reason");
+		expect(result.usage).toBeUndefined();
+		expect(result.details?.background).toBeUndefined();
+		expect(h.settled).toHaveBeenCalledTimes(1);
+		await h.service.shutdown();
+	},
+);

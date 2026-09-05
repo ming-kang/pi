@@ -1075,3 +1075,20 @@ describe("subagent rendering", () => {
 		expect(output).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/u);
 	});
 });
+
+it("renders a settled handoff snapshot without a spinner, elapsed clock, or live outcome", () => {
+	const snapshot = details({
+		status: "running",
+		runs: [liveRun()],
+		background: { id: "subagent-group", submittedAt: 1234 },
+	});
+	for (const expanded of [false, true]) {
+		const text = renderLines(snapshot, { expanded }).join(" ");
+		expect(text).toContain("Handed to background");
+		expect(text).toContain("subagent-group");
+		expect(text).toContain("/bg");
+		expect(text).not.toContain("Still running");
+		expect(text).not.toContain("0 tok");
+		if (expanded) expect(text).toContain("running at handoff");
+	}
+});

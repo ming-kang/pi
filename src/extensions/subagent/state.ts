@@ -53,6 +53,7 @@ export type SubagentRunEvent =
 	| { type: "compaction_started"; startedAt: number }
 	| {
 			type: "compaction_ended";
+			usage?: Usage;
 			tokensBefore: number | undefined;
 			tokensAfter: number | undefined;
 			error: string | undefined;
@@ -245,8 +246,8 @@ function handleRetryScheduled(
 	draft: SubagentRunState,
 	event: Extract<SubagentRunEvent, { type: "retry_scheduled" }>,
 ): void {
-	// Full reset: only runs that produced nothing are retried, so nothing of
-	// value is discarded. The retry view stays visible through the backoff.
+	// Reset attempt progress, never accrued provider tokens or cost. Even an
+	// attempt with no completed turns can have billable failed requests.
 	const error = draft.error ?? "Subagent failed before retry.";
 	draft.status = "queued";
 	draft.error = undefined;
@@ -254,7 +255,9 @@ function handleRetryScheduled(
 	draft.endedAt = undefined;
 	draft.report = "";
 	draft.activities = [];
-	draft.usage = emptyUsage();
+	draft.usage.turns = 0;
+	draft.usage.toolUses = 0;
+	draft.usage.contextTokens = undefined;
 	draft.retry = makeRetry(event.attempt, event.maxAttempts, event.deadline, error);
 }
 
@@ -335,6 +338,10 @@ function handleCompactionEnded(
 	draft: SubagentRunState,
 	event: Extract<SubagentRunEvent, { type: "compaction_ended" }>,
 ): void {
+	// Summary usage is billable, but is not the worker conversation watermark.
+	const contextTokens = draft.usage.contextTokens;
+	addUsage(draft.usage, event.usage);
+	draft.usage.contextTokens = contextTokens;
 	const activity = [...draft.activities]
 		.reverse()
 		.find((candidate) => candidate.id === COMPACTION_ACTIVITY_ID && candidate.status === "running");

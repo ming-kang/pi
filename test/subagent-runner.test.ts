@@ -108,6 +108,8 @@ describe("subagent SDK runner", () => {
 		expect(systemPrompt).toContain("Only your final message is returned to the caller");
 		expect(systemPrompt).toContain("code snippets only when the exact text is load-bearing");
 		expect(systemPrompt).toContain("The caller will relay it to the user");
+		expect(systemPrompt).toContain("Background execution is not available inside subagents");
+		expect(systemPrompt).toContain("do not use shell detachment to bypass this restriction");
 		// The general profile loads project instructions (this repo has AGENTS.md).
 		expect(systemPrompt).toContain("<project_context>");
 		const general = AGENT_PROFILES.find((profile) => profile.name === "general")!;

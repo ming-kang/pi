@@ -410,6 +410,16 @@ export function renderSubagentResult(
 	isError: boolean,
 ): Component {
 	const details = result.details;
+	if (details?.background) {
+		const summary = `Handed to background · ${details.background.id}`;
+		const rows = options.expanded
+			? details.runs
+					.map((run, index) => `#${index + 1} ${profileLabel(run.agent)} · ${run.status} at handoff`)
+					.join("\n")
+			: "";
+		const text = [summary, rows, "Use /bg for live progress and outcomes."].filter(Boolean).join("\n");
+		return new Text(theme.fg("muted", text), 0, 0);
+	}
 	if (!details || !Array.isArray(details.runs)) return fallbackResult(result, theme, isError);
 	if (details.runs.length === 0) return new Text(theme.fg("muted", "Starting..."), 0, 0);
 

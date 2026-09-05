@@ -37,6 +37,7 @@ function workerSystemPrompt(base: string | undefined, task: ResolvedSubagentTask
 		"Stay inside the assigned working directory and delegated scope.",
 		"Do not ask the end user questions. If blocked, report the exact blocker and what would resolve it.",
 		"Do not spawn subagents or invoke tools outside the configured tool list.",
+		"Background execution is not available inside subagents. Do not set `background: true` on bash or other tools, and do not use shell detachment to bypass this restriction. Run commands in the foreground and wait for them to finish before reporting. Only the parent agent or the user can move the entire subagent invocation to the background. If the task requires a long-lived background service, report the requirement to the parent instead of starting it.",
 		"When referencing files in the final report, use paths relative to the task's working directory so the caller can locate them unambiguously.",
 		"Include code snippets only when the exact text is load-bearing (a bug you found, a signature the caller asked for); do not recap code you merely read.",
 		"End with a concise report covering findings or changes, verification performed, blockers, and unresolved risks. The caller will relay it to the user, so include only the essentials.",
@@ -122,6 +123,7 @@ export function mapSessionEvent(
 		return {
 			runEvent: {
 				type: "compaction_ended",
+				usage: event.result?.usage,
 				tokensBefore: event.result?.tokensBefore,
 				tokensAfter: event.result?.estimatedTokensAfter,
 				error: event.errorMessage,
@@ -261,6 +263,7 @@ export async function runSdkTask(options: SdkRunnerOptions): Promise<void> {
 			await resourceLoader.reload();
 			if (scope.signal.aborted) return { kind: "aborted" };
 			const created = await createAgentSession({
+				executionRole: "subagent",
 				cwd: task.cwd,
 				agentDir,
 				modelRuntime,

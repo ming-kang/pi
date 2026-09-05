@@ -229,3 +229,13 @@ describe("Subagent SDK initialization aborts", () => {
 		expect(sdkMocks.reload).not.toHaveBeenCalled();
 	});
 });
+
+it("binds the child SDK session to immutable subagent execution identity", async () => {
+	sdkMocks.reload.mockResolvedValue(undefined);
+	sdkMocks.createAgentSession.mockReset();
+	sdkMocks.createAgentSession.mockResolvedValue({ session: fakeSession() });
+	const harness = start();
+	await harness.done;
+	expect(sdkMocks.createAgentSession).toHaveBeenCalledWith(expect.objectContaining({ executionRole: "subagent" }));
+	harness.scope.dispose();
+});

@@ -82,6 +82,8 @@ export interface SubagentInvocationOptions {
 	signal?: AbortSignal;
 	gate: ConcurrencyGate;
 	onUpdate?: (details: SubagentDetails) => void;
+	/** Whole-batch preflight and initial publication finished; no worker has started. */
+	onAccepted?: () => void;
 	onConfigWarning?: (message: string) => void;
 	registerAbort?: (abort: () => Promise<void>) => () => void;
 	/** Test hook: overrides the task-retry backoff base delay. */
@@ -254,6 +256,7 @@ export async function runSubagentInvocation(options: SubagentInvocationOptions):
 		// result order identical to input order. There is no single-task branch:
 		// one task is just a batch of one.
 		try {
+			if (!invocationScope.aborted) options.onAccepted?.();
 			await Promise.all(
 				resolved.map((task, index) => {
 					const dispatchToRun = (event: SubagentRunEvent): void => dispatch(index, event);

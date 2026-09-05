@@ -2,6 +2,21 @@
  * Extension system for lifecycle events and custom tools.
  */
 
+export type {
+	BackgroundCompletion,
+	BackgroundContext,
+	BackgroundControl,
+	BackgroundExecution,
+	BackgroundKind,
+	BackgroundMode,
+	BackgroundProjection,
+	BackgroundRead,
+	BackgroundStatus,
+	BackgroundTask,
+	BackgroundTerminalStatus,
+	BackgroundToolOutcome,
+	BackgroundWorker,
+} from "../background/types.ts";
 export type { SlashCommandInfo, SlashCommandSource } from "../slash-commands.ts";
 export type { SourceInfo } from "../source-info.ts";
 export {

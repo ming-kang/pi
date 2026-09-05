@@ -2,9 +2,7 @@
  * background — shared limits and identity.
  *
  * Numbers that more than one module needs live here so a change lands in one
- * place; module-private layout constants stay with their view. Registry option
- * defaults (`DEFAULT_MAX_OUTPUT_BYTES`, the stall watchdog tuning) stay in
- * registry.ts, documented next to the options they tune.
+ * place; execution and retention limits belong to the core service.
  */
 
 /** customType of the `<background-task>` message sent to the model. */
@@ -19,9 +17,6 @@ export const BG_LIST_FINISHED_SHOWN = 5;
 
 /** Bounded output delta returned by a successful wait. */
 export const BG_WAIT_DELTA_BYTES = 32 * 1024;
-
-/** Tail peek included in a wait timeout result so progress stays visible. */
-export const BG_WAIT_PEEK_BYTES = 2 * 1024;
 
 /** Wait-window bounds shared by execution and the pending-call renderer. */
 export const BG_WAIT_DEFAULT_MS = 20_000;

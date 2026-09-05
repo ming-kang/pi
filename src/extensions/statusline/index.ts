@@ -13,7 +13,13 @@ import type { Usage } from "@earendil-works/pi-ai";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "../../core/extensions/types.ts";
 import type { SessionEntry } from "../../core/session-manager.ts";
-import { addUsageToTotals, createUsageTotals, type UsageTotals } from "../../core/usage-totals.ts";
+import {
+	addUsageToTotals,
+	createUsageTotals,
+	getAccountedUsages,
+	getBackgroundUsageRecord,
+	type UsageTotals,
+} from "../../core/usage-totals.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 
 const CONTEXT_WARNING_PERCENT = 70;
@@ -89,7 +95,7 @@ interface BranchStats {
 }
 
 /**
- * One pass over the branch: latest thinking level + cumulative usage.
+ * Latest thinking level and parent cache hit rate, plus accounted branch usage.
  * Cached across footer paints while leaf identity + usage fingerprint hold.
  */
 function entryUsage(entry: SessionEntry): Usage | undefined {
@@ -99,13 +105,15 @@ function entryUsage(entry: SessionEntry): Usage | undefined {
 		return undefined;
 	}
 	if (entry.type === "branch_summary" || entry.type === "compaction") return entry.usage;
-	return undefined;
+	return getBackgroundUsageRecord(entry)?.usage;
 }
 
 function computeBranchStats(branchEntries: SessionEntry[]): BranchStats {
 	let thinkingLevel: ThinkingLevel = "off";
 	const usageTotals = createUsageTotals();
 	let latestCacheHitPercent: number | undefined;
+
+	for (const usage of getAccountedUsages(branchEntries)) addUsageToTotals(usageTotals, usage);
 
 	for (const entry of branchEntries) {
 		if (entry.type === "thinking_level_change") {
@@ -115,7 +123,6 @@ function computeBranchStats(branchEntries: SessionEntry[]): BranchStats {
 
 		const usage = entryUsage(entry);
 		if (!usage) continue;
-		addUsageToTotals(usageTotals, usage);
 
 		// Keep CH tied to the latest assistant request, matching the native
 		// footer; tool and summary usage contributes only to cumulative totals.

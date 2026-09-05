@@ -32,7 +32,7 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `super+
 | `tui.editor.cursorDown` | `down` | Move cursor down, browsing newer history at the bottom |
 | `tui.editor.historyPrevious` | *(none)* | Select the previous prompt history entry |
 | `tui.editor.historyNext` | *(none)* | Select the next prompt history entry |
-| `tui.editor.cursorLeft` | `left`, `ctrl+b` | Move cursor left |
+| `tui.editor.cursorLeft` | `left` | Move cursor left |
 | `tui.editor.cursorRight` | `right`, `ctrl+f` | Move cursor right |
 | `tui.editor.cursorWordLeft` | `alt+left`, `ctrl+left`, `alt+b` | Move cursor word left |
 | `tui.editor.cursorWordRight` | `alt+right`, `ctrl+right`, `alt+f` | Move cursor word right |
@@ -126,7 +126,10 @@ This routing remains configurable through the ordinary action bindings. For exam
 | `app.suspend` | `ctrl+z` (none on Windows) | Suspend to background |
 | `app.editor.external` | `ctrl+g` | Open in external editor (`externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere) |
 | `app.clipboard.pasteImage` | `ctrl+v` (`alt+v` on Windows and WSL) | Paste image or text from clipboard |
-| `app.backgroundTasks.kill` | `k` | Stop the selected task in the Background task menu |
+| `app.backgroundTasks.detach` | `ctrl+b` | Move all eligible current foreground shell tasks and Subagent groups to the background |
+| `app.backgroundTasks.kill` | `k` | Stop the selected shell task or whole Subagent group in `/bg` |
+
+Ctrl+B also works while `/bg` owns focus. It does not restart execution, reset shell timeouts, detach individual workers, or affect user `!` commands. With no eligible work it only reports that nothing can be moved. See [Background tasks](bundled/extensions/background.md).
 
 ### Sessions
 
@@ -211,10 +214,13 @@ On native Windows, `app.suspend` has no default binding because Windows terminal
 
 ### Emacs Example
 
+Disable the detach action before restoring Ctrl+B as cursor-left (or rebind detach to another key).
+
 ```json
 {
   "tui.editor.historyPrevious": "ctrl+p",
   "tui.editor.historyNext": "ctrl+n",
+  "app.backgroundTasks.detach": [],
   "tui.editor.cursorLeft": ["left", "ctrl+b"],
   "tui.editor.cursorRight": ["right", "ctrl+f"],
   "tui.editor.cursorWordLeft": ["alt+left", "alt+b"],
