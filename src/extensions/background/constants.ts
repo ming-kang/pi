@@ -5,8 +5,10 @@
  * place; execution and retention limits belong to the core service.
  */
 
-/** customType of the `<background-task>` message sent to the model. */
+/** Historical extension-owned completion/stall messages. */
 export const BG_NOTIFICATION_TYPE = "background-task";
+/** Session-owned completions; model content and delivery are unchanged by rendering. */
+export const BG_COMPLETION_TYPE = "background-completion";
 
 /** Default and floor for a `read` slice; the ceiling is truncate.ts's DEFAULT_MAX_BYTES. */
 export const BG_LOGS_DEFAULT_BYTES = 8 * 1024;

@@ -15,6 +15,7 @@ import type {
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type { CustomMessage } from "../src/core/messages.ts";
 import { runKill, runList, runRead, runWait } from "../src/extensions/background/actions.ts";
+import { renderBackgroundCompletion } from "../src/extensions/background/completion-render.ts";
 import { createBackgroundExtension } from "../src/extensions/background/index.ts";
 import {
 	type BgRenderState,
@@ -81,6 +82,8 @@ describe("public Background management", () => {
 			registerCommand: vi.fn(),
 		} as unknown as ExtensionAPI;
 		createBackgroundExtension()(pi);
+		expect(pi.registerMessageRenderer).toHaveBeenCalledWith("background-completion", renderBackgroundCompletion);
+		expect(pi.registerMessageRenderer).toHaveBeenCalledWith("background-task", renderBackgroundNotification);
 		expect(tool?.name).toBe("bg");
 		expect(tool?.renderShell).toBeUndefined();
 		expect(JSON.stringify(tool?.parameters)).not.toContain('"create"');

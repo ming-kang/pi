@@ -2,7 +2,8 @@
 import { isBackgroundTerminal } from "../../core/background/types.ts";
 import type { ExtensionAPI } from "../../core/extensions/types.ts";
 import { boundedText, describeTaskLine, runKill, runList, runRead, runWait } from "./actions.ts";
-import { BG_NOTIFICATION_TYPE } from "./constants.ts";
+import { renderBackgroundCompletion } from "./completion-render.ts";
+import { BG_COMPLETION_TYPE, BG_NOTIFICATION_TYPE } from "./constants.ts";
 import { BackgroundTasksMenu } from "./manager.ts";
 import { type BgRenderState, renderBackgroundNotification, renderBgCall, renderBgResult } from "./render.ts";
 import { BG_PROMPT_GUIDELINES, BG_PROMPT_SNIPPET, BG_TOOL_DESCRIPTION, bgSchema } from "./schema.ts";
@@ -60,6 +61,7 @@ export function createBackgroundExtension(): (pi: ExtensionAPI) => void {
 		});
 		// Stored legacy create results and notification details remain renderable.
 		pi.registerMessageRenderer<BgNotificationDetails>(BG_NOTIFICATION_TYPE, renderBackgroundNotification);
+		pi.registerMessageRenderer(BG_COMPLETION_TYPE, renderBackgroundCompletion);
 		pi.registerCommand("bg", {
 			description: "View and manage Bash tasks and Subagent groups",
 			handler: async (_args, ctx) => {

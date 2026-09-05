@@ -91,6 +91,14 @@ Controls follow `app.backgroundTasks.focusList`, `app.backgroundTasks.focusPrevi
 
 Outside TUI mode, `/bg` sends a bounded summary through the host notification UI rather than mounting a component (print/JSON notification UI is a no-op). Whether background startup is supported is an explicit host capability; a panel is never required for execution.
 
+## Completion notifications
+
+Interactive `background-completion` messages have a compact collapsed summary: outcome, execution kind, short ID, and a command or group brief. Failures retain a short reason; log paths, output and worker reports stay out of the collapsed view. Expand with the configured tool-output expansion binding (default Ctrl+O).
+
+Expanded shell notifications separate **Command**, **Result** or **Error**, a bounded plain-text **Output** tail, **Log** and the full execution ID. Expanded Subagent completions show numbered worker profiles and statuses, a short description when useful, and Markdown **Report** sections; failures distinguish the error from any partial report instead of repeating the generated prompt-heading wrapper. Long metadata wraps, visual output is bounded, and source truncation notices remain visible. These are previews of the saved bounded completion, not live log readers.
+
+Rendering uses only the persisted message text and optional task ID, so saved notifications remain readable after `/reload`, history eviction or restart without looking up a running task. Unrecognized, ambiguous or incomplete saved formats use a neutral, bounded **Details** view rather than guessing worker boundaries or showing the default raw custom-message card. The stored content, model-facing completion, delivery and usage accounting are unchanged. Legacy `background-task` notifications keep their existing renderer. This presentation applies to the interactive transcript; it does not change HTML export or `/tree` selector labels.
+
 ## Lifetime
 
 Background execution belongs to the current session runtime, not a daemon. Parent-turn cancellation still cancels foreground-owned work; after detach it does not cancel background work. Shutdown, `/reload`, `/new`, `/resume`, and `/fork` close admission, stop delivery, cancel work and perform bounded cleanup. `/tree` cancels executions whose launch anchor is absent from the destination branch and suppresses their completion delivery there; ordinary conversation progress along the same branch does not cancel them. Active processes and workers are not reattached across process restart or copied into a fork.
