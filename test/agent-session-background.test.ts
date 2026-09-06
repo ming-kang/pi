@@ -123,13 +123,25 @@ describe("session-owned background host", () => {
 		await session.bindExtensions({ backgroundEnabled: true });
 		const resume = session.pauseBackgroundNotifications();
 		const entries: string[] = [];
+		const snapshotAvailable: boolean[] = [];
 		session.subscribe((event) => {
 			if (event.type === "entry_appended" && event.entry.type === "custom") entries.push(event.entry.customType);
+			if (
+				event.type === "entry_appended" &&
+				event.entry.type === "custom" &&
+				event.entry.customType === BACKGROUND_USAGE_TYPE
+			)
+				snapshotAvailable.push(
+					session.sessionManager
+						.getEntries()
+						.some((entry) => entry.type === "custom" && entry.customType === "background-task-result"),
+				);
 		});
 		const execution = await task(session);
 		execution.finish();
 		await vi.waitFor(() => expect(session.background.get(execution.id).status).toBe("completed"));
 		expect(entries).toEqual([BACKGROUND_USAGE_TYPE, "background-task-result"]);
+		expect(snapshotAvailable).toEqual([true]);
 		expect(session.getSessionStats().tokens.total).toBe(30);
 		expect(session.messages).toHaveLength(0);
 		resume();
@@ -666,7 +678,62 @@ describe("session-owned background host", () => {
 		expect(session.background.pendingNotifications()).toEqual([]);
 	});
 
-	it("acknowledges a claimed notification even when an extension rewrites its role", async () => {
+	it("retains nextTurn context when a completion turn fails before persistence", async () => {
+		const session = await host();
+		const warning = vi.fn();
+		await session.bindExtensions({ backgroundEnabled: true, onError: warning });
+		await session.sendCustomMessage(
+			{ customType: "aside", content: "queued context", display: false },
+			{ deliverAs: "nextTurn" },
+		);
+		const prompt = vi.spyOn(session.agent, "prompt").mockRejectedValueOnce(new Error("delivery failed"));
+		const execution = await task(session);
+		execution.finish();
+		await vi.waitFor(() =>
+			expect(warning).toHaveBeenCalledWith(expect.objectContaining({ event: "background_delivery" })),
+		);
+		prompt.mockRestore();
+		session.retryBackgroundNotifications();
+		await vi.waitFor(() =>
+			expect(session.sessionManager.getEntries().filter((entry) => entry.type === "custom_message")).toHaveLength(2),
+		);
+		await session.waitForIdle();
+		expect(
+			session.sessionManager
+				.getEntries()
+				.flatMap((entry) => (entry.type === "custom_message" ? [entry.customType] : [])),
+		).toEqual(["background-completion", "aside"]);
+	});
+
+	it("retries only nextTurn context that was not persisted during a partial delivery", async () => {
+		const session = await host();
+		await session.bindExtensions({ backgroundEnabled: true });
+		for (const customType of ["first-aside", "second-aside"]) {
+			await session.sendCustomMessage(
+				{ customType, content: customType, display: false },
+				{ deliverAs: "nextTurn" },
+			);
+		}
+		const append = session.sessionManager.appendCustomMessageEntry.bind(session.sessionManager);
+		const persist = vi.spyOn(session.sessionManager, "appendCustomMessageEntry").mockImplementation((...args) => {
+			if (args[0] === "second-aside") throw new Error("persistence failed");
+			return append(...args);
+		});
+		const execution = await task(session);
+		execution.finish();
+		await vi.waitFor(() => expect(persist.mock.calls.some(([type]) => type === "second-aside")).toBe(true));
+		await session.waitForIdle();
+		expect(session.background.pendingNotifications()).toEqual([]);
+		persist.mockRestore();
+		await session.prompt("continue");
+		expect(
+			session.sessionManager
+				.getEntries()
+				.flatMap((entry) => (entry.type === "custom_message" ? [entry.customType] : [])),
+		).toEqual(["background-completion", "first-aside", "second-aside"]);
+	});
+
+	it("acknowledges the original notification when an extension role rewrite is rejected", async () => {
 		const session = await host("main", (pi) => {
 			pi.on("message_end", (event) => {
 				if (event.message.role === "custom" && event.message.customType === "background-completion")

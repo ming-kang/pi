@@ -13,7 +13,7 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import type {
 	Agent,
@@ -52,8 +52,8 @@ import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { sleep } from "../utils/sleep.ts";
 import { normalizeToolResultImages } from "../utils/tool-result-images.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
-import { BackgroundService } from "./background/service.ts";
-import { type BackgroundTask, isBackgroundTerminal } from "./background/types.ts";
+import type { BackgroundService } from "./background/service.ts";
+import { BackgroundSession, type QuarantinedBackgroundSettlement } from "./background/session.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import {
 	type CompactionPreparation,
@@ -114,14 +114,7 @@ import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-promp
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
-import { truncateHead } from "./tools/truncate.ts";
-import {
-	addUsageToTotals,
-	BACKGROUND_USAGE_TYPE,
-	createUsageTotals,
-	getAccountedUsages,
-	getBackgroundUsageRecord,
-} from "./usage-totals.ts";
+import { addUsageToTotals, createUsageTotals, getAccountedUsages } from "./usage-totals.ts";
 
 // ============================================================================
 // Skill Block Parsing
@@ -321,31 +314,7 @@ function estimateMessagesTokens(messages: AgentMessage[]): number {
 // ============================================================================
 
 export class AgentSession {
-	private _background: BackgroundService;
-	private readonly _executionRole: "main" | "subagent";
-	private _backgroundEnabled = false;
-	private _backgroundGeneration = 0;
-	private _backgroundPauseDepth = 0;
-	private _backgroundDrainTimer?: ReturnType<typeof setTimeout>;
-	private _backgroundDraining = false;
-	private _disposed = false;
-	/** Latest 32 late snapshots, excluded from normal totals (including the diagnostic sidecar). */
-	private readonly _quarantinedBackgroundSettlements: Array<{
-		sessionId: string;
-		generation: number;
-		task: BackgroundTask;
-		usage?: Usage;
-	}> = [];
-	get quarantinedBackgroundSettlements(): ReadonlyArray<{
-		sessionId: string;
-		generation: number;
-		task: BackgroundTask;
-		usage?: Usage;
-	}> {
-		return structuredClone(this._quarantinedBackgroundSettlements);
-	}
-	private readonly _backgroundClaims = new Map<string, BackgroundService>();
-	private readonly _backgroundDeliveryFailures = new Set<string>();
+	private readonly _backgroundHost: BackgroundSession;
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
 	readonly settingsManager: SettingsManager;
@@ -423,8 +392,23 @@ export class AgentSession {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settingsManager = config.settingsManager;
-		this._executionRole = config.executionRole ?? "main";
-		this._background = this._createBackground();
+		this._backgroundHost = new BackgroundSession({
+			manager: this.sessionManager,
+			role: config.executionRole ?? "main",
+			canDeliver: () =>
+				this.isIdle &&
+				!this.agent.state.isStreaming &&
+				this.pendingMessageCount === 0 &&
+				!this.agent.hasQueuedMessages() &&
+				this.model !== undefined,
+			deliver: (message) => {
+				// Completion turns skip before_agent_start, but consume nextTurn context.
+				const asides = this._pendingNextTurnMessages.slice();
+				return this._runAgentPrompt(asides.length ? [message, ...asides] : message);
+			},
+			onEntry: (entry) => this._emit({ type: "entry_appended", entry }),
+			onError: (event, error) => this._extensionRunner?.emitError({ extensionPath: "<background>", event, error }),
+		});
 		this._scopedModels = config.scopedModels ?? [];
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
@@ -450,236 +434,21 @@ export class AgentSession {
 	}
 
 	get background(): BackgroundService {
-		return this._background;
+		return this._backgroundHost.service;
 	}
 
-	private _createBackground(): BackgroundService {
-		const manager = this.sessionManager;
-		const generation = ++this._backgroundGeneration;
-		const sessionId = manager.getSessionId();
-		const sessionFile = manager.getSessionFile();
-		const service = new BackgroundService({
-			enabled: this._backgroundEnabled,
-			role: this._executionRole,
-			anchor: () => manager.getLeafId(),
-			onCleanupError: (message) => this._warnBackground("background_cleanup", message),
-			onSettled: (task, usage) => {
-				const sameSession = manager.getSessionId() === sessionId;
-				const onBranch =
-					sameSession &&
-					(task.anchorId === null || manager.getBranch().some((entry) => entry.id === task.anchorId));
-				if (
-					this._disposed ||
-					this._background !== service ||
-					this._backgroundGeneration !== generation ||
-					!onBranch
-				) {
-					// A timed-out executor can ignore abort and report billed usage much later.
-					// Never move the active leaf (even temporarily): the JSONL's last entry
-					// also controls its resumed branch. Keep a separate accounting quarantine.
-					this._quarantinedBackgroundSettlements.push(structuredClone({ sessionId, generation, task, usage }));
-					if (this._quarantinedBackgroundSettlements.length > 32) this._quarantinedBackgroundSettlements.shift();
-					let persistence =
-						"Not persisted: only the latest 32 snapshots are retained in quarantinedBackgroundSettlements; late usage is not accounted in session totals.";
-					if (sessionFile) {
-						try {
-							mkdirSync(dirname(sessionFile), { recursive: true });
-							appendFileSync(
-								`${sessionFile}.background-late.jsonl`,
-								`${JSON.stringify({ version: 1, sessionId, generation, task, usage })}
-`,
-							);
-							// Diagnostic evidence only: never read into the normal usage ledger.
-							persistence = `Saved diagnostic sidecar: ${sessionFile}.background-late.jsonl (not included in normal session totals).`;
-						} catch {
-							persistence = `Sidecar write failed. ${persistence}`;
-						}
-					}
-					this._warnBackground(
-						"background_settlement_quarantined",
-						`Late background settlement ${task.id} was quarantined. ${persistence}`,
-					);
-					return;
-				}
-				const entries = this.sessionManager.getEntries();
-				if (usage && !entries.some((entry) => getBackgroundUsageRecord(entry)?.taskId === task.id)) {
-					this._appendBackgroundEntry(BACKGROUND_USAGE_TYPE, { version: 1, taskId: task.id, usage });
-				}
-				// Persist only snapshots, never runtime execution handles.
-				this._appendBackgroundEntry("background-task-result", JSON.parse(JSON.stringify({ version: 1, task })));
-			},
-		});
-		this._restoreBackgroundHistory(service);
-		service.subscribe(() => this._scheduleBackgroundDrain());
-		return service;
-	}
-
-	private _restoreBackgroundHistory(service: BackgroundService): void {
-		service.restoreHistory(
-			this.sessionManager
-				.getBranch()
-				.flatMap((entry) =>
-					entry.type === "custom" && entry.customType === "background-task-result" ? [entry.data] : [],
-				),
-		);
-	}
-
-	private _warnBackground(event: string, message: string): void {
-		try {
-			this._extensionRunner?.emitError({
-				extensionPath: "<background>",
-				event,
-				error: truncateHead(message, { maxBytes: 4096, maxLines: 32 }).content,
-			});
-		} catch {
-			// Diagnostics must never reject a settlement, cleanup, or scheduled callback.
-		}
-	}
-
-	private _appendBackgroundEntry(customType: string, data: unknown): void {
-		const id = this.sessionManager.appendCustomEntry(customType, data);
-		const entry = this.sessionManager.getEntry(id);
-		if (entry) {
-			try {
-				this._emit({ type: "entry_appended", entry });
-			} catch {
-				// Observers cannot interrupt durable settlement or result publication.
-			}
-		}
+	get quarantinedBackgroundSettlements(): readonly QuarantinedBackgroundSettlement[] {
+		return this._backgroundHost.quarantinedSettlements;
 	}
 
 	/** Pause delivery across asynchronous lifecycle/preflight gaps. Nestable. */
 	pauseBackgroundNotifications(): () => void {
-		this._backgroundPauseDepth++;
-		const release = this._background.pause();
-		let released = false;
-		return () => {
-			if (released) return;
-			released = true;
-			this._backgroundPauseDepth--;
-			release();
-			this._scheduleBackgroundDrain();
-		};
-	}
-
-	private _scheduleBackgroundDrain(): void {
-		if (this._disposed || this._backgroundDrainTimer || this._backgroundDraining) return;
-		this._backgroundDrainTimer = setTimeout(() => {
-			this._backgroundDrainTimer = undefined;
-			void this._drainBackgroundNotifications().catch(() => {
-				this._warnBackground(
-					"background_delivery",
-					"Background notification drain failed; delivery was not confirmed.",
-				);
-			});
-		}, 0);
-		this._backgroundDrainTimer.unref?.();
-	}
-
-	private _backgroundDeliveryIsSafe(service: BackgroundService): boolean {
-		return (
-			!this._disposed &&
-			service === this._background &&
-			service.enabled &&
-			this._backgroundPauseDepth === 0 &&
-			this.isIdle &&
-			!this.agent.state.isStreaming &&
-			this.pendingMessageCount === 0 &&
-			!this.agent.hasQueuedMessages() &&
-			// Without a model the triggered turn can only fail; keep notifications pending.
-			this.model !== undefined
-		);
-	}
-
-	private _backgroundNotificationText(task: BackgroundTask): string {
-		const text = task.result?.content
-			.filter((part) => part.type === "text")
-			.map((part) => part.text)
-			.join("\n");
-		const result = truncateHead(
-			[
-				`Background ${task.kind} ${task.id}: ${task.status} — ${task.title}`,
-				task.outputPath ? `Output: ${task.outputPath}` : "",
-				text || task.error || task.projection?.text || "No text result.",
-			].join("\n"),
-			{ maxBytes: 48 * 1024, maxLines: 2000 },
-		);
-		return result.truncated
-			? `${result.content}\n[Notification truncated; use bg read for the task result.]`
-			: result.content;
-	}
-
-	private async _drainBackgroundNotifications(): Promise<void> {
-		const service = this._background;
-		if (this._backgroundDraining || !this._backgroundDeliveryIsSafe(service)) return;
-		this._backgroundDraining = true;
-		try {
-			const retainedIds = new Set(service.list().map((task) => task.id));
-			for (const id of this._backgroundDeliveryFailures) {
-				if (!retainedIds.has(id)) this._backgroundDeliveryFailures.delete(id);
-			}
-			// One completion per turn; re-check user priority at every scheduled boundary.
-			const task = service.pendingNotifications().find((task) => !this._backgroundDeliveryFailures.has(task.id));
-			if (!task || !service.claimNotification(task.id)) return;
-			this._backgroundClaims.set(task.id, service);
-			let deliveryError: unknown;
-			try {
-				// Notification turns skip before_agent_start on purpose; pending "nextTurn"
-				// context rides the same turn rather than slipping past it.
-				const appMessage: CustomMessage = {
-					role: "custom",
-					customType: "background-completion",
-					display: true,
-					content: this._backgroundNotificationText(task),
-					details: { taskId: task.id },
-					timestamp: Date.now(),
-				};
-				const asides = this._pendingNextTurnMessages.splice(0);
-				await this._runAgentPrompt(asides.length ? [appMessage, ...asides] : appMessage);
-			} catch (error) {
-				deliveryError = error;
-			} finally {
-				if (this._backgroundClaims.delete(task.id)) {
-					// Persistence is the only ack; a settled run without it means delivery failed.
-					// Mark once and let the next user prompt retry — never timer-retry indefinitely.
-					service.releaseNotification(task.id);
-					this._backgroundDeliveryFailures.add(task.id);
-					const reason = deliveryError instanceof Error ? `: ${deliveryError.message}` : "";
-					this._warnBackground(
-						"background_delivery",
-						`Background completion delivery failed for ${task.id}${reason}; it will retry on the next prompt.`,
-					);
-				}
-			}
-		} finally {
-			this._backgroundDraining = false;
-			if (
-				this._backgroundDeliveryIsSafe(service) &&
-				service.pendingNotifications().some((task) => !this._backgroundDeliveryFailures.has(task.id))
-			)
-				this._scheduleBackgroundDrain();
-		}
+		return this._backgroundHost.pause();
 	}
 
 	/** Explicit retry after a host delivery failure; never spins on a timer by itself. */
 	retryBackgroundNotifications(): void {
-		this._backgroundDeliveryFailures.clear();
-		this._scheduleBackgroundDrain();
-	}
-
-	private _getBackgroundMessageClaim(message: CustomMessage): { id: string; service: BackgroundService } | undefined {
-		if (message.customType !== "background-completion") return;
-		const details = message.details as { taskId?: unknown } | undefined;
-		if (typeof details?.taskId !== "string") return;
-		const service = this._backgroundClaims.get(details.taskId);
-		return service ? { id: details.taskId, service } : undefined;
-	}
-
-	private _markBackgroundMessagePersisted(message: CustomMessage): void {
-		const claim = this._getBackgroundMessageClaim(message);
-		if (!claim) return;
-		claim.service.markDelivered(claim.id);
-		this._backgroundClaims.delete(claim.id);
+		this._backgroundHost.retry();
 	}
 
 	get modelRuntime(): ModelRuntime {
@@ -925,14 +694,33 @@ export class AgentSession {
 	// Track last assistant message for auto-compaction check
 	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
 
+	/** Persist model/custom messages and consume queued context only after the append succeeds. */
+	private _persistMessage(message: AgentMessage): boolean {
+		if (message.role === "custom") {
+			this.sessionManager.appendCustomMessageEntry(
+				message.customType,
+				message.content,
+				message.display,
+				message.details,
+			);
+			const pendingIndex = this._pendingNextTurnMessages.indexOf(message);
+			if (pendingIndex !== -1) this._pendingNextTurnMessages.splice(pendingIndex, 1);
+		} else if (message.role === "user" || message.role === "assistant" || message.role === "toolResult") {
+			this.sessionManager.appendMessage(message);
+		} else {
+			// Bash execution, compaction and branch summaries are persisted by their owners.
+			return false;
+		}
+		if (message.role === "toolResult") this._backgroundHost.acknowledgeWaitResult(message.details);
+		return true;
+	}
+
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = async (event: AgentEvent): Promise<void> => {
 		// Preserve host delivery identity before extension message_end transforms.
 		// Content/details may be replaced, but a persisted replacement is still an ack.
-		const backgroundClaim =
-			event.type === "message_end" && event.message.role === "custom"
-				? this._getBackgroundMessageClaim(event.message)
-				: undefined;
+		const acknowledgeBackground =
+			event.type === "message_end" ? this._backgroundHost.messageAcknowledgement(event.message) : undefined;
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
@@ -963,49 +751,7 @@ export class AgentSession {
 
 		// Handle session persistence
 		if (event.type === "message_end") {
-			// Check if this is a custom message from extensions
-			if (event.message.role === "custom") {
-				// Persist as CustomMessageEntry
-				this.sessionManager.appendCustomMessageEntry(
-					event.message.customType,
-					event.message.content,
-					event.message.display,
-					event.message.details,
-				);
-			} else if (
-				event.message.role === "user" ||
-				event.message.role === "assistant" ||
-				event.message.role === "toolResult"
-			) {
-				// Regular LLM message - persist as SessionMessageEntry
-				this.sessionManager.appendMessage(event.message);
-				if (event.message.role === "toolResult") {
-					// A resolved wait is not delivery: only acknowledge the final persisted details,
-					// after tool-result/message hooks. Removing the marker favors duplication over loss.
-					const details: unknown = event.message.details;
-					if (details && typeof details === "object" && "backgroundTaskId" in details) {
-						const id = details.backgroundTaskId;
-						if (
-							typeof id === "string" &&
-							this._background
-								.list()
-								.some(
-									(task) => task.id === id && task.mode === "background" && isBackgroundTerminal(task.status),
-								)
-						) {
-							this._background.markDelivered(id);
-						}
-					}
-				}
-			}
-			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
-
-			// A claimed completion reaching message_end is delivered, whatever role an
-			// extension rewrote it to — the transcript carries it either way.
-			if (backgroundClaim) {
-				backgroundClaim.service.markDelivered(backgroundClaim.id);
-				this._backgroundClaims.delete(backgroundClaim.id);
-			}
+			if (this._persistMessage(event.message)) acknowledgeBackground?.();
 
 			// Track assistant message for auto-compaction (checked on agent_end)
 			if (event.message.role === "assistant") {
@@ -1196,9 +942,7 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
-		this._disposed = true;
-		this._background.close();
-		if (this._backgroundDrainTimer) clearTimeout(this._backgroundDrainTimer);
+		this._backgroundHost.dispose();
 		try {
 			this.abortRetry();
 			this.abortCompaction();
@@ -1594,7 +1338,6 @@ export class AgentSession {
 				for (const msg of this._pendingNextTurnMessages) {
 					messages.push(msg);
 				}
-				this._pendingNextTurnMessages = [];
 
 				// Emit before_agent_start extension event
 				const result = await this._extensionRunner.emitBeforeAgentStart(
@@ -1841,13 +1584,8 @@ export class AgentSession {
 
 	private _appendCustomMessage(appMessage: CustomMessage): void {
 		this.agent.state.messages.push(appMessage);
-		this.sessionManager.appendCustomMessageEntry(
-			appMessage.customType,
-			appMessage.content,
-			appMessage.display,
-			appMessage.details,
-		);
-		this._markBackgroundMessagePersisted(appMessage);
+		this._persistMessage(appMessage);
+		this._backgroundHost.messageAcknowledgement(appMessage)?.();
 		this._emit({ type: "message_start", message: appMessage });
 		this._emit({ type: "message_end", message: appMessage });
 	}
@@ -2818,8 +2556,7 @@ export class AgentSession {
 		const resumeBackground = this.pauseBackgroundNotifications();
 		try {
 			if (bindings.backgroundEnabled !== undefined) {
-				this._backgroundEnabled = bindings.backgroundEnabled && this._executionRole === "main";
-				this._background.setEnabled(this._backgroundEnabled);
+				this._backgroundHost.setEnabled(bindings.backgroundEnabled);
 			}
 			if (bindings.uiContext !== undefined) {
 				this._extensionUIContext = bindings.uiContext;
@@ -3001,7 +2738,7 @@ export class AgentSession {
 				setThinkingLevel: (level) => this.setThinkingLevel(level),
 			},
 			{
-				getBackground: () => this._background,
+				getBackground: () => this.background,
 				getModel: () => this.model,
 				getScopedModels: () => this._scopedModels,
 				isIdle: () => this.isIdle,
@@ -3206,17 +2943,15 @@ export class AgentSession {
 		try {
 			const oldRunner = this._extensionRunner;
 			const previousFlagValues = oldRunner.getFlagValues();
-			this._background.close();
-			await Promise.all([this._background.shutdown(), this.abort()]);
+			this.background.close();
+			await Promise.all([this.background.shutdown(), this.abort()]);
 			await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" });
 			oldRunner.invalidate();
 			await this.settingsManager.reload();
 			this.syncQueueModesFromSettings();
 			resetApiProviders();
 			await this._resourceLoader.reload();
-			this._background = this._createBackground();
-			this._backgroundDeliveryFailures.clear();
-			this._backgroundClaims.clear();
+			this._backgroundHost.replaceService();
 			this._buildRuntime({
 				activeToolNames: this.getActiveToolNames(),
 				flagValues: previousFlagValues,
@@ -3224,7 +2959,7 @@ export class AgentSession {
 			});
 
 			const hasBindings =
-				this._backgroundEnabled ||
+				this.background.enabled ||
 				this._extensionUIContext ||
 				this._extensionCommandContextActions ||
 				this._extensionShutdownHandler ||
@@ -3655,7 +3390,7 @@ export class AgentSession {
 				newLeafId = targetId;
 			}
 
-			await this._background.cancelOutsideBranch(
+			await this.background.cancelOutsideBranch(
 				new Set(newLeafId === null ? [] : this.sessionManager.getBranch(newLeafId).map((entry) => entry.id)),
 			);
 
@@ -3690,7 +3425,7 @@ export class AgentSession {
 				this.sessionManager.appendLabelChange(targetId, label);
 			}
 
-			this._restoreBackgroundHistory(this._background);
+			this._backgroundHost.restoreHistory();
 
 			// Update agent state
 			const sessionContext = this.sessionManager.buildSessionContext();

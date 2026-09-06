@@ -122,6 +122,27 @@ describe("native managed shell execution", () => {
 		expect(exec).toHaveBeenCalledOnce();
 	});
 
+	it("preserves partial output when a failed command completes before its handoff", async () => {
+		const background = host();
+		const execute = background.execute.bind(background);
+		vi.spyOn(background, "execute").mockImplementation((request) =>
+			execute({ ...request, run: (control) => request.run({ ...control, accept: () => {} }) }),
+		);
+		const tool = createBashToolDefinition(process.cwd(), {
+			operations: {
+				exec: async (_command, _cwd, { onData }) => {
+					onData(Buffer.from("partial output"));
+					return { exitCode: 7 };
+				},
+			},
+		});
+		await expect(
+			tool.execute("fast", { command: "fast", background: true }, undefined, undefined, context(background)),
+		).rejects.toMatchObject({ status: "failed", message: "partial output\n\nCommand exited with code 7" });
+		expect(background.list()[0]?.error).toBe("Command exited with code 7");
+		expect(background.pendingNotifications()).toEqual([]);
+	});
+
 	it.each([createBashToolDefinition, createPowerShellToolDefinition])(
 		"rejects unavailable background requests before hooks or operations (%#)",
 		async (factory) => {
@@ -483,6 +504,32 @@ describe("native managed shell execution", () => {
 		expect(statSync(task.outputPath!).size).toBe(MAX_BACKGROUND_OUTPUT_BYTES + 1);
 	});
 
+	it("classifies an oversized detach from the final progress callback as failure", async () => {
+		vi.useFakeTimers();
+		const background = host();
+		const child = execution();
+		let detachOnUpdate = false;
+		const tool = createBashToolDefinition(process.cwd(), { operations: child.operations });
+		const pending = tool.execute(
+			"call",
+			{ command: "chatty" },
+			undefined,
+			() => {
+				if (detachOnUpdate) background.detachForeground();
+			},
+			context(background),
+		);
+		child.output(Buffer.alloc(MAX_BACKGROUND_OUTPUT_BYTES + 1, 120));
+		child.output("tail"); // Leave a throttled update for finalization to flush.
+		detachOnUpdate = true;
+		child.finish();
+		const submitted = await pending;
+		const task = await background.wait(submitted.details!.background!.taskId);
+		expect(task.status).toBe("failed");
+		expect(task.error).toBe("Background command exceeded the 20 MiB output limit");
+		expect(child.operations.exec).toHaveBeenCalledOnce();
+	});
+
 	it("foreground timeout still throws while its core snapshot records timeout", async () => {
 		const background = host();
 		const child = execution();
@@ -492,6 +539,7 @@ describe("native managed shell execution", () => {
 		child.fail("timeout:3");
 		await expect(call).rejects.toThrow("Command timed out after 3 seconds");
 		expect(background.list()[0]?.status).toBe("timeout");
+		expect(background.list()[0]?.error).toBe("Command timed out after 3 seconds");
 		expect(text(background.list()[0]?.result)).toContain("not a timeout: output text");
 	});
 

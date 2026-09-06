@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
-import { access as fsAccess, unlink } from "node:fs/promises";
-import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import { access as fsAccess } from "node:fs/promises";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { spawn } from "child_process";
 import { type Static, Type } from "typebox";
 import { waitForChildProcess } from "../../utils/child-process.ts";
@@ -13,20 +13,15 @@ import {
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
-import { boundText } from "../background/output.ts";
-import {
-	type BackgroundControl,
-	BackgroundExecutionError,
-	type BackgroundTerminalStatus,
-} from "../background/types.ts";
+import { type BackgroundCompletion, BackgroundExecutionError } from "../background/types.ts";
 import { getExperimentalToolSampling } from "../experimental.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
-import { OutputAccumulator } from "./output-accumulator.ts";
-import { BASH_UPDATE_THROTTLE_MS, createShellRenderers } from "./renderers/bash.ts";
+import { createShellRenderers } from "./renderers/bash.ts";
+import { type ManagedShellExecution, runShellCommand } from "./shell-execution.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.ts";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type TruncationResult } from "./truncate.ts";
 
-export const MAX_BACKGROUND_OUTPUT_BYTES = 20 * 1024 * 1024;
+export { MAX_BACKGROUND_OUTPUT_BYTES } from "./shell-execution.ts";
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
 export const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
@@ -256,6 +251,20 @@ export interface ShellToolConfig {
 	tempFilePrefix: string;
 }
 
+/** Translate terminal shell failures to the native foreground tool contract once. */
+function shellToolResult(completion: BackgroundCompletion<BashToolDetails | undefined>, managed: boolean) {
+	const status = completion.status;
+	if (status === "failed" || status === "timeout" || status === "cancelled") {
+		const text = completion.result.content
+			.filter((part) => part.type === "text")
+			.map((part) => part.text)
+			.join("\n");
+		const message = completion.error ? text || completion.error : `${text ? `${text}\n\n` : ""}Command ${status}`;
+		throw managed ? new BackgroundExecutionError(message, status) : new Error(message);
+	}
+	return completion.result;
+}
+
 export function createShellToolDefinition(
 	cwd: string,
 	config: ShellToolConfig,
@@ -282,236 +291,47 @@ export function createShellToolDefinition(
 		) {
 			const host = ctx?.background;
 			if (host?.closed) throw new Error("Background service is closed");
-			if (background && !host) {
-				throw new Error("Background execution is not available in this host. No command was started.");
-			}
-			let accepted = false;
-			let failureStatus: BackgroundTerminalStatus = "failed";
-			let terminalDiagnostic: string | undefined;
-			let managedOutputPath: string | undefined;
 			const run = async (
-				control?: BackgroundControl<BashToolDetails | undefined>,
-			): Promise<AgentToolResult<BashToolDetails | undefined>> => {
-				const signal = control?.signal ?? parentSignal;
-				const onUpdate = control
-					? (result: AgentToolResult<BashToolDetails | undefined>) =>
-							control.publish(result, {
-								text: truncateTail(
-									result.content
-										.filter((part) => part.type === "text")
-										.map((part) => part.text)
-										.join("\n"),
-									{ maxBytes: 16 * 1024 },
-								).content,
-							})
-					: originalUpdate;
-				if (control) {
-					if (signal?.aborted) throw new Error("Command aborted");
-					resolveTimeoutMs(timeout);
-				}
-				const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
-				const spawnContext = resolveSpawnContext(
-					resolvedCommand,
-					ctx?.cwd || cwd,
-					spawnHook,
-					exposeSessionEnvironment,
-					ctx,
-				);
-				const output = new OutputAccumulator({
-					tempFilePrefix: config.tempFilePrefix,
-					persistFromStart: !!control,
-				});
-				let outputError: Error | undefined;
-				const failOutput = (error: unknown) => {
-					if (outputError) return;
-					outputError = error instanceof Error ? error : new Error(String(error));
-					try {
-						host?.kill(control!.id);
-					} catch {
-						/* Late data must not throw through a process observer. */
-					}
-				};
-				// Foreground has no disk cap. If its existing log already exceeds the
-				// background budget, detach stops it immediately but preserves those prior bytes.
-				const checkOutputLimit = () => {
-					if (control?.mode === "background" && output.getTotalBytes() > MAX_BACKGROUND_OUTPUT_BYTES) {
-						failOutput(new Error("Background command exceeded the 20 MiB output limit"));
-					}
-				};
-				let unsubscribe: (() => void) | undefined;
-				let acceptingOutput = true;
-				let updateTimer: NodeJS.Timeout | undefined;
-				let updateDirty = false;
-				let lastUpdateAt = 0;
-
-				const emitOutputUpdate = () => {
-					if (!onUpdate || !updateDirty) return;
-					updateDirty = false;
-					lastUpdateAt = Date.now();
-					const snapshot = output.snapshot({
-						persistIfTruncated: true,
-						maxBytes: control?.mode === "background" ? 40 * 1024 : undefined,
-					});
-					onUpdate({
-						content: [{ type: "text", text: snapshot.content || "" }],
-						details: {
-							truncation: snapshot.truncation.truncated ? snapshot.truncation : undefined,
-							fullOutputPath: snapshot.fullOutputPath,
-						},
-					});
-				};
-
-				const clearUpdateTimer = () => {
-					if (updateTimer) {
-						clearTimeout(updateTimer);
-						updateTimer = undefined;
-					}
-				};
-
-				const scheduleOutputUpdate = () => {
-					if (!onUpdate) return;
-					updateDirty = true;
-					const delay = BASH_UPDATE_THROTTLE_MS - (Date.now() - lastUpdateAt);
-					if (delay <= 0) {
-						clearUpdateTimer();
-						emitOutputUpdate();
-						return;
-					}
-					updateTimer ??= setTimeout(() => {
-						updateTimer = undefined;
-						emitOutputUpdate();
-					}, delay);
-				};
-
-				const handleData = (data: Buffer) => {
-					if (!acceptingOutput) return;
-					if (outputError) return;
-					try {
-						if (
-							control?.mode === "background" &&
-							output.getTotalBytes() + data.length > MAX_BACKGROUND_OUTPUT_BYTES
-						) {
-							const remaining = Math.max(0, MAX_BACKGROUND_OUTPUT_BYTES - output.getTotalBytes());
-							output.append(data.subarray(0, remaining));
-							failOutput(new Error("Background command exceeded the 20 MiB output limit"));
-						} else {
-							output.append(data);
-						}
-						scheduleOutputUpdate();
-					} catch (error) {
-						if (!control) throw error;
-						failOutput(error);
-					}
-				};
-
-				const finishOutput = async () => {
-					acceptingOutput = false;
-					output.finish();
-					clearUpdateTimer();
-					emitOutputUpdate();
-					const snapshot = output.snapshot({
-						persistIfTruncated: true,
-						maxBytes: control?.mode === "background" ? 40 * 1024 : undefined,
-					});
-					await output.closeTempFile();
-					return snapshot;
-				};
-
-				const formatOutput = (snapshot: Awaited<ReturnType<typeof finishOutput>>, emptyText = "(no output)") => {
-					const truncation = snapshot.truncation;
-					let text = snapshot.content || emptyText;
-					let details: BashToolDetails | undefined = control
-						? { fullOutputPath: snapshot.fullOutputPath }
-						: undefined;
-					if (truncation.truncated) {
-						details = { truncation, fullOutputPath: snapshot.fullOutputPath };
-						const startLine = truncation.totalLines - truncation.outputLines + 1;
-						const endLine = truncation.totalLines;
-						if (truncation.lastLinePartial) {
-							const lastLineSize = formatSize(output.getLastLineBytes());
-							text += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). Full output: ${snapshot.fullOutputPath}]`;
-						} else if (truncation.truncatedBy === "lines") {
-							text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${snapshot.fullOutputPath}]`;
-						} else {
-							text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(truncation.maxBytes)} limit). Full output: ${snapshot.fullOutputPath}]`;
-						}
-					}
-					return { text, details };
-				};
-
-				const appendStatus = (text: string, status: string) => {
-					// Store only the reason, never the accumulated stdout/stderr.
-					terminalDiagnostic = boundText(status, 4096);
-					return `${text ? `${text}\n\n` : ""}${status}`;
-				};
-
+				managed?: ManagedShellExecution,
+			): Promise<BackgroundCompletion<BashToolDetails | undefined>> => {
+				const signal = managed?.control.signal ?? parentSignal;
 				try {
-					if (control) {
-						const path = output.snapshot().fullOutputPath!;
-						managedOutputPath = path;
-						const cleanup = async () => {
-							await output.closeTempFile();
-							await unlink(path).catch((error: NodeJS.ErrnoException) => {
-								if (error.code !== "ENOENT") throw error;
-							});
-						};
-						try {
-							control.setOutputPath(path, cleanup);
-						} catch (error) {
-							await cleanup();
-							throw error;
-						}
-						unsubscribe = host?.subscribe(checkOutputLimit);
+					if (managed) {
+						if (signal?.aborted) throw new Error("Command aborted");
+						resolveTimeoutMs(timeout);
 					}
-					onUpdate?.({ content: [], details: undefined });
-					let exitCode: number | null;
-					try {
-						if (signal?.aborted) throw new Error("aborted");
-						const execution = ops.exec(spawnContext.command, spawnContext.cwd, {
-							onData: handleData,
-							signal,
-							timeout,
-							env: spawnContext.env,
-						});
-						accepted = true;
-						control?.accept();
-						const result = await execution;
-						if (outputError) throw outputError;
-						exitCode = result.exitCode;
-					} catch (err) {
-						const snapshot = await finishOutput();
-						const { text } = formatOutput(snapshot, "");
-						if (outputError) throw new Error(appendStatus(text, outputError.message));
-						if (err instanceof Error && err.message === "aborted") {
-							failureStatus = "cancelled";
-							throw new Error(appendStatus(text, "Command aborted"));
-						}
-						if (err instanceof Error && err.message.startsWith("timeout:")) {
-							failureStatus = "timeout";
-							const timeoutSecs = err.message.split(":")[1];
-							throw new Error(appendStatus(text, `Command timed out after ${timeoutSecs} seconds`));
-						}
-						throw new Error(appendStatus(text, err instanceof Error ? err.message : String(err)));
-					}
-
-					const snapshot = await finishOutput();
-					const { text: outputText, details } = formatOutput(snapshot);
-					if (control && exitCode === null) {
-						throw new Error(appendStatus(outputText, "Command terminated without an exit code"));
-					}
-					if (exitCode !== 0 && exitCode !== null) {
-						throw new Error(appendStatus(outputText, `Command exited with code ${exitCode}`));
-					}
-					return { content: [{ type: "text", text: outputText }], details };
-				} finally {
-					acceptingOutput = false;
-					unsubscribe?.();
-					clearUpdateTimer();
-					await output.closeTempFile();
+					const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
+					const spawnContext = resolveSpawnContext(
+						resolvedCommand,
+						ctx?.cwd || cwd,
+						spawnHook,
+						exposeSessionEnvironment,
+						ctx,
+					);
+					return await runShellCommand({
+						operations: ops,
+						context: spawnContext,
+						tempFilePrefix: config.tempFilePrefix,
+						timeout,
+						signal,
+						onUpdate: originalUpdate,
+						managed,
+					});
+				} catch (error) {
+					// Setup and cleanup exceptions carry an explicit terminal status.
+					if (!managed) throw error;
+					throw new BackgroundExecutionError(
+						error instanceof Error ? error.message : String(error),
+						managed.control.signal.aborted ? "cancelled" : "failed",
+					);
 				}
 			};
-			if (!host?.enabled && !background) return run();
-			const outcome = await host!.execute<BashToolDetails | undefined>({
+			if (!host || (!host.enabled && !background)) {
+				if (background)
+					throw new Error("Background execution is not available in this host. No command was started.");
+				return shellToolResult(await run(), false);
+			}
+			const outcome = await host.execute<BashToolDetails | undefined>({
 				kind: "bash",
 				title: `${config.label}: ${command}`,
 				toolCallId,
@@ -520,43 +340,9 @@ export function createShellToolDefinition(
 				background,
 				signal: parentSignal,
 				onUpdate: originalUpdate,
-				run: async (control) => {
-					try {
-						return { result: await run(control) };
-					} catch (error) {
-						// Foreground keeps the tool's throwing error contract. Background completion
-						// carries an explicit status: output limits are failures, not cancellations.
-						if (!accepted || control.mode === "foreground") {
-							throw new BackgroundExecutionError(
-								error instanceof Error ? error.message : String(error),
-								!accepted && control.signal.aborted ? "cancelled" : failureStatus,
-							);
-						}
-						return {
-							status: failureStatus,
-							error:
-								terminalDiagnostic ?? boundText(error instanceof Error ? error.message : String(error), 4096),
-							result: {
-								content: [
-									{
-										type: "text",
-										text: truncateTail(error instanceof Error ? error.message : String(error), {
-											maxBytes: 40 * 1024,
-										}).content,
-									},
-								],
-								details: { fullOutputPath: managedOutputPath },
-							},
-						};
-					}
-				},
+				run: (control) => run({ host, control }),
 			});
-			if (outcome.kind === "result") {
-				if (outcome.status === "failed" || outcome.status === "timeout" || outcome.status === "cancelled") {
-					throw new BackgroundExecutionError(outcome.error ?? `Command ${outcome.status}`, outcome.status);
-				}
-				return outcome.result;
-			}
+			if (outcome.kind === "result") return shellToolResult(outcome, true);
 			return {
 				content: [
 					{

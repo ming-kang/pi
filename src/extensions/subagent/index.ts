@@ -28,8 +28,10 @@ export default function subagent(pi: ExtensionAPI): void {
 		],
 		parameters: SubagentParamsSchema,
 		async execute(toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<SubagentDetails>> {
-			const managed = ctx.background?.enabled || params.background === true;
-			if (managed && !ctx.background) throw new Error("Background execution requires an enabled Background host.");
+			const host = ctx.background;
+			if (host?.closed) throw new Error("Background service is closed");
+			const managed = host?.enabled || params.background === true;
+			if (managed && !host) throw new Error("Background execution requires an enabled Background host.");
 			let latest: SubagentDetails = {
 				status: "running",
 				runs: [],
@@ -117,7 +119,7 @@ export default function subagent(pi: ExtensionAPI): void {
 				return result;
 			};
 			if (!managed) return run();
-			const outcome = await ctx.background!.execute<SubagentDetails>({
+			const outcome = await host!.execute<SubagentDetails>({
 				kind: "subagent",
 				title: `Subagent · ${params.tasks.length} tasks`,
 				toolCallId,

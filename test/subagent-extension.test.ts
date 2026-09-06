@@ -368,6 +368,19 @@ it("rejects a background batch before accepting or starting any worker when pref
 	await h.service.shutdown();
 });
 
+it("rejects a closed captured host before foreground fallback can start workers", async () => {
+	runSdkTaskMock.mockReset();
+	const h = managedHarness();
+	h.service.close();
+	const update = vi.fn();
+	await expect(h.tool.execute("closed", { tasks: [{ prompt: "work" }] }, undefined, update, h.ctx)).rejects.toThrow(
+		"closed",
+	);
+	expect(runSdkTaskMock).not.toHaveBeenCalled();
+	expect(update).not.toHaveBeenCalled();
+	expect(h.service.list()).toEqual([]);
+});
+
 it("keeps disabled-host foreground fallback, while explicit background reaches host rejection", async () => {
 	runSdkTaskMock.mockReset();
 	runSdkTaskMock.mockImplementation(async (options: SdkRunnerOptions) => {

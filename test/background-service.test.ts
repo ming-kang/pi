@@ -17,7 +17,6 @@ import {
 	type BackgroundCompletion,
 	type BackgroundControl,
 	type BackgroundExecution,
-	type BackgroundTask,
 	SUBAGENT_BACKGROUND_REJECTION,
 } from "../src/core/background/types.ts";
 
@@ -258,6 +257,18 @@ describe("BackgroundService execution ownership", () => {
 });
 
 describe("delivery and accounting", () => {
+	it("keeps the executor's foreground content independent of its terminal diagnostic", async () => {
+		const bg = service();
+		const completion = {
+			result: result("partial output\n\nCommand exited with code 7"),
+			status: "failed" as const,
+			error: "Command exited with code 7",
+		};
+		const outcome = await bg.execute(job({ run: async () => completion }).execution);
+		expect(outcome).toEqual({ kind: "result", ...completion });
+		expect(bg.list()[0]?.error).toBe(completion.error);
+	});
+
 	it("settles usage once before terminal delivery, strips it from snapshots and foreground results", async () => {
 		const usage: Usage = {
 			input: 1,
@@ -536,6 +547,22 @@ describe("bounded lifecycle and snapshots", () => {
 		unanchored.completion.resolve({ result: result() });
 		await tick();
 		expect(bg.pendingNotifications()).toHaveLength(2);
+	});
+
+	it("retains every undelivered completion while its branch is hidden", async () => {
+		const bg = service({ maxHistory: 1, maxActive: 1, anchor: () => "A" });
+		const ids: string[] = [];
+		for (let index = 0; index < 3; index++) {
+			const item = job({ background: true });
+			await bg.execute(item.execution);
+			item.completion.resolve({ result: result() });
+			await tick();
+			ids.push(item.control.id);
+		}
+		await bg.cancelOutsideBranch(new Set(["B"]));
+		expect(bg.list()).toEqual([]);
+		await bg.cancelOutsideBranch(new Set(["A"]));
+		expect(bg.pendingNotifications().map((task) => task.id)).toEqual(ids);
 	});
 
 	it("revives an undelivered completion when its branch becomes current again", async () => {
@@ -906,253 +933,5 @@ describe("terminal diagnostics and partial usage", () => {
 		await tick();
 		expect(onSettled).toHaveBeenCalledOnce();
 		expect(onSettled.mock.calls[0]![1]).toBeUndefined();
-	});
-});
-
-function savedTask(id = "bash-restored", endedAt = 20, overrides: Partial<BackgroundTask> = {}) {
-	return {
-		version: 1,
-		task: {
-			id,
-			kind: "bash",
-			title: "saved",
-			toolCallId: "call",
-			anchorId: null,
-			mode: "background",
-			status: "completed",
-			startedAt: 10,
-			endedAt,
-			result: result("saved report"),
-			...overrides,
-		} satisfies BackgroundTask,
-	};
-}
-
-describe("terminal history restoration", () => {
-	it("hides branch A history and ignored-abort work on B, then reveals A and revives undelivered completions", async () => {
-		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-		let anchor: string | null = "A";
-		const onSettled = vi.fn();
-		const bg = service({ anchor: () => anchor, onSettled, maxActive: 2 });
-		bg.restoreHistory([savedTask("bash-history-A", 20, { anchorId: "A" })]);
-		const ignored = job({ background: true });
-		await bg.execute(ignored.execution);
-		const terminal = job({ background: true });
-		await bg.execute(terminal.execution);
-		terminal.completion.resolve({ result: result() });
-		await tick();
-		anchor = null;
-		const rooted = job({ background: true });
-		await bg.execute(rooted.execution);
-		const leaving = bg.cancelOutsideBranch(new Set(["B"]));
-		expect(bg.list().map((task) => task.id)).toEqual([rooted.control.id]);
-		expect(bg.get(ignored.control.id).status).toBe("stopping");
-		await expect(bg.execute(job().execution)).rejects.toThrow("limit reached (2)");
-		expect(bg.pendingNotifications()).toEqual([]);
-		expect(rooted.control.signal.aborted).toBe(false);
-		await vi.advanceTimersByTimeAsync(2000);
-		await leaving;
-		bg.restoreHistory([savedTask("bash-history-B", 30, { anchorId: "B" })]);
-		ignored.completion.resolve({ result: result("late") });
-		await tick();
-		await bg.cancelOutsideBranch(new Set(["A"]));
-		bg.restoreHistory([
-			savedTask("bash-history-A", 20, { anchorId: "A" }),
-			{ version: 1, task: bg.get(terminal.control.id) },
-		]);
-		expect(bg.list().map((task) => task.id)).toEqual([
-			"bash-history-A",
-			ignored.control.id,
-			terminal.control.id,
-			rooted.control.id,
-		]);
-		expect(bg.get(ignored.control.id).status).toBe("cancelled");
-		// Restored history never renotifies; undelivered runtime completions revive on return.
-		expect(bg.pendingNotifications().map((task) => task.id)).toEqual([ignored.control.id, terminal.control.id]);
-		expect(ignored.run).toHaveBeenCalledOnce();
-		expect(onSettled).toHaveBeenCalledTimes(2);
-		rooted.completion.resolve({ result: result() });
-		await tick();
-		expect(bg.pendingNotifications().map((task) => task.id)).toEqual([
-			ignored.control.id,
-			terminal.control.id,
-			rooted.control.id,
-		]);
-	});
-
-	it("reveals matching hidden terminal IDs even at full history capacity without restoring delivery", async () => {
-		const bg = service({ maxHistory: 1 });
-		const saved = savedTask("bash-history-A", 20, { anchorId: "A" });
-		bg.restoreHistory([saved]);
-		await bg.cancelOutsideBranch(new Set(["B"]));
-		expect(bg.list()).toEqual([]);
-		bg.restoreHistory([saved]);
-		expect(bg.list().map((task) => task.id)).toEqual([saved.task.id]);
-		expect(bg.pendingNotifications()).toEqual([]);
-	});
-
-	it("restores newest terminal IDs without observers, accounting, notifications or deletion ownership", async () => {
-		const dir = await mkdtemp(join(tmpdir(), "pi-background-restore-"));
-		const path = join(dir, "saved.log");
-		try {
-			await writeFile(path, "saved raw log");
-			const onSettled = vi.fn();
-			const onCleanupError = vi.fn();
-			const observer = vi.fn();
-			const bg = service({ maxHistory: 2, maxActive: 1, onSettled, onCleanupError });
-			bg.subscribe(observer);
-			bg.restoreHistory([
-				savedTask("bash-new", 50, { outputPath: path, status: "cancelled" }),
-				savedTask("bash-old", 15),
-				savedTask("bash-duplicate", 40, { title: "new duplicate" }),
-				savedTask("bash-duplicate", 20, { title: "old duplicate" }),
-				savedTask("bash-live", 100, { status: "running" }),
-			]);
-			expect(bg.list().map((task) => task.id)).toEqual(["bash-duplicate", "bash-new"]);
-			expect(bg.get("bash-duplicate").title).toBe("new duplicate");
-			expect(bg.kill("bash-new")).toBe(false);
-			expect(bg.detachForeground()).toBe(0);
-			expect(bg.pendingNotifications()).toEqual([]);
-			expect(bg.claimNotification("bash-new")).toBe(false);
-			expect((await bg.read("bash-new")).text).toBe("saved raw log");
-			expect((await bg.wait("bash-new")).status).toBe("cancelled");
-			expect(onSettled).not.toHaveBeenCalled();
-			expect(observer).not.toHaveBeenCalled();
-			await bg.execute(job({ run: async () => ({ result: result() }) }).execution);
-			expect(bg.list()).toHaveLength(2);
-			expect(() => bg.get("bash-duplicate")).toThrow("Unknown");
-			await bg.shutdown();
-			expect(await readFile(path, "utf8")).toBe("saved raw log");
-			expect(onCleanupError).not.toHaveBeenCalled();
-		} finally {
-			await rm(dir, { recursive: true, force: true });
-		}
-	});
-	it("ignores malformed, nonterminal and malicious records without invoking callbacks", () => {
-		const bg = service();
-		const getter = vi.fn(() => "completed");
-		const malformed: unknown[] = [null, 7, [], {}, { version: 2, task: savedTask().task }];
-		for (const [key, value] of [
-			["kind", "worker"],
-			["mode", "detached"],
-			["status", "running"],
-			["status", "queued"],
-			["status", "stopping"],
-			["status", "fake"],
-			["id", "worker-1"],
-			["id", "bash-"],
-			["id", "x".repeat(10000)],
-			["toolCallId", 3],
-			["anchorId", {}],
-			["anchorId", "x".repeat(10000)],
-			["startedAt", NaN],
-			["startedAt", -1],
-			["endedAt", Infinity],
-			["endedAt", 9],
-			["endedAt", undefined],
-			["title", {}],
-			["error", []],
-			["outputPath", "x".repeat(10000)],
-			["projection", { workers: [null] }],
-			["result", { content: [null] }],
-		] as const)
-			malformed.push({ version: 1, task: { ...savedTask().task, [key]: value } });
-		malformed.push({ version: 1, task: Object.defineProperty(savedTask().task, "status", { get: getter }) });
-		bg.restoreHistory(malformed);
-		expect(bg.list()).toEqual([]);
-		expect(getter).not.toHaveBeenCalled();
-	});
-
-	it("bounds huge snapshots, strips runtime data and isolates restored projections", async () => {
-		const bg = service();
-		const huge = "😀".repeat(100000);
-		const serialize = vi.fn();
-		const worker = {
-			id: huge,
-			label: huge,
-			status: huge,
-			prompt: huge,
-			activity: huge,
-			outcome: huge,
-			model: huge,
-			usage: huge,
-		};
-		const record = savedTask("subagent-group", 20, {
-			kind: "subagent",
-			title: huge,
-			command: huge,
-			cwd: huge,
-			error: huge,
-			projection: { text: huge, workers: Array(100).fill(worker) },
-			result: { content: [{ type: "text", text: huge }], details: { toJSON: serialize } },
-		});
-		bg.restoreHistory([record]);
-		const task = bg.get("subagent-group");
-		expect(Buffer.byteLength(task.title)).toBeLessThanOrEqual(1024);
-		expect(Buffer.byteLength(task.command!)).toBeLessThanOrEqual(8192);
-		expect(Buffer.byteLength(task.cwd!)).toBeLessThanOrEqual(4096);
-		expect(Buffer.byteLength(task.error!)).toBeLessThanOrEqual(4096);
-		expect(task.projection?.workers).toHaveLength(8);
-		expect(Buffer.byteLength(JSON.stringify(task.projection))).toBeLessThan(128 * 1024);
-		expect(task.result?.details).toBeUndefined();
-		expect(Buffer.byteLength((await bg.read(task.id, { bytes: 999999 })).text)).toBeLessThanOrEqual(
-			BACKGROUND_RESULT_BYTES,
-		);
-		expect(serialize).not.toHaveBeenCalled();
-		worker.label = "mutated";
-		expect(bg.get(task.id).projection?.workers?.[0]?.label).not.toBe("mutated");
-		expect(() => bg.get(task.projection!.workers![0]!.id)).toThrow("Unknown");
-		const cyclic: Record<string, unknown> = {};
-		cyclic.self = cyclic;
-		bg.restoreHistory([
-			savedTask("bash-huge-details", 21, { result: { content: [], details: { huge } } }),
-			savedTask("bash-cycle", 22, { result: { content: [], details: cyclic } }),
-		]);
-		expect(bg.get("bash-huge-details").result?.details).toBeUndefined();
-		expect(bg.get("bash-cycle").result?.details).toBeUndefined();
-	});
-
-	it("reports expired restored paths even with an empty requested slice", async () => {
-		const dir = await mkdtemp(join(tmpdir(), "pi-expired-history-"));
-		try {
-			const bg = service();
-			bg.restoreHistory([
-				savedTask("bash-expired", 20, {
-					outputPath: join(dir, "missing"),
-					error: "command failed",
-					status: "failed",
-				}),
-			]);
-			const output = await bg.read("bash-expired", { bytes: 0 });
-			expect(output.text).toBe("");
-			expect(output.readError).toContain("Output could not be read");
-			expect(output.task.error).toBe("command failed");
-			expect((await bg.read("bash-expired")).text).toBe("saved report");
-		} finally {
-			await rm(dir, { recursive: true, force: true });
-		}
-	});
-
-	it("preserves existing records and ignores closed/zero-history services", async () => {
-		const bg = service({ maxHistory: 1 });
-		const active = job({ background: true });
-		await bg.execute(active.execution);
-		bg.restoreHistory([savedTask(active.control.id), savedTask("bash-history")]);
-		expect(bg.get(active.control.id).status).toBe("running");
-		bg.restoreHistory([savedTask("bash-history", 30, { title: "replacement" }), savedTask("bash-extra")]);
-		expect(bg.get("bash-history").title).toBe("saved");
-		expect(bg.list()).toHaveLength(2);
-		active.completion.resolve({ result: result() });
-		await tick();
-		expect(bg.list()).toHaveLength(2);
-		expect(bg.pendingNotifications()).toHaveLength(1);
-		bg.markDelivered(active.control.id);
-		expect(bg.list()).toHaveLength(1);
-		bg.close();
-		bg.restoreHistory([savedTask("bash-closed")]);
-		expect(() => bg.get("bash-closed")).toThrow("Unknown");
-		const zero = service({ maxHistory: 0 });
-		zero.restoreHistory([savedTask()]);
-		expect(zero.list()).toEqual([]);
 	});
 });

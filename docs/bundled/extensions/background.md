@@ -111,9 +111,13 @@ Managed logs are ephemeral: they are retained with the runtime record and cleane
 
 Terminal bounded text snapshots persist as `background-task-result` custom entries, and usage as independent `background-usage` entries. A saved log path is not a durable attachment. `/bg` restores bounded terminal history from the selected branch's valid saved snapshots. This is observation only: live execution never resumes after restart, and restoration does not replay accounting or completion events. See [session format](../../session-format.md#background-records).
 
+Delivered history outside the selected branch can be released and restored on return, so it does not fill the new branch's history budget. Undelivered completions stay protected while their branch is hidden. Pending delivery, pins and active reads use a separate allowance within the total runtime retention cap; restoration respects the same cap.
+
 Completion delivery waits for a safe idle boundary, respects queued user work, and sends one bounded completion at a time. A Subagent group produces one summary, not a separate wake-up per worker. A terminal `bg wait` coordinates with automatic delivery only after its tool result is persisted; aborting during output reading does not lose the pending completion. Direct SDK waits remain observational until explicitly acknowledged. Progress and repeated reads do not inject messages or add usage. `agent_settled` still describes the main agent, not the end of all background executions.
 
 Failed completion delivery leaves the terminal result available for inspection rather than silently discarding it, and warns through the extension error channel. The next user prompt retries delivery automatically; SDK hosts can also call `session.retryBackgroundNotifications()` explicitly after resolving the failure. There is no infinite timer retry loop.
+
+Queued extension `nextTurn` context accompanies completion turns and stays queued until each message is persisted. A failed or partially persisted turn therefore retries only the context that has not been saved.
 
 If an executor ignores cancellation and settles after bounded cleanup has retired its runtime or branch, the old session quarantines its bounded result and reported usage: the latest 32 records remain in memory, and persisted sessions also append `<session-file>.background-late.jsonl`. These audit records are excluded from active totals and are not automatically reconciled. A completed cleanup grace period is not proof that an uncooperative executor stopped.
 

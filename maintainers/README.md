@@ -8,6 +8,14 @@ This repository publishes one standalone package, `@astralyn/pi`, with the `pi` 
 
 AI, Agent core, Client, Protocol, and TUI behavior come from the exact published `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-client`, `@earendil-works/pi-protocol`, and `@earendil-works/pi-tui` dependencies; the experimental Chord runtime adds the exact `@earendil-works/chord` and `@earendil-works/pi-server` dependencies. Do not vendor or patch them. Core owns global lifecycle, native tool presentation, renderer integration, and configurable keybindings. Extensions are self-contained `src/extensions/**` users of the public Extension API; they do not import each other's internals. Keep functional UI with its extension and preserve tool schemas, protocols, and result structures for display-only work.
 
+Background execution has three ownership boundaries:
+
+- `src/core/background/service.ts` supervises invocation admission, foreground handoff, cancellation, delivery claims, and bounded retention. `history.ts` validates persisted snapshots; restoring a snapshot never restores execution or accounting ownership.
+- `src/core/background/session.ts` connects supervision to the session journal and main-agent completion turns. It persists usage and results before notifying observers, retains one in-flight delivery, and quarantines late settlements. `AgentSession` supplies lifecycle pauses and acknowledges messages only after persistence; queued `nextTurn` context follows the same rule.
+- `src/core/tools/shell-execution.ts` owns shell execution and output collection; the Subagent extension owns worker sessions and its concurrency gate. Executors return results and diagnostics. The native tool boundary decides whether to return a handoff or throw a foreground shell error. The `bg` extension only observes and controls these executions.
+
+Keep execution settlement, message delivery, and history retention distinct. A wait ending does not stop execution, a returned result is not yet a persisted acknowledgement, and hiding a branch does not deliver its pending completions. Delivered history can be released and restored from the selected branch; pending results, pins, and active reads share a separate allowance within the service's total retention bound.
+
 ## Local development
 
 Follow [`AGENTS.md`](../AGENTS.md), then install and verify a checkout:

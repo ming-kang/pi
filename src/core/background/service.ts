@@ -1,16 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
-import {
-	BACKGROUND_DETAILS_BYTES,
-	BACKGROUND_RESULT_BYTES,
-	BACKGROUND_TITLE_BYTES,
-	boundedResult,
-	boundText,
-	finiteLimit,
-	readOutputSlice,
-	sliceText,
-} from "./output.ts";
+import { parseBackgroundHistory } from "./history.ts";
+import { BACKGROUND_TITLE_BYTES, boundedResult, boundText, finiteLimit, readOutputSlice, sliceText } from "./output.ts";
 import {
 	type BackgroundCompletion,
 	type BackgroundContext,
@@ -22,7 +13,6 @@ import {
 	type BackgroundServiceOptions,
 	type BackgroundTask,
 	type BackgroundToolOutcome,
-	type BackgroundWorker,
 	SUBAGENT_BACKGROUND_REJECTION,
 } from "./types.ts";
 
@@ -71,169 +61,13 @@ function projectionSnapshot(projection: BackgroundProjection): BackgroundProject
 	};
 }
 
-/** Read persisted data properties only; never invoke getters or custom serialization. */
-function dataObject(value: unknown): Record<string, unknown> {
-	if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected object");
-	const prototype = Object.getPrototypeOf(value);
-	if (prototype !== Object.prototype && prototype !== null) throw new Error("Expected plain object");
-	return value as Record<string, unknown>;
-}
-
-function field(object: object, key: string): unknown {
-	const descriptor = Object.getOwnPropertyDescriptor(object, key);
-	if (descriptor && !("value" in descriptor)) throw new Error("Unexpected accessor");
-	return descriptor?.value;
-}
-
-function historyString(value: unknown, bytes: number, exact = false): string {
-	if (typeof value !== "string") throw new Error("Expected string");
-	if (exact && (!value || value.length > bytes || Buffer.byteLength(value) > bytes || value.includes("\0")))
-		throw new Error("Invalid identity or path");
-	return boundText(value, bytes);
-}
-
-/** Bound traversal before serialization, and omit unsupported/oversized details intact. */
-function historyDetails(value: unknown): unknown {
-	let budget = BACKGROUND_DETAILS_BYTES;
-	function copy(value: unknown, depth: number): unknown {
-		if (--budget < 0 || depth > 32) throw new Error("History details too large");
-		if (value === null || typeof value === "boolean") return value;
-		if (typeof value === "number" && Number.isFinite(value)) return value;
-		if (typeof value === "string") {
-			budget -= value.length;
-			if (budget < 0) throw new Error("History details too large");
-			return value;
-		}
-		if (Array.isArray(value)) {
-			if (value.length > budget) throw new Error("History details too large");
-			return Array.from({ length: value.length }, (_, index) => copy(field(value, String(index)), depth + 1));
-		}
-		const object = dataObject(value);
-		const out: Record<string, unknown> = Object.create(null);
-		for (const key in object) {
-			if (!Object.hasOwn(object, key)) continue;
-			budget -= key.length + 3;
-			out[key] = copy(field(object, key), depth + 1);
-		}
-		return out;
-	}
-	try {
-		return copy(value, 0);
-	} catch {
-		return undefined;
-	}
-}
-
-function historyTask(record: unknown): BackgroundTask | undefined {
-	try {
-		const envelope = dataObject(record);
-		if (field(envelope, "version") !== 1) return undefined;
-		const source = dataObject(field(envelope, "task"));
-		const kind = field(source, "kind");
-		const mode = field(source, "mode");
-		const status = field(source, "status");
-		if (kind !== "bash" && kind !== "subagent") return undefined;
-		if (mode !== "foreground" && mode !== "background") return undefined;
-		if (
-			status !== "completed" &&
-			status !== "partial" &&
-			status !== "failed" &&
-			status !== "cancelled" &&
-			status !== "timeout"
-		)
-			return undefined;
-		const startedAt = field(source, "startedAt");
-		const endedAt = field(source, "endedAt");
-		if (
-			typeof startedAt !== "number" ||
-			!Number.isSafeInteger(startedAt) ||
-			startedAt < 0 ||
-			typeof endedAt !== "number" ||
-			!Number.isSafeInteger(endedAt) ||
-			endedAt < startedAt
-		)
-			return undefined;
-		const anchor = field(source, "anchorId");
-		const task: BackgroundTask = {
-			id: historyString(field(source, "id"), 512, true),
-			kind,
-			mode,
-			status,
-			startedAt,
-			endedAt,
-			title: historyString(field(source, "title"), BACKGROUND_TITLE_BYTES),
-			toolCallId: historyString(field(source, "toolCallId"), 512, true),
-			anchorId: anchor === null ? null : historyString(anchor, 8192, true),
-		};
-		if (!task.id.startsWith(`${kind}-`) || task.id.length <= kind.length + 1) return undefined;
-		for (const [key, bytes] of [
-			["command", 8192],
-			["cwd", 4096],
-			["error", 4096],
-			["outputPath", 8192],
-		] as const) {
-			const value = field(source, key);
-			if (value !== undefined) task[key] = historyString(value, bytes, key === "outputPath");
-		}
-		const projection = field(source, "projection");
-		if (projection !== undefined) {
-			const object = dataObject(projection);
-			const text = field(object, "text");
-			const workers = field(object, "workers");
-			task.projection = {};
-			if (text !== undefined) task.projection.text = historyString(text, 16 * 1024);
-			if (workers !== undefined) {
-				if (!Array.isArray(workers)) return undefined;
-				task.projection.workers = Array.from({ length: Math.min(workers.length, 8) }, (_, index) => {
-					const worker = dataObject(field(workers, String(index)));
-					const snapshot: BackgroundWorker = {
-						id: historyString(field(worker, "id"), 256),
-						label: historyString(field(worker, "label"), 512),
-						status: historyString(field(worker, "status"), 128),
-						prompt: historyString(field(worker, "prompt"), 4096),
-						activity: historyString(field(worker, "activity"), 4096),
-						outcome: historyString(field(worker, "outcome"), 4096),
-					};
-					for (const key of ["model", "usage"] as const) {
-						const value = field(worker, key);
-						if (value !== undefined) snapshot[key] = historyString(value, 256);
-					}
-					return snapshot;
-				});
-			}
-		}
-		const result = field(source, "result");
-		if (result !== undefined) {
-			const object = dataObject(result);
-			const blocks = field(object, "content");
-			if (!Array.isArray(blocks)) return undefined;
-			const content: AgentToolResult<unknown>["content"] = [];
-			let remaining = BACKGROUND_RESULT_BYTES;
-			for (let index = 0; index < blocks.length && remaining > 0; index++) {
-				const block = dataObject(field(blocks, String(index)));
-				const type = field(block, "type");
-				if (type !== "text" && type !== "image") return undefined;
-				const text =
-					type === "text"
-						? historyString(field(block, "text"), remaining)
-						: "[Image omitted from background history]";
-				content.push({ type: "text", text });
-				remaining -= Math.max(1, Buffer.byteLength(text));
-			}
-			task.result = boundedResult({ content, details: historyDetails(field(object, "details")) });
-		}
-		return task;
-	} catch {
-		return undefined;
-	}
-}
-
 /** Session-local supervision. Executors own their processes, workers and output files. */
 export class BackgroundService implements BackgroundContext {
 	private readonly records = new Map<string, RecordState>();
 	private readonly listeners = new Set<() => void>();
 	private readonly maxActive: number;
 	private readonly maxHistory: number;
+	private readonly maxRetained: number;
 	private configuredEnabled: boolean;
 	private _closed = false;
 	private readonly cleanups = new Set<Promise<void>>();
@@ -250,6 +84,7 @@ export class BackgroundService implements BackgroundContext {
 		this.configuredEnabled = options.enabled ?? false;
 		this.maxActive = Math.max(1, finiteLimit(options.maxActive, 8, 128));
 		this.maxHistory = finiteLimit(options.maxHistory, 32, 1024);
+		this.maxRetained = this.maxActive + 2 * Math.max(1, this.maxHistory);
 	}
 
 	/**
@@ -263,11 +98,14 @@ export class BackgroundService implements BackgroundContext {
 		// Restoration must not evict runtime-owned records or run their cleanup callbacks.
 		const capacity = Math.max(
 			0,
-			this.maxHistory - [...this.records.values()].filter((record) => record.settled).length,
+			Math.min(
+				this.maxHistory - this.historyRecords().length,
+				this.maxRetained - this.records.size - this.cleanups.size,
+			),
 		);
 		const newest = new Map<string, BackgroundTask>();
 		for (const value of records) {
-			const task = historyTask(value);
+			const task = parseBackgroundHistory(value);
 			if (!task) continue;
 			const existing = this.records.get(task.id);
 			if (existing) {
@@ -326,7 +164,7 @@ export class BackgroundService implements BackgroundContext {
 		if ([...this.records.values()].filter((record) => !record.settled).length >= this.maxActive) {
 			throw new Error(`Background execution limit reached (${this.maxActive})`);
 		}
-		if (this.records.size + this.cleanups.size >= this.maxActive + 2 * Math.max(1, this.maxHistory)) {
+		if (this.records.size + this.cleanups.size >= this.maxRetained) {
 			throw new Error(
 				"Background history retention limit reached; deliver pending notifications or release pinned or claimed records",
 			);
@@ -467,6 +305,7 @@ export class BackgroundService implements BackgroundContext {
 					details: task.result?.details,
 				});
 			}
+			let settlementWarning: string | undefined;
 			try {
 				this.options.onSettled?.(
 					this.snapshot(record),
@@ -474,6 +313,7 @@ export class BackgroundService implements BackgroundContext {
 				);
 			} catch (accountingError) {
 				const warning = `Usage settlement failed: ${errorText(accountingError)}`;
+				settlementWarning = warning;
 				task.error = boundText([task.error, warning].filter(Boolean).join("\n"), 8192);
 				task.result = boundedResult({
 					content: [{ type: "text", text: warning }, ...(task.result?.content ?? [])],
@@ -487,7 +327,7 @@ export class BackgroundService implements BackgroundContext {
 				if (failed) rejectCaller(error);
 				else {
 					const { usage: _usage, ...result } = completion.result;
-					if (task.error) result.content = [{ type: "text", text: task.error }, ...result.content];
+					if (settlementWarning) result.content = [{ type: "text", text: settlementWarning }, ...result.content];
 					resolveCaller({ kind: "result", result, status: task.status, error: task.error });
 				}
 			}
@@ -723,6 +563,7 @@ export class BackgroundService implements BackgroundContext {
 		const outside = [...this.records.values()].filter((record) => !record.visible);
 		for (const record of outside) record.suppressed = true;
 		for (const record of outside) this.cancel(record);
+		this.trim();
 		this.emit();
 		await this.drain(outside, 2000);
 	}
@@ -765,22 +606,26 @@ export class BackgroundService implements BackgroundContext {
 		this.cleanups.add(pending);
 	}
 
+	/** Pending delivery, active reads and pins have their own bounded retention allowance. */
+	private historyRecords(): RecordState[] {
+		return [...this.records.values()].filter(
+			(record) => record.settled && record.delivery === "delivered" && !record.pins && !record.waiters.size,
+		);
+	}
+
 	private trim(): void {
 		if (this.closed) {
 			for (const record of this.records.values()) this.cleanupOutput(record);
 			return;
 		}
 		// Undelivered notifications and claims are never evicted. Admission bounds all retention.
-		const history = [...this.records.values()].filter(
-			(record) =>
-				record.settled &&
-				!record.pins &&
-				!record.waiters.size &&
-				record.delivery !== "claimed" &&
-				(!record.handedOff || record.suppressed || record.delivery === "delivered"),
-		);
-		history.sort((left, right) => (left.task.endedAt ?? 0) - (right.task.endedAt ?? 0));
-		for (const record of history.slice(0, Math.max(0, history.length - this.maxHistory))) {
+		const history = this.historyRecords();
+		// Delivered history can be restored from branch snapshots; hidden rows must
+		// not occupy the current branch's history budget. Pending results stay owned.
+		const hidden = history.filter((record) => !record.visible);
+		const visible = history.filter((record) => record.visible);
+		visible.sort((left, right) => (left.task.endedAt ?? 0) - (right.task.endedAt ?? 0));
+		for (const record of [...hidden, ...visible.slice(0, Math.max(0, visible.length - this.maxHistory))]) {
 			this.records.delete(record.task.id);
 			this.cleanupOutput(record);
 		}

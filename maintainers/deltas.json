@@ -89,7 +89,7 @@
 		{
 			"path": "src/core/agent-session.ts",
 			"category": "bugfix",
-			"intent": "Uses one captured stream for manual, automatic, and branch summarization across async auth; binds live shell settings into canonical extension contexts; invalidates stale contexts; owns the session Background service — admission, settlement persistence, exactly-once completion delivery with prompt-driven retry, and late-settlement quarantine",
+			"intent": "Uses one captured stream for summarization across async auth; binds live shell settings and invalidates stale contexts; hosts the BackgroundSession coordinator through lifecycle pauses and persistence acknowledgements, including nextTurn context retained until persistence",
 			"tests": [
 				"test/suite/agent-session-compaction.test.ts",
 				"test/suite/agent-session-extension-context.test.ts",
@@ -179,7 +179,7 @@
 		{
 			"path": "src/core/tools/bash.ts",
 			"category": "distribution",
-			"intent": "Managed background execution routing: background parameter, host handoff with preserved foreground error contract, and the 20 MiB background output cap; plus exported timeout/spawn helpers and Windows nul-redirect normalization; fork rendering lives in renderers/bash.ts",
+			"intent": "Routes shell calls through session supervision and the shared shell-execution result pipeline, preserving native foreground errors and background handoffs; exports timeout/spawn helpers and Windows nul-redirect normalization; fork rendering lives in renderers/bash.ts",
 			"tests": [
 				"test/bash-tool-rendering.test.ts",
 				"test/bash-nul-redirect.test.ts",

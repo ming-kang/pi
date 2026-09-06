@@ -27,6 +27,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Fixed
 
+- Fixed queued `nextTurn` context being lost when a background completion turn fails before or partway through persistence; only saved context is removed from the queue.
+- Fixed a full old branch history preventing `/bg` history restoration on another branch, and off-branch undelivered completions being evicted as ordinary history. Restored records now share the same bounded retention policy as live records.
+- Fixed Subagent calls starting unmanaged foreground workers through a closed Background host during runtime shutdown.
+- Fixed fast shell failures losing partial output when completion wins the background handoff race. Shell results and diagnostics now remain separate until the native foreground error boundary.
 - Fixed background completion delivery being permanently suppressed after a single failure: a failed delivery now warns through the extension error channel and the next user prompt retries it automatically, while SDK hosts keep the explicit `session.retryBackgroundNotifications()`. A completion stays pending rather than failing when no model is selected.
 - Fixed `/tree` navigation permanently suppressing an undelivered completion after returning to its branch; pending completions revive when the branch becomes current again.
 - Fixed background completion turns postponing extension `nextTurn` context to a later user prompt; queued context now rides along in the completion turn.
