@@ -585,7 +585,9 @@ export class AgentSession {
 			this.isIdle &&
 			!this.agent.state.isStreaming &&
 			this.pendingMessageCount === 0 &&
-			!this.agent.hasQueuedMessages()
+			!this.agent.hasQueuedMessages() &&
+			// Without a model the triggered turn can only fail; keep notifications pending.
+			this.model !== undefined
 		);
 	}
 
@@ -620,23 +622,33 @@ export class AgentSession {
 			const task = service.pendingNotifications().find((task) => !this._backgroundDeliveryFailures.has(task.id));
 			if (!task || !service.claimNotification(task.id)) return;
 			this._backgroundClaims.set(task.id, service);
+			let deliveryError: unknown;
 			try {
-				await this.sendCustomMessage(
-					{
-						customType: "background-completion",
-						display: true,
-						content: this._backgroundNotificationText(task),
-						details: { taskId: task.id },
-					},
-					{ triggerTurn: true },
-				);
-			} catch {
-				// Never timer-retry a failed delivery indefinitely.
-				this._backgroundDeliveryFailures.add(task.id);
+				// Notification turns skip before_agent_start on purpose; pending "nextTurn"
+				// context rides the same turn rather than slipping past it.
+				const appMessage: CustomMessage = {
+					role: "custom",
+					customType: "background-completion",
+					display: true,
+					content: this._backgroundNotificationText(task),
+					details: { taskId: task.id },
+					timestamp: Date.now(),
+				};
+				const asides = this._pendingNextTurnMessages.splice(0);
+				await this._runAgentPrompt(asides.length ? [appMessage, ...asides] : appMessage);
+			} catch (error) {
+				deliveryError = error;
 			} finally {
 				if (this._backgroundClaims.delete(task.id)) {
+					// Persistence is the only ack; a settled run without it means delivery failed.
+					// Mark once and let the next user prompt retry — never timer-retry indefinitely.
 					service.releaseNotification(task.id);
 					this._backgroundDeliveryFailures.add(task.id);
+					const reason = deliveryError instanceof Error ? `: ${deliveryError.message}` : "";
+					this._warnBackground(
+						"background_delivery",
+						`Background completion delivery failed for ${task.id}${reason}; it will retry on the next prompt.`,
+					);
 				}
 			}
 		} finally {
@@ -960,10 +972,6 @@ export class AgentSession {
 					event.message.display,
 					event.message.details,
 				);
-				if (backgroundClaim) {
-					backgroundClaim.service.markDelivered(backgroundClaim.id);
-					this._backgroundClaims.delete(backgroundClaim.id);
-				}
 			} else if (
 				event.message.role === "user" ||
 				event.message.role === "assistant" ||
@@ -991,6 +999,13 @@ export class AgentSession {
 				}
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
+
+			// A claimed completion reaching message_end is delivered, whatever role an
+			// extension rewrote it to — the transcript carries it either way.
+			if (backgroundClaim) {
+				backgroundClaim.service.markDelivered(backgroundClaim.id);
+				this._backgroundClaims.delete(backgroundClaim.id);
+			}
 
 			// Track assistant message for auto-compaction (checked on agent_end)
 			if (event.message.role === "assistant") {
@@ -1460,6 +1475,8 @@ export class AgentSession {
 	 * @throws Error if no model selected or no API key available (when not streaming)
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
+		// A user-initiated prompt is the recovery point for failed completion deliveries.
+		this.retryBackgroundNotifications();
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		const preflightResult = options?.preflightResult;
 		// Observer commands may stay open indefinitely. Their lifecycle operations
@@ -3199,6 +3216,7 @@ export class AgentSession {
 			await this._resourceLoader.reload();
 			this._background = this._createBackground();
 			this._backgroundDeliveryFailures.clear();
+			this._backgroundClaims.clear();
 			this._buildRuntime({
 				activeToolNames: this.getActiveToolNames(),
 				flagValues: previousFlagValues,

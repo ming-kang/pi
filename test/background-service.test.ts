@@ -537,6 +537,20 @@ describe("bounded lifecycle and snapshots", () => {
 		await tick();
 		expect(bg.pendingNotifications()).toHaveLength(2);
 	});
+
+	it("revives an undelivered completion when its branch becomes current again", async () => {
+		const anchor: string | null = "A";
+		const bg = service({ anchor: () => anchor });
+		const work = job({ background: true });
+		await bg.execute(work.execution);
+		work.completion.resolve({ result: result() });
+		await tick();
+		expect(bg.pendingNotifications().map((task) => task.id)).toEqual([work.control.id]);
+		await bg.cancelOutsideBranch(new Set(["B"]));
+		expect(bg.pendingNotifications()).toEqual([]);
+		await bg.cancelOutsideBranch(new Set(["A"]));
+		expect(bg.pendingNotifications().map((task) => task.id)).toEqual([work.control.id]);
+	});
 });
 
 describe("handoff and cleanup races", () => {
@@ -915,7 +929,7 @@ function savedTask(id = "bash-restored", endedAt = 20, overrides: Partial<Backgr
 }
 
 describe("terminal history restoration", () => {
-	it("hides branch A history and ignored-abort work on B, then reveals A without restarting or renotifying", async () => {
+	it("hides branch A history and ignored-abort work on B, then reveals A and revives undelivered completions", async () => {
 		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 		let anchor: string | null = "A";
 		const onSettled = vi.fn();
@@ -953,12 +967,17 @@ describe("terminal history restoration", () => {
 			rooted.control.id,
 		]);
 		expect(bg.get(ignored.control.id).status).toBe("cancelled");
-		expect(bg.pendingNotifications()).toEqual([]);
+		// Restored history never renotifies; undelivered runtime completions revive on return.
+		expect(bg.pendingNotifications().map((task) => task.id)).toEqual([ignored.control.id, terminal.control.id]);
 		expect(ignored.run).toHaveBeenCalledOnce();
 		expect(onSettled).toHaveBeenCalledTimes(2);
 		rooted.completion.resolve({ result: result() });
 		await tick();
-		expect(bg.pendingNotifications().map((task) => task.id)).toEqual([rooted.control.id]);
+		expect(bg.pendingNotifications().map((task) => task.id)).toEqual([
+			ignored.control.id,
+			terminal.control.id,
+			rooted.control.id,
+		]);
 	});
 
 	it("reveals matching hidden terminal IDs even at full history capacity without restoring delivery", async () => {

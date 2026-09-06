@@ -4,6 +4,7 @@ import type { Usage } from "@earendil-works/pi-ai/compat";
 import {
 	BACKGROUND_DETAILS_BYTES,
 	BACKGROUND_RESULT_BYTES,
+	BACKGROUND_TITLE_BYTES,
 	boundedResult,
 	boundText,
 	finiteLimit,
@@ -160,7 +161,7 @@ function historyTask(record: unknown): BackgroundTask | undefined {
 			status,
 			startedAt,
 			endedAt,
-			title: historyString(field(source, "title"), 1024),
+			title: historyString(field(source, "title"), BACKGROUND_TITLE_BYTES),
 			toolCallId: historyString(field(source, "toolCallId"), 512, true),
 			anchorId: anchor === null ? null : historyString(anchor, 8192, true),
 		};
@@ -336,7 +337,7 @@ export class BackgroundService implements BackgroundContext {
 		const task: BackgroundTask = {
 			id: `${execution.kind}-${randomUUID()}`,
 			kind: execution.kind,
-			title: boundText(execution.title, 1024),
+			title: boundText(execution.title, BACKGROUND_TITLE_BYTES),
 			toolCallId: boundText(execution.toolCallId, 512),
 			anchorId,
 			mode: execution.background ? "background" : "foreground",
@@ -433,10 +434,10 @@ export class BackgroundService implements BackgroundContext {
 					return;
 				}
 				if (record.cleanup) throw new Error("Managed output is already registered");
+				// Never truncate a real filesystem path into a different path.
 				if (Buffer.byteLength(path) > 8192) throw new Error("Background output path is too large");
 				record.cleanup = cleanup;
-				// Never truncate a real filesystem path into a different path.
-				if (Buffer.byteLength(path) <= 8192) task.outputPath = path;
+				task.outputPath = path;
 				this.emit();
 			},
 		};
@@ -715,6 +716,9 @@ export class BackgroundService implements BackgroundContext {
 	async cancelOutsideBranch(ancestors: ReadonlySet<string>): Promise<void> {
 		for (const record of this.records.values()) {
 			record.visible = record.task.anchorId === null || ancestors.has(record.task.anchorId);
+			// Returning to a branch revives its undelivered completions; restored history
+			// stays delivered and suppressed.
+			if (record.visible && record.delivery === "pending") record.suppressed = false;
 		}
 		const outside = [...this.records.values()].filter((record) => !record.visible);
 		for (const record of outside) record.suppressed = true;

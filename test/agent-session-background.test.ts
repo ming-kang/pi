@@ -578,13 +578,19 @@ describe("session-owned background host", () => {
 		"does not timer-retry a %s delivery without explicit host retry",
 		async (mode) => {
 			const session = await host();
-			await session.bindExtensions({ backgroundEnabled: true });
-			const deliver = vi.spyOn(session, "sendCustomMessage").mockImplementation(async () => {
+			const warning = vi.fn();
+			await session.bindExtensions({ backgroundEnabled: true, onError: warning });
+			// Delivery failure = the triggered turn rejects, or settles without persisting
+			// the claimed message. Both leave the claim alive for the drain's finally.
+			const deliver = vi.spyOn(session.agent, "prompt").mockImplementation(async () => {
 				if (mode === "reject") throw new Error("persistence failed");
 			});
 			const execution = await task(session);
 			execution.finish();
 			await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+			await vi.waitFor(() =>
+				expect(warning).toHaveBeenCalledWith(expect.objectContaining({ event: "background_delivery" })),
+			);
 			session.background.setEnabled(true);
 			await new Promise((resolve) => setTimeout(resolve, 20));
 			expect(deliver).toHaveBeenCalledOnce();
@@ -596,6 +602,85 @@ describe("session-owned background host", () => {
 			expect(session.background.pendingNotifications()).toHaveLength(0);
 		},
 	);
+
+	it("retries a failed completion delivery on the next user prompt", async () => {
+		const session = await host();
+		const warning = vi.fn();
+		await session.bindExtensions({ backgroundEnabled: true, onError: warning });
+		const deliver = vi.spyOn(session.agent, "prompt").mockRejectedValueOnce(new Error("persistence failed"));
+		const execution = await task(session);
+		execution.finish();
+		await vi.waitFor(() =>
+			expect(warning).toHaveBeenCalledWith(expect.objectContaining({ event: "background_delivery" })),
+		);
+		expect(session.background.pendingNotifications()).toHaveLength(1);
+		deliver.mockRestore();
+		await session.prompt("next");
+		await vi.waitFor(() => expect(session.messages.some((message) => message.role === "custom")).toBe(true));
+		await session.waitForIdle();
+		expect(session.background.pendingNotifications()).toEqual([]);
+	});
+
+	it("keeps a completion pending without a model instead of failure-marking it", async () => {
+		const session = await host();
+		const warning = vi.fn();
+		await session.bindExtensions({ backgroundEnabled: true, onError: warning });
+		const prompting = vi.spyOn(session.agent, "prompt");
+		const model = session.agent.state.model;
+		session.agent.state.model = undefined as never;
+		try {
+			const execution = await task(session);
+			execution.finish();
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(session.background.pendingNotifications()).toHaveLength(1);
+			expect(prompting).not.toHaveBeenCalled();
+			expect(warning).not.toHaveBeenCalledWith(expect.objectContaining({ event: "background_delivery" }));
+			session.agent.state.model = model;
+			session.retryBackgroundNotifications();
+			await vi.waitFor(() => expect(session.messages.some((message) => message.role === "custom")).toBe(true));
+			await session.waitForIdle();
+			expect(session.background.pendingNotifications()).toEqual([]);
+		} finally {
+			session.agent.state.model = model;
+		}
+	});
+
+	it("carries pending nextTurn messages into the completion turn", async () => {
+		const session = await host();
+		await session.bindExtensions({ backgroundEnabled: true });
+		await session.sendCustomMessage(
+			{ customType: "aside", content: "queued context", display: false },
+			{ deliverAs: "nextTurn" },
+		);
+		const execution = await task(session);
+		execution.finish();
+		await vi.waitFor(() =>
+			expect(session.sessionManager.getEntries().filter((entry) => entry.type === "custom_message")).toHaveLength(2),
+		);
+		await session.waitForIdle();
+		const customTypes = session.sessionManager
+			.getEntries()
+			.map((entry) => (entry.type === "custom_message" ? entry.customType : undefined))
+			.filter((customType) => customType !== undefined);
+		expect(customTypes).toEqual(["background-completion", "aside"]);
+		expect(session.background.pendingNotifications()).toEqual([]);
+	});
+
+	it("acknowledges a claimed notification even when an extension rewrites its role", async () => {
+		const session = await host("main", (pi) => {
+			pi.on("message_end", (event) => {
+				if (event.message.role === "custom" && event.message.customType === "background-completion")
+					return { message: { role: "user", content: event.message.content, timestamp: Date.now() } };
+			});
+		});
+		await session.bindExtensions({ backgroundEnabled: true });
+		const delivered = vi.spyOn(session.background, "markDelivered");
+		const execution = await task(session);
+		execution.finish();
+		await vi.waitFor(() => expect(delivered).toHaveBeenCalledWith(execution.id));
+		await session.waitForIdle();
+		expect(session.background.pendingNotifications()).toEqual([]);
+	});
 
 	it("acknowledges a persisted notification even when extensions replace its metadata", async () => {
 		const session = await host("main", (pi) => {
