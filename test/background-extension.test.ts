@@ -25,7 +25,6 @@ import {
 	scheduleWaitRefresh,
 } from "../src/extensions/background/render.ts";
 import type { bgSchema } from "../src/extensions/background/schema.ts";
-import { formatStatusline } from "../src/extensions/background/task-view.ts";
 import type { BgDetails, BgNotificationDetails } from "../src/extensions/background/types.ts";
 import type { Theme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -89,6 +88,25 @@ describe("public Background management", () => {
 		expect(JSON.stringify(tool?.parameters)).not.toContain('"create"');
 		expect(JSON.stringify(tool?.parameters)).not.toContain('"command"');
 	});
+	it("points unknown task ids back to the list action", async () => {
+		let tool: ToolDefinition<typeof bgSchema, BgDetails, BgRenderState> | undefined;
+		const pi = {
+			on: vi.fn(),
+			registerTool: (value: typeof tool) => {
+				tool = value;
+			},
+			registerMessageRenderer: vi.fn(),
+			registerCommand: vi.fn(),
+		} as unknown as ExtensionAPI;
+		createBackgroundExtension()(pi);
+		const h = running();
+		await h.outcome;
+		const ctx = { background: h.service } as unknown as ExtensionContext;
+		await expect(
+			tool!.execute("call", { action: "read", taskId: "nope" }, undefined, undefined, ctx),
+		).rejects.toThrow(/Unknown background task ID.*action list/);
+		h.finish();
+	});
 	it("reads and lists both kinds using the same service", async () => {
 		for (const kind of ["bash", "subagent"] as const) {
 			const h = running(kind);
@@ -127,6 +145,16 @@ describe("public Background management", () => {
 		h.finish();
 		await h.service.wait(id, 1000);
 		expect(textOf(await runRead(h.service, { action: "read", taskId: id }))).toContain("final report");
+	});
+	it("reports a closed host instead of claiming execution continues", async () => {
+		const h = running();
+		await h.outcome;
+		const id = h.service.list()[0]!.id;
+		h.service.close();
+		const text = textOf(await runWait(h.service, { action: "wait", taskId: id, waitMs: 1000 }));
+		expect(text).toContain("host closed");
+		expect(text).not.toContain("execution continues");
+		h.finish();
 	});
 	it("reports cancellation requested, never falsely stopped, and targets the whole group", async () => {
 		const h = running("subagent");
@@ -183,6 +211,15 @@ describe("public Background management", () => {
 			Array.from({ length: 150 }, () => ({ ...original, title: "界".repeat(50000) })),
 		);
 		expect(Buffer.byteLength(textOf(runList(h.service)))).toBeLessThanOrEqual(50 * 1024);
+		h.finish();
+	});
+	it("omits the hidden-records suffix when the list fits", async () => {
+		const h = running();
+		await h.outcome;
+		expect(textOf(runList(h.service))).not.toContain("more records not shown");
+		const original = h.service.list()[0]!;
+		vi.spyOn(h.service, "list").mockReturnValue(Array.from({ length: 105 }, () => ({ ...original })));
+		expect(textOf(runList(h.service))).toContain("5 more records not shown.");
 		h.finish();
 	});
 	it("releases renderer timers when a pending wait row is disposed", () => {
@@ -454,18 +491,16 @@ describe("renderBgCall", () => {
 	});
 });
 
-describe("renderBgCall wait live line", () => {
+describe("renderBgCall wait pending line", () => {
 	const plainTheme = {
 		fg: (_color: string, text: string) => text,
 		bold: (text: string) => text,
 	} as unknown as Theme;
 
-	it("shows elapsed/window and the output delta while pending, then settles", () => {
+	it("shows elapsed/window while pending, then settles", () => {
 		vi.useFakeTimers();
 		try {
 			const state: BgRenderState = {};
-			let bytes = 100;
-			const probe = () => ({ status: "running" as const, outputBytes: bytes });
 			const context = {
 				expanded: false,
 				executionStarted: true,
@@ -474,18 +509,15 @@ describe("renderBgCall wait live line", () => {
 				invalidate: vi.fn(),
 			} as unknown as ToolRenderContext<BgRenderState>;
 
-			const first = renderBgCall({ action: "wait", taskId: "bg-3f" }, plainTheme, context, probe);
+			const first = renderBgCall({ action: "wait", taskId: "bg-3f" }, plainTheme, context);
 			expect(first.render(200).map(stripTerminalSequences).join("\n")).toMatch(/^bg wait bg-3f waiting 0s\/20s/);
 			expect(state.refreshTimer).toBeDefined();
 
-			// Output grows; the armed timer invalidates and the next render shows the delta.
-			bytes = 3378;
+			// The armed timer invalidates and the next render shows elapsed progress.
 			vi.advanceTimersByTime(1000);
 			expect(context.invalidate).toHaveBeenCalledTimes(1);
-			const second = renderBgCall({ action: "wait", taskId: "bg-3f" }, plainTheme, context, probe);
-			const text = second.render(200).map(stripTerminalSequences).join("\n");
-			expect(text).toMatch(/^bg wait bg-3f waiting 1s\/20s/);
-			expect(text).toContain("+3.2KB new output");
+			const second = renderBgCall({ action: "wait", taskId: "bg-3f" }, plainTheme, context);
+			expect(second.render(200).map(stripTerminalSequences).join("\n")).toMatch(/^bg wait bg-3f waiting 1s\/20s/);
 
 			// Settled: timer cleared, static form returns.
 			const settledContext = {
@@ -494,12 +526,7 @@ describe("renderBgCall wait live line", () => {
 				isPartial: false,
 				state,
 			} as unknown as ToolRenderContext<BgRenderState>;
-			const settled = renderBgCall(
-				{ action: "wait", taskId: "bg-3f", waitMs: 20_000 },
-				plainTheme,
-				settledContext,
-				probe,
-			);
+			const settled = renderBgCall({ action: "wait", taskId: "bg-3f", waitMs: 20_000 }, plainTheme, settledContext);
 			expect(settled.render(200).map(stripTerminalSequences).join("\n")).toMatch(/^bg wait bg-3f 20s/);
 			expect(state.refreshTimer).toBeUndefined();
 		} finally {
@@ -518,21 +545,16 @@ describe("renderBgCall wait live line", () => {
 			state,
 		} as unknown as ToolRenderContext<BgRenderState>;
 
-		const line = renderBgCall({ action: "wait", taskId: "bg-3f" }, plainTheme, context, () => ({
-			status: "running" as const,
-			outputBytes: 100,
-		}));
+		const line = renderBgCall({ action: "wait", taskId: "bg-3f" }, plainTheme, context);
 		expect(line.render(200).map(stripTerminalSequences).join("\n")).not.toContain("waiting");
 		expect(state.refreshTimer).toBeUndefined();
 	});
 
 	it("falls back to the static line without shell state", () => {
-		const component = renderBgCall(
-			{ action: "wait", taskId: "bg-3f", waitMs: 5000 },
-			plainTheme,
-			{ expanded: false, isPartial: true } as ToolRenderContext<BgRenderState>,
-			() => ({ status: "running", outputBytes: 10 }),
-		);
+		const component = renderBgCall({ action: "wait", taskId: "bg-3f", waitMs: 5000 }, plainTheme, {
+			expanded: false,
+			isPartial: true,
+		} as ToolRenderContext<BgRenderState>);
 		expect(component.render(200).map(stripTerminalSequences).join("\n")).toMatch(/^bg wait bg-3f 5s/);
 	});
 });
@@ -561,25 +583,5 @@ describe("renderBgResult summaries", () => {
 		);
 		const text = component.render(200).map(stripTerminalSequences).join("\n");
 		expect(text).toContain("bg-3f (dev server) started");
-	});
-});
-
-describe("formatStatusline", () => {
-	it("reports running and finished counts", () => {
-		expect(formatStatusline({ running: 2, total: 3, stalled: 0 })).toBe("bg 2 running · 1 finished");
-	});
-
-	it("splits stalled tasks out of the running count so the counts add up", () => {
-		expect(formatStatusline({ running: 3, total: 4, stalled: 1 })).toBe(
-			"bg 2 running · 1 waiting for input · 1 finished",
-		);
-	});
-
-	it("reports a lone stalled task without a running segment", () => {
-		expect(formatStatusline({ running: 1, total: 1, stalled: 1 })).toBe("bg 1 waiting for input");
-	});
-
-	it("hides the segment when no tasks exist", () => {
-		expect(formatStatusline({ running: 0, total: 0, stalled: 0 })).toBeUndefined();
 	});
 });

@@ -1,8 +1,8 @@
 /**
  * background — how a task is described, everywhere.
  *
- * Every output this extension produces (five tool results, two notifications,
- * the statusline, the /bg list and detail header) is the same thing: a BgTask
+ * Every output this extension produces (four tool actions, two notification
+ * renderers, the /bg list and detail header) is the same thing: a BgTask
  * projected into a medium. The values those projections derive — runtime, exit
  * suffix, label, glyph — live here once, so the media can differ without the
  * vocabulary drifting. Pure functions; no TUI components, no theme.
@@ -84,23 +84,4 @@ export function statusColor(status: BgTaskStatus, stalled?: boolean): "success" 
 		default:
 			return "accent";
 	}
-}
-
-/** Shared running/waiting/finished count vocabulary for tools, menus, and footer. */
-export function formatTaskCounts(counts: { running: number; total: number; stalled: number }): string | undefined {
-	if (counts.total === 0) return undefined;
-	// Stalled tasks are running tasks: report them separately so the counts add up.
-	const running = counts.running - counts.stalled;
-	const finished = counts.total - counts.running;
-	const parts: string[] = [];
-	if (running > 0) parts.push(`${running} running`);
-	if (counts.stalled > 0) parts.push(`${counts.stalled} waiting for input`);
-	if (finished > 0) parts.push(`${finished} finished`);
-	return parts.join(" · ");
-}
-
-/** The footer segment, or nothing when this session has no tasks at all. */
-export function formatStatusline(counts: { running: number; total: number; stalled: number }): string | undefined {
-	const summary = formatTaskCounts(counts);
-	return summary ? `bg ${summary}` : undefined;
 }

@@ -18,7 +18,7 @@ import { highlightCode, type Theme } from "../../modes/interactive/theme/theme.t
 import { type BgInput, clampWaitMs } from "./schema.ts";
 import { commandLabel, exitSuffix, statusColor, statusGlyph } from "./task-view.ts";
 import { fileNameOf, firstCommandLine, formatDuration } from "./text.ts";
-import type { BgDetails, BgNotificationDetails, BgTaskStatus } from "./types.ts";
+import type { BgDetails, BgNotificationDetails } from "./types.ts";
 
 type BgRenderInput = Omit<BgInput, "action"> & {
 	action?: string;
@@ -36,22 +36,12 @@ const RESULT_EXPAND_LIMIT = 4000;
 /** Live pending-wait line refresh cadence; the first settled render clears the timer. */
 const WAIT_REFRESH_MS = 1000;
 
-/** Live peek at a waited-on task, optionally supplied by the host call renderer. */
-export interface BgTaskLive {
-	status: BgTaskStatus;
-	outputBytes: number;
-}
-
-export type WaitLiveProbe = (taskId: string) => BgTaskLive | undefined;
-
 /** Per-call live-refresh state owned by the shell's render context. */
 export interface BgRenderState {
 	dispose?: () => void;
 	refreshTimer?: ReturnType<typeof setTimeout>;
 	/** First pending render of a wait call; anchors the elapsed display. */
 	waitStartedAt?: number;
-	/** outputBytes snapshot at wait start; anchors the "+new output" display. */
-	waitBaselineBytes?: number;
 }
 
 /**
@@ -79,7 +69,6 @@ export function scheduleWaitRefresh(context: ToolRenderContext<BgRenderState>, p
 		state.refreshTimer = undefined;
 	}
 	state.waitStartedAt = undefined;
-	state.waitBaselineBytes = undefined;
 }
 
 function bgPrompt(theme: Theme): string {
@@ -97,12 +86,7 @@ function capForTranscript(text: string, limit: number): string {
 
 // ── tool call ─────────────────────────────────────────────────────────────
 
-export function renderBgCall(
-	args: BgRenderInput,
-	theme: Theme,
-	context: ToolRenderContext<BgRenderState>,
-	getTaskLive?: WaitLiveProbe,
-): Component {
+export function renderBgCall(args: BgRenderInput, theme: Theme, context: ToolRenderContext<BgRenderState>): Component {
 	switch (args.action) {
 		case "create": {
 			// Arguments stream in, so `command` may not have arrived yet.
@@ -121,7 +105,7 @@ export function renderBgCall(
 			);
 		}
 		case "wait":
-			return renderWaitCall(args, theme, context, getTaskLive);
+			return renderWaitCall(args, theme, context);
 		case "kill":
 			return new Text(
 				`${theme.fg("toolTitle", theme.bold("bg kill "))}${theme.fg("accent", args.taskId ?? "")}`,
@@ -140,18 +124,11 @@ export function renderBgCall(
 }
 
 /**
- * Pending wait call: elapsed/wait-window and the new-output delta since the
- * wait began, refreshed once per second by scheduleWaitRefresh until the
- * result settles and takes over the row.
+ * Pending wait call: elapsed/wait-window, refreshed once per second by
+ * scheduleWaitRefresh until the result settles and takes over the row.
  */
-function renderWaitCall(
-	args: BgRenderInput,
-	theme: Theme,
-	context: ToolRenderContext<BgRenderState>,
-	getTaskLive: WaitLiveProbe | undefined,
-): Component {
+function renderWaitCall(args: BgRenderInput, theme: Theme, context: ToolRenderContext<BgRenderState>): Component {
 	const taskId = typeof args.taskId === "string" ? args.taskId.trim() : "";
-	const live = getTaskLive !== undefined && taskId ? getTaskLive(taskId) : undefined;
 	// isPartial alone means "not settled", which also covers argument streaming
 	// and replayed history rows that never settle; executionStarted narrows it to
 	// a call that is actually running. The live display also needs shell-owned
@@ -172,18 +149,9 @@ function renderWaitCall(
 	}
 	const state = context.state;
 	if (state.waitStartedAt === undefined) state.waitStartedAt = Date.now();
-	const startedAt = state.waitStartedAt;
-	let liveBase: number | undefined;
-	if (live) {
-		if (state.waitBaselineBytes === undefined) state.waitBaselineBytes = live.outputBytes;
-		liveBase = state.waitBaselineBytes;
-	}
-	const parts = [`waiting ${formatDuration(Date.now() - startedAt)}/${formatDuration(clampWaitMs(args.waitMs))}`];
-	if (live && live.status === "running" && liveBase !== undefined && live.outputBytes > liveBase) {
-		parts.push(`+${formatSize(live.outputBytes - liveBase)} new output`);
-	}
+	const elapsed = `waiting ${formatDuration(Date.now() - state.waitStartedAt)}/${formatDuration(clampWaitMs(args.waitMs))}`;
 	return new Text(
-		`${theme.fg("toolTitle", theme.bold("bg wait "))}${theme.fg("accent", taskId)} ${theme.fg("muted", parts.join(" · "))}`,
+		`${theme.fg("toolTitle", theme.bold("bg wait "))}${theme.fg("accent", taskId)} ${theme.fg("muted", elapsed)}`,
 		0,
 		0,
 	);

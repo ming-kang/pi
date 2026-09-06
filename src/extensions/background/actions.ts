@@ -68,28 +68,32 @@ export async function runWait(
 		const start = Date.now();
 		const task = await background.wait(id, clampWaitMs(input.waitMs), signal);
 		const timedOut = !isBackgroundTerminal(task.status);
+		// A closed host resolves waits early without settling anything; do not claim
+		// the execution merely outlived the wait window.
+		const windowNote = background.closed
+			? " · host closed; execution state unconfirmed"
+			: timedOut
+				? " · wait window expired; execution continues"
+				: "";
 		const slice = await background.read(id, {
 			bytes: BG_WAIT_DELTA_BYTES,
 			sinceBytes: clampSinceBytes(input.sinceBytes),
 		});
 		signal?.throwIfAborted();
-		return result(
-			readText(`[${describeTaskLine(task)}${timedOut ? " · wait window expired; execution continues" : ""}]`, slice),
-			{
-				action: "wait",
-				taskId: task.id,
-				...(!timedOut ? { backgroundTaskId: task.id } : {}),
-				status: task.status,
-				kind: task.kind,
-				timedOut,
-				exitCode: undefined,
-				waitedMs: Date.now() - start,
-				deltaBytes: Buffer.byteLength(slice.text),
-				totalBytes: slice.totalBytes,
-				deltaTruncated: slice.truncated,
-				outputPath: task.outputPath ?? "",
-			},
-		);
+		return result(readText(`[${describeTaskLine(task)}${windowNote}]`, slice), {
+			action: "wait",
+			taskId: task.id,
+			...(!timedOut ? { backgroundTaskId: task.id } : {}),
+			status: task.status,
+			kind: task.kind,
+			timedOut,
+			exitCode: undefined,
+			waitedMs: Date.now() - start,
+			deltaBytes: Buffer.byteLength(slice.text),
+			totalBytes: slice.totalBytes,
+			deltaTruncated: slice.truncated,
+			outputPath: task.outputPath ?? "",
+		});
 	} finally {
 		release();
 	}
@@ -115,16 +119,17 @@ export function runList(background: BackgroundContext): AgentToolResult<BgListDe
 	const active = tasks.filter((task) => !isBackgroundTerminal(task.status));
 	const finished = tasks.filter((task) => isBackgroundTerminal(task.status));
 	const shown = [...active, ...finished.slice(0, BG_LIST_FINISHED_SHOWN)].slice(0, 100);
+	const hidden = tasks.length - shown.length;
 	return result(
 		shown.length
-			? `${shown.map((task) => describeTaskLine(task)).join("\n")}\n${tasks.length - shown.length} more records not shown.`
+			? `${shown.map((task) => describeTaskLine(task)).join("\n")}${hidden > 0 ? `\n${hidden} more records not shown.` : ""}`
 			: "No managed executions. Start work through bash or subagent with background: true.",
 		{
 			action: "list",
 			running: active.length,
 			finished: finished.length,
 			shown: shown.length,
-			hidden: tasks.length - shown.length,
+			hidden,
 		},
 	);
 }

@@ -104,10 +104,12 @@ export function createToolHtmlRenderer(deps: ToolHtmlRendererDeps): ToolHtmlRend
 					return undefined;
 				}
 
+				// A static export has no in-flight execution: isPartial stays false so
+				// historical calls render settled and never arm live-refresh timers.
 				const component = toolDef.renderCall(
 					args,
 					theme,
-					createRenderContext(toolCallId, renderedCallComponents.get(toolCallId), false, true, false),
+					createRenderContext(toolCallId, renderedCallComponents.get(toolCallId), false, false, false),
 				);
 				renderedCallComponents.set(toolCallId, component);
 				const lines = component.render(width);

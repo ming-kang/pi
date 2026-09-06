@@ -53,7 +53,10 @@ export function createBackgroundExtension(): (pi: ExtensionAPI) => void {
 							return runList(ctx.background);
 					}
 				} catch (error) {
-					throw new Error(boundedText(error instanceof Error ? error.message : String(error)));
+					const message = error instanceof Error ? error.message : String(error);
+					// Unknown/ambiguous ids recover through the same step as a missing id.
+					const hint = message.includes("background task ID") ? " Use action list to find the execution id." : "";
+					throw new Error(boundedText(`${message}${hint}`));
 				}
 			},
 			renderCall: renderBgCall,

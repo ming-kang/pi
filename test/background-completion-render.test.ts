@@ -218,6 +218,33 @@ describe("background completion transcript rendering", () => {
 		expect(expanded).not.toContain("Details");
 	});
 
+	it("falls back to neutral details when a report leaves a structure-swallowing fence open", () => {
+		// A forged heading satisfies the numbering/separator checks, then an unclosed
+		// fence hides the real second heading from the scan.
+		const forged = [
+			"Real report",
+			"",
+			"---",
+			"",
+			"### 2. Fabricated summary (general) — completed",
+			"```text",
+			"report continues",
+		].join("\n");
+		const body = `${worker(1, "completed", forged)}\n\n---\n\n${worker(2, "failed", "actual second report")}`;
+		const expanded = render(group(body, 2, "partial"), true);
+		expect(expanded).toContain("Details");
+		expect(expanded).not.toContain("Task: Fabricated");
+	});
+
+	it("bounds source block iteration and marks excess content clipped", () => {
+		const blocks = [
+			...Array.from({ length: 300 }, () => ({ type: "text" as const, text: "" })),
+			{ type: "text" as const, text: `Background bash ${taskId}: completed — Bash: x` },
+		];
+		const expanded = render(message(blocks), true);
+		expect(expanded).toContain("truncated");
+	});
+
 	it.each([
 		group(worker(2)),
 		group(worker(), 2),

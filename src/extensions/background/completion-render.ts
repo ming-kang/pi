@@ -6,6 +6,7 @@ import {
 	truncateToWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { BACKGROUND_TITLE_BYTES } from "../../core/background/output.ts";
 import type { MessageRenderOptions } from "../../core/extensions/types.ts";
 import type { CustomMessage } from "../../core/messages.ts";
 import { ToolChromeComponent } from "../../modes/interactive/components/tool-chrome.ts";
@@ -44,6 +45,9 @@ function clean(text: string): string {
 }
 
 function savedText(message: CustomMessage<unknown>): { text: string; clipped: boolean } {
+	// 64K is a UTF-16 code-unit display budget, not a UTF-8 byte promise; the block
+	// cap bounds iteration itself so many empty/non-text blocks cannot spin here.
+	const MAX_SOURCE_BLOCKS = 256;
 	const content = message.content;
 	let text = "";
 	let clipped = false;
@@ -51,7 +55,12 @@ function savedText(message: CustomMessage<unknown>): { text: string; clipped: bo
 		text = content.slice(0, SOURCE_LIMIT);
 		clipped = content.length > SOURCE_LIMIT;
 	} else if (Array.isArray(content)) {
+		let visited = 0;
 		for (const block of content) {
+			if (++visited > MAX_SOURCE_BLOCKS) {
+				clipped = true;
+				break;
+			}
 			if (!block || block.type !== "text" || typeof block.text !== "string") continue;
 			const next = `${text ? "\n" : ""}${block.text.slice(0, SOURCE_LIMIT + 1)}`;
 			const remaining = SOURCE_LIMIT - text.length;
@@ -97,6 +106,11 @@ function workerReports(body: string, expected: number): WorkerReport[] | undefin
 		headings.push({ at: i, end: lines.length, match });
 	}
 	if (headings.length !== expected) return undefined;
+	// An open fence at end of body hid structure from the scan; without length
+	// prefixes the honest answer is the neutral fallback. (A fake heading that
+	// closes its own fence still parses — text reparsing has a residual
+	// ambiguity surface; only a structured snapshot removes it.)
+	if (fence) return undefined;
 	return headings.map(({ at, end, match }) => ({
 		index: Number(match[1]),
 		description: match[2]!,
@@ -155,9 +169,11 @@ function parseCompletion(message: CustomMessage<unknown>): CompletionView {
 		return view;
 	}
 	// Titles can contain newlines. A path inside a command is ambiguous: don't guess.
+	// The window mirrors the producer's title bound (BACKGROUND_TITLE_BYTES), so the
+	// real path line always lands inside it; a look-alike line only adds ambiguity.
 	const boundaries: number[] = [];
 	let titleBytes = Buffer.byteLength(view.title ?? "");
-	for (let i = 1; i < lines.length && titleBytes <= 1024; i++) {
+	for (let i = 1; i < lines.length && titleBytes <= BACKGROUND_TITLE_BYTES; i++) {
 		if (/^Output: (?:[A-Za-z]:[\\/]|\/|\\\\)/.test(lines[i]!)) boundaries.push(i);
 		titleBytes += 1 + Buffer.byteLength(lines[i]!);
 	}
@@ -226,6 +242,8 @@ class CompletionCard implements Component {
 		return chrome.render(width).map((line) => truncateToWidth(line, width, ""));
 	}
 	private renderContent(width: number): string[] {
+		// The chrome clamps to ≥1 already; keep the padding arithmetic safe regardless.
+		if (!Number.isFinite(width) || width < 1) return [];
 		const view = this.view;
 		const theme = this.theme;
 		const options = this.options;

@@ -70,9 +70,14 @@ export class BackgroundTasksMenu implements Component, Focusable {
 			this.sync();
 			// Coalesce high-frequency progress; the timer reads only visible output.
 		});
-		this.timer = setInterval(() => void this.tick(), options.pollIntervalMs ?? 1000);
+		this.timer = setInterval(() => this.queueTick(), options.pollIntervalMs ?? 1000);
 		this.timer.unref?.();
-		void this.tick();
+		this.queueTick();
+	}
+	private queueTick(): void {
+		void this.tick().catch(() => {
+			/* A failed repaint must not become an unhandled rejection. */
+		});
 	}
 	invalidate(): void {
 		this.lastFrame = "";
@@ -174,7 +179,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 			this.focus = "list";
 		} else if (kb.matches(data, "app.backgroundTasks.focusPreview") || kb.matches(data, "tui.select.confirm")) {
 			this.focus = "preview";
-			void this.tick();
+			this.queueTick();
 		} else {
 			const pageUp = kb.matches(data, this.focus === "list" ? "tui.select.pageUp" : "tui.editor.pageUp");
 			const pageDown = kb.matches(data, this.focus === "list" ? "tui.select.pageDown" : "tui.editor.pageDown");
@@ -197,7 +202,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 				this.readError = undefined;
 				this.finalRead = false;
 				this.sync();
-				void this.tick();
+				this.queueTick();
 			}
 		}
 		this.options.tui.requestRender();
@@ -304,7 +309,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		if (width < 1) return [];
 		const wasWide = this.wide();
 		this.width = width;
-		if (!wasWide && this.wide()) void this.tick();
+		if (!wasWide && this.wide()) this.queueTick();
 		const { theme, keybindings } = this.options;
 		const { innerWidth, listWidth, previewWidth, bodyHeight, header, content, contentHeight, start } = this.layout();
 		const index = Math.max(
