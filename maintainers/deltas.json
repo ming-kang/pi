@@ -74,13 +74,27 @@
 			"intent": "Fork distribution constants: package name, disabled install telemetry, changelog hint"
 		},
 		{
+			"path": "src/core/agent-session-runtime.ts",
+			"category": "distribution",
+			"intent": "Pauses background delivery across session switch/new/fork, closes the session-owned Background service before runtime replacement, and re-reads the settled leaf when forking",
+			"tests": [
+				"test/agent-session-runtime-events.test.ts"
+			]
+		},
+		{
+			"path": "src/core/agent-session-services.ts",
+			"category": "distribution",
+			"intent": "Passes the host-assigned executionRole through session-from-services creation so nested subagent sessions cannot enable background execution"
+		},
+		{
 			"path": "src/core/agent-session.ts",
 			"category": "bugfix",
-			"intent": "Uses one captured stream for manual, automatic, and branch summarization across async auth; binds live shell settings into canonical extension contexts; invalidates stale contexts",
+			"intent": "Uses one captured stream for manual, automatic, and branch summarization across async auth; binds live shell settings into canonical extension contexts; invalidates stale contexts; owns the session Background service — admission, settlement persistence, exactly-once completion delivery with prompt-driven retry, and late-settlement quarantine",
 			"tests": [
 				"test/suite/agent-session-compaction.test.ts",
 				"test/suite/agent-session-extension-context.test.ts",
-				"test/suite/regressions/6324-branch-summary-ambient-auth.test.ts"
+				"test/suite/regressions/6324-branch-summary-ambient-auth.test.ts",
+				"test/agent-session-background.test.ts"
 			]
 		},
 		{
@@ -89,6 +103,14 @@
 			"intent": "Cuts at the last valid point when trailing tool results exceed keepRecentTokens, instead of keeping everything and making compaction a no-op; this also keeps upstream's between-turn compaction from being a no-op after a large tool batch",
 			"tests": [
 				"test/compaction.test.ts"
+			]
+		},
+		{
+			"path": "src/core/export-html/tool-renderer.ts",
+			"category": "distribution",
+			"intent": "Static export renders tool calls as settled (isPartial false) so fork renderers with live-refresh state never arm timers in exported HTML",
+			"tests": [
+				"test/background-extension.test.ts"
 			]
 		},
 		{
@@ -120,7 +142,10 @@
 		{
 			"path": "src/core/keybindings.ts",
 			"category": "ui",
-			"intent": "Adds configurable app.list.toggle and app.backgroundTasks.kill bindings"
+			"intent": "Adds configurable app.list.toggle and app.backgroundTasks.* bindings (detach, list/preview focus, kill)",
+			"tests": [
+				"test/keybindings.test.ts"
+			]
 		},
 		{
 			"path": "src/core/model-registry.ts",
@@ -139,17 +164,26 @@
 			]
 		},
 		{
+			"path": "src/core/sdk.ts",
+			"category": "distribution",
+			"intent": "CreateAgentSessionOptions.executionRole carries the host-assigned execution identity; subagent-role sessions reject background execution",
+			"tests": [
+				"test/agent-session-background.test.ts"
+			]
+		},
+		{
 			"path": "src/core/settings-manager.ts",
 			"category": "distribution",
 			"intent": "Default tuiMode is fullscreen; keep when syncing upstream"
 		},
 		{
 			"path": "src/core/tools/bash.ts",
-			"category": "ui",
-			"intent": "Exported timeout/spawn helpers and Windows nul-redirect normalization consumed by the background extension; fork rendering lives in renderers/bash.ts",
+			"category": "distribution",
+			"intent": "Managed background execution routing: background parameter, host handoff with preserved foreground error contract, and the 20 MiB background output cap; plus exported timeout/spawn helpers and Windows nul-redirect normalization; fork rendering lives in renderers/bash.ts",
 			"tests": [
 				"test/bash-tool-rendering.test.ts",
-				"test/bash-nul-redirect.test.ts"
+				"test/bash-nul-redirect.test.ts",
+				"test/bash-background.test.ts"
 			]
 		},
 		{
@@ -183,6 +217,14 @@
 			"intent": "Explore toolGroup on the definition; fork collapsed-lines hint lives in renderers/ls.ts"
 		},
 		{
+			"path": "src/core/tools/output-accumulator.ts",
+			"category": "distribution",
+			"intent": "persistFromStart writes managed execution output through a dedicated fd from the first byte (no unbounded stream write queue), with a per-snapshot maxBytes override",
+			"tests": [
+				"test/bash-background.test.ts"
+			]
+		},
+		{
 			"path": "src/core/tools/read.ts",
 			"category": "ui",
 			"intent": "Explore toolGroup on the definition; fork rendering (muted range colors, group-summary expand hint) lives in renderers/read.ts"
@@ -212,6 +254,15 @@
 			"intent": "Trust-key identity across drive-letter case (realpathSync keeps input case, so C:/c: cwd spellings produce distinct keys for the same dir) via lowercased drive + dev:ino stat comparison; dual HOME sources for global-resource checks",
 			"tests": [
 				"test/trust-manager.test.ts"
+			]
+		},
+		{
+			"path": "src/core/usage-totals.ts",
+			"category": "distribution",
+			"intent": "Accounts the validated background-usage ledger once per task id in session totals and cost breakdown without double-counting foreground results",
+			"tests": [
+				"test/background-usage.test.ts",
+				"test/agent-session-stats.test.ts"
 			]
 		},
 		{
@@ -256,11 +307,27 @@
 			]
 		},
 		{
+			"path": "src/modes/interactive/components/custom-message.ts",
+			"category": "ui",
+			"intent": "Custom-rendered messages expand/collapse through a MouseRegion gated to unmodified single primary clicks, preserving child handlers and keyboard expansion",
+			"tests": [
+				"test/custom-message.test.ts"
+			]
+		},
+		{
 			"path": "src/modes/interactive/components/extension-selector.ts",
 			"category": "ui",
 			"intent": "Selector subtitle line under the title and keybinding-aware hint labels",
 			"tests": [
 				"test/extension-selector.test.ts"
+			]
+		},
+		{
+			"path": "src/modes/interactive/components/footer.ts",
+			"category": "ui",
+			"intent": "Footer totals flow through the shared accounted-usage ledger so settled background usage counts once alongside assistant and tool usage",
+			"tests": [
+				"test/footer-width.test.ts"
 			]
 		},
 		{
