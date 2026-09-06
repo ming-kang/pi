@@ -4,6 +4,7 @@ import { Box, Container, Markdown, type MarkdownTheme, MouseRegion, Spacer, Text
 import type { MessageRenderer } from "../../../core/extensions/types.ts";
 import type { CustomMessage } from "../../../core/messages.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { isPlainPrimaryClick } from "./primary-click.ts";
 
 /**
  * Component that renders a custom message entry from extensions.
@@ -76,7 +77,8 @@ export class CustomMessageComponent extends Container {
 				if (component) {
 					// Custom renderer provides its own styled component
 					this.customComponent = new MouseRegion(component, (event) => {
-						if (event.type !== "click" || event.button !== "left") return undefined;
+						// MouseRegion already delegates handled child events before this callback.
+						if (!isPlainPrimaryClick(event)) return undefined;
 						this.setExpanded(!this._expanded);
 						return { handled: true };
 					});

@@ -2887,14 +2887,14 @@ export class InteractiveMode {
 		this.backgroundInputUnsubscribe?.();
 		this.backgroundInputUnsubscribe = this.ui.addInputListener((data) => {
 			if (!this.keybindings.matches(data, "app.backgroundTasks.detach")) return undefined;
-			if (!this.isShuttingDown) {
-				const count = this.session.background.detachForeground();
-				this.showStatus(
-					count > 0
-						? `Moved ${count} execution${count === 1 ? "" : "s"} to the background. Use /bg to manage tasks.`
-						: "No foreground Bash or Subagent execution can be moved to the background.",
-				);
-			}
+			if (this.isShuttingDown) return { consume: true };
+			const count = this.session.background.detachForeground();
+			// Nothing can move: let the key fall through to editor bindings instead of
+			// spending it on a "nothing happened" status line.
+			if (count === 0) return undefined;
+			this.showStatus(
+				`Moved ${count} execution${count === 1 ? "" : "s"} to the background. Use /bg to manage tasks.`,
+			);
 			return { consume: true };
 		});
 	}

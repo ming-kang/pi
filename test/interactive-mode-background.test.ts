@@ -36,15 +36,14 @@ describe("interactive Background detach input listener", () => {
 		expect(h.ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining("Moved 2 executions"));
 		expect(h.input("x")).toBeUndefined();
 	});
-	it("uses the configured action, with exact no-eligible feedback", () => {
+	it("uses the configured action and passes the key through when nothing can detach", () => {
 		const h = harness(new KeybindingsManager({ "app.backgroundTasks.detach": "ctrl+y" }));
 		h.setup();
 		h.ctx.session.background.detachForeground.mockReturnValue(0);
 		expect(h.input("\x02")).toBeUndefined();
-		expect(h.input("\x19")).toEqual({ consume: true });
-		expect(h.ctx.showStatus).toHaveBeenCalledWith(
-			"No foreground Bash or Subagent execution can be moved to the background.",
-		);
+		expect(h.input("\x19")).toBeUndefined();
+		expect(h.ctx.session.background.detachForeground).toHaveBeenCalledOnce();
+		expect(h.ctx.showStatus).not.toHaveBeenCalled();
 	});
 	it("rebinds without accumulating listeners, disposes and ignores shutdown input", () => {
 		const h = harness();

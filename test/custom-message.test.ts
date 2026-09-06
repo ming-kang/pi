@@ -105,6 +105,24 @@ describe("CustomMessageComponent", () => {
 		expect(renderer).toHaveBeenCalledTimes(1);
 	});
 
+	test("toggles only on unmodified single primary clicks", () => {
+		initTheme("dark");
+		const component = new CustomMessageComponent(message, expandingRenderer, undefined, 0);
+		component.render(40);
+		expect(lines(component)).toEqual(["", "summary"]);
+		for (const event of [
+			mouse({ shift: true }),
+			mouse({ ctrl: true }),
+			mouse({ alt: true }),
+			mouse({ clickCount: 2 }),
+		]) {
+			expect(component.handleMouse(event)).toBeUndefined();
+			expect(lines(component)).toEqual(["", "summary"]);
+		}
+		expect(component.handleMouse(mouse())?.handled).toBe(true);
+		expect(lines(component)).toEqual(["", "summary", "details"]);
+	});
+
 	test.each(["absent", "undefined", "throw"] as const)("leaves %s renderer fallback static", (mode) => {
 		initTheme("dark");
 		const renderer: MessageRenderer | undefined =
