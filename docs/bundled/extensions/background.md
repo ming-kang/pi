@@ -23,9 +23,7 @@ Omitting `background` keeps the normal foreground wait. A background submission 
 
 In interactive mode, **Ctrl+B** moves all eligible foreground shell tasks and Subagent invocations to the background. It works even when `/bg` owns focus. The same execution continues: no cancellation, restart, new worker or timeout reset. It does not detach individual workers, ordinary file tools, or user `!` shell commands.
 
-If nothing is eligible, Pi reports:
-
-> No foreground Bash or Subagent execution can be moved to the background.
+When nothing is eligible, the key is not consumed: it falls through to other bindings instead of reporting a no-op.
 
 Configure `app.backgroundTasks.detach` in `keybindings.json` to change or disable the shortcut. The default `tui.editor.cursorLeft` is now `left`, freeing Ctrl+B. To restore Emacs cursor behavior, disable or rebind detach before assigning Ctrl+B to cursor-left.
 
@@ -101,7 +99,7 @@ Rendering uses only the persisted message text and optional task ID, so saved no
 
 ## Lifetime
 
-Background execution belongs to the current session runtime, not a daemon. Parent-turn cancellation still cancels foreground-owned work; after detach it does not cancel background work. Shutdown, `/reload`, `/new`, `/resume`, and `/fork` close admission, stop delivery, cancel work and perform bounded cleanup. `/tree` cancels executions whose launch anchor is absent from the destination branch and suppresses their completion delivery there; ordinary conversation progress along the same branch does not cancel them. Active processes and workers are not reattached across process restart or copied into a fork.
+Background execution belongs to the current session runtime, not a daemon. Parent-turn cancellation still cancels foreground-owned work; after detach it does not cancel background work. Shutdown, `/reload`, `/new`, `/resume`, and `/fork` close admission, stop delivery, cancel work and perform bounded cleanup. `/tree` cancels executions whose launch anchor is absent from the destination branch and suppresses their completion delivery there; navigating back to a branch revives its undelivered completions, and ordinary conversation progress along the same branch does not cancel them. Active processes and workers are not reattached across process restart or copied into a fork.
 
 The panel is an observer, not a cleanup engine. Admission, bounded history/output retention, completion delivery and headless exit policy are enforced by the core service and hosting mode.
 
@@ -115,7 +113,7 @@ Terminal bounded text snapshots persist as `background-task-result` custom entri
 
 Completion delivery waits for a safe idle boundary, respects queued user work, and sends one bounded completion at a time. A Subagent group produces one summary, not a separate wake-up per worker. A terminal `bg wait` coordinates with automatic delivery only after its tool result is persisted; aborting during output reading does not lose the pending completion. Direct SDK waits remain observational until explicitly acknowledged. Progress and repeated reads do not inject messages or add usage. `agent_settled` still describes the main agent, not the end of all background executions.
 
-Failed completion delivery leaves the terminal result available for inspection rather than silently discarding it. SDK hosts can explicitly call `session.retryBackgroundNotifications()` after resolving the failure; there is no infinite timer retry loop.
+Failed completion delivery leaves the terminal result available for inspection rather than silently discarding it, and warns through the extension error channel. The next user prompt retries delivery automatically; SDK hosts can also call `session.retryBackgroundNotifications()` explicitly after resolving the failure. There is no infinite timer retry loop.
 
 If an executor ignores cancellation and settles after bounded cleanup has retired its runtime or branch, the old session quarantines its bounded result and reported usage: the latest 32 records remain in memory, and persisted sessions also append `<session-file>.background-late.jsonl`. These audit records are excluded from active totals and are not automatically reconciled. A completed cleanup grace period is not proof that an uncooperative executor stopped.
 

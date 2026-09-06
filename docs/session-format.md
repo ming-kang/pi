@@ -287,7 +287,7 @@ Use `customType` to identify your extension's entries on reload. Interactive mod
 
 ### Background records
 
-Managed execution uses ordinary version-3 custom entries; it does not add a new session-file version or persist live execution handles.
+Managed execution uses ordinary version-3 custom entries; it does not add a new session-file version or persist live execution handles. Every managed execution — including a foreground one — appends its own bounded terminal snapshot, so the file carries both the tool result and this snapshot; that duplication is the deliberate price of replay-safe history.
 
 | `customType` | `data` | Purpose |
 |---|---|---|

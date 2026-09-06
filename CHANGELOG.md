@@ -27,6 +27,13 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Fixed
 
+- Fixed background completion delivery being permanently suppressed after a single failure: a failed delivery now warns through the extension error channel and the next user prompt retries it automatically, while SDK hosts keep the explicit `session.retryBackgroundNotifications()`. A completion stays pending rather than failing when no model is selected.
+- Fixed `/tree` navigation permanently suppressing an undelivered completion after returning to its branch; pending completions revive when the branch becomes current again.
+- Fixed background completion turns postponing extension `nextTurn` context to a later user prompt; queued context now rides along in the completion turn.
+- Fixed `bg list` always appending "0 more records not shown.", unknown or ambiguous `bg` task ids lacking the list recovery hint, and a `bg wait` interrupted by host shutdown claiming the execution continues.
+- Fixed completion cards toggling on Shift/Ctrl/Alt clicks and on the second click of a double-click; only unmodified single primary clicks expand. Ctrl+B now falls through to other bindings when nothing can be detached instead of reporting a no-op.
+- Fixed HTML export rendering historical `bg wait` calls as live waiting rows with armed refresh timers, and removed the wait renderer's never-wired live output-delta probe.
+- Hardened completion-card parsing: a worker report leaving a Markdown fence open falls back to the neutral Details view instead of trusting fabricated worker boundaries, and saved-source iteration is bounded by block count as well as length.
 - Fixed bundled router function tools omitting Codex's explicit `strict: false`, header-only Authorization being rejected before Responses requests, and `/router reload` retaining removed relay headers and stale credentials. Tool schemas and credential validation remain with the public pi-ai adapter.
 - Fixed router session identities exceeding the 64-character prompt-cache key limit by hashing long or unsafe ids consistently across wire metadata. Serialized installation identity initialization across processes and atomically published complete JSON without replacing corrupt existing identities.
 - Fixed custom-rendered transcript messages not expanding on fullscreen left-click. Message-local toggling now uses the public TUI mouse region, preserves child mouse handlers and keyboard expansion, and leaves static fallback messages alone. Background completion cards now reuse the native status-dot/title/continuation-rail presentation while retaining their separate completion identity and structured expanded details.
