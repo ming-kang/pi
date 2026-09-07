@@ -117,7 +117,7 @@ export default function subagent(pi: ExtensionAPI): void {
 				content: [
 					{
 						type: "text",
-						text: `Subagent invocation handed to background: ${outcome.task.id}. Use bg to read, wait for, or stop the group.`,
+						text: `Subagent group handed to background: ${outcome.task.id}. Its completion will be delivered automatically; use bg read to inspect progress, bg wait to block until the group settles, or bg kill to stop the whole group.`,
 					},
 				],
 				details: { ...latest, endedAt: submittedAt, background: { id: outcome.task.id, submittedAt } },

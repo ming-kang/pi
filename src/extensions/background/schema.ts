@@ -81,12 +81,15 @@ export function clampSinceBytes(sinceBytes: number | undefined): number | undefi
 }
 
 export const BG_TOOL_DESCRIPTION =
-	"Manage existing Bash tasks and whole Subagent groups. list: bounded activity/history listing. " +
-	"read: bounded output or report (head/tail). wait: bounded wait and result; cancelling only ends the wait. " +
-	"kill: request cancellation of a task or whole group, not an individual worker. " +
-	"Start work with bash or subagent background: true, not bg. Output is capped at 50KB per response.";
+	"Inspect and control backgrounded work: Bash tasks and Subagent groups started with background: true. " +
+	"Completion is delivered to you automatically as a notification — never poll. " +
+	"list: bounded activity/history listing; find task IDs here. " +
+	"read: bounded output or report slice (head/tail). " +
+	"wait: block up to waitMs for a task to settle; cancelling the wait ends only the wait, never the task. " +
+	"kill: request cancellation of a task or a whole Subagent group, never an individual worker. " +
+	"bg cannot start work; pass background: true to bash or subagent. Output is capped at 50KB per response.";
 export const BG_PROMPT_SNIPPET = "Manage Bash tasks and Subagent groups (list, read, wait, kill)";
 export const BG_PROMPT_GUIDELINES = [
 	"Start background work through bash or subagent with background: true; continue independent work while it runs.",
-	"Do not sleep-poll or repeatedly read bg tasks. Use bg action wait only when the next step depends on the result.",
+	"A finished background task delivers its result automatically as a notification; use bg wait only when your next step is blocked on it, and never sleep-poll with repeated reads.",
 ];

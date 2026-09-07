@@ -33,7 +33,7 @@ export const SubagentParamsSchema = Type.Object(
 	{
 		background: nullable(
 			Type.Boolean(),
-			"Run the entire invocation in the background; false, null or omit to wait in the foreground",
+			"true runs all tasks as one managed background group and returns a group reference immediately; false, null or omit blocks until every worker finishes and returns their reports",
 		),
 		tasks: Type.Array(TaskSchema, {
 			minItems: 1,

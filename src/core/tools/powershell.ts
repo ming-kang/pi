@@ -16,7 +16,7 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 const UTF8_OUTPUT_PREFIX = "try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}\n";
 
 export const powershellToolSystemPromptContribution = {
-	snippet: "Execute PowerShell commands",
+	snippet: "Execute PowerShell commands, foreground or background",
 	guidelines: ["You can inspect PI_* environment variables for current model and session details."],
 } as const;
 

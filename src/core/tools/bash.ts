@@ -47,12 +47,15 @@ const bashSchema = Type.Object({
 	command: Type.String({ description: "Shell command to execute" }),
 	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
 	background: Type.Optional(
-		Type.Boolean({ description: "Run in the background (requires an enabled host; unavailable inside subagents)" }),
+		Type.Boolean({
+			description:
+				"true returns a managed task ID immediately and runs the command in the background; omit or false to block until exit",
+		}),
 	),
 });
 
 export const bashToolSystemPromptContribution = {
-	snippet: "Execute bash commands (ls, grep, find, etc.)",
+	snippet: "Execute bash commands, foreground or background",
 	guidelines: ["You can inspect PI_* environment variables for current model and session details."],
 } as const;
 
@@ -277,7 +280,7 @@ export function createShellToolDefinition(
 	return {
 		name: config.name,
 		label: config.label,
-		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds. With an enabled host, background: true returns a managed task reference. Background output is limited to 20 MiB. Use background: true for long-running work, then use bg read/wait/kill with the returned task ID; a handoff is not completion. A bg wait window expiring does not stop the command. Inside subagents, omit background or use false; only the parent can background the whole invocation.`,
+		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr, truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a temp file. Optionally provide a timeout in seconds (no default). Choose the mode per call: foreground (default) blocks until the command exits — use it when your next step needs the output; background: true returns immediately with a task ID — use it for long-running work (builds, servers, watchers, big test suites) or when you have independent work to continue. A handoff is not completion: the result arrives later as an automatic completion notification; meanwhile use bg read to inspect output, bg wait to block until it settles, bg kill to stop it. Background output is limited to 20 MiB; an expired bg wait window never stops the command.`,
 		promptSnippet: config.promptSnippet,
 		promptGuidelines: exposeSessionEnvironment && config.promptGuidelines ? [...config.promptGuidelines] : undefined,
 		parameters: bashSchema,
@@ -348,7 +351,7 @@ export function createShellToolDefinition(
 				content: [
 					{
 						type: "text",
-						text: `Command handed to background. Task ID: ${outcome.task.id}. Status: ${outcome.task.status}. Use bg to read, wait, or stop it.${outcome.task.outputPath ? `\nFull output: ${outcome.task.outputPath}` : ""}`,
+						text: `Command handed to background. Task ID: ${outcome.task.id}. Status: ${outcome.task.status}. Its completion will be delivered automatically; use bg read to inspect output, bg wait to block until it settles, or bg kill to stop it.${outcome.task.outputPath ? `\nFull output: ${outcome.task.outputPath}` : ""}`,
 					},
 				],
 				details: {
