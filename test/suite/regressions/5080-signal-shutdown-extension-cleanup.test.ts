@@ -18,6 +18,7 @@ import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode
 
 type ShutdownThis = {
 	isShuttingDown: boolean;
+	session: { background: { close: () => void } };
 	unregisterSignalHandlers: () => void;
 	runtimeHost: { dispose: () => Promise<void> };
 	ui: { terminal: { drainInput: (ms: number) => Promise<void> } };
@@ -69,6 +70,13 @@ function restoreStdoutIsTTY(): void {
 function createContext(order: string[], sessionManager = createSessionManager()): ShutdownThis {
 	return {
 		isShuttingDown: false,
+		session: {
+			background: {
+				close: vi.fn(() => {
+					order.push("background:close");
+				}),
+			},
+		},
 		unregisterSignalHandlers: vi.fn(),
 		runtimeHost: {
 			dispose: vi.fn(async () => {
@@ -116,7 +124,7 @@ describe("InteractiveMode.shutdown ordering (#5080)", () => {
 
 		await callShutdown(context, { fromSignal: true });
 
-		expect(order).toEqual(["dispose", "drainInput", "stop"]);
+		expect(order).toEqual(["background:close", "dispose", "drainInput", "stop"]);
 		expect(context.isShuttingDown).toBe(true);
 	});
 
@@ -129,7 +137,7 @@ describe("InteractiveMode.shutdown ordering (#5080)", () => {
 
 		await callShutdown(context);
 
-		expect(order).toEqual(["drainInput", "stop", "dispose"]);
+		expect(order).toEqual(["background:close", "drainInput", "stop", "dispose"]);
 	});
 
 	test("interactive quit prints a resume hint for persisted sessions", async () => {
@@ -145,7 +153,7 @@ describe("InteractiveMode.shutdown ordering (#5080)", () => {
 
 		await callShutdown(context);
 
-		expect(order).toEqual(["drainInput", "stop", "dispose"]);
+		expect(order).toEqual(["background:close", "drainInput", "stop", "dispose"]);
 		expect(stdoutWrite).toHaveBeenCalledWith(
 			`${chalk.dim("To resume this session:")} ${APP_NAME} --session test-session\n`,
 		);
@@ -180,6 +188,7 @@ describe("InteractiveMode.shutdown ordering (#5080)", () => {
 		await callShutdown(context, { fromSignal: true });
 
 		expect(order).toEqual([]);
+		expect(context.session.background.close).not.toHaveBeenCalled();
 		expect(context.runtimeHost.dispose).not.toHaveBeenCalled();
 	});
 });

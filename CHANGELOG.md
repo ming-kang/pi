@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.85.1] - 2026-09-08
+
 ### Added
 
 - Added `/btw [question]` for temporary, multi-turn side conversations above the editor. It preserves the main request prefix and cache affinity, denies tool execution, and cancels independently. BTW questions and answers stay in memory and never enter Session JSONL or `/tree`; close, reload, and session navigation discard them.

@@ -2,12 +2,13 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
 import { allowNetwork } from "./test-network-env.ts";
 
 const cliPath = resolve(__dirname, "../src/cli.ts");
-const sourceResolverPath = resolve(__dirname, "../src/experimental/source-resolver.ts");
+const sourceResolverUrl = pathToFileURL(resolve(__dirname, "../src/experimental/source-resolver.ts")).href;
 
 const tempDirs: string[] = [];
 
@@ -60,7 +61,7 @@ async function runCli(args: string[]): Promise<{ stdout: string; stderr: string;
 	);
 
 	return await new Promise((resolvePromise, reject) => {
-		const child = spawn(process.execPath, ["--import", sourceResolverPath, cliPath, ...args], {
+		const child = spawn(process.execPath, ["--import", sourceResolverUrl, cliPath, ...args], {
 			cwd: projectDir,
 			env: {
 				...process.env,
