@@ -70,11 +70,11 @@ The list groups executions into **Running** (newest started first) and **Finishe
 
 **Running** also lists live foreground executions, tagged `fg`, so the currently running command or group can be watched or stopped. **Finished** holds backgrounded work only: a settled foreground execution already delivered its result inline in the transcript, so it leaves the panel and is counted in the title as `N foreground hidden`. A selected row is the exception — it never disappears mid-watch when its foreground execution settles, and leaves once the selection moves away.
 
-The detail pane shows an aligned field table — status with mode and runtime, full execution id, highlighted command, directory, log path, and diagnostics — above a scrollable output region. Subagent groups list one summary line per worker; worker views render **Prompt** and **Outcome** as Markdown around a plain **Activity** section.
+The detail pane shows an aligned field table — status with mode and runtime, full execution id, highlighted command, directory, log path, and diagnostics — above a scrollable output region. Subagent groups list one compact line per worker — marker, label, status and task description — as an index into the worker rows; worker views render **Prompt** and **Outcome** as Markdown around a plain **Activity** section.
 
 - Bash rows and Subagent group/worker rows retain stable selection as status and ordering change.
 - Running foreground rows carry an `fg` tag; foreground/background mode is explicit in the detail status line.
-- Worker detail shows identity/profile, group, model, usage, Prompt, Activity and Outcome from the public projection.
+- Worker detail shows identity/profile, group, model and usage on separate rows that wrap rather than truncate, plus Prompt, Activity and Outcome from the public projection.
 - Opening a view does not reattach the parent wait. Closing it never kills execution.
 - Selected groups are pinned against history eviction until selection changes or the panel closes.
 - Completed detail stays open. The panel releases its subscriptions, pin and timers on close or session shutdown.

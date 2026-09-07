@@ -72,6 +72,8 @@ const DETAIL_LABEL_WIDTH = 10;
 const DETAIL_MAX_ROWS = 9;
 const COMMAND_MAX_ROWS = 3;
 const ERROR_MAX_ROWS = 2;
+/** Long field values (worker model/usage) wrap up to this many rows instead of truncating. */
+const DETAIL_VALUE_MAX_ROWS = 2;
 const RENDER_CACHE_MAX = 8;
 const clean = (text: string) => sanitizeBinaryOutput(stripTerminalSequences(text));
 const pad = (text: string, width: number) => truncateToWidth(text, width, "…", true);
@@ -382,11 +384,16 @@ export class BackgroundTasksMenu implements Component, Focusable {
 			return [...field("Status", [status]), ...second];
 		}
 		if (worker) {
+			// Model and usage get their own rows and wrap rather than truncate:
+			// one combined line always overflows at realistic widths.
+			const wrap = (value: string) =>
+				wrapTextWithAnsi(value, Math.max(1, valueWidth)).slice(0, DETAIL_VALUE_MAX_ROWS);
 			return [
 				...field("Status", [status]),
 				...field("Worker", [truncateToWidth(clean(worker.label), valueWidth, "…")]),
 				...field("Group", [truncateToWidth(task.id, valueWidth, "…")]),
-				...field("Model", [truncateToWidth(`${worker.model ?? "—"} · ${worker.usage ?? "—"}`, valueWidth, "…")]),
+				...field("Model", wrap(worker.model ?? "—")),
+				...field("Usage", wrap(worker.usage ?? "—")),
 			];
 		}
 		const lines = [
@@ -448,7 +455,10 @@ export class BackgroundTasksMenu implements Component, Focusable {
 			if (workers.length)
 				return workers.map((w) => {
 					const marker = statusMarker(w.status, { now });
-					return `${theme.fg(marker.color, marker.glyph)} ${theme.fg("toolOutput", `${clean(w.label)} · ${w.status} · ${w.model ?? "—"} · ${w.usage ?? "—"}`)}`;
+					// One truncated line per worker — an index of who did what. Model
+					// and usage live in the worker's own detail view.
+					const summary = oneLine(`${w.label} · ${w.status}${w.description ? ` — ${w.description}` : ""}`);
+					return `${theme.fg(marker.color, marker.glyph)} ${theme.fg("toolOutput", truncateToWidth(summary, Math.max(1, width), "…"))}`;
 				});
 			const fallback = task.projection?.text;
 			return fallback

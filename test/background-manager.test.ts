@@ -145,7 +145,7 @@ describe("BackgroundTasksMenu public service", () => {
 		await vi.advanceTimersByTimeAsync(0);
 		let frame = h.render().join("\n");
 		expect(frame).toContain("Workers");
-		expect(frame).toContain("#2 Explorer · running · model/thinking · 1k tokens");
+		expect(frame).toContain("#2 Explorer · running — Inspect module");
 		h.menu.handleInput("\x1b[B");
 		await vi.advanceTimersByTimeAsync(0);
 		frame = h.render().join("\n");
@@ -173,6 +173,28 @@ describe("BackgroundTasksMenu public service", () => {
 		h.menu.handleInput("y");
 		expect(h.host.kill).toHaveBeenCalledWith("group-1");
 		expect(h.pins).toEqual(["group-1"]);
+	});
+	it("keeps group worker lines compact and wraps worker model and usage instead of truncating", async () => {
+		const model = `provider/${"very-long-model-name-".repeat(4)} · high`;
+		const group = task("group-1", {
+			kind: "subagent",
+			command: undefined,
+			projection: {
+				workers: [worker("worker-1", { model, usage: "123 tokens · $0.0001 · 2 tool calls" })],
+			},
+		});
+		const h = harness([group], 140);
+		await vi.advanceTimersByTimeAsync(0);
+		let frame = h.render().join("\n");
+		expect(frame).toContain("#2 Explorer · running — Inspect module");
+		expect(frame).not.toContain("provider/");
+		h.menu.handleInput("\x1b[B"); // select the worker row
+		await vi.advanceTimersByTimeAsync(0);
+		frame = h.render().join("\n");
+		expect(frame).toContain("Model");
+		expect(frame).toContain("Usage");
+		expect(frame).toContain("· high"); // the wrapped tail survives instead of truncating
+		expect(frame).toContain("123 tokens · $0.0001 · 2 tool calls");
 	});
 	it("preserves stable selected worker identity as statuses reorder groups", async () => {
 		const first = task("first");
@@ -665,8 +687,8 @@ describe("BackgroundTasksMenu public service", () => {
 		h.menu.handleInput("\x1b[D");
 		h.menu.handleInput("\x1b[C");
 		const frame = h.render().join("\n");
-		expect(frame).toContain("15–28/47"); // the browsed position is retained across focus changes
-		expect(frame).toContain("prompt-13");
+		expect(frame).toContain("14–26/47"); // the browsed position is retained across focus changes
+		expect(frame).toContain("prompt-12");
 		expect(frame).not.toContain("prompt-0");
 	});
 	it("orders running newest-first above finished and never selects section headers", () => {
