@@ -16,7 +16,9 @@ export function createBackgroundExtension(): (pi: ExtensionAPI) => void {
 		pi.on("session_start", (_event, ctx) => {
 			unsubscribe?.();
 			const update = () => {
-				const tasks = ctx.background.list();
+				// The status counts backgrounded work only; foreground executions
+				// are already visible as ordinary tool rows in the transcript.
+				const tasks = ctx.background.list().filter((task) => task.mode === "background");
 				const running = tasks.filter((task) => !isBackgroundTerminal(task.status)).length;
 				ctx.ui.setStatus(
 					"background",
@@ -73,10 +75,11 @@ export function createBackgroundExtension(): (pi: ExtensionAPI) => void {
 						boundedText(
 							ctx.background
 								.list()
+								.filter((task) => task.mode === "background")
 								.slice(0, 10)
 								.map((task) => describeTaskLine(task))
 								.join("\n"),
-						) || "No managed executions.",
+						) || "No background tasks.",
 						"info",
 					);
 					return;

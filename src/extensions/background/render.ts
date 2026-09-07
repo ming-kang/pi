@@ -228,7 +228,8 @@ function resultSummaryLine(details: BgDetails, theme: Theme, expanded: boolean):
 			return `${theme.fg(statusColor("killed"), statusGlyph("killed"))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", details.requested === undefined ? " stopped" : details.requested ? " cancellation requested" : ` ${details.status ?? "unchanged"}`)}`;
 		case "list": {
 			const hidden = details.hidden > 0 ? ` · ${details.hidden} more finished` : "";
-			return theme.fg("muted", `${details.running} running · ${details.finished} finished${hidden}`);
+			const omitted = details.foregroundOmitted ? ` · ${details.foregroundOmitted} foreground omitted` : "";
+			return theme.fg("muted", `${details.running} running · ${details.finished} finished${hidden}${omitted}`);
 		}
 	}
 }

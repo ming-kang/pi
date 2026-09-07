@@ -35,7 +35,7 @@ Workers cannot start background work themselves. Their system prompt forbids it 
 
 | Action | Parameters | Behavior |
 |---|---|---|
-| `list` | — | Lists active and up to five retained finished records, at most 100 rows |
+| `list` | — | Lists active and up to five retained finished records, at most 100 rows; foreground executions are omitted with a count (they deliver inline in the transcript) |
 | `read` | `taskId`, optional `mode`, `bytes` | Reads bounded output/report while running or after completion |
 | `wait` | `taskId`, optional `waitMs`, `sinceBytes` | Waits within a deadline and returns status plus bounded output/report |
 | `kill` | `taskId` | Requests cancellation of the Bash task or entire Subagent group |
@@ -68,10 +68,12 @@ The panel opens as a fullscreen overlay framed by horizontal rules, matching Pi'
 
 The list groups executions into **Running** (newest started first) and **Finished** (newest ended first). A row shows the shared status marker, the task label, and a right-aligned runtime or finish age; running rows animate the spinner on the one-second refresh. Ids, modes, and log paths live in the detail pane, not the list. Worker rows nest indented under their Subagent group. Status glyphs and colors come from the shared status-marker vocabulary — spinner/`›` running, `✓` completed, red `×` failed, yellow `×` timeout, yellow `○` cancelled/stopping/partial, muted `○` queued, `!` waiting on input — which transcript notifications, completion cards and Subagent results also use.
 
+**Running** also lists live foreground executions, tagged `fg`, so the currently running command or group can be watched or stopped. **Finished** holds backgrounded work only: a settled foreground execution already delivered its result inline in the transcript, so it leaves the panel and is counted in the title as `N foreground hidden`. A selected row is the exception — it never disappears mid-watch when its foreground execution settles, and leaves once the selection moves away.
+
 The detail pane shows an aligned field table — status with mode and runtime, full execution id, highlighted command, directory, log path, and diagnostics — above a scrollable output region. Subagent groups list one summary line per worker; worker views render **Prompt** and **Outcome** as Markdown around a plain **Activity** section.
 
 - Bash rows and Subagent group/worker rows retain stable selection as status and ordering change.
-- Foreground/background mode is explicit in the detail status line.
+- Running foreground rows carry an `fg` tag; foreground/background mode is explicit in the detail status line.
 - Worker detail shows identity/profile, group, model, usage, Prompt, Activity and Outcome from the public projection.
 - Opening a view does not reattach the parent wait. Closing it never kills execution.
 - Selected groups are pinned against history eviction until selection changes or the panel closes.
@@ -90,6 +92,8 @@ The detail pane shows an aligned field table — status with mode and runtime, f
 Preview positions are retained per row while the panel is open, including across focus changes, updates and resizes. Worker previews start at the top. Shell previews initially follow the tail; scrolling up switches to **browsing**, and only explicit downward scrolling to the bottom resumes **following**. Neither mode pauses execution. The range counter on the output divider describes the visible lines within the bounded preview, not the entire log. The detail table stays above the scrolling content; on very short terminals, status and diagnostics take priority.
 
 Controls follow `app.backgroundTasks.focusList`, `app.backgroundTasks.focusPreview`, `tui.select.*`, `app.backgroundTasks.kill`, and `app.backgroundTasks.detach`. List paging uses `tui.select.pageUp`/`pageDown`; preview paging uses `tui.editor.pageUp`/`pageDown`, so the two can be rebound independently. Theme colors are semantic. Only visible selected output is read, at most once per second and within a 128KB request budget (the service may impose a smaller bound), with at most 2,000 viewport lines. Settled output is read once. Unselected work continues collecting progress independently of the panel.
+
+Outside TUI mode, `/bg` sends a bounded summary through the host notification UI rather than mounting a component (print/JSON notification UI is a no-op). Whether background startup is supported is an explicit host capability; a panel is never required for execution.
 
 ## Completion notifications
 

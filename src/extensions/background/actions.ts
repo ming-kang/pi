@@ -115,21 +115,30 @@ export function runKill(background: BackgroundContext, input: BgInput): AgentToo
 	);
 }
 export function runList(background: BackgroundContext): AgentToolResult<BgListDetails> {
-	const tasks = background.list();
+	// Listings cover backgrounded work only; foreground executions deliver
+	// inline in the transcript, so they are counted here rather than shown.
+	const all = background.list();
+	const tasks = all.filter((task) => task.mode === "background");
+	const foregroundOmitted = all.length - tasks.length;
 	const active = tasks.filter((task) => !isBackgroundTerminal(task.status));
 	const finished = tasks.filter((task) => isBackgroundTerminal(task.status));
 	const shown = [...active, ...finished.slice(0, BG_LIST_FINISHED_SHOWN)].slice(0, 100);
 	const hidden = tasks.length - shown.length;
+	const foregroundNote =
+		foregroundOmitted > 0
+			? `\n${foregroundOmitted} foreground ${foregroundOmitted === 1 ? "execution" : "executions"} omitted — foreground work is delivered inline in the transcript.`
+			: "";
 	return result(
 		shown.length
-			? `${shown.map((task) => describeTaskLine(task)).join("\n")}${hidden > 0 ? `\n${hidden} more records not shown.` : ""}`
-			: "No managed executions. Start work through bash or subagent with background: true.",
+			? `${shown.map((task) => describeTaskLine(task)).join("\n")}${hidden > 0 ? `\n${hidden} more records not shown.` : ""}${foregroundNote}`
+			: `No background tasks. Start work through bash or subagent with background: true.${foregroundNote}`,
 		{
 			action: "list",
 			running: active.length,
 			finished: finished.length,
 			shown: shown.length,
 			hidden,
+			...(foregroundOmitted > 0 ? { foregroundOmitted } : {}),
 		},
 	);
 }

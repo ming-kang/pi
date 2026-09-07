@@ -513,7 +513,7 @@ describe("BackgroundTasksMenu public service", () => {
 			  "narrowList": "────────────────────────────────────────────────────────────
 			Background tasks                      1 running · 0 finished
 			Running                                                     
-			→ · npm run build                                         0s
+			→ · npm run build                                    fg · 0s
 			Status    · running · foreground · 0s                       
 			Command   npm run build                                     
 			─ Output · tail · browsing ────────────────────── 15–28/40 ─
@@ -537,7 +537,7 @@ describe("BackgroundTasksMenu public service", () => {
 			  "narrowPreview": "────────────────────────────────────────────────────────────
 			Background tasks                      1 running · 0 finished
 			Running                                                     
-			→ · npm run build                                         0s
+			→ · npm run build                                    fg · 0s
 			Status    · running · foreground · 0s                       
 			Command   npm run build                                     
 			─ Output · tail · browsing ────────────────────── 15–28/40 ─
@@ -561,7 +561,7 @@ describe("BackgroundTasksMenu public service", () => {
 			  "wideList": "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 			Background tasks                                                                                                      1 running · 0 finished
 			Running                                     │Status    · running · foreground · 0s                                                          
-			→ · npm run build                         0s│Task      bash-1                                                                               
+			→ · npm run build                    fg · 0s│Task      bash-1                                                                               
 			                                            │Command   npm run build                                                                        
 			                                            │Directory /work                                                                                
 			                                            │Output    /tmp/build.log                                                                       
@@ -585,7 +585,7 @@ describe("BackgroundTasksMenu public service", () => {
 			  "widePreview": "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 			Background tasks                                                                                                      1 running · 0 finished
 			Running                                     │Status    · running · foreground · 0s                                                          
-			→ · npm run build                         0s│Task      bash-1                                                                               
+			→ · npm run build                    fg · 0s│Task      bash-1                                                                               
 			                                            │Command   npm run build                                                                        
 			                                            │Directory /work                                                                                
 			                                            │Output    /tmp/build.log                                                                       
@@ -676,12 +676,19 @@ describe("BackgroundTasksMenu public service", () => {
 			[
 				task("done-old", {
 					command: "cmd-done-old",
+					mode: "background",
 					status: "completed",
 					startedAt: now - 5000,
 					endedAt: now - 4000,
 				}),
 				task("old-run", { command: "cmd-old-run", startedAt: now - 1000 }),
-				task("done-new", { command: "cmd-done-new", status: "failed", startedAt: now - 3000, endedAt: now - 2000 }),
+				task("done-new", {
+					command: "cmd-done-new",
+					mode: "background",
+					status: "failed",
+					startedAt: now - 3000,
+					endedAt: now - 2000,
+				}),
 				task("new-run", { command: "cmd-new-run", startedAt: now - 100 }),
 			],
 			140,
@@ -719,10 +726,62 @@ describe("BackgroundTasksMenu public service", () => {
 		const h = harness([], 140);
 		await vi.advanceTimersByTimeAsync(0);
 		const frame = h.render().join("\n");
-		expect(frame).toContain("No managed executions.");
+		expect(frame).toContain("No background tasks.");
 		expect(frame).not.toContain("running ·");
 		h.menu.handleInput("k");
 		expect(h.render().join("\n")).not.toContain("y/N");
 		expect(h.host.kill).not.toHaveBeenCalled();
+	});
+	it("omits settled foreground executions from Finished and tags running foreground rows", async () => {
+		vi.setSystemTime(1_000_000);
+		const now = Date.now();
+		const h = harness(
+			[
+				task("fg-run", { command: "cmd-fg-run", startedAt: now - 100 }),
+				task("fg-done", {
+					command: "cmd-fg-done",
+					status: "completed",
+					startedAt: now - 3000,
+					endedAt: now - 2000,
+				}),
+				task("bg-done", {
+					command: "cmd-bg-done",
+					mode: "background",
+					status: "completed",
+					startedAt: now - 3000,
+					endedAt: now - 2000,
+				}),
+			],
+			140,
+		);
+		await vi.advanceTimersByTimeAsync(0);
+		const frame = h.render().join("\n");
+		expect(frame).toContain("cmd-fg-run");
+		expect(frame).toContain("fg · 0s");
+		expect(frame).toContain("cmd-bg-done");
+		expect(frame).not.toContain("cmd-fg-done");
+		expect(frame).toContain("1 running · 1 finished · 1 foreground hidden");
+	});
+	it("reports hidden settled foreground executions in the empty state", async () => {
+		const h = harness([task("fg-done", { status: "completed", endedAt: Date.now() })], 140);
+		await vi.advanceTimersByTimeAsync(0);
+		const frame = h.render().join("\n");
+		expect(frame).toContain("No background tasks.");
+		expect(frame).toContain("1 foreground hidden");
+		expect(frame).not.toContain("running ·");
+	});
+	it("keeps a selected settled foreground row until the selection moves away", async () => {
+		const h = harness([task("bash-1"), task("bash-2", { command: "echo second" })], 140);
+		await vi.advanceTimersByTimeAsync(0);
+		h.tasks[0]!.status = "completed";
+		h.tasks[0]!.endedAt = Date.now();
+		h.change();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.render().join("\n")).toContain("1 running · 1 finished");
+		h.menu.handleInput("\x1b[B"); // move to bash-2: bash-1 is no longer watched
+		await vi.advanceTimersByTimeAsync(0);
+		const frame = h.render().join("\n");
+		expect(frame).not.toContain("npm run build");
+		expect(frame).toContain("1 running · 0 finished · 1 foreground hidden");
 	});
 });

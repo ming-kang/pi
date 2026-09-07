@@ -69,6 +69,8 @@ export interface BgListDetails {
 	finished: number;
 	shown: number;
 	hidden: number;
+	/** Foreground executions omitted from the listing; they deliver inline in the transcript. */
+	foregroundOmitted?: number;
 }
 
 export type BgDetails = BgCreateDetails | BgReadDetails | BgKillDetails | BgListDetails | BgWaitDetails;

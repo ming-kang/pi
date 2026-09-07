@@ -120,6 +120,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	private rows: Row[] = [];
 	private runningCount = 0;
 	private finishedCount = 0;
+	private hiddenFinished = 0;
 	private selected?: string;
 	private pinned?: string;
 	private releasePin?: () => void;
@@ -183,11 +184,17 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const running = tasks
 			.filter((task) => !isBackgroundTerminal(task.status))
 			.sort((a, b) => b.startedAt - a.startedAt);
-		const finished = tasks
+		// Finished history holds backgrounded work: a settled foreground execution
+		// already delivered its result in the transcript. Exception: the selected
+		// row never disappears mid-watch when its execution settles.
+		const selectedTask = this.selected?.split("/")[0];
+		const settled = tasks
 			.filter((task) => isBackgroundTerminal(task.status))
 			.sort((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt));
+		const finished = settled.filter((task) => task.mode === "background" || task.id === selectedTask);
 		this.runningCount = running.length;
 		this.finishedCount = finished.length;
+		this.hiddenFinished = settled.length - finished.length;
 		this.rows = [...running, ...finished].flatMap((task): Row[] => [
 			{ key: task.id, task },
 			...(task.projection?.workers ?? []).map((worker) => ({ key: `${task.id}/${worker.id}`, task, worker })),
@@ -537,11 +544,14 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const glyph = theme.fg(marker.color, marker.glyph);
 		const cursor = selected ? theme.fg(this.focus === "list" ? "accent" : "muted", "→ ") : "  ";
 		const indent = row.worker ? "  " : "";
-		const time = row.worker
-			? ""
-			: isBackgroundTerminal(row.task.status)
-				? formatAge(row.task.endedAt ?? row.task.startedAt, now)
-				: runtimeLabel(row.task, now);
+		const terminal = isBackgroundTerminal(row.task.status);
+		// Live foreground executions carry an `fg` tag so their presence in a
+		// background panel is self-explanatory; settled ones leave the list.
+		let time = "";
+		if (!row.worker) {
+			time = terminal ? formatAge(row.task.endedAt ?? row.task.startedAt, now) : runtimeLabel(row.task, now);
+			if (!terminal && row.task.mode === "foreground") time = `fg · ${time}`;
+		}
 		const timeWidth = time ? visibleWidth(time) + 1 : 0;
 		const labelWidth = Math.max(1, width - 2 - indent.length - visibleWidth(glyph) - 1 - timeWidth);
 		const labelColor: ThemeColor = selected && this.focus === "list" ? "accent" : "text";
@@ -559,7 +569,9 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		return pad(line, width);
 	}
 	private emptyLine(width: number): string {
-		const message = "No managed executions.";
+		return this.centered(width, "No background tasks.");
+	}
+	private centered(width: number, message: string): string {
 		const leftPad = Math.max(0, Math.floor((width - visibleWidth(message)) / 2));
 		return pad(this.options.theme.fg("muted", `${" ".repeat(leftPad)}${message}`), width);
 	}
@@ -589,10 +601,11 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const layout = this.layout();
 		const rule = () => new DynamicBorder((text) => theme.fg("border", text)).render(width)[0] ?? "";
 		const title = theme.fg("accent", theme.bold("Background tasks"));
-		const stats =
-			this.runningCount + this.finishedCount > 0
-				? theme.fg("muted", `${this.runningCount} running · ${this.finishedCount} finished`)
-				: "";
+		const counts = `${this.runningCount} running · ${this.finishedCount} finished`;
+		const hiddenNote = this.hiddenFinished > 0 ? `${this.hiddenFinished} foreground hidden` : "";
+		const statsText =
+			this.runningCount + this.finishedCount > 0 ? (hiddenNote ? `${counts} · ${hiddenNote}` : counts) : hiddenNote;
+		const stats = statsText ? theme.fg("muted", statsText) : "";
 		const gap = width - visibleWidth(title) - visibleWidth(stats);
 		const titleLine = pad(stats && gap >= 1 ? `${title}${" ".repeat(gap)}${stats}` : title, width);
 		const hint = (id: Parameters<typeof keybindings.getKeys>[0]) => keyLabel(id, { keybindings });
