@@ -1,6 +1,7 @@
 #!/bin/sh
 
 node scripts/check-lockfile-commit.mjs || exit 1
+node scripts/diff-upstream.mjs --check --staged || exit 1
 
 echo "Running linting, dependency, lockfile, and type checks..."
 npm run check || exit 1

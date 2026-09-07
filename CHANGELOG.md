@@ -20,7 +20,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Changed
 
-- Followed upstream Pi `v0.85.1`, updating all seven exact `@earendil-works` runtime dependency pins to `0.85.1`.
+- Followed upstream Pi `v0.85.1`, updating the exact `@earendil-works` dependency pins to `0.85.1`.
+- Moved direct Chord, Client, Protocol, and Server dependencies used only by experimental source code to development dependencies. Stable installations retain AI, Agent core, and TUI as direct runtime dependencies; Agent core still brings its own Chord dependency.
 - Moved experimental server/client commands to the source development entrypoint (`npm run dev`). The `client` and `experimental/plugin` subpaths now resolve only under the `source` condition in a checkout; their implementations are excluded from the build and npm package. The local SDK and stdio RPC entrypoint remain supported, with installed-package checks for the stable/experimental boundary.
 - Improved `/bg` with explicit configurable list/preview focus, independent pane scrolling and paging, retained per-row preview positions, visible ranges and shell following/browsing state, and sticky diagnostics. Navigation and closing remain observation-only; stopping a worker still targets its whole group.
 - Redesigned the `/bg` panel as a fullscreen overlay in Pi's standard selector frame (horizontal rules, accent title, `→` accent selection). The list groups Running (newest started first) above Finished (newest ended first) and shows only marker, label, and runtime/age; status, id, highlighted command, directory, log path, and diagnostics moved to an aligned detail table above the scrollable output region. Worker Prompt/Outcome render as Markdown, stopping requires a `y` confirmation, and transcripts shorten log paths to file names in collapsed rows.

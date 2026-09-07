@@ -55,7 +55,7 @@ function baseManifest() {
 function createTestRepo({ sourceDependencies = runtimeDependencies, sourceDevDependencies } = {}) {
 	const root = createTemporaryDirectory();
 
-	git(root, "init");
+	git(root, "init", "--initial-branch=main");
 	git(root, "config", "user.email", "test@example.invalid");
 	git(root, "config", "user.name", "Diff Test");
 	git(root, "config", "core.autocrlf", "false");
@@ -264,7 +264,7 @@ describe("diff-upstream manifest and dependency validation", () => {
 		);
 	});
 
-	test("validates source-only upstream dependency ranges while requiring local runtime pins", () => {
+	test("validates source-only upstream dependencies in either local installation scope", () => {
 		const sourceDependencies = { ...runtimeDependencies };
 		const sourceDevDependencies = {};
 		for (const name of ["@earendil-works/pi-client", "@earendil-works/pi-protocol", "@earendil-works/pi-server"]) {
@@ -280,7 +280,16 @@ describe("diff-upstream manifest and dependency validation", () => {
 
 		const packagePath = join(repo.root, "package.json");
 		const packageJson = readJson(packagePath);
+		packageJson.devDependencies = { "@earendil-works/pi-server": packageJson.dependencies["@earendil-works/pi-server"] };
 		delete packageJson.dependencies["@earendil-works/pi-server"];
+		writeJson(packagePath, packageJson);
+		const lockPath = join(repo.root, "npm-shrinkwrap.json");
+		const lock = readJson(lockPath);
+		lock.packages[""].devDependencies = packageJson.devDependencies;
+		delete lock.packages[""].dependencies["@earendil-works/pi-server"];
+		writeJson(lockPath, lock);
+		expect(invoke(repo.root, ["--check"]).code).toBe(0);
+		delete packageJson.devDependencies["@earendil-works/pi-server"];
 		writeJson(packagePath, packageJson);
 		expect(invoke(repo.root, ["--check"]).stderr).toContain(
 			"package.json dependency @earendil-works/pi-server must be an exact stable semver",
@@ -299,6 +308,24 @@ describe("diff-upstream manifest and dependency validation", () => {
 });
 
 describe("diff-upstream worktree collection and CLI execution", () => {
+	test("checks staged changes against the staged ledger rather than an unstaged repair", () => {
+		const repo = createTestRepo();
+		git(repo.root, "add", "-f", "--", "maintainers/upstream.json", "maintainers/deltas.json", "npm-shrinkwrap.json");
+		writeFileSync(join(repo.root, "mod.txt"), "changed\n");
+		git(repo.root, "add", "mod.txt");
+		writeJson(join(repo.root, "maintainers/deltas.json"), {
+			deltas: [{ path: "mod.txt", category: "bugfix", intent: "Local fix" }],
+		});
+		expect(invoke(repo.root, ["--check"]).code).toBe(0);
+		const rejected = invoke(repo.root, ["--check", "--staged"]);
+		expect(rejected.code).toBe(1);
+		expect(rejected.stderr).toContain("unregistered upstream deviation: M mod.txt");
+		git(repo.root, "add", "-f", "--", "maintainers/deltas.json");
+		writeFileSync(join(repo.root, "sub/a.txt"), "unrelated unstaged change\n");
+		const accepted = invoke(repo.root, ["--check", "--staged"]);
+		expect(accepted.code, accepted.stderr).toBe(0);
+		expect(accepted.stdout).toContain("staged differences");
+	});
 	test("collects staged, unstaged, and untracked changes into M, A, D groups", () => {
 		const repo = createTestRepo();
 		writeFileSync(join(repo.root, "mod.txt"), "modified content\n");

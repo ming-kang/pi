@@ -6,7 +6,7 @@ import { join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { prerelease, satisfies, valid, validRange } from "semver";
 
-const runtimeDependencyNames = [
+const upstreamDependencyNames = [
 	"@earendil-works/chord",
 	"@earendil-works/pi-agent-core",
 	"@earendil-works/pi-ai",
@@ -15,16 +15,15 @@ const runtimeDependencyNames = [
 	"@earendil-works/pi-server",
 	"@earendil-works/pi-tui",
 ];
-// v0.85.0 referenced pi-server only as a workspace sibling. Later baselines
-// declare the source-only remote runtime in devDependencies; validate those
-// ranges while keeping all seven distribution dependencies exactly pinned.
-const distributionOnlyRuntimeDependencyNames = ["@earendil-works/pi-server"];
+// This list identifies consumed upstream libraries, not their installation scope.
+// v0.85.0 omitted pi-server's range; newer baselines declare it for source development.
+const legacyUndeclaredDependencies = ["@earendil-works/pi-server"];
 const manifestKeys = ["repository", "tag", "commit", "sourceSubtree", "sourceTree"];
 const deltaRequiredKeys = ["path", "category", "intent"];
 const deltaAllowedKeys = [...deltaRequiredKeys, "tests"];
 const deltaCategories = ["ui", "bugfix", "extension-support", "distribution", "windows-compat"];
 
-const usage = `Usage: node scripts/diff-upstream.mjs [--check | --target <tag>]
+const usage = `Usage: node scripts/diff-upstream.mjs [--check [--staged] | --target <tag>]
 
 Compares the current worktree against the recorded upstream baseline
 in maintainers/upstream.json, annotated with the per-path deviation
@@ -32,6 +31,7 @@ ledger in maintainers/deltas.json.
 
   (no flag)       print the deterministic full classification report
   --check         verify baseline, dependencies, and ledger coverage and print a concise count summary
+  --staged        with --check, verify the index that will be committed
   --target <tag>  classify upstream changes from the baseline to a release tag against the ledger`;
 
 function isPlainObject(value) {
@@ -115,7 +115,7 @@ function isValidDeltaPath(value) {
  * Validate maintainers/deltas.json. Entries with a trailing "/" register a
  * whole directory prefix; all other entries register one exact file.
  */
-export function validateDeltas(deltas, root, failures) {
+export function validateDeltas(deltas, root, failures, testExists = (path) => existsSync(join(root, path))) {
 	if (!isPlainObject(deltas) || !Array.isArray(deltas.deltas) || Object.keys(deltas).length !== 1) {
 		failures.push('maintainers/deltas.json must be an object with a single "deltas" array');
 		return [];
@@ -155,7 +155,7 @@ export function validateDeltas(deltas, root, failures) {
 				failures.push(`${location} tests must be an array of repository-relative paths`);
 			} else {
 				for (const test of entry.tests) {
-					if (!existsSync(join(root, test))) {
+					if (!testExists(test)) {
 						failures.push(`${location} references a test path that does not exist: ${test}`);
 					}
 				}
@@ -270,9 +270,9 @@ function verifyBaseline(manifest, failures, warnings, tryGit) {
 	return upstreamPackage;
 }
 
-function verifyRuntimeDependencies(upstreamPackage, manifest, failures, root) {
-	const packageJson = readJsonFile(join(root, "package.json"), "package.json", failures);
-	const shrinkwrap = readJsonFile(join(root, "npm-shrinkwrap.json"), "npm-shrinkwrap.json", failures);
+function verifyUpstreamDependencies(upstreamPackage, manifest, failures, readJson) {
+	const packageJson = readJson("package.json", failures);
+	const shrinkwrap = readJson("npm-shrinkwrap.json", failures);
 
 	const localVersions = {};
 	if (packageJson !== undefined) {
@@ -281,8 +281,8 @@ function verifyRuntimeDependencies(upstreamPackage, manifest, failures, root) {
 		} else if (!isPlainObject(packageJson.dependencies)) {
 			failures.push("package.json.dependencies must be an object");
 		} else {
-			for (const dep of runtimeDependencyNames) {
-				const ver = packageJson.dependencies[dep];
+			for (const dep of upstreamDependencyNames) {
+				const ver = packageJson.dependencies[dep] ?? packageJson.devDependencies?.[dep];
 				if (!isStableSemver(ver)) {
 					failures.push(
 						`package.json dependency ${dep} must be an exact stable semver; found ${JSON.stringify(ver)}`,
@@ -306,16 +306,17 @@ function verifyRuntimeDependencies(upstreamPackage, manifest, failures, root) {
 				if (!isPlainObject(rootPkg) || !isPlainObject(rootPkg.dependencies)) {
 					failures.push('npm-shrinkwrap.json.packages[""].dependencies must be an object');
 				} else {
-					for (const dep of runtimeDependencyNames) {
-						if (localVersions[dep] && rootPkg.dependencies[dep] !== localVersions[dep]) {
+					for (const dep of upstreamDependencyNames) {
+						const rootSpec = rootPkg.dependencies[dep] ?? rootPkg.devDependencies?.[dep];
+						if (localVersions[dep] && rootSpec !== localVersions[dep]) {
 							failures.push(
-								`npm-shrinkwrap.json root spec for ${dep} (${String(rootPkg.dependencies[dep])}) does not match package.json (${localVersions[dep]})`,
+								`npm-shrinkwrap.json root spec for ${dep} (${String(rootSpec)}) does not match package.json (${localVersions[dep]})`,
 							);
 						}
 					}
 				}
 
-				for (const dep of runtimeDependencyNames) {
+				for (const dep of upstreamDependencyNames) {
 					const installed = packages[`node_modules/${dep}`];
 					if (!isPlainObject(installed)) {
 						failures.push(`npm-shrinkwrap.json is missing installed entry node_modules/${dep}`);
@@ -342,10 +343,10 @@ function verifyRuntimeDependencies(upstreamPackage, manifest, failures, root) {
 			if (!isPlainObject(upstreamPackage.dependencies)) {
 				failures.push("baseline package.json dependencies must be an object");
 			} else {
-				for (const dep of runtimeDependencyNames) {
+				for (const dep of upstreamDependencyNames) {
 					const localVer = localVersions[dep];
 					const upstreamRange = upstreamPackage.dependencies[dep] ?? upstreamPackage.devDependencies?.[dep];
-					if (upstreamRange === undefined && distributionOnlyRuntimeDependencyNames.includes(dep)) {
+					if (upstreamRange === undefined && legacyUndeclaredDependencies.includes(dep)) {
 						continue;
 					}
 					if (typeof upstreamRange !== "string" || !validRange(upstreamRange)) {
@@ -411,15 +412,15 @@ function printFailures(failures, stderr) {
 }
 
 /** Load and validate the deviation ledger, reporting problems into failures. */
-function loadDeltaEntries(root, failures) {
+function loadDeltaEntries(root, failures, readJson, stagedPaths) {
 	const deltasPath = join(root, "maintainers", "deltas.json");
-	if (!existsSync(deltasPath)) {
+	if (!(stagedPaths ? stagedPaths.has("maintainers/deltas.json") : existsSync(deltasPath))) {
 		failures.push("maintainers/deltas.json is missing; register upstream deviations there");
 		return [];
 	}
-	const deltasJson = readJsonFile(deltasPath, "maintainers/deltas.json", failures);
+	const deltasJson = readJson("maintainers/deltas.json", failures);
 	if (deltasJson === undefined) return [];
-	return validateDeltas(deltasJson, root, failures);
+	return validateDeltas(deltasJson, root, failures, stagedPaths ? (path) => stagedPaths.has(path) : undefined);
 }
 
 /**
@@ -471,11 +472,14 @@ export function runDiffUpstream({
 	stderr = process.stderr,
 } = {}) {
 	let isCheck = false;
+	let staged = false;
 	let targetTag;
 	for (let i = 0; i < args.length; i += 1) {
 		const arg = args[i];
 		if (arg === "--check" && !isCheck) {
 			isCheck = true;
+		} else if (arg === "--staged" && !staged) {
+			staged = true;
 		} else if (arg === "--target" && targetTag === undefined && typeof args[i + 1] === "string") {
 			targetTag = args[i + 1];
 			i += 1;
@@ -484,7 +488,7 @@ export function runDiffUpstream({
 			return 2;
 		}
 	}
-	if (isCheck && targetTag !== undefined) {
+	if ((isCheck && targetTag !== undefined) || (staged && !isCheck)) {
 		writeLine(stderr, usage);
 		return 2;
 	}
@@ -494,11 +498,21 @@ export function runDiffUpstream({
 	}
 
 	const { git, tryGit } = createGit(root);
+	const stagedPaths = staged ? new Set(git("ls-files", "-z").split("\0")) : undefined;
+	const readJson = (path, errors) => {
+		if (!staged) return readJsonFile(join(root, path), path, errors);
+		const contents = tryGit("show", `:${path}`);
+		if (contents === undefined) {
+			errors.push(`${path} is missing from the index; stage the intended file before committing`);
+			return undefined;
+		}
+		return parseJson(contents, `staged ${path}`, errors);
+	};
 
 	const failures = [];
 	const warnings = [];
 
-	const manifest = readJsonFile(join(root, "maintainers", "upstream.json"), "maintainers/upstream.json", failures);
+	const manifest = readJson("maintainers/upstream.json", failures);
 	if (manifest !== undefined) {
 		failures.push(...validateManifest(manifest));
 	}
@@ -509,7 +523,7 @@ export function runDiffUpstream({
 
 	const upstreamPackage = verifyBaseline(manifest, failures, warnings, tryGit);
 	if (targetTag === undefined) {
-		verifyRuntimeDependencies(upstreamPackage, manifest, failures, root);
+		verifyUpstreamDependencies(upstreamPackage, manifest, failures, readJson);
 	}
 	if (failures.length > 0) {
 		for (const w of warnings) writeLine(stderr, `warning: ${w}`);
@@ -542,7 +556,7 @@ export function runDiffUpstream({
 		}
 
 		const ledgerFailures = [];
-		const deltaEntries = loadDeltaEntries(root, ledgerFailures);
+		const deltaEntries = loadDeltaEntries(root, ledgerFailures, readJson, stagedPaths);
 		for (const w of warnings) writeLine(stderr, `warning: ${w}`);
 		if (ledgerFailures.length > 0) {
 			printFailures(ledgerFailures, stderr);
@@ -598,7 +612,9 @@ export function runDiffUpstream({
 		return 0;
 	}
 
-	const entries = collectWorktreeEntries(manifest.sourceTree, failures, git);
+	const entries = staged
+		? parseNameStatus(git("diff", "--cached", "--name-status", "-z", "--no-renames", manifest.sourceTree, "--"))
+		: collectWorktreeEntries(manifest.sourceTree, failures, git);
 	if (failures.length > 0) {
 		for (const w of warnings) writeLine(stderr, `warning: ${w}`);
 		printFailures(failures, stderr);
@@ -612,7 +628,7 @@ export function runDiffUpstream({
 	// The ledger must cover every modified or dropped upstream path (M/T/D).
 	// Additions are distribution-local and listed without registration.
 	const ledgerFailures = [];
-	const deltaEntries = loadDeltaEntries(root, ledgerFailures);
+	const deltaEntries = loadDeltaEntries(root, ledgerFailures, readJson, stagedPaths);
 
 	const ledgerScope = [...modified, ...dropped];
 	const unregistered = ledgerScope.filter((entry) => findDelta(deltaEntries, entry.path) === undefined);
@@ -635,7 +651,7 @@ export function runDiffUpstream({
 		}
 		writeLine(
 			stdout,
-			`Verified ${entries.length} worktree differences against ${manifest.tag}: ${modified.length} modified upstream (M/T), ${additions.length} distribution-local additions (A), ${dropped.length} dropped upstream (D), ${deltaEntries.length} registered deltas.`,
+			`Verified ${entries.length} ${staged ? "staged" : "worktree"} differences against ${manifest.tag}: ${modified.length} modified upstream (M/T), ${additions.length} distribution-local additions (A), ${dropped.length} dropped upstream (D), ${deltaEntries.length} registered deltas.`,
 		);
 		return ledgerFailures.length > 0 || unregistered.length > 0 || stale.length > 0 ? 1 : 0;
 	}

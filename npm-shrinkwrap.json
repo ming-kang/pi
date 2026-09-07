@@ -9,12 +9,8 @@
 			"version": "0.85.0",
 			"license": "MIT",
 			"dependencies": {
-				"@earendil-works/chord": "0.85.1",
 				"@earendil-works/pi-agent-core": "0.85.1",
 				"@earendil-works/pi-ai": "0.85.1",
-				"@earendil-works/pi-client": "0.85.1",
-				"@earendil-works/pi-protocol": "0.85.1",
-				"@earendil-works/pi-server": "0.85.1",
 				"@earendil-works/pi-tui": "0.85.1",
 				"@silvia-odwyer/photon-node": "0.3.4",
 				"chalk": "5.6.2",
@@ -39,6 +35,10 @@
 				"@anthropic-ai/sandbox-runtime": "0.0.26",
 				"@anthropic-ai/sdk": "0.52.0",
 				"@biomejs/biome": "2.3.5",
+				"@earendil-works/chord": "0.85.1",
+				"@earendil-works/pi-client": "0.85.1",
+				"@earendil-works/pi-protocol": "0.85.1",
+				"@earendil-works/pi-server": "0.85.1",
 				"@types/cross-spawn": "6.0.6",
 				"@types/hosted-git-info": "3.0.5",
 				"@types/ms": "2.1.0",
@@ -1254,6 +1254,7 @@
 			"version": "0.85.1",
 			"resolved": "https://registry.npmjs.org/@earendil-works/pi-client/-/pi-client-0.85.1.tgz",
 			"integrity": "sha512-YKZeFZTcpH7SWdeJ9IeJO+AhW5EVGRYZV2WuZ9jgMGD1hSe3+vDPlcsVqOUmYbyl/vvzPe9SzvPz+HzlYhvCLA==",
+			"dev": true,
 			"license": "MIT",
 			"dependencies": {
 				"@earendil-works/chord": "^0.85.1",
@@ -1267,6 +1268,7 @@
 			"version": "0.85.1",
 			"resolved": "https://registry.npmjs.org/@earendil-works/pi-protocol/-/pi-protocol-0.85.1.tgz",
 			"integrity": "sha512-w+pPvmw54Z8oFmJiSbPT4OwV4Hl97PA3vaLTp7KUwVLbPx3ucaAIldGrlNVt5F3k4C/reT4I39FKmuJIyrmKdg==",
+			"dev": true,
 			"license": "MIT",
 			"dependencies": {
 				"@earendil-works/chord": "^0.85.1",
@@ -1280,6 +1282,7 @@
 			"version": "0.85.1",
 			"resolved": "https://registry.npmjs.org/@earendil-works/pi-server/-/pi-server-0.85.1.tgz",
 			"integrity": "sha512-3plYDUNFNBs5sRM590KGDAau5NvGIQbLquTruoDHAAAPLR9rUwwi6JG5eIy56bFHTbjlT9sn8rib0wjGaA0KJw==",
+			"dev": true,
 			"license": "MIT",
 			"dependencies": {
 				"@earendil-works/chord": "^0.85.1",

@@ -1,67 +1,71 @@
 # Upstream synchronization
 
-Synchronize this standalone package only from an exact upstream release tag. Follow [`AGENTS.md`](../AGENTS.md); use [release.md](release.md) only after synchronization is complete.
+Follow [AGENTS.md](../AGENTS.md) and the ownership rules in [Architecture](architecture.md). Synchronization adopts an exact upstream release; [publication](release.md) is a separate operation.
 
-## Upstream baseline and boundary check
+## Baseline and deviation ledger
 
-The [`upstream.json`](upstream.json) manifest pins the upstream repository, release tag, commit, `sourceSubtree`, and root-mapped `sourceTree`. The tag's subtree tree is the comparison baseline, not `HEAD` or a branch tip.
+`upstream.json` records the repository, exact release tag/commit, source subtree, and root-mapped source tree. Compare against that tree, never a branch tip. `deltas.json` records each modified or dropped upstream path with its reason and covering tests; directory entries end in `/`.
 
-Run `npm run diff:upstream` to inspect the full worktree path classification report against the baseline tag, `npm run diff:upstream -- --check` to verify baseline integrity, all seven runtime dependency pins and declared ranges, and ledger coverage as a concise CI/release gate, or `npm run diff:upstream -- --target v<version>` to classify an upstream release diff against the ledger and fork-owned additions in the clean `HEAD` tree. It is a review aid, not a substitute for understanding the release diff.
+| Category | Treatment during synchronization |
+| --- | --- |
+| `distribution` | Preserve standalone packaging, identity, and distribution-owned documentation. |
+| `bugfix` | Retire when upstream supplies the equivalent fix. |
+| `windows-compat` | Verify with a native Windows reproduction before retiring. |
+| `ui` | Merge upstream behavior into the distribution's presentation. |
+| `extension-support` | Merge public API evolution; retire additions once no consumer needs them or upstream supplies an equivalent. |
 
-## Deviation ledger
+`npm run diff:upstream` prints the complete worktree report. `--check` validates baseline integrity, upstream dependency pins/ranges across installation scopes, and ledger coverage. The commit hook uses `--check --staged` to check the index that will be committed, including its baseline manifest, package metadata, ledger, and referenced test paths. An unstaged ledger repair cannot make that gate pass.
 
-[`deltas.json`](deltas.json) registers every modified or dropped upstream path (M/T/D) with a category, a one-line intent, and optional covering tests. Entries ending in `/` register a whole directory. The diff report annotates each path with its ledger entry; `--check` fails on unregistered deviations and stale entries. Update the ledger whenever a deviation is added, removed, or changes meaning — especially during upstream synchronization, where it answers "why does this file differ and can the upstream version replace it" without re-deriving history.
+For an unexpected deviation, inspect the actual diff and introducing commit before describing its impact:
 
-Categories encode why a deviation exists and how to treat it during synchronization:
+```bash
+git diff <sourceTree> -- <path>
+git log -p -1 -- <path>
+```
 
-- `distribution` — required for the standalone package to exist; never adopt the upstream version.
-- `bugfix` — fixes an upstream defect ahead of upstream; check each synchronization whether upstream fixed it and retire the entry once it has.
-- `windows-compat` — upstream behavior correct on POSIX but broken on native Windows; treat like `bugfix`, but expect longer-lived entries and verify with a Windows reproduction.
-- `ui` — the fork's TUI presentation identity; permanent, merge upstream changes into it by hand.
-- `extension-support` — additions to the upstream Extension API contract surface (`src/core/extensions/types.ts`, its barrel, `src/core/tools/tool-definition-wrapper.ts`); each intent names what drives the addition (a fork UI feature, the compaction controller, or a bundled-extension need). Merge upstream API evolution by hand, and retire an addition when it loses all consumers or upstream grows an equivalent.
-
-Keep durable human context here when a meaningful local deviation changes.
+An unregistered path can be a prompt wording change; it does not by itself imply an execution or protocol change.
 
 ## Synchronization runbook
 
-1. Start from a clean synchronization branch. Fetch upstream tags, select an exact stable release tag (never synchronize from `upstream/main`), and classify the release diff against the deviation ledger:
+1. Inspect status and existing work. Start a clean synchronization branch from the intended `main` commit; preserve unrelated work. Fetch only the selected release tag and inspect it with `gh`:
 
    ```bash
-   git fetch upstream --tags
+   git switch main
+   git switch -c sync/upstream-v<version>
+   git fetch upstream tag v<version>
+   gh release view v<version> --repo earendil-works/pi
+   npm run diff:upstream -- --check
    npm run diff:upstream -- --target v<version>
    ```
 
-   Changes touching registered deviations or colliding with fork-owned additions need per-path review; only changes clear of both are adoption candidates. Removed upstream paths need drop-or-keep decisions. Read the relevant source, tests, public API, documentation, and examples, and triage each change as adopt, defer, or not applicable in the branch review.
-2. Apply compatible behavior without importing workspace assumptions, vendoring dependencies, or changing upstream tool contracts for display-only behavior. Update local tests and distribution documentation for what ships.
-3. If the adopted release needs newer runtime packages, set all seven direct upstream runtime dependencies to compatible exact published versions, regenerate the shrinkwrap, and run `npm run check:pinned-deps`.
-4. When source, tests, documentation, dependencies, and shrinkwrap are final, update the manifest to the selected repository, tag, commit, subtree, and resolved target tree. Run `npm run diff:upstream` to inspect the full worktree path report, and `npm run diff:upstream -- --check` as a release gate.
-5. Run focused tests for every changed subsystem, a real-TTY check for interactive behavior, then `npm run build`, `npm run check`, and the diff command. Resolve failures before handoff.
+   If a fresh clone lacks the recorded baseline tree, fetch its exact tag first. Target classification uses the committed HEAD tree; finish or isolate local edits before relying on its collision report.
+2. Read the changed source, tests, APIs, documentation, and examples. Classify changes as adopt, adapt, defer, or not applicable. Review each collision with a registered deviation or distribution-owned addition. Record this release's decisions under `maintainers/syncs/v<version>.md`; keep durable architecture explanations in [Architecture](architecture.md) and per-path intent in the ledger.
+3. Apply compatible changes. Review dependency **scope** as well as version using [Dependency maintenance](dependencies.md). Update distribution documentation and `CHANGELOG.md` under `[Unreleased]`. The root package's release version stays unchanged during synchronization.
+4. When adoption is final, update all fields of `upstream.json` and reconcile `deltas.json`. Explicitly register newly adopted upstream paths with `git add --intent-to-add -- <paths>` before the worktree comparison; Git otherwise treats an untracked replacement as a deletion plus a separate file.
+5. Verify the installed dependency tree, focused behavior tests, and interactive changes as required by AGENTS.md. Use a clean build for deleted sources or changed build/package exclusions. Run `npm run check`, the full diff report, and `npm run diff:upstream -- --check`. For entrypoint, dependency-scope, or packaging changes, pack and run `npm run verify:package-install -- <tarball>`. Include validation results and any explicitly assigned follow-up work in the synchronization record.
+6. At an owner-requested checkpoint, inspect status, stage explicit paths, inspect the staged diff, and commit. Follow the lockfile acknowledgement procedure when needed. Existing authorization persists; complete the authorized steps without asking again.
+7. If pushing/CI verification is authorized, push the synchronization branch and run the existing CI workflow on that exact commit:
 
-## v0.85.1 adoption review
+   ```bash
+   SYNC_BRANCH="$(git branch --show-current)"
+   SYNC_SHA="$(git rev-parse HEAD)"
+   gh workflow run ci.yml --repo ming-kang/pi --ref "$SYNC_BRANCH" -f expected_sha="$SYNC_SHA"
+   gh run list --repo ming-kang/pi --workflow ci.yml --event workflow_dispatch --commit "$SYNC_SHA" --json databaseId,headSha,status,conclusion,url
+   gh run watch <run-id> --repo ming-kang/pi --exit-status
+   ```
 
-Reviewed all 38 coding-agent paths changed from `v0.85.0` to `v0.85.1`:
+   The manual trigger must already exist on GitHub's default branch. Ubuntu CI owns POSIX-sensitive complete-suite coverage.
+8. When merging is authorized, merge the **standalone synchronization branch** and remove the merged local branch:
 
-| Paths | Decision |
-| --- | --- |
-| 12 runtime source paths | Adopted the stable/development entrypoint split, configurable selector save keys and hints; retained local keybindings and help text. |
-| 5 test paths | Adopted selector, entrypoint, and footer regressions; adapted package paths and Node preload URLs to this distribution and native Windows. |
-| 5 documentation paths | Adapted development, environment, keybinding, cache, and Docker Sandboxes guidance. The community sandbox image ships upstream Pi, so this distribution documents building a kit with `@astralyn/pi`. |
-| `package.json`, `npm-shrinkwrap.json`, `tsconfig.build.json` | Adopted source-only experimental exports and build/package exclusions; upgraded all seven exact runtime dependencies to `0.85.1`. Kept the distribution's dependency placement and release-owned package version. |
-| `CHANGELOG.md` | Recorded the adopted behavior under `[Unreleased]`. |
-| `README.md` | No additional edit: this distribution already omits the experimental server environment variables removed upstream. |
-| 9 example package/lock paths | Not applicable: upstream only bumped private example versions; retained distribution-owned example metadata and exact dependency pins. |
-| 2 `install-lock/` paths | Not applicable: this standalone package owns its shrinkwrap and does not ship upstream's install-lock workspace. |
+   ```bash
+   git switch main
+   git merge --ff-only sync/upstream-v<version>
+   git branch -d sync/upstream-v<version>
+   git status --short --branch
+   ```
 
-AI model/catalog/cache and TUI mouse changes come from the published dependencies. Upstream monorepo release scripts and workflows are not imported; the local bundler rejects development-only source imports, and the installed-package verifier checks the stable SDK, CLI/RPC startup, experimental export conditions, and excluded files.
+   If `main` diverged, reconcile and revalidate the result before merging; do not force the fast-forward or branch deletion. Delete a published remote synchronization branch only when that cleanup is also in scope. Report the resulting commit, worktree state, and any outstanding validation. Publication/versioning remains governed by the release runbook.
 
-## Durable notes for local deviations
+## Synchronization records
 
-Re-read these notes whenever the related upstream lifecycle or renderer behavior changes. Prefer public Extension API or a local adapter before changing an upstream-aligned runtime surface.
-
-- **Standalone package and bundled features:** This is a standalone `@astralyn/pi` package with exact published runtime dependencies. Bundled workflow extensions remain independent public-API consumers; their model-facing output stays bounded. Native themes and package documentation are distribution-owned. Within `src/extensions/`, only `llama` is upstream's own bundled extension (kept byte-identical to the baseline); every other bundled extension is a fork addition.
-- **esbuild bundled executables (distribution-only build step):** `scripts/build-bundle.mjs` overwrites the tsc-built `dist/cli.js` and `dist/rpc-entry.js` with self-contained esbuild bundles (plus `dist/image-resize-worker.js`) so cold starts read one file instead of hundreds — critical on native Windows, where Defender real-time scanning made every first launch slow. The bundles define `PI_BUNDLED_NODE` (upstream's own embedded-modules switch in `src/core/extensions/loader.ts`), register OAuth flows via `@earendil-works/pi-ai/bun-oauth`, and keep the native/WASM dependencies external. Upstream has no equivalent step; when upstream changes the executable entrypoints, the extension loader's bundled-mode branch, or the image-resize worker layout, re-verify `npm run build:bundle` and `npm run verify:package-install`.
-- **Experimental Chord runtime (v0.85.1):** Adopt upstream's source-only boundary: `npm run dev` enters `src/experimental/cli.ts`, while the stable CLI/SDK/RPC graph excludes `src/client/`, `src/experimental/`, and `src/cli/experimental/`. The two experimental package subpaths expose only the `source` condition. This distribution retains all seven exact runtime dependencies required by its repository contract; upstream moved `pi-client`, `pi-protocol`, and `pi-server` to development dependencies, so `diff:upstream` checks their declared development ranges too. The experimental durable server is POSIX-only by upstream design (`process.getuid` guard in `src/experimental/server.ts`); its tests skip on native Windows and are covered by Ubuntu CI. `src/experimental/plugins/bundled.ts` additionally maps this distribution's `@astralyn/pi/experimental/plugin` specifier for plugin external resolution.
-- **Mid-turn compaction (high risk):** Context is checked after a completed tool batch and before queued steering or follow-up work reaches the next provider request. Safe compaction continues the same run; unsafe retained context, aborts, and failures stop at an explicit lifecycle boundary. Do not simulate a graceful upstream turn stop where the Agent API does not provide one. Exercise continuation, cancellation, unavailable cut points, retained-context failure, and queued work in focused tests and a real TTY.
-- **Native tool presentation (high risk):** Keep native call/result chrome, bounded collapsed output, renderer refreshes, and keybinding-aware expansion hints without changing tool schemas, execution protocols, or model-facing results. Verify the affected pending, success, error, collapsed, expanded, grouped, and delayed-progress states in focused tests and a real TTY.
-- **Session-owned background execution:** `src/core/background/service.ts` supervises execution and bounded retention; `background/session.ts` owns settlement persistence, completion delivery, and late-result quarantine. `AgentSession` supplies lifecycle pauses and persistence acknowledgements. Bash and PowerShell share the `tools/shell-execution.ts` result pipeline; the Subagent extension retains ownership of workers and its concurrency gate, and the background extension remains an observer/controller. Completion delivery waits for a safe idle boundary and retries on the next user prompt after failure; queued `nextTurn` context is consumed only after its own persistence. Tree navigation releases delivered off-branch history while protecting pending completions for return. Upstream has no equivalent; merge upstream changes to `agent-session*.ts`, `tools/bash.ts`, `tools/output-accumulator.ts`, and `usage-totals.ts` by hand around this wiring.  The shared presentation contract lives in `background/presentation.ts`: result-record version 2 retains typed projections and completion details version 1 carries self-contained terminal facts. Executors own report/output truncation provenance; rendering never parses model prose or private Subagent details.
-- **Platform and time-sensitive UI:** Keep Windows shell normalization narrow, and ensure interactive timers and selectors derive from deadlines, repaint only while active, and dispose on replacement or shutdown. Re-check Windows process behavior and real-TTY lifecycle interactions after upstream changes.
+- [v0.85.1](syncs/v0.85.1.md)

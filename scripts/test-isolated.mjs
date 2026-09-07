@@ -2,7 +2,7 @@
 
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, posix as posixPath, resolve, win32 as win32Path } from "node:path";
+import { delimiter, dirname, join, posix as posixPath, resolve, win32 as win32Path } from "node:path";
 import { fileURLToPath } from "node:url";
 import spawn from "cross-spawn";
 
@@ -57,10 +57,14 @@ function canRun(command, environment) {
 	return (result.error === undefined || result.error === null) && result.status === 0;
 }
 
-export function runIsolatedTests() {
+export function runIsolatedTests(args = process.argv.slice(2)) {
 	const isWindows = process.platform === "win32";
+	const npmCliPath = process.env.npm_execpath;
+	const npmBin = npmCliPath ? resolve(dirname(npmCliPath), isWindows ? "../../.." : "../../../../bin") : undefined;
+	const hasNpmShim = npmBin && existsSync(join(npmBin, isWindows ? "npm.cmd" : "npm"));
+	const sourcePath = hasNpmShim ? `${npmBin}${delimiter}${process.env.PATH ?? ""}` : process.env.PATH;
 	const managedBin = getManagedBinDirectory(process.env, process.platform);
-	const isolatedPath = buildIsolatedPath(process.env.PATH, managedBin, process.platform);
+	const isolatedPath = buildIsolatedPath(sourcePath, managedBin, process.platform);
 
 	// Isolate user resources, credentials, temporary files, and tool configuration.
 	const testRoot = mkdtempSync(join(tmpdir(), "pi-test-"));
@@ -99,6 +103,7 @@ export function runIsolatedTests() {
 			NPM_CONFIG_USERCONFIG: join(testRoot, "npm-userconfig"),
 			NPM_CONFIG_GLOBALCONFIG: join(testRoot, "npm-globalconfig"),
 			NPM_CONFIG_CACHE: join(testRoot, "cache", "npm"),
+			NPM_CONFIG_PREFIX: join(testRoot, "npm-prefix"),
 			PI_NO_LOCAL_LLM: "1",
 			AWS_EC2_METADATA_DISABLED: "true",
 		};
@@ -123,7 +128,15 @@ export function runIsolatedTests() {
 		}
 
 		console.log(`Running tests without API keys in isolated home: ${join(testRoot, "home")}`);
-		const result = spawn.sync("npm", ["test"], { cwd: root, env: environment, stdio: "inherit" });
+		const result = spawn.sync(
+			npmCliPath ? process.execPath : "npm",
+			[...(npmCliPath ? [npmCliPath] : []), "test", ...(args.length ? ["--", ...args] : [])],
+			{
+				cwd: root,
+				env: environment,
+				stdio: "inherit",
+			},
+		);
 		if (result.error) {
 			console.error(`Failed to start npm test: ${result.error.message}`);
 			return 1;

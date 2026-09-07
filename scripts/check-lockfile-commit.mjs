@@ -75,24 +75,19 @@ if (!stagedFiles.includes("npm-shrinkwrap.json")) {
 	process.exit(0);
 }
 
-if (allowed) {
-	console.error("npm-shrinkwrap.json is staged; PI_ALLOW_LOCKFILE_CHANGE is set, allowing commit.");
-	process.exit(0);
-}
-
 const changes = getLockfilePackageChanges();
 console.error("npm-shrinkwrap.json is staged.");
 console.error("");
 console.error("Review lockfile changes before committing:");
 console.error("  - confirm every new/updated package is intentional");
-console.error("  - confirm npm age gates were active for resolution");
+console.error("  - confirm npm age gates were active, or record the authorized release-specific exception");
 console.error("  - review any new lifecycle scripts in the dependency tree");
 console.error("  - confirm npm-shrinkwrap.json matches package.json and the intended runtime tree");
 
 const summary = changes ? summarizeLockfileChange(changes) : [];
 if (summary.length > 0) {
 	console.error("");
-	console.error("Detected package version changes:");
+	console.error("Detected package changes (including dependency metadata):");
 	for (const change of summary.slice(0, 40)) {
 		console.error(`  - ${change}`);
 	}
@@ -101,7 +96,12 @@ if (summary.length > 0) {
 	}
 }
 
+if (allowed) {
+	console.error("PI_ALLOW_LOCKFILE_CHANGE is set: accepting the reviewed lockfile change above.");
+	process.exit(0);
+}
+
 console.error("");
-console.error("If this lockfile change is intentional, commit with:");
+console.error("After reviewing this intentional lockfile change, commit with:");
 console.error("  PI_ALLOW_LOCKFILE_CHANGE=1 git commit ...");
 process.exit(1);

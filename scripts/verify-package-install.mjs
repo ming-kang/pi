@@ -15,15 +15,7 @@ if (!installSpec) {
 
 const sourcePackage = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const expectedVersion = expectedVersionArgument ?? sourcePackage.version;
-const expectedRuntimePackages = [
-	"@earendil-works/chord",
-	"@earendil-works/pi-ai",
-	"@earendil-works/pi-agent-core",
-	"@earendil-works/pi-client",
-	"@earendil-works/pi-protocol",
-	"@earendil-works/pi-server",
-	"@earendil-works/pi-tui",
-];
+const expectedRuntimePackages = Object.keys(sourcePackage.dependencies);
 const sourceExtensionsDirectory = new URL("../src/extensions/", import.meta.url);
 const expectedExtensionEntrypoints = readdirSync(sourceExtensionsDirectory, { withFileTypes: true })
 	.filter(
@@ -83,11 +75,15 @@ try {
 		JSON.stringify({ name: "astralyn-pi-package-smoke", version: "1.0.0", private: true }, null, 2),
 	);
 
-	execFileSync(process.execPath, [npmCliPath, "install", "--ignore-scripts", "--save-exact", resolvedInstallSpec], {
-		cwd: installDirectory,
-		env: smokeEnvironment,
-		stdio: "inherit",
-	});
+	execFileSync(
+		process.execPath,
+		[npmCliPath, "install", "--omit=dev", "--ignore-scripts", "--save-exact", resolvedInstallSpec],
+		{
+			cwd: installDirectory,
+			env: smokeEnvironment,
+			stdio: "inherit",
+		},
+	);
 
 	const installedPackage = readInstalledPackage("@astralyn/pi");
 	assertEqual(installedPackage.name, "@astralyn/pi", "installed package name");

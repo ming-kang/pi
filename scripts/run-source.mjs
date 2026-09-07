@@ -100,7 +100,8 @@ export function createSourceEnvironment(environment, withoutCredentials) {
 export function runSource(args = process.argv.slice(2)) {
 	const { forwardedArguments, withoutCredentials } = parseSourceArguments(args);
 	const environment = createSourceEnvironment(process.env, withoutCredentials);
-	if (withoutCredentials) console.log("Running without API keys...");
+	if (withoutCredentials)
+		console.log("Provider credential environment variables removed; local agent files are still loaded.");
 
 	const require = createRequire(import.meta.url);
 	const tsxCli = require.resolve("tsx/cli", { paths: [root] });
