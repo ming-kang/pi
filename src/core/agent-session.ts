@@ -30,6 +30,7 @@ import type {
 	AssistantMessage,
 	AuthResult,
 	ImageContent,
+	Message,
 	Model,
 	ProviderHeaders,
 	TextContent,
@@ -67,6 +68,7 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "./compaction/index.ts";
+import type { ContextSnapshot } from "./context-snapshot.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
@@ -102,6 +104,7 @@ import { emitSessionShutdownEvent } from "./extensions/runner.ts";
 import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
+import { resolveModelStreamOptions } from "./model-stream-options.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import { exportSessionToJsonl } from "./session-export.ts";
@@ -229,6 +232,8 @@ export interface AgentSessionConfig {
 	baseToolsOverride?: Record<string, AgentTool>;
 	/** Mutable ref used by Agent to access the current ExtensionRunner */
 	extensionRunnerRef?: { current?: ExtensionRunner };
+	/** Reuse model input already prepared by the SDK without replaying its context hooks. */
+	captureModelContext?: (messages: AgentMessage[]) => Promise<Message[]>;
 	/** Session start event metadata emitted when extensions bind to this runtime. */
 	sessionStartEvent?: SessionStartEvent;
 }
@@ -376,6 +381,7 @@ export class AgentSession {
 	private _extensionErrorUnsubscriber?: () => void;
 
 	private _modelRuntime: ModelRuntime;
+	private readonly _captureModelContext?: (messages: AgentMessage[]) => Promise<Message[]>;
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -414,6 +420,7 @@ export class AgentSession {
 		this._customTools = config.customTools ?? [];
 		this._cwd = config.cwd;
 		this._modelRuntime = config.modelRuntime;
+		this._captureModelContext = config.captureModelContext;
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._allowedToolNames = config.allowedToolNames ? new Set(config.allowedToolNames) : undefined;
@@ -453,6 +460,41 @@ export class AgentSession {
 
 	get modelRuntime(): ModelRuntime {
 		return this._modelRuntime;
+	}
+
+	/** Capture stable state before any asynchronous context preparation. Never includes a partial stream. */
+	async getContextSnapshot(): Promise<ContextSnapshot> {
+		const model = this.model;
+		if (!model) throw new Error("No model selected");
+		const snapshot = {
+			capturedAt: Date.now(),
+			sessionId: this.sessionManager.getSessionId(),
+			leafId: this.sessionManager.getLeafId(),
+			model: structuredClone(model),
+			thinkingLevel: this.thinkingLevel,
+			systemPrompt: this.systemPrompt,
+			tools: this.agent.state.tools.map(({ name, description, parameters, constrainedSampling }) => ({
+				name,
+				description,
+				parameters: structuredClone(parameters),
+				...(constrainedSampling === undefined ? {} : { constrainedSampling: structuredClone(constrainedSampling) }),
+			})),
+			streamOptions: resolveModelStreamOptions(model, this.settingsManager, this._extensionRunner, {
+				sessionId: this.agent.sessionId ?? this.sessionManager.getSessionId(),
+				transport: this.agent.transport,
+				thinkingBudgets: structuredClone(this.agent.thinkingBudgets),
+				maxRetryDelayMs: this.agent.maxRetryDelayMs,
+				onPayload: this.agent.onPayload,
+				onResponse: this.agent.onResponse,
+			}),
+		};
+		const messages = structuredClone(this.agent.state.messages);
+		const convert = this.agent.convertToLlm;
+		const transform = this.agent.transformContext;
+		const prepared = this._captureModelContext
+			? await this._captureModelContext(messages)
+			: await convert(transform ? await transform(messages) : messages);
+		return { ...snapshot, messages: structuredClone(prepared) };
 	}
 
 	private async _getRequiredRequestAuth(model: Model<any>): Promise<{
@@ -2756,6 +2798,7 @@ export class AgentSession {
 					this._extensionShutdownHandler?.();
 				},
 				getContextUsage: () => this.getContextUsage(),
+				getContextSnapshot: () => this.getContextSnapshot(),
 				compact: (options) => {
 					void (async () => {
 						try {

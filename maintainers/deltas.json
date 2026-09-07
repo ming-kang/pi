@@ -89,12 +89,13 @@
 		{
 			"path": "src/core/agent-session.ts",
 			"category": "bugfix",
-			"intent": "Uses one captured stream for summarization across async auth; binds live shell settings and invalidates stale contexts; hosts the BackgroundSession coordinator through lifecycle pauses and persistence acknowledgements, including nextTurn context retained until persistence",
+			"intent": "Uses one captured stream for summarization across async auth; binds live shell settings and detached stable model-context snapshots; invalidates stale contexts; hosts the BackgroundSession coordinator through lifecycle pauses and persistence acknowledgements, including nextTurn context retained until persistence",
 			"tests": [
 				"test/suite/agent-session-compaction.test.ts",
 				"test/suite/agent-session-extension-context.test.ts",
 				"test/suite/regressions/6324-branch-summary-ambient-auth.test.ts",
-				"test/agent-session-background.test.ts"
+				"test/agent-session-background.test.ts",
+				"test/context-snapshot.test.ts"
 			]
 		},
 		{
@@ -116,7 +117,7 @@
 		{
 			"path": "src/core/extensions/index.ts",
 			"category": "extension-support",
-			"intent": "Re-exports ShellSettings and the stale-extension-context helpers"
+			"intent": "Re-exports ShellSettings, stable context snapshots, editor submit/input types, and the stale-extension-context helpers"
 		},
 		{
 			"path": "src/core/extensions/loader.ts",
@@ -129,22 +130,24 @@
 		{
 			"path": "src/core/extensions/runner.ts",
 			"category": "extension-support",
-			"intent": "Exposes canonical ModelRuntime and host shell settings through ExtensionContext for bundled nested sessions and background tasks",
+			"intent": "Exposes canonical ModelRuntime, host shell settings and guarded model-context snapshots through ExtensionContext; supplies no-op editor submission hooks outside TUI mode",
 			"tests": [
-				"test/extensions-runner.test.ts"
+				"test/extensions-runner.test.ts",
+				"test/context-snapshot.test.ts"
 			]
 		},
 		{
 			"path": "src/core/extensions/types.ts",
 			"category": "extension-support",
-			"intent": "Tool grouping/result render context with disposable row-local state, canonical ModelRuntime, stale-context helpers, and host ShellSettings access"
+			"intent": "Tool grouping/result render context with disposable row-local state, canonical ModelRuntime, stale-context helpers, host ShellSettings, stable snapshots, synchronous editor submission, cursor access and editor-scoped terminal input"
 		},
 		{
 			"path": "src/core/keybindings.ts",
 			"category": "ui",
-			"intent": "Adds configurable app.list.toggle and app.backgroundTasks.* bindings (detach, list/preview focus, kill)",
+			"intent": "Adds configurable app.list.toggle, app.backgroundTasks.* (detach, list/preview focus, kill), and app.btw.* (close, cancel, scroll) bindings",
 			"tests": [
-				"test/keybindings.test.ts"
+				"test/keybindings.test.ts",
+				"test/btw-extension.test.ts"
 			]
 		},
 		{
@@ -166,9 +169,11 @@
 		{
 			"path": "src/core/sdk.ts",
 			"category": "distribution",
-			"intent": "CreateAgentSessionOptions.executionRole carries the host-assigned execution identity; subagent-role sessions reject background execution",
+			"intent": "CreateAgentSessionOptions.executionRole carries the host-assigned execution identity; subagent-role sessions reject background execution; model preparation records a reusable context prefix and shares request-option resolution with independent context consumers",
 			"tests": [
-				"test/agent-session-background.test.ts"
+				"test/agent-session-background.test.ts",
+				"test/context-snapshot.test.ts",
+				"test/sdk-stream-options.test.ts"
 			]
 		},
 		{
@@ -288,7 +293,7 @@
 		{
 			"path": "src/index.ts",
 			"category": "extension-support",
-			"intent": "Re-exports ShellSettings and the public Background supervision, projection, text, worker-report, and completion-snapshot types"
+			"intent": "Re-exports ShellSettings, model-context snapshots and editor submit/input types, plus the public Background supervision, projection, text, worker-report, and completion-snapshot types"
 		},
 		{
 			"path": "src/modes/interactive/components/armin.ts",
@@ -383,10 +388,11 @@
 		{
 			"path": "src/modes/interactive/interactive-mode.ts",
 			"category": "ui",
-			"intent": "Tool grouping and selector disposal, selector subtitle plumbing, canonical guarded ExtensionContext for shortcuts, distribution constants for telemetry and update hints",
+			"intent": "Tool grouping and selector disposal, selector subtitle plumbing, canonical guarded ExtensionContext for shortcuts, distribution constants for telemetry and update hints; routes Enter/follow-up through synchronous extension interception before history and queues, exposes editor cursor position, and scopes terminal listeners to editor focus",
 			"tests": [
 				"test/interactive-tui.test.ts",
-				"test/extensions-runner.test.ts"
+				"test/extensions-runner.test.ts",
+				"test/interactive-editor-submit.test.ts"
 			]
 		},
 		{
@@ -396,6 +402,12 @@
 			"tests": [
 				"test/theme-picker.test.ts"
 			]
+		},
+		{
+			"path": "src/modes/rpc/rpc-mode.ts",
+			"category": "extension-support",
+			"intent": "Supplies TUI-only editor submission and cursor APIs as no-ops in the RPC UI context",
+			"tests": ["test/extensions-runner.test.ts"]
 		},
 		{
 			"path": "src/utils/shell.ts",

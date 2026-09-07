@@ -49,6 +49,7 @@ import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { BackgroundContext } from "../background/types.ts";
 import type { BashResult } from "../bash-executor.ts";
 import type { CompactionPreparation, CompactionResult } from "../compaction/index.ts";
+import type { ContextSnapshot } from "../context-snapshot.ts";
 import type { EventBus } from "../event-bus.ts";
 import type { ExecOptions, ExecResult } from "../exec.ts";
 import type { ReadonlyFooterDataProvider } from "../footer-data-provider.ts";
@@ -87,6 +88,7 @@ import type {
 	WriteToolInput,
 } from "../tools/index.ts";
 
+export type { ContextSnapshot } from "../context-snapshot.ts";
 export type { ExecOptions, ExecResult } from "../exec.ts";
 export type { BuildSystemPromptOptions } from "../system-prompt.ts";
 export type { AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode };
@@ -115,6 +117,21 @@ export interface ExtensionWidgetOptions {
 
 /** Raw terminal input listener for extensions. */
 export type TerminalInputHandler = (data: string) => { consume?: boolean; data?: string } | undefined;
+
+export interface TerminalInputOptions {
+	/** Only receive input while the main editor has focus, without overlays or autocomplete. */
+	scope?: "editor";
+}
+
+export interface EditorSubmitEvent {
+	/** Expanded, trimmed editor text, before history, command dispatch, or any main-agent queue. */
+	text: string;
+	kind: "prompt" | "command" | "bash";
+	mode: "steer" | "followUp";
+}
+
+/** Handlers must claim input synchronously; start asynchronous work after claiming it. */
+export type EditorSubmitHandler = (event: EditorSubmitEvent) => { handled: true; editorText?: string } | undefined;
 
 /** Working indicator configuration for the interactive streaming loader. */
 export interface WorkingIndicatorOptions {
@@ -146,7 +163,10 @@ export interface ExtensionUIContext {
 	notify(message: string, type?: "info" | "warning" | "error"): void;
 
 	/** Listen to raw terminal input (interactive mode only). Returns an unsubscribe function. */
-	onTerminalInput(handler: TerminalInputHandler): () => void;
+	onTerminalInput(handler: TerminalInputHandler, options?: TerminalInputOptions): () => void;
+
+	/** Intercept editor submissions in TUI mode, including during compaction. First claim wins. */
+	onEditorSubmit(handler: EditorSubmitHandler): () => void;
 
 	/** Set status text in the footer/status bar. Pass undefined to clear. */
 	setStatus(key: string, text: string | undefined): void;
@@ -221,6 +241,9 @@ export interface ExtensionUIContext {
 
 	/** Get the current text from the core input editor. */
 	getEditorText(): string;
+
+	/** Get the logical cursor position when the editor exposes it. Indices are zero-based. */
+	getEditorCursor(): { line: number; col: number } | undefined;
 
 	/** Show a multi-line editor for text editing. */
 	editor(title: string, prefill?: string): Promise<string | undefined>;
@@ -348,6 +371,8 @@ export interface ExtensionContext {
 	shutdown(): void;
 	/** Get current context usage for the active model. */
 	getContextUsage(): ContextUsage | undefined;
+	/** Capture detached, stable model input and request settings without writing to the session. */
+	getContextSnapshot(): Promise<ContextSnapshot>;
 	/** Trigger compaction without awaiting completion. */
 	compact(options?: CompactOptions): void;
 	/** Get the current effective system prompt. */
@@ -1768,6 +1793,7 @@ export interface ExtensionContextActions {
 	hasPendingMessages: () => boolean;
 	shutdown: () => void;
 	getContextUsage: () => ContextUsage | undefined;
+	getContextSnapshot?: () => Promise<ContextSnapshot>;
 	compact: (options?: CompactOptions) => void;
 	getSystemPrompt: () => string;
 	getSystemPromptOptions?: () => BuildSystemPromptOptions;

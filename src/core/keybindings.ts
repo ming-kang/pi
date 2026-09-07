@@ -60,6 +60,10 @@ export interface AppKeybindings {
 	"app.backgroundTasks.focusPreview": true;
 	"app.backgroundTasks.kill": true;
 	"app.backgroundTasks.detach": true;
+	"app.btw.close": true;
+	"app.btw.cancel": true;
+	"app.btw.scrollUp": true;
+	"app.btw.scrollDown": true;
 }
 
 export type AppKeybinding = keyof AppKeybindings;
@@ -264,6 +268,10 @@ export const KEYBINDINGS = {
 		defaultKeys: "k",
 		description: "Kill selected background task",
 	},
+	"app.btw.close": { defaultKeys: "escape", description: "Close the BTW conversation" },
+	"app.btw.cancel": { defaultKeys: "ctrl+c", description: "Stop the BTW answer, or close when idle" },
+	"app.btw.scrollUp": { defaultKeys: "up", description: "Scroll BTW up when the editor is empty" },
+	"app.btw.scrollDown": { defaultKeys: "down", description: "Scroll BTW down when the editor is empty" },
 } as const satisfies KeybindingDefinitions;
 
 const KEYBINDING_NAME_MIGRATIONS = {

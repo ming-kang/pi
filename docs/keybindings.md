@@ -137,6 +137,17 @@ In `/bg`, Up/Down and Page Up/Page Down target the focused pane: row selection/l
 
 Ctrl+B also works while `/bg` owns focus. It does not restart execution, reset shell timeouts, detach individual workers, or affect user `!` commands. With no eligible work it only reports that nothing can be moved. See [Background tasks](bundled/extensions/background.md).
 
+### BTW Side Questions
+
+These actions apply while the [BTW panel](bundled/extensions/btw.md) is open and the editor has focus. Autocomplete and dialogs retain priority.
+
+| Keybinding id | Default | Description |
+| --- | --- | --- |
+| `app.btw.close` | `escape` | Close BTW and discard its history and draft |
+| `app.btw.cancel` | `ctrl+c` | Stop the side answer while retaining partial output; close when idle |
+| `app.btw.scrollUp` | `up` | Scroll BTW up when the editor is empty |
+| `app.btw.scrollDown` | `down` | Scroll BTW down when the editor is empty |
+
 ### Sessions
 
 | Keybinding id | Default | Description |

@@ -6,6 +6,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Added
 
+- Added `/btw [question]` for temporary, multi-turn side conversations above the editor. It preserves the main request prefix and cache affinity, denies tool execution, and cancels independently. BTW questions and answers stay in memory and never enter Session JSONL or `/tree`; close, reload, and session navigation discard them.
+- Exposed stable `ctx.getContextSnapshot()`, synchronous `ctx.ui.onEditorSubmit()` before main/compaction queues, and editor-scoped terminal input for extensions. BTW controls use configurable `app.btw.*` bindings.
 - Added inherited GPT-6 Astra support for OpenAI API keys and Codex subscriptions, plus the refreshed OpenRouter MAI-Image-2.6 and MAI-Image-2.6 Flash image catalog.
 - Added inherited five-times-faster Alt-wheel scrolling in fullscreen mode and documentation for running this distribution with a custom Docker Sandboxes kit.
 - Added session-owned Background execution for native `bash` and Windows `powershell` with `background: true`, plus a top-level `subagent.background` flag for whole invocation groups. Interactive Ctrl+B moves all eligible current foreground executions to the background without restarting commands/workers or resetting shell timeouts. Workers retain foreground shell access but cannot create background work: both their prompt and trusted execution-role checks enforce the restriction.

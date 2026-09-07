@@ -22,6 +22,7 @@ import type {
 	CompactOptions,
 	ContextEvent,
 	ContextEventResult,
+	ContextSnapshot,
 	ContextUsage,
 	EntryRenderer,
 	Extension,
@@ -243,6 +244,7 @@ const noOpUIContext: ExtensionUIContext = {
 	input: async () => undefined,
 	notify: () => {},
 	onTerminalInput: () => () => {},
+	onEditorSubmit: () => () => {},
 	setStatus: () => {},
 	setWorkingMessage: () => {},
 	setWorkingVisible: () => {},
@@ -256,6 +258,7 @@ const noOpUIContext: ExtensionUIContext = {
 	pasteToEditor: () => {},
 	setEditorText: () => {},
 	getEditorText: () => "",
+	getEditorCursor: () => undefined,
 	editor: async () => undefined,
 	addAutocompleteProvider: () => {},
 	setEditorComponent: () => {},
@@ -290,6 +293,9 @@ export class ExtensionRunner {
 	private abortFn: () => void = () => {};
 	private hasPendingMessagesFn: () => boolean = () => false;
 	private getContextUsageFn: () => ContextUsage | undefined = () => undefined;
+	private getContextSnapshotFn: () => Promise<ContextSnapshot> = async () => {
+		throw new Error("Context snapshots are not available in this host");
+	};
 	private compactFn: (options?: CompactOptions) => void = () => {};
 	private getSystemPromptFn: () => string = () => "";
 	private getSystemPromptOptionsFn: () => BuildSystemPromptOptions = () => ({ cwd: this.cwd });
@@ -358,6 +364,7 @@ export class ExtensionRunner {
 		this.hasPendingMessagesFn = contextActions.hasPendingMessages;
 		this.shutdownHandler = contextActions.shutdown;
 		this.getContextUsageFn = contextActions.getContextUsage;
+		if (contextActions.getContextSnapshot) this.getContextSnapshotFn = contextActions.getContextSnapshot;
 		this.compactFn = contextActions.compact;
 		this.getSystemPromptFn = contextActions.getSystemPrompt;
 		this.getSystemPromptOptionsFn = contextActions.getSystemPromptOptions ?? (() => ({ cwd: this.cwd }));
@@ -807,6 +814,10 @@ export class ExtensionRunner {
 			getContextUsage: () => {
 				runner.assertActive();
 				return runner.getContextUsageFn();
+			},
+			getContextSnapshot: () => {
+				runner.assertActive();
+				return runner.getContextSnapshotFn();
 			},
 			compact: (options) => {
 				runner.assertActive();

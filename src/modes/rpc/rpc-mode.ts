@@ -164,6 +164,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			// Raw terminal input not supported in RPC mode
 			return () => {};
 		},
+		onEditorSubmit: () => () => {},
+		getEditorCursor: () => undefined,
 
 		setStatus(key: string, text: string | undefined): void {
 			// Fire and forget - no response needed

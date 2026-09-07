@@ -38,6 +38,7 @@ Type `/` in the editor to open command completion. Extensions can register custo
 |---------|-------------|
 | `/login`, `/logout` | Manage OAuth or API-key credentials |
 | [`/llama`](llama-cpp.md) | Download, load, and unload llama.cpp router models |
+| [`/btw [question]`](bundled/extensions/btw.md) | Open a temporary side conversation using the current context |
 | `/model` | Switch models; Ctrl+S in the picker saves the startup default |
 | `/thinking` | Switch thinking level; Ctrl+S in the picker saves the startup default |
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
@@ -72,6 +73,8 @@ You can submit messages while the agent is still working:
 On Windows Terminal, Alt+Enter is fullscreen by default. Remap it as described in [Terminal setup](terminal-setup.md) if you want pi to receive the shortcut.
 
 Configure delivery in [Settings](settings.md) with `steeringMode` and `followUpMode`.
+
+While the [BTW panel](bundled/extensions/btw.md) is open, ordinary editor submissions go to that side conversation. Busy side questions remain drafts instead of entering the main queue.
 
 ## Sessions
 

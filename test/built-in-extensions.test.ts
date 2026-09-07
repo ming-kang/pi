@@ -4,6 +4,7 @@ import { builtInExtensions } from "../src/extensions/index.ts";
 const EXPECTED_BUILT_INS = [
 	"llama.cpp",
 	"background",
+	"btw",
 	"deepwiki",
 	"question",
 	"router",

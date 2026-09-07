@@ -61,6 +61,10 @@
           "path": "bundled/extensions/background.md"
         },
         {
+          "title": "BTW",
+          "path": "bundled/extensions/btw.md"
+        },
+        {
           "title": "DeepWiki",
           "path": "bundled/extensions/deepwiki.md"
         },

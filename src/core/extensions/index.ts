@@ -60,10 +60,13 @@ export type {
 	ContextEvent,
 	// Event Results
 	ContextEventResult,
+	ContextSnapshot,
 	ContextUsage,
 	CustomToolCallEvent,
 	CustomToolResultEvent,
 	EditorFactory,
+	EditorSubmitEvent,
+	EditorSubmitHandler,
 	EditToolCallEvent,
 	EditToolResultEvent,
 	// Message and Entry Rendering
@@ -163,6 +166,7 @@ export type {
 	SetThinkingLevelHandler,
 	ShellSettings,
 	TerminalInputHandler,
+	TerminalInputOptions,
 	// Events - Tool
 	ToolCallEvent,
 	ToolCallEventResult,

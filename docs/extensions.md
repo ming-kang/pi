@@ -1190,6 +1190,23 @@ if (usage && usage.tokens > 100_000) {
 }
 ```
 
+### ctx.getContextSnapshot()
+
+Returns a `Promise<ContextSnapshot>` with detached stable messages, effective system prompt, model, thinking level, active tool metadata in order, source session/leaf IDs, capture time, and `streamOptions`. It captures source state synchronously before awaiting preparation; partially streamed assistant frames are excluded. It throws if no model is selected.
+
+The SDK reuses the message prefix already prepared for the most recent main request when it still matches the current branch and image policy, then converts newly settled messages. This preserves context-hook changes without replaying those hooks over the prefix. Before the first request, or after replacing the branch or image policy, it prepares the detached context once through the current context hooks and message conversion. It does not rerun `before_agent_start`, persist messages, or execute tools.
+
+`streamOptions` includes transport, thinking budgets, timeouts, retries, provider hooks and header transforms. It contains callbacks, so the snapshot is not a JSON serialization format. Credentials are resolved through `ctx.modelRuntime`; the main run's abort signal and tool executors are never included. Provider hooks still run for each request and can change serialized payloads, so arbitrary external hooks can affect prefix reuse.
+
+```typescript
+const snapshot = await ctx.getContextSnapshot();
+// Use snapshot.messages as a fixed prefix for an independent native Agent.
+// Forward snapshot.streamOptions through ctx.modelRuntime.streamSimple,
+// and let that Agent supply its own signal and per-turn options.
+```
+
+Consumers own the lifetime and cancellation of their independent work. A shared `streamOptions.sessionId` provides provider cache affinity; it does not give a consumer ownership of the main session's provider resources. Do not clean up shared provider session resources when closing a side conversation. See [BTW](bundled/extensions/btw.md) for the bundled consumer.
+
 ### ctx.compact()
 
 Trigger compaction without awaiting completion. Use `onComplete` and `onError` for follow-up actions.
@@ -2769,6 +2786,27 @@ pi.on("session_shutdown", () => {
 
 Return `{ consume: true }` to stop dispatch immediately. Return `{ data }` to replace the input seen by later listeners and then Pi's focused component; an empty replacement also prevents focused-component handling after listeners finish. In RPC, JSON, and print modes this is a no-op, so guard terminal-specific behavior with `ctx.mode === "tui"`.
 
+Pass `{ scope: "editor" }` as the second argument to receive input only when the main editor has focus, no overlay is visible, and the editor is not showing autocomplete. Custom editors can expose `isShowingAutocomplete()` for that last check. Subscriptions are removed on extension UI teardown and follow TUI mode changes.
+
+### Editor Submission
+
+`ctx.ui.onEditorSubmit(handler)` intercepts normalized, expanded editor text before command dispatch, editor history, streaming queues, and compaction queues. Enter and the configured follow-up shortcut use the same hook. It is TUI-only and does not intercept programmatic extension messages.
+
+The event has `text`, `mode` (`"steer"` or `"followUp"`), and `kind` (`"prompt"`, `"command"`, or `"bash"`). Known built-in/extension commands, templates, and skills are classified as commands; unknown slash-prefixed text remains a prompt.
+
+Handlers run synchronously in registration order. Return `{ handled: true }` to claim and clear the input, or `{ handled: true, editorText }` to keep a draft. Return `undefined` to pass through. Start asynchronous work after making the synchronous claim. The first claim wins; a thrown error restores the input and stops dispatch instead of sending it to the main agent.
+
+```typescript
+const unsubscribe = ctx.ui.onEditorSubmit((event) => {
+  if (!panelOpen || event.kind !== "prompt") return undefined;
+  if (busy) return { handled: true, editorText: event.text };
+  void answerSideQuestion(event.text).catch(showSideError);
+  return { handled: true };
+});
+```
+
+Keep the unsubscribe function and call it during teardown. Pi also clears these handlers when resetting extension UI.
+
 ### Widgets, Status, and Footer
 
 ```typescript
@@ -2831,6 +2869,7 @@ ctx.ui.setTitle("pi - my-project");
 // Editor text
 ctx.ui.setEditorText("Prefill text");
 const current = ctx.ui.getEditorText();
+const cursor = ctx.ui.getEditorCursor(); // { line, col }, zero-based; undefined if unsupported
 
 // Paste into editor (triggers paste handling, including collapse for large content)
 ctx.ui.pasteToEditor("pasted content");
