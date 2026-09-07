@@ -6,6 +6,8 @@ import type { CustomMessage } from "../messages.ts";
 import type { SessionEntry, SessionManager } from "../session-manager.ts";
 import { truncateHead } from "../tools/truncate.ts";
 import { BACKGROUND_USAGE_TYPE, getBackgroundUsageRecord } from "../usage-totals.ts";
+import { BACKGROUND_HISTORY_VERSION } from "./history.ts";
+import { backgroundCompletionMessage } from "./presentation.ts";
 import { BackgroundService } from "./service.ts";
 import { type BackgroundTask, isBackgroundTerminal } from "./types.ts";
 
@@ -30,24 +32,6 @@ interface Delivery {
 	id: string;
 	service: BackgroundService;
 	persisted: boolean;
-}
-
-function notificationText(task: BackgroundTask): string {
-	const text = task.result?.content
-		.filter((part) => part.type === "text")
-		.map((part) => part.text)
-		.join("\n");
-	const result = truncateHead(
-		[
-			`Background ${task.kind} ${task.id}: ${task.status} — ${task.title}`,
-			task.outputPath ? `Output: ${task.outputPath}` : "",
-			text || task.error || task.projection?.text || "No text result.",
-		].join("\n"),
-		{ maxBytes: 48 * 1024, maxLines: 2000 },
-	);
-	return result.truncated
-		? `${result.content}\n[Notification truncated; use bg read for the task result.]`
-		: result.content;
 }
 
 /** Session persistence and completion delivery; execution supervision stays in BackgroundService. */
@@ -157,7 +141,7 @@ export class BackgroundSession {
 			if (usage && !manager.getEntries().some((entry) => getBackgroundUsageRecord(entry)?.taskId === task.id)) {
 				append(BACKGROUND_USAGE_TYPE, { version: 1, taskId: task.id, usage });
 			}
-			append("background-task-result", JSON.parse(JSON.stringify({ version: 1, task })));
+			append("background-task-result", JSON.parse(JSON.stringify({ version: BACKGROUND_HISTORY_VERSION, task })));
 		} finally {
 			// Complete the writes before observers can replace the runtime or its manager.
 			// If a write fails, still report entries that were successfully appended.
@@ -229,14 +213,7 @@ export class BackgroundSession {
 		this.delivery = delivery;
 		let deliveryError: unknown;
 		try {
-			await this.options.deliver({
-				role: "custom",
-				customType: "background-completion",
-				display: true,
-				content: notificationText(task),
-				details: { taskId: task.id },
-				timestamp: Date.now(),
-			});
+			await this.options.deliver(backgroundCompletionMessage(task));
 		} catch (error) {
 			deliveryError = error;
 		} finally {

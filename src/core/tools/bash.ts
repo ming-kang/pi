@@ -310,6 +310,7 @@ export function createShellToolDefinition(
 					);
 					return await runShellCommand({
 						operations: ops,
+						shellName: config.shellName,
 						context: spawnContext,
 						tempFilePrefix: config.tempFilePrefix,
 						timeout,

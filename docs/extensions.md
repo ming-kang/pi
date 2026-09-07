@@ -1062,7 +1062,11 @@ pi.on("tool_result", async (event, ctx) => {
 
 Session-bound `BackgroundContext` for supervising shell tasks and whole Subagent invocations. The host owns execution lifetime; a tool can either wait for its final result or return a background reference. Check `ctx.background.enabled` before offering background work. Interactive mode enables it; ordinary SDK sessions and built-in print/JSON/RPC hosts leave it disabled. See [SDK host policy](sdk.md#background-execution) and [Background behavior](bundled/extensions/background.md).
 
-Public types are exported from `@astralyn/pi`: `BackgroundContext`, `BackgroundExecution<T>`, `BackgroundControl<T>`, `BackgroundCompletion<T>`, `BackgroundToolOutcome<T>`, `BackgroundTask`, `BackgroundRead`, `BackgroundProjection`, `BackgroundWorker`, `BackgroundKind`, `BackgroundMode`, `BackgroundStatus`, and `BackgroundTerminalStatus`.
+Public types are exported from `@astralyn/pi`: `BackgroundContext`, `BackgroundExecution<T>`, `BackgroundControl<T>`, `BackgroundCompletion<T>`, `BackgroundToolOutcome<T>`, `BackgroundTask`, `BackgroundRead`, `BackgroundProjection`, `BackgroundWorker`, `BackgroundWorkerReport`, `BackgroundText`, `BackgroundCompletionSnapshot`, `BackgroundKind`, `BackgroundMode`, `BackgroundStatus`, and `BackgroundTerminalStatus`.
+
+Use the optional projection in `control.publish(result, projection)` for portable presentation facts. `BackgroundText` is `{ text: string, truncated: boolean }`; record truncation where it happens instead of embedding a marker for the renderer to parse. Shell projections carry `shell: { name, output }`. Worker projections carry `id`, `label`, `profile`, `description`, observed `status`, `report`, optional `error`, plus `prompt`, `activity` and optional `model`/`usage` display strings. The host bounds each field, retaining at most eight workers, 40 KiB of shell output and 4 KiB per report.
+
+Automatic completions persist a terminal `BackgroundCompletionSnapshot` in message `details`, independently of the tool's private result details. Completion workers omit live prompt/activity/model/usage fields, and display metadata is never billed. The host generates bounded model prose from the same facts; renderers read the structured snapshot. Executors without a projection get a bounded plain result fallback. See [Background records](session-format.md#background-records) for the complete format and replay rules.
 
 | Member | Contract |
 |---|---|

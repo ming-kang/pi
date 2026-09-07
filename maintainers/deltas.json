@@ -283,7 +283,7 @@
 		{
 			"path": "src/index.ts",
 			"category": "extension-support",
-			"intent": "Re-exports the ShellSettings type for the fork's ctx.getShellSettings() extension API"
+			"intent": "Re-exports ShellSettings and the public Background supervision, projection, text, worker-report, and completion-snapshot types"
 		},
 		{
 			"path": "src/modes/interactive/components/armin.ts",

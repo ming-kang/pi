@@ -152,8 +152,15 @@ describe("session-owned background host", () => {
 		const notification = notifications[0];
 		if (notification.type !== "custom_message") throw new Error("expected notification");
 		expect(notification.customType).toBe("background-completion");
-		expect(notification.details).toEqual({ taskId: execution.id });
-		expect(Buffer.byteLength(String(notification.content))).toBeLessThanOrEqual(50 * 1024);
+		expect(notification.details).toMatchObject({
+			version: 1,
+			taskId: execution.id,
+			kind: "subagent",
+			status: "completed",
+			startedAt: expect.any(Number),
+			endedAt: expect.any(Number),
+		});
+		expect(Buffer.byteLength(String(notification.content))).toBeLessThanOrEqual(48 * 1024);
 		expect(session.background.pendingNotifications()).toHaveLength(0);
 		await session.background.read(execution.id);
 		await session.background.wait(execution.id, 0);
@@ -319,7 +326,7 @@ describe("session-owned background host", () => {
 		await session.navigateTree(root);
 		await session.reload();
 		expect(session.background.list()).toEqual([]);
-		const invalid = [null, { version: 2, task: snapshot }, { version: 1, task: { ...snapshot, status: "running" } }];
+		const invalid = [null, { version: 1, task: snapshot }, { version: 2, task: { ...snapshot, status: "running" } }];
 		for (const record of invalid) session.sessionManager.appendCustomEntry("background-task-result", record);
 		session.sessionManager.appendCustomEntry("unrelated", { version: 1, task: snapshot });
 		await session.reload();
@@ -343,7 +350,7 @@ describe("session-owned background host", () => {
 		const snapshot = session.background.get(execution.id);
 		for (let index = 0; index < 40; index++) {
 			session.sessionManager.appendCustomEntry("background-task-result", {
-				version: 1,
+				version: 2,
 				task: { ...snapshot, id: `subagent-history-${index}`, endedAt: snapshot.endedAt! + index + 1 },
 			});
 		}

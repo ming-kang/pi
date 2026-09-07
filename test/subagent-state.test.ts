@@ -70,6 +70,7 @@ describe("subagent run state reducer", () => {
 		expect(created.id).toBe("subagent-1");
 		const details = toRunDetails(created);
 		expect(details).not.toHaveProperty("version");
+		expect(details).not.toHaveProperty("reportTruncated");
 		expect(details).toEqual({
 			id: "subagent-1",
 			agent: "explorer",

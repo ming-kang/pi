@@ -1,14 +1,15 @@
 import { randomUUID } from "node:crypto";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
 import { parseBackgroundHistory } from "./history.ts";
 import { BACKGROUND_TITLE_BYTES, boundedResult, boundText, finiteLimit, readOutputSlice, sliceText } from "./output.ts";
+import { readBackgroundProjection } from "./presentation.ts";
 import {
 	type BackgroundCompletion,
 	type BackgroundContext,
 	type BackgroundControl,
 	type BackgroundExecution,
 	BackgroundExecutionError,
-	type BackgroundProjection,
 	type BackgroundRead,
 	type BackgroundServiceOptions,
 	type BackgroundTask,
@@ -45,20 +46,16 @@ function errorText(error: unknown): string {
 	}
 }
 
-function projectionSnapshot(projection: BackgroundProjection): BackgroundProjection {
-	return {
-		text: projection.text === undefined ? undefined : boundText(projection.text, 16 * 1024),
-		workers: projection.workers?.slice(0, 8).map((worker) => ({
-			id: boundText(worker.id, 256),
-			label: boundText(worker.label, 512),
-			status: boundText(worker.status, 128),
-			prompt: boundText(worker.prompt, 4096),
-			activity: boundText(worker.activity, 4096),
-			outcome: boundText(worker.outcome, 4096),
-			model: worker.model === undefined ? undefined : boundText(worker.model, 256),
-			usage: worker.usage === undefined ? undefined : boundText(worker.usage, 256),
-		})),
-	};
+function storeResult(task: BackgroundTask, result: AgentToolResult<unknown>, truncated = false): void {
+	const bounded = boundedResult(result);
+	task.result = bounded;
+	task.resultTruncated =
+		truncated ||
+		bounded.content.length !== result.content.length ||
+		bounded.content.some((block, index) => {
+			const original = result.content[index];
+			return original?.type !== "text" || block.type !== "text" || block.text !== original.text;
+		});
 }
 
 /** Session-local supervision. Executors own their processes, workers and output files. */
@@ -88,7 +85,7 @@ export class BackgroundService implements BackgroundContext {
 	}
 
 	/**
-	 * Rehydrate terminal version-1 custom data only, newest endedAt first (later input
+	 * Rehydrate terminal version-2 custom data only, newest endedAt first (later input
 	 * wins ties). Existing runtime records win ID collisions. No execution, accounting,
 	 * notification, or deletion ownership is restored, including for worker projections.
 	 * The host supplies the current branch; closed services ignore restoration.
@@ -182,6 +179,8 @@ export class BackgroundService implements BackgroundContext {
 			status: "queued",
 			startedAt: Date.now(),
 			command: execution.command === undefined ? undefined : boundText(execution.command, 8192),
+			commandTruncated:
+				execution.command === undefined ? undefined : boundText(execution.command, 8192) !== execution.command,
 			cwd: execution.cwd === undefined ? undefined : boundText(execution.cwd, 4096),
 		};
 		let resolveCaller!: (outcome: BackgroundToolOutcome<T>) => void;
@@ -254,9 +253,9 @@ export class BackgroundService implements BackgroundContext {
 			},
 			publish: (result, projection) => {
 				if (record.settled || this.closed) return;
-				task.result = boundedResult(result);
+				storeResult(task, result);
 				if (result.usage !== undefined) record.publishedUsage = structuredClone(result.usage);
-				if (projection) task.projection = projectionSnapshot(projection);
+				if (projection) task.projection = readBackgroundProjection(projection);
 				if (!record.detachRequested && !record.handedOff) {
 					try {
 						onUpdate?.(result);
@@ -295,15 +294,19 @@ export class BackgroundService implements BackgroundContext {
 							? "failed"
 							: "completed");
 			if (completion) {
-				task.result = boundedResult(completion.result);
+				storeResult(task, completion.result);
 				if (completion.error !== undefined) task.error = boundText(completion.error, 4096);
 			}
 			if (failed) {
 				task.error = errorText(error);
-				task.result = boundedResult({
-					content: [{ type: "text", text: task.error }, ...(task.result?.content ?? [])],
-					details: task.result?.details,
-				});
+				storeResult(
+					task,
+					{
+						content: [{ type: "text", text: task.error }, ...(task.result?.content ?? [])],
+						details: task.result?.details,
+					},
+					task.resultTruncated,
+				);
 			}
 			let settlementWarning: string | undefined;
 			try {
@@ -315,10 +318,14 @@ export class BackgroundService implements BackgroundContext {
 				const warning = `Usage settlement failed: ${errorText(accountingError)}`;
 				settlementWarning = warning;
 				task.error = boundText([task.error, warning].filter(Boolean).join("\n"), 8192);
-				task.result = boundedResult({
-					content: [{ type: "text", text: warning }, ...(task.result?.content ?? [])],
-					details: task.result?.details,
-				});
+				storeResult(
+					task,
+					{
+						content: [{ type: "text", text: warning }, ...(task.result?.content ?? [])],
+						details: task.result?.details,
+					},
+					task.resultTruncated,
+				);
 			}
 			record.publishedUsage = undefined;
 			record.accounted = true;

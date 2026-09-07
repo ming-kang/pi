@@ -4,11 +4,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 export const BACKGROUND_RESULT_BYTES = 48 * 1024;
 export const BACKGROUND_DETAILS_BYTES = 120 * 1024;
 export const BACKGROUND_READ_BYTES = 8 * 1024;
-/**
- * Task title budget. The completion-card parser's `Output:` scan window in
- * extensions/background/completion-render.ts must stay in sync with this bound:
- * a real path line lands inside the window only because titles cannot exceed it.
- */
+/** Task title budget, independent of notification wording and rendering. */
 export const BACKGROUND_TITLE_BYTES = 1024;
 
 export function finiteLimit(value: number | undefined, fallback: number, ceiling: number): number {

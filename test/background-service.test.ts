@@ -479,7 +479,9 @@ describe("bounded lifecycle and snapshots", () => {
 				status: huge,
 				prompt: huge,
 				activity: huge,
-				outcome: huge,
+				profile: huge,
+				description: huge,
+				report: { text: huge, truncated: false },
 			})),
 		});
 		const snapshot = bg.get(item.control.id);

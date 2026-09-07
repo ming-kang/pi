@@ -16,6 +16,7 @@ export interface ManagedShellExecution {
 
 interface ShellExecutionOptions {
 	operations: BashOperations;
+	shellName: string;
 	context: BashSpawnContext;
 	tempFilePrefix: string;
 	timeout?: number;
@@ -107,6 +108,10 @@ export async function runShellCommand(
 		if (managed) {
 			managed.control.publish(result, {
 				text: truncateTail(snapshot?.content ?? "", { maxBytes: 16 * 1024 }).content,
+				shell: {
+					name: options.shellName,
+					output: { text: snapshot?.content ?? "", truncated: snapshot?.truncation.truncated ?? false },
+				},
 			});
 		} else options.onUpdate?.(result);
 	};
@@ -193,7 +198,8 @@ export async function runShellCommand(
 		acceptingOutput = false;
 		output.finish();
 		clearUpdateTimer();
-		emitOutputUpdate();
+		if (managed) publish(snapshot());
+		else emitOutputUpdate();
 		const final = snapshot();
 		await output.closeTempFile();
 		// Final progress/cleanup can re-enter handoff. Classify policy cancellation

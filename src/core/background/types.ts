@@ -6,22 +6,64 @@ export type BackgroundMode = "foreground" | "background";
 export type BackgroundTerminalStatus = "completed" | "partial" | "failed" | "cancelled" | "timeout";
 export type BackgroundStatus = "queued" | "running" | "stopping" | BackgroundTerminalStatus;
 
-/** A serializable, domain-owned projection. No extension-private renderer imports. */
-export interface BackgroundWorker {
+/** A bounded snapshot; truncation is recorded at the source, never inferred from text. */
+export interface BackgroundText {
+	text: string;
+	truncated: boolean;
+}
+
+export interface BackgroundWorkerReport {
 	id: string;
 	label: string;
+	profile: string;
+	description: string;
 	status: string;
+	report: BackgroundText;
+	error?: string;
+}
+
+/** A serializable, domain-owned projection. No extension-private renderer imports. */
+export interface BackgroundWorker extends BackgroundWorkerReport {
 	prompt: string;
 	activity: string;
-	outcome: string;
 	model?: string;
 	usage?: string;
 }
 
 export interface BackgroundProjection {
 	text?: string;
+	shell?: { name: string; output: BackgroundText };
 	workers?: BackgroundWorker[];
 }
+
+interface BackgroundCompletionBase {
+	version: 1;
+	taskId: string;
+	title: string;
+	status: BackgroundTerminalStatus;
+	startedAt: number;
+	endedAt: number;
+	error?: string;
+}
+
+/** Self-contained completion-message details. No live handles, tool-private details or accounting. */
+export type BackgroundCompletionSnapshot = BackgroundCompletionBase &
+	(
+		| {
+				kind: "bash";
+				shell?: string;
+				command?: BackgroundText;
+				cwd?: string;
+				outputPath?: string;
+				output: BackgroundText;
+		  }
+		| {
+				kind: "subagent";
+				workers: BackgroundWorkerReport[];
+				/** Plain fallback when an executor has no worker projection. */
+				output?: BackgroundText;
+		  }
+	);
 
 export interface BackgroundTask {
 	id: string;
@@ -34,10 +76,12 @@ export interface BackgroundTask {
 	startedAt: number;
 	endedAt?: number;
 	command?: string;
+	commandTruncated?: boolean;
 	cwd?: string;
 	outputPath?: string;
 	projection?: BackgroundProjection;
 	result?: AgentToolResult<unknown>;
+	resultTruncated?: boolean;
 	error?: string;
 }
 

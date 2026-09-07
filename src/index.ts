@@ -28,6 +28,7 @@ export { readStoredCredential } from "./core/auth-storage.ts";
 export { BackgroundService } from "./core/background/service.ts";
 export type {
 	BackgroundCompletion,
+	BackgroundCompletionSnapshot,
 	BackgroundContext,
 	BackgroundControl,
 	BackgroundExecution,
@@ -39,8 +40,10 @@ export type {
 	BackgroundStatus,
 	BackgroundTask,
 	BackgroundTerminalStatus,
+	BackgroundText,
 	BackgroundToolOutcome,
 	BackgroundWorker,
+	BackgroundWorkerReport,
 } from "./core/background/types.ts";
 // Compaction
 export {

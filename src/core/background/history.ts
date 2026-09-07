@@ -6,7 +6,10 @@ import {
 	boundedResult,
 	boundText,
 } from "./output.ts";
-import type { BackgroundTask, BackgroundWorker } from "./types.ts";
+import { readBackgroundProjection } from "./presentation.ts";
+import type { BackgroundTask } from "./types.ts";
+
+export const BACKGROUND_HISTORY_VERSION = 2;
 
 /** Read persisted data properties only; never invoke getters or custom serialization. */
 function dataObject(value: unknown): Record<string, unknown> {
@@ -64,7 +67,7 @@ function historyDetails(value: unknown): unknown {
 export function parseBackgroundHistory(record: unknown): BackgroundTask | undefined {
 	try {
 		const envelope = dataObject(record);
-		if (field(envelope, "version") !== 1) return undefined;
+		if (field(envelope, "version") !== BACKGROUND_HISTORY_VERSION) return undefined;
 		const source = dataObject(field(envelope, "task"));
 		const kind = field(source, "kind");
 		const mode = field(source, "mode");
@@ -112,32 +115,15 @@ export function parseBackgroundHistory(record: unknown): BackgroundTask | undefi
 			const value = field(source, key);
 			if (value !== undefined) task[key] = historyString(value, bytes, key === "outputPath");
 		}
+		for (const key of ["commandTruncated", "resultTruncated"] as const) {
+			const value = field(source, key);
+			if (value !== undefined && typeof value !== "boolean") return undefined;
+			task[key] = value;
+		}
+		if (task.command !== undefined && task.command !== field(source, "command")) task.commandTruncated = true;
 		const projection = field(source, "projection");
 		if (projection !== undefined) {
-			const object = dataObject(projection);
-			const text = field(object, "text");
-			const workers = field(object, "workers");
-			task.projection = {};
-			if (text !== undefined) task.projection.text = historyString(text, 16 * 1024);
-			if (workers !== undefined) {
-				if (!Array.isArray(workers)) return undefined;
-				task.projection.workers = Array.from({ length: Math.min(workers.length, 8) }, (_, index) => {
-					const worker = dataObject(field(workers, String(index)));
-					const snapshot: BackgroundWorker = {
-						id: historyString(field(worker, "id"), 256),
-						label: historyString(field(worker, "label"), 512),
-						status: historyString(field(worker, "status"), 128),
-						prompt: historyString(field(worker, "prompt"), 4096),
-						activity: historyString(field(worker, "activity"), 4096),
-						outcome: historyString(field(worker, "outcome"), 4096),
-					};
-					for (const key of ["model", "usage"] as const) {
-						const value = field(worker, key);
-						if (value !== undefined) snapshot[key] = historyString(value, 256);
-					}
-					return snapshot;
-				});
-			}
+			task.projection = readBackgroundProjection(projection);
 		}
 		const result = field(source, "result");
 		if (result !== undefined) {
@@ -150,13 +136,14 @@ export function parseBackgroundHistory(record: unknown): BackgroundTask | undefi
 				const block = dataObject(field(blocks, String(index)));
 				const type = field(block, "type");
 				if (type !== "text" && type !== "image") return undefined;
+				const original = type === "text" ? field(block, "text") : undefined;
 				const text =
-					type === "text"
-						? historyString(field(block, "text"), remaining)
-						: "[Image omitted from background history]";
+					type === "text" ? historyString(original, remaining) : "[Image omitted from background history]";
+				if (text !== original) task.resultTruncated = true;
 				content.push({ type: "text", text });
 				remaining -= Math.max(1, Buffer.byteLength(text));
 			}
+			if (content.length < blocks.length) task.resultTruncated = true;
 			task.result = boundedResult({ content, details: historyDetails(field(object, "details")) });
 		}
 		return task;

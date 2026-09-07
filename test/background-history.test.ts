@@ -65,7 +65,7 @@ afterEach(() => {
 
 function savedTask(id = "bash-restored", endedAt = 20, overrides: Partial<BackgroundTask> = {}) {
 	return {
-		version: 1,
+		version: 2,
 		task: {
 			id,
 			kind: "bash",
@@ -126,7 +126,7 @@ describe("terminal history restoration", () => {
 		await bg.cancelOutsideBranch(new Set(["A"]));
 		bg.restoreHistory([
 			savedTask("bash-history-A", 20, { anchorId: "A" }),
-			{ version: 1, task: bg.get(terminal.control.id) },
+			{ version: 2, task: bg.get(terminal.control.id) },
 		]);
 		expect(
 			bg
@@ -226,7 +226,7 @@ describe("terminal history restoration", () => {
 	it("ignores malformed, nonterminal and malicious records without invoking callbacks", () => {
 		const bg = service();
 		const getter = vi.fn(() => "completed");
-		const malformed: unknown[] = [null, 7, [], {}, { version: 2, task: savedTask().task }];
+		const malformed: unknown[] = [null, 7, [], {}, { version: 3, task: savedTask().task }];
 		for (const [key, value] of [
 			["kind", "worker"],
 			["mode", "detached"],
@@ -251,8 +251,8 @@ describe("terminal history restoration", () => {
 			["projection", { workers: [null] }],
 			["result", { content: [null] }],
 		] as const)
-			malformed.push({ version: 1, task: { ...savedTask().task, [key]: value } });
-		malformed.push({ version: 1, task: Object.defineProperty(savedTask().task, "status", { get: getter }) });
+			malformed.push({ version: 2, task: { ...savedTask().task, [key]: value } });
+		malformed.push({ version: 2, task: Object.defineProperty(savedTask().task, "status", { get: getter }) });
 		bg.restoreHistory(malformed);
 		expect(bg.list()).toEqual([]);
 		expect(getter).not.toHaveBeenCalled();
@@ -268,7 +268,9 @@ describe("terminal history restoration", () => {
 			status: huge,
 			prompt: huge,
 			activity: huge,
-			outcome: huge,
+			profile: huge,
+			description: huge,
+			report: { text: huge, truncated: false },
 			model: huge,
 			usage: huge,
 		};

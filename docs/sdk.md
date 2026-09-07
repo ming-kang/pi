@@ -303,6 +303,8 @@ try {
 
 For a longer-lived embedding, keep the host alive, subscribe to snapshots and choose bounded waits or release notification delivery according to your model-turn policy. Do not use a panel or repeated reads as the billing or cleanup mechanism.
 
+Automatic completion messages carry a version-1 `BackgroundCompletionSnapshot` in `details`, with independent shell output or worker reports, diagnostics and explicit truncation flags. This snapshot is self-contained for transcript replay and is not sent to the model; `content` contains the separately bounded prose generated from it. Current terminal history uses version-2 `background-task-result` records, with no migration of earlier result records. The usage ledger remains independent. See [Background records](session-format.md#background-records).
+
 `executionRole: "subagent"` on `createAgentSession()` is a trusted host-assigned identity, not a model argument. It prevents enabling Background even through `bindExtensions`; built-in workers also receive a no-background prompt rule. Their shared shell schema retains the optional flag but runtime requests for `background: true` are rejected before startup. Foreground shell access remains normal. This capability restriction is not an OS sandbox.
 
 Reload, replacement/fork, shutdown and branch navigation enforce the [Background lifetime rules](bundled/extensions/background.md#lifetime). Saved terminal branch history is observational only: no live processes/workers resume, and restoration does not replay accounting or completion events. Managed logs expire with their runtime records; save anything needed before eviction or shutdown.

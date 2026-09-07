@@ -252,7 +252,12 @@ export class BackgroundTasksMenu implements Component, Focusable {
 					worker.activity || "—",
 					"",
 					"Outcome",
-					worker.outcome || "Still running…",
+					...(worker.error ? [`Error: ${worker.error}`] : []),
+					worker.report.text ||
+						(worker.status === "queued" || worker.status === "running"
+							? "Still running…"
+							: "No report returned."),
+					...(worker.report.truncated ? ["[Saved report truncated.]"] : []),
 				].join("\n");
 			} else {
 				metadata.push(task.command ?? task.title);

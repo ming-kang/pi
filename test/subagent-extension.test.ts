@@ -276,6 +276,36 @@ function managedHarness(enabled = true) {
 	return { tool, ctx, service, execute, settled, shutdown };
 }
 
+it.each([false, true])("keeps report truncation provenance outside tool details, clipped=%s", async (clipped) => {
+	runSdkTaskMock.mockReset();
+	const report = clipped ? "界".repeat(50000) : "[Output truncated.]\nSubagent failed: example";
+	runSdkTaskMock.mockImplementation(async (options: SdkRunnerOptions) => {
+		options.dispatch({
+			type: "settle",
+			verdict: clipped ? "failed" : "completed",
+			report,
+			error: clipped ? "Independent failure reason" : undefined,
+			endedAt: Date.now(),
+		});
+	});
+	const h = managedHarness();
+	try {
+		await h.tool.execute("projection", { tasks: [{ prompt: "Inspect task" }] }, undefined, undefined, h.ctx);
+		const task = h.service.list()[0]!;
+		const projected = task.projection?.workers?.[0];
+		expect(projected).toMatchObject({
+			profile: "explorer",
+			description: "Inspect task",
+			report: { truncated: clipped },
+		});
+		expect(projected?.error).toBe(clipped ? "Independent failure reason" : undefined);
+		if (!clipped) expect(projected?.report.text).toBe(report);
+		expect((task.result?.details as SubagentDetails).runs[0]).not.toHaveProperty("reportTruncated");
+	} finally {
+		await h.service.shutdown();
+	}
+});
+
 it.each([true, false])(
 	"manages one entire invocation, background=%s, without restarting workers on detach",
 	async (background) => {
@@ -338,6 +368,11 @@ it.each([true, false])(
 		workers[6]!.finish();
 		const final = await h.service.wait(initial.id, 1000);
 		expect(final.status).toBe("completed");
+		expect(final.projection?.workers?.[0]).toMatchObject({
+			profile: "explorer",
+			description: expect.any(String),
+			report: { text: "task 0", truncated: false },
+		});
 		expect(final.projection?.workers?.map((worker) => worker.id)).toEqual(
 			initial.projection?.workers?.map((worker) => worker.id),
 		);

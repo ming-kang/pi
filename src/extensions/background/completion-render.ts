@@ -6,7 +6,8 @@ import {
 	truncateToWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { BACKGROUND_TITLE_BYTES } from "../../core/background/output.ts";
+import { readBackgroundCompletion } from "../../core/background/presentation.ts";
+import type { BackgroundTerminalStatus } from "../../core/background/types.ts";
 import type { MessageRenderOptions } from "../../core/extensions/types.ts";
 import type { CustomMessage } from "../../core/messages.ts";
 import { ToolChromeComponent } from "../../modes/interactive/components/tool-chrome.ts";
@@ -18,25 +19,26 @@ const CARD_ROWS = 128;
 const OUTPUT_ROWS = 20;
 const REPORT_ROWS = 24;
 
-type Status = "completed" | "partial" | "failed" | "cancelled" | "timeout";
 interface WorkerReport {
 	index: number;
 	description: string;
 	profile: string;
 	status: string;
 	report: string;
+	error?: string;
+	truncated: boolean;
 }
 interface CompletionView {
 	kind?: "bash" | "subagent";
-	status?: Status;
+	status?: BackgroundTerminalStatus;
 	id?: string;
-	title?: string;
+	shell?: string;
 	command?: string;
+	cwd?: string;
 	path?: string;
 	diagnostic?: string;
 	body: string;
 	workers?: WorkerReport[];
-	ambiguous?: boolean;
 	truncated: boolean;
 }
 
@@ -74,137 +76,46 @@ function savedText(message: CustomMessage<unknown>): { text: string; clipped: bo
 	return { text: clean(text), clipped };
 }
 
-const WORKER_HEADER = /^### ([1-8])\. (.+) \((explorer|general)\) — (completed|failed|aborted|queued|running)$/;
-
-/** Only split the known, consecutive envelope headings, outside Markdown fences. */
-function workerReports(body: string, expected: number): WorkerReport[] | undefined {
-	const lines = body.split("\n");
-	const first = WORKER_HEADER.exec(lines[0] ?? "");
-	if (!first || first[1] !== "1") return undefined;
-	const headings: { at: number; end: number; match: RegExpExecArray }[] = [{ at: 0, end: lines.length, match: first }];
-	let fence: { char: string; length: number } | undefined;
-	for (let i = 1; i < lines.length; i++) {
-		const line = lines[i]!;
-		const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-		if (marker) {
-			const token = marker[1]!;
-			if (!fence) fence = { char: token[0]!, length: token.length };
-			else if (token[0] === fence.char && token.length >= fence.length && !marker[2]?.trim()) fence = undefined;
-			continue;
-		}
-		if (fence) continue;
-		const match = WORKER_HEADER.exec(line);
-		if (!match) continue;
-		if (
-			Number(match[1]) !== headings.length + 1 ||
-			lines[i - 1] !== "" ||
-			lines[i - 2] !== "---" ||
-			lines[i - 3] !== ""
-		)
-			return undefined;
-		headings[headings.length - 1]!.end = i - 3;
-		headings.push({ at: i, end: lines.length, match });
+function completionView(message: CustomMessage<unknown>): CompletionView {
+	const snapshot = readBackgroundCompletion(message.details);
+	if (!snapshot) {
+		const { text, clipped } = savedText(message);
+		return { body: text, truncated: clipped };
 	}
-	if (headings.length !== expected) return undefined;
-	// An open fence at end of body hid structure from the scan; without length
-	// prefixes the honest answer is the neutral fallback. (A fake heading that
-	// closes its own fence still parses — text reparsing has a residual
-	// ambiguity surface; only a structured snapshot removes it.)
-	if (fence) return undefined;
-	return headings.map(({ at, end, match }) => ({
-		index: Number(match[1]),
-		description: match[2]!,
-		profile: match[3]!,
-		status: match[4]!,
-		report: lines
-			.slice(at + 1, end)
-			.join("\n")
-			.trim(),
-	}));
-}
-
-function finalDiagnostic(body: string, status: Status): string | undefined {
-	const last = body.trimEnd().split("\n").at(-1)?.trim() ?? "";
-	if (status === "timeout" && /^Command timed out after \d+(?:\.\d+)? seconds$/.test(last)) return last;
-	if (status === "cancelled" && last === "Command aborted") return last;
-	if (
-		status === "failed" &&
-		/^(?:Command exited with code -?\d+|Command terminated without an exit code|Background command exceeded the 20 MiB output limit)$/.test(
-			last,
-		)
-	)
-		return last;
-	return undefined;
-}
-
-function parseCompletion(message: CustomMessage<unknown>): CompletionView {
-	const { text, clipped } = savedText(message);
-	const truncated = clipped || /\[(?:Notification truncated;|Output truncated[:.])/.test(text);
-	const fallback: CompletionView = { body: text, truncated };
-	const lines = text.split("\n");
-	const header =
-		/^Background (bash|subagent) ([\w-]{1,160}): (completed|partial|failed|cancelled|timeout) — (.*)$/.exec(
-			lines[0] ?? "",
-		);
-	if (!header) return fallback;
-	const details = message.details;
-	const savedId = details && typeof details === "object" && "taskId" in details ? details.taskId : undefined;
-	if (typeof savedId === "string" && savedId !== header[2]) return fallback;
-	const kind = header[1] as "bash" | "subagent";
-	const status = header[3] as Status;
 	const view: CompletionView = {
-		kind,
-		status,
-		id: header[2],
-		title: header[4],
-		body: lines.slice(1).join("\n").trim(),
-		truncated,
+		kind: snapshot.kind,
+		status: snapshot.status,
+		id: clean(snapshot.taskId),
+		body: "",
+		diagnostic: snapshot.error === undefined ? undefined : clean(snapshot.error),
+		truncated: false,
 	};
-	if (kind === "subagent") {
-		const count = /^Subagent · ([1-8]) tasks$/.exec(view.title ?? "");
-		if (lines[1] === "") {
-			view.body = lines.slice(2).join("\n").trim();
-			if (count) view.workers = workerReports(view.body, Number(count[1]));
-		}
-		return view;
-	}
-	// Titles can contain newlines. A path inside a command is ambiguous: don't guess.
-	// The window mirrors the producer's title bound (BACKGROUND_TITLE_BYTES), so the
-	// real path line always lands inside it; a look-alike line only adds ambiguity.
-	const boundaries: number[] = [];
-	let titleBytes = Buffer.byteLength(view.title ?? "");
-	for (let i = 1; i < lines.length && titleBytes <= BACKGROUND_TITLE_BYTES; i++) {
-		if (/^Output: (?:[A-Za-z]:[\\/]|\/|\\\\)/.test(lines[i]!)) boundaries.push(i);
-		titleBytes += 1 + Buffer.byteLength(lines[i]!);
-	}
-	if (boundaries.length === 1) {
-		const boundary = boundaries[0]!;
-		view.command = [view.title, ...lines.slice(1, boundary)].join("\n").replace(/^(?:bash|powershell):\s?/i, "");
-		view.path = lines[boundary]!.slice("Output: ".length);
-		view.body = lines
-			.slice(boundary + 1)
-			.join("\n")
-			.trimEnd();
-	} else if (!boundaries.length && lines[1] === "") {
-		view.command = (view.title ?? "").replace(/^(?:bash|powershell):\s?/i, "");
-		view.body = lines.slice(2).join("\n").trimEnd();
+	if (snapshot.kind === "bash") {
+		view.shell = snapshot.shell === undefined ? undefined : clean(snapshot.shell);
+		view.command = snapshot.command === undefined ? undefined : clean(snapshot.command.text);
+		view.cwd = snapshot.cwd === undefined ? undefined : clean(snapshot.cwd);
+		view.path = snapshot.outputPath === undefined ? undefined : clean(snapshot.outputPath);
+		view.body = clean(snapshot.output.text);
+		view.truncated = snapshot.output.truncated || snapshot.command?.truncated === true;
+	} else if (snapshot.workers.length) {
+		view.workers = snapshot.workers.map((worker, index) => ({
+			index: index + 1,
+			description: clean(worker.description),
+			profile: clean(worker.profile),
+			status: clean(worker.status),
+			report: clean(worker.report.text),
+			error: worker.error === undefined ? undefined : clean(worker.error),
+			truncated: worker.report.truncated,
+		}));
 	} else {
-		view.ambiguous = true;
-		view.body = text;
-	}
-	if (!view.ambiguous) {
-		view.diagnostic = finalDiagnostic(view.body, status);
-		if (view.diagnostic) view.body = view.body.trimEnd().slice(0, -view.diagnostic.length).trimEnd();
+		view.body = clean(snapshot.output?.text ?? "");
+		view.truncated = snapshot.output?.truncated ?? false;
 	}
 	return view;
 }
 
-function workerFailure(worker: WorkerReport): { reason: string; partial: string } | undefined {
-	if (worker.status !== "failed" && worker.status !== "aborted") return undefined;
-	const failure = /^(Subagent failed|Subagent aborted)(?:: |\.)([\s\S]*)$/.exec(worker.report);
-	if (!failure) return undefined;
-	const [reason = "", ...partial] = failure[2]!.split("\n\nPartial report:\n");
-	return { reason: reason.trim() || statusName(worker.status), partial: partial.join("\n\nPartial report:\n") };
+function failedWorker(worker: WorkerReport): boolean {
+	return !!worker.error || worker.status === "failed" || worker.status === "aborted" || worker.status === "cancelled";
 }
 
 function color(status: string | undefined): "success" | "error" | "warning" | "muted" {
@@ -214,7 +125,7 @@ function color(status: string | undefined): "success" | "error" | "warning" | "m
 	return "muted";
 }
 function statusName(status: string): string {
-	return status === "timeout" ? "Timed out" : status[0]!.toUpperCase() + status.slice(1);
+	return status === "timeout" ? "Timed out" : status ? status[0]!.toUpperCase() + status.slice(1) : "Unknown";
 }
 function shortId(id: string): string {
 	return id.replace(/^(bash|subagent)-(.{8}).+$/, "$1-$2");
@@ -259,9 +170,9 @@ class CompletionCard implements Component {
 			view.kind === "subagent"
 				? "Subagent"
 				: view.kind === "bash"
-					? /^powershell:/i.test(view.title ?? "")
-						? "PowerShell"
-						: "Bash"
+					? view.shell === "bash"
+						? "Bash"
+						: view.shell || "Shell"
 					: "Notification";
 		lines.push(
 			`${theme.fg("toolTitle", theme.bold(kind))}${theme.fg("muted", ` · Background ${status.toLowerCase()}`)}${view.id ? theme.fg("dim", ` · ${shortId(view.id)}`) : ""}`,
@@ -276,20 +187,18 @@ class CompletionCard implements Component {
 					),
 				);
 			if (view.diagnostic) lines.push(theme.fg(color(view.status), view.diagnostic));
-			else if (view.kind === "bash" && view.status === "failed" && !view.ambiguous) {
-				const last = view.body.trimEnd().split("\n").at(-1)?.trim();
-				if (last) lines.push(theme.fg("muted", `Last output: ${last}`));
-			}
-			const problem = view.workers?.find((worker) => workerFailure(worker));
+			const problem = view.workers?.find(failedWorker);
 			if (problem) {
-				const failure = workerFailure(problem)!;
-				lines.push(theme.fg(color(problem.status), `#${problem.index}: ${failure.reason.split("\n")[0]}`));
+				lines.push(
+					theme.fg(
+						color(problem.status),
+						`#${problem.index}: ${(problem.error || statusName(problem.status)).split("\n")[0]}`,
+					),
+				);
 			}
 		} else {
 			if (view.truncated) {
-				lines.push(
-					theme.fg("warning", "The saved notification is truncated; this is not the complete original output."),
-				);
+				lines.push(theme.fg("warning", "The saved result is truncated; this is not the complete original output."));
 			}
 			const section = (
 				title: string,
@@ -309,8 +218,11 @@ class CompletionCard implements Component {
 				for (const line of selected) lines.push(indent + line);
 				if (!tail && omitted) lines.push(theme.fg("dim", `${indent}… ${omitted} more display lines omitted`));
 			};
-			if (view.kind === "bash" && !view.ambiguous) {
+			if (view.kind === "subagent" && view.diagnostic)
+				section("Group result", view.diagnostic, 4, false, false, view.status === "failed");
+			if (view.kind === "bash") {
 				if (view.command) section("Command", view.command, 8);
+				if (view.cwd) section("Directory", view.cwd, 2);
 				section(
 					view.status === "failed" || view.status === "timeout" ? "Error" : "Result",
 					view.diagnostic ?? status,
@@ -319,13 +231,7 @@ class CompletionCard implements Component {
 					false,
 					view.status === "failed",
 				);
-				section(
-					"Output",
-					view.body === "(no output)" || !view.body.trim() ? "No output." : view.body,
-					OUTPUT_ROWS,
-					false,
-					true,
-				);
+				section("Output", !view.body.trim() ? "No output." : view.body, OUTPUT_ROWS, false, true);
 				if (view.path) section("Log", view.path, 4);
 			} else if (view.workers) {
 				const reportBudget = Math.min(REPORT_ROWS, Math.max(6, Math.floor(72 / view.workers.length)));
@@ -335,27 +241,21 @@ class CompletionCard implements Component {
 						`${theme.fg(color(worker.status), `${worker.status === "completed" ? "✓" : worker.status === "failed" ? "×" : "○"} #${worker.index} ${statusName(worker.profile)}`)}${theme.fg("muted", ` · ${statusName(worker.status)}`)}`,
 					);
 					lines.push(theme.fg("muted", `Task: ${worker.description}`));
-					const failure = workerFailure(worker);
-					if (failure) {
-						section("Reason", failure.reason, 2, false, false, worker.status === "failed");
-						if (failure.partial) section("Partial report", failure.partial, Math.max(3, reportBudget - 6), true);
-					} else
+					if (failedWorker(worker)) {
 						section(
-							"Report",
-							worker.report === "(Subagent completed but returned no output.)"
-								? "No report returned."
-								: worker.report || "No report returned.",
-							reportBudget,
-							true,
+							"Reason",
+							worker.error || statusName(worker.status),
+							2,
+							false,
+							false,
+							worker.status === "failed",
 						);
+						if (worker.report) section("Partial report", worker.report, Math.max(3, reportBudget - 6), true);
+					} else section("Report", worker.report || "No report returned.", reportBudget, true);
+					if (worker.truncated) lines.push(theme.fg("warning", "  Saved report truncated."));
 				}
 			} else {
-				section(
-					view.ambiguous ? "Saved details (format ambiguous)" : "Details",
-					view.body || "No text result.",
-					36,
-					view.kind !== "bash",
-				);
+				section("Details", view.body || "No text result.", 36, true);
 			}
 			if (view.id) {
 				lines.push("", ...wrapTextWithAnsi(`Task ID: ${view.id}`, inner).map((line) => theme.fg("dim", line)));
@@ -379,7 +279,7 @@ export function renderBackgroundCompletion(
 ): Component {
 	let view: CompletionView;
 	try {
-		view = parseCompletion(message);
+		view = completionView(message);
 	} catch {
 		view = {
 			body: "The saved notification could not be interpreted. Its original message remains in session history.",

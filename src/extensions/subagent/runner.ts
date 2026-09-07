@@ -1,4 +1,5 @@
 import { isRetryableAssistantError } from "@earendil-works/pi-ai/compat";
+import type { BackgroundProjection } from "../../core/background/types.ts";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
 import { emptyUsage, mergeUsage, toNestedUsage } from "./activity.ts";
 import { boundSubagentDetails, resultContent } from "./budget.ts";
@@ -14,6 +15,7 @@ import {
 	type SubagentRunEvent,
 	type SubagentRunState,
 	statusOf,
+	statusSummary,
 	toRunDetails,
 	versionSum,
 } from "./state.ts";
@@ -81,7 +83,7 @@ export interface SubagentInvocationOptions {
 	projectTrusted: boolean;
 	signal?: AbortSignal;
 	gate: ConcurrencyGate;
-	onUpdate?: (details: SubagentDetails) => void;
+	onUpdate?: (details: SubagentDetails, projection: BackgroundProjection) => void;
 	/** Whole-batch preflight and initial publication finished; no worker has started. */
 	onAccepted?: () => void;
 	onConfigWarning?: (message: string) => void;
@@ -98,10 +100,40 @@ function aggregateUsage(runs: readonly SubagentRunState[]): SubagentUsage {
 	return usage;
 }
 
+/** Capture report provenance before the tool-details budget can discard it. */
+function backgroundProjection(
+	runs: readonly SubagentRunState[],
+	tasks: readonly ResolvedSubagentTask[],
+	details: SubagentDetails,
+): BackgroundProjection {
+	return {
+		text: statusSummary(details),
+		workers: runs.map((run, index) => ({
+			id: run.id,
+			label: run.agent,
+			profile: run.agent,
+			description: run.description,
+			status: run.status,
+			prompt: tasks[index]?.prompt ?? run.description,
+			activity:
+				run.currentActivity ??
+				run.activities
+					.slice(-3)
+					.map((item) => item.summary)
+					.join("\n"),
+			report: { text: run.report, truncated: run.reportTruncated },
+			error: run.error,
+			model: `${run.model} · ${run.thinking}`,
+			usage: `${run.usage.totalTokens} tokens · $${run.usage.cost.toFixed(4)} · ${run.usage.toolUses} tool calls`,
+		})),
+	};
+}
+
 function emitDetails(
 	runs: SubagentRunState[],
+	tasks: readonly ResolvedSubagentTask[],
 	startedAt: number,
-	onUpdate: ((details: SubagentDetails) => void) | undefined,
+	onUpdate: SubagentInvocationOptions["onUpdate"],
 ): SubagentDetails {
 	const details: SubagentDetails = {
 		status: statusOf(runs),
@@ -109,7 +141,7 @@ function emitDetails(
 		startedAt,
 		usage: aggregateUsage(runs),
 	};
-	onUpdate?.(boundSubagentDetails(details));
+	onUpdate?.(boundSubagentDetails(details), backgroundProjection(runs, tasks, details));
 	return details;
 }
 
@@ -244,13 +276,13 @@ export async function runSubagentInvocation(options: SubagentInvocationOptions):
 			const version = versionSum(runs);
 			if (version === lastVersion) return;
 			lastVersion = version;
-			emitDetails(runs, startedAt, options.onUpdate);
+			emitDetails(runs, resolved, startedAt, options.onUpdate);
 		};
 		const dispatch = (index: number, event: SubagentRunEvent): void => {
 			runs[index] = reduceRun(runs[index]!, event);
 			progress();
 		};
-		let latestDetails = emitDetails(runs, startedAt, options.onUpdate);
+		let latestDetails = emitDetails(runs, resolved, startedAt, options.onUpdate);
 
 		// Every task runs concurrently through the shared gate; Promise.all keeps
 		// result order identical to input order. There is no single-task branch:
@@ -267,13 +299,14 @@ export async function runSubagentInvocation(options: SubagentInvocationOptions):
 			unregisterChildren();
 			for (const scope of scopes) scope.dispose();
 		}
-		latestDetails = emitDetails(runs, startedAt, undefined);
+		latestDetails = emitDetails(runs, resolved, startedAt, undefined);
 		latestDetails.endedAt = Date.now();
 		// Error classification lives in the tool_result handler (index.ts), the
 		// only channel that reaches the session transcript and export.
 		return {
 			content: resultContent(latestDetails),
 			details: boundSubagentDetails(latestDetails),
+			projection: backgroundProjection(runs, resolved, latestDetails),
 			usage: toNestedUsage(latestDetails.usage),
 		};
 	} finally {

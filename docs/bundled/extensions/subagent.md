@@ -83,7 +83,7 @@ Only `explorer` and `general` keys are valid. A malformed, unsupported, unreadab
 - A retryable failure that produced no turns or tool use may be retried at task level up to two more times. Runs with partial work are never restarted.
 - Retry backoff does not hold a concurrency slot; another queued worker can run while the failed task waits.
 - Cancellation of the owning execution interrupts queued and retrying workers immediately.
-- Background completion is delivered as one bounded group summary, with reports in input order, at a safe idle boundary after queued user work. `bg wait` can deliver the terminal result instead; repeated `bg read` calls do not trigger notifications or billing.
+- Background completion is delivered as one bounded group summary, with reports in input order, at a safe idle boundary after queued user work. Its saved card has independent profile/status/report/error fields and explicit report-truncation flags; report text is never reparsed as worker metadata. Every worker gets a bounded report share. `bg wait` can deliver the terminal result instead; repeated `bg read` calls do not trigger notifications or billing.
 - Managed worker usage settles through an independent persisted ledger, not through panel visits or result reads. Accrued usage from retries, failures, cancellations, and provider-supplied worker compaction is retained; missing provider usage is not fabricated. Worker tokens do not count as parent context occupancy.
 
 Child sessions share the parent's canonical model/authentication runtime, so extension-registered providers and current credentials do not need to be mirrored into a second runtime.

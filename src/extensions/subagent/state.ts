@@ -30,6 +30,8 @@ import type { ResolvedSubagentTask, SubagentDetails, SubagentRunDetails, ToolAct
 export interface SubagentRunState extends SubagentRunDetails {
 	/** Monotonic per-run revision; bumped by every applied event. */
 	version: number;
+	/** Presentation provenance; excluded from the foreground tool's details. */
+	reportTruncated: boolean;
 }
 
 /** The adapter layer's only output and the reducer's only input. */
@@ -107,6 +109,7 @@ export function createRunState(
 		status: "queued",
 		activities: [],
 		report: "",
+		reportTruncated: false,
 		usage: emptyUsage(),
 		version: 0,
 	};
@@ -114,7 +117,7 @@ export function createRunState(
 
 /** Strips internal fields for projection into the public details shape. */
 export function toRunDetails(state: SubagentRunState): SubagentRunDetails {
-	const { version: _version, ...details } = state;
+	const { version: _version, reportTruncated: _reportTruncated, ...details } = state;
 	return details;
 }
 
@@ -254,6 +257,7 @@ function handleRetryScheduled(
 	draft.startedAt = undefined;
 	draft.endedAt = undefined;
 	draft.report = "";
+	draft.reportTruncated = false;
 	draft.activities = [];
 	draft.usage.turns = 0;
 	draft.usage.toolUses = 0;
@@ -357,6 +361,7 @@ function handleCompactionEnded(
 function handleSettle(draft: SubagentRunState, event: Extract<SubagentRunEvent, { type: "settle" }>): void {
 	draft.status = event.verdict;
 	draft.report = boundText(event.report, TASK_OUTPUT_LIMIT);
+	draft.reportTruncated = draft.report !== event.report;
 	draft.error = event.error ? boundText(event.error, ERROR_TEXT_LIMIT) : undefined;
 	draft.endedAt = event.endedAt;
 	draft.retry = undefined;

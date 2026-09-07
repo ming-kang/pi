@@ -16,6 +16,8 @@ Background execution has three ownership boundaries:
 
 Keep execution settlement, message delivery, and history retention distinct. A wait ending does not stop execution, a returned result is not yet a persisted acknowledgement, and hiding a branch does not deliver its pending completions. Delivered history can be released and restored from the selected branch; pending results, pins, and active reads share a separate allowance within the service's total retention bound.
 
+`src/core/background/presentation.ts` owns the bounded public projection and terminal completion-message contract. Executors publish separate output/report/error fields and source truncation flags; the session produces both the model prose and self-contained card details from those facts. The background extension owns rendering and never decodes another extension's private tool details. History uses result-record version 2; completion details use version 1. There is one decoder for each current format, no text reconstruction or migration. Accounting remains in the independent usage ledger.
+
 ## Local development
 
 Follow [`AGENTS.md`](../AGENTS.md), then install and verify a checkout:

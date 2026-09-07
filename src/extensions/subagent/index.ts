@@ -10,7 +10,6 @@ import type { ParentModelContext } from "./resolve.ts";
 import { ConcurrencyGate, isSubagentError, runSubagentInvocation } from "./runner.ts";
 import { SubagentParamsSchema } from "./schema.ts";
 import { statusSummary } from "./state.ts";
-import { boundText } from "./text.ts";
 import type { SubagentDetails } from "./types.ts";
 
 export default function subagent(pi: ExtensionAPI): void {
@@ -39,49 +38,27 @@ export default function subagent(pi: ExtensionAPI): void {
 				usage: emptyUsage(),
 			};
 			const ordinals = new Map<string, number>();
-			const projection = (details: SubagentDetails): BackgroundProjection => ({
-				text: statusSummary(details),
-				workers: details.runs.map((run, index) => {
-					let ordinal = ordinals.get(run.id);
+			const projection = (view: BackgroundProjection): BackgroundProjection => ({
+				...view,
+				workers: view.workers?.map((worker) => {
+					let ordinal = ordinals.get(worker.id);
 					if (ordinal === undefined) {
 						ordinal = ++workerOrdinal;
-						ordinals.set(run.id, ordinal);
+						ordinals.set(worker.id, ordinal);
 					}
-					return {
-						id: run.id,
-						label: `#${ordinal} ${run.agent}`,
-						status: run.status,
-						model: boundText(`${run.model} · ${run.thinking}`, 512),
-						prompt: boundText(params.tasks[index]?.prompt ?? run.description, 4096),
-						activity: boundText(
-							run.currentActivity ??
-								run.activities
-									.slice(-3)
-									.map((item) => item.summary)
-									.join("\n"),
-							1024,
-						),
-						outcome: boundText(
-							[run.error, run.report].filter(Boolean).join("\n\n") ||
-								(run.status === "queued" || run.status === "running"
-									? "Still running…"
-									: "No outcome returned."),
-							4096,
-						),
-						usage: `${run.usage.totalTokens} tokens · $${run.usage.cost.toFixed(4)} · ${run.usage.toolUses} tool calls`,
-					};
+					return { ...worker, label: `#${ordinal} ${worker.profile}` };
 				}),
 			});
 			const run = async (
 				control?: BackgroundControl<SubagentDetails>,
 			): Promise<AgentToolResult<SubagentDetails>> => {
-				const update = (details: SubagentDetails): void => {
+				const update = (details: SubagentDetails, view?: BackgroundProjection): void => {
 					latest = details;
 					const result: AgentToolResult<SubagentDetails> = {
 						content: [{ type: "text", text: statusSummary(details) }],
 						details,
 					};
-					if (control) control.publish(result, projection(details));
+					if (control) control.publish(result, view ? projection(view) : undefined);
 					else onUpdate?.(result);
 				};
 				update(latest);
@@ -115,7 +92,7 @@ export default function subagent(pi: ExtensionAPI): void {
 					details: execution.details,
 					usage: execution.usage,
 				};
-				control?.publish(result, projection(execution.details));
+				control?.publish(result, projection(execution.projection));
 				return result;
 			};
 			if (!managed) return run();
