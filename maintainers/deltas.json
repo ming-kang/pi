@@ -225,6 +225,11 @@
 			]
 		},
 		{
+			"path": "src/core/tools/powershell.ts",
+			"category": "distribution",
+			"intent": "Prompt snippet describes the foreground/background modes supplied by the shared shell execution definition"
+		},
+		{
 			"path": "src/core/tools/read.ts",
 			"category": "ui",
 			"intent": "Explore toolGroup on the definition; fork rendering (muted range colors, group-summary expand hint) lives in renderers/read.ts"

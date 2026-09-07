@@ -13,6 +13,7 @@ There are two general options. You can either
 | Gondolin extension | Built-in tools and `!` commands | Local micro-VM isolation while keeping auth on host | See [`examples/extensions/gondolin/`](../examples/extensions/gondolin/). |
 | Plain Docker | Whole `pi` process in a local container | Simple local isolation | Provider API keys enter the container. |
 | OpenShell | Whole `pi` process in a policy-controlled sandbox | Local or remote managed sandbox | Requires an OpenShell gateway |
+| Docker Sandboxes | Whole `pi` process in a managed sandbox | Local isolation with provider keys kept on the host | Requires `sbx` and a kit image containing `@astralyn/pi`. |
 
 Extensions run wherever the `pi` process runs. If you run host `pi` with a tool-routing extension, other custom extension tools still run on the host unless they also delegate their operations.
 
@@ -109,3 +110,36 @@ openshell sandbox download pi-sandbox /workspace/repo ./repo-out
 OpenShell providers can keep raw model API keys outside the sandbox.
 When inference routing is configured, code inside the sandbox can call `https://inference.local`, and the gateway injects the configured provider credentials upstream.
 Configure Pi to use the corresponding OpenAI-compatible or Anthropic-compatible endpoint if you want model traffic to use this route.
+
+## Docker Sandboxes
+
+[Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) runs the whole `pi` process inside a managed sandbox. Its proxy can keep provider credentials on the host and substitute the real credential for a sentinel when requests leave the sandbox.
+
+Use the [community Pi kit](https://github.com/docker/sbx-kits-contrib/tree/main/pi) as a template for a local `./pi-kit`. Its published `docker.io/sbx/pi-kit` image installs upstream Pi. To use this distribution, change the kit's image build to install an exact `@astralyn/pi` version, build that image, and point the kit's `sandbox.image` at it.
+
+Store the credential on the host before creating the sandbox. For an Anthropic API key:
+
+```bash
+sbx secret set anthropic
+sbx run --kit ./pi-kit pi
+```
+
+For a Claude subscription token obtained with `claude setup-token`, use a custom credential binding instead of the `anthropic` service secret. If the service secret is already bound, remove that binding first so the proxy does not add both API-key and Bearer headers:
+
+```bash
+sbx secret rm anthropic
+sbx secret set-custom \
+  --host api.anthropic.com \
+  --env ANTHROPIC_OAUTH_TOKEN \
+  --placeholder 'sk-ant-oat01-{rand}'
+```
+
+`set-custom` reads the token from stdin. The sandbox receives an OAuth-shaped placeholder, and the proxy substitutes the real token on egress. Create a new sandbox after changing credential bindings. Authenticate on the host: running `/login` inside the sandbox writes a real token into its filesystem.
+
+Scripted use runs against the same sandbox:
+
+```bash
+sbx exec <sandbox-name> -- pi -p "list the failing tests"
+```
+
+See the kit documentation for image builds, credential options, egress policies, and version pinning.

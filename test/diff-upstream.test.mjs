@@ -11,10 +11,12 @@ import {
 } from "../scripts/diff-upstream.mjs";
 
 const runtimeDependencies = {
+	"@earendil-works/chord": "1.2.3",
 	"@earendil-works/pi-agent-core": "1.2.3",
 	"@earendil-works/pi-ai": "1.2.3",
 	"@earendil-works/pi-client": "1.2.3",
 	"@earendil-works/pi-protocol": "1.2.3",
+	"@earendil-works/pi-server": "1.2.3",
 	"@earendil-works/pi-tui": "1.2.3",
 };
 
@@ -50,7 +52,7 @@ function baseManifest() {
 	};
 }
 
-function createTestRepo({ sourceDependencies = runtimeDependencies } = {}) {
+function createTestRepo({ sourceDependencies = runtimeDependencies, sourceDevDependencies } = {}) {
 	const root = createTemporaryDirectory();
 
 	git(root, "init");
@@ -60,7 +62,12 @@ function createTestRepo({ sourceDependencies = runtimeDependencies } = {}) {
 
 	const sourceDir = join(root, "packages", "coding-agent");
 	mkdirSync(sourceDir, { recursive: true });
-	const sourcePackage = { name: "test-agent", version: "1.2.3", dependencies: sourceDependencies };
+	const sourcePackage = {
+		name: "test-agent",
+		version: "1.2.3",
+		dependencies: sourceDependencies,
+		...(sourceDevDependencies ? { devDependencies: sourceDevDependencies } : {}),
+	};
 	writeJson(join(sourceDir, "package.json"), sourcePackage);
 	for (const name of ["mod.txt", "drop.txt"]) {
 		writeFileSync(join(sourceDir, name), `${name}\n`);
@@ -89,7 +96,7 @@ function createTestRepo({ sourceDependencies = runtimeDependencies } = {}) {
 	}
 	writeFileSync(join(root, ".gitignore"), "maintainers/\nignored.txt\n");
 
-	git(root, "add", "-A");
+	git(root, "add", "--", "packages", ".gitignore", "package.json", "mod.txt", "drop.txt", "sub");
 	git(root, "commit", "-m", "root mapped");
 
 	const manifest = baseManifest();
@@ -254,6 +261,39 @@ describe("diff-upstream manifest and dependency validation", () => {
 		expect(installedResult.code).toBe(1);
 		expect(installedResult.stderr).toContain(
 			"npm-shrinkwrap.json installed version for @earendil-works/pi-client (1.2.4) does not match package.json (1.2.3)",
+		);
+	});
+
+	test("validates source-only upstream dependency ranges while requiring local runtime pins", () => {
+		const sourceDependencies = { ...runtimeDependencies };
+		const sourceDevDependencies = {};
+		for (const name of ["@earendil-works/pi-client", "@earendil-works/pi-protocol", "@earendil-works/pi-server"]) {
+			sourceDevDependencies[name] = sourceDependencies[name];
+			delete sourceDependencies[name];
+		}
+		const repo = createTestRepo({ sourceDependencies, sourceDevDependencies });
+		writeJson(join(repo.root, "maintainers", "deltas.json"), {
+			deltas: [{ path: "package.json", category: "distribution", intent: "Exact runtime dependencies" }],
+		});
+		const valid = invoke(repo.root, ["--check"]);
+		expect(valid.code, valid.stderr).toBe(0);
+
+		const packagePath = join(repo.root, "package.json");
+		const packageJson = readJson(packagePath);
+		delete packageJson.dependencies["@earendil-works/pi-server"];
+		writeJson(packagePath, packageJson);
+		expect(invoke(repo.root, ["--check"]).stderr).toContain(
+			"package.json dependency @earendil-works/pi-server must be an exact stable semver",
+		);
+
+		const incompatible = createTestRepo({
+			sourceDependencies,
+			sourceDevDependencies: { ...sourceDevDependencies, "@earendil-works/pi-server": "^2.0.0" },
+		});
+		const rejected = invoke(incompatible.root, ["--check"]);
+		expect(rejected.code).toBe(1);
+		expect(rejected.stderr).toContain(
+			"local dependency @earendil-works/pi-server@1.2.3 does not satisfy upstream coding-agent range ^2.0.0",
 		);
 	});
 });

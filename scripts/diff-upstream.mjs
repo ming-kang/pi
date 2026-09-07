@@ -15,9 +15,9 @@ const runtimeDependencyNames = [
 	"@earendil-works/pi-server",
 	"@earendil-works/pi-tui",
 ];
-// Upstream references pi-server only as a workspace sibling, so the baseline
-// package.json declares no dependency range for it; the exact-pin and
-// shrinkwrap gates above still apply.
+// v0.85.0 referenced pi-server only as a workspace sibling. Later baselines
+// declare the source-only remote runtime in devDependencies; validate those
+// ranges while keeping all seven distribution dependencies exactly pinned.
 const distributionOnlyRuntimeDependencyNames = ["@earendil-works/pi-server"];
 const manifestKeys = ["repository", "tag", "commit", "sourceSubtree", "sourceTree"];
 const deltaRequiredKeys = ["path", "category", "intent"];
@@ -344,7 +344,7 @@ function verifyRuntimeDependencies(upstreamPackage, manifest, failures, root) {
 			} else {
 				for (const dep of runtimeDependencyNames) {
 					const localVer = localVersions[dep];
-					const upstreamRange = upstreamPackage.dependencies[dep];
+					const upstreamRange = upstreamPackage.dependencies[dep] ?? upstreamPackage.devDependencies?.[dep];
 					if (upstreamRange === undefined && distributionOnlyRuntimeDependencyNames.includes(dep)) {
 						continue;
 					}

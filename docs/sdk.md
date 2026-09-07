@@ -186,7 +186,7 @@ unsubscribe = session.subscribe(() => {});
 
 ### Experimental Remote Sessions
 
-The `@astralyn/pi/client` subpath provides a lifecycle controller and transcript reducers for applications that connect to a remote Pi server. Transport and protocol primitives come from the exact `@earendil-works/pi-client` and `@earendil-works/pi-protocol` dependencies.
+The `@astralyn/pi/client` subpath provides a lifecycle controller and transcript reducers for applications that connect to a remote Pi server. It is available only in a source checkout under the `source` condition, together with `@astralyn/pi/experimental/plugin`; neither subpath is a published runtime export. See [Experimental remote harness](development.md#experimental-remote-harness). Transport and protocol primitives come from the exact `@earendil-works/pi-client` and `@earendil-works/pi-protocol` dependencies.
 
 ```typescript
 import { PiClient } from "@earendil-works/pi-client";

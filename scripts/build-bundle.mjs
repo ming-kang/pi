@@ -3,7 +3,7 @@
 /**
  * Bundles the executable entrypoints into self-contained single files with
  * esbuild, overwriting the tsc output at dist/cli.js and dist/rpc-entry.js.
- * The tsc output remains the SDK/library surface (dist/index.js, dist/client,
+ * The tsc output remains the stable SDK/library surface (dist/index.js and
  * .d.ts); only the two bin entrypoints and the image-resize worker are
  * bundled, so cold starts read one file instead of hundreds.
  *
@@ -57,6 +57,7 @@ const result = await esbuild.build({
 	target: "node22",
 	bundle: true,
 	splitting: false,
+	metafile: true,
 	// src/core/extensions/loader.ts switches user-extension loading to
 	// embedded virtualModules when this is defined.
 	define: { PI_BUNDLED_NODE: "true" },
@@ -73,6 +74,13 @@ const result = await esbuild.build({
 	},
 	logLevel: "silent",
 });
+
+const developmentOnlyInput = Object.keys(result.metafile.inputs).find((input) =>
+	/^src\/(?:client\/|experimental\/|cli\/experimental\/)/.test(input.replaceAll("\\", "/")),
+);
+if (developmentOnlyInput) {
+	throw new Error(`Published entrypoints must not import development-only source: ${developmentOnlyInput}`);
+}
 
 for (const warning of result.warnings) {
 	console.warn(`esbuild warning: ${warning.text} (${warning.location?.file}:${warning.location?.line})`);

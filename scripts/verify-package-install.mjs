@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, w
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
+import { createSourceEnvironment } from "./run-source.mjs";
 
 const [installSpec, expectedVersionArgument] = process.argv.slice(2);
 if (!installSpec) {
@@ -41,7 +42,14 @@ if (!npmCliPath) {
 	throw new Error("Run this verifier through `npm run verify:package-install -- <package-spec>`.");
 }
 const smokeEnvironment = {
-	...process.env,
+	...createSourceEnvironment(process.env, true),
+	HOME: installDirectory,
+	USERPROFILE: installDirectory,
+	XDG_CONFIG_HOME: join(installDirectory, "config"),
+	XDG_CACHE_HOME: join(installDirectory, "cache"),
+	PI_CODING_AGENT_DIR: join(installDirectory, "agent"),
+	PI_CODING_AGENT_SESSION_DIR: join(installDirectory, "sessions"),
+	PI_EXPERIMENTAL: "1",
 	NO_COLOR: "1",
 	PI_OFFLINE: "1",
 	PI_SKIP_VERSION_CHECK: "1",
@@ -86,16 +94,14 @@ try {
 	assertEqual(installedPackage.version, expectedVersion, "installed package version");
 	assertEqual(installedPackage.bin?.pi, "dist/cli.js", "installed pi binary target");
 	assertEqual(installedPackage.exports?.["./rpc-entry"]?.import, "./dist/rpc-entry.js", "installed RPC export target");
-	assertEqual(
-		installedPackage.exports?.["./client"]?.types,
-		"./dist/client/index.d.ts",
-		"installed client types target",
-	);
-	assertEqual(
-		installedPackage.exports?.["./client"]?.import,
-		"./dist/client/index.js",
-		"installed client export target",
-	);
+	for (const [subpath, source] of [
+		["./client", "./src/client/index.ts"],
+		["./experimental/plugin", "./src/experimental/plugin.ts"],
+	]) {
+		const entry = installedPackage.exports?.[subpath];
+		assertEqual(entry?.source, source, `${subpath} source target`);
+		assertEqual(Object.keys(entry).join(","), "source", `${subpath} export conditions`);
+	}
 
 	for (const packageName of expectedRuntimePackages) {
 		const expectedDependencyVersion = installedPackage.dependencies?.[packageName];
@@ -110,8 +116,6 @@ try {
 		"LICENSE",
 		"README.md",
 		"dist/cli.js",
-		"dist/client/index.d.ts",
-		"dist/client/index.js",
 		"dist/index.d.ts",
 		"dist/index.js",
 		"dist/rpc-entry.js",
@@ -167,6 +171,9 @@ try {
 		}
 	}
 	for (const forbiddenPath of [
+		"dist/client",
+		"dist/experimental",
+		"dist/cli/experimental",
 		"dist/extensions/biu",
 		"dist/extensions/plan",
 		"dist/extensions/rewind",
@@ -216,15 +223,36 @@ try {
 		throw new Error("CLI --list-models returned no output.");
 	}
 
-	execFileSync(
-		process.execPath,
-		[
-			"--input-type=module",
-			"--eval",
-			'const api = await import("@astralyn/pi"); if (typeof api.createAgentSession !== "function") throw new Error("createAgentSession export missing");',
-		],
-		{ cwd: installDirectory, env: smokeEnvironment, stdio: "inherit" },
+	const importCheckPath = join(installDirectory, "verify-imports.mjs");
+	writeFileSync(
+		importCheckPath,
+		`import assert from "node:assert/strict";
+import { createAgentSession } from "@astralyn/pi";
+
+assert.equal(typeof createAgentSession, "function");
+for (const subpath of ["@astralyn/pi/client", "@astralyn/pi/experimental/plugin"]) {
+	assert.throws(() => import.meta.resolve(subpath), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
+}
+`,
 	);
+	execFileSync(process.execPath, [importCheckPath], {
+		cwd: installDirectory,
+		env: smokeEnvironment,
+		stdio: "inherit",
+	});
+
+	const stableVersion = execFileSync(
+		process.execPath,
+		[bundledCliPath, "server", "--server-id", "invalid", "--version"],
+		{ cwd: installDirectory, encoding: "utf8", env: smokeEnvironment },
+	).trim();
+	assertEqual(stableVersion, expectedVersion, "published CLI ignores development-only server dispatch");
+	const rpcVersion = execFileSync(process.execPath, [join(packageDirectory, "dist", "rpc-entry.js"), "--version"], {
+		cwd: installDirectory,
+		encoding: "utf8",
+		env: smokeEnvironment,
+	}).trim();
+	assertEqual(rpcVersion, expectedVersion, "RPC entrypoint version");
 
 	console.log(`Verified clean installation of @astralyn/pi@${expectedVersion} from ${resolvedInstallSpec}.`);
 } finally {

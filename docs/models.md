@@ -600,11 +600,11 @@ For `api: "openai-responses"`, the compatible fields are `supportsDeveloperRole`
 | --- | --- |
 | `supportsDeveloperRole` | Uses `developer` rather than `system` for reasoning models. Default: `true`. |
 | `sessionAffinityFormat` | `openai` sends `session_id` and `x-client-request-id`; `openai-nosession` omits `session_id`; `openrouter` sends `x-session-id`. It does not change `prompt_cache_key`. |
-| `supportsLongCacheRetention` | Accepts `prompt_cache_retention: "24h"` for long cache retention. Default: `true`. |
+| `supportsLongCacheRetention` | Accepts long cache retention: `prompt_cache_options.ttl: "30m"` when `supportsExplicitPromptCacheMode` is enabled (including GPT-5.6+ Responses models), otherwise `prompt_cache_retention: "24h"`. Default: `true`. |
 | `supportsStrictMode` | Accepts strict JSON-schema function tools. Default: `false`. |
 | `supportsOpenAIGrammarTools` | Emits OpenAI Lark/regex grammar tools. Default: `false`. |
 | `supportsToolSearch` | Supports client-executed deferred tool search. Default: `false`. |
-| `supportsExplicitPromptCacheMode` | Accepts `prompt_cache_options: { mode: "explicit" }` when cache retention is `none`, which disables implicit prompt caching. Default: `false`. |
+| `supportsExplicitPromptCacheMode` | Accepts `prompt_cache_options: { mode: "explicit" }` when cache retention is `none`, which disables implicit prompt caching; long cache retention uses `{ ttl: "30m" }` when `supportsLongCacheRetention` is also enabled. Default: `false`. |
 
 The public Pi AI model type also exposes the Responses compatibility shape for `azure-openai-responses` and `openai-codex-responses`. The Azure transport uses `supportsDeveloperRole`, `supportsStrictMode`, and `supportsOpenAIGrammarTools`; the Codex transport uses `supportsStrictMode`, `supportsOpenAIGrammarTools`, and `supportsToolSearch`. Other Responses options do not alter those transports.
 

@@ -6,6 +6,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Added
 
+- Added inherited GPT-6 Astra support for OpenAI API keys and Codex subscriptions, plus the refreshed OpenRouter MAI-Image-2.6 and MAI-Image-2.6 Flash image catalog.
+- Added inherited five-times-faster Alt-wheel scrolling in fullscreen mode and documentation for running this distribution with a custom Docker Sandboxes kit.
 - Added session-owned Background execution for native `bash` and Windows `powershell` with `background: true`, plus a top-level `subagent.background` flag for whole invocation groups. Interactive Ctrl+B moves all eligible current foreground executions to the background without restarting commands/workers or resetting shell timeouts. Workers retain foreground shell access but cannot create background work: both their prompt and trusted execution-role checks enforce the restriction.
 - Exposed `ctx.background` supervision, snapshots, bounded reads/waits, cancellation, subscriptions, and history pins through the public Extension API. SDK sessions keep background execution disabled by default; interactive mode enables it, while embeddings can explicitly opt in and own host lifecycle. Built-in print, JSON, and RPC modes still reject background startup. See [Background](docs/bundled/extensions/background.md) and [SDK](docs/sdk.md#background-execution).
 - Added explicit `session.retryBackgroundNotifications()` recovery for failed completion delivery, retaining inspectable results without infinite timer retries. Late settlements from executors that ignore cancellation are quarantined on the originating session (latest 32 bounded in-memory records and a persisted `.background-late.jsonl` audit sidecar), excluded from active totals rather than automatically reconciled.
@@ -18,6 +20,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Changed
 
+- Followed upstream Pi `v0.85.1`, updating all seven exact `@earendil-works` runtime dependency pins to `0.85.1`.
+- Moved experimental server/client commands to the source development entrypoint (`npm run dev`). The `client` and `experimental/plugin` subpaths now resolve only under the `source` condition in a checkout; their implementations are excluded from the build and npm package. The local SDK and stdio RPC entrypoint remain supported, with installed-package checks for the stable/experimental boundary.
 - Improved `/bg` with explicit configurable list/preview focus, independent pane scrolling and paging, retained per-row preview positions, visible ranges and shell following/browsing state, and sticky diagnostics. Navigation and closing remain observation-only; stopping a worker still targets its whole group.
 - Redesigned the `/bg` panel as a fullscreen overlay in Pi's standard selector frame (horizontal rules, accent title, `→` accent selection). The list groups Running (newest started first) above Finished (newest ended first) and shows only marker, label, and runtime/age; status, id, highlighted command, directory, log path, and diagnostics moved to an aligned detail table above the scrollable output region. Worker Prompt/Outcome render as Markdown, stopping requires a `y` confirmation, and transcripts shorten log paths to file names in collapsed rows.
 - Unified execution status markers across `/bg`, background notifications and completion cards, and Subagent results via a shared status-marker vocabulary (spinner/`›` running, `✓` completed, red `×` failed, yellow `×` timeout, yellow `○` cancelled/stopping/partial — Subagent aborted now uses `○` instead of `■` — muted `○` queued, `!` waiting on input).
@@ -32,6 +36,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Fixed
 
+- Fixed inherited model and thinking selectors ignoring configured save shortcuts; added `app.thinking.save` (default Ctrl+S) and made selector hints reflect configured keys.
+- Fixed inherited autocomplete and settings lists changing selection and recentering on mouse hover.
+- Fixed inherited GPT-5.6+ Responses long-cache requests to send `prompt_cache_options.ttl: "30m"` instead of `prompt_cache_retention: "24h"`.
+- Adopted upstream's deterministic footer debounce tests and added source-entry checks on native Windows.
 - Fixed queued `nextTurn` context being lost when a background completion turn fails before or partway through persistence; only saved context is removed from the queue.
 - Fixed a full old branch history preventing `/bg` history restoration on another branch, and off-branch undelivered completions being evicted as ordinary history. Restored records now share the same bounded retention policy as live records.
 - Fixed Subagent calls starting unmanaged foreground workers through a closed Background host during runtime shutdown.
