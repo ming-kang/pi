@@ -192,7 +192,7 @@ export function renderBgResult(
 	}
 
 	const container = new Container();
-	container.addChild(new TruncatedText(resultSummaryLine(details, theme), 1, 0));
+	container.addChild(new TruncatedText(resultSummaryLine(details, theme, options.expanded), 1, 0));
 	if (options.expanded) {
 		const text = result.content.find((part) => part.type === "text")?.text ?? "";
 		container.addChild(new Text("", 0, 0));
@@ -201,18 +201,21 @@ export function renderBgResult(
 	return container;
 }
 
-function resultSummaryLine(details: BgDetails, theme: Theme): string {
+function resultSummaryLine(details: BgDetails, theme: Theme, expanded: boolean): string {
+	// Collapsed rows stay compact with the log's file name; the full path
+	// (model-relevant, human-rarely) shows when expanded.
+	const shownPath = (path: string) => (expanded ? path : fileNameOf(path));
 	switch (details.action) {
 		case "create": {
 			const label = details.description ? ` (${details.description})` : "";
-			return `${theme.fg("muted", "→ task ")}${theme.fg("accent", `${details.taskId}${label}`)}${theme.fg("muted", ` started · ${details.outputPath}`)}`;
+			return `${theme.fg("muted", "→ task ")}${theme.fg("accent", `${details.taskId}${label}`)}${theme.fg("muted", ` started · ${shownPath(details.outputPath)}`)}`;
 		}
 		case "read": {
 			const size =
 				details.sliceBytes !== details.totalBytes
 					? `${details.mode} ${formatSize(details.sliceBytes)} of ${formatSize(details.totalBytes)}`
 					: formatSize(details.totalBytes);
-			return `${theme.fg("muted", "→ ")}${theme.fg("accent", details.taskId)}${theme.fg("muted", ` ${size} · ${details.outputPath}`)}`;
+			return `${theme.fg("muted", "→ ")}${theme.fg("accent", details.taskId)}${theme.fg("muted", ` ${size} · ${shownPath(details.outputPath)}`)}`;
 		}
 		case "wait": {
 			if (details.timedOut) {
@@ -239,7 +242,7 @@ function taskSummaryLine(details: BgNotificationDetails, theme: Theme): string {
 		? `${details.description} (${commandLabel(details.command, LABELLED_COMMAND_LIMIT)})`
 		: commandLabel(details.command, COMMAND_PREVIEW_LIMIT);
 	if (details.stalled) {
-		const glyph = theme.fg("warning", "…");
+		const glyph = theme.fg("warning", statusGlyph(details.status, true));
 		return `${glyph} ${theme.fg("accent", details.taskId)} ${label} ${theme.fg("muted", `— waiting for input (${runtime})`)}`;
 	}
 	const outcome = theme.fg(

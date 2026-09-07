@@ -8,6 +8,11 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { AgentToolResult, ToolRenderContext, ToolRenderResultOptions } from "../../core/extensions/types.ts";
+import {
+	STATUS_SPINNER_INTERVAL_MS,
+	statusMarker,
+	statusSpinnerFrame,
+} from "../../modes/interactive/components/status-marker.ts";
 import { getMarkdownTheme, type Theme, type ThemeColor } from "../../modes/interactive/theme/theme.ts";
 import { activityCallText, isDisplayableActivity } from "./activity.ts";
 import { AGENT_PROFILE_LABELS } from "./agents.ts";
@@ -21,13 +26,6 @@ const RETRY_ERROR_LIMIT = 160;
 const FALLBACK_OUTPUT_LIMIT = 4_000;
 const OUTPUT_TRUNCATION_NOTICE_PATTERN = /\s*\[Output truncated(?:: \d+ bytes omitted)?\.\]\s*$/u;
 
-// A breathing dot-to-star bloom: the sequence plays forward to full bloom
-// and back, holding each extreme for two ticks. The mid frame uses ✼ rather
-// than the more common ✳ because U+2733 carries the Unicode Emoji property
-// and some terminals render it as a double-width color emoji.
-const SPINNER_BLOOM = ["·", "✢", "✼", "✶", "✻", "✽"];
-const SPINNER_FRAMES = [...SPINNER_BLOOM, ...[...SPINNER_BLOOM].reverse()];
-const SPINNER_INTERVAL_MS = 120;
 const ELAPSED_REFRESH_INTERVAL_MS = 1_000;
 const FLOW_SEPARATOR = " · ";
 const FLOW_SEPARATOR_WIDTH = 3;
@@ -69,33 +67,10 @@ function elapsed(startedAt: number | undefined, endedAt?: number): string | unde
 	return formatDuration(Math.max(0, ((endedAt ?? Date.now()) - startedAt) / 1_000));
 }
 
-function statusColor(status: SubagentRunStatus): "success" | "error" | "warning" | "accent" | "muted" {
-	switch (status) {
-		case "completed":
-			return "success";
-		case "failed":
-			return "error";
-		case "aborted":
-			return "warning";
-		case "running":
-			return "accent";
-		default:
-			return "muted";
-	}
-}
-
-function statusMarker(status: SubagentRunStatus, theme: Theme): string {
-	const glyph =
-		status === "completed"
-			? "✓"
-			: status === "failed"
-				? "×"
-				: status === "aborted"
-					? "■"
-					: status === "running"
-						? "›"
-						: "○";
-	return theme.fg(statusColor(status), glyph);
+/** Settled status marker, colored via the shared status-marker vocabulary. */
+function runMarker(status: SubagentRunStatus, theme: Theme): string {
+	const marker = statusMarker(status);
+	return theme.fg(marker.color, marker.glyph);
 }
 
 function displayLine(text: string): string {
@@ -130,11 +105,6 @@ function formatTotalTokens(value: number): string {
 	return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)}${suffix}`;
 }
 
-function spinnerGlyph(now: number): string {
-	const frame = Math.floor(now / SPINNER_INTERVAL_MS) % SPINNER_FRAMES.length;
-	return SPINNER_FRAMES[frame] ?? SPINNER_FRAMES[0] ?? "";
-}
-
 // All spinner and status glyphs are single-width characters; this constant
 // documents the expectation and guards against accidental double-width
 // substitutions causing layout flicker in the collapsed flow.
@@ -144,13 +114,13 @@ const MARKER_WIDTH = 1;
 function flowSegment(run: SubagentRunDetails, index: number, theme: Theme, now: number): string {
 	let marker: string;
 	if (run.status === "running") {
-		const glyph = spinnerGlyph(now);
+		const glyph = statusSpinnerFrame(now);
 		// Pad to MARKER_WIDTH so cellWidth stays stable across frames even if
 		// a glyph measures wider on some terminal/font combinations.
 		const pad = Math.max(0, MARKER_WIDTH - visibleWidth(glyph));
 		marker = theme.fg("accent", glyph) + (pad > 0 ? " ".repeat(pad) : "");
 	} else {
-		marker = statusMarker(run.status, theme);
+		marker = runMarker(run.status, theme);
 	}
 	return `${marker} ${theme.fg("dim", `#${index + 1}`)} ${theme.fg("accent", profileLabel(run.agent))}`;
 }
@@ -354,7 +324,7 @@ export function desiredRefreshInterval(
 ): number | undefined {
 	if (!options.isPartial) return undefined;
 	if (!options.expanded) {
-		return runs.some((run) => run.status === "running") ? SPINNER_INTERVAL_MS : undefined;
+		return runs.some((run) => run.status === "running") ? STATUS_SPINNER_INTERVAL_MS : undefined;
 	}
 	return runs.some((run) => run.status === "running" || run.retry !== undefined)
 		? ELAPSED_REFRESH_INTERVAL_MS

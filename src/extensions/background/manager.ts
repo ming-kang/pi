@@ -1,7 +1,9 @@
 /** Inline observer: selecting or closing a view never changes execution ownership. */
+import { homedir } from "node:os";
 import {
 	type Component,
 	type Focusable,
+	Markdown,
 	stripTerminalSequences,
 	truncateToWidth,
 	visibleWidth,
@@ -14,10 +16,13 @@ import {
 	isBackgroundTerminal,
 } from "../../core/background/types.ts";
 import type { KeybindingsManager } from "../../core/keybindings.ts";
+import { DynamicBorder } from "../../modes/interactive/components/dynamic-border.ts";
 import { keyLabel } from "../../modes/interactive/components/keybinding-hints.ts";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
+import { statusMarker } from "../../modes/interactive/components/status-marker.ts";
+import { getMarkdownTheme, highlightCode, type Theme, type ThemeColor } from "../../modes/interactive/theme/theme.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
-import { runtimeLabel, statusColor, statusGlyph } from "./task-view.ts";
+import { runtimeLabel, taskLabel } from "./task-view.ts";
+import { firstCommandLine, formatAge } from "./text.ts";
 
 export type BackgroundManagerHost = Pick<BackgroundContext, "list" | "read" | "kill" | "subscribe" | "pin">;
 export interface BackgroundTasksMenuOptions {
@@ -33,18 +38,88 @@ interface Row {
 	task: BackgroundTask;
 	worker?: BackgroundWorker;
 }
+type ListItem = { header: string } | { row: Row };
 interface PreviewPosition {
 	scroll: number;
 	follow: boolean;
 	anchor?: { line: number; column: number };
 }
+interface WrappedEntry {
+	text: string;
+	line: number;
+	column: number;
+}
+interface Layout {
+	wide: boolean;
+	listWidth: number;
+	previewWidth: number;
+	bodyHeight: number;
+	visibleItems: ListItem[];
+	listVisible: number;
+	detail: string[];
+	content: string[];
+	contentHeight: number;
+	start: number;
+	max: number;
+	total: number;
+	entries: WrappedEntry[];
+}
+const WIDE_MIN_WIDTH = 100;
+const LIST_MIN_WIDTH = 28;
+const LIST_MAX_WIDTH = 44;
+const NARROW_LIST_MAX_ROWS = 7;
+const DETAIL_LABEL_WIDTH = 10;
+const DETAIL_MAX_ROWS = 9;
+const COMMAND_MAX_ROWS = 3;
+const ERROR_MAX_ROWS = 2;
+const RENDER_CACHE_MAX = 8;
 const clean = (text: string) => sanitizeBinaryOutput(stripTerminalSequences(text));
 const pad = (text: string, width: number) => truncateToWidth(text, width, "…", true);
+const padEnd = (text: string, width: number) => text + " ".repeat(Math.max(0, width - visibleWidth(text)));
+const oneLine = (text: string) => clean(text).replace(/\s+/g, " ");
+
+function headChars(text: string, width: number): string {
+	let out = "";
+	let used = 0;
+	for (const char of text) {
+		const charWidth = visibleWidth(char);
+		if (used + charWidth > width) break;
+		out += char;
+		used += charWidth;
+	}
+	return out;
+}
+function tailChars(text: string, width: number): string {
+	let out = "";
+	let used = 0;
+	const chars = [...text];
+	for (let i = chars.length - 1; i >= 0; i--) {
+		const charWidth = visibleWidth(chars[i]!);
+		if (used + charWidth > width) break;
+		out = chars[i] + out;
+		used += charWidth;
+	}
+	return out;
+}
+function ellipsizeMiddle(text: string, width: number): string {
+	if (visibleWidth(text) <= width) return text;
+	if (width <= 1) return truncateToWidth(text, Math.max(1, width), "…");
+	const head = Math.ceil((width - 1) / 2);
+	const tail = width - 1 - head;
+	return `${headChars(text, head)}…${tailChars(text, tail)}`;
+}
+function displayPath(path: string, width: number): string {
+	const home = homedir();
+	const shortened = home && path.startsWith(home) ? `~${path.slice(home.length)}` : path;
+	return ellipsizeMiddle(shortened, width);
+}
 
 export class BackgroundTasksMenu implements Component, Focusable {
 	focused = false;
 	private readonly options: BackgroundTasksMenuOptions;
 	private rows: Row[] = [];
+	private runningCount = 0;
+	private finishedCount = 0;
 	private selected?: string;
 	private pinned?: string;
 	private releasePin?: () => void;
@@ -52,7 +127,9 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	private timer: ReturnType<typeof setInterval>;
 	private disposed = false;
 	private focus: "list" | "preview" = "list";
+	private pendingKill?: string;
 	private readonly positions = new Map<string, PreviewPosition>();
+	private readonly renderCache = new Map<string, string[]>();
 	private width: number;
 	private text = "";
 	private readKey?: string;
@@ -81,6 +158,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	}
 	invalidate(): void {
 		this.lastFrame = "";
+		this.renderCache.clear();
 	}
 	dispose(): void {
 		if (this.disposed) return;
@@ -93,19 +171,27 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		return this.rows.find((row) => row.key === this.selected);
 	}
 	private wide(): boolean {
-		return this.width >= 110;
+		return this.width >= WIDE_MIN_WIDTH;
 	}
-	private height(): number {
-		return Math.min(20, Math.max(10, this.options.tui.terminal.rows - 8));
+	/** Fullscreen overlay: body fills the terminal minus the frame (rule, title, rule, hints, rule). */
+	private bodyHeight(): number {
+		return Math.max(6, this.options.tui.terminal.rows - 5);
 	}
 	private sync(): void {
 		if (this.disposed) return;
-		this.rows = this.options.host
-			.list()
-			.flatMap((task): Row[] => [
-				{ key: task.id, task },
-				...(task.projection?.workers ?? []).map((worker) => ({ key: `${task.id}/${worker.id}`, task, worker })),
-			]);
+		const tasks = this.options.host.list();
+		const running = tasks
+			.filter((task) => !isBackgroundTerminal(task.status))
+			.sort((a, b) => b.startedAt - a.startedAt);
+		const finished = tasks
+			.filter((task) => isBackgroundTerminal(task.status))
+			.sort((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt));
+		this.runningCount = running.length;
+		this.finishedCount = finished.length;
+		this.rows = [...running, ...finished].flatMap((task): Row[] => [
+			{ key: task.id, task },
+			...(task.projection?.workers ?? []).map((worker) => ({ key: `${task.id}/${worker.id}`, task, worker })),
+		]);
 		if (!this.current()) {
 			this.selected = this.rows[0]?.key;
 		}
@@ -134,7 +220,8 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	}
 	private async refresh(): Promise<void> {
 		const row = this.current();
-		if (!row || row.worker || this.busy || (this.readKey === row.key && this.finalRead)) return;
+		if (!row || row.worker || row.task.kind !== "bash" || this.busy || (this.readKey === row.key && this.finalRead))
+			return;
 		this.busy = true;
 		try {
 			const slice = await this.options.host.read(row.task.id, { mode: "tail", bytes: 128 * 1024 });
@@ -157,6 +244,22 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		if (this.disposed) return;
 		const kb = this.options.keybindings;
 		this.feedback = undefined;
+		if (this.pendingKill) {
+			// The one raw-key exception: a pending y/N confirmation captures the next input.
+			const id = this.pendingKill;
+			this.pendingKill = undefined;
+			if (data === "y" || data === "Y") {
+				try {
+					this.feedback = this.options.host.kill(id)
+						? `stopping ${id}… (whole group)`
+						: `${id}: no new cancellation requested`;
+				} catch (error) {
+					this.feedback = oneLine(String(error));
+				}
+			}
+			this.options.tui.requestRender();
+			return;
+		}
 		if (kb.matches(data, "tui.select.cancel")) {
 			if (this.focus === "preview") this.focus = "list";
 			else {
@@ -166,15 +269,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 			}
 		} else if (kb.matches(data, "app.backgroundTasks.kill")) {
 			const row = this.current();
-			if (row) {
-				try {
-					this.feedback = this.options.host.kill(row.task.id)
-						? `stopping ${row.task.id}… (whole group)`
-						: `${row.task.id}: no new cancellation requested`;
-				} catch (error) {
-					this.feedback = clean(String(error)).replace(/\s+/g, " ");
-				}
-			}
+			if (row) this.pendingKill = row.task.id;
 		} else if (kb.matches(data, "app.backgroundTasks.focusList")) {
 			this.focus = "list";
 		} else if (kb.matches(data, "app.backgroundTasks.focusPreview") || kb.matches(data, "tui.select.confirm")) {
@@ -188,7 +283,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 			const layout = this.layout();
 			const delta =
 				direction *
-				(pageUp || pageDown ? (this.focus === "preview" ? layout.contentHeight : layout.bodyHeight) : 1);
+				(pageUp || pageDown ? (this.focus === "preview" ? layout.contentHeight : layout.listVisible) : 1);
 			if (delta && this.focus === "preview") this.scrollPreview(delta);
 			else if (delta && this.rows.length) {
 				const index = this.rows.findIndex((row) => row.key === this.selected);
@@ -216,71 +311,181 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		}
 		return position;
 	}
-	private diagnostics(): string[] {
-		const row = this.current();
+	/** Selectable rows interleaved with their section headers; headers are display-only and never selected. */
+	private listItems(): ListItem[] {
+		const items: ListItem[] = [];
+		let section = "";
+		for (const row of this.rows) {
+			const next = isBackgroundTerminal(row.task.status) ? "Finished" : "Running";
+			if (next !== section) {
+				section = next;
+				items.push({ header: next });
+			}
+			items.push({ row });
+		}
+		return items;
+	}
+	private cacheSet(key: string, lines: string[]): void {
+		if (this.renderCache.size >= RENDER_CACHE_MAX) {
+			const oldest = this.renderCache.keys().next().value;
+			if (oldest !== undefined) this.renderCache.delete(oldest);
+		}
+		this.renderCache.set(key, lines);
+	}
+	private commandLines(task: BackgroundTask, width: number, maxRows: number): string[] {
+		const first = firstCommandLine(task.command ?? "");
+		const key = `command|${task.id}|${width}|${first.length}`;
+		let lines = this.renderCache.get(key);
+		if (!lines) {
+			lines = wrapTextWithAnsi(highlightCode(first, "bash")[0] ?? "", Math.max(1, width));
+			this.cacheSet(key, lines);
+		}
+		return lines.slice(0, maxRows);
+	}
+	private markdownLines(rowKey: string, section: string, text: string, width: number): string[] {
+		const key = `${section}|${rowKey}|${width}|${text.length}`;
+		const cached = this.renderCache.get(key);
+		if (cached) return cached;
+		const lines = new Markdown(text, 0, 0, getMarkdownTheme(), {
+			color: (value: string) => this.options.theme.fg("toolOutput", value),
+		}).render(Math.max(1, width));
+		this.cacheSet(key, lines);
+		return lines;
+	}
+	private detailLines(row: Row | undefined, valueWidth: number, compact: boolean): string[] {
 		if (!row) return [];
-		return [
-			row.task.error ? `Task error: ${row.task.error}` : "",
-			!row.worker && this.readKey === row.key && this.readError ? `Output read error: ${this.readError}` : "",
-		].filter(Boolean);
+		const { theme } = this.options;
+		const { task, worker } = row;
+		const now = Date.now();
+		const marker = statusMarker(worker?.status ?? task.status, { now });
+		const glyph = theme.fg(marker.color, marker.glyph);
+		const time =
+			isBackgroundTerminal(task.status) && task.endedAt ? formatAge(task.endedAt, now) : runtimeLabel(task, now);
+		const field = (label: string, values: string[]): string[] =>
+			values.map(
+				(value, index) => `${theme.fg("dim", padEnd(index === 0 ? label : "", DETAIL_LABEL_WIDTH))}${value}`,
+			);
+		const status = worker ? `${glyph} ${worker.status}` : `${glyph} ${task.status} · ${task.mode} · ${time}`;
+		if (compact) {
+			const second = worker
+				? field("Worker", [truncateToWidth(clean(worker.label), valueWidth, "…")])
+				: task.command
+					? field("Command", this.commandLines(task, valueWidth, 1))
+					: field("Task", [truncateToWidth(task.id, valueWidth, "…")]);
+			return [...field("Status", [status]), ...second];
+		}
+		if (worker) {
+			return [
+				...field("Status", [status]),
+				...field("Worker", [truncateToWidth(clean(worker.label), valueWidth, "…")]),
+				...field("Group", [truncateToWidth(task.id, valueWidth, "…")]),
+				...field("Model", [truncateToWidth(`${worker.model ?? "—"} · ${worker.usage ?? "—"}`, valueWidth, "…")]),
+			];
+		}
+		const lines = [
+			...field("Status", [status]),
+			...field("Task", [truncateToWidth(task.id, valueWidth, "…")]),
+			...field(
+				"Error",
+				[
+					task.error ? `Task error: ${oneLine(task.error)}` : "",
+					this.readKey === row.key && this.readError ? `Output read error: ${oneLine(this.readError)}` : "",
+				]
+					.filter(Boolean)
+					.flatMap((error) => wrapTextWithAnsi(theme.fg("error", error), Math.max(1, valueWidth)))
+					.slice(0, ERROR_MAX_ROWS),
+			),
+		];
+		if (task.kind === "bash") {
+			if (task.command) lines.push(...field("Command", this.commandLines(task, valueWidth, COMMAND_MAX_ROWS)));
+			if (task.cwd)
+				lines.push(...field("Directory", [truncateToWidth(displayPath(task.cwd, valueWidth), valueWidth, "…")]));
+			if (task.outputPath) lines.push(...field("Output", [displayPath(task.outputPath, valueWidth)]));
+		}
+		return lines.slice(0, DETAIL_MAX_ROWS);
+	}
+	private workerLines(row: Row, width: number): string[] {
+		const worker = row.worker;
+		if (!worker) return [];
+		const { theme } = this.options;
+		const heading = (text: string) => theme.fg("dim", theme.bold(text));
+		const lines = [
+			heading("Prompt"),
+			...this.markdownLines(row.key, "prompt", worker.prompt, width),
+			"",
+			heading("Activity"),
+		];
+		for (const line of worker.activity ? clean(worker.activity).split("\n") : ["—"])
+			lines.push(theme.fg("toolOutput", line));
+		lines.push("");
+		if (worker.error)
+			lines.push(
+				...wrapTextWithAnsi(theme.fg("error", oneLine(worker.error)), Math.max(1, width)).slice(0, ERROR_MAX_ROWS),
+			);
+		lines.push(heading("Outcome"));
+		if (worker.report.text) lines.push(...this.markdownLines(row.key, "outcome", worker.report.text, width));
+		else if (worker.status === "queued" || worker.status === "running")
+			lines.push(theme.fg("muted", "Still running…"));
+		else lines.push(theme.fg("muted", "No report returned."));
+		if (worker.report.truncated) lines.push(theme.fg("warning", "[Saved report truncated.]"));
+		return lines;
+	}
+	private contentLines(row: Row | undefined, width: number): string[] {
+		if (!row) return [];
+		const { theme } = this.options;
+		const { task, worker } = row;
+		if (worker) return this.workerLines(row, width);
+		if (task.kind !== "bash") {
+			const workers = task.projection?.workers ?? [];
+			const now = Date.now();
+			if (workers.length)
+				return workers.map((w) => {
+					const marker = statusMarker(w.status, { now });
+					return `${theme.fg(marker.color, marker.glyph)} ${theme.fg("toolOutput", `${clean(w.label)} · ${w.status} · ${w.model ?? "—"} · ${w.usage ?? "—"}`)}`;
+				});
+			const fallback = task.projection?.text;
+			return fallback
+				? clean(fallback)
+						.split("\n")
+						.map((line) => theme.fg("toolOutput", line))
+				: [theme.fg("muted", "No workers.")];
+		}
+		const text = this.readKey === row.key ? this.text : (task.projection?.text ?? "Loading…");
+		return clean(text)
+			.split("\n")
+			.map((line) => theme.fg("toolOutput", line));
 	}
 	/** One geometry calculation shared by rendering and page/line navigation. */
-	private layout() {
-		const innerWidth = Math.max(0, this.width - 2);
-		const listWidth = this.wide() ? Math.floor(innerWidth * 0.4) : innerWidth;
-		const previewWidth = this.wide() ? innerWidth - listWidth - 1 : innerWidth;
-		// Borders, pane titles, range, and two hint rows are outside the pane body.
-		const bodyHeight = this.height() - 6;
+	private layout(): Layout {
+		const wide = this.wide();
+		const listWidth = wide
+			? Math.min(LIST_MAX_WIDTH, Math.max(LIST_MIN_WIDTH, Math.floor((this.width - 1) * 0.36)))
+			: this.width;
+		const previewWidth = wide ? this.width - listWidth - 1 : this.width;
+		const bodyHeight = this.bodyHeight();
+		const items = this.listItems();
+		const selectedIndex = items.findIndex((item) => "row" in item && item.row.key === this.selected);
+		const listVisible = wide ? bodyHeight : Math.min(NARROW_LIST_MAX_ROWS, Math.max(1, bodyHeight - 4));
+		const listFirst = Math.max(0, selectedIndex - listVisible + 1);
+		const visibleItems = items.slice(listFirst, listFirst + listVisible);
 		const row = this.current();
-		const metadata: string[] = [];
-		let text = "No managed executions.";
-		if (row) {
-			const { task, worker } = row;
-			metadata.push(
-				worker
-					? `${worker.label} · ${worker.status} · group ${task.id}`
-					: `${task.status} · ${task.mode} · ${runtimeLabel(task)} · ${task.id}`,
-			);
-			metadata.push(...this.diagnostics());
-			if (worker) {
-				metadata.push(`Model: ${worker.model ?? "—"} · Usage: ${worker.usage ?? "—"}`);
-				text = [
-					"Prompt",
-					worker.prompt,
-					"",
-					"Activity",
-					worker.activity || "—",
-					"",
-					"Outcome",
-					...(worker.error ? [`Error: ${worker.error}`] : []),
-					worker.report.text ||
-						(worker.status === "queued" || worker.status === "running"
-							? "Still running…"
-							: "No report returned."),
-					...(worker.report.truncated ? ["[Saved report truncated.]"] : []),
-				].join("\n");
-			} else {
-				metadata.push(task.command ?? task.title);
-				if (task.cwd) metadata.push(`cwd: ${task.cwd}`);
-				if (task.outputPath) metadata.push(`Output: ${task.outputPath}`);
-				text = this.readKey === row.key ? this.text : (task.projection?.text ?? "Loading…");
-			}
-		}
-		// On very short terminals prioritize status and diagnostics, leaving one output row.
-		const header = metadata.slice(0, bodyHeight - 1).map((line) => clean(line).replace(/\s+/g, " "));
-		const wrapped = clean(text)
-			.split("\n")
-			.flatMap((line, lineIndex) => {
-				let column = 0;
-				return wrapTextWithAnsi(line, Math.max(1, previewWidth)).map((text) => {
-					const entry = { text, line: lineIndex, column };
-					column += visibleWidth(text);
-					return entry;
-				});
+		const detail = this.detailLines(row, Math.max(1, previewWidth - DETAIL_LABEL_WIDTH), !wide).slice(
+			0,
+			wide ? Math.max(1, Math.min(DETAIL_MAX_ROWS, bodyHeight - 2)) : 2,
+		);
+		const contentHeight = wide
+			? Math.max(1, bodyHeight - detail.length - 1)
+			: Math.max(1, bodyHeight - visibleItems.length - detail.length - 1);
+		const wrapped = this.contentLines(row, previewWidth).flatMap((line, lineIndex) => {
+			let column = 0;
+			return wrapTextWithAnsi(line, Math.max(1, previewWidth)).map((text) => {
+				const entry = { text, line: lineIndex, column };
+				column += visibleWidth(text);
+				return entry;
 			});
+		});
 		const entries = row?.task.kind === "bash" && !row.worker ? wrapped.slice(-2000) : wrapped.slice(0, 2000);
 		const content = entries.map((entry) => entry.text);
-		const contentHeight = bodyHeight - header.length;
 		const max = Math.max(0, content.length - contentHeight);
 		const position = this.position();
 		let offset = position.scroll;
@@ -298,7 +503,21 @@ export class BackgroundTasksMenu implements Component, Focusable {
 			}
 		}
 		const start = position.follow ? max : Math.min(offset, max);
-		return { innerWidth, listWidth, previewWidth, bodyHeight, header, content, contentHeight, max, start, entries };
+		return {
+			wide,
+			listWidth,
+			previewWidth,
+			bodyHeight,
+			visibleItems,
+			listVisible,
+			detail,
+			content,
+			contentHeight,
+			start,
+			max,
+			total: content.length,
+			entries,
+		};
 	}
 	private scrollPreview(delta: number): void {
 		const { start, max, entries } = this.layout();
@@ -310,78 +529,114 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		position.follow =
 			delta > 0 && position.scroll === max && this.current()?.task.kind === "bash" && !this.current()?.worker;
 	}
+	private listRowLine(row: Row, width: number): string {
+		const { theme } = this.options;
+		const selected = row.key === this.selected;
+		const now = Date.now();
+		const marker = statusMarker(row.worker?.status ?? row.task.status, { now });
+		const glyph = theme.fg(marker.color, marker.glyph);
+		const cursor = selected ? theme.fg(this.focus === "list" ? "accent" : "muted", "→ ") : "  ";
+		const indent = row.worker ? "  " : "";
+		const time = row.worker
+			? ""
+			: isBackgroundTerminal(row.task.status)
+				? formatAge(row.task.endedAt ?? row.task.startedAt, now)
+				: runtimeLabel(row.task, now);
+		const timeWidth = time ? visibleWidth(time) + 1 : 0;
+		const labelWidth = Math.max(1, width - 2 - indent.length - visibleWidth(glyph) - 1 - timeWidth);
+		const labelColor: ThemeColor = selected && this.focus === "list" ? "accent" : "text";
+		const label = theme.fg(
+			labelColor,
+			truncateToWidth(
+				clean(row.worker ? row.worker.label : taskLabel({ command: row.task.command ?? row.task.title })),
+				labelWidth,
+				"…",
+			),
+		);
+		let line = `${cursor}${indent}${glyph} ${label}`;
+		if (time)
+			line += " ".repeat(Math.max(1, width - visibleWidth(line) - visibleWidth(time))) + theme.fg("dim", time);
+		return pad(line, width);
+	}
+	private emptyLine(width: number): string {
+		const message = "No managed executions.";
+		const leftPad = Math.max(0, Math.floor((width - visibleWidth(message)) / 2));
+		return pad(this.options.theme.fg("muted", `${" ".repeat(leftPad)}${message}`), width);
+	}
+	private dividerLine(layout: Layout): string {
+		const { theme } = this.options;
+		const row = this.current();
+		const label = row ? (row.worker ? "Worker" : row.task.kind === "bash" ? "Output" : "Workers") : "Output";
+		const styledLabel = theme.fg(this.focus === "preview" ? "accent" : "muted", label);
+		const shell = row !== undefined && row.task.kind === "bash" && !row.worker;
+		const suffix = shell ? theme.fg("muted", ` · tail · ${this.position().follow ? "following" : "browsing"}`) : "";
+		const range = theme.fg(
+			"muted",
+			`${layout.total ? layout.start + 1 : 0}–${Math.min(layout.start + layout.contentHeight, layout.total)}/${layout.total}`,
+		);
+		const rule = (count: number) => theme.fg("borderMuted", "─".repeat(Math.max(0, count)));
+		const left = `${rule(1)} ${styledLabel}${suffix} `;
+		const right = ` ${range} ${rule(1)}`;
+		const fill = layout.previewWidth - visibleWidth(left) - visibleWidth(right);
+		return pad(`${left}${rule(fill)}${right}`, layout.previewWidth);
+	}
 	render(width: number): string[] {
 		if (width < 1) return [];
 		const wasWide = this.wide();
 		this.width = width;
 		if (!wasWide && this.wide()) this.queueTick();
 		const { theme, keybindings } = this.options;
-		const { innerWidth, listWidth, previewWidth, bodyHeight, header, content, contentHeight, start } = this.layout();
-		const index = Math.max(
-			0,
-			this.rows.findIndex((row) => row.key === this.selected),
-		);
-		const first = Math.max(0, index - bodyHeight + 1);
-		const list = this.rows.slice(first, first + bodyHeight).map((row) => {
-			const status = row.worker?.status ?? row.task.status;
-			const label = row.worker
-				? `  ${row.worker.label} · ${status}`
-				: `${statusGlyph(row.task.status)} ${row.task.id.slice(0, row.task.kind.length + 9)} · ${row.task.status} (${row.task.mode}) · ${row.task.title}`;
-			const selected = row.key === this.selected;
-			const text = pad(`${selected ? "→" : " "} ${clean(label)}`, listWidth);
-			return selected
-				? this.focus === "list"
-					? theme.bg("selectedBg", theme.fg("accent", text))
-					: theme.fg("muted", text)
-				: theme.fg(statusColor(row.task.status), text);
-		});
-		if (!list.length) list.push(pad("No managed executions.", listWidth));
-		const preview = [
-			...header.map((line) => theme.fg("muted", line)),
-			...content.slice(start, start + contentHeight).map((line) => theme.fg("toolOutput", line)),
-		];
-		const border = (text: string) => theme.fg("border", text);
-		const frame = (text: string) => pad(border("│") + pad(text, innerWidth) + border("│"), width);
-		const panes = (left: string, right: string) =>
-			this.wide()
-				? pad(left, listWidth) + border("│") + pad(right, previewWidth)
-				: pad(this.focus === "list" ? left : right, innerWidth);
-		const title = (pane: "list" | "preview", text: string) =>
-			theme.fg(this.focus === pane ? "accent" : "muted", `${this.focus === pane ? "›" : " "} ${text}`);
-		const range = (offset: number, count: number, total: number) =>
-			`${total ? offset + 1 : 0}–${Math.min(offset + count, total)}/${total}`;
-		const shell = this.current()?.task.kind === "bash" && !this.current()?.worker;
-		const previewRange = `Lines ${range(start, contentHeight, content.length)}${shell ? (this.position().follow ? " · following" : " · browsing") : ""}`;
+		const layout = this.layout();
+		const rule = () => new DynamicBorder((text) => theme.fg("border", text)).render(width)[0] ?? "";
+		const title = theme.fg("accent", theme.bold("Background tasks"));
+		const stats =
+			this.runningCount + this.finishedCount > 0
+				? theme.fg("muted", `${this.runningCount} running · ${this.finishedCount} finished`)
+				: "";
+		const gap = width - visibleWidth(title) - visibleWidth(stats);
+		const titleLine = pad(stats && gap >= 1 ? `${title}${" ".repeat(gap)}${stats}` : title, width);
 		const hint = (id: Parameters<typeof keybindings.getKeys>[0]) => keyLabel(id, { keybindings });
-		return [
-			pad(border(`╭${"─".repeat(innerWidth)}╮`), width),
-			frame(
-				panes(
-					title("list", `Background tasks (${this.rows.length ? index + 1 : 0}/${this.rows.length})`),
-					title("preview", "Preview"),
-				),
-			),
-			...Array.from({ length: bodyHeight }, (_, i) => frame(panes(list[i] ?? "", preview[i] ?? ""))),
-			frame(
-				panes(
-					theme.fg("muted", `Rows ${range(first, bodyHeight, this.rows.length)}`),
-					theme.fg("muted", previewRange),
-				),
-			),
-			frame(
-				theme.fg(
-					"muted",
-					`${hint("app.backgroundTasks.focusList")} list · ${hint("app.backgroundTasks.focusPreview")}/${hint("tui.select.confirm")} preview · ${hint("tui.select.up")}/${hint("tui.select.down")} ${this.focus === "list" ? "select" : "scroll"} · ${hint(this.focus === "list" ? "tui.select.pageUp" : "tui.editor.pageUp")}/${hint(this.focus === "list" ? "tui.select.pageDown" : "tui.editor.pageDown")} page`,
-				),
-			),
-			frame(
-				theme.fg(
-					"muted",
-					this.feedback ??
-						`${hint("tui.select.cancel")} ${this.focus === "preview" ? "back to list" : "close"} · ${hint("app.backgroundTasks.kill")} stop group`,
-				),
-			),
-			pad(border(`╰${"─".repeat(innerWidth)}╯`), width),
-		];
+		const pageUp = this.focus === "list" ? "tui.select.pageUp" : "tui.editor.pageUp";
+		const pageDown = this.focus === "list" ? "tui.select.pageDown" : "tui.editor.pageDown";
+		const hints = [
+			`${hint("tui.select.up")}/${hint("tui.select.down")} select`,
+			`${hint("app.backgroundTasks.focusList")} list`,
+			`${hint("app.backgroundTasks.focusPreview")}/${hint("tui.select.confirm")} output`,
+			`${hint(pageUp)}/${hint(pageDown)} page`,
+			`${hint("app.backgroundTasks.kill")} stop`,
+			`${hint("tui.select.cancel")} close`,
+		].join(" · ");
+		const hintLine = pad(
+			this.pendingKill
+				? theme.fg("warning", `Stop ${this.pendingKill} (whole group)? y/N`)
+				: theme.fg(this.feedback ? "muted" : "dim", this.feedback ?? hints),
+			width,
+		);
+		const leftLines = layout.visibleItems.length
+			? layout.visibleItems.map((item) =>
+					"header" in item
+						? pad(theme.fg("dim", item.header), layout.listWidth)
+						: this.listRowLine(item.row, layout.listWidth),
+				)
+			: [this.emptyLine(layout.listWidth)];
+		const contentWindow = layout.content.slice(layout.start, layout.start + layout.contentHeight);
+		const divider = this.dividerLine(layout);
+		const body: string[] = [];
+		if (layout.wide) {
+			const right = [...layout.detail, divider, ...contentWindow];
+			for (let i = 0; i < layout.bodyHeight; i++)
+				body.push(
+					pad(
+						`${pad(leftLines[i] ?? "", layout.listWidth)}${theme.fg("borderMuted", "│")}${pad(right[i] ?? "", layout.previewWidth)}`,
+						width,
+					),
+				);
+		} else {
+			body.push(...[...leftLines, ...layout.detail, divider, ...contentWindow].map((line) => pad(line, width)));
+			while (body.length < layout.bodyHeight) body.push(pad("", width));
+		}
+		return [rule(), titleLine, ...body.slice(0, layout.bodyHeight), rule(), hintLine, rule()].map((line) =>
+			pad(line, width),
+		);
 	}
 }

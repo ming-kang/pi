@@ -82,14 +82,17 @@ export function createBackgroundExtension(): (pi: ExtensionAPI) => void {
 					return;
 				}
 				closeMenu?.();
-				await ctx.ui.custom<void>((tui, theme, keybindings, done) => {
-					const close = () => {
-						if (closeMenu === close) closeMenu = undefined;
-						done();
-					};
-					closeMenu = close;
-					return new BackgroundTasksMenu({ tui, theme, keybindings, host: ctx.background, onClose: close });
-				});
+				await ctx.ui.custom<void>(
+					(tui, theme, keybindings, done) => {
+						const close = () => {
+							if (closeMenu === close) closeMenu = undefined;
+							done();
+						};
+						closeMenu = close;
+						return new BackgroundTasksMenu({ tui, theme, keybindings, host: ctx.background, onClose: close });
+					},
+					{ overlay: true, overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%" } },
+				);
 			},
 		});
 	};

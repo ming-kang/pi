@@ -192,7 +192,7 @@ describe("subagent rendering", () => {
 				],
 			}),
 		);
-		expect(output).toBe("✓ #1 Explorer · × #2 General · ■ #3 General");
+		expect(output).toBe("✓ #1 Explorer · × #2 General · ○ #3 General");
 		expect(output).not.toContain("completed · 1 failed");
 		expect(output).not.toContain("$0.420");
 		expect(output).not.toContain("nope");
@@ -241,7 +241,7 @@ describe("subagent rendering", () => {
 		).render(120);
 		expect(colors).toContain("success:✓");
 		expect(colors).toContain("error:×");
-		expect(colors).toContain("warning:■");
+		expect(colors).toContain("warning:○");
 	});
 
 	it("omits duration for a terminal row that never started", () => {
@@ -251,7 +251,7 @@ describe("subagent rendering", () => {
 				runs: [run({ status: "aborted", startedAt: undefined, endedAt: undefined, report: "" })],
 			}),
 		);
-		expect(output).toBe("■ #1 Explorer");
+		expect(output).toBe("○ #1 Explorer");
 	});
 
 	it("formats per-run minute boundaries without emitting sixty seconds", () => {
@@ -415,7 +415,7 @@ describe("subagent rendering", () => {
 		expect(output).toContain("✓ #1 Explorer");
 		expect(output).toMatch(/[·✢✼✶✻✽] #2 General/u);
 		expect(output).toContain("× #3 Explorer");
-		expect(output).toContain("■ #4 General");
+		expect(output).toContain("○ #4 General");
 		expect(output).toContain("○ #5 Explorer");
 		expect(output).toMatch(/[·✢✼✶✻✽] #6 Explorer/u);
 		expect(output).not.toContain("done");

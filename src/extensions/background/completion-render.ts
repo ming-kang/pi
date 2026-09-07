@@ -10,6 +10,7 @@ import { readBackgroundCompletion } from "../../core/background/presentation.ts"
 import type { BackgroundTerminalStatus } from "../../core/background/types.ts";
 import type { MessageRenderOptions } from "../../core/extensions/types.ts";
 import type { CustomMessage } from "../../core/messages.ts";
+import { type StatusMarkerColor, statusMarker } from "../../modes/interactive/components/status-marker.ts";
 import { ToolChromeComponent } from "../../modes/interactive/components/tool-chrome.ts";
 import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
@@ -118,11 +119,8 @@ function failedWorker(worker: WorkerReport): boolean {
 	return !!worker.error || worker.status === "failed" || worker.status === "aborted" || worker.status === "cancelled";
 }
 
-function color(status: string | undefined): "success" | "error" | "warning" | "muted" {
-	if (status === "completed") return "success";
-	if (status === "failed") return "error";
-	if (status === "partial" || status === "cancelled" || status === "aborted" || status === "timeout") return "warning";
-	return "muted";
+function color(status: string | undefined): StatusMarkerColor {
+	return status === undefined ? "muted" : statusMarker(status).color;
 }
 function statusName(status: string): string {
 	return status === "timeout" ? "Timed out" : status ? status[0]!.toUpperCase() + status.slice(1) : "Unknown";
@@ -236,9 +234,10 @@ class CompletionCard implements Component {
 			} else if (view.workers) {
 				const reportBudget = Math.min(REPORT_ROWS, Math.max(6, Math.floor(72 / view.workers.length)));
 				for (const worker of view.workers) {
+					const marker = statusMarker(worker.status);
 					lines.push(
 						"",
-						`${theme.fg(color(worker.status), `${worker.status === "completed" ? "✓" : worker.status === "failed" ? "×" : "○"} #${worker.index} ${statusName(worker.profile)}`)}${theme.fg("muted", ` · ${statusName(worker.status)}`)}`,
+						`${theme.fg(marker.color, `${marker.glyph} #${worker.index} ${statusName(worker.profile)}`)}${theme.fg("muted", ` · ${statusName(worker.status)}`)}`,
 					);
 					lines.push(theme.fg("muted", `Task: ${worker.description}`));
 					if (failedWorker(worker)) {

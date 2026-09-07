@@ -9,6 +9,7 @@
  */
 
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { type StatusMarkerColor, statusMarker } from "../../modes/interactive/components/status-marker.ts";
 import { firstCommandLine, formatDuration } from "./text.ts";
 import type { BgTaskStatus } from "./types.ts";
 /** How long a task has run, or ran. A running task has no `endedAt`, so it measures to `now`. */
@@ -50,38 +51,15 @@ export function commandLabel(command: string, width: number): string {
 	return truncateToWidth(firstCommandLine(command), width, "…");
 }
 
+/**
+ * Static marker for transcripts and snapshots; the /bg panel animates running
+ * rows via statusMarker(status, { now }) directly. Both delegate to the shared
+ * status-marker vocabulary.
+ */
 export function statusGlyph(status: BgTaskStatus, stalled?: boolean): string {
-	if (stalled) return "…";
-	switch (status) {
-		case "completed":
-			return "✓";
-		case "failed":
-		case "timeout":
-			return "✗";
-		case "cancelled":
-		case "partial":
-		case "stopping":
-		case "killed":
-			return "○";
-		default:
-			return "●";
-	}
+	return statusMarker(status, { stalled }).glyph;
 }
 
-export function statusColor(status: BgTaskStatus, stalled?: boolean): "success" | "error" | "warning" | "accent" {
-	if (stalled) return "warning";
-	switch (status) {
-		case "completed":
-			return "success";
-		case "failed":
-			return "error";
-		case "timeout":
-		case "cancelled":
-		case "partial":
-		case "stopping":
-		case "killed":
-			return "warning";
-		default:
-			return "accent";
-	}
+export function statusColor(status: BgTaskStatus, stalled?: boolean): StatusMarkerColor {
+	return statusMarker(status, { stalled }).color;
 }
