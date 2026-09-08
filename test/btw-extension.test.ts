@@ -205,11 +205,50 @@ describe("BTW extension lifecycle and persistence", () => {
 		expect(view.keyHandlers.size).toBe(0);
 		view.submit("/btw", "command");
 		// The asynchronous snapshot has not settled yet.
+		view.ui.setEditorText("private draft during capture");
 		await fixture.session.extensionRunner.emit({ type: "session_shutdown", reason: "reload" });
 		await Promise.resolve();
 		expect(view.widget).toBeUndefined();
+		expect(view.editorText).toBe("");
 		expect(view.submitHandlers.size).toBe(0);
 		expect(view.keyHandlers.size).toBe(0);
+	});
+
+	it("discards the BTW draft only after successful tree navigation and leaves later main drafts alone", async () => {
+		let cancelNavigation = true;
+		const fixture = await createBtwTestSession({
+			persist: true,
+			extensions: [btwExtension, (pi) => pi.on("session_before_tree", () => ({ cancel: cancelNavigation }))],
+			stream: () => btwDone(btwResponse("main answer")),
+		});
+		const view = await bindUi(fixture);
+		cleanups.push(async () => {
+			await fixture.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+			await fixture.cleanup();
+		});
+		await fixture.session.prompt("main seed");
+		const target = fixture.sessionManager.getBranch().find((entry) => entry.type === "message")!;
+		await fixture.session.prompt("/btw");
+		view.ui.setEditorText("private BTW draft");
+		expect(await fixture.session.navigateTree(target.id)).toMatchObject({ cancelled: true });
+		expect(view.widget).toBeDefined();
+		expect(view.editorText).toBe("private BTW draft");
+
+		cancelNavigation = false;
+		expect(await fixture.session.navigateTree(target.id)).toMatchObject({ cancelled: false });
+		expect(view.widget).toBeUndefined();
+		expect(view.editorText).toBe("");
+		expect(view.keyHandlers.size).toBe(0);
+		expect(view.submit("new main prompt")).toBe(false);
+		await fixture.session.prompt("new main prompt");
+		expect(JSON.stringify(fixture.session.messages)).not.toContain("private BTW draft");
+		expect(readFileSync(fixture.sessionManager.getSessionFile()!, "utf8")).not.toContain("private BTW draft");
+
+		view.ui.setEditorText("main draft after BTW closed");
+		await fixture.session.navigateTree(target.id);
+		expect(view.editorText).toBe("main draft after BTW closed");
+		await fixture.session.extensionRunner.emit({ type: "session_shutdown", reason: "reload" });
+		expect(view.editorText).toBe("main draft after BTW closed");
 	});
 
 	it("never opens main history for a short panel while retaining multiline draft movement", async () => {

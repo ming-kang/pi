@@ -4,6 +4,11 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed BTW drafts surviving successful tree navigation or reload and becoming main-conversation input after the panel closed. Cancelled navigation keeps the side conversation and its draft.
+- Fixed `/bg` browsing jumping as long logs roll forward. Each row keeps its bounded output snapshot across selection changes and pending reads until downward scrolling resumes following; task status and terminal diagnostics continue updating.
+
 ## [0.85.1] - 2026-09-08
 
 ### Added

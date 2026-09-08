@@ -43,6 +43,7 @@ interface PreviewPosition {
 	scroll: number;
 	follow: boolean;
 	anchor?: { line: number; column: number };
+	output?: { text: string; readError?: string; settled: boolean };
 }
 interface WrappedEntry {
 	text: string;
@@ -134,10 +135,6 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	private readonly positions = new Map<string, PreviewPosition>();
 	private readonly renderCache = new Map<string, string[]>();
 	private width: number;
-	private text = "";
-	private readKey?: string;
-	private readError?: string;
-	private finalRead = false;
 	private busy = false;
 	private feedback?: string;
 	private lastFrame = "";
@@ -169,6 +166,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		clearInterval(this.timer);
 		this.unsubscribe();
 		this.releasePin?.();
+		this.positions.clear();
 	}
 	private current(): Row | undefined {
 		return this.rows.find((row) => row.key === this.selected);
@@ -229,21 +227,29 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	}
 	private async refresh(): Promise<void> {
 		const row = this.current();
-		if (!row || row.worker || row.task.kind !== "bash" || this.busy || (this.readKey === row.key && this.finalRead))
-			return;
+		if (!row || row.worker || row.task.kind !== "bash" || this.busy) return;
+		const position = this.position();
+		// Keep the bounded output with its row's scroll anchor while browsing.
+		// A new tail can otherwise move even lines that are still inside the read window.
+		if (position.output && (!position.follow || position.output.settled)) return;
 		this.busy = true;
 		try {
 			const slice = await this.options.host.read(row.task.id, { mode: "tail", bytes: 128 * 1024 });
 			if (this.disposed || this.selected !== row.key) return;
-			this.text = clean(slice.text).split("\n").slice(-2000).join("\n");
-			this.readKey = row.key;
-			this.readError = slice.readError ? clean(slice.readError).slice(0, 4096) : undefined;
-			this.finalRead = isBackgroundTerminal(slice.task.status);
+			// A read started while following may settle after the user scrolls up.
+			if (!position.follow && position.output) return;
+			position.output = {
+				text: clean(slice.text).split("\n").slice(-2000).join("\n"),
+				readError: slice.readError ? clean(slice.readError).slice(0, 4096) : undefined,
+				settled: isBackgroundTerminal(slice.task.status),
+			};
 		} catch (error) {
-			if (!this.disposed && this.selected === row.key) {
-				this.text = "";
-				this.readError = `Cannot read output: ${clean(String(error)).slice(0, 1000)}`;
-				this.readKey = row.key;
+			if (!this.disposed && this.selected === row.key && (position.follow || !position.output)) {
+				position.output = {
+					text: "",
+					readError: `Cannot read output: ${clean(String(error)).slice(0, 1000)}`,
+					settled: false,
+				};
 			}
 		} finally {
 			this.busy = false;
@@ -301,10 +307,6 @@ export class BackgroundTasksMenu implements Component, Focusable {
 						? Math.max(0, Math.min(this.rows.length - 1, index + delta))
 						: (index + delta + this.rows.length) % this.rows.length;
 				this.selected = this.rows[next]?.key;
-				this.text = "";
-				this.readKey = undefined;
-				this.readError = undefined;
-				this.finalRead = false;
 				this.sync();
 				this.queueTick();
 			}
@@ -396,6 +398,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 				...field("Usage", wrap(worker.usage ?? "—")),
 			];
 		}
+		const readError = this.positions.get(row.key)?.output?.readError;
 		const lines = [
 			...field("Status", [status]),
 			...field("Task", [truncateToWidth(task.id, valueWidth, "…")]),
@@ -403,7 +406,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 				"Error",
 				[
 					task.error ? `Task error: ${oneLine(task.error)}` : "",
-					this.readKey === row.key && this.readError ? `Output read error: ${oneLine(this.readError)}` : "",
+					readError ? `Output read error: ${oneLine(readError)}` : "",
 				]
 					.filter(Boolean)
 					.flatMap((error) => wrapTextWithAnsi(theme.fg("error", error), Math.max(1, valueWidth)))
@@ -467,7 +470,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 						.map((line) => theme.fg("toolOutput", line))
 				: [theme.fg("muted", "No workers.")];
 		}
-		const text = this.readKey === row.key ? this.text : (task.projection?.text ?? "Loading…");
+		const text = this.positions.get(row.key)?.output?.text ?? task.projection?.text ?? "Loading…";
 		return clean(text)
 			.split("\n")
 			.map((line) => theme.fg("toolOutput", line));
@@ -539,12 +542,14 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	private scrollPreview(delta: number): void {
 		const { start, max, entries } = this.layout();
 		const position = this.position();
+		const wasFollowing = position.follow;
 		position.scroll = Math.min(max, Math.max(0, start + delta));
 		const entry = entries[position.scroll];
 		position.anchor = entry ? { line: entry.line, column: entry.column } : undefined;
 		// Only an explicit downward movement resumes shell following, never resize/update.
 		position.follow =
 			delta > 0 && position.scroll === max && this.current()?.task.kind === "bash" && !this.current()?.worker;
+		if (position.follow && !wasFollowing) this.queueTick();
 	}
 	private listRowLine(row: Row, width: number): string {
 		const { theme } = this.options;

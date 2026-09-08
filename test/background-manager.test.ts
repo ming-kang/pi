@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sliceText } from "../src/core/background/output.ts";
 import { BackgroundService } from "../src/core/background/service.ts";
 import type { BackgroundTask, BackgroundWorker } from "../src/core/background/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
@@ -269,6 +270,7 @@ describe("BackgroundTasksMenu public service", () => {
 		expect(frame).toContain("line-32");
 		expect(frame).not.toContain("line-41");
 		h.menu.handleInput("\x1b[6~");
+		await vi.advanceTimersByTimeAsync(0);
 		frame = h.render().join("\n");
 		expect(frame).toContain("line-41");
 		expect(frame).toContain("following");
@@ -280,10 +282,71 @@ describe("BackgroundTasksMenu public service", () => {
 		expect(h.render().join("\n")).toContain("line-01");
 		h.setText("one\ntwo");
 		await vi.advanceTimersByTimeAsync(1000);
+		for (let i = 0; i < 8; i++) h.menu.handleInput("\x1b[6~");
+		await vi.advanceTimersByTimeAsync(0);
 		h.menu.handleInput("\x1b[5~");
 		const frame = h.render().join("\n");
 		expect(frame).toContain("one");
 		expect(frame).toContain("two");
+	});
+	it("holds a bounded browsing snapshot across rolling tails, row changes and settlement until following resumes", async () => {
+		const h = harness([task("a", { mode: "background" }), task("b")], 140);
+		const line = (index: number) => `line-${String(index).padStart(4, "0")} ${"x".repeat(50)}\n`;
+		let log = Array.from({ length: 1500 }, (_, index) => line(index + 1)).join("");
+		vi.mocked(h.host.read).mockImplementation(async (id, options) => ({
+			task: h.tasks.find((task) => task.id === id)!,
+			...sliceText(log, options),
+		}));
+		await vi.advanceTimersByTimeAsync(1000);
+		await h.open();
+		h.menu.handleInput("\x1b[5~");
+		const visibleLines = () => h.render().flatMap((line) => line.match(/line-\d{4}/g) ?? []);
+		const before = visibleLines();
+		expect(before.length).toBeGreaterThan(0);
+		log += Array.from({ length: 10 }, (_, index) => line(index + 1501)).join("");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(visibleLines()).toEqual(before);
+		expect(h.render().join("\n")).toContain("browsing");
+
+		h.menu.handleInput("\x1b[D");
+		h.menu.handleInput("\x1b[B");
+		await h.open();
+		h.menu.handleInput("\x1b[D");
+		h.menu.handleInput("\x1b[A");
+		await h.open();
+		expect(visibleLines()).toEqual(before);
+		h.tasks[0]!.status = "failed";
+		h.tasks[0]!.error = "Command exited with code 42";
+		h.tasks[0]!.endedAt = Date.now();
+		h.change();
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(visibleLines()[0]).toBe(before[0]);
+		expect(h.render().join("\n")).toContain("Command exited with code 42");
+
+		for (let i = 0; i < 2; i++) h.menu.handleInput("\x1b[6~");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.render().join("\n")).toContain("following");
+		expect(visibleLines()).toContain("line-1510");
+		expect(h.host.kill).not.toHaveBeenCalled();
+	});
+	it("does not let a pending tail read replace the snapshot after the user starts browsing", async () => {
+		const h = harness([task("bash-1")], 140);
+		await h.open();
+		let resolve!: (value: Awaited<ReturnType<BackgroundManagerHost["read"]>>) => void;
+		vi.mocked(h.host.read).mockImplementationOnce(
+			() =>
+				new Promise((done) => {
+					resolve = done;
+				}),
+		);
+		await vi.advanceTimersByTimeAsync(1000);
+		h.menu.handleInput("\x1b[5~");
+		const visibleLines = () => h.render().filter((line) => line.includes("line-"));
+		const before = visibleLines();
+		resolve({ task: h.tasks[0]!, text: "new tail", totalBytes: 8, truncated: false });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(visibleLines()).toEqual(before);
+		expect(h.render().join("\n")).not.toContain("new tail");
 	});
 	it("requires y confirmation before killing and gives honest stopping feedback", async () => {
 		const h = harness();
@@ -477,7 +540,7 @@ describe("BackgroundTasksMenu public service", () => {
 		h.menu.handleInput("d");
 		expect(h.render().join("\n")).toMatch(/Task\s+bravo/);
 	});
-	it("retains separate row positions across selection, updates, content shrink/grow and resize", async () => {
+	it("retains row snapshots and positions across selection, updates and resize", async () => {
 		const h = harness([task("a"), task("b")], 140);
 		await h.open();
 		h.menu.handleInput("\x1b[5~");
@@ -499,11 +562,15 @@ describe("BackgroundTasksMenu public service", () => {
 		expect(h.menu.render(140).map(stripTerminalSequences).join("\n")).toContain("15–27/40");
 		h.setText("short");
 		await vi.advanceTimersByTimeAsync(1000);
-		expect(h.render().join("\n")).toContain("1–1/1");
+		expect(h.render().join("\n")).toContain("15–27/40");
 		h.setText(Array.from({ length: 50 }, (_, i) => `line-${i + 1}`).join("\n"));
 		await vi.advanceTimersByTimeAsync(1000);
-		expect(h.render().join("\n")).toContain("15–27/50");
+		expect(h.render().join("\n")).toContain("15–27/40");
 		expect(h.render().join("\n")).toContain("browsing");
+		h.menu.handleInput("\x1b[6~");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.render().join("\n")).toContain("38–50/50");
+		expect(h.render().join("\n")).toContain("following");
 	});
 	it("keeps a wrapped source-line anchor when resizing a browsed preview", async () => {
 		const h = harness(undefined, 140);

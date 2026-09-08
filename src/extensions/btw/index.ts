@@ -12,13 +12,13 @@ export default function btwExtension(pi: ExtensionAPI): void {
 	});
 	pi.on("session_start", (_event, ctx) => {
 		unsubscribeSubmit?.();
-		controller.close(false);
+		controller.close();
 		if (ctx.mode === "tui") unsubscribeSubmit = ctx.ui.onEditorSubmit((event) => controller.intercept(event, ctx));
 	});
-	pi.on("session_tree", () => controller.close(false));
+	pi.on("session_tree", () => controller.close());
 	pi.on("session_shutdown", () => {
 		unsubscribeSubmit?.();
 		unsubscribeSubmit = undefined;
-		controller.close(false);
+		controller.close();
 	});
 }

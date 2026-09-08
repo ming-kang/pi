@@ -21,7 +21,7 @@ export class BtwController {
 			ctx.ui.notify("/btw is available in interactive mode.", "warning");
 			return;
 		}
-		this.close(false);
+		this.close();
 		ctx.ui.setEditorText("");
 		const conversation: Conversation = {
 			ctx,
@@ -84,7 +84,7 @@ export class BtwController {
 		return this.submit(event.text);
 	}
 
-	close(clearEditor = true): void {
+	close(): void {
 		const conversation = this.current;
 		if (!conversation) return;
 		this.current = undefined;
@@ -92,7 +92,8 @@ export class BtwController {
 		conversation.panel?.dispose();
 		conversation.agent?.dispose();
 		conversation.ctx.ui.setWidget(BTW_WIDGET, undefined);
-		if (clearEditor) conversation.ctx.ui.setEditorText("");
+		// The open panel owns the editor draft; never hand it back to the main conversation.
+		conversation.ctx.ui.setEditorText("");
 	}
 
 	private submit(text: string): { handled: true; editorText?: string } | undefined {
