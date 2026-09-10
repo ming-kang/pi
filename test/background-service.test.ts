@@ -413,13 +413,16 @@ describe("bounded lifecycle and snapshots", () => {
 		const bg = service();
 		for (let i = 0; i < 40; i++) await bg.execute(job({ run: async () => ({ result: result() }) }).execution);
 		expect(bg.list()).toHaveLength(32);
+		for (let i = 0; i < 32; i++)
+			await bg.execute(job({ background: true, run: async () => ({ result: result() }) }).execution);
+		expect(bg.list()).toHaveLength(64);
 		for (let i = 0; i < 40; i++) {
 			const item = job({ background: true });
 			await bg.execute(item.execution);
 			item.completion.resolve({ result: result() });
 			await tick();
 		}
-		expect(bg.list()).toHaveLength(72);
+		expect(bg.list()).toHaveLength(104);
 		const pending = bg.pendingNotifications();
 		expect(pending).toHaveLength(40);
 		const rejected = job();
@@ -431,7 +434,7 @@ describe("bounded lifecycle and snapshots", () => {
 		}
 		expect(bg.pendingNotifications().map((task) => task.id)).toEqual(pending.map((task) => task.id));
 		for (const task of pending) bg.markDelivered(task.id);
-		expect(bg.list()).toHaveLength(32);
+		expect(bg.list()).toHaveLength(64);
 		await bg.execute(job({ run: async () => ({ result: result() }) }).execution);
 	});
 
@@ -656,7 +659,7 @@ describe("handoff and cleanup races", () => {
 
 	it("bounds claimed history instead of letting stalled delivery grow records indefinitely", async () => {
 		const bg = service({ maxActive: 1, maxHistory: 1 });
-		for (let i = 0; i < 3; i++) {
+		for (let i = 0; i < 4; i++) {
 			const item = job({ background: true });
 			await bg.execute(item.execution);
 			item.completion.resolve({ result: result() });
@@ -664,7 +667,7 @@ describe("handoff and cleanup races", () => {
 			expect(bg.claimNotification(item.control.id)).toBe(true);
 		}
 		await expect(bg.execute(job().execution)).rejects.toThrow("retention limit");
-		expect(bg.list()).toHaveLength(3);
+		expect(bg.list()).toHaveLength(4);
 		for (const task of bg.list()) bg.markDelivered(task.id);
 		expect(bg.list()).toHaveLength(1);
 		await bg.execute(job({ run: async () => ({ result: result() }) }).execution);

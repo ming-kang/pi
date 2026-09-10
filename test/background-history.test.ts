@@ -174,13 +174,13 @@ describe("terminal history restoration", () => {
 	it("bounds restoration even when every retained record is pinned", () => {
 		const bg = service({ maxHistory: 1, maxActive: 1 });
 		const releases: Array<() => void> = [];
-		for (let index = 0; index < 3; index++) {
+		for (let index = 0; index < 4; index++) {
 			const id = `bash-pinned-${index}`;
 			bg.restoreHistory([savedTask(id)]);
 			releases.push(bg.pin(id));
 		}
 		bg.restoreHistory([savedTask("bash-over-budget")]);
-		expect(bg.list()).toHaveLength(3);
+		expect(bg.list()).toHaveLength(4);
 		expect(() => bg.get("bash-over-budget")).toThrow("Unknown");
 		for (const release of releases) release();
 		expect(bg.list()).toHaveLength(1);
@@ -214,8 +214,8 @@ describe("terminal history restoration", () => {
 			expect(onSettled).not.toHaveBeenCalled();
 			expect(observer).not.toHaveBeenCalled();
 			await bg.execute(job({ run: async () => ({ result: result() }) }).execution);
-			expect(bg.list()).toHaveLength(2);
-			expect(() => bg.get("bash-duplicate")).toThrow("Unknown");
+			expect(bg.list()).toHaveLength(3);
+			expect(bg.get("bash-duplicate").title).toBe("new duplicate");
 			await bg.shutdown();
 			expect(await readFile(path, "utf8")).toBe("saved raw log");
 			expect(onCleanupError).not.toHaveBeenCalled();

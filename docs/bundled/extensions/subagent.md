@@ -94,6 +94,8 @@ Background support is enabled by interactive mode. Built-in print, JSON, and RPC
 
 After handoff, the transcript row is a settled submission snapshot, not a still-pending worker view. Use `/bg` for live group/worker progress and outcomes: wide terminals show list and detail side by side, narrow terminals enter detail from the list. Worker display numbers there are stable within the extension runtime; transcript ordinals below remain local input positions. Opening detail only observes work and does not make the parent wait again.
 
+Completed groups remain in `/bg` under **Finished** whether they ran in the foreground or background; foreground groups keep an `fg` tag. Subagent groups share a bounded history with background shell tasks, separate from foreground shell logs, so ordinary shell commands cannot evict their reports. The same independent histories restore from the selected session branch after reload or restart.
+
 Pi's native tool chrome owns the aggregate `● Subagent` call marker and the dim continuation rail. The collapsed view is a compact flow containing one cell per task:
 
 ```text

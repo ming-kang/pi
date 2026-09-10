@@ -436,7 +436,11 @@
 		{
 			"path": "test/",
 			"category": "distribution",
-			"intent": "Tests track the standalone layout and the registered src deviations"
+			"intent": "Tests track the standalone layout and registered src deviations, including independent foreground shell/task history and completed foreground Subagent browsing",
+			"tests": [
+				"test/background-retention.test.ts",
+				"test/background-manager.test.ts"
+			]
 		},
 		{
 			"path": "tsconfig.build.json",

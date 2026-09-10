@@ -821,7 +821,7 @@ describe("BackgroundTasksMenu public service", () => {
 		expect(h.render().join("\n")).not.toContain("y/N");
 		expect(h.host.kill).not.toHaveBeenCalled();
 	});
-	it("omits settled foreground executions from Finished and tags running foreground rows", async () => {
+	it("omits settled foreground shells from Finished and tags running foreground rows", async () => {
 		vi.setSystemTime(1_000_000);
 		const now = Date.now();
 		const h = harness(
@@ -849,14 +849,14 @@ describe("BackgroundTasksMenu public service", () => {
 		expect(frame).toContain("fg · 0s");
 		expect(frame).toContain("cmd-bg-done");
 		expect(frame).not.toContain("cmd-fg-done");
-		expect(frame).toContain("1 running · 1 finished · 1 foreground hidden");
+		expect(frame).toContain("1 running · 1 finished · 1 foreground shell hidden");
 	});
-	it("reports hidden settled foreground executions in the empty state", async () => {
+	it("reports hidden settled foreground shells in the empty state", async () => {
 		const h = harness([task("fg-done", { status: "completed", endedAt: Date.now() })], 140);
 		await vi.advanceTimersByTimeAsync(0);
 		const frame = h.render().join("\n");
 		expect(frame).toContain("No background tasks.");
-		expect(frame).toContain("1 foreground hidden");
+		expect(frame).toContain("1 foreground shell hidden");
 		expect(frame).not.toContain("running ·");
 	});
 	it("keeps a selected settled foreground row until the selection moves away", async () => {
@@ -871,6 +871,60 @@ describe("BackgroundTasksMenu public service", () => {
 		await vi.advanceTimersByTimeAsync(0);
 		const frame = h.render().join("\n");
 		expect(frame).not.toContain("npm run build");
-		expect(frame).toContain("1 running · 0 finished · 1 foreground hidden");
+		expect(frame).toContain("1 running · 0 finished · 1 foreground shell hidden");
+	});
+	it.each([60, 140])("shows completed foreground subagents when opening the panel at width %s", async (width) => {
+		const group = task("subagent-fg", {
+			kind: "subagent",
+			title: "Subagent group",
+			command: undefined,
+			status: "completed",
+			endedAt: Date.now(),
+			projection: {
+				workers: [
+					worker("worker-1", { status: "completed", report: { text: "Saved worker report", truncated: false } }),
+				],
+			},
+		});
+		const tasks = [task("bash-live"), group];
+		const h = harness(tasks, width, 32);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.render().join("\n")).toContain("1 running · 1 finished");
+		expect(h.render().join("\n")).toContain("#2 Explorer");
+		h.menu.handleInput("\x1b[B");
+		expect(h.render().join("\n")).toContain("fg · 0s ago");
+		h.menu.handleInput("\x1b[B");
+		await h.open();
+		expect(h.render().join("\n")).toContain("Saved worker report");
+		h.menu.dispose();
+		const reopened = harness(tasks, width, 32);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(reopened.render().join("\n")).toContain("#2 Explorer");
+		expect(group.mode).toBe("foreground");
+		expect(h.host.kill).not.toHaveBeenCalled();
+	});
+	it("keeps a foreground subagent in Finished after settlement and selection moves away", async () => {
+		const group = task("subagent-fg", {
+			kind: "subagent",
+			title: "Subagent group",
+			command: undefined,
+			projection: { workers: [worker("worker-1")] },
+		});
+		const h = harness([group, task("bash-live")], 140);
+		h.menu.handleInput("\x1b[B");
+		group.status = "completed";
+		group.endedAt = Date.now();
+		group.projection!.workers![0]!.status = "completed";
+		group.projection!.workers![0]!.report.text = "Finished while watched";
+		h.change();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.render().join("\n")).toContain("Finished while watched");
+		h.menu.handleInput("\x1b[A");
+		h.menu.handleInput("\x1b[A");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.render().join("\n")).toMatch(/Task\s+bash-live/);
+		expect(h.render().join("\n")).toContain("1 running · 1 finished");
+		expect(h.render().join("\n")).toContain("#2 Explorer");
+		expect(h.render().join("\n")).not.toContain("foreground shells hidden");
 	});
 });

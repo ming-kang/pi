@@ -14,6 +14,7 @@ import {
 	type BackgroundTask,
 	type BackgroundWorker,
 	isBackgroundTerminal,
+	isForegroundShellTask,
 } from "../../core/background/types.ts";
 import type { KeybindingsManager } from "../../core/keybindings.ts";
 import { DynamicBorder } from "../../modes/interactive/components/dynamic-border.ts";
@@ -184,14 +185,13 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const running = tasks
 			.filter((task) => !isBackgroundTerminal(task.status))
 			.sort((a, b) => b.startedAt - a.startedAt);
-		// Finished history holds backgrounded work: a settled foreground execution
-		// already delivered its result in the transcript. Exception: the selected
-		// row never disappears mid-watch when its execution settles.
+		// Finished includes every subagent group and background shell. Foreground
+		// shells deliver inline, except the selected row stays until selection moves.
 		const selectedTask = this.selected?.split("/")[0];
 		const settled = tasks
 			.filter((task) => isBackgroundTerminal(task.status))
 			.sort((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt));
-		const finished = settled.filter((task) => task.mode === "background" || task.id === selectedTask);
+		const finished = settled.filter((task) => !isForegroundShellTask(task) || task.id === selectedTask);
 		this.runningCount = running.length;
 		this.finishedCount = finished.length;
 		this.hiddenFinished = settled.length - finished.length;
@@ -560,12 +560,11 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const cursor = selected ? theme.fg(this.focus === "list" ? "accent" : "muted", "→ ") : "  ";
 		const indent = row.worker ? "  " : "";
 		const terminal = isBackgroundTerminal(row.task.status);
-		// Live foreground executions carry an `fg` tag so their presence in a
-		// background panel is self-explanatory; settled ones leave the list.
+		// Foreground mode stays explicit, including completed subagent groups.
 		let time = "";
 		if (!row.worker) {
 			time = terminal ? formatAge(row.task.endedAt ?? row.task.startedAt, now) : runtimeLabel(row.task, now);
-			if (!terminal && row.task.mode === "foreground") time = `fg · ${time}`;
+			if (row.task.mode === "foreground") time = `fg · ${time}`;
 		}
 		const timeWidth = time ? visibleWidth(time) + 1 : 0;
 		const labelWidth = Math.max(1, width - 2 - indent.length - visibleWidth(glyph) - 1 - timeWidth);
@@ -617,7 +616,10 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const rule = () => new DynamicBorder((text) => theme.fg("border", text)).render(width)[0] ?? "";
 		const title = theme.fg("accent", theme.bold("Background tasks"));
 		const counts = `${this.runningCount} running · ${this.finishedCount} finished`;
-		const hiddenNote = this.hiddenFinished > 0 ? `${this.hiddenFinished} foreground hidden` : "";
+		const hiddenNote =
+			this.hiddenFinished > 0
+				? `${this.hiddenFinished} foreground shell${this.hiddenFinished === 1 ? "" : "s"} hidden`
+				: "";
 		const statsText =
 			this.runningCount + this.finishedCount > 0 ? (hiddenNote ? `${counts} · ${hiddenNote}` : counts) : hiddenNote;
 		const stats = statsText ? theme.fg("muted", statsText) : "";

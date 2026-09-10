@@ -14,6 +14,7 @@ import {
 	type BackgroundServiceOptions,
 	type BackgroundTask,
 	type BackgroundToolOutcome,
+	isForegroundShellTask,
 	SUBAGENT_BACKGROUND_REJECTION,
 } from "./types.ts";
 
@@ -58,6 +59,14 @@ function storeResult(task: BackgroundTask, result: AgentToolResult<unknown>, tru
 		});
 }
 
+function oldestTask(tasks: Iterable<BackgroundTask>): BackgroundTask | undefined {
+	let oldest: BackgroundTask | undefined;
+	for (const task of tasks) {
+		if (!oldest || task.endedAt! < oldest.endedAt!) oldest = task;
+	}
+	return oldest;
+}
+
 /** Session-local supervision. Executors own their processes, workers and output files. */
 export class BackgroundService implements BackgroundContext {
 	private readonly records = new Map<string, RecordState>();
@@ -81,24 +90,26 @@ export class BackgroundService implements BackgroundContext {
 		this.configuredEnabled = options.enabled ?? false;
 		this.maxActive = Math.max(1, finiteLimit(options.maxActive, 8, 128));
 		this.maxHistory = finiteLimit(options.maxHistory, 32, 1024);
-		this.maxRetained = this.maxActive + 2 * Math.max(1, this.maxHistory);
+		// Separate foreground shell history, plus the existing history/protected-record allowance.
+		this.maxRetained = this.maxActive + 2 * Math.max(1, this.maxHistory) + this.maxHistory;
 	}
 
 	/**
-	 * Rehydrate terminal version-2 custom data only, newest endedAt first (later input
-	 * wins ties). Existing runtime records win ID collisions. No execution, accounting,
+	 * Rehydrate terminal version-2 custom data only, newest endedAt in each history
+	 * (later input wins ties). Existing runtime records win ID collisions. No execution, accounting,
 	 * notification, or deletion ownership is restored, including for worker projections.
 	 * The host supplies the current branch; closed services ignore restoration.
 	 */
 	restoreHistory(records: readonly unknown[]): void {
 		if (this.closed) return;
 		// Restoration must not evict runtime-owned records or run their cleanup callbacks.
+		const history = this.historyRecords();
+		const shells = history.filter((record) => isForegroundShellTask(record.task)).length;
+		const shellCapacity = Math.max(0, this.maxHistory - shells);
+		const taskCapacity = Math.max(0, this.maxHistory - (history.length - shells));
 		const capacity = Math.max(
 			0,
-			Math.min(
-				this.maxHistory - this.historyRecords().length,
-				this.maxRetained - this.records.size - this.cleanups.size,
-			),
+			Math.min(shellCapacity + taskCapacity, this.maxRetained - this.records.size - this.cleanups.size),
 		);
 		const newest = new Map<string, BackgroundTask>();
 		for (const value of records) {
@@ -113,13 +124,17 @@ export class BackgroundService implements BackgroundContext {
 			const previous = newest.get(task.id);
 			if (previous && previous.endedAt! > task.endedAt!) continue;
 			newest.delete(task.id);
+			const shell = isForegroundShellTask(task);
+			const limit = shell ? shellCapacity : taskCapacity;
+			if (limit === 0) continue;
 			newest.set(task.id, task);
+			const group = [...newest.values()].filter((candidate) => isForegroundShellTask(candidate) === shell);
+			if (group.length > limit) newest.delete(oldestTask(group)!.id);
 			if (newest.size > capacity) {
-				let oldest: BackgroundTask | undefined;
-				for (const candidate of newest.values()) {
-					if (!oldest || candidate.endedAt! < oldest.endedAt!) oldest = candidate;
-				}
-				newest.delete(oldest!.id);
+				// Protected runtime records can leave less room than both histories allow.
+				// Restore inspectable tasks before hidden foreground shell logs in that case.
+				const foreground = [...newest.values()].filter(isForegroundShellTask);
+				newest.delete(oldestTask(foreground.length ? foreground : newest.values())!.id);
 			}
 		}
 		for (const task of [...newest.values()].sort((a, b) => a.endedAt! - b.endedAt!)) {
@@ -629,10 +644,13 @@ export class BackgroundService implements BackgroundContext {
 		const history = this.historyRecords();
 		// Delivered history can be restored from branch snapshots; hidden rows must
 		// not occupy the current branch's history budget. Pending results stay owned.
-		const hidden = history.filter((record) => !record.visible);
-		const visible = history.filter((record) => record.visible);
-		visible.sort((left, right) => (left.task.endedAt ?? 0) - (right.task.endedAt ?? 0));
-		for (const record of [...hidden, ...visible.slice(0, Math.max(0, visible.length - this.maxHistory))]) {
+		const expired = history.filter((record) => !record.visible);
+		for (const shell of [false, true]) {
+			const group = history.filter((record) => record.visible && isForegroundShellTask(record.task) === shell);
+			group.sort((left, right) => (left.task.endedAt ?? 0) - (right.task.endedAt ?? 0));
+			expired.push(...group.slice(0, Math.max(0, group.length - this.maxHistory)));
+		}
+		for (const record of expired) {
 			this.records.delete(record.task.id);
 			this.cleanupOutput(record);
 		}

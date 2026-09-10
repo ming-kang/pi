@@ -156,6 +156,7 @@ export interface BackgroundServiceOptions {
 	role?: "main" | "subagent";
 	anchor?: () => string | null;
 	maxActive?: number;
+	/** Per-history limit: foreground shells and background tasks/all subagents each get this allowance. */
 	maxHistory?: number;
 	/** Best-effort cleanup errors, bounded to 4096 bytes; no retries or execution failure. */
 	onCleanupError?: (message: string) => void;
@@ -168,6 +169,11 @@ export const SUBAGENT_BACKGROUND_REJECTION =
 
 export function isBackgroundTerminal(status: BackgroundStatus): boolean {
 	return status !== "queued" && status !== "running" && status !== "stopping";
+}
+
+/** Foreground shell logs have their own history; subagent groups remain inspectable in either mode. */
+export function isForegroundShellTask(task: Pick<BackgroundTask, "kind" | "mode">): boolean {
+	return task.kind === "bash" && task.mode === "foreground";
 }
 
 /** Preserve the foreground throwing contract without guessing status from output text. */
