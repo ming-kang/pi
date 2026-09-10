@@ -113,6 +113,81 @@ describe("BackgroundTasksMenu public service", () => {
 		for (const menu of menus.splice(0)) menu.dispose();
 		vi.useRealTimers();
 	});
+	it.each([60, 140])("animates within a second without polling output more often at width %i", async (width) => {
+		vi.setSystemTime(0);
+		const h = harness([task("bash-1")], width);
+		await vi.advanceTimersByTimeAsync(0);
+		const frames: string[] = [];
+		h.tui.requestRender.mockImplementation(() => {
+			frames.push(h.render().join("\n"));
+		});
+		const reads = vi.mocked(h.host.read).mock.calls.length;
+		const list = vi.spyOn(h.host, "list");
+		await vi.advanceTimersByTimeAsync(480);
+		expect(new Set(frames).size).toBeGreaterThanOrEqual(4);
+		for (const frame of frames) expect(frame).toContain("running · foreground · 0s");
+		expect(h.host.read).toHaveBeenCalledTimes(reads);
+		expect(list).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(520);
+		expect(h.host.read).toHaveBeenCalledTimes(reads + (width >= 100 ? 1 : 0));
+		expect(frames.at(-1)).toContain("running · foreground · 1s");
+	});
+	it("keeps animating while a selected output read is pending", async () => {
+		vi.setSystemTime(0);
+		const h = harness([task("bash-1")], 60);
+		let resolve!: (value: Awaited<ReturnType<BackgroundManagerHost["read"]>>) => void;
+		vi.mocked(h.host.read).mockImplementationOnce(
+			() =>
+				new Promise((done) => {
+					resolve = done;
+				}),
+		);
+		await h.open();
+		const frames: string[] = [];
+		h.tui.requestRender.mockImplementation(() => {
+			frames.push(h.render().join("\n"));
+		});
+		await vi.advanceTimersByTimeAsync(750);
+		expect(new Set(frames).size).toBeGreaterThanOrEqual(4);
+		expect(h.host.read).toHaveBeenCalledOnce();
+		resolve({ task: h.tasks[0]!, text: "new output", totalBytes: 10, truncated: false });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(frames.at(-1)).toContain("new output");
+	});
+	it("starts animation for newly running workers and stops it when they settle", async () => {
+		vi.setSystemTime(0);
+		const activeWorker = worker("worker-1", { status: "queued" });
+		const group = task("group-1", {
+			kind: "subagent",
+			status: "stopping",
+			projection: { workers: [activeWorker] },
+		});
+		const h = harness([group], 140, 24, 60_000);
+		await h.open();
+		h.tui.requestRender.mockClear();
+		await vi.advanceTimersByTimeAsync(750);
+		expect(h.tui.requestRender).not.toHaveBeenCalled();
+		activeWorker.status = "running";
+		h.change();
+		h.change(); // repeated progress must not add animation timers
+		const frames: string[] = [];
+		h.tui.requestRender.mockImplementation(() => {
+			frames.push(h.render().join("\n"));
+		});
+		await vi.advanceTimersByTimeAsync(750);
+		expect(new Set(frames).size).toBeGreaterThanOrEqual(4);
+		expect(frames.length).toBeLessThanOrEqual(7);
+		activeWorker.status = "completed";
+		group.status = "completed";
+		group.endedAt = Date.now();
+		h.change();
+		await h.open();
+		expect(h.render().join("\n")).toContain("✓ #2 Explorer");
+		h.tui.requestRender.mockClear();
+		await vi.advanceTimersByTimeAsync(750);
+		expect(h.tui.requestRender).not.toHaveBeenCalled();
+		expect(h.host.read).not.toHaveBeenCalled();
+	});
 	it("does not read hidden output in a narrow list; drilldown and ordinary close never kill", async () => {
 		const h = harness([task("bash-1")], 60);
 		await vi.advanceTimersByTimeAsync(2000);
@@ -470,7 +545,7 @@ describe("BackgroundTasksMenu public service", () => {
 		h.menu.dispose();
 		const renders = h.tui.requestRender.mock.calls.length;
 		resolve({ task: h.tasks[0]!, text: "late", totalBytes: 4, truncated: false });
-		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(750);
 		expect(h.tui.requestRender).toHaveBeenCalledTimes(renders);
 		expect(h.unsubscribe).toHaveBeenCalledOnce();
 		expect(h.releases).toEqual(["bash-1"]);

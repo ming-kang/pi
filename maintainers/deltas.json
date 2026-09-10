@@ -436,7 +436,7 @@
 		{
 			"path": "test/",
 			"category": "distribution",
-			"intent": "Tests track the standalone layout and registered src deviations, including independent foreground shell/task history and completed foreground Subagent browsing",
+			"intent": "Tests track the standalone layout and registered src deviations, including independent foreground shell/task history, completed foreground Subagent browsing, and background-manager spinner animation independent of output polling with settlement/disposal cleanup",
 			"tests": [
 				"test/background-retention.test.ts",
 				"test/background-manager.test.ts"

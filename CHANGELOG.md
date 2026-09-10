@@ -6,6 +6,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Fixed
 
+- Fixed `/bg` spinners advancing only once per second. Animation now refreshes independently of output polling and pending log reads, and stops when no tasks or workers are running or the panel closes.
 - Fixed foreground shell traffic evicting completed background tasks and Subagent groups from `/bg`. Foreground shell history now has an independent quota during execution and session restoration; completed foreground Subagent groups also remain visible in Finished.
 - Fixed BTW drafts surviving successful tree navigation or reload and becoming main-conversation input after the panel closed. Cancelled navigation keeps the side conversation and its draft.
 - Fixed `/bg` browsing jumping as long logs roll forward. Each row keeps its bounded output snapshot across selection changes and pending reads until downward scrolling resumes following; task status and terminal diagnostics continue updating.

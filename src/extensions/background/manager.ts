@@ -19,7 +19,7 @@ import {
 import type { KeybindingsManager } from "../../core/keybindings.ts";
 import { DynamicBorder } from "../../modes/interactive/components/dynamic-border.ts";
 import { keyLabel } from "../../modes/interactive/components/keybinding-hints.ts";
-import { statusMarker } from "../../modes/interactive/components/status-marker.ts";
+import { STATUS_SPINNER_INTERVAL_MS, statusMarker } from "../../modes/interactive/components/status-marker.ts";
 import { getMarkdownTheme, highlightCode, type Theme, type ThemeColor } from "../../modes/interactive/theme/theme.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
 import { runtimeLabel, taskLabel } from "./task-view.ts";
@@ -129,7 +129,8 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	private pinned?: string;
 	private releasePin?: () => void;
 	private unsubscribe: () => void;
-	private timer: ReturnType<typeof setInterval>;
+	private pollTimer: ReturnType<typeof setInterval>;
+	private animationTimer: ReturnType<typeof setInterval> | undefined;
 	private disposed = false;
 	private focus: "list" | "preview" = "list";
 	private pendingKill?: string;
@@ -146,10 +147,10 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		this.sync();
 		this.unsubscribe = options.host.subscribe(() => {
 			this.sync();
-			// Coalesce high-frequency progress; the timer reads only visible output.
+			// Coalesce high-frequency progress; polling reads only visible output.
 		});
-		this.timer = setInterval(() => this.queueTick(), options.pollIntervalMs ?? 1000);
-		this.timer.unref?.();
+		this.pollTimer = setInterval(() => this.queueTick(), options.pollIntervalMs ?? 1000);
+		this.pollTimer.unref?.();
 		this.queueTick();
 	}
 	private queueTick(): void {
@@ -164,7 +165,9 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
-		clearInterval(this.timer);
+		clearInterval(this.pollTimer);
+		clearInterval(this.animationTimer);
+		this.animationTimer = undefined;
 		this.unsubscribe();
 		this.releasePin?.();
 		this.positions.clear();
@@ -212,6 +215,16 @@ export class BackgroundTasksMenu implements Component, Focusable {
 			this.pinned = id;
 			this.releasePin = release;
 			previous?.();
+		}
+		// Spinner frames must advance independently of output polling and pending reads.
+		if (this.rows.some((row) => (row.worker?.status ?? row.task.status) === "running")) {
+			if (!this.animationTimer) {
+				this.animationTimer = setInterval(() => this.options.tui.requestRender(), STATUS_SPINNER_INTERVAL_MS);
+				this.animationTimer.unref?.();
+			}
+		} else {
+			clearInterval(this.animationTimer);
+			this.animationTimer = undefined;
 		}
 	}
 	private async tick(): Promise<void> {
