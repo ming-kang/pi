@@ -4,6 +4,11 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced the bundled `router` extension with `provider`, a minimalist `models.json` editor (`/provider`) with connection, API-type, and model editing, OpenAI-style catalog fetch with Pi-resolved auth, and builtin-catalog field completion; `router.json` and `router-client.json` remain on disk unmigrated, and the Codex-shaped relay request profile no longer applies (requests use Pi's native API implementations).
+- Added three new user-configurable keybindings for `/provider`: `app.provider.switchPaneLeft` and `app.provider.switchPaneRight` for pane switching, and `app.provider.removeEntry` for entry removal.
+
 ### Fixed
 
 - Fixed `/bg` spinners advancing only once per second. Animation now refreshes independently of output polling and pending log reads, and stops when no tasks or workers are running or the panel closes.

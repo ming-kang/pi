@@ -423,6 +423,11 @@ export class ModelRuntime implements Models {
 		return this.snapshot.available;
 	}
 
+	/** The models.json path this runtime loads, or undefined when the file config is disabled. */
+	getModelsPath(): string | undefined {
+		return this.modelsPath;
+	}
+
 	getError(): string | undefined {
 		const errors: string[] = [];
 		const configError = this.config.getError();

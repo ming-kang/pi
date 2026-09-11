@@ -64,6 +64,9 @@ export interface AppKeybindings {
 	"app.btw.cancel": true;
 	"app.btw.scrollUp": true;
 	"app.btw.scrollDown": true;
+	"app.provider.switchPaneLeft": true;
+	"app.provider.switchPaneRight": true;
+	"app.provider.removeEntry": true;
 }
 
 export type AppKeybinding = keyof AppKeybindings;
@@ -272,6 +275,18 @@ export const KEYBINDINGS = {
 	"app.btw.cancel": { defaultKeys: "ctrl+c", description: "Stop the BTW answer, or close when idle" },
 	"app.btw.scrollUp": { defaultKeys: "up", description: "Scroll BTW up when the editor is empty" },
 	"app.btw.scrollDown": { defaultKeys: "down", description: "Scroll BTW down when the editor is empty" },
+	"app.provider.switchPaneLeft": {
+		defaultKeys: "left",
+		description: "/provider: focus the left pane",
+	},
+	"app.provider.switchPaneRight": {
+		defaultKeys: "right",
+		description: "/provider: focus the right pane",
+	},
+	"app.provider.removeEntry": {
+		defaultKeys: "ctrl+x",
+		description: "/provider: remove the selected compat or dictionary entry",
+	},
 } as const satisfies KeybindingDefinitions;
 
 const KEYBINDING_NAME_MIGRATIONS = {

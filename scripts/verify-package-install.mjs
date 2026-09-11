@@ -126,7 +126,7 @@ try {
 		"docs/bundled/extensions/background.md",
 		"docs/bundled/extensions/deepwiki.md",
 		"docs/bundled/extensions/question.md",
-		"docs/bundled/extensions/router.md",
+		"docs/bundled/extensions/provider.md",
 		"docs/bundled/extensions/statusline.md",
 		"docs/bundled/extensions/subagent.md",
 		"docs/bundled/extensions/todo.md",

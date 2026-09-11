@@ -73,8 +73,8 @@
           "path": "bundled/extensions/question.md"
         },
         {
-          "title": "Router",
-          "path": "bundled/extensions/router.md"
+          "title": "Provider",
+          "path": "bundled/extensions/provider.md"
         },
         {
           "title": "Statusline",

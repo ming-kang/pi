@@ -171,6 +171,9 @@ These actions apply while the [BTW panel](bundled/extensions/btw.md) is open and
 | `app.model.cycleForward` | `ctrl+p` | Cycle to next model |
 | `app.model.cycleBackward` | `shift+ctrl+p` (`alt+p` on Windows and WSL) | Cycle to previous model |
 | `app.models.save` | `ctrl+s` | Save the selected default model or scoped model configuration to settings |
+| `app.provider.switchPaneLeft` | `left` | Focus the left pane in /provider |
+| `app.provider.switchPaneRight` | `right` | Focus the right pane in /provider |
+| `app.provider.removeEntry` | `ctrl+x` | Remove the selected compat or dictionary entry in /provider |
 | `app.thinking.cycle` | `shift+tab` | Cycle thinking level |
 | `app.thinking.save` | `ctrl+s` | Save current thinking level to settings |
 | `app.thinking.toggle` | `ctrl+t` | Collapse or expand thinking blocks |

@@ -144,7 +144,7 @@
 		{
 			"path": "src/core/keybindings.ts",
 			"category": "ui",
-			"intent": "Adds configurable app.list.toggle, app.backgroundTasks.* (detach, list/preview focus, kill), and app.btw.* (close, cancel, scroll) bindings",
+			"intent": "Adds configurable app.list.toggle, app.backgroundTasks.* (detach, list/preview focus, kill), app.btw.* (close, cancel, scroll), and app.provider.* (/provider pane focus, entry removal) bindings",
 			"tests": [
 				"test/keybindings.test.ts",
 				"test/btw-extension.test.ts"
@@ -157,6 +157,12 @@
 			"tests": [
 				"test/extensions-runner.test.ts"
 			]
+		},
+		{
+			"path": "src/core/model-runtime.ts",
+			"category": "extension-support",
+			"intent": "Read-only ModelRuntime.getModelsPath() accessor so the bundled /provider extension edits the same models.json the runtime loads, including custom or disabled SDK paths",
+			"tests": []
 		},
 		{
 			"path": "src/core/resource-loader.ts",

@@ -13,7 +13,7 @@ These hidden built-ins use the same public Extension API available to external e
 | [BTW](extensions/btw.md) | `/btw [question]` | Ask temporary side questions with the current context while the main task continues |
 | [DeepWiki](extensions/deepwiki.md) | `deepwiki` | Query indexed public GitHub repository documentation |
 | [Question](extensions/question.md) | `question` | Ask structured questions through native interactive UI |
-| [Router](extensions/router.md) | `/router` | Configure and probe Codex-style routing endpoints |
+| [Provider](extensions/provider.md) | `/provider` | Edit models.json providers: connection, API type, and models |
 | [Statusline](extensions/statusline.md) | Footer status | Show concise extension-managed activity state |
 | [Subagent](extensions/subagent.md) | `subagent`, `/agents` | Delegate bounded work to isolated child Pi sessions |
 | [Todo](extensions/todo.md) | `todo`, `/todos` | Track ordered multi-step work in a compact one-line widget |

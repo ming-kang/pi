@@ -1,0 +1,113 @@
+# provider — visual models.json editor
+
+Minimalist visual editor for the `providers` record of `models.json` (`~/.pi/agent/models.json`; respects `PI_CODING_AGENT_DIR`). The extension never registers runtime providers and stores no parallel configuration; Pi's native [models.json](../../models.md) mechanism remains the source of truth. See [Providers](../../providers.md) for credential setup and runtime resolution.
+
+## Usage
+
+`/provider` requires interactive TUI mode.
+
+```text
+/provider         Open the searchable provider list (+ New Provider)
+/provider <id>    Jump straight into a provider editor
+```
+
+## Editor layout and controls
+
+`/provider` presents a two-pane editor:
+
+- **Left column:** Navigation list containing Authentication, API Type, Fetch Models, the provider's configured models (display name → `id` → `"New Model"` draft fallback; at most one draft at a time), `+ Add Model`, and `Delete Provider`.
+- **Right column:** Hosts the selected item's field pane and sub-pane stack.
+
+Both columns keep independent selection and scroll positions.
+
+### Key controls
+
+| Key | Default | Action |
+|---|---|---|
+| `↑` / `↓` | `up` / `down` | Navigate rows (wraps at list boundaries) |
+| `←` | `app.provider.switchPaneLeft` (`left`) | Focus the left navigation pane |
+| `→` | `app.provider.switchPaneRight` (`right`) | Focus the right detail pane |
+| `Enter` | `enter` | Tweak a value or enter a sub-pane |
+| Printable typing | | Overwrite the highlighted text or numeric value |
+| `Space` | `app.list.toggle` (`space`) | Toggle booleans and checklist items |
+| `Ctrl+X` | `app.provider.removeEntry` (`ctrl+x`) | Remove the selected compat or dictionary entry |
+| `Esc` | `escape` | Cancel current edit, pop the sub-pane, or return to provider list |
+
+## Provider configuration
+
+### Authentication
+
+Configures connection credentials at the provider level:
+
+- **`baseUrl`**: Endpoint URL (for example, `http://localhost:11434/v1`).
+- **`apiKey`**: Provider API key or credential expression. Literal keys are masked in the display (e.g. `••••••1234`), while environment variable references (`$VAR`) and command substitutions (`!command`) are displayed verbatim. Values are stored raw in `models.json`; variable and command references resolve dynamically at request time.
+- **Precedence hints**: When a higher-priority credential source is active (such as a saved token in `auth.json` or an environment variable), an informational notice indicates that the higher-priority source takes precedence over the `apiKey` row.
+
+### API Type
+
+Single-select picker over Pi's supported API protocols. Common protocols are listed first:
+
+1. `openai-responses`
+2. `openai-completions`
+3. `anthropic-messages`
+4. `google-generative-ai`
+5. `azure-openai-responses`
+6. `openai-codex-responses`
+7. `mistral-conversations`
+8. `google-vertex`
+9. `bedrock-converse-stream`
+10. `pi-messages`
+
+Custom `api` strings already present in `models.json` are preserved. The provider API type can also be set to unset if individual models define their own `api`.
+
+## Model configuration
+
+Selecting a model in the left column displays its editable fields in the right column:
+
+- **`id`**: Model identifier (required, unique per provider). Renaming updates references and store operations immediately.
+- **`name`**: Human-readable display name. When unset, interfaces fall back to showing the `id`.
+- **`reasoning`**: Boolean toggle (`true`, `false`, or unset).
+- **`thinkingLevelMap`**: Sub-pane configuring mappings for all seven Pi thinking levels (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). Each level supports three states:
+  - **String target:** Maps to a specific provider effort string.
+  - **Hidden (`null`):** Explicitly hides the thinking level from selection.
+  - **Inherit:** Removes the key, falling back to Pi's default level handling.
+- **`input`**: Modality checkboxes for `text` and `image`. At least one input modality must remain selected.
+- **`cost`**: Sub-pane for $/M-token rates (`input`, `output`, `cacheRead`, `cacheWrite`). Edits require a complete cost object (unspecified rates default to `0`). Existing custom cost `tiers` are preserved read-only.
+- **`contextWindow`**: Positive integer total context token limit.
+- **`maxTokens`**: Positive integer maximum generation token limit.
+- **`compat`**: Sub-pane configuring provider compatibility flags selected from a per-API known-field catalog picker. Open dictionary fields (`chatTemplateKwargs` and `chatTemplateArgs`) allow arbitrary keys. Pressing `Ctrl+X` removes an entry to restore inherited behavior.
+
+The active session model and its provider cannot be deleted or renamed; switch models with `/model` first.
+
+## Fetch Models
+
+Triggers an OpenAI-compatible discovery request: `GET {baseUrl}/models`.
+
+- **Authentication:** Credentials resolve through Pi's canonical resolution chain (`auth.json` > environment variables > `models.json`). Raw `$VAR` or `!command` placeholders are never transmitted unresolved; discovery aborts if configured credentials cannot be resolved.
+- **Limits:** Requests time out after 10 seconds, and responses are bounded to 4 MiB (error payloads are bounded to 4 KiB and displayed up to 400 characters). Catalogs are capped at 2,000 models.
+- **Checklist import:** Discovered models appear in a searchable checklist. Models already configured in `models.json` are marked `Added` and cannot be checked. Selecting models and confirming appends `{ id, name? }` records, saves immediately, and refreshes the provider runtime.
+
+## Use Built-in Data
+
+The `Use Built-in Data` row in a model's field list provides field-level completion from Pi's built-in model catalog:
+
+- **Matching:** Queries Pi's catalog using exact ID matches first, then normalized ID comparisons, then fuzzy search. Ties prefer entries sharing the model's effective API protocol. Up to 8 candidates are presented.
+- **Preview:** Selecting a candidate displays a per-field comparison (`current → reference`).
+- **Default selections:** Unset scalar fields (`name`, `reasoning`, `input`, `contextWindow`, `maxTokens`) are pre-checked. Explicitly configured values remain unchecked. `thinkingLevelMap`, `compat`, and `cost` are always opt-in.
+- **Safety boundaries:** Cross-API thinking maps and compat dictionaries are view-only and cannot be imported. Cost tiers from the reference are never imported. Identity and connection fields (`provider`, `id`, `api`, `baseUrl`, keys) are never altered. Pressing `Esc` discards the preview without applying changes.
+
+## Persistence and runtime refresh
+
+- **Atomic locking:** Edits save immediately. Writes acquire a cross-process lock via `proper-lockfile`, write to a temporary file in the same directory, validate the candidate file with `ModelConfig`, and atomically rename it into place.
+- **Backup:** The first successful write in a session creates `models.json.bak` from the existing file content.
+- **Formatting:** Comments and custom indentation are normalized to two-space JSON on save. Unknown top-level and nested fields are preserved verbatim.
+- **Conflict resolution:** Concurrent external edits to unrelated fields merge automatically. Edits to the same field surface in an interactive Conflict pane where each field is resolved individually (`Keep my value` or `Use external value`).
+- **Runtime refresh:** An offline-scoped refresh (`allowNetwork: false`) synchronizes the runtime when `/provider` closes (or immediately following a Fetch Models import). Save errors and runtime refresh errors are reported independently.
+- **Overlay behavior:** Configuring a provider whose ID matches a Pi built-in provider overlays that catalog. Deleting the provider configuration unmasks the built-in models. Existing `modelOverrides` in `models.json` remain preserved and take precedence over fields edited here.
+
+## Migration from router
+
+The `provider` extension replaces the retired `router` extension.
+
+- Existing `~/.pi/agent/router.json` and `~/.pi/agent/router-client.json` files remain on disk unmigrated for manual reference.
+- The previous Codex 0.153.4-pinned relay request profile is discontinued. Requests now follow Pi's native API implementations and standard `models.json` `compat` options.
