@@ -28,14 +28,12 @@ type FieldRow =
 	| { kind: "deleteModel" };
 
 export class ModelFieldsPane implements EditorPane {
-	readonly crumb: string;
 	private readonly rows: FieldRow[];
 	private index = 0;
 	private editing: ValueEditor | undefined;
 	private editingRow: FieldRow | undefined;
 	private error: string | undefined;
 	private focused = false;
-	private reasoningChoice: number | undefined; // 0 true · 1 false · 2 unset
 
 	private readonly host: EditorHost;
 	private readonly model: ModelHandle;
@@ -56,8 +54,6 @@ export class ModelFieldsPane implements EditorPane {
 		];
 		if (!model.isDraft) rows.push({ kind: "builtin" }, { kind: "deleteModel" });
 		this.rows = rows;
-		const current = model.read();
-		this.crumb = current.name ?? current.id ?? "New Model";
 	}
 
 	/** Enter id editing immediately (used right after + Add Model). */
@@ -81,18 +77,6 @@ export class ModelFieldsPane implements EditorPane {
 		for (const [rowIndex, row] of this.rows.entries()) {
 			const active = rowIndex === this.index;
 			lines.push(this.renderRow(row, current, active, width));
-		}
-		if (this.reasoningChoice !== undefined) {
-			for (const [choiceIndex, label] of ["true", "false", "unset (default: false)"].entries()) {
-				lines.push(
-					renderPlainLine(theme, label, {
-						active: choiceIndex === this.reasoningChoice,
-						paneFocused: this.focused,
-						dim: choiceIndex === 2,
-						width,
-					}),
-				);
-			}
 		}
 		if (this.error) lines.push(theme.fg("error", truncate(this.error, Math.max(10, width - 2))));
 		return lines;
@@ -124,7 +108,7 @@ export class ModelFieldsPane implements EditorPane {
 				const value = current.reasoning;
 				return renderKeyValueLine(theme, {
 					keyLabel: "reasoning",
-					valueText: value === undefined ? "false (default)" : String(value),
+					valueText: `${value === undefined ? "false (default)" : String(value)} →`,
 					unset: value === undefined,
 					active,
 					paneFocused: this.focused,
@@ -215,10 +199,6 @@ export class ModelFieldsPane implements EditorPane {
 			this.host.refresh();
 			return;
 		}
-		if (this.reasoningChoice !== undefined) {
-			this.handleReasoningChoice(data);
-			return;
-		}
 		if (kb.matches(data, "tui.select.up")) {
 			this.index = this.index === 0 ? this.rows.length - 1 : this.index - 1;
 			this.host.refresh();
@@ -262,9 +242,7 @@ export class ModelFieldsPane implements EditorPane {
 				this.beginEdit("tweak");
 				return;
 			case "reasoning":
-				this.reasoningChoice =
-					this.model.read().reasoning === true ? 0 : this.model.read().reasoning === false ? 1 : 2;
-				this.host.refresh();
+				this.host.pushPane(new ReasoningPane(this.host, this.model));
 				return;
 			case "subpage":
 				this.pushSubpage(row.key);
@@ -404,32 +382,6 @@ export class ModelFieldsPane implements EditorPane {
 		}
 	}
 
-	private handleReasoningChoice(data: string): void {
-		const kb = this.host.keybindings;
-		if (kb.matches(data, "tui.select.up")) {
-			this.reasoningChoice = this.reasoningChoice === 0 ? 2 : (this.reasoningChoice ?? 0) - 1;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.down")) {
-			this.reasoningChoice = ((this.reasoningChoice ?? 0) + 1) % 3;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.cancel")) {
-			this.reasoningChoice = undefined;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.confirm")) {
-			const choice = this.reasoningChoice ?? 0;
-			this.reasoningChoice = undefined;
-			this.host.mutate(() =>
-				this.model.setField(["reasoning"], choice === 0 ? true : choice === 1 ? false : DELETE),
-			);
-		}
-	}
-
 	setFocused(focused: boolean): void {
 		this.focused = focused;
 		if (this.editing) this.editing.focused = focused;
@@ -441,17 +393,86 @@ export class ModelFieldsPane implements EditorPane {
 
 	hints(): string {
 		if (this.editing) return [keyHint("tui.input.submit", "save"), keyHint("tui.select.cancel", "cancel")].join("  ");
-		if (this.reasoningChoice !== undefined)
-			return [
-				rawKeyHint("↑↓", "move"),
-				keyHint("tui.select.confirm", "set"),
-				keyHint("tui.select.cancel", "cancel"),
-			].join("  ");
 		return [
 			rawKeyHint("type", "overwrite"),
 			keyHint("tui.select.confirm", "edit / enter"),
 			keyHint("app.list.toggle", "toggle"),
 			keyHint("app.provider.switchPaneLeft", "focus left"),
+			keyHint("tui.select.cancel", "back"),
+		].join("  ");
+	}
+}
+
+// -------------------------------------------------------------------------
+// reasoning
+// -------------------------------------------------------------------------
+
+const REASONING_OPTIONS = [
+	{ label: "true", value: true },
+	{ label: "false", value: false },
+	{ label: "unset (default: false)", value: undefined },
+] as const;
+
+/** Radio sub-page for reasoning — consistent with the other nested model settings. */
+export class ReasoningPane implements EditorPane {
+	readonly crumb = "reasoning";
+	private index = 0;
+	private focused = false;
+	private readonly host: EditorHost;
+	private readonly model: ModelHandle;
+
+	constructor(host: EditorHost, model: ModelHandle) {
+		this.host = host;
+		this.model = model;
+		const current = model.read().reasoning;
+		this.index = current === true ? 0 : current === false ? 1 : 2;
+	}
+
+	render(width: number): string[] {
+		const theme = this.host.theme;
+		const current = this.model.read().reasoning;
+		return REASONING_OPTIONS.map((option, optionIndex) => {
+			const selected = option.value === undefined ? current === undefined : current === option.value;
+			return renderPlainLine(theme, `${selected ? "●" : "○"} ${option.label}`, {
+				active: optionIndex === this.index,
+				paneFocused: this.focused,
+				dim: option.value === undefined,
+				width,
+			});
+		});
+	}
+
+	handleInput(data: string): void {
+		const kb = this.host.keybindings;
+		if (kb.matches(data, "tui.select.up")) {
+			this.index = this.index === 0 ? REASONING_OPTIONS.length - 1 : this.index - 1;
+			this.host.refresh();
+			return;
+		}
+		if (kb.matches(data, "tui.select.down")) {
+			this.index = (this.index + 1) % REASONING_OPTIONS.length;
+			this.host.refresh();
+			return;
+		}
+		if (kb.matches(data, "tui.select.cancel")) {
+			this.host.popPane();
+			return;
+		}
+		if (kb.matches(data, "tui.select.confirm") || kb.matches(data, "app.list.toggle")) {
+			const option = REASONING_OPTIONS[this.index]!;
+			this.host.mutate(() => this.model.setField(["reasoning"], option.value === undefined ? DELETE : option.value));
+			this.host.popPane();
+		}
+	}
+
+	setFocused(focused: boolean): void {
+		this.focused = focused;
+	}
+
+	hints(): string {
+		return [
+			rawKeyHint("↑↓", "move"),
+			keyHint("tui.select.confirm", "set"),
 			keyHint("tui.select.cancel", "back"),
 		].join("  ");
 	}

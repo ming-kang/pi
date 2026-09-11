@@ -12,6 +12,12 @@ import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 
 export const CURSOR = "›";
 
+/** KeyId → raw terminal data for the few keys ValueEditor replays into Input. */
+const RAW_KEY_SEQUENCES: Record<string, string> = {
+	end: "\x1b[F",
+	"ctrl+e": "\x05",
+};
+
 /** Wraps pi-tui Input with the two /provider entry modes. */
 export class ValueEditor {
 	private readonly input: Input;
@@ -46,8 +52,15 @@ export class ValueEditor {
 	/** Start with the current value and the cursor at the end. */
 	beginTweak(current: string): void {
 		this.input.setValue(current);
-		const endKey = this.keybindings.getKeys("tui.editor.cursorLineEnd")[0];
-		if (endKey) this.input.handleInput(endKey);
+		// Components receive raw terminal data, not KeyIds: feed the configured
+		// line-end key back as the raw sequence the Input matcher understands.
+		for (const key of this.keybindings.getKeys("tui.editor.cursorLineEnd")) {
+			const raw = RAW_KEY_SEQUENCES[key];
+			if (raw) {
+				this.input.handleInput(raw);
+				return;
+			}
+		}
 	}
 
 	get value(): string {
@@ -147,4 +160,29 @@ export function isPrintableInput(data: string): boolean {
 		if (code < 0x20 || code === 0x7f) return false;
 	}
 	return true;
+}
+
+/** Width-aware middle ellipsis for long identifiers: keeps the head and the tail. */
+export function truncateMiddle(text: string, maxWidth: number): string {
+	if (visibleWidth(text) <= maxWidth) return text;
+	if (maxWidth <= 4) return truncateToWidth(text, maxWidth);
+	const headWidth = Math.ceil((maxWidth - 1) / 2);
+	const tailWidth = maxWidth - 1 - headWidth;
+	let head = "";
+	let headUsed = 0;
+	for (const char of text) {
+		const charWidth = visibleWidth(char);
+		if (headUsed + charWidth > headWidth) break;
+		head += char;
+		headUsed += charWidth;
+	}
+	let tail = "";
+	let tailUsed = 0;
+	for (const char of [...text].reverse()) {
+		const charWidth = visibleWidth(char);
+		if (tailUsed + charWidth > tailWidth) break;
+		tail = char + tail;
+		tailUsed += charWidth;
+	}
+	return `${head}…${tail}`;
 }

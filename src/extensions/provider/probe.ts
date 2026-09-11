@@ -22,6 +22,8 @@ export async function probeProviderModels(opts: {
 	baseUrl: string;
 	/** Resolved auth from ModelRuntime.getAuth(). Undefined = anonymous public catalog. */
 	auth?: ModelAuth;
+	/** Effective provider api; selects the protocol's auth header scheme. */
+	api?: string;
 	fetch?: FetchFunction;
 	signal?: AbortSignal;
 	timeoutMs?: number;
@@ -48,7 +50,7 @@ export async function probeProviderModels(opts: {
 
 	try {
 		const url = appendPath(baseUrl, "models");
-		const headers = buildHeaders(opts.auth);
+		const headers = buildHeaders(opts.auth, opts.api);
 		const doFetch = opts.fetch ?? globalThis.fetch;
 		const response = await doFetch(url, { method: "GET", headers, signal: controller.signal });
 		if (!response.ok) {
@@ -101,17 +103,33 @@ function appendPath(base: URL, segment: string): URL {
 	return url;
 }
 
-function buildHeaders(auth: ModelAuth | undefined): Headers {
+function buildHeaders(auth: ModelAuth | undefined, api: string | undefined): Headers {
 	const headers = new Headers();
 	headers.set("accept", "application/json");
 	const configured: ProviderHeaders = auth?.headers ?? {};
 	let hasAuthorization = false;
 	for (const [key, value] of Object.entries(configured)) {
-		// null explicitly removes a header; it also suppresses the default Bearer.
+		// null explicitly removes a header; it also suppresses the default auth header.
 		if (key.toLowerCase() === "authorization") hasAuthorization = true;
 		if (typeof value === "string") headers.set(key, value);
 	}
-	if (auth?.apiKey && !hasAuthorization) headers.set("authorization", `Bearer ${auth.apiKey}`);
+	if (!auth?.apiKey || hasAuthorization) return headers;
+	const lower = (name: string) => Object.keys(configured).some((key) => key.toLowerCase() === name);
+	if (api === "anthropic-messages") {
+		// Mirror pi-ai: OAuth tokens use Bearer; plain keys use x-api-key + version.
+		if (auth.apiKey.includes("sk-ant-oat")) {
+			headers.set("authorization", `Bearer ${auth.apiKey}`);
+		} else {
+			if (!lower("x-api-key")) headers.set("x-api-key", auth.apiKey);
+			if (!lower("anthropic-version")) headers.set("anthropic-version", "2023-06-01");
+		}
+		return headers;
+	}
+	if (api === "google-generative-ai" || api === "google-vertex") {
+		if (!lower("x-goog-api-key")) headers.set("x-goog-api-key", auth.apiKey);
+		return headers;
+	}
+	headers.set("authorization", `Bearer ${auth.apiKey}`);
 	return headers;
 }
 
@@ -125,10 +143,11 @@ function parseOpenAIModels(json: unknown): ProbeModel[] | null {
 		const record = item as Record<string, unknown>;
 		const id = typeof record.id === "string" ? record.id.trim() : "";
 		if (!id) continue;
-		const name =
-			typeof record.name === "string" && record.name.trim() && record.name.trim() !== id
-				? record.name.trim()
-				: undefined;
+		// OpenAI uses `name`; Anthropic's /v1/models uses `display_name`.
+		const displayName = typeof record.name === "string" && record.name.trim() ? record.name.trim() : undefined;
+		const anthropicName =
+			typeof record.display_name === "string" && record.display_name.trim() ? record.display_name.trim() : undefined;
+		const name = (displayName ?? anthropicName) !== id ? (displayName ?? anthropicName) : undefined;
 		models.push(name ? { id, name } : { id });
 	}
 	return models;

@@ -79,6 +79,67 @@ describe("provider probe", () => {
 		expect(new Headers(calls[0]!.init.headers).get("authorization")).toBeNull();
 	});
 
+	test("anthropic-messages uses x-api-key + version, OAuth tokens keep Bearer", async () => {
+		const { fetch, calls } = mockFetch(() => jsonResponse({ data: [] }));
+		await probeProviderModels({
+			baseUrl: "https://api.anthropic.com",
+			auth: { apiKey: "sk-ant-api-key" },
+			api: "anthropic-messages",
+			fetch,
+		});
+		const headers = new Headers(calls[0]!.init.headers);
+		expect(headers.get("x-api-key")).toBe("sk-ant-api-key");
+		expect(headers.get("anthropic-version")).toBe("2023-06-01");
+		expect(headers.get("authorization")).toBeNull();
+
+		await probeProviderModels({
+			baseUrl: "https://api.anthropic.com",
+			auth: { apiKey: "sk-ant-oat-token" },
+			api: "anthropic-messages",
+			fetch,
+		});
+		expect(new Headers(calls[1]!.init.headers).get("authorization")).toBe("Bearer sk-ant-oat-token");
+	});
+
+	test("configured headers win over protocol defaults", async () => {
+		const { fetch, calls } = mockFetch(() => jsonResponse({ data: [] }));
+		await probeProviderModels({
+			baseUrl: "https://api.example.com",
+			auth: { apiKey: "sk-1", headers: { "X-API-Key": "custom", "anthropic-version": "2024-01-01" } },
+			api: "anthropic-messages",
+			fetch,
+		});
+		const headers = new Headers(calls[0]!.init.headers);
+		expect(headers.get("x-api-key")).toBe("custom");
+		expect(headers.get("anthropic-version")).toBe("2024-01-01");
+	});
+
+	test("google apis use x-goog-api-key", async () => {
+		const { fetch, calls } = mockFetch(() => jsonResponse({ data: [] }));
+		await probeProviderModels({
+			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+			auth: { apiKey: "g-key" },
+			api: "google-generative-ai",
+			fetch,
+		});
+		const headers = new Headers(calls[0]!.init.headers);
+		expect(headers.get("x-goog-api-key")).toBe("g-key");
+		expect(headers.get("authorization")).toBeNull();
+	});
+
+	test("anthropic display_name becomes the model name", async () => {
+		const { fetch } = mockFetch(() =>
+			jsonResponse({ data: [{ id: "claude-opus-4-6", display_name: "Claude Opus 4.6" }] }),
+		);
+		const result = await probeProviderModels({
+			baseUrl: "https://api.anthropic.com",
+			api: "anthropic-messages",
+			fetch,
+		});
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(result.models).toEqual([{ id: "claude-opus-4-6", name: "Claude Opus 4.6" }]);
+	});
+
 	test("non-OK responses surface a bounded error body", async () => {
 		const huge = "x".repeat(10_000);
 		const { fetch } = mockFetch(() => new Response(huge, { status: 401 }));

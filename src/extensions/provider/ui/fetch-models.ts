@@ -102,7 +102,7 @@ export class FetchModelsPane implements EditorPane {
 					),
 					renderInfoLine(
 						theme,
-						"OpenAI-compatible GET {baseUrl}/models. Other catalog formats are not parsed yet.",
+						"OpenAI-style GET {baseUrl}/models with a data[] list; the auth header follows the API type (Bearer, x-api-key, …).",
 						width,
 					),
 				];

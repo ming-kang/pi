@@ -32,6 +32,7 @@ import {
 	renderInfoLine,
 	renderKeyValueLine,
 	renderPlainLine,
+	truncateMiddle,
 	ValueEditor,
 } from "./value-row.ts";
 
@@ -58,7 +59,8 @@ type LeftItem =
 	| { kind: "addModel" }
 	| { kind: "deleteProvider" };
 
-const LEFT_WIDTH = 24;
+const LEFT_WIDTH_MIN = 16;
+const LEFT_WIDTH_MAX = 40;
 const LEFT_MAX_VISIBLE = 12;
 const MIN_WIDTH = 56;
 
@@ -369,6 +371,11 @@ export class ProviderEditorScreen implements Component, Focusable {
 				text = "";
 		}
 		const dim = item.kind === "draft" && !this.draft?.fields.name && !this.draft?.fields.id;
+		// Long model names keep head and tail (the distinctive parts) instead of a hard cut.
+		if (item.kind === "model" || item.kind === "draft") {
+			const budget = Math.max(8, width - 2 - (note ? visibleWidth(note) + 1 : 0));
+			text = truncateMiddle(text, budget);
+		}
 		const noteText = note ? theme.fg("dim", ` ${note}`) : "";
 		return truncateToWidth(marker + style(text, dim) + noteText, width);
 	}
@@ -599,7 +606,12 @@ export class ProviderEditorScreen implements Component, Focusable {
 			return { ok: false, error: "An apiKey is configured but did not resolve; check its value." };
 		}
 		const authInfo: ModelAuth | undefined = auth?.auth;
-		return probeProviderModels({ baseUrl: authInfo?.baseUrl ?? baseUrl, auth: authInfo, signal });
+		return probeProviderModels({
+			baseUrl: authInfo?.baseUrl ?? baseUrl,
+			auth: authInfo,
+			api: this.host.effectiveApi({}),
+			signal,
+		});
 	}
 
 	private async importModels(models: readonly ProbeModel[]): Promise<string | undefined> {
@@ -646,7 +658,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 				border,
 			];
 		}
-		const leftWidth = Math.min(LEFT_WIDTH, Math.max(16, Math.floor(width * 0.3)));
+		const leftWidth = this.computeLeftWidth(width);
 		const rightWidth = width - leftWidth - 3;
 		const separator = theme.fg("border", " │ ");
 
@@ -665,6 +677,43 @@ export class ProviderEditorScreen implements Component, Focusable {
 
 		const footerLines = this.renderFooter(width);
 		return [border, title, border, ...body, border, ...footerLines, border];
+	}
+
+	/** Content-driven left width: fits the longest visible label, clamped to 16–40 and 45% of the terminal. */
+	private computeLeftWidth(width: number): number {
+		let longest = 12;
+		for (const item of this.leftItems) {
+			if (item.kind === "separator") continue;
+			let label = "";
+			switch (item.kind) {
+				case "authentication":
+					label = "Authentication";
+					break;
+				case "apiType":
+					label = "API Type";
+					break;
+				case "fetch":
+					label = `Fetch Models${this.fetchStatus ?? ""}`;
+					break;
+				case "model": {
+					const model = this.options.store.getModel(this.options.providerId, item.modelId);
+					label = model ? modelDisplayName(model) : item.modelId;
+					break;
+				}
+				case "draft":
+					label = `${this.draft?.fields.name ?? this.draft?.fields.id ?? "New Model"} · draft`;
+					break;
+				case "addModel":
+					label = "+ Add Model";
+					break;
+				case "deleteProvider":
+					label = "Delete Provider";
+					break;
+			}
+			longest = Math.max(longest, visibleWidth(label));
+		}
+		const fit = Math.max(LEFT_WIDTH_MIN, Math.min(LEFT_WIDTH_MAX, longest + 2));
+		return Math.min(fit, Math.max(LEFT_WIDTH_MIN, Math.floor(width * 0.45)));
 	}
 
 	private renderTitle(width: number): string {
