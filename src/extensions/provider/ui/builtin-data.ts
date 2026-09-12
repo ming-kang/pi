@@ -11,7 +11,7 @@ import type { ModelsJsonModel } from "../../../core/model-config.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { type CatalogEntry, computeFieldChanges, type FieldChange, matchBuiltinModels } from "../catalog.ts";
 import { truncate } from "../constants.ts";
-import { DELETE, jsonEquals } from "../store.ts";
+import { jsonEquals } from "../store.ts";
 import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
 import { renderInfoLine, renderPlainLine, ValueEditor } from "./value-row.ts";
 
@@ -34,7 +34,7 @@ export class BuiltinCandidatesPane implements EditorPane {
 		this.model = model;
 
 		this.query = this.model.read().id ?? "";
-		this.search = new ValueEditor(host.keybindings, {
+		this.search = new ValueEditor({
 			onCommit: () => this.pickCurrent(),
 			onCancel: () => this.host.popPane(),
 		});
@@ -135,6 +135,7 @@ export class BuiltinPreviewPane implements EditorPane {
 	private readonly changes: FieldChange[];
 	private readonly checked: boolean[];
 	private readonly snapshot: Partial<ModelsJsonModel> & { id?: string };
+	private readonly snapshotApi: string | undefined;
 	private index = 0;
 	private expanded: number | undefined;
 	private error: string | undefined;
@@ -150,6 +151,7 @@ export class BuiltinPreviewPane implements EditorPane {
 
 		const current = model.read();
 		this.snapshot = structuredClone(current);
+		this.snapshotApi = host.effectiveApi(current);
 		this.changes = computeFieldChanges(current, reference.model, host.effectiveApi(current));
 		this.checked = this.changes.map((change) => change.checked && change.applicable);
 	}
@@ -243,6 +245,11 @@ export class BuiltinPreviewPane implements EditorPane {
 	private apply(): void {
 		// Re-validate against the live model: a stale preview must not write to a changed model.
 		const current = this.model.read();
+		if (this.host.effectiveApi(current) !== this.snapshotApi) {
+			this.error = "The API changed since this preview opened; reopen to continue.";
+			this.host.refresh();
+			return;
+		}
 		if (!current.id || !jsonEquals(current, this.snapshot)) {
 			this.error = "The model changed since this preview opened; reopen to continue.";
 			this.host.refresh();
@@ -270,7 +277,7 @@ export class BuiltinPreviewPane implements EditorPane {
 		const current = this.model.read();
 		switch (field) {
 			case "name":
-				this.model.setField(["name"], reference.name !== reference.id ? reference.name : DELETE);
+				this.model.setField(["name"], reference.name);
 				return;
 			case "reasoning":
 				this.model.setField(["reasoning"], reference.reasoning);
@@ -291,18 +298,29 @@ export class BuiltinPreviewPane implements EditorPane {
 				return;
 			case "compat":
 				for (const [key, value] of Object.entries(reference.compat ?? {})) {
-					this.model.setField(["compat", key], structuredClone(value));
+					if (
+						["chatTemplateKwargs", "chatTemplateArgs", "openRouterRouting", "vercelGatewayRouting"].includes(
+							key,
+						) &&
+						value !== null &&
+						typeof value === "object" &&
+						!Array.isArray(value)
+					) {
+						for (const [entryKey, entryValue] of Object.entries(value))
+							this.model.setField(["compat", key, entryKey], structuredClone(entryValue));
+					} else this.model.setField(["compat", key], structuredClone(value));
 				}
 				return;
 			case "cost": {
-				const tiers = current.cost?.tiers;
-				this.model.setField(["cost"], {
+				const rates = {
 					input: reference.cost.input,
 					output: reference.cost.output,
 					cacheRead: reference.cost.cacheRead,
 					cacheWrite: reference.cost.cacheWrite,
-					...(tiers ? { tiers } : {}),
-				});
+				};
+				if (current.cost) {
+					for (const [rate, value] of Object.entries(rates)) this.model.setField(["cost", rate], value);
+				} else this.model.setField(["cost"], rates);
 				return;
 			}
 		}

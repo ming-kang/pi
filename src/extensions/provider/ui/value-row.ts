@@ -7,33 +7,25 @@
  * old value, Esc restores.
  */
 
-import { Input, type KeybindingsManager, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { decodeKittyPrintable, Input, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 
 export const CURSOR = "›";
 
-/** KeyId → raw terminal data for the few keys ValueEditor replays into Input. */
-const RAW_KEY_SEQUENCES: Record<string, string> = {
-	end: "\x1b[F",
-	"ctrl+e": "\x05",
-};
+const PASTE_START = "\x1b[200~";
+const PASTE_END = "\x1b[201~";
 
 /** Wraps pi-tui Input with the two /provider entry modes. */
 export class ValueEditor {
 	private readonly input: Input;
-	private readonly keybindings: KeybindingsManager;
 
-	constructor(
-		keybindings: KeybindingsManager,
-		callbacks: {
-			/** Enter pressed; the pane validates and either closes the editor or keeps it open with an error. */
-			onCommit: (value: string) => void;
-			/** Esc pressed; the pane discards the in-progress value. */
-			onCancel: () => void;
-		},
-	) {
-		this.keybindings = keybindings;
-		this.input = new Input();
+	constructor(callbacks: {
+		/** Enter pressed; the pane validates and either closes the editor or keeps it open with an error. */
+		onCommit: (value: string) => void;
+		/** Esc pressed; the pane discards the in-progress value. */
+		onCancel: () => void;
+	}) {
+		this.input = new Input({ prompt: "" });
 		this.input.onSubmit = callbacks.onCommit;
 		this.input.onEscape = callbacks.onCancel;
 	}
@@ -46,21 +38,16 @@ export class ValueEditor {
 
 	/** Reset the text without any editing semantics (search boxes, repurposed inputs). */
 	reset(value: string): void {
-		this.input.setValue(value);
+		this.beginTweak(value);
 	}
 
 	/** Start with the current value and the cursor at the end. */
 	beginTweak(current: string): void {
+		// Native paste insertion positions the cursor without synthesizing a user-bound key.
+		this.input.setValue("");
+		this.input.handleInput(PASTE_START + current + PASTE_END);
+		// Preserve existing values verbatim even when they contain paste-normalized whitespace.
 		this.input.setValue(current);
-		// Components receive raw terminal data, not KeyIds: feed the configured
-		// line-end key back as the raw sequence the Input matcher understands.
-		for (const key of this.keybindings.getKeys("tui.editor.cursorLineEnd")) {
-			const raw = RAW_KEY_SEQUENCES[key];
-			if (raw) {
-				this.input.handleInput(raw);
-				return;
-			}
-		}
 	}
 
 	get value(): string {
@@ -115,7 +102,7 @@ export function renderKeyValueLine(theme: Theme, opts: KeyValueLineOptions): str
 	if (opts.editing) {
 		const head = (opts.active ? theme.fg(color, marker) : marker) + theme.fg(opts.active ? color : "text", keyPrefix);
 		const body = opts.editing.renderLine(Math.max(1, opts.width - visibleWidth(marker) - visibleWidth(keyPrefix)));
-		return truncateToWidth(head + body + note, opts.width);
+		return truncateToWidth(head + theme.fg(opts.active ? color : "text", body) + note, opts.width);
 	}
 	const valueColor = opts.unset ? "dim" : opts.active ? color : "text";
 	const line =
@@ -154,6 +141,7 @@ export function renderInfoLine(theme: Theme, text: string, width: number): strin
 /** True for printable text input (single chars or pasted text), false for key events and control sequences. */
 export function isPrintableInput(data: string): boolean {
 	if (!data) return false;
+	if (data.startsWith(PASTE_START) || decodeKittyPrintable(data) !== undefined) return true;
 	if (data.includes("\x1b") || data.includes("\r") || data.includes("\n")) return false;
 	for (const char of data) {
 		const code = char.codePointAt(0)!;

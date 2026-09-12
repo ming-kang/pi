@@ -1,27 +1,35 @@
 /**
  * Compat field catalog per effective API, derived from pi-ai's public compat
  * types (OpenAICompletionsCompat / OpenAIResponsesCompat /
- * AnthropicMessagesCompat / BedrockCompat). Endpoints configured through
- * /provider are not Pi builtins, so the catalog lists the full type-level
- * field set without per-implementation filtering.
+ * AnthropicMessagesCompat / BedrockCompat). Each API variant exposes only the settings consumed by its published
+ * implementation; existing foreign fields are preserved by the editor.
  */
 
-import type { Api } from "@earendil-works/pi-ai";
+import type {
+	AnthropicMessagesCompat,
+	BedrockCompat,
+	ChatTemplateKwargValue,
+	OpenAICompletionsCompat,
+	OpenAIResponsesCompat,
+} from "@earendil-works/pi-ai";
+import { ModelConfig } from "../../core/model-config.ts";
 
 export type CompatValueKind = "boolean" | "enum" | "number" | "stringMap" | "json";
 
-export interface CompatField {
-	key: string;
-	kind: CompatValueKind;
-	/** Legal values for enum fields. */
-	options?: readonly string[];
-	/** Short single-line description shown in the picker. */
+export type CompatField<Key extends string = string> = {
+	key: Key;
 	note?: string;
-}
+} & ({ kind: "enum"; options: readonly string[] } | { kind: Exclude<CompatValueKind, "enum"> });
+
+export const THINKING_VARIABLES = [
+	"thinking.enabled",
+	"thinking.effort",
+	"thinking.budget",
+] as const satisfies readonly Extract<ChatTemplateKwargValue, { $var: string }>["$var"][];
 
 const SESSION_AFFINITY = ["openai", "openai-nosession", "openrouter"] as const;
 
-const OPENAI_COMPLETIONS_FIELDS: readonly CompatField[] = [
+const OPENAI_COMPLETIONS_FIELDS: readonly CompatField<keyof OpenAICompletionsCompat>[] = [
 	{ key: "supportsStore", kind: "boolean", note: "Accepts the `store` parameter" },
 	{ key: "supportsDeveloperRole", kind: "boolean", note: "Accepts `developer` role messages" },
 	{ key: "supportsReasoningEffort", kind: "boolean", note: "Accepts `reasoning_effort`" },
@@ -71,9 +79,17 @@ const OPENAI_COMPLETIONS_FIELDS: readonly CompatField[] = [
 	{ key: "sessionAffinityFormat", kind: "enum", options: SESSION_AFFINITY, note: "Affinity header format" },
 	{ key: "supportsLongCacheRetention", kind: "boolean", note: "Long-lived prompt cache retention" },
 	{ key: "vllmPriority", kind: "number", note: "vLLM scheduling priority" },
+	{ key: "zaiToolStream", kind: "boolean", note: "Z.AI streaming tool calls" },
+	{ key: "supportsThinkingTokenBudget", kind: "boolean", note: "Enable the thinking-token budget alias" },
+	{
+		key: "thinkingTokenBudgetField",
+		kind: "enum",
+		options: ["thinking_token_budget", "thinking_budget", "thinking_budget_tokens"],
+		note: "Thinking budget field",
+	},
 ];
 
-const OPENAI_RESPONSES_FIELDS: readonly CompatField[] = [
+const OPENAI_RESPONSES_FIELDS: readonly CompatField<keyof OpenAIResponsesCompat>[] = [
 	{ key: "supportsDeveloperRole", kind: "boolean", note: "Accepts `developer` role messages" },
 	{ key: "sessionAffinityFormat", kind: "enum", options: SESSION_AFFINITY, note: "Affinity header format" },
 	{ key: "supportsLongCacheRetention", kind: "boolean", note: "Long-lived prompt cache retention" },
@@ -82,9 +98,10 @@ const OPENAI_RESPONSES_FIELDS: readonly CompatField[] = [
 	{ key: "supportsAdditionalTools", kind: "boolean", note: "Accepts additional hosted tools" },
 	{ key: "supportsToolSearch", kind: "boolean", note: "Tool search support" },
 	{ key: "supportsMaxOutputTokens", kind: "boolean", note: "Accepts `max_output_tokens`" },
+	{ key: "supportsExplicitPromptCacheMode", kind: "boolean", note: "Explicit prompt caching" },
 ];
 
-const ANTHROPIC_MESSAGES_FIELDS: readonly CompatField[] = [
+const ANTHROPIC_MESSAGES_FIELDS: readonly CompatField<keyof AnthropicMessagesCompat>[] = [
 	{ key: "supportsEagerToolInputStreaming", kind: "boolean", note: "Streams tool input eagerly" },
 	{ key: "supportsLongCacheRetention", kind: "boolean", note: "Long-lived prompt cache retention" },
 	{ key: "sendSessionAffinityHeaders", kind: "boolean", note: "Send session affinity headers" },
@@ -97,19 +114,30 @@ const ANTHROPIC_MESSAGES_FIELDS: readonly CompatField[] = [
 	{ key: "supportsToolReferences", kind: "boolean", note: "Tool references support" },
 ];
 
-const BEDROCK_FIELDS: readonly CompatField[] = [
+const BEDROCK_FIELDS: readonly CompatField<keyof BedrockCompat>[] = [
 	{ key: "supportsStrictMode", kind: "boolean", note: "Strict tool schemas" },
 ];
 
 /** Compat fields known for the given effective api; empty when the API consumes no compat object. */
 export function compatFieldsForApi(api: string): readonly CompatField[] {
-	switch (api as Api) {
+	switch (api) {
 		case "openai-completions":
 			return OPENAI_COMPLETIONS_FIELDS;
 		case "openai-responses":
-		case "azure-openai-responses":
-		case "openai-codex-responses":
 			return OPENAI_RESPONSES_FIELDS;
+		case "azure-openai-responses":
+			return OPENAI_RESPONSES_FIELDS.filter((field) =>
+				["supportsDeveloperRole", "supportsStrictMode", "supportsOpenAIGrammarTools"].includes(field.key),
+			);
+		case "openai-codex-responses":
+			return OPENAI_RESPONSES_FIELDS.filter((field) =>
+				[
+					"supportsStrictMode",
+					"supportsOpenAIGrammarTools",
+					"supportsAdditionalTools",
+					"supportsToolSearch",
+				].includes(field.key),
+			);
 		case "anthropic-messages":
 			return ANTHROPIC_MESSAGES_FIELDS;
 		case "bedrock-converse-stream":
@@ -123,78 +151,27 @@ export function compatFieldFor(api: string, key: string): CompatField | undefine
 	return compatFieldsForApi(api).find((field) => field.key === key);
 }
 
-/** Allowed top-level keys for JSON-shaped compat fields; validates shape, not just JSON.parse success. */
-const JSON_FIELD_SHAPES: Record<
-	string,
-	Record<string, "boolean" | "string" | "number" | "array" | "object" | "any">
-> = {
-	openRouterRouting: {
-		allow_fallbacks: "boolean",
-		require_parameters: "boolean",
-		data_collection: "string",
-		zdr: "boolean",
-		enforce_distillable_text: "boolean",
-		order: "array",
-		only: "array",
-		ignore: "array",
-		quantizations: "array",
-		sort: "any",
-		max_price: "object",
-		preferred_min_throughput: "any",
-		preferred_max_latency: "any",
-	},
-	vercelGatewayRouting: { only: "array", order: "array" },
-};
-
-/** Validate a JSON-text value for a json-kind compat field. Returns an error message or undefined. */
+/** Parse JSON values and reuse the canonical models.json schema, including nested validation. */
 export function validateJsonCompatValue(key: string, text: string): string | undefined {
-	let parsed: unknown;
+	let value: unknown;
 	try {
-		parsed = JSON.parse(text);
+		value = JSON.parse(text);
 	} catch {
 		return "Value is not valid JSON.";
 	}
-	const shape = JSON_FIELD_SHAPES[key];
-	if (!shape) return undefined;
-	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return `${key} must be a JSON object.`;
-	for (const [entryKey, entryValue] of Object.entries(parsed as Record<string, unknown>)) {
-		const expected = shape[entryKey];
-		if (!expected) return `${key}.${entryKey} is not a supported field.`;
-		if (expected === "any") continue;
-		const actual = Array.isArray(entryValue) ? "array" : entryValue === null ? "null" : typeof entryValue;
-		if (expected === "object" ? actual !== "object" : actual !== expected) {
-			return `${key}.${entryKey} must be ${expected}, got ${actual}.`;
-		}
-	}
-	return undefined;
+	return ModelConfig.validateCompat("openai-completions", { [key]: value });
 }
 
-/** Chat-template kwarg scalar or {$var} reference, per pi-ai's ChatTemplateKwarg type. */
-export type ChatTemplateKwargValue =
-	| string
-	| number
-	| boolean
-	| null
-	| { $var: "thinking.enabled" | "thinking.effort"; omitWhenOff?: boolean };
-
-/** Validate one open-dictionary value for chatTemplateKwargs/chatTemplateArgs. */
+/** Chat-template values share the core schema and the published pi-ai value contract. */
 export function validateChatTemplateKwarg(value: unknown): string | undefined {
-	if (value === null) return undefined;
-	const kind = typeof value;
-	if (kind === "string" || kind === "number" || kind === "boolean") return undefined;
-	if (kind === "object" && !Array.isArray(value)) {
-		const record = value as Record<string, unknown>;
-		const keys = Object.keys(record);
-		if (record.$var !== "thinking.enabled" && record.$var !== "thinking.effort") {
-			return 'Object values must be { "$var": "thinking.enabled" | "thinking.effort" }.';
-		}
-		if (!keys.every((key) => key === "$var" || key === "omitWhenOff")) {
-			return 'Only "$var" and "omitWhenOff" are allowed.';
-		}
-		if (record.omitWhenOff !== undefined && typeof record.omitWhenOff !== "boolean") {
-			return "omitWhenOff must be a boolean.";
-		}
-		return undefined;
+	if (
+		value !== null &&
+		typeof value === "object" &&
+		!Array.isArray(value) &&
+		!Object.keys(value).every((key) => key === "$var" || key === "omitWhenOff")
+	) {
+		return 'Only "$var" and "omitWhenOff" are allowed.';
 	}
-	return "Value must be a string, number, boolean, null, or a $var reference.";
+	const error = ModelConfig.validateCompat("openai-completions", { chatTemplateKwargs: { value } });
+	return error ? `Value must be a scalar or valid $var reference: ${error}` : undefined;
 }

@@ -12,10 +12,14 @@ describe("provider compat field catalog", () => {
 		expect(completions.some((field) => field.key === "supportsStore")).toBe(true);
 		expect(completions.some((field) => field.key === "thinkingFormat")).toBe(true);
 
-		// The whole Responses family shares the full Responses catalog.
+		// The transports consume different subsets of the shared Responses type.
 		const responses = compatFieldsForApi("openai-responses");
-		expect(compatFieldsForApi("azure-openai-responses")).toEqual(responses);
-		expect(compatFieldsForApi("openai-codex-responses")).toEqual(responses);
+		expect(compatFieldsForApi("azure-openai-responses").map((field) => field.key)).not.toContain(
+			"supportsMaxOutputTokens",
+		);
+		expect(compatFieldsForApi("openai-codex-responses").map((field) => field.key)).toContain(
+			"supportsAdditionalTools",
+		);
 		expect(responses.some((field) => field.key === "supportsMaxOutputTokens")).toBe(true);
 
 		expect(compatFieldsForApi("anthropic-messages").some((field) => field.key === "allowEmptySignature")).toBe(true);
@@ -32,10 +36,8 @@ describe("provider compat field catalog", () => {
 				if (field.kind === "enum") expect(field.options?.length ?? 0).toBeGreaterThan(0);
 			}
 		}
-		expect(compatFieldFor("openai-completions", "maxTokensField")?.options).toEqual([
-			"max_completion_tokens",
-			"max_tokens",
-		]);
+		const tokensField = compatFieldFor("openai-completions", "maxTokensField");
+		expect(tokensField?.kind === "enum" ? tokensField.options : []).toEqual(["max_completion_tokens", "max_tokens"]);
 	});
 
 	test("catalog keys stay within the models.json schema surface", () => {
@@ -51,9 +53,12 @@ describe("provider compat field catalog", () => {
 describe("provider compat value validation", () => {
 	test("json fields validate shape, not just JSON.parse success", () => {
 		expect(validateJsonCompatValue("openRouterRouting", "{ not json")).toContain("not valid JSON");
-		expect(validateJsonCompatValue("openRouterRouting", '["array"]')).toContain("must be a JSON object");
-		expect(validateJsonCompatValue("openRouterRouting", '{"nope": true}')).toContain("not a supported field");
-		expect(validateJsonCompatValue("openRouterRouting", '{"order": "not-an-array"}')).toContain("must be array");
+		expect(validateJsonCompatValue("openRouterRouting", '["array"]')).toBeDefined();
+		// Unknown fields round-trip under the native configuration contract.
+		expect(validateJsonCompatValue("openRouterRouting", '{"futureField": true}')).toBeUndefined();
+		expect(validateJsonCompatValue("openRouterRouting", '{"order": "not-an-array"}')).toBeDefined();
+		expect(validateJsonCompatValue("openRouterRouting", '{"order": [123]}')).toBeDefined();
+		expect(validateJsonCompatValue("openRouterRouting", '{"data_collection": "invalid"}')).toBeDefined();
 		expect(validateJsonCompatValue("openRouterRouting", '{"order": ["a"], "zdr": true}')).toBeUndefined();
 		expect(validateJsonCompatValue("vercelGatewayRouting", '{"only": ["anthropic"]}')).toBeUndefined();
 	});
@@ -64,6 +69,8 @@ describe("provider compat value validation", () => {
 		expect(validateChatTemplateKwarg(true)).toBeUndefined();
 		expect(validateChatTemplateKwarg(null)).toBeUndefined();
 		expect(validateChatTemplateKwarg({ $var: "thinking.enabled" })).toBeUndefined();
+		expect(validateChatTemplateKwarg({ $var: "thinking.budget" })).toBeUndefined();
+		expect(validateChatTemplateKwarg(Number.POSITIVE_INFINITY)).toBeDefined();
 		expect(validateChatTemplateKwarg({ $var: "thinking.effort", omitWhenOff: true })).toBeUndefined();
 		expect(validateChatTemplateKwarg({ $var: "other" })).toContain("$var");
 		expect(validateChatTemplateKwarg({ $var: "thinking.enabled", extra: 1 })).toContain("Only");

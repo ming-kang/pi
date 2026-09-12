@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { ModelConfig } from "../src/core/model-config.ts";
 import { DELETE, ModelsJsonStore, type SaveResult } from "../src/extensions/provider/store.ts";
 
 let tempDir: string;
@@ -14,6 +15,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	vi.restoreAllMocks();
 	rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -45,6 +47,101 @@ async function flush(store: ModelsJsonStore): Promise<SaveResult[]> {
 }
 
 describe("provider store", () => {
+	test("retains edits confirmed while a previous candidate is being validated", async () => {
+		const store = await loadStore({ providers: { cpa: { baseUrl: "https://old.example" } } });
+		let entered!: () => void;
+		let release!: () => void;
+		const validating = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const originalLoad = ModelConfig.load.bind(ModelConfig);
+		let blocked = false;
+		vi.spyOn(ModelConfig, "load").mockImplementation(async (path) => {
+			if (path?.endsWith(".tmp") && !blocked) {
+				blocked = true;
+				entered();
+				await gate;
+			}
+			return originalLoad(path);
+		});
+		store.setProviderField("cpa", ["baseUrl"], "https://new.example");
+		await validating;
+		store.setProviderField("cpa", ["apiKey"], "review-fixture-key");
+		release();
+		await store.flush();
+		expect(readDisk().providers.cpa).toMatchObject({ baseUrl: "https://new.example", apiKey: "review-fixture-key" });
+		expect(store.pendingCount).toBe(0);
+	});
+
+	test("holds a colliding model import until the user resolves it", async () => {
+		const store = await loadStore({ providers: { cpa: { baseUrl: "https://a", models: [] } } });
+		const external = { id: "k3", name: "External model", contextWindow: 262144 };
+		writeDisk({ providers: { cpa: { baseUrl: "https://a", models: [external] } } });
+		store.addModel("cpa", { id: "k3", name: "Imported model" });
+		const first = (await flush(store)).at(-1);
+		expect(first?.kind).toBe("conflict");
+		store.setProviderField("cpa", ["baseUrl"], "https://b");
+		const later = (await flush(store)).at(-1);
+		expect(readDisk().providers.cpa.models).toEqual([external]);
+		expect(later?.kind).toBe("conflict");
+		expect(store.pendingCount).toBe(1);
+	});
+
+	test("a provider draft never mutates the disk baseline", async () => {
+		const store = await loadStore({ providers: {} });
+		store.ensureProviderView("scratch");
+		expect(store.isDraftProvider("scratch")).toBe(true);
+		store.discardProviderDraft("scratch");
+		expect(store.getProvider("scratch")).toBeUndefined();
+		expect(readDisk().providers).toEqual({});
+	});
+
+	test("an incomplete provider stays in memory until its connection is configured", async () => {
+		const store = await loadStore({ providers: {} });
+		store.ensureProviderView("draft");
+		store.setProviderField("draft", ["api"], "openai-completions");
+		await store.flush();
+		expect(readDisk().providers).toEqual({});
+		store.setProviderField("draft", ["baseUrl"], "https://example.test/v1");
+		await store.flush();
+		expect(readDisk().providers.draft).toMatchObject({
+			api: "openai-completions",
+			baseUrl: "https://example.test/v1",
+		});
+	});
+
+	test("a rename conflict cannot adopt an unrelated model at the destination id", async () => {
+		const store = await loadStore({
+			providers: { cpa: { baseUrl: "https://a", models: [{ id: "old", name: "Mine" }] } },
+		});
+		writeDisk({ providers: { cpa: { baseUrl: "https://a", models: [{ id: "new", name: "External" }] } } });
+		expect(await store.renameModel("cpa", "old", "new")).toBeDefined();
+		expect(readDisk().providers.cpa.models).toEqual([{ id: "new", name: "External" }]);
+		expect(store.pendingCount).toBe(0);
+	});
+
+	test("conflict previews mask API keys while retaining the raw value for resolution", async () => {
+		const store = await loadStore({ providers: { cpa: { baseUrl: "https://a", apiKey: "initial-fixture" } } });
+		writeDisk({ providers: { cpa: { baseUrl: "https://a", apiKey: "external-fixture-secret" } } });
+		store.setProviderField("cpa", ["apiKey"], "local-fixture-secret");
+		const result = (await flush(store)).at(-1);
+		if (result?.kind !== "conflict") throw new Error("Expected conflict");
+		expect(result.conflicts[0].external).not.toContain("external-fixture-secret");
+		expect(result.conflicts[0].attempted).not.toContain("local-fixture-secret");
+		expect(result.conflicts[0].externalRaw).toBe("external-fixture-secret");
+	});
+
+	test("creates the models directory before acquiring its first file lock", async () => {
+		modelsPath = join(tempDir, "nested", "agent", "models.json");
+		const store = await loadStore();
+		store.setProviderField("cpa", ["baseUrl"], "https://a");
+		expect((await flush(store)).at(-1)?.kind).toBe("saved");
+		expect(readDisk().providers.cpa.baseUrl).toBe("https://a");
+	});
+
 	test("creates a missing file on first save and backs up only existing files", async () => {
 		const store = await loadStore();
 		store.setProviderField("cpa", ["baseUrl"], "https://api.cpa.example");
@@ -91,7 +188,7 @@ describe("provider store", () => {
 		await flush(store);
 		expect(readDisk().providers.cpa.models[0].contextWindow).toBe(262144);
 
-		store.renameModel("cpa", "k3", "k3.1");
+		await store.renameModel("cpa", "k3", "k3.1");
 		await flush(store);
 		expect(readDisk().providers.cpa.models[0].id).toBe("k3.1");
 		expect(readDisk().providers.cpa.models[0].name).toBe("Kimi K3");

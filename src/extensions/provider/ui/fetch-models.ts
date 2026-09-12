@@ -7,7 +7,7 @@
 
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { truncate } from "../constants.ts";
-import type { ProbeModel } from "../probe.ts";
+import { modelCatalogUrl, type ProbeModel } from "../probe.ts";
 import type { EditorHost, EditorPane } from "./pane.ts";
 import { renderInfoLine, renderPlainLine, ValueEditor } from "./value-row.ts";
 
@@ -30,12 +30,13 @@ export class FetchModelsPane implements EditorPane {
 	private importing = false;
 	private error: string | undefined;
 	private focused = false;
+	private disposed = false;
 
 	private readonly host: EditorHost;
 	constructor(host: EditorHost) {
 		this.host = host;
 
-		this.search = new ValueEditor(host.keybindings, {
+		this.search = new ValueEditor({
 			onCommit: () => this.importChecked(),
 			onCancel: () => this.exitResults(),
 		});
@@ -43,7 +44,7 @@ export class FetchModelsPane implements EditorPane {
 
 	/** Enter pressed on the left-column row (or on the idle pane): start the request. */
 	start(): void {
-		if (this.state.type === "loading" || this.importing) return;
+		if (this.disposed || this.state.type === "loading" || this.importing) return;
 		const controller = new AbortController();
 		this.controller = controller;
 		this.state = { type: "loading" };
@@ -52,7 +53,7 @@ export class FetchModelsPane implements EditorPane {
 		void this.host
 			.runFetch(controller.signal)
 			.then((result) => {
-				if (controller.signal.aborted || this.state.type !== "loading") return; // stale page/result
+				if (this.disposed || controller.signal.aborted || this.controller !== controller) return;
 				if (!result.ok) {
 					if (result.error === "Cancelled.") return;
 					this.state = { type: "error", message: result.error };
@@ -63,6 +64,8 @@ export class FetchModelsPane implements EditorPane {
 					this.query = "";
 					this.search.reset("");
 					this.index = 0;
+					this.search.focused = this.focused;
+					this.host.setFetchStatus(`· ${result.models.length} models`);
 				}
 				this.host.refresh();
 			})
@@ -92,23 +95,31 @@ export class FetchModelsPane implements EditorPane {
 	render(width: number): string[] {
 		const theme = this.host.theme;
 		const baseUrl = this.host.store.getProvider(this.host.providerId)?.baseUrl;
+		let catalogUrl = baseUrl;
+		try {
+			if (baseUrl) catalogUrl = modelCatalogUrl(new URL(baseUrl), this.host.effectiveApi()).href;
+		} catch {
+			/* validated before fetching */
+		}
 		switch (this.state.type) {
 			case "idle":
 				return [
 					renderInfoLine(
 						theme,
-						baseUrl ? `Fetch the model catalog from ${baseUrl}` : "Set a baseUrl under Authentication first.",
+						catalogUrl
+							? `Fetch the model catalog from ${catalogUrl}`
+							: "Set a baseUrl under Authentication first.",
 						width,
 					),
 					renderInfoLine(
 						theme,
-						"OpenAI-style GET {baseUrl}/models with a data[] list; the auth header follows the API type (Bearer, x-api-key, …).",
+						"Supports data[] / models[] catalogs; credentials follow the configured API.",
 						width,
 					),
 				];
 			case "loading":
 				return [
-					renderInfoLine(theme, `Fetching ${baseUrl ?? ""}/models …`, width),
+					renderInfoLine(theme, `Fetching ${catalogUrl ?? ""} …`, width),
 					renderInfoLine(theme, "Esc cancels the request.", width),
 				];
 			case "error":
@@ -249,12 +260,15 @@ export class FetchModelsPane implements EditorPane {
 			return;
 		}
 		const chosen = this.state.models.filter((model) => this.checked.has(model.id));
+		const controller = new AbortController();
+		this.controller = controller;
 		this.importing = true;
 		this.error = undefined;
 		this.host.refresh();
 		void this.host
-			.importModels(chosen)
+			.importModels(chosen, controller.signal)
 			.then((error) => {
+				if (this.disposed || controller.signal.aborted || this.controller !== controller) return;
 				this.importing = false;
 				if (error) {
 					this.error = error;
@@ -266,6 +280,7 @@ export class FetchModelsPane implements EditorPane {
 				this.host.popPane(); // back to the left column with the new models visible
 			})
 			.catch((error: unknown) => {
+				if (this.disposed || controller.signal.aborted || this.controller !== controller) return;
 				this.importing = false;
 				this.error = error instanceof Error ? error.message : String(error);
 				this.host.refresh();
@@ -273,6 +288,8 @@ export class FetchModelsPane implements EditorPane {
 	}
 
 	private exitResults(): void {
+		this.controller?.abort();
+		this.importing = false;
 		this.state = { type: "idle" };
 		this.checked = new Set();
 		this.host.popPane();
@@ -288,6 +305,7 @@ export class FetchModelsPane implements EditorPane {
 	}
 
 	dispose(): void {
+		this.disposed = true;
 		this.controller?.abort();
 	}
 

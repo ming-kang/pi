@@ -48,6 +48,50 @@ describe("provider probe", () => {
 		expect(calls[0]!.url.toString()).toBe("https://api.example.com/v1/models?tenant=a%20b");
 	});
 
+	test("accepts models[] and slug/display_name catalogs without guessing metadata", async () => {
+		const { fetch } = mockFetch(() =>
+			jsonResponse({ models: [{ slug: "k3", display_name: "Kimi K3", context_window: 999999 }] }),
+		);
+		expect(await probeProviderModels({ baseUrl: "https://example.test/v1", fetch })).toEqual({
+			ok: true,
+			models: [{ id: "k3", name: "Kimi K3" }],
+			truncated: false,
+		});
+	});
+
+	test("uses the Anthropic catalog path and keeps version with explicit Authorization", async () => {
+		const { fetch, calls } = mockFetch(() => jsonResponse({ data: [] }));
+		await probeProviderModels({
+			baseUrl: "https://example.test/anthropic",
+			api: "anthropic-messages",
+			auth: { headers: { Authorization: "Bearer fixture", Accept: "text/event-stream" } },
+			fetch,
+		});
+		expect(calls[0]!.url.pathname).toBe("/anthropic/v1/models");
+		const headers = new Headers(calls[0]!.init.headers);
+		expect(headers.get("anthropic-version")).toBe("2023-06-01");
+		expect(headers.get("accept")).toBe("application/json");
+	});
+
+	test("redacts resolved credentials from server errors", async () => {
+		const key = "provider-review-private-key";
+		const { fetch } = mockFetch(() => new Response(`Rejected token ${key}`, { status: 401 }));
+		const result = await probeProviderModels({ baseUrl: "https://example.test/v1", auth: { apiKey: key }, fetch });
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error).not.toContain(key);
+			expect(result.error).toContain("[redacted]");
+		}
+	});
+
+	test("marks a partial paginated catalog as truncated", async () => {
+		const { fetch } = mockFetch(() => jsonResponse({ data: [{ id: "first" }], has_more: true }));
+		expect(await probeProviderModels({ baseUrl: "https://example.test/v1", fetch })).toMatchObject({
+			ok: true,
+			truncated: true,
+		});
+	});
+
 	test("sends Bearer auth unless headers override or remove it", async () => {
 		const { fetch, calls } = mockFetch(() => jsonResponse({ data: [] }));
 		await probeProviderModels({
@@ -156,7 +200,7 @@ describe("provider probe", () => {
 		expect(a.ok).toBe(false);
 		if (!a.ok) expect(a.error).toContain("not JSON");
 
-		const noData = mockFetch(() => jsonResponse({ models: [] }));
+		const noData = mockFetch(() => jsonResponse({ unexpected: [] }));
 		const b = await probeProviderModels({ baseUrl: "https://api.example.com", fetch: noData.fetch });
 		expect(b.ok).toBe(false);
 		if (!b.ok) expect(b.error).toContain("OpenAI-style");

@@ -151,6 +151,15 @@
 			]
 		},
 		{
+			"path": "src/core/model-config.ts",
+			"category": "extension-support",
+			"intent": "Exposes pure API-family compat validation for the bundled /provider editor and aligns models.json compatibility fields with the pinned pi-ai thinking-budget, tool-stream, and prompt-cache options",
+			"tests": [
+				"test/provider-compat-fields.test.ts",
+				"test/model-registry.test.ts"
+			]
+		},
+		{
 			"path": "src/core/model-registry.ts",
 			"category": "extension-support",
 			"intent": "Provides the canonical ModelRuntime backing ExtensionContext.modelRuntime",

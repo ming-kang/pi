@@ -31,6 +31,8 @@ export interface ModelHandle {
 	read(): Partial<ModelsJsonModel> & { id?: string };
 	/** Drafts mutate memory; persisted models queue a store op and schedule a save. */
 	setField(path: readonly string[], value: unknown): void;
+	/** Renaming an identity waits for storage before the UI starts using the new id. */
+	rename(newId: string): Promise<string | undefined>;
 }
 
 export interface EditorHost {
@@ -59,7 +61,7 @@ export interface EditorHost {
 	/** Refresh the provider, resolve auth canonically, and GET {baseUrl}/models. */
 	runFetch(signal: AbortSignal): Promise<ProbeResult>;
 	/** Validate + batch-add imported models, save once, refresh; returns an error or undefined. */
-	importModels(models: readonly ProbeModel[]): Promise<string | undefined>;
+	importModels(models: readonly ProbeModel[], signal: AbortSignal): Promise<string | undefined>;
 	/** Push an in-editor Yes/No confirm into the right column. */
 	confirm(message: string, actionLabel: string, action: () => void): void;
 	/** A model was just removed: rebuild the left column and reset the right stack. */

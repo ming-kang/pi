@@ -5,16 +5,17 @@
  * store ops that save immediately.
  */
 
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ModelsJsonModel } from "../../../core/model-config.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { matchBuiltinModels } from "../catalog.ts";
-import { INPUT_TYPES, type InputType, THINKING_LEVELS, truncate } from "../constants.ts";
+import { truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
 import { BuiltinCandidatesPane } from "./builtin-data.ts";
 import { CompatPane } from "./compat.ts";
+import { CostPane, InputTypesPane, ReasoningPane } from "./model-options.ts";
 import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
-import { isPrintableInput, renderInfoLine, renderKeyValueLine, renderPlainLine, ValueEditor } from "./value-row.ts";
+import { ThinkingMapPane } from "./thinking-map.ts";
+import { isPrintableInput, renderInfoLine, renderKeyValueLine, ValueEditor } from "./value-row.ts";
 
 const DEFAULT_CONTEXT_WINDOW = 128000;
 const DEFAULT_MAX_TOKENS = 16384;
@@ -34,6 +35,8 @@ export class ModelFieldsPane implements EditorPane {
 	private editingRow: FieldRow | undefined;
 	private error: string | undefined;
 	private focused = false;
+	private renaming = false;
+	private disposed = false;
 
 	private readonly host: EditorHost;
 	private readonly model: ModelHandle;
@@ -79,6 +82,7 @@ export class ModelFieldsPane implements EditorPane {
 			lines.push(this.renderRow(row, current, active, width));
 		}
 		if (this.error) lines.push(theme.fg("error", truncate(this.error, Math.max(10, width - 2))));
+		if (this.renaming) lines.push(renderInfoLine(theme, "Saving model id…", width));
 		return lines;
 	}
 
@@ -192,6 +196,7 @@ export class ModelFieldsPane implements EditorPane {
 	}
 
 	handleInput(data: string): void {
+		if (this.renaming || this.disposed) return;
 		const kb = this.host.keybindings;
 		if (this.editing) {
 			if (kb.matches(data, "tui.select.up") || kb.matches(data, "tui.select.down")) return;
@@ -284,7 +289,7 @@ export class ModelFieldsPane implements EditorPane {
 		const row = this.rows[this.index]!;
 		if (row.kind !== "text" && row.kind !== "number") return;
 		const current = this.model.read()[row.key];
-		const editor = new ValueEditor(this.host.keybindings, {
+		const editor = new ValueEditor({
 			onCommit: (value) => this.commitText(row, value),
 			onCancel: () => {
 				this.editing = undefined;
@@ -340,8 +345,18 @@ export class ModelFieldsPane implements EditorPane {
 				finish(`Model "${value}" already exists.`);
 				return;
 			}
-			this.host.mutate(() => this.model.setField(["id"], value));
-			finish();
+			this.renaming = true;
+			this.host.refresh();
+			void this.model.rename(value).then(
+				(error) => {
+					this.renaming = false;
+					if (!this.disposed) finish(error);
+				},
+				(error: unknown) => {
+					this.renaming = false;
+					if (!this.disposed) finish(error instanceof Error ? error.message : String(error));
+				},
+			);
 			return;
 		}
 		if (row.key === "name") {
@@ -388,7 +403,11 @@ export class ModelFieldsPane implements EditorPane {
 	}
 
 	isEditing(): boolean {
-		return this.editing !== undefined;
+		return this.editing !== undefined || this.renaming;
+	}
+
+	dispose(): void {
+		this.disposed = true;
 	}
 
 	hints(): string {
@@ -398,487 +417,6 @@ export class ModelFieldsPane implements EditorPane {
 			keyHint("tui.select.confirm", "edit / enter"),
 			keyHint("app.list.toggle", "toggle"),
 			keyHint("app.provider.switchPaneLeft", "focus left"),
-			keyHint("tui.select.cancel", "back"),
-		].join("  ");
-	}
-}
-
-// -------------------------------------------------------------------------
-// reasoning
-// -------------------------------------------------------------------------
-
-const REASONING_OPTIONS = [
-	{ label: "true", value: true },
-	{ label: "false", value: false },
-	{ label: "unset (default: false)", value: undefined },
-] as const;
-
-/** Radio sub-page for reasoning — consistent with the other nested model settings. */
-export class ReasoningPane implements EditorPane {
-	readonly crumb = "reasoning";
-	private index = 0;
-	private focused = false;
-	private readonly host: EditorHost;
-	private readonly model: ModelHandle;
-
-	constructor(host: EditorHost, model: ModelHandle) {
-		this.host = host;
-		this.model = model;
-		const current = model.read().reasoning;
-		this.index = current === true ? 0 : current === false ? 1 : 2;
-	}
-
-	render(width: number): string[] {
-		const theme = this.host.theme;
-		const current = this.model.read().reasoning;
-		return REASONING_OPTIONS.map((option, optionIndex) => {
-			const selected = option.value === undefined ? current === undefined : current === option.value;
-			return renderPlainLine(theme, `${selected ? "●" : "○"} ${option.label}`, {
-				active: optionIndex === this.index,
-				paneFocused: this.focused,
-				dim: option.value === undefined,
-				width,
-			});
-		});
-	}
-
-	handleInput(data: string): void {
-		const kb = this.host.keybindings;
-		if (kb.matches(data, "tui.select.up")) {
-			this.index = this.index === 0 ? REASONING_OPTIONS.length - 1 : this.index - 1;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.down")) {
-			this.index = (this.index + 1) % REASONING_OPTIONS.length;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.cancel")) {
-			this.host.popPane();
-			return;
-		}
-		if (kb.matches(data, "tui.select.confirm") || kb.matches(data, "app.list.toggle")) {
-			const option = REASONING_OPTIONS[this.index]!;
-			this.host.mutate(() => this.model.setField(["reasoning"], option.value === undefined ? DELETE : option.value));
-			this.host.popPane();
-		}
-	}
-
-	setFocused(focused: boolean): void {
-		this.focused = focused;
-	}
-
-	hints(): string {
-		return [
-			rawKeyHint("↑↓", "move"),
-			keyHint("tui.select.confirm", "set"),
-			keyHint("tui.select.cancel", "back"),
-		].join("  ");
-	}
-}
-
-// -------------------------------------------------------------------------
-// thinkingLevelMap
-// -------------------------------------------------------------------------
-
-type ThinkingMapMode =
-	| { type: "levels" }
-	| { type: "choice"; level: ModelThinkingLevel; index: number }
-	| { type: "target"; level: ModelThinkingLevel };
-
-export class ThinkingMapPane implements EditorPane {
-	readonly crumb = "thinkingLevelMap";
-	private mode: ThinkingMapMode = { type: "levels" };
-	private index = 0;
-	private editor: ValueEditor | undefined;
-	private error: string | undefined;
-	private focused = false;
-
-	private readonly host: EditorHost;
-	private readonly model: ModelHandle;
-	constructor(host: EditorHost, model: ModelHandle) {
-		this.host = host;
-		this.model = model;
-	}
-
-	private map(): Partial<Record<ModelThinkingLevel, string | null>> {
-		return this.model.read().thinkingLevelMap ?? {};
-	}
-
-	render(width: number): string[] {
-		const theme = this.host.theme;
-		const lines: string[] = [];
-		if (this.model.read().reasoning !== true) {
-			lines.push(
-				renderInfoLine(theme, "reasoning is not true — the map is stored but currently has no effect.", width),
-			);
-		}
-		if (this.mode.type === "levels") {
-			for (const [rowIndex, level] of THINKING_LEVELS.entries()) {
-				const value = this.map()[level];
-				const status = value === undefined ? "inherit" : value === null ? "null (hidden)" : value;
-				lines.push(
-					renderKeyValueLine(theme, {
-						keyLabel: level,
-						valueText: status,
-						unset: value === undefined,
-						active: rowIndex === this.index,
-						paneFocused: this.focused,
-						width,
-					}),
-				);
-			}
-		} else if (this.mode.type === "choice") {
-			lines.push(renderInfoLine(theme, `${this.mode.level} · mapping`, width));
-			for (const [choiceIndex, label] of [
-				"String target (provider effort)",
-				"Hidden (null)",
-				"Inherit (remove key)",
-			].entries()) {
-				lines.push(
-					renderPlainLine(theme, label, {
-						active: choiceIndex === this.mode.index,
-						paneFocused: this.focused,
-						width,
-					}),
-				);
-			}
-		} else {
-			lines.push(renderInfoLine(theme, `${this.mode.level} · non-empty provider effort`, width));
-			lines.push(this.editor?.renderLine(width) ?? "");
-		}
-		if (this.error) lines.push(theme.fg("error", truncate(this.error, Math.max(10, width - 2))));
-		return lines;
-	}
-
-	handleInput(data: string): void {
-		const kb = this.host.keybindings;
-		if (this.mode.type === "target") {
-			if (kb.matches(data, "tui.select.up") || kb.matches(data, "tui.select.down")) return;
-			this.editor?.handleInput(data);
-			this.host.refresh();
-			return;
-		}
-		if (this.mode.type === "choice") {
-			if (kb.matches(data, "tui.select.up")) {
-				this.mode = { ...this.mode, index: this.mode.index === 0 ? 2 : this.mode.index - 1 };
-				this.host.refresh();
-				return;
-			}
-			if (kb.matches(data, "tui.select.down")) {
-				this.mode = { ...this.mode, index: (this.mode.index + 1) % 3 };
-				this.host.refresh();
-				return;
-			}
-			if (kb.matches(data, "tui.select.cancel")) {
-				this.mode = { type: "levels" };
-				this.host.refresh();
-				return;
-			}
-			if (kb.matches(data, "tui.select.confirm")) {
-				const { level, index } = this.mode;
-				if (index === 0) {
-					const editor = new ValueEditor(this.host.keybindings, {
-						onCommit: (value) => {
-							const target = value.trim();
-							if (!target) {
-								this.error = "A string target must be non-empty; use Hidden for null.";
-								return this.host.refresh();
-							}
-							this.error = undefined;
-							this.mode = { type: "levels" };
-							this.editor = undefined;
-							this.host.mutate(() => this.model.setField(["thinkingLevelMap", level], target));
-						},
-						onCancel: () => {
-							this.editor = undefined;
-							this.mode = { type: "levels" };
-							this.host.refresh();
-						},
-					});
-					this.editor = editor;
-					editor.focused = this.focused;
-					const existing = this.map()[level];
-					if (typeof existing === "string") editor.beginTweak(existing);
-					this.mode = { type: "target", level };
-					this.host.refresh();
-					return;
-				}
-				this.mode = { type: "levels" };
-				this.host.mutate(() => this.model.setField(["thinkingLevelMap", level], index === 1 ? null : DELETE));
-				return;
-			}
-			return;
-		}
-		// levels
-		if (kb.matches(data, "tui.select.up")) {
-			this.index = this.index === 0 ? THINKING_LEVELS.length - 1 : this.index - 1;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.down")) {
-			this.index = (this.index + 1) % THINKING_LEVELS.length;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.confirm")) {
-			this.mode = { type: "choice", level: THINKING_LEVELS[this.index]!, index: 0 };
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.cancel")) {
-			this.host.popPane();
-			return;
-		}
-	}
-
-	setFocused(focused: boolean): void {
-		this.focused = focused;
-		if (this.editor) this.editor.focused = focused && this.mode.type === "target";
-	}
-
-	isEditing(): boolean {
-		return this.mode.type === "target";
-	}
-
-	hints(): string {
-		if (this.mode.type === "target")
-			return [keyHint("tui.input.submit", "save"), keyHint("tui.select.cancel", "back")].join("  ");
-		return [
-			rawKeyHint("↑↓", "move"),
-			keyHint("tui.select.confirm", this.mode.type === "choice" ? "set" : "edit"),
-			keyHint("tui.select.cancel", "back"),
-		].join("  ");
-	}
-}
-
-// -------------------------------------------------------------------------
-// input modalities
-// -------------------------------------------------------------------------
-
-export class InputTypesPane implements EditorPane {
-	readonly crumb = "input";
-	private index = 0;
-	private error: string | undefined;
-	private focused = false;
-
-	private readonly host: EditorHost;
-	private readonly model: ModelHandle;
-	constructor(host: EditorHost, model: ModelHandle) {
-		this.host = host;
-		this.model = model;
-	}
-
-	private selected(): Set<string> {
-		return new Set(this.model.read().input ?? ["text"]);
-	}
-
-	render(width: number): string[] {
-		const theme = this.host.theme;
-		const selected = this.selected();
-		const lines = INPUT_TYPES.map((type, rowIndex) =>
-			renderPlainLine(theme, type, {
-				checked: selected.has(type),
-				active: rowIndex === this.index,
-				paneFocused: this.focused,
-				width,
-			}),
-		);
-		if (this.model.read().input === undefined) {
-			lines.push(renderInfoLine(theme, "unset — the runtime default is [text].", width));
-		}
-		if (this.error) lines.push(theme.fg("error", truncate(this.error, Math.max(10, width - 2))));
-		return lines;
-	}
-
-	handleInput(data: string): void {
-		const kb = this.host.keybindings;
-		if (kb.matches(data, "tui.select.up")) {
-			this.index = this.index === 0 ? INPUT_TYPES.length - 1 : this.index - 1;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.down")) {
-			this.index = (this.index + 1) % INPUT_TYPES.length;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "app.list.toggle")) {
-			const type: InputType = INPUT_TYPES[this.index]!;
-			const selected = this.selected();
-			if (selected.has(type)) {
-				if (selected.size === 1) {
-					this.error = "At least one input type must stay selected.";
-					this.host.refresh();
-					return;
-				}
-				selected.delete(type);
-			} else {
-				selected.add(type);
-			}
-			this.error = undefined;
-			const next = INPUT_TYPES.filter((entry) => selected.has(entry));
-			this.host.mutate(() => this.model.setField(["input"], [...next]));
-			return;
-		}
-		if (kb.matches(data, "tui.select.confirm") || kb.matches(data, "tui.select.cancel")) {
-			this.host.popPane();
-			return;
-		}
-	}
-
-	setFocused(focused: boolean): void {
-		this.focused = focused;
-	}
-
-	hints(): string {
-		return [
-			keyHint("app.list.toggle", "toggle"),
-			keyHint("tui.select.confirm", "done"),
-			keyHint("tui.select.cancel", "back"),
-		].join("  ");
-	}
-}
-
-// -------------------------------------------------------------------------
-// cost
-// -------------------------------------------------------------------------
-
-const COST_RATES = ["input", "output", "cacheRead", "cacheWrite"] as const;
-type CostRate = (typeof COST_RATES)[number];
-
-export class CostPane implements EditorPane {
-	readonly crumb = "cost";
-	private index = 0;
-	private editing: ValueEditor | undefined;
-	private editingRate: CostRate | undefined;
-	private error: string | undefined;
-	private focused = false;
-
-	private readonly host: EditorHost;
-	private readonly model: ModelHandle;
-	constructor(host: EditorHost, model: ModelHandle) {
-		this.host = host;
-		this.model = model;
-	}
-
-	private cost(): Record<CostRate, number> | undefined {
-		const cost = this.model.read().cost;
-		if (!cost) return undefined;
-		return { input: cost.input, output: cost.output, cacheRead: cost.cacheRead, cacheWrite: cost.cacheWrite };
-	}
-
-	render(width: number): string[] {
-		const theme = this.host.theme;
-		const cost = this.cost();
-		const lines: string[] = [];
-		for (const [rowIndex, rate] of COST_RATES.entries()) {
-			const value = cost?.[rate];
-			lines.push(
-				renderKeyValueLine(theme, {
-					keyLabel: rate,
-					valueText: value === undefined ? "0 (default)" : `$${value} / M tokens`,
-					unset: value === undefined,
-					active: rowIndex === this.index,
-					paneFocused: this.focused,
-					editing: this.editingRate === rate ? this.editing : undefined,
-					width,
-				}),
-			);
-		}
-		const tiers = this.model.read().cost?.tiers;
-		if (tiers && tiers.length > 0) {
-			lines.push(renderInfoLine(theme, `tiers: ${tiers.length} (read-only; kept as-is)`, width));
-		}
-		if (this.error) lines.push(theme.fg("error", truncate(this.error, Math.max(10, width - 2))));
-		return lines;
-	}
-
-	handleInput(data: string): void {
-		const kb = this.host.keybindings;
-		if (this.editing) {
-			if (kb.matches(data, "tui.select.up") || kb.matches(data, "tui.select.down")) return;
-			this.editing.handleInput(data);
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.up")) {
-			this.index = this.index === 0 ? COST_RATES.length - 1 : this.index - 1;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.down")) {
-			this.index = (this.index + 1) % COST_RATES.length;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.cancel")) {
-			this.host.popPane();
-			return;
-		}
-		if (kb.matches(data, "tui.select.confirm")) {
-			this.beginEdit("tweak");
-			return;
-		}
-		if (isPrintableInput(data)) {
-			this.beginEdit("overwrite", data);
-			return;
-		}
-	}
-
-	private beginEdit(mode: "overwrite" | "tweak", firstData?: string): void {
-		const rate = COST_RATES[this.index]!;
-		const current = this.cost()?.[rate];
-		const editor = new ValueEditor(this.host.keybindings, {
-			onCommit: (value) => this.commit(rate, value),
-			onCancel: () => {
-				this.editing = undefined;
-				this.editingRate = undefined;
-				this.error = undefined;
-				this.host.refresh();
-			},
-		});
-		this.editing = editor;
-		this.editingRate = rate;
-		editor.focused = this.focused;
-		if (mode === "overwrite") editor.beginOverwrite(firstData);
-		else editor.beginTweak(current === undefined ? "" : String(current));
-		this.host.refresh();
-	}
-
-	private commit(rate: CostRate, raw: string): void {
-		const value = raw.trim();
-		const parsed = value === "" ? 0 : Number(value);
-		if (!Number.isFinite(parsed) || parsed < 0) {
-			this.error = "cost rates must be finite non-negative numbers.";
-			this.host.refresh();
-			return;
-		}
-		this.error = undefined;
-		this.editing = undefined;
-		this.editingRate = undefined;
-		// A cost object must stay complete: first edit materializes the other rates as 0; tiers are preserved.
-		const current = this.cost() ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-		const tiers = this.model.read().cost?.tiers;
-		const next = { ...current, [rate]: parsed, ...(tiers ? { tiers } : {}) };
-		this.host.mutate(() => this.model.setField(["cost"], next));
-	}
-
-	setFocused(focused: boolean): void {
-		this.focused = focused;
-		if (this.editing) this.editing.focused = focused;
-	}
-
-	isEditing(): boolean {
-		return this.editing !== undefined;
-	}
-
-	hints(): string {
-		if (this.editing) return [keyHint("tui.input.submit", "save"), keyHint("tui.select.cancel", "cancel")].join("  ");
-		return [
-			rawKeyHint("type", "overwrite"),
-			keyHint("tui.select.confirm", "edit"),
 			keyHint("tui.select.cancel", "back"),
 		].join("  ");
 	}

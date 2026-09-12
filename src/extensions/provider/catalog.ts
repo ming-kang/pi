@@ -100,17 +100,16 @@ export function matchBuiltinModels(query: string, preferredApi?: string, max: nu
 			consumed.add(entry);
 		}
 	}
-	const remaining = index.filter((entry) => !consumed.has(entry));
+	const remaining = sortTier(
+		index.filter((entry) => !consumed.has(entry)).map((entry) => ({ entry, tier: "fuzzy" })),
+		preferredApi,
+	);
 	const fuzzy: CatalogMatch[] = fuzzyFilter(
 		remaining,
 		trimmed,
-		(entry) => `${entry.model.id} ${entry.model.name} ${entry.providerId}`,
-	).map((entry) => ({ entry, tier: "fuzzy" as const }));
-	return [
-		...sortTier(exact, preferredApi),
-		...sortTier(normalized, preferredApi),
-		...sortTier(fuzzy, preferredApi),
-	].slice(0, max);
+		({ entry }) => `${entry.model.id} ${entry.model.name} ${entry.providerId}`,
+	);
+	return [...sortTier(exact, preferredApi), ...sortTier(normalized, preferredApi), ...fuzzy].slice(0, max);
 }
 
 export type ReferenceField =

@@ -18,36 +18,38 @@ export interface RefreshOutcome {
 }
 
 export class RefreshCoordinator {
-	private readonly runtime: ModelRuntime;
-	private readonly touched = new Set<string>();
+	private readonly runtime: Pick<ModelRuntime, "refresh" | "getError">;
+	private readonly pending = new Map<string, number>();
+	private readonly changed = new Set<string>();
+	private revision = 0;
 
-	constructor(runtime: ModelRuntime) {
+	constructor(runtime: Pick<ModelRuntime, "refresh" | "getError">) {
 		this.runtime = runtime;
 	}
 
 	touch(providerId: string): void {
-		this.touched.add(providerId);
+		this.pending.set(providerId, ++this.revision);
+		this.changed.add(providerId);
 	}
 
 	get touchedProviders(): readonly string[] {
-		return [...this.touched];
+		return [...this.changed];
 	}
 
 	/** Offline-scoped refresh of a single provider (fetch prep / post-import). */
 	async refreshNow(providerId: string, signal?: AbortSignal): Promise<RefreshOutcome> {
-		this.touched.delete(providerId);
 		return this.run([providerId], signal);
 	}
 
 	/** Refresh everything touched, including deleted provider ids. */
 	async flush(signal?: AbortSignal): Promise<RefreshOutcome> {
-		const providers = [...this.touched];
-		this.touched.clear();
+		const providers = [...this.pending.keys()];
 		if (providers.length === 0) return { ok: true, aborted: false, errors: [] };
 		return this.run(providers, signal);
 	}
 
 	private async run(providers: readonly string[], signal?: AbortSignal): Promise<RefreshOutcome> {
+		const revisions = new Map(providers.map((id) => [id, this.pending.get(id)]));
 		const combined = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(REFRESH_TIMEOUT_MS)]);
 		const errors: string[] = [];
 		try {
@@ -57,7 +59,15 @@ export class RefreshCoordinator {
 			}
 			const configError = this.runtime.getError();
 			if (configError) errors.push(configError);
-			return { ok: errors.length === 0, aborted: result.aborted, errors };
+			const aborted = result.aborted || combined.aborted;
+			if (aborted && errors.length === 0) errors.push("Refresh was cancelled or timed out.");
+			const ok = errors.length === 0 && !aborted;
+			if (ok) {
+				for (const id of providers) {
+					if (this.pending.get(id) === revisions.get(id)) this.pending.delete(id);
+				}
+			}
+			return { ok, aborted, errors };
 		} catch (error) {
 			errors.push(formatError(error));
 			return { ok: false, aborted: combined.aborted, errors };

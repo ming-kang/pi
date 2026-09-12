@@ -8,6 +8,7 @@
  */
 
 import type { FetchFunction, ModelAuth, ProviderHeaders } from "@earendil-works/pi-ai";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { readResponseTextBounded } from "../../utils/http-response.ts";
 import { formatError, PROBE_LIMITS } from "./constants.ts";
 
@@ -49,7 +50,7 @@ export async function probeProviderModels(opts: {
 	opts.signal?.addEventListener("abort", onOuterAbort, { once: true });
 
 	try {
-		const url = appendPath(baseUrl, "models");
+		const url = modelCatalogUrl(baseUrl, opts.api);
 		const headers = buildHeaders(opts.auth, opts.api);
 		const doFetch = opts.fetch ?? globalThis.fetch;
 		const response = await doFetch(url, { method: "GET", headers, signal: controller.signal });
@@ -60,7 +61,7 @@ export async function probeProviderModels(opts: {
 			});
 			return {
 				ok: false,
-				error: `HTTP ${response.status}${body ? `: ${body.slice(0, PROBE_LIMITS.maxErrorChars)}` : ""}`,
+				error: `HTTP ${response.status}${body ? `: ${safeErrorText(body, opts.auth).slice(0, PROBE_LIMITS.maxErrorChars)}` : ""}`,
 			};
 		}
 		const text = await readResponseTextBounded(response, {
@@ -74,21 +75,22 @@ export async function probeProviderModels(opts: {
 		} catch {
 			return { ok: false, error: "Model catalog response is not JSON." };
 		}
-		const models = parseOpenAIModels(json);
+		const models = parseCatalogModels(json);
 		if (models === null) {
 			return {
 				ok: false,
-				error: "JSON has no OpenAI-style `data` array of model ids. This endpoint may not expose an OpenAI-compatible catalog; add models manually instead.",
+				error: "JSON has no supported OpenAI-style data[] or models[] catalog with model ids. Add models manually if this endpoint uses another catalog format.",
 			};
 		}
 		const sorted = dedupeSort(models);
-		const truncated = sorted.length > PROBE_LIMITS.maxModels;
+		const morePages = typeof json === "object" && json !== null && "has_more" in json && json.has_more === true;
+		const truncated = sorted.length > PROBE_LIMITS.maxModels || morePages;
 		return { ok: true, models: sorted.slice(0, PROBE_LIMITS.maxModels), truncated };
 	} catch (error) {
 		if (controller.signal.aborted) {
 			return { ok: false, error: opts.signal?.aborted ? "Cancelled." : `Timed out after ${timeoutMs}ms.` };
 		}
-		return { ok: false, error: formatError(error) };
+		return { ok: false, error: safeErrorText(formatError(error), opts.auth) };
 	} finally {
 		clearTimeout(timer);
 		opts.signal?.removeEventListener("abort", onOuterAbort);
@@ -96,23 +98,36 @@ export async function probeProviderModels(opts: {
 }
 
 /** Append a path segment, keeping the query string and avoiding duplicate slashes or a doubled /v1. */
-function appendPath(base: URL, segment: string): URL {
+export function modelCatalogUrl(base: URL, api?: string): URL {
 	const url = new URL(base.href);
 	const path = url.pathname.replace(/\/+$/, "");
-	url.pathname = `${path}/${segment}`;
+	url.pathname = api === "anthropic-messages" && !path.endsWith("/v1") ? `${path}/v1/models` : `${path}/models`;
 	return url;
+}
+
+function safeErrorText(text: string, auth: ModelAuth | undefined): string {
+	for (const value of [auth?.apiKey, ...Object.values(auth?.headers ?? {})]) {
+		if (typeof value !== "string" || !value) continue;
+		text = text.replaceAll(value, "[redacted]");
+		const token = value.replace(/^Bearer\s+/i, "");
+		if (token !== value && token) text = text.replaceAll(token, "[redacted]");
+	}
+	return stripTerminalSequences(text);
 }
 
 function buildHeaders(auth: ModelAuth | undefined, api: string | undefined): Headers {
 	const headers = new Headers();
 	headers.set("accept", "application/json");
 	const configured: ProviderHeaders = auth?.headers ?? {};
+	if (api === "anthropic-messages") headers.set("anthropic-version", "2023-06-01");
 	let hasAuthorization = false;
 	for (const [key, value] of Object.entries(configured)) {
 		// null explicitly removes a header; it also suppresses the default auth header.
 		if (key.toLowerCase() === "authorization") hasAuthorization = true;
 		if (typeof value === "string") headers.set(key, value);
+		else if (value === null) headers.delete(key);
 	}
+	headers.set("accept", "application/json");
 	if (!auth?.apiKey || hasAuthorization) return headers;
 	const lower = (name: string) => Object.keys(configured).some((key) => key.toLowerCase() === name);
 	if (api === "anthropic-messages") {
@@ -133,24 +148,31 @@ function buildHeaders(auth: ModelAuth | undefined, api: string | undefined): Hea
 	return headers;
 }
 
-function parseOpenAIModels(json: unknown): ProbeModel[] | null {
+function parseCatalogModels(json: unknown): ProbeModel[] | null {
 	if (!json || typeof json !== "object") return null;
-	const data = (json as { data?: unknown }).data;
+	const payload = json as { models?: unknown; data?: unknown };
+	const data = Array.isArray(json) ? json : Array.isArray(payload.models) ? payload.models : payload.data;
 	if (!Array.isArray(data)) return null;
 	const models: ProbeModel[] = [];
 	for (const item of data) {
 		if (!item || typeof item !== "object") continue;
 		const record = item as Record<string, unknown>;
-		const id = typeof record.id === "string" ? record.id.trim() : "";
+		const id =
+			(typeof record.id === "string" ? record.id.trim() : "") ||
+			(typeof record.slug === "string" ? record.slug.trim() : "");
 		if (!id) continue;
 		// OpenAI uses `name`; Anthropic's /v1/models uses `display_name`.
 		const displayName = typeof record.name === "string" && record.name.trim() ? record.name.trim() : undefined;
 		const anthropicName =
-			typeof record.display_name === "string" && record.display_name.trim() ? record.display_name.trim() : undefined;
+			typeof record.display_name === "string" && record.display_name.trim()
+				? record.display_name.trim()
+				: typeof record.displayName === "string"
+					? record.displayName.trim()
+					: undefined;
 		const name = (displayName ?? anthropicName) !== id ? (displayName ?? anthropicName) : undefined;
 		models.push(name ? { id, name } : { id });
 	}
-	return models;
+	return data.length > 0 && models.length === 0 ? null : models;
 }
 
 function dedupeSort(models: ProbeModel[]): ProbeModel[] {

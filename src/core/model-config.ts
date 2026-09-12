@@ -65,7 +65,11 @@ const ThinkingLevelMapSchema = Type.Object({
 
 const ChatTemplateKwargScalarSchema = Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]);
 const ChatTemplateKwargVariableSchema = Type.Object({
-	$var: Type.Union([Type.Literal("thinking.enabled"), Type.Literal("thinking.effort")]),
+	$var: Type.Union([
+		Type.Literal("thinking.enabled"),
+		Type.Literal("thinking.effort"),
+		Type.Literal("thinking.budget"),
+	]),
 	omitWhenOff: Type.Optional(Type.Boolean()),
 });
 const ChatTemplateKwargSchema = Type.Union([ChatTemplateKwargScalarSchema, ChatTemplateKwargVariableSchema]);
@@ -110,6 +114,15 @@ const OpenAICompletionsCompatSchema = Type.Object({
 	),
 	supportsLongCacheRetention: Type.Optional(Type.Boolean()),
 	vllmPriority: Type.Optional(Type.Number()),
+	zaiToolStream: Type.Optional(Type.Boolean()),
+	supportsThinkingTokenBudget: Type.Optional(Type.Boolean()),
+	thinkingTokenBudgetField: Type.Optional(
+		Type.Union([
+			Type.Literal("thinking_token_budget"),
+			Type.Literal("thinking_budget"),
+			Type.Literal("thinking_budget_tokens"),
+		]),
+	),
 });
 
 const OpenAIResponsesCompatSchema = Type.Object({
@@ -123,6 +136,7 @@ const OpenAIResponsesCompatSchema = Type.Object({
 	supportsAdditionalTools: Type.Optional(Type.Boolean()),
 	supportsToolSearch: Type.Optional(Type.Boolean()),
 	supportsMaxOutputTokens: Type.Optional(Type.Boolean()),
+	supportsExplicitPromptCacheMode: Type.Optional(Type.Boolean()),
 });
 
 const AnthropicMessagesCompatSchema = Type.Object({
@@ -246,6 +260,31 @@ export class ModelConfig {
 	private constructor(providers: ReadonlyMap<string, ModelsJsonProvider>, error?: string) {
 		this.providers = providers;
 		this.error = error;
+	}
+
+	/** Validate a compat object against its API family without reading a file or resolving credentials. */
+	static validateCompat(api: string, value: unknown): string | undefined {
+		const schema =
+			api === "openai-completions"
+				? OpenAICompletionsCompatSchema
+				: api === "anthropic-messages"
+					? AnthropicMessagesCompatSchema
+					: [
+								"openai-responses",
+								"azure-openai-responses",
+								"openai-codex-responses",
+								"bedrock-converse-stream",
+							].includes(api)
+						? OpenAIResponsesCompatSchema
+						: undefined;
+		if (!schema) return undefined;
+		const validator = Compile(schema);
+		if (validator.Check(value)) return undefined;
+		return validator
+			.Errors(value)
+			.slice(0, 5)
+			.map((error) => `${formatValidationPath(error)}: ${error.message}`)
+			.join("; ");
 	}
 
 	static async load(modelsJsonPath: string | undefined): Promise<ModelConfig> {

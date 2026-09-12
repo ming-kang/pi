@@ -20,6 +20,8 @@ Minimalist visual editor for the `providers` record of `models.json` (`~/.pi/age
 
 Both columns keep independent selection and scroll positions.
 
+Fixed fields keep their `Key: ` prefix while editing, and the selected key and value are highlighted together. Typing or pasting replaces the value; Enter opens the existing value for adjustment. Escape cancels that edit.
+
 ### Key controls
 
 | Key | Default | Action |
@@ -64,7 +66,7 @@ Custom `api` strings already present in `models.json` are preserved. The provide
 
 Selecting a model in the left column displays its editable fields in the right column:
 
-- **`id`**: Model identifier (required, unique per provider). Renaming updates references and store operations immediately.
+- **`id`**: Model identifier (required, unique per provider). Renaming waits for a successful save before switching the editor to the new id; conflicts leave the original model selected.
 - **`name`**: Human-readable display name. When unset, interfaces fall back to showing the `id`.
 - **`reasoning`**: Boolean toggle (`true`, `false`, or unset).
 - **`thinkingLevelMap`**: Sub-pane configuring mappings for all seven Pi thinking levels (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). Each level supports three states:
@@ -75,16 +77,18 @@ Selecting a model in the left column displays its editable fields in the right c
 - **`cost`**: Sub-pane for $/M-token rates (`input`, `output`, `cacheRead`, `cacheWrite`). Edits require a complete cost object (unspecified rates default to `0`). Existing custom cost `tiers` are preserved read-only.
 - **`contextWindow`**: Positive integer total context token limit.
 - **`maxTokens`**: Positive integer maximum generation token limit.
-- **`compat`**: Sub-pane configuring provider compatibility flags selected from a per-API known-field catalog picker. Open dictionary fields (`chatTemplateKwargs` and `chatTemplateArgs`) allow arbitrary keys. Pressing `Ctrl+X` removes an entry to restore inherited behavior.
+- **`compat`**: Sub-pane configuring flags consumed by the selected API implementation. Open dictionary fields (`chatTemplateKwargs` and `chatTemplateArgs`) allow arbitrary keys and Pi thinking variables, including `thinking.budget`. Nested JSON values use the core models.json validation rules. Pressing `Ctrl+X` removes an entry to restore inherited behavior.
 
 The active session model and its provider cannot be deleted or renamed; switch models with `/model` first.
 
 ## Fetch Models
 
-Triggers an OpenAI-compatible discovery request: `GET {baseUrl}/models`.
+For OpenAI-compatible APIs, discovery uses `GET {baseUrl}/models`. Anthropic Messages uses `{baseUrl}/v1/models`, without repeating an existing `/v1` suffix. The right pane shows the discovery URL.
 
-- **Authentication:** Credentials resolve through Pi's canonical resolution chain (`auth.json` > environment variables > `models.json`). Raw `$VAR` or `!command` placeholders are never transmitted unresolved; discovery aborts if configured credentials cannot be resolved.
-- **Limits:** Requests time out after 10 seconds, and responses are bounded to 4 MiB (error payloads are bounded to 4 KiB and displayed up to 400 characters). Catalogs are capped at 2,000 models.
+Accepted catalog shapes are `data[]`, `models[]`, or a bare array. Entries can provide `id` or `slug`, plus an optional `name`, `display_name`, or `displayName`. Discovery imports identifiers and labels; model capabilities remain explicit configuration or opt-in built-in data. Native Google catalog shapes are not supported.
+
+- **Authentication:** Credentials resolve through Pi's canonical resolution chain. Header-only resolved authentication is supported, and the default scheme follows the API type. Unsaved connection changes block discovery. Raw `$VAR` or `!command` placeholders are never transmitted unresolved; discovery aborts if configured credentials cannot be resolved. Known resolved credentials are redacted from server errors.
+- **Limits:** Discovery has a 10-second deadline including preparation and authentication waits. Responses are bounded to 4 MiB (error payloads are bounded to 4 KiB and displayed up to 400 characters). Catalogs are capped at 2,000 models. A response declaring `has_more` is marked partial; further pages are not fetched automatically.
 - **Checklist import:** Discovered models appear in a searchable checklist. Models already configured in `models.json` are marked `Added` and cannot be checked. Selecting models and confirming appends `{ id, name? }` records, saves immediately, and refreshes the provider runtime.
 
 ## Use Built-in Data
@@ -92,17 +96,18 @@ Triggers an OpenAI-compatible discovery request: `GET {baseUrl}/models`.
 The `Use Built-in Data` row in a model's field list provides field-level completion from Pi's built-in model catalog:
 
 - **Matching:** Queries Pi's catalog using exact ID matches first, then normalized ID comparisons, then fuzzy search. Ties prefer entries sharing the model's effective API protocol. Up to 8 candidates are presented.
-- **Preview:** Selecting a candidate displays a per-field comparison (`current → reference`).
+- **Preview:** Selecting a candidate displays a per-field comparison (`current → reference`). Applying verifies that the model and its effective API still match the preview. Existing cost tiers and unrelated nested compatibility entries are retained.
 - **Default selections:** Unset scalar fields (`name`, `reasoning`, `input`, `contextWindow`, `maxTokens`) are pre-checked. Explicitly configured values remain unchecked. `thinkingLevelMap`, `compat`, and `cost` are always opt-in.
 - **Safety boundaries:** Cross-API thinking maps and compat dictionaries are view-only and cannot be imported. Cost tiers from the reference are never imported. Identity and connection fields (`provider`, `id`, `api`, `baseUrl`, keys) are never altered. Pressing `Esc` discards the preview without applying changes.
 
 ## Persistence and runtime refresh
 
 - **Atomic locking:** Edits save immediately. Writes acquire a cross-process lock via `proper-lockfile`, write to a temporary file in the same directory, validate the candidate file with `ModelConfig`, and atomically rename it into place.
-- **Backup:** The first successful write in a session creates `models.json.bak` from the existing file content.
-- **Formatting:** Comments and custom indentation are normalized to two-space JSON on save. Unknown top-level and nested fields are preserved verbatim.
+- **Backup:** The first write over an existing file creates a `.bak` copy of its content. Symlinked configuration files are edited at their resolved target without replacing the symlink.
+- **Formatting:** Comments and custom indentation are normalized to two-space JSON on save. Unknown top-level and nested values are preserved.
 - **Conflict resolution:** Concurrent external edits to unrelated fields merge automatically. Edits to the same field surface in an interactive Conflict pane where each field is resolved individually (`Keep my value` or `Use external value`).
 - **Runtime refresh:** An offline-scoped refresh (`allowNetwork: false`) synchronizes the runtime when `/provider` closes (or immediately following a Fetch Models import). Save errors and runtime refresh errors are reported independently.
+- **Recovery:** Failed or conflicting edits remain pending. Closing offers return, retry, or explicit discard. Fetch refreshes retain the changed-model information needed to update the active session model on close. Leaving a pane cancels its outstanding discovery and prevents late results from changing another page.
 - **Overlay behavior:** Configuring a provider whose ID matches a Pi built-in provider overlays that catalog. Deleting the provider configuration unmasks the built-in models. Existing `modelOverrides` in `models.json` remain preserved and take precedence over fields edited here.
 
 ## Migration from router

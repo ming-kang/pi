@@ -36,6 +36,10 @@ describe("provider builtin catalog", () => {
 		expect(matches.some((match) => match.entry.model.id.includes("opus"))).toBe(true);
 	});
 
+	test("preserves relevance instead of alphabetically promoting unrelated fuzzy hits", () => {
+		expect(matchBuiltinModels("sol")[0]?.entry.model.id.toLowerCase()).toContain("sol");
+	});
+
 	test("the preferred api sorts first within a tier", () => {
 		const matches = matchBuiltinModels("claude-opus-4-6", "anthropic-messages");
 		const exact = matches.filter((match) => match.tier === "exact");
