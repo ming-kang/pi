@@ -9,6 +9,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - Replaced the bundled `router` extension with `provider`, a minimalist `models.json` editor (`/provider`) with connection, API-type, and model editing, OpenAI-style catalog fetch with Pi-resolved auth, and builtin-catalog field completion; `router.json` and `router-client.json` remain on disk unmigrated, and the Codex-shaped relay request profile no longer applies (requests use Pi's native API implementations).
 - Added three new user-configurable keybindings for `/provider`: `app.provider.switchPaneLeft` and `app.provider.switchPaneRight` for pane switching, and `app.provider.removeEntry` for entry removal.
 - Redesigned `/provider` with a fixed-height frame: the provider list and both editor columns scroll inside fixed windows with `(n/N)` position indicators (the `/model` selector convention) instead of resizing the dialog, and the selected row now stays highlighted in the unfocused pane as the selection path while that pane's other rows dim back.
+- Simplified `/provider` persistence to write-through field merging: every save re-reads `models.json` under a cross-process lock and applies pending edits onto the freshest content, so unrelated external edits merge automatically and same-field races resolve last-writer-wins; the per-field conflict pane is removed. Esc on a model draft now discards it (asking first when the draft has fields), and the Fetch Models capability line and one-time save-format footer notice are gone.
 
 ### Fixed
 

@@ -71,6 +71,11 @@ export class ModelFieldsPane implements EditorPane {
 		this.beginEdit("overwrite");
 	}
 
+	/** A draft with no fields set is safe to abandon without asking. */
+	private draftEmpty(): boolean {
+		return this.model.isDraft && Object.keys(this.model.read()).length === 0;
+	}
+
 	render(width: number): string[] {
 		const theme = this.host.theme;
 		const current = this.model.read();
@@ -230,7 +235,19 @@ export class ModelFieldsPane implements EditorPane {
 			return;
 		}
 		if (kb.matches(data, "tui.select.cancel")) {
-			this.host.popPane();
+			if (!this.model.isDraft) {
+				this.host.popPane();
+				return;
+			}
+			// Esc on a draft abandons it; a draft with fields asks first.
+			if (this.draftEmpty()) {
+				this.host.discardModelDraft();
+				return;
+			}
+			const label = this.model.read().name ?? this.model.read().id ?? "New Model";
+			this.host.confirm(`Discard the new model "${label}"? Its fields are not saved.`, "Discard Model", () =>
+				this.host.discardModelDraft(),
+			);
 			return;
 		}
 		if (kb.matches(data, "app.list.toggle")) {
@@ -310,6 +327,11 @@ export class ModelFieldsPane implements EditorPane {
 				this.editing = undefined;
 				this.editingRow = undefined;
 				this.error = undefined;
+				// Cancelling the edit of an untouched draft abandons the draft outright.
+				if (this.draftEmpty()) {
+					this.host.discardModelDraft();
+					return;
+				}
 				this.host.refresh();
 			},
 		});
@@ -432,7 +454,7 @@ export class ModelFieldsPane implements EditorPane {
 			keyHint("tui.select.confirm", "edit / enter"),
 			keyHint("app.list.toggle", "toggle"),
 			keyHint("app.provider.switchPaneLeft", "focus left"),
-			keyHint("tui.select.cancel", "back"),
+			keyHint("tui.select.cancel", this.model.isDraft ? "discard" : "back"),
 		].join("  ");
 	}
 }

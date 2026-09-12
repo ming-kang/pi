@@ -24,8 +24,8 @@ import { isBuiltinProviderId } from "../catalog.ts";
 import { effectiveModelSettings, hasProviderSettings } from "../configuration.ts";
 import { fetchProviderModels, importProviderModels } from "../connection.ts";
 import type { RefreshCoordinator } from "../refresh.ts";
-import { DELETE, type ModelsJsonStore, type SaveConflict } from "../store.ts";
-import { ConfirmPane, ConflictPane, InfoPane } from "./dialogs.ts";
+import { DELETE, type ModelsJsonStore } from "../store.ts";
+import { ConfirmPane, InfoPane } from "./dialogs.ts";
 import { FetchModelsPane } from "./fetch-models.ts";
 import { ModelFieldsPane } from "./model-fields.ts";
 import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
@@ -58,7 +58,7 @@ type LeftItem =
 const LEFT_WIDTH_MIN = 16;
 const LEFT_WIDTH_MAX = 40;
 /** Fixed editor body height: both columns scroll inside it rather than resizing the frame. */
-const BODY_ROWS = 13;
+const BODY_ROWS = 14;
 const MIN_WIDTH = 56;
 
 interface ModelDraft {
@@ -178,24 +178,6 @@ export class ProviderEditorScreen implements Component, Focusable {
 			return;
 		}
 		if (kb.matches(data, "tui.select.cancel")) this.done("back");
-	}
-
-	/** Called by the flow when a save settles with conflicts. */
-	showConflicts(conflicts: SaveConflict[]): void {
-		if (this.disposed) return;
-		conflicts = conflicts.filter((conflict) => conflict.op.kind !== "renameModel");
-		if (conflicts.length === 0) return;
-		const active = this.topPane();
-		if (active instanceof ConflictPane) {
-			active.update(conflicts);
-			this.refresh();
-			return;
-		}
-		this.pushPane(new ConflictPane(this.host, conflicts));
-		this.options.notify(
-			`${conflicts.length} field(s) changed on disk since this page opened — resolve the conflicts in the right column.`,
-			"warning",
-		);
 	}
 
 	/** Rebuild from the store view after a save merged external changes. */
@@ -441,7 +423,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 			case "addModel":
 				return new InfoPane(this.host, [
 					"Press Enter to create a model.",
-					"One unfinished draft can exist at a time; it is kept in memory until its id is set.",
+					"A draft is kept in memory until its id is set; Esc on the draft discards it.",
 				]);
 			case "deleteProvider":
 				return new InfoPane(this.host, ["Press Enter to delete this provider from models.json."]);
@@ -558,6 +540,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 				return effectiveModelSettings(providerId, store.getProvider(providerId), model).baseUrl;
 			},
 			commitModelDraft: () => this.commitModelDraft(),
+			discardModelDraft: () => this.discardModelDraft(),
 			isCurrentModel: (modelId) =>
 				this.options.currentModel?.provider === providerId && this.options.currentModel.id === modelId,
 			isCurrentProvider: () => this.options.currentModel?.provider === providerId,
@@ -584,6 +567,18 @@ export class ProviderEditorScreen implements Component, Focusable {
 				this.refresh();
 			},
 		};
+	}
+
+	/** Drop the in-memory draft: the selection returns to + Add Model with focus on the left. */
+	private discardModelDraft(): void {
+		if (!this.draft) return;
+		this.draft = undefined;
+		this.rebuildLeftItems();
+		const addIndex = this.leftItems.findIndex((item) => item.kind === "addModel");
+		this.leftIndex = addIndex >= 0 ? addIndex : this.selectableIndex(0);
+		this.focusPane = "left";
+		this.resetRightStack();
+		this.refresh();
 	}
 
 	private commitModelDraft(): string | undefined {
@@ -705,9 +700,6 @@ export class ProviderEditorScreen implements Component, Focusable {
 	}
 
 	private renderFooter(width: number): string[] {
-		const theme = this.theme;
-		// Two reserved rows keep the frame height stable; the save-behavior note
-		// blanks out once models.json has been written.
 		const hints =
 			this.focusPane === "left"
 				? [
@@ -717,13 +709,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 						keyHint("tui.select.cancel", "back"),
 					].join("  ")
 				: (this.topPane()?.hints() ?? "");
-		const note = this.options.store.hasWritten
-			? ""
-			: theme.fg(
-					"dim",
-					"Saving rewrites models.json as two-space JSON (comments are dropped); the first save creates models.json.bak.",
-				);
-		return [hints, note].map((line) => truncateToWidth(line, width));
+		return [truncateToWidth(hints, width)];
 	}
 }
 

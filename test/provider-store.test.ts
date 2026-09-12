@@ -76,18 +76,14 @@ describe("provider store", () => {
 		expect(store.pendingCount).toBe(0);
 	});
 
-	test("holds a colliding model import until the user resolves it", async () => {
+	test("a colliding model import overwrites the external entry (last-writer-wins)", async () => {
 		const store = await loadStore({ providers: { cpa: { baseUrl: "https://a", models: [] } } });
-		const external = { id: "k3", name: "External model", contextWindow: 262144 };
-		writeDisk({ providers: { cpa: { baseUrl: "https://a", models: [external] } } });
+		writeDisk({ providers: { cpa: { baseUrl: "https://a", models: [{ id: "k3", name: "External model" }] } } });
 		store.addModel("cpa", { id: "k3", name: "Imported model" });
 		const first = (await flush(store)).at(-1);
-		expect(first?.kind).toBe("conflict");
-		store.setProviderField("cpa", ["baseUrl"], "https://b");
-		const later = (await flush(store)).at(-1);
-		expect(readDisk().providers.cpa.models).toEqual([external]);
-		expect(later?.kind).toBe("conflict");
-		expect(store.pendingCount).toBe(1);
+		expect(first?.kind).toBe("saved");
+		expect(readDisk().providers.cpa.models).toEqual([{ id: "k3", name: "Imported model" }]);
+		expect(store.pendingCount).toBe(0);
 	});
 
 	test("a provider draft never mutates the disk baseline", async () => {
@@ -113,7 +109,7 @@ describe("provider store", () => {
 		});
 	});
 
-	test("a rename conflict cannot adopt an unrelated model at the destination id", async () => {
+	test("a rename cannot adopt an unrelated model at the destination id", async () => {
 		const store = await loadStore({
 			providers: { cpa: { baseUrl: "https://a", models: [{ id: "old", name: "Mine" }] } },
 		});
@@ -123,15 +119,34 @@ describe("provider store", () => {
 		expect(store.pendingCount).toBe(0);
 	});
 
-	test("conflict previews mask API keys while retaining the raw value for resolution", async () => {
-		const store = await loadStore({ providers: { cpa: { baseUrl: "https://a", apiKey: "initial-fixture" } } });
-		writeDisk({ providers: { cpa: { baseUrl: "https://a", apiKey: "external-fixture-secret" } } });
-		store.setProviderField("cpa", ["apiKey"], "local-fixture-secret");
-		const result = (await flush(store)).at(-1);
-		if (result?.kind !== "conflict") throw new Error("Expected conflict");
-		expect(result.conflicts[0].external).not.toContain("external-fixture-secret");
-		expect(result.conflicts[0].attempted).not.toContain("local-fixture-secret");
-		expect(result.conflicts[0].externalRaw).toBe("external-fixture-secret");
+	test("merges unrelated external edits; same-field edits resolve last-writer-wins", async () => {
+		const store = await loadStore({ providers: { cpa: { baseUrl: "https://a", api: "openai-completions" } } });
+		store.setProviderField("cpa", ["baseUrl"], "https://b");
+		await flush(store);
+
+		// External editor changes apiKey (unrelated) and api (the field we edit next).
+		writeDisk({ providers: { cpa: { baseUrl: "https://b", api: "openai-responses", apiKey: "sk-ext" } } });
+
+		store.setProviderField("cpa", ["api"], "anthropic-messages");
+		store.setProviderField("cpa", ["headers"], { "x-trace": "1" });
+		const last = (await flush(store)).at(-1);
+		expect(last?.kind).toBe("saved");
+
+		const disk = readDisk().providers.cpa;
+		expect(disk.apiKey).toBe("sk-ext"); // unrelated external change preserved
+		expect(disk.headers).toEqual({ "x-trace": "1" });
+		expect(disk.api).toBe("anthropic-messages"); // our write wins the same field
+		expect(store.getProvider("cpa")?.api).toBe("anthropic-messages");
+	});
+
+	test("the view resyncs onto external edits after a save", async () => {
+		const store = await loadStore({ providers: { cpa: { baseUrl: "https://a" } } });
+		writeDisk({ providers: { cpa: { baseUrl: "https://external" } } });
+		store.setProviderField("cpa", ["apiKey"], "sk-mine");
+		await flush(store);
+		expect(readDisk().providers.cpa).toMatchObject({ baseUrl: "https://external", apiKey: "sk-mine" });
+		// The baseline refreshed from disk, so the external value shows through.
+		expect(store.getProvider("cpa")?.baseUrl).toBe("https://external");
 	});
 
 	test("creates the models directory before acquiring its first file lock", async () => {
@@ -206,52 +221,6 @@ describe("provider store", () => {
 		await flush(store);
 		// Nothing net to write: no file created at all.
 		expect(existsSync(modelsPath)).toBe(false);
-	});
-
-	test("merges unrelated external edits and conflicts only the moved field", async () => {
-		const store = await loadStore({ providers: { cpa: { baseUrl: "https://a", api: "openai-completions" } } });
-		store.setProviderField("cpa", ["baseUrl"], "https://b");
-		await flush(store);
-
-		// External editor changes apiKey (unrelated) and api (conflicting).
-		writeDisk({ providers: { cpa: { baseUrl: "https://b", api: "openai-responses", apiKey: "sk-ext" } } });
-
-		store.setProviderField("cpa", ["api"], "anthropic-messages"); // base "openai-completions" vs disk "openai-responses"
-		store.setProviderField("cpa", ["headers"], { "x-trace": "1" }); // untouched externally
-		const results = await flush(store);
-		const last = results.at(-1);
-		expect(last?.kind).toBe("conflict");
-		if (last?.kind !== "conflict") throw new Error("expected conflict");
-		expect(last.conflicts).toHaveLength(1);
-		expect(last.conflicts[0].location).toContain("cpa");
-		expect(last.conflicts[0].location).toContain("api");
-
-		// Unrelated external change and our other op were merged and written.
-		const disk = readDisk().providers.cpa;
-		expect(disk.apiKey).toBe("sk-ext");
-		expect(disk.headers).toEqual({ "x-trace": "1" });
-		expect(disk.api).toBe("openai-responses"); // external value kept
-		// View still shows the user's attempted value (op held).
-		expect(store.getProvider("cpa")?.api).toBe("anthropic-messages");
-
-		// Keep mine: rebase and overwrite the external value.
-		store.resolveConflict(last.conflicts[0].op.seq, "keep", last.conflicts[0].externalRaw, true);
-		await flush(store);
-		expect(readDisk().providers.cpa.api).toBe("anthropic-messages");
-	});
-
-	test("use-external conflict resolution drops the op", async () => {
-		const store = await loadStore({ providers: { cpa: { baseUrl: "https://a" } } });
-		writeDisk({ providers: { cpa: { baseUrl: "https://external" } } });
-		store.setProviderField("cpa", ["baseUrl"], "https://mine");
-		const results = await flush(store);
-		const last = results.at(-1);
-		expect(last?.kind).toBe("conflict");
-		if (last?.kind !== "conflict") throw new Error("expected conflict");
-		store.resolveConflict(last.conflicts[0].op.seq, "external", undefined, false);
-		await flush(store);
-		expect(readDisk().providers.cpa.baseUrl).toBe("https://external");
-		expect(store.getProvider("cpa")?.baseUrl).toBe("https://external");
 	});
 
 	test("rejects schema-invalid candidates without touching the file", async () => {

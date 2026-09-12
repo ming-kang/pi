@@ -60,6 +60,8 @@ export interface EditorHost {
 	effectiveBaseUrl(model?: Partial<ModelsJsonModel>): string | undefined;
 	/** Commit the pending model draft (id validation + addModel op); returns an error or undefined. */
 	commitModelDraft(): string | undefined;
+	/** Drop the in-memory model draft; the left column returns to + Add Model. */
+	discardModelDraft(): void;
 	/** Current session model protection (§4.3): no delete/rename of the active model or its provider. */
 	isCurrentModel(modelId: string): boolean;
 	isCurrentProvider(): boolean;

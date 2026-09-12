@@ -71,8 +71,7 @@ export function createProviderApp(
 
 	store.onSaveResult = (result) => {
 		if (session.signal.aborted) return;
-		if (result.kind === "conflict") activeEditor?.showConflicts(result.conflicts);
-		else if (result.kind === "invalid" || result.kind === "error") notify(result.error, "error");
+		if (result.kind === "invalid" || result.kind === "error") notify(result.error, "error");
 		activeEditor?.syncFromStore();
 		tui.requestRender();
 	};
@@ -110,8 +109,6 @@ export function createProviderApp(
 			notify,
 		});
 		session.setScreen(activeEditor);
-		const conflicts = store.getConflicts(providerId);
-		if (conflicts.length > 0) activeEditor.showConflicts(conflicts);
 	}
 
 	function showUnsaved(error: string): void {

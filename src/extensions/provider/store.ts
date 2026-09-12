@@ -4,11 +4,13 @@
  * Three states are tracked: `baseline` (last known disk content), pending
  * field-level ops, and `view` (baseline + ops, what the UI renders). Every
  * confirmed edit queues an op and schedules a save. A save re-reads the file
- * under a cross-process lock, applies ops whose field was not externally
- * modified since baseline, merges unrelated external changes, validates the
- * candidate via ModelConfig on a temp file, backs up once per session, and
- * atomically replaces models.json. Conflicting ops stay pending for the UI
- * to resolve. Whole-snapshot blind overwrites are never performed.
+ * under a cross-process lock and applies the pending ops onto that freshest
+ * content — unrelated external edits are preserved, a same-field race
+ * resolves last-writer-wins, and ops targeting externally removed models
+ * simply miss. The candidate is validated via ModelConfig on a temp file,
+ * backed up once per session, and atomically renamed into place. Failed
+ * saves keep the ops pending; closing offers retry or explicit discard.
+ * Whole-snapshot blind overwrites are never performed.
  *
  * Comments and custom formatting are normalized to two-space JSON on save;
  * unknown fields anywhere in the document are preserved verbatim.
@@ -24,13 +26,11 @@ import { stripJsonComments } from "../../utils/json.ts";
 import { normalizePath } from "../../utils/paths.ts";
 import { stripBom } from "../../utils/text.ts";
 import { hasProviderSettings } from "./configuration.ts";
-import { formatError, maskApiKey } from "./constants.ts";
+import { formatError } from "./constants.ts";
 
 /** Sentinel op value removing the key at the op path. */
 export const DELETE: unique symbol = Symbol("provider-store-delete");
 export type DeleteMarker = typeof DELETE;
-/** Sentinel for "key absent" in op baselines. */
-const MISSING: unique symbol = Symbol("provider-store-missing");
 
 export interface ModelsJsonDocument {
 	providers: Record<string, ModelsJsonProvider>;
@@ -39,8 +39,6 @@ export interface ModelsJsonDocument {
 
 interface OpBase {
 	seq: number;
-	/** Expected value before this operation, including earlier queued edits. */
-	base: unknown;
 }
 export interface SetFieldOp extends OpBase {
 	kind: "set";
@@ -75,23 +73,9 @@ export interface RemoveProviderOp extends OpBase {
 }
 export type Op = SetFieldOp | AddModelOp | RemoveModelOp | RenameModelOp | RemoveProviderOp;
 
-export interface SaveConflict {
-	op: Op;
-	/** Human-readable location, e.g. `CPA › kimi-k3 › contextWindow`. */
-	location: string;
-	/** External value found on disk (MISSING-rendered as "(absent)"). */
-	external: string;
-	/** Value the user tried to write. */
-	attempted: string;
-	/** Raw external value for rebase-on-keep; MISSING when the key is absent on disk. */
-	externalRaw: unknown;
-	externalPresent: boolean;
-}
-
 export type SaveResult =
 	| { kind: "clean" }
-	| { kind: "saved"; applied: number; conflicts: SaveConflict[] }
-	| { kind: "conflict"; conflicts: SaveConflict[] }
+	| { kind: "saved"; applied: number }
 	| { kind: "invalid"; error: string }
 	| { kind: "error"; error: string };
 
@@ -124,16 +108,6 @@ export function jsonEquals(a: unknown, b: unknown): boolean {
 	return false;
 }
 
-function getPath(root: Record<string, unknown>, path: readonly string[]): unknown {
-	let current: unknown = root;
-	for (const segment of path) {
-		if (!isPlainObject(current)) return MISSING;
-		current = Object.hasOwn(current, segment) ? current[segment] : MISSING;
-		if (current === MISSING) return MISSING;
-	}
-	return current;
-}
-
 function setPath(root: Record<string, unknown>, path: readonly string[], value: unknown): void {
 	let current = root;
 	for (const segment of path.slice(0, -1)) {
@@ -162,15 +136,7 @@ function setPath(root: Record<string, unknown>, path: readonly string[], value: 
 }
 
 function cloneValue(value: unknown): unknown {
-	return value === MISSING || value === DELETE ? value : structuredClone(value);
-}
-
-function renderValue(value: unknown): string {
-	if (value === MISSING) return "(absent)";
-	if (value === DELETE) return "(removed)";
-	if (typeof value === "string") return JSON.stringify(value);
-	const text = JSON.stringify(value);
-	return text === undefined ? String(value) : text;
+	return value === DELETE ? value : structuredClone(value);
 }
 
 async function readDocument(path: string): Promise<DiskRead> {
@@ -195,7 +161,6 @@ export class ModelsJsonStore {
 	private view: ModelsJsonDocument;
 	private seq = 0;
 	private backedUp = false;
-	private wroteOnce = false;
 	private batching = false;
 	private saveChain: Promise<void> = Promise.resolve();
 	private readonly drafts = new Set<string>();
@@ -276,15 +241,7 @@ export class ModelsJsonStore {
 		if (pending.length === 0) return undefined;
 		if (this.lastSaveResult.kind === "error" || this.lastSaveResult.kind === "invalid")
 			return this.lastSaveResult.error;
-		return `${pending.length} change(s) are not saved; resolve the conflicts or retry before continuing.`;
-	}
-
-	getConflicts(providerId: string): SaveConflict[] {
-		if (this.lastSaveResult.kind !== "conflict") return [];
-		const pending = new Set(this.ops.map((op) => op.seq));
-		return this.lastSaveResult.conflicts.filter(
-			(conflict) => conflict.op.providerId === providerId && pending.has(conflict.op.seq),
-		);
+		return `${pending.length} change(s) are not saved; retry or discard before continuing.`;
 	}
 
 	retrySave(): void {
@@ -312,16 +269,6 @@ export class ModelsJsonStore {
 		return ++this.seq;
 	}
 
-	private viewValue(providerId: string, modelId: string | undefined, path: readonly string[]): unknown {
-		const provider = this.getProvider(providerId) as Record<string, unknown> | undefined;
-		if (!provider) return MISSING;
-		if (modelId === undefined) return getPath(provider, path);
-		const models = Array.isArray(provider.models) ? (provider.models as Record<string, unknown>[]) : [];
-		const model = models.find((entry) => entry.id === modelId);
-		if (!model) return MISSING;
-		return getPath(model, path);
-	}
-
 	setProviderField(providerId: string, path: readonly string[], value: unknown): void {
 		this.enqueue({
 			kind: "set",
@@ -329,7 +276,6 @@ export class ModelsJsonStore {
 			providerId,
 			path,
 			value: cloneValue(value),
-			base: cloneValue(this.viewValue(providerId, undefined, path)),
 			createProvider: !Object.hasOwn(this.baseline.providers, providerId),
 		});
 	}
@@ -342,7 +288,6 @@ export class ModelsJsonStore {
 			modelId,
 			path,
 			value: cloneValue(value),
-			base: cloneValue(this.viewValue(providerId, modelId, path)),
 			createProvider: !Object.hasOwn(this.baseline.providers, providerId),
 		});
 	}
@@ -353,7 +298,6 @@ export class ModelsJsonStore {
 			seq: this.nextSeq(),
 			providerId,
 			model: structuredClone(model),
-			base: cloneValue(this.getModel(providerId, model.id) ?? MISSING),
 			createProvider: !Object.hasOwn(this.baseline.providers, providerId),
 		});
 	}
@@ -364,7 +308,6 @@ export class ModelsJsonStore {
 			seq: this.nextSeq(),
 			providerId,
 			modelId,
-			base: cloneValue(this.getModel(providerId, modelId) ?? MISSING),
 		});
 	}
 
@@ -372,6 +315,8 @@ export class ModelsJsonStore {
 		await this.flush();
 		const pendingError = this.getPendingError(providerId);
 		if (pendingError) return pendingError;
+		const before = this.getModel(providerId, oldId);
+		if (!before) return "The model no longer exists.";
 		const seq = this.nextSeq();
 		this.enqueue({
 			kind: "renameModel",
@@ -379,14 +324,20 @@ export class ModelsJsonStore {
 			providerId,
 			oldId,
 			newId,
-			base: cloneValue(this.getModel(providerId, oldId) ?? MISSING),
 		});
 		await this.flush();
-		if (!this.ops.some((op) => op.seq === seq)) return undefined;
-		const error = this.getPendingError(providerId) ?? "The model changed on disk; reopen it before renaming.";
-		this.ops = this.ops.filter((op) => op.seq !== seq);
-		this.recomputeView();
-		return error;
+		if (this.ops.some((op) => op.seq === seq)) {
+			// The save failed; drop the rename rather than surprising the user later.
+			this.ops = this.ops.filter((op) => op.seq !== seq);
+			this.recomputeView();
+			return this.getPendingError(providerId) ?? "Failed to save models.json.";
+		}
+		// A settled rename can still have missed when the model moved on disk; never
+		// adopt an unrelated model that already uses the destination id.
+		const renamed = this.getModel(providerId, newId);
+		return renamed && jsonEquals(renamed, { ...before, id: newId })
+			? undefined
+			: "The model changed on disk; reopen it before renaming.";
 	}
 
 	removeProvider(providerId: string): void {
@@ -394,7 +345,6 @@ export class ModelsJsonStore {
 			kind: "removeProvider",
 			seq: this.nextSeq(),
 			providerId,
-			base: cloneValue(this.getProvider(providerId) ?? MISSING),
 		});
 	}
 
@@ -409,35 +359,12 @@ export class ModelsJsonStore {
 		if (this.ops.length > 0) this.scheduleSave();
 	}
 
-	/** True after the first successful write of this session (drives the one-time format notice). */
-	get hasWritten(): boolean {
-		return this.wroteOnce;
-	}
-
 	/** Drop all pending ops targeting a draft provider (used when leaving its editor untouched). */
 	discardProviderDraft(providerId: string): void {
 		this.drafts.delete(providerId);
 		if (Object.hasOwn(this.baseline.providers, providerId)) return;
 		this.ops = this.ops.filter((op) => op.providerId !== providerId);
 		this.recomputeView();
-	}
-
-	/**
-	 * Resolve a held conflict: "keep" rebases the op onto the external value so
-	 * the next save overwrites it; "external" drops the op.
-	 */
-	resolveConflict(seq: number, action: "keep" | "external", externalValue: unknown, externalPresent: boolean): void {
-		const op = this.ops.find((entry) => entry.seq === seq);
-		if (!op) return;
-		if (action === "external") this.ops = this.ops.filter((entry) => entry.seq !== seq);
-		else
-			this.ops = this.ops.map((entry) =>
-				entry === op
-					? { ...entry, seq: this.nextSeq(), base: externalPresent ? cloneValue(externalValue) : MISSING }
-					: entry,
-			);
-		this.recomputeView();
-		if (action === "keep") this.scheduleSave();
 	}
 
 	// ---------------------------------------------------------------------
@@ -523,9 +450,6 @@ export class ModelsJsonStore {
 				return { kind: "error", error: `models.json changed on disk and is unreadable: ${formatError(error)}` };
 			}
 			const working = structuredClone(disk.doc);
-			const conflicts: SaveConflict[] = [];
-			const applied: Op[] = [];
-			const held: Op[] = [];
 			const batch = this.ops.filter((op) => {
 				const provider = this.getProvider(op.providerId);
 				return (
@@ -535,58 +459,42 @@ export class ModelsJsonStore {
 					hasProviderSettings(provider)
 				);
 			});
+			// Apply blindly onto the freshest disk content: unrelated external
+			// edits are preserved, a same-field race resolves last-writer-wins,
+			// and ops targeting externally removed models simply miss.
+			for (const op of batch) applyOp(working, op);
+			pruneEmptyNewProviders(working, disk.doc);
 			const settle = () => {
-				const settled = new Set(applied.map((op) => op.seq));
+				const settled = new Set(batch.map((op) => op.seq));
 				this.ops = this.ops.filter((op) => !settled.has(op.seq));
 				this.recomputeView();
 			};
-			let needsWrite = false;
-			for (const op of batch) {
-				const outcome = classifyOp(op, working);
-				if (outcome === "conflict") {
-					held.push(op);
-					conflicts.push(describeConflict(op, working));
-					continue;
-				}
-				if (outcome === "apply") {
-					applyOp(working, op);
-					needsWrite = true;
-				}
-				applied.push(op); // "reached" ops need no write but are settled
+			if (jsonEquals(working, disk.doc)) {
+				// Ops cancelled each other out or already matched disk; nothing to write.
+				this.baseline = disk.doc;
+				settle();
+				return { kind: "saved", applied: batch.length };
 			}
-			if (needsWrite) {
-				pruneEmptyNewProviders(working, disk.doc);
-				const candidate = `${JSON.stringify(working, null, 2)}\n`;
-				if (jsonEquals(working, disk.doc)) {
-					// Ops cancelled each other out; nothing to write.
-					this.baseline = disk.doc;
-					settle();
-					return held.length > 0
-						? { kind: "conflict", conflicts }
-						: { kind: "saved", applied: applied.length, conflicts };
-				}
-				await writeFile(tempPath, candidate, { encoding: "utf8", mode: 0o600 });
-				const check = await ModelConfig.load(tempPath);
-				const validationError = check.getError();
-				if (validationError) {
-					return { kind: "invalid", error: validationError };
-				}
-				const latest = await readDocument(this.path);
-				if (latest.exists !== disk.exists || latest.rawText !== disk.rawText) {
-					throw new Error("models.json changed while saving; the edits were kept for retry.");
-				}
-				if (!this.backedUp && disk.exists && disk.rawText !== undefined) {
-					await writeFile(`${this.path}.bak`, disk.rawText, { encoding: "utf8", mode: 0o600 });
-					this.backedUp = true;
-				}
-				assertLock();
-				await rename(tempPath, this.path);
-				this.wroteOnce = true;
+			const candidate = `${JSON.stringify(working, null, 2)}\n`;
+			await writeFile(tempPath, candidate, { encoding: "utf8", mode: 0o600 });
+			const check = await ModelConfig.load(tempPath);
+			const validationError = check.getError();
+			if (validationError) {
+				return { kind: "invalid", error: validationError };
 			}
-			this.baseline = needsWrite ? working : disk.doc;
+			const latest = await readDocument(this.path);
+			if (latest.exists !== disk.exists || latest.rawText !== disk.rawText) {
+				throw new Error("models.json changed while saving; the edits were kept for retry.");
+			}
+			if (!this.backedUp && disk.exists && disk.rawText !== undefined) {
+				await writeFile(`${this.path}.bak`, disk.rawText, { encoding: "utf8", mode: 0o600 });
+				this.backedUp = true;
+			}
+			assertLock();
+			await rename(tempPath, this.path);
+			this.baseline = working;
 			settle();
-			if (held.length > 0) return { kind: "conflict", conflicts };
-			return { kind: "saved", applied: applied.length, conflicts };
+			return { kind: "saved", applied: batch.length };
 		} finally {
 			await rm(tempPath, { force: true }).catch(() => {});
 		}
@@ -594,7 +502,7 @@ export class ModelsJsonStore {
 }
 
 // -------------------------------------------------------------------------
-// Op application & conflict classification
+// Op application
 // -------------------------------------------------------------------------
 
 function ensureProvider(doc: ModelsJsonDocument, providerId: string): Record<string, unknown> {
@@ -653,103 +561,6 @@ function applyOp(doc: ModelsJsonDocument, op: Op): void {
 			return;
 		}
 	}
-}
-
-/** "apply" writes the op, "reached" means disk already matches the goal, "conflict" means the field moved externally. */
-function classifyOp(op: Op, disk: ModelsJsonDocument): "apply" | "reached" | "conflict" {
-	switch (op.kind) {
-		case "set": {
-			const provider = disk.providers[op.providerId] as Record<string, unknown> | undefined;
-			if (!provider && !op.createProvider) return "conflict";
-			let diskValue: unknown = MISSING;
-			if (provider) {
-				if (op.modelId === undefined) diskValue = getPath(provider, op.path);
-				else {
-					const models = Array.isArray(provider.models) ? (provider.models as Record<string, unknown>[]) : [];
-					const model = models.find((entry) => entry.id === op.modelId);
-					if (!model) return "conflict";
-					if (model) diskValue = getPath(model, op.path);
-				}
-			}
-			const target = op.value === DELETE ? MISSING : op.value;
-			if (jsonEquals(diskValue, target)) return "reached";
-			return jsonEquals(diskValue, op.base) ? "apply" : "conflict";
-		}
-		case "addModel": {
-			const provider = disk.providers[op.providerId];
-			if (!provider && !op.createProvider) return "conflict";
-			const existing = provider?.models?.find((model) => model.id === op.model.id) ?? MISSING;
-			if (jsonEquals(existing, op.model)) return "reached";
-			return jsonEquals(existing, op.base) ? "apply" : "conflict";
-		}
-		case "removeModel": {
-			const provider = disk.providers[op.providerId];
-			const existing = provider?.models?.find((model) => model.id === op.modelId);
-			return existing ? (jsonEquals(existing, op.base) ? "apply" : "conflict") : "reached";
-		}
-		case "renameModel": {
-			const provider = disk.providers[op.providerId];
-			const oldModel = provider?.models?.find((model) => model.id === op.oldId);
-			if (!oldModel) {
-				const renamed = provider?.models?.find((model) => model.id === op.newId);
-				return isPlainObject(op.base) && jsonEquals(renamed, { ...op.base, id: op.newId }) ? "reached" : "conflict";
-			}
-			if (provider?.models?.some((model) => model.id === op.newId)) return "conflict";
-			if (!jsonEquals(oldModel, op.base)) return "conflict";
-			return "apply";
-		}
-		case "removeProvider": {
-			return Object.hasOwn(disk.providers, op.providerId)
-				? jsonEquals(disk.providers[op.providerId], op.base)
-					? "apply"
-					: "conflict"
-				: "reached";
-		}
-	}
-}
-
-function opLocation(op: Op): string {
-	const parts = [op.providerId];
-	if ("modelId" in op && op.modelId) parts.push(op.modelId);
-	if (op.kind === "renameModel") parts.push(op.oldId);
-	if (op.kind === "set") parts.push(op.path.join("."));
-	return parts.join(" › ");
-}
-
-function conflictValue(op: Op, value: unknown): string {
-	if (op.kind !== "set") return value === MISSING ? "(absent)" : "(record changed on disk)";
-	if (op.path[0] === "apiKey" && typeof value === "string") return maskApiKey(value);
-	if (op.path[0] === "headers") return "(configured headers)";
-	return renderValue(value);
-}
-
-function describeConflict(op: Op, disk: ModelsJsonDocument): SaveConflict {
-	let external: unknown = MISSING;
-	if (op.kind === "set") {
-		const provider = disk.providers[op.providerId] as Record<string, unknown> | undefined;
-		if (provider) {
-			if (op.modelId === undefined) external = getPath(provider, op.path);
-			else {
-				const model = (Array.isArray(provider.models) ? provider.models : []).find(
-					(entry) => (entry as Record<string, unknown>).id === op.modelId,
-				) as Record<string, unknown> | undefined;
-				if (model) external = getPath(model, op.path);
-			}
-		}
-	} else if (op.kind === "removeProvider") {
-		external = disk.providers[op.providerId] ?? MISSING;
-	} else {
-		const id = op.kind === "addModel" ? op.model.id : op.kind === "renameModel" ? op.oldId : op.modelId;
-		external = disk.providers[op.providerId]?.models?.find((model) => model.id === id) ?? MISSING;
-	}
-	return {
-		op,
-		location: opLocation(op),
-		external: conflictValue(op, external),
-		attempted: op.kind === "set" ? conflictValue(op, op.value) : op.kind,
-		externalRaw: external,
-		externalPresent: external !== MISSING,
-	};
 }
 
 /** Remove providers the ops materialized but which ended up with no keys (self-cancelled drafts). */

@@ -109,11 +109,6 @@ export class FetchModelsPane implements EditorPane {
 							: "Set a baseUrl under Authentication first.",
 						width,
 					),
-					renderInfoLine(
-						theme,
-						"Supports data[] / models[] catalogs; credentials follow the configured API.",
-						width,
-					),
 				];
 			case "loading":
 				return [

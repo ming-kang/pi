@@ -33,7 +33,7 @@ Fixed fields keep their `Key: ` prefix while editing, and the selected key and v
 | Printable typing | | Overwrite the highlighted text or numeric value |
 | `Space` | `app.list.toggle` (`space`) | Toggle booleans and checklist items |
 | `Ctrl+X` | `app.provider.removeEntry` (`ctrl+x`) | Remove the selected compat or dictionary entry |
-| `Esc` | `escape` | Cancel current edit, pop the sub-pane, or return to provider list |
+| `Esc` | `escape` | Cancel the current edit, discard a model draft (confirming when it has fields), pop the sub-pane, or return to the provider list |
 
 ## Provider configuration
 
@@ -105,9 +105,9 @@ The `Use Built-in Data` row in a model's field list provides field-level complet
 - **Atomic locking:** Edits save immediately. Writes acquire a cross-process lock via `proper-lockfile`, write to a temporary file in the same directory, validate the candidate file with `ModelConfig`, and atomically rename it into place.
 - **Backup:** The first write over an existing file creates a `.bak` copy of its content. Symlinked configuration files are edited at their resolved target without replacing the symlink.
 - **Formatting:** Comments and custom indentation are normalized to two-space JSON on save. Unknown top-level and nested values are preserved.
-- **Conflict resolution:** Concurrent external edits to unrelated fields merge automatically. Edits to the same field surface in an interactive Conflict pane where each field is resolved individually (`Keep my value` or `Use external value`).
+- **Conflict resolution:** Every save re-reads the file under a cross-process lock and applies pending edits onto the freshest content, so unrelated external edits merge automatically and a same-field race resolves last-writer-wins. Edits targeting externally removed models simply miss, and the view resyncs onto the merged result after each save.
 - **Runtime refresh:** An offline-scoped refresh (`allowNetwork: false`) synchronizes the runtime when `/provider` closes (or immediately following a Fetch Models import). Save errors and runtime refresh errors are reported independently.
-- **Recovery:** Failed or conflicting edits remain pending. Closing offers return, retry, or explicit discard. Fetch refreshes retain the changed-model information needed to update the active session model on close. Leaving a pane cancels its outstanding discovery and prevents late results from changing another page.
+- **Recovery:** Failed edits remain pending and retry automatically with the next save. Closing offers return, retry, or explicit discard. Fetch refreshes retain the changed-model information needed to update the active session model on close. Leaving a pane cancels its outstanding discovery and prevents late results from changing another page.
 - **Overlay behavior:** Configuring a provider whose ID matches a Pi built-in provider overlays that catalog. Deleting the provider configuration unmasks the built-in models. Existing `modelOverrides` in `models.json` remain preserved and take precedence over fields edited here.
 
 ## Migration from router

@@ -1,10 +1,9 @@
-/** Confirmation, conflict, and information panes owned by the provider editor. */
+/** Confirmation and information panes owned by the provider editor. */
 
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
-import type { SaveConflict } from "../store.ts";
 import type { EditorHost, EditorPane } from "./pane.ts";
-import { renderInfoLine, renderPlainLine, type ScrollWindowInfo } from "./value-row.ts";
+import { renderInfoLine, renderPlainLine } from "./value-row.ts";
 
 /** Static dim text lines (e.g. action-row explanations). */
 export class InfoPane implements EditorPane {
@@ -79,132 +78,5 @@ export class ConfirmPane implements EditorPane {
 
 	hints(): string {
 		return [keyHint("tui.select.confirm", "choose"), keyHint("tui.select.cancel", "cancel")].join("  ");
-	}
-}
-
-/** Lists save conflicts; each resolves to "keep mine" (rebase + retry) or "use external" (drop the op). */
-export class ConflictPane implements EditorPane {
-	readonly crumb = "Conflicts";
-	private conflicts: SaveConflict[];
-	private index = 0;
-	private choice: number | undefined; // 0 = keep mine, 1 = use external
-	private focused = false;
-
-	private readonly host: EditorHost;
-	constructor(host: EditorHost, conflicts: SaveConflict[]) {
-		this.host = host;
-
-		this.conflicts = conflicts;
-	}
-
-	update(conflicts: SaveConflict[]): void {
-		const selected = this.conflicts[this.index]?.op.seq;
-		this.conflicts = conflicts;
-		this.index = Math.max(
-			0,
-			conflicts.findIndex((conflict) => conflict.op.seq === selected),
-		);
-		this.choice = undefined;
-	}
-
-	render(width: number): string[] {
-		const theme = this.host.theme;
-		const lines: string[] = [renderInfoLine(theme, "These fields changed on disk after this page opened:", width)];
-		for (const [rowIndex, conflict] of this.conflicts.entries()) {
-			const active = rowIndex === this.index && this.choice === undefined;
-			lines.push(
-				renderPlainLine(theme, conflict.location, {
-					active,
-					paneFocused: this.focused,
-					note: `yours ${conflict.attempted} · external ${conflict.external}`,
-					width,
-				}),
-			);
-			if (rowIndex === this.index && this.choice !== undefined) {
-				lines.push(
-					renderPlainLine(theme, "Keep my value", {
-						active: this.choice === 0,
-						paneFocused: this.focused,
-						width,
-					}),
-				);
-				lines.push(
-					renderPlainLine(theme, "Use external value", {
-						active: this.choice === 1,
-						paneFocused: this.focused,
-						width,
-					}),
-				);
-			}
-		}
-		return lines;
-	}
-
-	scrollWindow(): ScrollWindowInfo {
-		// The intro line pins above; the cursor tracks the selected conflict row.
-		return { top: 1, cursor: 1 + this.index };
-	}
-
-	handleInput(data: string): void {
-		const kb = this.host.keybindings;
-		if (this.choice !== undefined) {
-			if (kb.matches(data, "tui.select.up") || kb.matches(data, "tui.select.down")) {
-				this.choice = this.choice === 0 ? 1 : 0;
-				this.host.refresh();
-				return;
-			}
-			if (kb.matches(data, "tui.select.cancel")) {
-				this.choice = undefined;
-				this.host.refresh();
-				return;
-			}
-			if (kb.matches(data, "tui.select.confirm")) {
-				const conflict = this.conflicts[this.index]!;
-				const keep = this.choice === 0;
-				this.choice = undefined;
-				this.host.store.resolveConflict(
-					conflict.op.seq,
-					keep ? "keep" : "external",
-					conflict.externalRaw,
-					conflict.externalPresent,
-				);
-				this.conflicts = this.conflicts.filter((entry) => entry !== conflict);
-				if (this.conflicts.length === 0) {
-					this.host.popPane();
-					return;
-				}
-				this.index = Math.min(this.index, this.conflicts.length - 1);
-				this.host.refresh();
-				return;
-			}
-			return;
-		}
-		if (kb.matches(data, "tui.select.up")) {
-			this.index = this.index === 0 ? this.conflicts.length - 1 : this.index - 1;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.down")) {
-			this.index = (this.index + 1) % this.conflicts.length;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.confirm")) {
-			this.choice = 0;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.cancel")) {
-			this.host.popPane();
-			return;
-		}
-	}
-
-	setFocused(focused: boolean): void {
-		this.focused = focused;
-	}
-
-	hints(): string {
-		return [keyHint("tui.select.confirm", "resolve"), keyHint("tui.select.cancel", "later")].join("  ");
 	}
 }

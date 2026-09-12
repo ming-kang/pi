@@ -101,6 +101,7 @@ function hostFixture(): { host: EditorHost; model: ModelHandle } {
 		effectiveApi: () => "openai-completions",
 		effectiveBaseUrl: () => "https://old.example/v1",
 		commitModelDraft: () => undefined,
+		discardModelDraft: vi.fn(),
 		isCurrentModel: () => false,
 		isCurrentProvider: () => false,
 		setFetchStatus: vi.fn(),
@@ -436,6 +437,36 @@ describe("provider fixed layout", () => {
 		for (let index = 0; index < 16; index++) list.handleInput("\x1b[B");
 		expect(stripAnsi(list.render(120).join("\n"))).toContain("(17/17)");
 		expect(list.render(120).length).toBe(20);
+	});
+
+	test("Esc on a fresh model draft discards it in one step", () => {
+		const { screen } = editor();
+		for (let index = 0; index < 4; index++) screen.handleInput("\x1b[B"); // + Add Model
+		screen.handleInput("\r"); // creates the draft and opens id editing
+		expect(render(screen)).toContain("New Model");
+		screen.handleInput("\x1b"); // cancels id editing → the empty draft is discarded
+		expect(render(screen)).not.toContain("New Model");
+		expect(render(screen)).toContain("› + Add Model");
+		expect(screen.render(120).length).toBe(20);
+		screen.dispose();
+	});
+
+	test("Esc on a draft with fields asks before discarding", async () => {
+		const { screen } = editor();
+		for (let index = 0; index < 4; index++) screen.handleInput("\x1b[B");
+		screen.handleInput("\r");
+		screen.handleInput("k3"); // duplicate id
+		screen.handleInput("\r"); // the commit fails; the draft keeps the id
+		expect(render(screen)).toContain("already exists");
+		screen.handleInput("\x1b"); // cancels the edit; the non-empty draft stays
+		expect(render(screen)).toContain("· draft");
+		screen.handleInput("\x1b"); // asks before discarding
+		expect(render(screen)).toContain("Discard the new model");
+		screen.handleInput("\x1b[A"); // Discard Model
+		screen.handleInput("\r");
+		expect(render(screen)).not.toContain("· draft");
+		expect(render(screen)).toContain("› + Add Model");
+		screen.dispose();
 	});
 });
 
