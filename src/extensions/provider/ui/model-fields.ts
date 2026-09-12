@@ -15,7 +15,13 @@ import { CompatPane } from "./compat.ts";
 import { CostPane, InputTypesPane, ReasoningPane } from "./model-options.ts";
 import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
 import { ThinkingMapPane } from "./thinking-map.ts";
-import { isPrintableInput, renderInfoLine, renderKeyValueLine, ValueEditor } from "./value-row.ts";
+import {
+	isPrintableInput,
+	renderInfoLine,
+	renderKeyValueLine,
+	type ScrollWindowInfo,
+	ValueEditor,
+} from "./value-row.ts";
 
 const DEFAULT_CONTEXT_WINDOW = 128000;
 const DEFAULT_MAX_TOKENS = 16384;
@@ -84,6 +90,15 @@ export class ModelFieldsPane implements EditorPane {
 		if (this.error) lines.push(theme.fg("error", truncate(this.error, Math.max(10, width - 2))));
 		if (this.renaming) lines.push(renderInfoLine(theme, "Saving model id…", width));
 		return lines;
+	}
+
+	scrollWindow(): ScrollWindowInfo {
+		// The effective-api header stays pinned above, errors/progress below.
+		return {
+			top: 1,
+			bottom: (this.error ? 1 : 0) + (this.renaming ? 1 : 0),
+			cursor: 1 + this.index,
+		};
 	}
 
 	private renderRow(

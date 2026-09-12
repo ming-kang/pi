@@ -6,9 +6,10 @@ import { DynamicBorder } from "../../../modes/interactive/components/dynamic-bor
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ModelsJsonStore } from "../store.ts";
-import { renderInfoLine, renderKeyValueLine, renderPlainLine, ValueEditor } from "./value-row.ts";
+import { renderInfoLine, renderKeyValueLine, renderPlainLine, ValueEditor, windowLines } from "./value-row.ts";
 
-const MAX_VISIBLE = 12;
+/** Fixed list-area height: the screen frame matches the provider editor's. */
+const LIST_ROWS = 12;
 export type ProviderListResult = { kind: "open"; providerId: string } | { kind: "close" };
 
 export class ProviderListScreen implements Component, Focusable {
@@ -69,12 +70,15 @@ export class ProviderListScreen implements Component, Focusable {
 			}),
 			"",
 		];
+		// The list area is a fixed window: overlong lists scroll with a (n/N)
+		// indicator (the /model selector convention) instead of resizing.
+		const area: string[] = [];
 		if (this.mode === "list") {
 			const entries = this.filtered();
 			const total = entries.length + 1;
 			this.index = Math.min(this.index, total - 1);
-			const start = Math.max(0, Math.min(this.index - 5, total - MAX_VISIBLE));
-			for (let row = start; row < Math.min(total, start + MAX_VISIBLE); row++) {
+			const rows: string[] = [];
+			for (let row = 0; row < total; row++) {
 				const id = entries[row - 1];
 				const provider = id === undefined ? undefined : this.store.getProvider(id);
 				const note =
@@ -83,7 +87,7 @@ export class ProviderListScreen implements Component, Focusable {
 						: provider
 							? [`${String(provider.models?.length ?? 0)} models`, provider.api].filter(Boolean).join(" · ")
 							: "pending deletion";
-				lines.push(
+				rows.push(
 					renderPlainLine(theme, row === 0 ? "+ New Provider" : id!, {
 						active: row === this.index,
 						paneFocused: this.active,
@@ -93,9 +97,12 @@ export class ProviderListScreen implements Component, Focusable {
 				);
 			}
 			if (entries.length === 0)
-				lines.push(renderInfoLine(theme, this.query ? "No matching providers." : "No providers yet.", width));
+				rows.push(renderInfoLine(theme, this.query ? "No matching providers." : "No providers yet.", width));
+			area.push(...windowLines(theme, rows, LIST_ROWS, { cursor: this.index }));
+		} else if (this.error) {
+			area.push(truncateToWidth(theme.fg("error", this.error), width));
 		}
-		if (this.error) lines.push(truncateToWidth(theme.fg("error", this.error), width));
+		while (area.length < LIST_ROWS) area.push("");
 		const hints =
 			this.mode === "newProvider"
 				? [keyHint("tui.input.submit", "create"), keyHint("tui.select.cancel", "cancel")]
@@ -106,7 +113,7 @@ export class ProviderListScreen implements Component, Focusable {
 						keyHint("tui.select.confirm", "open"),
 						keyHint("tui.select.cancel", "close"),
 					];
-		return [...lines, border, truncateToWidth(hints.join("  "), width), border];
+		return [...lines, ...area, border, truncateToWidth(hints.join("  "), width), border];
 	}
 
 	handleInput(data: string): void {

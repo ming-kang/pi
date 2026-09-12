@@ -13,7 +13,7 @@ import { type CatalogEntry, computeFieldChanges, type FieldChange, matchBuiltinM
 import { truncate } from "../constants.ts";
 import { jsonEquals } from "../store.ts";
 import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
-import { renderInfoLine, renderPlainLine, ValueEditor } from "./value-row.ts";
+import { renderInfoLine, renderPlainLine, type ScrollWindowInfo, ValueEditor } from "./value-row.ts";
 
 function formatContext(model: Model<Api>): string {
 	const ctx = model.contextWindow >= 1000 ? `${Math.round(model.contextWindow / 1024)}k` : String(model.contextWindow);
@@ -75,6 +75,11 @@ export class BuiltinCandidatesPane implements EditorPane {
 			renderInfoLine(theme, "Candidates are a reference only; the configured id is never rewritten.", width),
 		);
 		return lines;
+	}
+
+	scrollWindow(): ScrollWindowInfo {
+		// The filter input pins above, the reference disclaimer below.
+		return { top: 1, bottom: 1, cursor: 1 + this.index };
 	}
 
 	private pickCurrent(): void {
@@ -196,6 +201,19 @@ export class BuiltinPreviewPane implements EditorPane {
 		);
 		if (this.error) lines.push(theme.fg("error", truncate(this.error, Math.max(10, width - 2))));
 		return lines;
+	}
+
+	scrollWindow(): ScrollWindowInfo {
+		// The reference header pins above; errors pin below. Expanded detail
+		// lines shift the cursor row when they sit above it.
+		let cursor = 1 + this.index;
+		if (this.expanded !== undefined && this.expanded < this.index) {
+			const change = this.changes[this.expanded]!;
+			if (change.referenceDetails) {
+				cursor += change.referenceDetails.length + (change.referenceHasTiers ? 1 : 0);
+			}
+		}
+		return { top: 1, bottom: this.error ? 1 : 0, cursor };
 	}
 
 	handleInput(data: string): void {

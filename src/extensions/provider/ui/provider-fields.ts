@@ -7,7 +7,14 @@ import { builtinDefaults } from "../catalog.ts";
 import { API_TYPES, maskApiKey, truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
 import type { EditorHost, EditorPane } from "./pane.ts";
-import { isPrintableInput, renderInfoLine, renderKeyValueLine, renderPlainLine, ValueEditor } from "./value-row.ts";
+import {
+	isPrintableInput,
+	renderInfoLine,
+	renderKeyValueLine,
+	renderPlainLine,
+	type ScrollWindowInfo,
+	ValueEditor,
+} from "./value-row.ts";
 
 /** baseUrl / apiKey rows with masking and credential-source hints. */
 export class AuthPane implements EditorPane {
@@ -28,6 +35,16 @@ export class AuthPane implements EditorPane {
 
 	private provider(): ModelsJsonProvider | undefined {
 		return this.host.store.getProvider(this.host.providerId);
+	}
+
+	scrollWindow(): ScrollWindowInfo {
+		// Two value rows scroll; the credential-source notes stay pinned below.
+		return { cursor: this.index, bottom: this.bottomNoteCount() };
+	}
+
+	private bottomNoteCount(): number {
+		const status = this.registry.getProviderAuthStatus(this.host.providerId);
+		return (this.error ? 1 : 0) + (status.configured ? 1 : 0) + 1;
 	}
 
 	render(width: number): string[] {
@@ -238,6 +255,10 @@ export class ApiTypePane implements EditorPane {
 		});
 		if (this.error) lines.push(renderInfoLine(theme, this.error, width));
 		return lines;
+	}
+
+	scrollWindow(): ScrollWindowInfo {
+		return { cursor: this.index, bottom: this.error ? 1 : 0 };
 	}
 
 	handleInput(data: string): void {

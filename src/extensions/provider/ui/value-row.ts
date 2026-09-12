@@ -91,23 +91,25 @@ export interface KeyValueLineOptions {
 
 /**
  * Render one `key: value` row. The active row highlights key, colon, and
- * value together (accent when the pane is focused, muted otherwise); unset
- * fallback values stay dim even on the active row.
+ * value together in accent — focused or not, so the unfocused pane keeps a
+ * visible selection path. Other rows render plain while their pane is
+ * focused and dim back when focus leaves; unset fallback values stay dim
+ * even on the active row.
  */
 export function renderKeyValueLine(theme: Theme, opts: KeyValueLineOptions): string {
 	const marker = opts.active ? `${CURSOR} ` : "  ";
 	const keyPrefix = opts.keyLabel === undefined ? "" : `${opts.keyLabel}: `;
-	const color = opts.paneFocused ? "accent" : "muted";
+	const keyColor = opts.active ? "accent" : opts.paneFocused ? "text" : "dim";
 	const note = opts.note ? theme.fg("dim", ` ${opts.note}`) : "";
 	if (opts.editing) {
-		const head = (opts.active ? theme.fg(color, marker) : marker) + theme.fg(opts.active ? color : "text", keyPrefix);
+		const head = (opts.active ? theme.fg("accent", marker) : marker) + theme.fg(keyColor, keyPrefix);
 		const body = opts.editing.renderLine(Math.max(1, opts.width - visibleWidth(marker) - visibleWidth(keyPrefix)));
-		return truncateToWidth(head + theme.fg(opts.active ? color : "text", body) + note, opts.width);
+		return truncateToWidth(head + theme.fg(keyColor, body) + note, opts.width);
 	}
-	const valueColor = opts.unset ? "dim" : opts.active ? color : "text";
+	const valueColor = opts.unset ? "dim" : keyColor;
 	const line =
-		(opts.active ? theme.fg(color, marker) : marker) +
-		theme.fg(opts.active ? color : "text", keyPrefix) +
+		(opts.active ? theme.fg("accent", marker) : marker) +
+		theme.fg(keyColor, keyPrefix) +
 		theme.fg(valueColor, opts.valueText ?? "") +
 		note;
 	return truncateToWidth(line, opts.width);
@@ -127,15 +129,56 @@ export interface PlainLineOptions {
 export function renderPlainLine(theme: Theme, text: string, opts: PlainLineOptions): string {
 	const marker = opts.active ? `${CURSOR} ` : "  ";
 	const check = opts.checked === undefined ? "" : opts.checked ? "[x] " : "[ ] ";
-	const color = opts.dim ? "dim" : opts.active ? (opts.paneFocused ? "accent" : "muted") : "text";
+	const color = opts.dim ? "dim" : opts.active ? "accent" : opts.paneFocused ? "text" : "dim";
 	const note = opts.note ? theme.fg("dim", ` ${opts.note}`) : "";
-	const line = (opts.active ? theme.fg(color, marker) : marker) + theme.fg(color, check + text) + note;
+	const line = (opts.active ? theme.fg("accent", marker) : marker) + theme.fg(color, check + text) + note;
 	return truncateToWidth(line, opts.width);
 }
 
 /** Dim informational line without a cursor slot. */
 export function renderInfoLine(theme: Theme, text: string, width: number): string {
 	return truncateToWidth(theme.fg("dim", text), width);
+}
+
+export interface ScrollWindowInfo {
+	/** Leading render() lines that never scroll (filter inputs, headers). */
+	top?: number;
+	/** Trailing render() lines that never scroll (status and error lines). */
+	bottom?: number;
+	/** render() line index the window keeps visible. */
+	cursor?: number;
+}
+
+/**
+ * Clip lines to a fixed height, keeping the cursor row centered and the
+ * pinned top/bottom lines on screen. Always returns exactly `height` lines;
+ * when the scrollable middle overflows, one row becomes a dim `(n/N)`
+ * position indicator (the /model selector convention).
+ */
+export function windowLines(
+	theme: Theme,
+	lines: string[],
+	height: number,
+	scroll?: ScrollWindowInfo,
+	indicator?: (position: number, total: number) => string,
+): string[] {
+	const top = Math.max(0, Math.min(scroll?.top ?? 0, lines.length));
+	const bottom = Math.max(0, Math.min(scroll?.bottom ?? 0, lines.length - top));
+	const head = lines.slice(0, top);
+	const tail = bottom > 0 ? lines.slice(lines.length - bottom) : [];
+	const middle = lines.slice(top, lines.length - bottom);
+	const cursor = Math.max(0, Math.min((scroll?.cursor ?? 0) - top, Math.max(0, middle.length - 1)));
+	const padToHeight = (rows: string[]): string[] => {
+		const out = rows.slice(0, height);
+		while (out.length < height) out.push("");
+		return out;
+	};
+	const avail = height - head.length - tail.length;
+	if (middle.length <= avail) return padToHeight([...head, ...middle, ...tail]);
+	const slots = Math.max(1, avail - 1); // one row carries the indicator
+	const start = Math.max(0, Math.min(cursor - Math.floor(slots / 2), middle.length - slots));
+	const note = indicator?.(cursor + 1, middle.length) ?? theme.fg("dim", `  (${cursor + 1}/${middle.length})`);
+	return padToHeight([...head, ...middle.slice(start, start + slots), note, ...tail]);
 }
 
 /** True for printable text input (single chars or pasted text), false for key events and control sequences. */

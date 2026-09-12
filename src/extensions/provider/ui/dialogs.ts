@@ -4,7 +4,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import type { SaveConflict } from "../store.ts";
 import type { EditorHost, EditorPane } from "./pane.ts";
-import { renderInfoLine, renderPlainLine } from "./value-row.ts";
+import { renderInfoLine, renderPlainLine, type ScrollWindowInfo } from "./value-row.ts";
 
 /** Static dim text lines (e.g. action-row explanations). */
 export class InfoPane implements EditorPane {
@@ -138,6 +138,11 @@ export class ConflictPane implements EditorPane {
 			}
 		}
 		return lines;
+	}
+
+	scrollWindow(): ScrollWindowInfo {
+		// The intro line pins above; the cursor tracks the selected conflict row.
+		return { top: 1, cursor: 1 + this.index };
 	}
 
 	handleInput(data: string): void {

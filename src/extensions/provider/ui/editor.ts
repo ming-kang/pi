@@ -5,7 +5,10 @@
  * models (name → id → "New Model" fallback, one draft at a time), then
  * + Add Model and Delete Provider. Right column hosts the selected item's
  * field pane and sub-pane stack; both columns keep their own selection and
- * scroll position. Typing on a value row overwrites, Enter tweaks or enters,
+ * scroll position. The frame height is fixed: each column scrolls inside a
+ * fixed window with a (n/N) position indicator instead of resizing, and the
+ * selected row stays accent in both panes while the unfocused pane's other
+ * rows dim back. Typing on a value row overwrites, Enter tweaks or enters,
  * ←/→ switch panes, Esc cancels/pops/backs out.
  */
 
@@ -27,7 +30,7 @@ import { FetchModelsPane } from "./fetch-models.ts";
 import { ModelFieldsPane } from "./model-fields.ts";
 import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
 import { ApiTypePane, AuthPane } from "./provider-fields.ts";
-import { CURSOR, truncateMiddle } from "./value-row.ts";
+import { CURSOR, truncateMiddle, windowLines } from "./value-row.ts";
 
 export interface ProviderEditorOptions {
 	store: ModelsJsonStore;
@@ -54,7 +57,8 @@ type LeftItem =
 
 const LEFT_WIDTH_MIN = 16;
 const LEFT_WIDTH_MAX = 40;
-const LEFT_MAX_VISIBLE = 12;
+/** Fixed editor body height: both columns scroll inside it rather than resizing the frame. */
+const BODY_ROWS = 13;
 const MIN_WIDTH = 56;
 
 interface ModelDraft {
@@ -312,35 +316,36 @@ export class ProviderEditorScreen implements Component, Focusable {
 	private renderLeft(width: number): string[] {
 		const theme = this.theme;
 		const focused = this.focusPane === "left";
-		const lines: string[] = [];
-		const start = Math.max(
-			0,
-			Math.min(
-				this.leftIndex - Math.floor(LEFT_MAX_VISIBLE / 2),
-				Math.max(0, this.leftItems.length - LEFT_MAX_VISIBLE),
-			),
-		);
-		const end = Math.min(start + LEFT_MAX_VISIBLE, this.leftItems.length);
-		for (let index = start; index < end; index++) {
+		const rows: string[] = [];
+		const renderRow = (index: number): string => {
 			const item = this.leftItems[index]!;
 			if (item.kind === "separator") {
-				lines.push(theme.fg("borderMuted", `  ${"─".repeat(Math.max(1, width - 4))}`));
-				continue;
+				return theme.fg("borderMuted", `  ${"─".repeat(Math.max(1, width - 4))}`);
 			}
-			const active = index === this.leftIndex;
-			const line = this.renderLeftItem(item, active, focused, width);
-			lines.push(line);
+			return this.renderLeftItem(item, index === this.leftIndex, focused, width);
+		};
+		if (this.leftItems.length <= BODY_ROWS) {
+			for (let index = 0; index < this.leftItems.length; index++) rows.push(renderRow(index));
+		} else {
+			// One row carries the (n/N) position indicator, like the /model selector.
+			const slots = BODY_ROWS - 1;
+			const start = Math.max(0, Math.min(this.leftIndex - Math.floor(slots / 2), this.leftItems.length - slots));
+			for (let index = start; index < start + slots; index++) rows.push(renderRow(index));
+			const selectable: LeftItem[] = this.leftItems.filter((item) => item.kind !== "separator");
+			const position = selectable.indexOf(this.leftItems[this.leftIndex]!);
+			rows.push(theme.fg("dim", `  (${position + 1}/${selectable.length})`));
 		}
-		return lines;
+		while (rows.length < BODY_ROWS) rows.push("");
+		return rows;
 	}
 
 	private renderLeftItem(item: LeftItem, active: boolean, focused: boolean, width: number): string {
 		const theme = this.theme;
 		const store = this.options.store;
-		const color = focused ? "accent" : "muted";
-		const marker = active ? theme.fg(active ? color : "text", `${CURSOR} `) : "  ";
-		const style = (text: string, dim = false) =>
-			theme.fg(active && focused ? "accent" : dim ? "dim" : active ? color : "text", text);
+		// The selected row stays accent in both focus states: it is the section
+		// the right column edits. Only an unfocused column dims its other rows.
+		const marker = active ? theme.fg("accent", `${CURSOR} `) : "  ";
+		const style = (text: string, dim = false) => theme.fg(active ? "accent" : dim || !focused ? "dim" : "text", text);
 		let text: string;
 		let note: string | undefined;
 		switch (item.kind) {
@@ -627,11 +632,11 @@ export class ProviderEditorScreen implements Component, Focusable {
 		const title = this.renderTitle(width);
 		const crumb = this.renderBreadcrumb(rightWidth);
 		const leftLines = this.renderLeft(leftWidth);
-		const rightBody = this.topPane()?.render(rightWidth) ?? [];
-		const rightLines = [crumb, ...rightBody];
-		const height = Math.max(leftLines.length, rightLines.length);
+		const pane = this.topPane();
+		const paneLines = pane ? windowLines(theme, pane.render(rightWidth), BODY_ROWS - 1, pane.scrollWindow?.()) : [];
+		const rightLines = [crumb, ...paneLines];
 		const body: string[] = [];
-		for (let row = 0; row < height; row++) {
+		for (let row = 0; row < BODY_ROWS; row++) {
 			const left = padTo(truncateToWidth(leftLines[row] ?? "", leftWidth), leftWidth);
 			const right = truncateToWidth(rightLines[row] ?? "", rightWidth);
 			body.push(left + separator + right);
@@ -701,28 +706,24 @@ export class ProviderEditorScreen implements Component, Focusable {
 
 	private renderFooter(width: number): string[] {
 		const theme = this.theme;
-		const lines: string[] = [];
-		if (this.focusPane === "left") {
-			lines.push(
-				[
-					rawKeyHint("↑↓", "move"),
-					keyHint("tui.select.confirm", "enter"),
-					keyHint("app.provider.switchPaneRight", "focus right"),
-					keyHint("tui.select.cancel", "back"),
-				].join("  "),
-			);
-		} else {
-			lines.push(this.topPane()?.hints() ?? "");
-		}
-		if (!this.options.store.hasWritten) {
-			lines.push(
-				theme.fg(
+		// Two reserved rows keep the frame height stable; the save-behavior note
+		// blanks out once models.json has been written.
+		const hints =
+			this.focusPane === "left"
+				? [
+						rawKeyHint("↑↓", "move"),
+						keyHint("tui.select.confirm", "enter"),
+						keyHint("app.provider.switchPaneRight", "focus right"),
+						keyHint("tui.select.cancel", "back"),
+					].join("  ")
+				: (this.topPane()?.hints() ?? "");
+		const note = this.options.store.hasWritten
+			? ""
+			: theme.fg(
 					"dim",
 					"Saving rewrites models.json as two-space JSON (comments are dropped); the first save creates models.json.bak.",
-				),
-			);
-		}
-		return lines.filter(Boolean).map((line) => truncateToWidth(line, width));
+				);
+		return [hints, note].map((line) => truncateToWidth(line, width));
 	}
 }
 

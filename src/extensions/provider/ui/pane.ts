@@ -11,6 +11,13 @@ import type { ModelsJsonStore } from "../store.ts";
 export interface EditorPane {
 	/** Breadcrumb segment appended to the provider/model path, e.g. "cost". */
 	readonly crumb?: string;
+	/**
+	 * Scroll position for the editor's fixed-height right column. `top` and
+	 * `bottom` count pinned render() lines that never scroll (filter inputs,
+	 * status/error lines); `cursor` is the render() line index the window
+	 * keeps visible. Omitted: no scrolling, content is expected to fit.
+	 */
+	scrollWindow?(): { top?: number; bottom?: number; cursor?: number };
 	/** Body lines for the right column. */
 	render(width: number): string[];
 	/** Input while the right column is focused. */

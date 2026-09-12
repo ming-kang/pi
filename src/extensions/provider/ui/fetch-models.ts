@@ -9,9 +9,7 @@ import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybi
 import { truncate } from "../constants.ts";
 import { modelCatalogUrl, type ProbeModel } from "../probe.ts";
 import type { EditorHost, EditorPane } from "./pane.ts";
-import { renderInfoLine, renderPlainLine, ValueEditor } from "./value-row.ts";
-
-const MAX_VISIBLE = 10;
+import { renderInfoLine, renderPlainLine, type ScrollWindowInfo, ValueEditor } from "./value-row.ts";
 
 type FetchState =
 	| { type: "idle" }
@@ -135,14 +133,9 @@ export class FetchModelsPane implements EditorPane {
 					);
 				}
 				lines.push(this.search.renderLine(width));
+				// All rows render; the editor's fixed window scrolls around scrollWindow().
 				const rows = this.rows();
-				const start = Math.max(
-					0,
-					Math.min(this.index - Math.floor(MAX_VISIBLE / 2), Math.max(0, rows.length - MAX_VISIBLE)),
-				);
-				const end = Math.min(start + MAX_VISIBLE, rows.length);
-				for (let rowIndex = start; rowIndex < end; rowIndex++) {
-					const row = rows[rowIndex]!;
+				for (const [rowIndex, row] of rows.entries()) {
 					if (row.added) {
 						lines.push(
 							renderPlainLine(theme, row.model.id, {
@@ -178,6 +171,15 @@ export class FetchModelsPane implements EditorPane {
 				return lines;
 			}
 		}
+	}
+
+	scrollWindow(): ScrollWindowInfo {
+		if (this.state.type !== "results") return {};
+		// The truncation notice and the filter input pin above the checklist;
+		// the selection summary (and import progress/error) pin below.
+		const top = (this.state.truncated ? 1 : 0) + 1;
+		const bottom = 1 + (this.importing ? 1 : 0) + (this.error ? 1 : 0);
+		return { top, bottom, cursor: top + this.index };
 	}
 
 	handleInput(data: string): void {

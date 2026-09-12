@@ -4,7 +4,7 @@ Minimalist visual editor for the `providers` record of `models.json` (`~/.pi/age
 
 ## Usage
 
-`/provider` requires interactive TUI mode.
+`/provider` requires interactive TUI mode. The provider list and the editor share the same fixed frame height, so opening a provider never resizes the dialog.
 
 ```text
 /provider         Open the searchable provider list (+ New Provider)
@@ -18,7 +18,7 @@ Minimalist visual editor for the `providers` record of `models.json` (`~/.pi/age
 - **Left column:** Navigation list containing Authentication, API Type, Fetch Models, the provider's configured models (display name → `id` → `"New Model"` draft fallback; at most one draft at a time), `+ Add Model`, and `Delete Provider`.
 - **Right column:** Hosts the selected item's field pane and sub-pane stack.
 
-Both columns keep independent selection and scroll positions.
+Both columns keep independent selection and scroll positions. The frame height is fixed: instead of resizing, each column scrolls inside a fixed window with a `(n/N)` position indicator (the `/model` selector convention), and pinned rows such as filter inputs and error lines stay on screen. The selected row stays highlighted in both panes as the selection path; only the pane with keyboard focus renders its other rows at full brightness while the unfocused pane's rows dim back.
 
 Fixed fields keep their `Key: ` prefix while editing, and the selected key and value are highlighted together. Typing or pasting replaces the value; Enter opens the existing value for adjustment. Escape cancels that edit.
 

@@ -15,6 +15,8 @@ import { ProviderEditorScreen } from "../src/extensions/provider/ui/editor.ts";
 import { FetchModelsPane } from "../src/extensions/provider/ui/fetch-models.ts";
 import { CostPane } from "../src/extensions/provider/ui/model-options.ts";
 import type { EditorHost, ModelHandle } from "../src/extensions/provider/ui/pane.ts";
+import { ProviderListScreen } from "../src/extensions/provider/ui/provider-list.ts";
+import { windowLines } from "../src/extensions/provider/ui/value-row.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 import { VirtualTerminal } from "./helpers/virtual-terminal.ts";
@@ -330,6 +332,110 @@ describe("provider editor interactions", () => {
 		await Promise.resolve();
 		await Promise.resolve();
 		expect(host.popPane).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("provider fixed layout", () => {
+	test("windowLines pads short content and clips around the cursor with an indicator", () => {
+		expect(windowLines(theme, ["a", "b"], 4)).toEqual(["a", "b", "", ""]);
+		const rows = Array.from({ length: 10 }, (_, index) => `row ${index}`);
+		const top = windowLines(theme, rows, 5, { cursor: 0 }).map(stripAnsi);
+		expect(top).toEqual(["row 0", "row 1", "row 2", "row 3", "  (1/10)"]);
+		const bottom = windowLines(theme, rows, 5, { cursor: 9 }).map(stripAnsi);
+		expect(bottom).toEqual(["row 6", "row 7", "row 8", "row 9", "  (10/10)"]);
+		// Pinned lines survive clipping.
+		const pinned = windowLines(theme, rows, 5, { top: 1, bottom: 1, cursor: 9 }).map(stripAnsi);
+		expect(pinned).toEqual(["row 0", "row 7", "row 8", "  (8/8)", "row 9"]);
+	});
+
+	test("the editor frame height stays fixed while navigating", () => {
+		const { screen } = editor();
+		const height = screen.render(120).length;
+		expect(height).toBe(20);
+		for (let index = 0; index < 6; index++) screen.handleInput("\x1b[B");
+		expect(screen.render(120).length).toBe(height);
+		screen.handleInput("\x1b[C"); // focus the right column
+		expect(screen.render(120).length).toBe(height);
+		screen.handleInput("\x1b[B");
+		screen.handleInput("\x1b[A");
+		expect(screen.render(120).length).toBe(height);
+		screen.dispose();
+	});
+
+	test("the selection path stays highlighted in the unfocused pane", () => {
+		const { screen } = editor();
+		screen.handleInput("\x1b[B"); // left selection: API Type
+		const focusedLeft = screen.render(120).join("\n");
+		expect(focusedLeft).toContain(theme.fg("accent", "API Type"));
+		expect(focusedLeft).toContain(theme.fg("text", "Authentication"));
+		// The unfocused right pane previews with only its active row lit.
+		expect(focusedLeft).toContain(theme.fg("accent", "● openai-completions"));
+		expect(focusedLeft).toContain(theme.fg("dim", "○ anthropic-messages"));
+		screen.handleInput("\x1b[C"); // focus moves right
+		const focusedRight = screen.render(120).join("\n");
+		expect(focusedRight).toContain(theme.fg("accent", "API Type"));
+		expect(focusedRight).toContain(theme.fg("dim", "Authentication"));
+		expect(focusedRight).toContain(theme.fg("text", "○ anthropic-messages"));
+		screen.dispose();
+	});
+
+	test("the left column scrolls with a position indicator", () => {
+		for (let index = 0; index < 14; index++) store.addModel("cpa", { id: `m${index}` });
+		const { screen } = editor();
+		expect(render(screen)).toContain("(1/20)");
+		expect(screen.render(120).length).toBe(20);
+		for (let index = 0; index < 3; index++) screen.handleInput("\x1b[B");
+		expect(render(screen)).toContain("(4/20)");
+		expect(screen.render(120).length).toBe(20);
+		screen.dispose();
+	});
+
+	test("fetch results scroll inside the fixed window with a position indicator", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(
+						JSON.stringify({ data: Array.from({ length: 15 }, (_, index) => ({ id: `remote-${index}` })) }),
+					),
+			),
+		);
+		const { screen } = editor();
+		screen.handleInput("\x1b[B");
+		screen.handleInput("\x1b[B"); // Fetch Models row
+		screen.handleInput("\r"); // focus right and start the request
+		await vi.waitFor(() => expect(render(screen)).toContain("(1/15)"));
+		expect(screen.render(120).length).toBe(20);
+		// The filter input stays pinned above the scrolled rows.
+		expect(render(screen)).toContain("0 selected · 15 shown");
+		screen.handleInput("\x1b[B");
+		expect(render(screen)).toContain("(2/15)");
+		expect(screen.render(120).length).toBe(20);
+		screen.dispose();
+	});
+
+	test("the provider list keeps a fixed frame in list, empty, and id-entry modes", () => {
+		const list = new ProviderListScreen(tui, theme, keys, vi.fn(), store);
+		list.focused = true;
+		expect(list.render(120).length).toBe(20);
+		list.handleInput("zzz"); // filter to no match
+		expect(list.render(120).length).toBe(20);
+		list.handleInput("\r"); // + New Provider → id entry mode
+		expect(list.render(120).length).toBe(20);
+		list.handleInput("\r"); // empty id → inline error, still fixed height
+		expect(stripAnsi(list.render(120).join("\n"))).toContain("non-empty");
+		expect(list.render(120).length).toBe(20);
+	});
+
+	test("the provider list scrolls with a position indicator", () => {
+		for (let index = 0; index < 15; index++) store.ensureProviderView(`p${index}`);
+		const list = new ProviderListScreen(tui, theme, keys, vi.fn(), store);
+		list.focused = true;
+		expect(stripAnsi(list.render(120).join("\n"))).toContain("(1/17)");
+		expect(list.render(120).length).toBe(20);
+		for (let index = 0; index < 16; index++) list.handleInput("\x1b[B");
+		expect(stripAnsi(list.render(120).join("\n"))).toContain("(17/17)");
+		expect(list.render(120).length).toBe(20);
 	});
 });
 

@@ -12,7 +12,13 @@ import { truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
 import { DictPane } from "./dictionary.ts";
 import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
-import { renderInfoLine, renderKeyValueLine, renderPlainLine, ValueEditor } from "./value-row.ts";
+import {
+	renderInfoLine,
+	renderKeyValueLine,
+	renderPlainLine,
+	type ScrollWindowInfo,
+	ValueEditor,
+} from "./value-row.ts";
 
 function compatObject(handle: ModelHandle): Record<string, unknown> {
 	const compat = handle.read().compat;
@@ -91,9 +97,8 @@ export class CompatPane implements EditorPane {
 		if (known.length === 0 && entries.length === 0) {
 			lines.push(renderInfoLine(theme, `No compat fields are known for ${api ?? "this api"}.`, width));
 		}
-		const start = Math.max(0, Math.min(this.index - 5, entries.length + 1 - 10));
-		for (const [offset, [key, value]] of entries.slice(start, start + 10).entries()) {
-			const rowIndex = start + offset;
+		// All entries render; the editor's fixed window scrolls around scrollWindow().
+		for (const [rowIndex, [key, value]] of entries.entries()) {
 			const active = rowIndex === this.index;
 			const field = api ? compatFieldFor(api, key) : undefined;
 			const editing = this.mode.type === "editValue" && this.mode.key === key ? this.mode.editor : undefined;
@@ -110,16 +115,21 @@ export class CompatPane implements EditorPane {
 				}),
 			);
 		}
-		if (entries.length < start + 10)
-			lines.push(
-				renderPlainLine(theme, "+ Add Entry", {
-					active: this.index === entries.length && this.mode.type === "list",
-					paneFocused: this.focused,
-					width,
-				}),
-			);
+		lines.push(
+			renderPlainLine(theme, "+ Add Entry", {
+				active: this.index === entries.length && this.mode.type === "list",
+				paneFocused: this.focused,
+				width,
+			}),
+		);
 		if (this.error) lines.push(theme.fg("error", truncate(this.error, Math.max(10, width - 2))));
 		return lines;
+	}
+
+	scrollWindow(): ScrollWindowInfo {
+		// The effective-api header pins above; errors pin below.
+		if (this.mode.type === "chooseValue") return { top: 1, cursor: 2 + this.mode.index };
+		return { top: 1, bottom: this.error ? 1 : 0, cursor: 1 + this.index };
 	}
 
 	handleInput(data: string): void {
@@ -389,11 +399,11 @@ export class CompatKeyPickerPane implements EditorPane {
 		const lines: string[] = [this.editor.renderLine(width)];
 		const candidates = this.candidates();
 		if (candidates.length === 0) lines.push(renderInfoLine(theme, "No remaining known fields.", width));
-		const start = Math.max(0, Math.min(this.index - 5, candidates.length - 10));
-		for (const [offset, field] of candidates.slice(start, start + 10).entries()) {
+		// All candidates render; the editor's fixed window scrolls around scrollWindow().
+		for (const [rowIndex, field] of candidates.entries()) {
 			lines.push(
 				renderPlainLine(theme, field.key, {
-					active: start + offset === this.index,
+					active: rowIndex === this.index,
 					paneFocused: this.focused,
 					note: field.note ? `· ${field.kind} — ${truncate(field.note, 30)}` : `· ${field.kind}`,
 					width,
@@ -401,6 +411,11 @@ export class CompatKeyPickerPane implements EditorPane {
 			);
 		}
 		return lines;
+	}
+
+	scrollWindow(): ScrollWindowInfo {
+		// The filter input pins above the candidate rows.
+		return { top: 1, cursor: 1 + this.index };
 	}
 
 	private pickCurrent(): void {

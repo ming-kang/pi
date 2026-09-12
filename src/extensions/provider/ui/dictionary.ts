@@ -5,7 +5,13 @@ import { THINKING_VARIABLES, validateChatTemplateKwarg } from "../compat-fields.
 import { truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
 import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
-import { renderInfoLine, renderKeyValueLine, renderPlainLine, ValueEditor } from "./value-row.ts";
+import {
+	renderInfoLine,
+	renderKeyValueLine,
+	renderPlainLine,
+	type ScrollWindowInfo,
+	ValueEditor,
+} from "./value-row.ts";
 
 function compatObject(handle: ModelHandle): Record<string, unknown> {
 	const compat = handle.read().compat;
@@ -73,9 +79,9 @@ export class DictPane implements EditorPane {
 			return lines;
 		}
 		const entries = this.entries();
-		const start = Math.max(0, Math.min(this.index - 5, entries.length + 1 - 10));
-		for (const [offset, [key, value]] of entries.slice(start, start + 10).entries()) {
-			const active = start + offset === this.index;
+		// All entries render; the editor's fixed window scrolls around scrollWindow().
+		for (const [rowIndex, [key, value]] of entries.entries()) {
+			const active = rowIndex === this.index;
 			lines.push(
 				renderKeyValueLine(theme, {
 					keyLabel: key,
@@ -86,16 +92,22 @@ export class DictPane implements EditorPane {
 				}),
 			);
 		}
-		if (entries.length < start + 10)
-			lines.push(
-				renderPlainLine(theme, "+ Add Entry", {
-					active: this.index === entries.length && this.mode.type === "list",
-					paneFocused: this.focused,
-					width,
-				}),
-			);
+		lines.push(
+			renderPlainLine(theme, "+ Add Entry", {
+				active: this.index === entries.length && this.mode.type === "list",
+				paneFocused: this.focused,
+				width,
+			}),
+		);
 		if (this.error) lines.push(theme.fg("error", truncate(this.error, Math.max(10, width - 2))));
 		return lines;
+	}
+
+	scrollWindow(): ScrollWindowInfo {
+		// The format header pins above; errors pin below. Entry flows are short
+		// enough to fit, so only the list mode reports a meaningful cursor.
+		if (this.mode.type !== "list") return { top: 1, bottom: this.error ? 1 : 0 };
+		return { top: 1, bottom: this.error ? 1 : 0, cursor: 1 + this.index };
 	}
 
 	private renderMode(width: number): string[] {
