@@ -21,6 +21,10 @@ export const TaskSchema = Type.Object(
 			maxLength: 50_000,
 			description: "Complete self-contained briefing; the worker cannot see the parent conversation",
 		}),
+		description: nullable(
+			Type.String({ minLength: 1, maxLength: 80 }),
+			"Short task label (3-5 words) shown in the /bg list, live rows, and report headings; null or omit to derive it from the prompt",
+		),
 		cwd: nullable(
 			Type.String({ minLength: 1, maxLength: 4_096 }),
 			"Relative or absolute directory inside the parent working directory; null or omit to inherit it",

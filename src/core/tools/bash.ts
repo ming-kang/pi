@@ -351,7 +351,7 @@ export function createShellToolDefinition(
 				content: [
 					{
 						type: "text",
-						text: `Command handed to background. Task ID: ${outcome.task.id}. Status: ${outcome.task.status}. Its completion will be delivered automatically; use bg read to inspect output, bg wait to block until it settles, or bg kill to stop it.${outcome.task.outputPath ? `\nFull output: ${outcome.task.outputPath}` : ""}`,
+						text: `Command handed to background. Task ID: ${outcome.task.id}. Status: ${outcome.task.status}. Completion arrives automatically as a notification — do not poll or immediately wait on it; continue with other work or hand back to the user. Use bg read to inspect output, bg wait only when your next step is blocked on the result (prefer foreground next time in that case), or bg kill to stop it.${outcome.task.outputPath ? `\nFull output: ${outcome.task.outputPath}` : ""}`,
 					},
 				],
 				details: {

@@ -8,7 +8,7 @@ import { AGENT_PROFILES } from "./agents.ts";
 import { findAvailableModel } from "./model-selection.ts";
 import type { SubagentTask } from "./schema.ts";
 import { loadSubagentConfig } from "./settings.ts";
-import { firstPlainLine } from "./text.ts";
+import { firstPlainLine, truncate } from "./text.ts";
 import type { ResolvedSubagentTask, SubagentConfigFile, SubagentProfileOverride } from "./types.ts";
 
 export interface ParentModelContext {
@@ -77,12 +77,19 @@ function resolveThinking(
 // agent resolves to the read-only explorer profile.
 const DEFAULT_AGENT_NAME = "explorer";
 
-// The schema has no description field; derive a bounded plain-text label from
+// An explicit short label wins; otherwise derive a bounded plain-text label from
 // the briefing's first meaningful line so UI rows and report headings stay readable.
-function taskDescription(prompt: string): string {
-	const firstLine = firstPlainLine(prompt);
-	const characters = [...firstLine];
-	return characters.length <= 80 ? firstLine : `${characters.slice(0, 79).join("")}…`;
+export function taskLabel(task: Pick<SubagentTask, "prompt"> & { description?: string | null }): string {
+	const explicit = task.description?.trim();
+	if (explicit) return explicit;
+	return truncate(firstPlainLine(task.prompt), 80);
+}
+
+/** Group title shown in the /bg list, status line, and completion notification. */
+export function subagentGroupTitle(tasks: readonly SubagentTask[]): string {
+	const labels = tasks.map((task) => taskLabel(task));
+	if (labels.length === 1) return truncate(`Subagent · ${labels[0]}`, 100);
+	return truncate(`Subagent · ${tasks.length} tasks: ${labels.join(", ")}`, 100);
 }
 
 export async function resolveSubagentTask(
@@ -103,7 +110,7 @@ export async function resolveSubagentTask(
 	const model = resolveModel(override, parent);
 	return {
 		agent,
-		description: taskDescription(task.prompt),
+		description: taskLabel(task),
 		prompt: task.prompt,
 		cwd: resolveTaskCwd(parentCwd, task.cwd ?? undefined),
 		model,

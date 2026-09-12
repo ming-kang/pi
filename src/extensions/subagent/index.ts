@@ -6,7 +6,7 @@ import { subagentToolDescription } from "./agents.ts";
 import { showAgentsCommand } from "./agents-command.ts";
 import { SUBAGENT_COMMAND_NAME, SUBAGENT_TOOL_LABEL, SUBAGENT_TOOL_NAME } from "./constants.ts";
 import { renderSubagentCall, renderSubagentResult, type SubagentRenderState, scheduleLiveRefresh } from "./render.ts";
-import type { ParentModelContext } from "./resolve.ts";
+import { type ParentModelContext, subagentGroupTitle } from "./resolve.ts";
 import { ConcurrencyGate, isSubagentError, runSubagentInvocation } from "./runner.ts";
 import { SubagentParamsSchema } from "./schema.ts";
 import { statusSummary } from "./state.ts";
@@ -24,6 +24,7 @@ export default function subagent(pi: ExtensionAPI): void {
 		promptSnippet: "Delegate bounded work to isolated explorer or general workers",
 		promptGuidelines: [
 			"Use `subagent` for bounded work that benefits from isolated context or concurrent investigation; do not delegate a task you can finish with one or two direct tool calls.",
+			"Give every task a short `description` label; it is shown in the /bg list, live rows, and report headings.",
 		],
 		parameters: SubagentParamsSchema,
 		async execute(toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<SubagentDetails>> {
@@ -98,7 +99,7 @@ export default function subagent(pi: ExtensionAPI): void {
 			if (!managed) return run();
 			const outcome = await host!.execute<SubagentDetails>({
 				kind: "subagent",
-				title: `Subagent · ${params.tasks.length} tasks`,
+				title: subagentGroupTitle(params.tasks),
 				toolCallId,
 				background: params.background === true,
 				signal,
@@ -117,7 +118,7 @@ export default function subagent(pi: ExtensionAPI): void {
 				content: [
 					{
 						type: "text",
-						text: `Subagent group handed to background: ${outcome.task.id}. Its completion will be delivered automatically; use bg read to inspect progress, bg wait to block until the group settles, or bg kill to stop the whole group.`,
+						text: `Subagent group handed to background: ${outcome.task.id}. Completion arrives automatically as a notification — do not poll or immediately wait on it; continue with other work or hand back to the user. Use bg read to inspect progress, bg wait only when your next step is blocked on the result (prefer foreground next time in that case), or bg kill to stop the whole group.`,
 					},
 				],
 				details: { ...latest, endedAt: submittedAt, background: { id: outcome.task.id, submittedAt } },

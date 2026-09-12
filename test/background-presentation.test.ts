@@ -121,6 +121,36 @@ describe("background completion data contract", () => {
 		expect(saved.details.workers[1]?.report.text).toBe("partial report");
 	});
 
+	it("appends a classified next-step hint to non-completed terminal notifications", () => {
+		const cancelled = backgroundCompletionMessage(task({ status: "cancelled" }));
+		expect(cancelled.content).toContain(
+			"Next step: the task was cancelled — do not restart it unless the user asks.",
+		);
+
+		const timedOut = backgroundCompletionMessage(task({ status: "timeout" }));
+		expect(timedOut.content).toContain("Next step: the task hit its timeout");
+
+		const failed = backgroundCompletionMessage(task({ status: "failed" }));
+		expect(failed.content).toContain("Next step: diagnose from the output above");
+
+		const completed = backgroundCompletionMessage(task({ status: "completed" }));
+		expect(completed.content).not.toContain("Next step:");
+	});
+
+	it("names unfinished workers in the re-delegation hint for failed or partial groups", () => {
+		const saved = backgroundCompletionMessage(
+			task({
+				id: "subagent-group",
+				kind: "subagent",
+				status: "partial",
+				projection: { workers: [worker(1), { ...worker(2), status: "failed" }] },
+			}),
+		);
+		expect(saved.content).toContain(
+			"Next step: re-delegate the unfinished work in a fresh subagent call if still needed (task-2).",
+		);
+	});
+
 	it("records truncation when generic results or commands are bounded by supervision", async () => {
 		const service = new BackgroundService({ enabled: true });
 		try {

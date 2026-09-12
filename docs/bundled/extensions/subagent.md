@@ -12,6 +12,7 @@ Every call supplies one ordered `tasks` array with 1–8 items and an optional t
   "tasks": [
     {
       "prompt": "Locate the provider retry implementation and report exact symbols.",
+      "description": "Find provider retry code",
       "agent": "explorer",
       "cwd": "src/core"
     }
@@ -24,9 +25,10 @@ Every call supplies one ordered `tasks` array with 1–8 items and an optional t
 Each item has:
 
 ```text
-prompt   Required self-contained worker briefing
-agent?   explorer or general; defaults to explorer
-cwd?     Directory inside the parent working directory
+prompt       Required self-contained worker briefing
+description? Short task label for the /bg list, live rows, and report headings; derived from the prompt when omitted
+agent?       explorer or general; defaults to explorer
+cwd?         Directory inside the parent working directory
 ```
 
 There is no separate single-task or parallel mode. One item launches one worker; multiple items launch concurrent workers. A session-scoped gate permits at most six active workers across all sibling `subagent` calls, so additional items wait for a slot. Results always follow input order, regardless of completion order.

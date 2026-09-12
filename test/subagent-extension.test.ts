@@ -81,6 +81,7 @@ describe("subagent extension registration", () => {
 		expect(initialTool?.promptSnippet).toBe("Delegate bounded work to isolated explorer or general workers");
 		expect(initialTool?.promptGuidelines).toEqual([
 			"Use `subagent` for bounded work that benefits from isolated context or concurrent investigation; do not delegate a task you can finish with one or two direct tool calls.",
+			"Give every task a short `description` label; it is shown in the /bg list, live rows, and report headings.",
 		]);
 		expect(initialTool?.executionMode).toBeUndefined();
 		expect(initialTool?.prepareArguments).toBeUndefined();
@@ -235,12 +236,16 @@ describe("subagent extension registration", () => {
 
 		expect(taskSchema.required).toEqual(["prompt"]);
 		expect(taskSchema.additionalProperties).toBe(false);
-		expect(Object.keys(taskSchema.properties).sort()).toEqual(["agent", "cwd", "prompt"]);
+		expect(Object.keys(taskSchema.properties).sort()).toEqual(["agent", "cwd", "description", "prompt"]);
 		expect(taskSchema.properties).not.toHaveProperty("mode");
-		expect(taskSchema.properties).not.toHaveProperty("description");
 		expect(taskSchema.properties.prompt?.type).toBe("string");
 		expect(taskSchema.properties.prompt?.minLength).toBe(1);
 		expect(validateParams.Check({ tasks: [{ agent: null, prompt: "Find it.", cwd: null }] })).toBe(true);
+		// Optional per-task label: bounded string, nullable, derivable when omitted.
+		expect(validateParams.Check({ tasks: [{ prompt: "Work", description: "Find retry code" }] })).toBe(true);
+		expect(validateParams.Check({ tasks: [{ prompt: "Work", description: null }] })).toBe(true);
+		expect(validateParams.Check({ tasks: [{ prompt: "Work", description: "x".repeat(81) }] })).toBe(false);
+		expect(validateParams.Check({ tasks: [{ prompt: "Work", description: "" }] })).toBe(false);
 		const agentSchema = taskSchema.properties.agent as { description?: string };
 		expect(agentSchema.description).toContain("null or omit for explorer (the default)");
 		// The agent enum is exactly the two static profiles.

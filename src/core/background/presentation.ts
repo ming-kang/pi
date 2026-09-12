@@ -246,6 +246,35 @@ function modelText(value: BackgroundText, bytes: number, lines: number): string 
 	return result.content + (value.truncated || result.truncated ? OMISSION : "");
 }
 
+/** One bounded action hint per terminal outcome; completed work needs none. */
+function nextStepLine(snapshot: BackgroundCompletionSnapshot): string {
+	switch (snapshot.status) {
+		case "cancelled":
+			return "Next step: the task was cancelled — do not restart it unless the user asks.";
+		case "timeout":
+			return "Next step: the task hit its timeout; inspect the partial output above, then rerun with a longer timeout or in smaller pieces if still needed.";
+		case "failed":
+		case "partial": {
+			if (snapshot.kind === "subagent") {
+				const unfinished = snapshot.workers
+					.filter((worker) => worker.status !== "completed")
+					.map((worker) => singleLine(worker.description))
+					.filter(Boolean);
+				const names =
+					unfinished.length > 3
+						? `${unfinished.slice(0, 3).join(", ")}, +${unfinished.length - 3} more`
+						: unfinished.join(", ");
+				return names
+					? `Next step: re-delegate the unfinished work in a fresh subagent call if still needed (${names}).`
+					: "Next step: re-delegate the work in a fresh subagent call if still needed.";
+			}
+			return "Next step: diagnose from the output above before retrying; rerun only what is still needed.";
+		}
+		default:
+			return "";
+	}
+}
+
 /** The model and the card share facts; only the model receives this prose projection. */
 function notificationText(snapshot: BackgroundCompletionSnapshot): string {
 	const header = [
@@ -258,8 +287,10 @@ function notificationText(snapshot: BackgroundCompletionSnapshot): string {
 		if (snapshot.outputPath) header.push(`Output: ${singleLine(snapshot.outputPath)}`);
 	}
 	const prefix = `${header.join("\n")}\n\n`;
-	const remaining = BACKGROUND_RESULT_BYTES - Buffer.byteLength(prefix);
-	const lines = MODEL_LINES - prefix.split("\n").length;
+	const guidance = nextStepLine(snapshot);
+	const suffix = guidance ? `\n\n${guidance}` : "";
+	const remaining = BACKGROUND_RESULT_BYTES - Buffer.byteLength(prefix) - Buffer.byteLength(suffix);
+	const lines = MODEL_LINES - prefix.split("\n").length - (guidance ? 3 : 0);
 	if (snapshot.kind === "subagent" && snapshot.workers.length) {
 		// Allocate before formatting, so one verbose report cannot erase later workers.
 		const budget = Math.floor((remaining - 8 * snapshot.workers.length) / snapshot.workers.length);
@@ -275,10 +306,13 @@ function notificationText(snapshot: BackgroundCompletionSnapshot): string {
 						: { text: "No report returned.", truncated: worker.report.truncated };
 					return heading + reason + modelText(body, budget - Buffer.byteLength(heading + reason), lineBudget);
 				})
-				.join("\n\n---\n\n")
+				.join("\n\n---\n\n") +
+			suffix
 		);
 	}
-	return prefix + modelText(snapshot.output ?? { text: "No text result.", truncated: false }, remaining, lines);
+	return (
+		prefix + modelText(snapshot.output ?? { text: "No text result.", truncated: false }, remaining, lines) + suffix
+	);
 }
 
 export function backgroundCompletionMessage(task: BackgroundTask): CustomMessage<BackgroundCompletionSnapshot> {
