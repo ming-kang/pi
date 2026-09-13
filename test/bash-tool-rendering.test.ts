@@ -26,6 +26,30 @@ function renderCall(component: ToolExecutionComponent, width: number): string {
 	return stripAnsi(component.render(width).join("\n"));
 }
 
+function createDetachHintRenderer(
+	toolName: string,
+	options: { detachable?: boolean; keyLabel?: string } = {},
+): ToolExecutionComponent {
+	const tool =
+		toolName === "bash"
+			? createBashToolDefinition(process.cwd(), { operations: { exec: async () => ({ exitCode: 0 }) } })
+			: undefined;
+	return new ToolExecutionComponent(
+		toolName,
+		`${toolName}-detach-hint-test`,
+		toolName === "bash" ? { command: "sleep 60" } : { tasks: [] },
+		{
+			detachHint: {
+				isDetachable: (name: string) => options.detachable ?? name === toolName,
+				keyLabel: () => options.keyLabel ?? "Ctrl+B",
+			},
+		},
+		tool,
+		{ requestRender: () => {} } as never,
+		process.cwd(),
+	);
+}
+
 describe("bash tool call rendering", () => {
 	beforeAll(() => {
 		initTheme("dark");
@@ -140,6 +164,7 @@ describe("bash tool call rendering", () => {
 		expect(renderCall(component, 120)).not.toContain("Running");
 		vi.advanceTimersByTime(1);
 		expect(renderCall(component, 120)).toContain("Running… (2.0s)");
+		expect(renderCall(component, 120)).not.toContain("run in background");
 
 		vi.setSystemTime(59_950);
 		component.invalidate();
@@ -153,6 +178,7 @@ describe("bash tool call rendering", () => {
 		component.updateResult({ content: [{ type: "text", text: "(no output)" }], isError: false }, false);
 		const completed = renderCall(component, 120);
 		expect(completed).toContain("(no output)");
+		expect(completed).not.toContain("run in background");
 		expect(completed).not.toContain("Running");
 		expect(completed).not.toContain("Took");
 	});
@@ -208,5 +234,66 @@ describe("bash tool call rendering", () => {
 
 	afterEach(() => {
 		vi.useRealTimers();
+	});
+});
+
+describe("detach hint on long-running foreground cards", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	test("appears after the delay with the resolved key label and clears on settlement", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+		const component = createDetachHintRenderer("bash");
+		component.markExecutionStarted();
+		component.updateResult({ content: [], isError: false }, true);
+
+		vi.setSystemTime(9_999);
+		component.invalidate();
+		expect(renderCall(component, 120)).not.toContain("run in background");
+
+		vi.setSystemTime(10_000);
+		component.invalidate();
+		expect(renderCall(component, 120)).toContain("Press Ctrl+B to run in background, /bg to manage");
+
+		component.updateResult({ content: [{ type: "text", text: "done" }], isError: false }, false);
+		expect(renderCall(component, 120)).not.toContain("run in background");
+	});
+
+	test("hides when the key is unbound or the tool is not detachable", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+		const unbound = createDetachHintRenderer("bash", { keyLabel: "" });
+		unbound.markExecutionStarted();
+		unbound.updateResult({ content: [], isError: false }, true);
+		vi.setSystemTime(15_000);
+		unbound.invalidate();
+		expect(renderCall(unbound, 120)).not.toContain("run in background");
+
+		const fixed = createDetachHintRenderer("bash", { detachable: false });
+		fixed.markExecutionStarted();
+		fixed.updateResult({ content: [], isError: false }, true);
+		vi.setSystemTime(15_000);
+		fixed.invalidate();
+		expect(renderCall(fixed, 120)).not.toContain("run in background");
+	});
+
+	test("shows on subagent cards without the generic running line", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+		const component = createDetachHintRenderer("subagent");
+		component.markExecutionStarted();
+		component.updateResult({ content: [], isError: false }, true);
+
+		vi.setSystemTime(5_000);
+		component.invalidate();
+		expect(renderCall(component, 120)).not.toContain("Running…");
+
+		vi.setSystemTime(11_000);
+		component.invalidate();
+		const frame = renderCall(component, 120);
+		expect(frame).not.toContain("Running…");
+		expect(frame).toContain("Press Ctrl+B to run in background, /bg to manage");
 	});
 });

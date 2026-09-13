@@ -127,7 +127,14 @@ import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { FooterComponent, formatTokens } from "./components/footer.ts";
-import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
+import {
+	formatKeyText,
+	keyDisplayText,
+	keyHint,
+	keyLabel,
+	keyText,
+	rawKeyHint,
+} from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { createMermaidMarkdownTransformer } from "./components/mermaid.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
@@ -2056,6 +2063,11 @@ export class InteractiveMode {
 			{
 				showImages: this.settingsManager.getShowImages(),
 				imageWidthCells: this.settingsManager.getImageWidthCells(),
+				detachHint: {
+					// Everything BackgroundService.detachForeground() can move: shell tools and subagents.
+					isDetachable: (name) => name === "bash" || name === "powershell" || name === "subagent",
+					keyLabel: () => keyLabel("app.backgroundTasks.detach", { keybindings: this.keybindings }),
+				},
 			},
 			this.getRegisteredToolDefinition(toolName),
 			this.ui,

@@ -40,6 +40,12 @@ import { FallbackResultComponent, formatElapsed, formatFallbackArgs, ToolChromeC
 export interface ToolExecutionOptions {
 	showImages?: boolean;
 	imageWidthCells?: number;
+	/** Long-running foreground cards advertise backgrounding. Absent means no hint (e.g. hosts without background execution). */
+	detachHint?: {
+		isDetachable(toolName: string): boolean;
+		/** Current key label; empty string means unbound and hides the hint. */
+		keyLabel(): string;
+	};
 }
 
 interface ConvertedImage {
@@ -56,6 +62,8 @@ interface PendingImageConversion {
 
 const PROGRESS_THRESHOLD_MS = 2000;
 const PROGRESS_REFRESH_INTERVAL_MS = 1000;
+/** Delay before a long-running detachable card advertises backgrounding. */
+const DETACH_HINT_DELAY_MS = 10_000;
 
 export class ToolExecutionComponent extends Container {
 	private contentContainer: Container;
@@ -89,6 +97,7 @@ export class ToolExecutionComponent extends Container {
 	private hideComponent = false;
 	private progressStartedAt?: number;
 	private refreshTimer?: NodeJS.Timeout;
+	private readonly detachHint?: ToolExecutionOptions["detachHint"];
 	private disposed = false;
 
 	constructor(
@@ -108,6 +117,7 @@ export class ToolExecutionComponent extends Container {
 		this.toolGroup = this.getRenderShell() === "self" ? undefined : this.toolDefinition?.toolGroup;
 		this.showImages = options.showImages ?? true;
 		this.imageWidthCells = options.imageWidthCells ?? 60;
+		this.detachHint = options.detachHint;
 		this.ui = ui;
 		this.cwd = cwd;
 
@@ -138,6 +148,17 @@ export class ToolExecutionComponent extends Container {
 
 	private shouldRenderGenericProgress(): boolean {
 		return this.toolName === "bash" && this.getRenderShell() !== "self";
+	}
+
+	private shouldRenderDetachHint(): boolean {
+		return this.getRenderShell() !== "self" && this.detachHint?.isDetachable(this.toolName) === true;
+	}
+
+	/** The hint label, or undefined when the hint is unavailable or the key is unbound. */
+	private detachHintText(): string | undefined {
+		if (!this.shouldRenderDetachHint()) return undefined;
+		const key = this.detachHint?.keyLabel();
+		return key ? `Press ${key} to run in background, /bg to manage` : undefined;
 	}
 
 	private getRenderContext(lastComponent: Component | undefined, toolGroupSummary = false): ToolRenderContext {
@@ -218,7 +239,7 @@ export class ToolExecutionComponent extends Container {
 	markExecutionStarted(): void {
 		if (this.disposed) return;
 		this.executionStarted = true;
-		if (this.shouldRenderGenericProgress()) {
+		if (this.shouldRenderGenericProgress() || this.shouldRenderDetachHint()) {
 			if (this.progressStartedAt === undefined) {
 				this.progressStartedAt = Date.now();
 			}
@@ -455,8 +476,12 @@ export class ToolExecutionComponent extends Container {
 
 		if (this.executionStarted && this.isPartial && this.progressStartedAt !== undefined) {
 			const elapsedMs = Date.now() - this.progressStartedAt;
-			if (elapsedMs >= PROGRESS_THRESHOLD_MS) {
+			if (this.shouldRenderGenericProgress() && elapsedMs >= PROGRESS_THRESHOLD_MS) {
 				addResult(new Text(theme.fg("muted", `Running… (${formatElapsed(elapsedMs)})`), 0, 0));
+			}
+			if (elapsedMs >= DETACH_HINT_DELAY_MS) {
+				const hint = this.detachHintText();
+				if (hint) addResult(new Text(theme.fg("dim", hint), 0, 0));
 			}
 		}
 
