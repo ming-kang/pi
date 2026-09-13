@@ -22,7 +22,7 @@ import { keyLabel } from "../../modes/interactive/components/keybinding-hints.ts
 import { STATUS_SPINNER_INTERVAL_MS, statusMarker } from "../../modes/interactive/components/status-marker.ts";
 import { getMarkdownTheme, highlightCode, type Theme, type ThemeColor } from "../../modes/interactive/theme/theme.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
-import { runtimeLabel, taskLabel } from "./task-view.ts";
+import { runtimeLabel, taskLabel, workerLabel } from "./task-view.ts";
 import { firstCommandLine, formatAge } from "./text.ts";
 
 export type BackgroundManagerHost = Pick<BackgroundContext, "list" | "read" | "kill" | "subscribe" | "pin">;
@@ -124,6 +124,8 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	private rows: Row[] = [];
 	private runningCount = 0;
 	private finishedCount = 0;
+	private completedCount = 0;
+	private failedCount = 0;
 	private hiddenFinished = 0;
 	private selected?: string;
 	private pinned?: string;
@@ -197,6 +199,8 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const finished = settled.filter((task) => !isForegroundShellTask(task) || task.id === selectedTask);
 		this.runningCount = running.length;
 		this.finishedCount = finished.length;
+		this.completedCount = finished.filter((task) => task.status === "completed").length;
+		this.failedCount = this.finishedCount - this.completedCount;
 		this.hiddenFinished = settled.length - finished.length;
 		this.rows = [...running, ...finished].flatMap((task): Row[] => [
 			{ key: task.id, task },
@@ -577,6 +581,11 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		let time = "";
 		if (!row.worker) {
 			time = terminal ? formatAge(row.task.endedAt ?? row.task.startedAt, now) : runtimeLabel(row.task, now);
+			const workers = row.task.projection?.workers;
+			if (workers && workers.length > 0) {
+				const settledCount = workers.filter((w) => w.status !== "queued" && w.status !== "running").length;
+				time = `${settledCount}/${workers.length} · ${time}`;
+			}
 			if (row.task.mode === "foreground") time = `fg · ${time}`;
 		}
 		const timeWidth = time ? visibleWidth(time) + 1 : 0;
@@ -585,7 +594,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const label = theme.fg(
 			labelColor,
 			truncateToWidth(
-				clean(row.worker ? row.worker.label : taskLabel({ command: row.task.command ?? row.task.title })),
+				clean(row.worker ? workerLabel(row.worker) : taskLabel({ command: row.task.command ?? row.task.title })),
 				labelWidth,
 				"…",
 			),
@@ -628,14 +637,16 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const layout = this.layout();
 		const rule = () => new DynamicBorder((text) => theme.fg("border", text)).render(width)[0] ?? "";
 		const title = theme.fg("accent", theme.bold("Background tasks"));
-		const counts = `${this.runningCount} running · ${this.finishedCount} finished`;
-		const hiddenNote =
-			this.hiddenFinished > 0
-				? `${this.hiddenFinished} foreground shell${this.hiddenFinished === 1 ? "" : "s"} hidden`
-				: "";
-		const statsText =
-			this.runningCount + this.finishedCount > 0 ? (hiddenNote ? `${counts} · ${hiddenNote}` : counts) : hiddenNote;
-		const stats = statsText ? theme.fg("muted", statsText) : "";
+		// Only non-zero segments show: a quiet header means nothing needs attention.
+		const segments: string[] = [];
+		if (this.runningCount > 0) segments.push(theme.fg("accent", `${this.runningCount} running`));
+		if (this.completedCount > 0) segments.push(theme.fg("muted", `${this.completedCount} completed`));
+		if (this.failedCount > 0) segments.push(theme.fg("error", `${this.failedCount} failed`));
+		if (this.hiddenFinished > 0)
+			segments.push(
+				theme.fg("muted", `${this.hiddenFinished} foreground shell${this.hiddenFinished === 1 ? "" : "s"} hidden`),
+			);
+		const stats = segments.join(theme.fg("muted", " · "));
 		const gap = width - visibleWidth(title) - visibleWidth(stats);
 		const titleLine = pad(stats && gap >= 1 ? `${title}${" ".repeat(gap)}${stats}` : title, width);
 		const hint = (id: Parameters<typeof keybindings.getKeys>[0]) => keyLabel(id, { keybindings });

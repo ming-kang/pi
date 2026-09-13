@@ -460,7 +460,7 @@ describe("BackgroundTasksMenu public service", () => {
 			100,
 		);
 		const initial = h.render().join("\n");
-		expect(initial).toContain("30 running · 0 finished");
+		expect(initial).toContain("30 running");
 		expect(initial).toContain("echo 0");
 		expect(initial).not.toContain("echo 29");
 		h.menu.handleInput("\x1b[A");
@@ -675,7 +675,7 @@ describe("BackgroundTasksMenu public service", () => {
 		expect({ wideList, widePreview, narrowPreview, narrowList }).toMatchInlineSnapshot(`
 			{
 			  "narrowList": "────────────────────────────────────────────────────────────
-			Background tasks                      1 running · 0 finished
+			Background tasks                                   1 running
 			Running                                                     
 			→ · npm run build                                    fg · 0s
 			Status    · running · foreground · 0s                       
@@ -699,7 +699,7 @@ describe("BackgroundTasksMenu public service", () => {
 			↑/↓ select · ← list · →/Enter output · PgUp/PgDn page · K s…
 			────────────────────────────────────────────────────────────",
 			  "narrowPreview": "────────────────────────────────────────────────────────────
-			Background tasks                      1 running · 0 finished
+			Background tasks                                   1 running
 			Running                                                     
 			→ · npm run build                                    fg · 0s
 			Status    · running · foreground · 0s                       
@@ -723,7 +723,7 @@ describe("BackgroundTasksMenu public service", () => {
 			↑/↓ select · ← list · →/Enter output · PgUp/PgDn page · K s…
 			────────────────────────────────────────────────────────────",
 			  "wideList": "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-			Background tasks                                                                                                      1 running · 0 finished
+			Background tasks                                                                                                                   1 running
 			Running                                     │Status    · running · foreground · 0s                                                          
 			→ · npm run build                    fg · 0s│Task      bash-1                                                                               
 			                                            │Command   npm run build                                                                        
@@ -747,7 +747,7 @@ describe("BackgroundTasksMenu public service", () => {
 			↑/↓ select · ← list · →/Enter output · PgUp/PgDn page · K stop · Esc close                                                                  
 			────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
 			  "widePreview": "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-			Background tasks                                                                                                      1 running · 0 finished
+			Background tasks                                                                                                                   1 running
 			Running                                     │Status    · running · foreground · 0s                                                          
 			→ · npm run build                    fg · 0s│Task      bash-1                                                                               
 			                                            │Command   npm run build                                                                        
@@ -864,7 +864,7 @@ describe("BackgroundTasksMenu public service", () => {
 			expect(index).toBeGreaterThan(at);
 			at = index;
 		}
-		expect(frame).toContain("2 running · 2 finished");
+		expect(frame).toContain("2 running · 1 completed · 1 failed");
 		expect(frame).toContain("4s ago");
 		expect(frame).toContain("2s ago");
 		expect(frame).toMatch(/Task\s+new-run/);
@@ -924,7 +924,7 @@ describe("BackgroundTasksMenu public service", () => {
 		expect(frame).toContain("fg · 0s");
 		expect(frame).toContain("cmd-bg-done");
 		expect(frame).not.toContain("cmd-fg-done");
-		expect(frame).toContain("1 running · 1 finished · 1 foreground shell hidden");
+		expect(frame).toContain("1 running · 1 completed · 1 foreground shell hidden");
 	});
 	it("reports hidden settled foreground shells in the empty state", async () => {
 		const h = harness([task("fg-done", { status: "completed", endedAt: Date.now() })], 140);
@@ -941,12 +941,12 @@ describe("BackgroundTasksMenu public service", () => {
 		h.tasks[0]!.endedAt = Date.now();
 		h.change();
 		await vi.advanceTimersByTimeAsync(0);
-		expect(h.render().join("\n")).toContain("1 running · 1 finished");
+		expect(h.render().join("\n")).toContain("1 running · 1 completed");
 		h.menu.handleInput("\x1b[B"); // move to bash-2: bash-1 is no longer watched
 		await vi.advanceTimersByTimeAsync(0);
 		const frame = h.render().join("\n");
 		expect(frame).not.toContain("npm run build");
-		expect(frame).toContain("1 running · 0 finished · 1 foreground shell hidden");
+		expect(frame).toContain("1 running · 1 foreground shell hidden");
 	});
 	it.each([60, 140])("shows completed foreground subagents when opening the panel at width %s", async (width) => {
 		const group = task("subagent-fg", {
@@ -964,10 +964,10 @@ describe("BackgroundTasksMenu public service", () => {
 		const tasks = [task("bash-live"), group];
 		const h = harness(tasks, width, 32);
 		await vi.advanceTimersByTimeAsync(0);
-		expect(h.render().join("\n")).toContain("1 running · 1 finished");
+		expect(h.render().join("\n")).toContain("1 running · 1 completed");
 		expect(h.render().join("\n")).toContain("#2 Explorer");
 		h.menu.handleInput("\x1b[B");
-		expect(h.render().join("\n")).toContain("fg · 0s ago");
+		expect(h.render().join("\n")).toContain("fg · 1/1 · 0s ago");
 		h.menu.handleInput("\x1b[B");
 		await h.open();
 		expect(h.render().join("\n")).toContain("Saved worker report");
@@ -998,8 +998,50 @@ describe("BackgroundTasksMenu public service", () => {
 		h.menu.handleInput("\x1b[A");
 		await vi.advanceTimersByTimeAsync(0);
 		expect(h.render().join("\n")).toMatch(/Task\s+bash-live/);
-		expect(h.render().join("\n")).toContain("1 running · 1 finished");
+		expect(h.render().join("\n")).toContain("1 running · 1 completed");
 		expect(h.render().join("\n")).toContain("#2 Explorer");
 		expect(h.render().join("\n")).not.toContain("foreground shells hidden");
+	});
+	it("shows the worker description in its list row", async () => {
+		const group = task("group-1", {
+			kind: "subagent",
+			mode: "background",
+			command: undefined,
+			projection: { workers: [worker("worker-1")] },
+		});
+		const h = harness([group]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.render().join("\n")).toContain("#2 Explorer — Inspect module");
+	});
+	it("shows settled/total progress on subagent group rows", async () => {
+		const group = task("group-1", {
+			kind: "subagent",
+			mode: "background",
+			command: undefined,
+			projection: {
+				workers: [
+					worker("worker-1", { status: "completed" }),
+					worker("worker-2", { status: "running" }),
+					worker("worker-3", { status: "queued" }),
+				],
+			},
+		});
+		const h = harness([group], 140);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.render().join("\n")).toContain("1/3 ·");
+	});
+	it("splits header counts into completed and failed, hiding zero segments", async () => {
+		const h = harness([
+			task("bg-run", { mode: "background", status: "running" }),
+			task("bg-ok", { mode: "background", status: "completed", endedAt: Date.now() }),
+			task("bg-fail", { mode: "background", status: "failed", endedAt: Date.now() }),
+			task("bg-cancel", { mode: "background", status: "cancelled", endedAt: Date.now() }),
+		]);
+		await vi.advanceTimersByTimeAsync(0);
+		const frame = h.render().join("\n");
+		expect(frame).toContain("1 running");
+		expect(frame).toContain("1 completed");
+		expect(frame).toContain("2 failed");
+		expect(frame).not.toContain("finished");
 	});
 });

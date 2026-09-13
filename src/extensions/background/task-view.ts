@@ -41,6 +41,11 @@ export function taskLabel(task: { description?: string; command: string }): stri
 	return task.description ? `${task.description} — ${command}` : command;
 }
 
+/** Worker row label for listings: the "#1 explorer" ordinal label plus its description. */
+export function workerLabel(worker: { label: string; description?: string }): string {
+	return worker.description ? `${worker.label} — ${worker.description}` : worker.label;
+}
+
 /** A listing row's label, fitted to a visible-column budget. */
 export function taskLabelWithin(task: { description?: string; command: string }, width: number): string {
 	return truncateToWidth(taskLabel(task), width, "…");
