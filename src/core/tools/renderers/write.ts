@@ -9,17 +9,7 @@
 import { Container, Text } from "@earendil-works/pi-tui";
 import { getLanguageFromPath, highlightCode, type Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../../extensions/types.ts";
-import {
-	boundDisplayTail,
-	collapsedLinesHint,
-	formatThenRunSection,
-	normalizeDisplayText,
-	renderToolPath,
-	replaceTabs,
-	str,
-	stripThenRunHeader,
-	thenRunCommandOf,
-} from "../render-utils.ts";
+import { collapsedLinesHint, normalizeDisplayText, renderToolPath, replaceTabs, str } from "../render-utils.ts";
 
 type WriteHighlightCache = {
 	rawPath: string | null;
@@ -132,25 +122,14 @@ function formatWriteCall(
 		}
 	}
 
-	const thenRunCommand = thenRunCommandOf(args);
-	if (thenRunCommand) {
-		text += `\n${theme.fg("muted", `$ ${thenRunCommand}`)}`;
-	}
-
 	return text;
 }
 function formatWriteResult(
-	result: {
-		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-		details?: unknown;
-		isError?: boolean;
-	},
+	result: { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>; isError?: boolean },
 	theme: Theme,
-	expanded: boolean,
-	args?: unknown,
 ): string | undefined {
 	if (!result.isError) {
-		return formatThenRunSection(result, theme, expanded, args);
+		return undefined;
 	}
 	const output = result.content
 		.filter((c) => c.type === "text")
@@ -159,7 +138,7 @@ function formatWriteResult(
 	if (!output) {
 		return undefined;
 	}
-	return `\n${theme.fg("error", boundDisplayTail(stripThenRunHeader(output, args), theme, expanded))}`;
+	return `\n${theme.fg("error", output)}`;
 }
 
 export const writeRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> = {
@@ -187,8 +166,8 @@ export const writeRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rend
 		);
 		return component;
 	},
-	renderResult(result, options, theme, context) {
-		const output = formatWriteResult({ ...result, isError: context.isError }, theme, options.expanded, context.args);
+	renderResult(result, _options, theme, context) {
+		const output = formatWriteResult({ ...result, isError: context.isError }, theme);
 		if (!output) {
 			const component = (context.lastComponent as Container | undefined) ?? new Container();
 			component.clear();
