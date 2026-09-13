@@ -100,10 +100,13 @@
 		},
 		{
 			"path": "src/core/compaction/compaction.ts",
-			"category": "bugfix",
-			"intent": "Cuts at the last valid point when trailing tool results exceed keepRecentTokens, instead of keeping everything and making compaction a no-op; this also keeps upstream's between-turn compaction from being a no-op after a large tool batch",
+			"category": "distribution",
+			"intent": "Auto-compaction triggers at triggerPercent (default 85) of the context window instead of upstream's fixed reserveTokens reserve; reserveTokens is removed as a setting and the summary budget uses the internal 16384-token constant. Also cuts at the last valid point when trailing tool results exceed keepRecentTokens instead of making compaction a no-op (retire that part once upstream supplies an equivalent fix)",
 			"tests": [
-				"test/compaction.test.ts"
+				"test/compaction.test.ts",
+				"test/compaction-summary-reasoning.test.ts",
+				"test/suite/agent-session-compaction.test.ts",
+				"test/agent-session-auto-compaction-queue.test.ts"
 			]
 		},
 		{
@@ -194,7 +197,7 @@
 		{
 			"path": "src/core/settings-manager.ts",
 			"category": "distribution",
-			"intent": "Default tuiMode is fullscreen; keep when syncing upstream"
+			"intent": "Default tuiMode is fullscreen; compaction exposes triggerPercent (default 85) and drops reserveTokens; keep when syncing upstream"
 		},
 		{
 			"path": "src/core/tools/bash.ts",

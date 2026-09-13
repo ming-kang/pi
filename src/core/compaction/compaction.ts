@@ -125,14 +125,21 @@ function combineUsage(first: Usage, second: Usage): Usage {
 
 export interface CompactionSettings {
 	enabled: boolean;
-	reserveTokens: number;
 	keepRecentTokens: number;
+	/** Trigger line as a percentage of the context window. Default: 85 */
+	triggerPercent?: number;
 }
+
+/** Default trigger line: compact once context exceeds 85% of the window. */
+export const DEFAULT_TRIGGER_PERCENT = 85;
+
+/** Summary budget reserve (bounds the summary maxTokens). Internal constant, not user-configurable. */
+export const SUMMARY_RESERVE_TOKENS = 16384;
 
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	enabled: true,
-	reserveTokens: 16384,
 	keepRecentTokens: 20000,
+	triggerPercent: DEFAULT_TRIGGER_PERCENT,
 };
 
 // ============================================================================
@@ -231,10 +238,11 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 
 /**
  * Check if compaction should trigger based on context usage.
+ * The trigger line is triggerPercent (default 85) percent of the context window.
  */
 export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
 	if (!settings.enabled) return false;
-	return contextTokens > contextWindow - settings.reserveTokens;
+	return contextTokens > (contextWindow * (settings.triggerPercent ?? DEFAULT_TRIGGER_PERCENT)) / 100;
 }
 
 // ============================================================================
@@ -877,7 +885,6 @@ export async function compact(
 		tokensBefore,
 		previousSummary,
 		fileOps,
-		settings,
 	} = preparation;
 
 	// Generate summaries and merge into one
@@ -891,7 +898,7 @@ export async function compact(
 			const historyResult = await generateSummaryWithUsage(
 				messagesToSummarize,
 				model,
-				settings.reserveTokens,
+				SUMMARY_RESERVE_TOKENS,
 				apiKey,
 				headers,
 				signal,
@@ -910,7 +917,7 @@ export async function compact(
 		const turnPrefixResult = await generateTurnPrefixSummary(
 			turnPrefixMessages,
 			model,
-			settings.reserveTokens,
+			SUMMARY_RESERVE_TOKENS,
 			apiKey,
 			headers,
 			env,
@@ -929,7 +936,7 @@ export async function compact(
 		const result = await generateSummaryWithUsage(
 			messagesToSummarize,
 			model,
-			settings.reserveTokens,
+			SUMMARY_RESERVE_TOKENS,
 			apiKey,
 			headers,
 			signal,

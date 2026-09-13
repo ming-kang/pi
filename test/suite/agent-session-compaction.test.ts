@@ -520,7 +520,7 @@ describe("AgentSession compaction characterization", () => {
 	it("compacts and resumes after a length stop below the desired output limit", async () => {
 		const harness = await createHarness({
 			models: [{ id: "faux-1", contextWindow: 1000, maxTokens: 100 }],
-			settings: { compaction: { keepRecentTokens: 1, reserveTokens: 0 } },
+			settings: { compaction: { keepRecentTokens: 1, triggerPercent: 100 } },
 			extensionFactories: [
 				(pi) => {
 					pi.on("session_before_compact", async (event) => ({
@@ -563,7 +563,7 @@ describe("AgentSession compaction characterization", () => {
 		const order: string[] = [];
 		const harness = await createHarness({
 			models: [{ id: "faux-1", contextWindow: 2600, maxTokens: 100 }],
-			settings: { compaction: { enabled: true, reserveTokens: 400, keepRecentTokens: 1750 } },
+			settings: { compaction: { enabled: true, triggerPercent: 84.62, keepRecentTokens: 1750 } },
 			tools: [largeTool],
 			extensionFactories: [
 				(pi) => {
@@ -631,7 +631,7 @@ describe("AgentSession compaction characterization", () => {
 		});
 		const harness = await createHarness({
 			models: [{ id: "faux-1", contextWindow: 2600, maxTokens: 100 }],
-			settings: { compaction: { enabled: true, reserveTokens: 400, keepRecentTokens: 1750 } },
+			settings: { compaction: { enabled: true, triggerPercent: 84.62, keepRecentTokens: 1750 } },
 			tools: [largeTool],
 			extensionFactories: [
 				(pi) => {
@@ -689,7 +689,7 @@ describe("AgentSession compaction characterization", () => {
 		};
 		const harness = await createHarness({
 			models: [{ id: "faux-1", contextWindow: 2600, maxTokens: 100 }],
-			settings: { compaction: { enabled: true, reserveTokens: 400, keepRecentTokens: 1750 } },
+			settings: { compaction: { enabled: true, triggerPercent: 84.62, keepRecentTokens: 1750 } },
 			tools: [terminatingTool],
 			extensionFactories: [
 				(pi) => {
@@ -736,7 +736,7 @@ describe("AgentSession compaction characterization", () => {
 	it("stops after one compact-and-retry when a second response is also truncated", async () => {
 		const harness = await createHarness({
 			models: [{ id: "faux-1", contextWindow: 1_000_000, maxTokens: 100 }],
-			settings: { compaction: { keepRecentTokens: 1, reserveTokens: 0 } },
+			settings: { compaction: { keepRecentTokens: 1, triggerPercent: 100 } },
 			extensionFactories: [
 				(pi) => {
 					pi.on("session_before_compact", async (event) => ({
@@ -891,7 +891,7 @@ describe("AgentSession compaction characterization", () => {
 
 	it("compacts successful overflow responses without retrying", async () => {
 		const harness = await createHarness({
-			settings: { compaction: { enabled: true, keepRecentTokens: 1, reserveTokens: 0 } },
+			settings: { compaction: { enabled: true, keepRecentTokens: 1, triggerPercent: 100 } },
 			models: [{ id: "faux-1", contextWindow: 1, maxTokens: 100 }],
 			extensionFactories: [
 				(pi) => {
@@ -1054,7 +1054,7 @@ describe("AgentSession compaction characterization", () => {
 
 	it("does not trigger threshold compaction below the threshold or when disabled", async () => {
 		const belowThresholdHarness = await createHarness({
-			settings: { compaction: { enabled: true, reserveTokens: 1000 } },
+			settings: { compaction: { enabled: true, triggerPercent: 99.5 } },
 			models: [{ id: "faux-1", contextWindow: 200_000 }],
 		});
 		harnesses.push(belowThresholdHarness);

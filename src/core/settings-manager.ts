@@ -12,8 +12,8 @@ import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dis
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
-	reserveTokens?: number; // default: 16384
 	keepRecentTokens?: number; // default: 20000
+	triggerPercent?: number; // default: 85 - auto-compaction triggers past this percentage of the context window
 }
 
 export interface BranchSummarySettings {
@@ -839,19 +839,23 @@ export class SettingsManager {
 		this.save();
 	}
 
-	getCompactionReserveTokens(): number {
-		return this.settings.compaction?.reserveTokens ?? 16384;
-	}
-
 	getCompactionKeepRecentTokens(): number {
 		return this.settings.compaction?.keepRecentTokens ?? 20000;
 	}
 
-	getCompactionSettings(): { enabled: boolean; reserveTokens: number; keepRecentTokens: number } {
+	getCompactionTriggerPercent(): number {
+		return this.settings.compaction?.triggerPercent ?? 85;
+	}
+
+	getCompactionSettings(): {
+		enabled: boolean;
+		keepRecentTokens: number;
+		triggerPercent?: number;
+	} {
 		return {
 			enabled: this.getCompactionEnabled(),
-			reserveTokens: this.getCompactionReserveTokens(),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(),
+			triggerPercent: this.getCompactionTriggerPercent(),
 		};
 	}
 

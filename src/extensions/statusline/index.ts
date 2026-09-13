@@ -22,8 +22,8 @@ import {
 } from "../../core/usage-totals.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 
-const CONTEXT_WARNING_PERCENT = 70;
-const CONTEXT_ERROR_PERCENT = 90;
+const CONTEXT_WARNING_PERCENT = 40;
+const CONTEXT_ERROR_PERCENT = 80;
 const MIN_GAP = 1;
 
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
