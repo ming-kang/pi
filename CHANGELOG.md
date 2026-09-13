@@ -4,11 +4,18 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Added an optional `description` per Subagent task, used as the worker label in `/bg` rows, live cards, and report headings (derived from the prompt when omitted). Background completion notifications now end with per-outcome next-step guidance — naming the unfinished workers to re-delegate after a partial failure, or warning not to restart cancelled work unless asked.
+- Added worker descriptions, group progress, and settled-outcome counts to `/bg` Subagent group rows.
+- Added the shell exit code to the `/bg` detail view for finished bash/powershell tasks.
+- Long-running foreground tool cards advertise backgrounding after 10 seconds (`Press Ctrl+B to run in background, /bg to manage`); the hint hides when the detach key is unbound or the host runs without background execution.
+
 ### Changed
 
-- Replaced the bundled `router` extension with `provider`, a minimalist `models.json` editor (`/provider`) with connection, API-type, and model editing, OpenAI-style catalog fetch with Pi-resolved auth, and builtin-catalog field completion; `router.json` and `router-client.json` remain on disk unmigrated, and the Codex-shaped relay request profile no longer applies (requests use Pi's native API implementations).
+- Replaced the bundled `router` extension with `provider`, a minimalist `models.json` editor (`/provider`). A unified API Auth page edits `baseUrl`, `apiKey`, and the API type together with per-API URL-shape hints; models edit fields individually and can override `baseUrl` and API type per model, with inherited provider values shown dimmed; Fetch Models discovers remote catalogs with Pi-resolved auth; and the builtin catalog completes model fields on demand. `router.json` and `router-client.json` remain on disk unmigrated, and the Codex-shaped relay request profile no longer applies (requests use Pi's native API implementations).
 - Added three new user-configurable keybindings for `/provider`: `app.provider.switchPaneLeft` and `app.provider.switchPaneRight` for pane switching, and `app.provider.removeEntry` for entry removal.
-- Redesigned `/provider` with a fixed-height frame: the provider list and both editor columns scroll inside fixed windows with `(n/N)` position indicators (the `/model` selector convention) instead of resizing the dialog, and the selected row now stays highlighted in the unfocused pane as the selection path while that pane's other rows dim back.
+- Redesigned `/provider` with a fixed-height frame: the provider list and both editor columns scroll inside fixed windows with `(n/N)` position indicators (the `/model` selector convention) instead of resizing the dialog. Exactly one accent selection marker is shown at a time, in the pane holding keyboard focus. `Enter` activates action rows while `→` only moves focus, Fetch Models imports the highlighted row when nothing is checked, and a fruitless provider search prefills the new provider's id.
 - Simplified `/provider` persistence to write-through field merging: every save re-reads `models.json` under a cross-process lock and applies pending edits onto the freshest content, so unrelated external edits merge automatically and same-field races resolve last-writer-wins; the per-field conflict pane is removed. Esc on a model draft now discards it (asking first when the draft has fields), and the Fetch Models capability line and one-time save-format footer notice are gone.
 
 ### Fixed
@@ -18,6 +25,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - Fixed foreground shell traffic evicting completed background tasks and Subagent groups from `/bg`. Foreground shell history now has an independent quota during execution and session restoration; completed foreground Subagent groups also remain visible in Finished.
 - Fixed BTW drafts surviving successful tree navigation or reload and becoming main-conversation input after the panel closed. Cancelled navigation keeps the side conversation and its draft.
 - Fixed `/bg` browsing jumping as long logs roll forward. Each row keeps its bounded output snapshot across selection changes and pending reads until downward scrolling resumes following; task status and terminal diagnostics continue updating.
+- Hardened `/bg` against tiny terminals (a resize notice replaces the layout below the minimum dimensions) and stale kill confirmations (a pending confirmation auto-cancels after 5 seconds instead of capturing input).
 
 ## [0.85.1] - 2026-09-08
 
