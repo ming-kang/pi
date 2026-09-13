@@ -7,6 +7,7 @@ import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../utils/ansi.ts";
 import { resolvePath } from "../../utils/paths.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
+import type { ThenRunDetails } from "./then-run.ts";
 
 export function shortenPath(path: unknown): string {
 	if (typeof path !== "string") return "";
@@ -83,6 +84,52 @@ export function renderToolPath(
 	const value = rawPath || options?.emptyFallback;
 	if (!value) return theme.fg("toolOutput", "...");
 	return linkPath(theme.fg("accent", shortenPath(value)), value, cwd);
+}
+
+/** Extract the fused then_run command from raw tool call args, if present. */
+export function thenRunCommandOf(args: unknown): string | undefined {
+	if (!args || typeof args !== "object") return undefined;
+	const thenRun = (args as { then_run?: unknown }).then_run;
+	if (!thenRun || typeof thenRun !== "object") return undefined;
+	const command = (thenRun as { command?: unknown }).command;
+	return typeof command === "string" && command.length > 0 ? command : undefined;
+}
+
+/** Bound long text for display: keep the tail, hint at hidden earlier lines. */
+export function boundDisplayTail(text: string, theme: Theme, expanded: boolean, maxLines = 10): string {
+	const lines = normalizeDisplayText(text).split("\n");
+	if (expanded || lines.length <= maxLines) return lines.join("\n");
+	const shown = lines.slice(-maxLines);
+	const hidden = lines.length - shown.length;
+	return `${shown.join("\n")}\n${collapsedLinesHint(theme, hidden, "earlier", { total: lines.length })}`;
+}
+
+/**
+ * Display section for a fused then_run command: dimmed `$ cmd` plus the bounded
+ * output tail. Skipped runs render their note as-is; failed runs throw from the
+ * tool and render through the error path instead.
+ */
+export function formatThenRunSection(
+	result: { content: Array<{ type: string; text?: string }>; details?: unknown },
+	theme: Theme,
+	expanded: boolean,
+): string | undefined {
+	const details = (result.details as { thenRun?: ThenRunDetails } | null | undefined)?.thenRun;
+	if (!details) return undefined;
+	const body = result.content
+		.slice(1)
+		.map((block) => (block.type === "text" ? (block.text ?? "") : ""))
+		.join("\n");
+	if (details.status === "skipped") {
+		return theme.fg("muted", body);
+	}
+	const prefix = `[then_run] $ ${details.command}\n`;
+	const output = body.startsWith(prefix) ? body.slice(prefix.length) : body;
+	let text = theme.fg("muted", `$ ${details.command}`);
+	if (output) {
+		text += `\n${theme.fg("toolOutput", boundDisplayTail(replaceTabs(output), theme, expanded))}`;
+	}
+	return text;
 }
 
 /**

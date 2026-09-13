@@ -12,7 +12,14 @@ import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition } from "../../extensions/types.ts";
 import type { EditToolDetails } from "../edit.ts";
 import { computeEditsDiff, type Edit, type EditDiffError, type EditDiffResult } from "../edit-diff.ts";
-import { collapsedLinesHint, renderToolPath, str } from "../render-utils.ts";
+import {
+	boundDisplayTail,
+	collapsedLinesHint,
+	formatThenRunSection,
+	renderToolPath,
+	str,
+	thenRunCommandOf,
+} from "../render-utils.ts";
 
 type EditPreview = EditDiffResult | EditDiffError;
 export type EditRenderState = {
@@ -115,15 +122,19 @@ function formatEditResult(
 		if (!errorText || errorText === previewError) {
 			return undefined;
 		}
-		return theme.fg("error", errorText);
+		return theme.fg("error", boundDisplayTail(errorText, theme, expanded));
 	}
 
 	const resultDiff = result.details?.diff;
-	if (resultDiff && resultDiff !== previewDiff) {
-		return boundDiffBody(renderDiff(resultDiff, { filePath: rawPath ?? undefined }), expanded, theme);
+	const diffBody =
+		resultDiff && resultDiff !== previewDiff
+			? boundDiffBody(renderDiff(resultDiff, { filePath: rawPath ?? undefined }), expanded, theme)
+			: undefined;
+	const thenRunSection = formatThenRunSection(result, theme, expanded);
+	if (diffBody && thenRunSection) {
+		return `${diffBody}\n\n${thenRunSection}`;
 	}
-
-	return undefined;
+	return diffBody ?? thenRunSection;
 }
 function buildEditCallComponent(
 	component: EditCallRenderComponent,
@@ -138,6 +149,8 @@ function buildEditCallComponent(
 	const previewDiff = preview && !("error" in preview) ? preview.diff : undefined;
 	let headline = formatEditCall(args, theme, cwd);
 	if (previewDiff !== undefined) headline += formatDiffStat(previewDiff, theme);
+	const thenRunCommand = thenRunCommandOf(args);
+	if (thenRunCommand) headline += `\n${theme.fg("muted", `$ ${thenRunCommand}`)}`;
 	component.addChild(new Text(headline, 0, 0));
 
 	if (!preview) {

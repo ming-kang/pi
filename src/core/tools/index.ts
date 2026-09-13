@@ -62,6 +62,14 @@ export {
 	type ReadToolOptions,
 } from "./read.ts";
 export {
+	executeThenRun,
+	THEN_RUN_SKIPPED,
+	type ThenRunDetails,
+	type ThenRunInput,
+	thenRunSchema,
+	thenRunSkippedError,
+} from "./then-run.ts";
+export {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
 	formatSize,
@@ -75,6 +83,7 @@ export {
 	createWriteTool,
 	createWriteToolDefinition,
 	type WriteOperations,
+	type WriteToolDetails,
 	type WriteToolInput,
 	type WriteToolOptions,
 } from "./write.ts";

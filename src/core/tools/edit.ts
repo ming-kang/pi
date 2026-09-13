@@ -1,10 +1,11 @@
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } from "fs/promises";
 import { type Static, Type } from "typebox";
 import { splitBom } from "../../utils/text.ts";
 import { getExperimentalToolSampling } from "../experimental.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
+import type { BashToolOptions } from "./bash.ts";
 import {
 	applyEditsToNormalizedContent,
 	detectLineEnding,
@@ -17,6 +18,7 @@ import {
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
 import { type EditRenderState, editRenderers } from "./renderers/edit.ts";
+import { executeThenRun, type ThenRunDetails, thenRunSchema, thenRunSkippedError } from "./then-run.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
 const replaceEditSchema = Type.Object(
@@ -37,6 +39,7 @@ const editSchema = Type.Object(
 			description:
 				"One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
 		}),
+		then_run: thenRunSchema,
 	},
 	{},
 );
@@ -48,6 +51,7 @@ export const editToolSystemPromptContribution = {
 		"When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls",
 		"Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.",
 		"Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.",
+		"When the natural next step is to run, build, test, or check the edited file, pass then_run to fuse the command into this call and save a round trip.",
 	],
 } as const;
 
@@ -75,6 +79,8 @@ export interface EditToolDetails {
 	patch: string;
 	/** Line number of the first change in the new file (for editor navigation) */
 	firstChangedLine?: number;
+	/** Fused follow-up command record, present when then_run was requested and ran */
+	thenRun?: ThenRunDetails;
 }
 
 /**
@@ -99,6 +105,8 @@ const defaultEditOperations: EditOperations = {
 export interface EditToolOptions {
 	/** Custom operations for file editing. Default: local filesystem */
 	operations?: EditOperations;
+	/** Shell options for the fused then_run command. Default: local shell */
+	thenRun?: BashToolOptions;
 }
 
 function prepareEditArguments(input: unknown): EditToolInput {
@@ -158,6 +166,7 @@ export function createEditToolDefinition(
 		prepareArguments: prepareEditArguments,
 		async execute(_toolCallId, input: EditToolInput, signal?: AbortSignal, _onUpdate?, ctx?: ExtensionContext) {
 			const { path, edits } = validateEditInput(input);
+			const thenRun = input.then_run?.command ? input.then_run : undefined;
 			const absolutePath = resolveToCwd(path, ctx?.cwd || cwd);
 
 			return withFileMutationQueue(absolutePath, async () => {
@@ -169,45 +178,76 @@ export function createEditToolDefinition(
 					if (signal?.aborted) throw new Error("Operation aborted");
 				};
 
-				throwIfAborted();
-
-				// Check if file exists.
+				let mutationResult: AgentToolResult<EditToolDetails>;
 				try {
-					await ops.access(absolutePath);
-				} catch (error: unknown) {
 					throwIfAborted();
-					const errorMessage =
-						error instanceof Error && "code" in error ? `Error code: ${error.code}` : String(error);
-					throw new Error(`Could not edit file: ${path}. ${errorMessage}.`);
+
+					// Check if file exists.
+					try {
+						await ops.access(absolutePath);
+					} catch (error: unknown) {
+						throwIfAborted();
+						const errorMessage =
+							error instanceof Error && "code" in error ? `Error code: ${error.code}` : String(error);
+						throw new Error(`Could not edit file: ${path}. ${errorMessage}.`);
+					}
+					throwIfAborted();
+
+					// Read the file.
+					const buffer = await ops.readFile(absolutePath);
+					const rawContent = buffer.toString("utf-8");
+					throwIfAborted();
+
+					// Strip BOM before matching. The model will not include an invisible BOM in oldText.
+					const { bom, text: content } = splitBom(rawContent);
+					const originalEnding = detectLineEnding(content);
+					const normalizedContent = normalizeToLF(content);
+					const { baseContent, newContent } = applyEditsToNormalizedContent(normalizedContent, edits, path);
+					throwIfAborted();
+
+					const finalContent = bom + restoreLineEndings(newContent, originalEnding);
+					await ops.writeFile(absolutePath, finalContent);
+					throwIfAborted();
+
+					const diffResult = generateDiffString(baseContent, newContent);
+					const patch = generateUnifiedPatch(path, baseContent, newContent);
+					mutationResult = {
+						content: [
+							{
+								type: "text",
+								text: `Successfully replaced ${edits.length} block(s) in ${path}.`,
+							},
+						],
+						details: { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },
+					};
+				} catch (error) {
+					throw thenRun ? thenRunSkippedError(error) : error;
 				}
-				throwIfAborted();
 
-				// Read the file.
-				const buffer = await ops.readFile(absolutePath);
-				const rawContent = buffer.toString("utf-8");
-				throwIfAborted();
+				if (!thenRun) {
+					return mutationResult;
+				}
 
-				// Strip BOM before matching. The model will not include an invisible BOM in oldText.
-				const { bom, text: content } = splitBom(rawContent);
-				const originalEnding = detectLineEnding(content);
-				const normalizedContent = normalizeToLF(content);
-				const { baseContent, newContent } = applyEditsToNormalizedContent(normalizedContent, edits, path);
 				throwIfAborted();
-
-				const finalContent = bom + restoreLineEndings(newContent, originalEnding);
-				await ops.writeFile(absolutePath, finalContent);
-				throwIfAborted();
-
-				const diffResult = generateDiffString(baseContent, newContent);
-				const patch = generateUnifiedPatch(path, baseContent, newContent);
+				const outcome = await executeThenRun({
+					thenRun,
+					absolutePath,
+					cwd: ctx?.cwd || cwd,
+					shell: options?.thenRun,
+					signal,
+					readFile: ops.readFile,
+					ctx,
+				});
+				const mutationText = mutationResult.content
+					.filter((block) => block.type === "text")
+					.map((block) => block.text)
+					.join("\n");
+				if (outcome.failure) {
+					throw new Error(`${mutationText}\n\n${outcome.text}`);
+				}
 				return {
-					content: [
-						{
-							type: "text",
-							text: `Successfully replaced ${edits.length} block(s) in ${path}.`,
-						},
-					],
-					details: { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },
+					content: [...mutationResult.content, { type: "text" as const, text: outcome.text }],
+					details: { ...mutationResult.details, thenRun: outcome.details },
 				};
 			});
 		},

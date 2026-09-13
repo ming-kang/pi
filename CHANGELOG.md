@@ -7,6 +7,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 ### Added
 
 - Added an optional `description` per Subagent task, used as the worker label in `/bg` rows, live cards, and report headings (derived from the prompt when omitted). Background completion notifications now end with per-outcome next-step guidance — naming the unfinished workers to re-delegate after a partial failure, or warning not to restart cancelled work unless asked.
+- `edit` and `write` accept an optional `then_run` object (`{command, timeout?}`) that runs a follow-up shell command (build, test, check) in the same tool call after a successful file mutation, returning one combined result and saving a model round-trip. The command runs through the bash execution pipeline (same truncation and full-output spill, honoring `shellPath`/`shellCommandPrefix`); a non-zero exit marks the result as an error but keeps the file changes, and the command is skipped when the mutation fails or the file changed on disk in between.
 - Added worker descriptions, group progress, and settled-outcome counts to `/bg` Subagent group rows.
 - Added the shell exit code to the `/bg` detail view for finished bash/powershell tasks.
 - Long-running foreground tool cards advertise backgrounding after 10 seconds (`Press Ctrl+B to run in background, /bg to manage`); the hint hides when the detach key is unbound or the host runs without background execution.

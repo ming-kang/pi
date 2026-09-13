@@ -211,6 +211,8 @@ cat README.md | pi -p "Summarize this text"
 
 Built-in tools: `read`, `bash`, `powershell` (Windows), `edit`, `write`, `grep`, `find`, `ls`.
 
+The `edit` and `write` tools accept an optional `then_run` object (`{ "command": string, "timeout?": number }`) that runs a follow-up shell command — for example a build, test, or check — in the same tool call once the file mutation succeeds, returning one combined result and saving a model round-trip. A non-zero exit is reported as an error but keeps the file changes; the command is skipped when the mutation fails or when the file changed on disk between the mutation and the run.
+
 ### Resource Options
 
 | Option | Description |

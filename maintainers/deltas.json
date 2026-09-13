@@ -89,7 +89,7 @@
 		{
 			"path": "src/core/agent-session.ts",
 			"category": "bugfix",
-			"intent": "Uses one captured stream for summarization across async auth; binds live shell settings and detached stable model-context snapshots; invalidates stale contexts; hosts the BackgroundSession coordinator through lifecycle pauses and persistence acknowledgements, including nextTurn context retained until persistence",
+			"intent": "Uses one captured stream for summarization across async auth; binds live shell settings and detached stable model-context snapshots; invalidates stale contexts; hosts the BackgroundSession coordinator through lifecycle pauses and persistence acknowledgements, including nextTurn context retained until persistence; passes shell commandPrefix/shellPath into edit/write for then_run execution",
 			"tests": [
 				"test/suite/agent-session-compaction.test.ts",
 				"test/suite/agent-session-extension-context.test.ts",
@@ -212,9 +212,10 @@
 		{
 			"path": "src/core/tools/edit.ts",
 			"category": "ui",
-			"intent": "Drops renderShell self so edits use the native chrome; fork rendering lives in renderers/edit.ts",
+			"intent": "Drops renderShell self so edits use the native chrome; fork rendering lives in renderers/edit.ts; adds the optional then_run parameter fusing a follow-up shell command into a successful edit via tools/then-run.ts",
 			"tests": [
-				"test/edit-tool-no-full-redraw.test.ts"
+				"test/edit-tool-no-full-redraw.test.ts",
+				"test/then-run.test.ts"
 			]
 		},
 		{
@@ -232,6 +233,14 @@
 			"intent": "Explore toolGroup on the definition; fork rendering (flag badges, shared path/hint) lives in renderers/grep.ts",
 			"tests": [
 				"test/tools.test.ts"
+			]
+		},
+		{
+			"path": "src/core/tools/index.ts",
+			"category": "distribution",
+			"intent": "Re-exports the then_run fusion helpers and WriteToolDetails",
+			"tests": [
+				"test/then-run.test.ts"
 			]
 		},
 		{
@@ -260,21 +269,30 @@
 		{
 			"path": "src/core/tools/render-utils.ts",
 			"category": "ui",
-			"intent": "Shared collapsedLinesHint helper consumed by all built-in tool renderers"
+			"intent": "Shared collapsedLinesHint helper consumed by all built-in tool renderers; shared then_run command line and bounded output-tail sections"
 		},
 		{
 			"path": "src/core/tools/renderers/",
 			"category": "ui",
-			"intent": "Fork rendering layered on upstream's extracted renderers: syntax-highlighted bash call line, edit diff stat and bounded collapsed body, shared collapsedLinesHint everywhere, find/grep path rendering, read muted ranges and group-summary hint, write total count",
+			"intent": "Fork rendering layered on upstream's extracted renderers: syntax-highlighted bash call line, edit diff stat and bounded collapsed body, shared collapsedLinesHint everywhere, find/grep path rendering, read muted ranges and group-summary hint, write total count, edit/write then_run command and output sections",
 			"tests": [
 				"test/bash-tool-rendering.test.ts",
-				"test/edit-tool-no-full-redraw.test.ts"
+				"test/edit-tool-no-full-redraw.test.ts",
+				"test/then-run.test.ts"
 			]
 		},
 		{
 			"path": "src/core/tools/tool-definition-wrapper.ts",
 			"category": "extension-support",
 			"intent": "Propagates toolGroup through tool wrapping and tightens generics"
+		},
+		{
+			"path": "src/core/tools/write.ts",
+			"category": "distribution",
+			"intent": "Adds the optional then_run parameter fusing a follow-up shell command into a successful write via tools/then-run.ts",
+			"tests": [
+				"test/then-run.test.ts"
+			]
 		},
 		{
 			"path": "src/core/trust-manager.ts",
