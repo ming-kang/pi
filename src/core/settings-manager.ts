@@ -8,6 +8,12 @@ import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
+import {
+	clampTriggerPercent,
+	DEFAULT_COMPACTION_SETTINGS,
+	DEFAULT_TRIGGER_PERCENT,
+	type CompactionSettings as ResolvedCompactionSettings,
+} from "./compaction/settings.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 
 export interface CompactionSettings {
@@ -827,7 +833,7 @@ export class SettingsManager {
 	}
 
 	getCompactionEnabled(): boolean {
-		return this.settings.compaction?.enabled ?? true;
+		return this.settings.compaction?.enabled ?? DEFAULT_COMPACTION_SETTINGS.enabled;
 	}
 
 	setCompactionEnabled(enabled: boolean): void {
@@ -840,18 +846,14 @@ export class SettingsManager {
 	}
 
 	getCompactionKeepRecentTokens(): number {
-		return this.settings.compaction?.keepRecentTokens ?? 20000;
+		return this.settings.compaction?.keepRecentTokens ?? DEFAULT_COMPACTION_SETTINGS.keepRecentTokens;
 	}
 
 	getCompactionTriggerPercent(): number {
-		return this.settings.compaction?.triggerPercent ?? 85;
+		return clampTriggerPercent(this.settings.compaction?.triggerPercent ?? DEFAULT_TRIGGER_PERCENT);
 	}
 
-	getCompactionSettings(): {
-		enabled: boolean;
-		keepRecentTokens: number;
-		triggerPercent?: number;
-	} {
+	getCompactionSettings(): ResolvedCompactionSettings {
 		return {
 			enabled: this.getCompactionEnabled(),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(),

@@ -32,7 +32,7 @@ CTX 2.1%/1.0M                    ↑13k ↓13k R440k CH99.4% $0.074
 **Left**
 
 - **Context:** used percentage plus context-window size. The percentage uses
-  fixed semantic tiers: accent normally, warning above 70%, error above 90%.
+  fixed semantic tiers: accent normally, warning above 40%, error above 80%.
 
 **Right**
 

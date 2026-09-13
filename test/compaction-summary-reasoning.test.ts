@@ -294,4 +294,36 @@ describe("generateSummary reasoning options", () => {
 		});
 		expect(completeSimpleMock.mock.calls.map((call) => call[2]?.maxTokens)).toEqual([8000, 8000]);
 	});
+
+	it.each([false, true])("scales summary output down for a low trigger (split turn: %s)", async (isSplitTurn) => {
+		const preparation: CompactionPreparation = {
+			firstKeptEntryId: "entry-keep",
+			messagesToSummarize: messages,
+			turnPrefixMessages: isSplitTurn ? messages : [],
+			isSplitTurn,
+			tokensBefore: 16000,
+			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+			settings: { enabled: true, keepRecentTokens: 20000, triggerPercent: 20 },
+		};
+		await compact(preparation, { ...createModel(false, 32768), contextWindow: 64000 }, "test-key");
+
+		const outputLimits = completeSimpleMock.mock.calls.map((call) => call[2]?.maxTokens as number);
+		expect(outputLimits).toEqual(isSplitTurn ? [2560, 1600] : [2560]);
+		// Even both summaries plus the retained 6.4K target leave room below the 12.8K trigger.
+		expect(outputLimits.reduce((total, limit) => total + limit, 6400)).toBeLessThan(12800);
+	});
+
+	it.each([200000, 1000000])("preserves the existing summary limits on a %i-token window", async (contextWindow) => {
+		const preparation: CompactionPreparation = {
+			firstKeptEntryId: "entry-keep",
+			messagesToSummarize: messages,
+			turnPrefixMessages: messages,
+			isSplitTurn: true,
+			tokensBefore: 50000,
+			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+			settings: { enabled: true, keepRecentTokens: 20000 },
+		};
+		await compact(preparation, { ...createModel(false, 32768), contextWindow }, "test-key");
+		expect(completeSimpleMock.mock.calls.map((call) => call[2]?.maxTokens)).toEqual([13107, 8192]);
+	});
 });

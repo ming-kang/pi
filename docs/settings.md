@@ -119,7 +119,7 @@ Version checks read the latest `@astralyn/pi` version from npm. Set `PI_SKIP_VER
 |---------|------|---------|-------------|
 | `compaction.enabled` | boolean | `true` | Enable auto-compaction |
 | `compaction.triggerPercent` | number | `85` | Percentage of the context window that triggers auto-compaction (clamped to 20–95) |
-| `compaction.keepRecentTokens` | number | `20000` | Recent tokens to keep (not summarized) |
+| `compaction.keepRecentTokens` | number | `20000` | Recent-message retention target, capped at half the trigger token budget |
 
 ```json
 {
@@ -132,6 +132,8 @@ Version checks read the latest `@astralyn/pi` version from npm. Set `PI_SKIP_VER
 ```
 
 Note: upstream Pi's `compaction.reserveTokens` setting is not supported and is ignored when present; the trigger is always `triggerPercent` (values outside 20–95 are clamped).
+
+Retention and summary budgets shrink for small windows or low trigger percentages without changing the saved settings. Whole messages and tool-call/result groups can exceed the retention target. See [Compaction](compaction.md#how-it-works) for the budget rules and examples.
 
 ### Branch Summary
 
@@ -357,17 +359,17 @@ Project settings (`.pi/settings.json`) override global settings. Nested objects 
 // ~/.pi/agent/settings.json (global)
 {
   "theme": "dark",
-  "compaction": { "enabled": true, "reserveTokens": 16384 }
+  "compaction": { "enabled": true, "triggerPercent": 85 }
 }
 
 // .pi/settings.json (project)
 {
-  "compaction": { "reserveTokens": 8192 }
+  "compaction": { "triggerPercent": 70 }
 }
 
 // Result
 {
   "theme": "dark",
-  "compaction": { "enabled": true, "reserveTokens": 8192 }
+  "compaction": { "enabled": true, "triggerPercent": 70 }
 }
 ```

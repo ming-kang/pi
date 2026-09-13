@@ -16,6 +16,7 @@ import {
 	type SessionEntry,
 	sessionEntryToContextMessages,
 } from "../session-manager.ts";
+import { type CompactionSettings, getCompactionBudget } from "./settings.ts";
 import {
 	computeFileLists,
 	createFileOps,
@@ -25,6 +26,17 @@ import {
 	SUMMARIZATION_SYSTEM_PROMPT,
 	serializeConversation,
 } from "./utils.ts";
+
+export {
+	type CompactionSettings,
+	clampTriggerPercent,
+	DEFAULT_COMPACTION_SETTINGS,
+	DEFAULT_TRIGGER_PERCENT,
+	MAX_TRIGGER_PERCENT,
+	MIN_TRIGGER_PERCENT,
+	SUMMARY_RESERVE_TOKENS,
+	shouldCompact,
+} from "./settings.ts";
 
 // ============================================================================
 // File Operation Tracking
@@ -120,39 +132,6 @@ function combineUsage(first: Usage, second: Usage): Usage {
 }
 
 // ============================================================================
-// Types
-// ============================================================================
-
-export interface CompactionSettings {
-	enabled: boolean;
-	keepRecentTokens: number;
-	/** Trigger line as a percentage of the context window. Default: 85 */
-	triggerPercent?: number;
-}
-
-/** Default trigger line: compact once context exceeds 85% of the window. */
-export const DEFAULT_TRIGGER_PERCENT = 85;
-
-/** triggerPercent is clamped into this range: lower churns compaction too often, higher leaves too little room. */
-export const MIN_TRIGGER_PERCENT = 20;
-export const MAX_TRIGGER_PERCENT = 95;
-
-/** Clamp a configured triggerPercent into [MIN_TRIGGER_PERCENT, MAX_TRIGGER_PERCENT]. */
-export function clampTriggerPercent(value: number): number {
-	if (!Number.isFinite(value)) return DEFAULT_TRIGGER_PERCENT;
-	return Math.min(MAX_TRIGGER_PERCENT, Math.max(MIN_TRIGGER_PERCENT, value));
-}
-
-/** Summary budget reserve (bounds the summary maxTokens). Internal constant, not user-configurable. */
-export const SUMMARY_RESERVE_TOKENS = 16384;
-
-export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
-	enabled: true,
-	keepRecentTokens: 20000,
-	triggerPercent: DEFAULT_TRIGGER_PERCENT,
-};
-
-// ============================================================================
 // Token calculation
 // ============================================================================
 
@@ -244,16 +223,6 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 		trailingTokens,
 		lastUsageIndex: usageInfo.index,
 	};
-}
-
-/**
- * Check if compaction should trigger based on context usage.
- * The trigger line is triggerPercent (default 85, clamped to 20-95) percent of the context window.
- */
-export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
-	if (!settings.enabled) return false;
-	const triggerPercent = clampTriggerPercent(settings.triggerPercent ?? DEFAULT_TRIGGER_PERCENT);
-	return contextTokens > (contextWindow * triggerPercent) / 100;
 }
 
 // ============================================================================
@@ -762,13 +731,15 @@ export interface CompactionPreparation {
 	previousSummary?: string;
 	/** File operations extracted from messagesToSummarize */
 	fileOps: FileOperations;
-	/** Compaction settions from settings.jsonl	*/
+	/** Configured compaction settings, before applying the model's budget limits. */
 	settings: CompactionSettings;
 }
 
+/** Pass the model's context window to adapt retention to the configured trigger. */
 export function prepareCompaction(
 	pathEntries: SessionEntry[],
 	settings: CompactionSettings,
+	contextWindow?: number,
 ): CompactionPreparation | undefined {
 	if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {
 		return undefined;
@@ -794,7 +765,8 @@ export function prepareCompaction(
 
 	const tokensBefore = estimateContextTokens(buildSessionContext(pathEntries).messages).tokens;
 
-	const cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens);
+	const budget = getCompactionBudget(settings, contextWindow);
+	const cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, budget.keepRecentTokens);
 
 	// Get UUID of first kept entry
 	const firstKeptEntry = pathEntries[cutPoint.firstKeptEntryIndex];
@@ -897,6 +869,7 @@ export async function compact(
 		previousSummary,
 		fileOps,
 	} = preparation;
+	const { summaryReserveTokens } = getCompactionBudget(preparation.settings, model.contextWindow);
 
 	// Generate summaries and merge into one
 	let summary: string;
@@ -909,7 +882,7 @@ export async function compact(
 			const historyResult = await generateSummaryWithUsage(
 				messagesToSummarize,
 				model,
-				SUMMARY_RESERVE_TOKENS,
+				summaryReserveTokens,
 				apiKey,
 				headers,
 				signal,
@@ -928,7 +901,7 @@ export async function compact(
 		const turnPrefixResult = await generateTurnPrefixSummary(
 			turnPrefixMessages,
 			model,
-			SUMMARY_RESERVE_TOKENS,
+			summaryReserveTokens,
 			apiKey,
 			headers,
 			env,
@@ -947,7 +920,7 @@ export async function compact(
 		const result = await generateSummaryWithUsage(
 			messagesToSummarize,
 			model,
-			SUMMARY_RESERVE_TOKENS,
+			summaryReserveTokens,
 			apiKey,
 			headers,
 			signal,

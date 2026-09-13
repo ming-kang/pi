@@ -29,7 +29,7 @@ Auto-compaction triggers when:
 contextTokens > contextWindow × triggerPercent / 100
 ```
 
-By default, `triggerPercent` is 85 (configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`, accepted range 20–95 with out-of-range values clamped): compaction starts once context usage passes 85% of the model's context window — e.g. ~850K tokens on a 1M window or ~170K on a 200K window — leaving the remainder for the response and the compaction summary.
+By default, `triggerPercent` is 85 (configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`, accepted range 20–95 with out-of-range values clamped): compaction starts once context usage passes 85% of the model's context window — e.g. ~850K tokens on a 1M window or ~170K on a 200K window. Non-finite SDK values fall back to 85. Retention and summary budgets also shrink for smaller windows or lower trigger percentages, as described below.
 
 > **Distribution note:** upstream Pi triggers at `contextWindow − reserveTokens` (a fixed 16384-token reserve by default), which on large windows delays compaction until ~98% usage. This distribution replaces that setting with the proportional `triggerPercent`. A `reserveTokens` key left over in an existing settings file is ignored; it no longer has any effect.
 
@@ -41,11 +41,17 @@ You can also trigger manually with `/compact [instructions]`, where optional ins
 
 ### How It Works
 
-1. **Find cut point**: Walk backwards from newest message, accumulating token estimates until `keepRecentTokens` (default 20k, configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`) is reached
+1. **Find cut point**: Walk backwards from newest message until the effective retention target is reached: `keepRecentTokens` (default 20k), capped at half the configured trigger's token budget
 2. **Extract messages**: Collect messages from the previous kept boundary (or session start) up to the cut point
 3. **Generate summary**: Call LLM to summarize with structured format, passing the previous summary as iterative context when present
 4. **Append entry**: Save `CompactionEntry` with summary and `firstKeptEntryId`
 5. **Rebuilds context**: Session rebuilds the context for the next request, using summary + messages from `firstKeptEntryId` onwards
+
+For both automatic and manual compaction, the model's context window limits the recent-message target to half the trigger budget. The internal summary reserve is capped at one quarter of that budget, up to its existing 16384-token maximum. History summaries can use 80% of this reserve and split-turn prefix summaries can use 50%; each is also limited by the model's output cap. This leaves room below the trigger for summary framing and continued work instead of retaining the entire context at a low threshold. The configured settings are not rewritten.
+
+For example, a 64K window with `triggerPercent: 20` triggers above 12.8K tokens. Its recent-message target is at most 6.4K, with output limits of 2560 tokens for a history summary and 1600 for a split-turn prefix summary. Default 200K and 1M windows keep the existing retention and summary budgets. These are budget targets, not hard bounds on retained content: whole messages and tool-call/result groups remain intact and can exceed the target.
+
+SDK callers using `prepareCompaction()` directly should pass `model.contextWindow` as the third argument to apply the same retention cap. The two-argument form preserves the configured retention target when the window is unknown.
 
 ```
 Before compaction:
@@ -415,7 +421,7 @@ Configure compaction in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settin
 |---------|---------|-------------|
 | `enabled` | `true` | Enable auto-compaction |
 | `triggerPercent` | `85` | Percentage of the context window that triggers auto-compaction (clamped to 20–95) |
-| `keepRecentTokens` | `20000` | Recent tokens to keep (not summarized) |
+| `keepRecentTokens` | `20000` | Recent-message retention target, capped at half the trigger token budget when the model window is known |
 
 Disable auto-compaction with `"enabled": false`. You can still compact manually with `/compact`.
 

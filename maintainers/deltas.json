@@ -89,9 +89,10 @@
 		{
 			"path": "src/core/agent-session.ts",
 			"category": "bugfix",
-			"intent": "Uses one captured stream for summarization across async auth; binds live shell settings and detached stable model-context snapshots; invalidates stale contexts; hosts the BackgroundSession coordinator through lifecycle pauses and persistence acknowledgements, including nextTurn context retained until persistence",
+			"intent": "Uses one captured stream for summarization across async auth; binds live shell settings and detached stable model-context snapshots; invalidates stale contexts; hosts the BackgroundSession coordinator through lifecycle pauses and persistence acknowledgements, including nextTurn context retained until persistence; supplies the captured model window to manual and automatic compaction budgets",
 			"tests": [
 				"test/suite/agent-session-compaction.test.ts",
+				"test/suite/compaction-budget.test.ts",
 				"test/suite/agent-session-extension-context.test.ts",
 				"test/suite/regressions/6324-branch-summary-ambient-auth.test.ts",
 				"test/agent-session-background.test.ts",
@@ -101,10 +102,11 @@
 		{
 			"path": "src/core/compaction/compaction.ts",
 			"category": "distribution",
-			"intent": "Auto-compaction triggers at triggerPercent (default 85) of the context window instead of upstream's fixed reserveTokens reserve; reserveTokens is removed as a setting and the summary budget uses the internal 16384-token constant. Also cuts at the last valid point when trailing tool results exceed keepRecentTokens instead of making compaction a no-op (retire that part once upstream supplies an equivalent fix)",
+			"intent": "Compaction uses the shared percentage policy and model-window budgets from compaction/settings.ts, adapting retention and summary limits at low thresholds. Also cuts at the last valid point when trailing tool results exceed keepRecentTokens instead of making compaction a no-op (retire that part once upstream supplies an equivalent fix)",
 			"tests": [
 				"test/compaction.test.ts",
 				"test/compaction-summary-reasoning.test.ts",
+				"test/suite/compaction-budget.test.ts",
 				"test/suite/agent-session-compaction.test.ts",
 				"test/agent-session-auto-compaction-queue.test.ts"
 			]
@@ -197,7 +199,8 @@
 		{
 			"path": "src/core/settings-manager.ts",
 			"category": "distribution",
-			"intent": "Default tuiMode is fullscreen; compaction exposes triggerPercent (default 85) and drops reserveTokens; keep when syncing upstream"
+			"intent": "Default tuiMode is fullscreen; compaction uses the shared defaults and effective clamped triggerPercent, dropping reserveTokens; keep when syncing upstream",
+			"tests": ["test/compaction-settings.test.ts"]
 		},
 		{
 			"path": "src/core/tools/bash.ts",

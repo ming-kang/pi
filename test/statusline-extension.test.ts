@@ -1,10 +1,10 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "../src/core/extensions/types.ts";
 import type { SessionEntry } from "../src/core/session-manager.ts";
 import statusline from "../src/extensions/statusline/index.ts";
-import type { Theme } from "../src/modes/interactive/theme/theme.ts";
+import { initTheme, type Theme, theme } from "../src/modes/interactive/theme/theme.ts";
 
 interface FooterComponent {
 	render(width: number): string[];
@@ -83,6 +83,7 @@ function usageEntries(): SessionEntry[] {
 async function createFooter(
 	entries: SessionEntry[],
 	statuses: ReadonlyMap<string, string> = new Map(),
+	options: { percent?: number | null; theme?: Theme } = {},
 ): Promise<FooterComponent> {
 	let sessionStart: SessionStartHandler | undefined;
 	const api = {
@@ -93,6 +94,7 @@ async function createFooter(
 	statusline(api);
 
 	let footerFactory: FooterFactory | undefined;
+	const percent = options.percent === undefined ? 10 : options.percent;
 	const ctx = {
 		mode: "tui",
 		cwd: "/workspace/project",
@@ -102,7 +104,7 @@ async function createFooter(
 			getLeafId: () => entries.at(-1)?.id ?? null,
 			getBranch: () => entries,
 		},
-		getContextUsage: () => ({ tokens: 100, contextWindow: 1_000, percent: 10 }),
+		getContextUsage: () => ({ tokens: percent === null ? null : percent * 10, contextWindow: 1_000, percent }),
 		ui: {
 			setFooter: (factory: FooterFactory | undefined) => {
 				footerFactory = factory;
@@ -118,7 +120,7 @@ async function createFooter(
 		bold: (text: string) => text,
 		getThinkingBorderColor: () => (text: string) => text,
 	} as unknown as Theme;
-	return footerFactory({ requestRender() {} }, identityTheme, {
+	return footerFactory({ requestRender() {} }, options.theme ?? identityTheme, {
 		onBranchChange: () => () => {},
 		getGitBranch: () => "feature/long-statusline-branch",
 		getExtensionStatuses: () => statuses,
@@ -168,6 +170,25 @@ describe("statusline usage", () => {
 		const lines = footer.render(width);
 		expect(lines).toHaveLength(2);
 		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		footer.dispose();
+	});
+});
+
+describe("statusline context colors", () => {
+	beforeAll(() => initTheme("dark"));
+
+	it.each([
+		[0, "accent"],
+		[40, "accent"],
+		[40.1, "warning"],
+		[80, "warning"],
+		[80.1, "error"],
+		[95, "error"],
+		[null, "accent"],
+	] as const)("renders %s percent with the %s theme color", async (percent, color) => {
+		const footer = await createFooter([], new Map(), { percent, theme });
+		const label = `CTX ${percent === null ? "?" : percent.toFixed(1)}%/1.0k`;
+		expect(footer.render(200)[1]).toContain(theme.fg(color, label));
 		footer.dispose();
 	});
 });
