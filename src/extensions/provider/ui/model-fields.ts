@@ -8,11 +8,11 @@
 import type { ModelsJsonModel } from "../../../core/model-config.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { matchBuiltinModels } from "../catalog.ts";
-import { truncate } from "../constants.ts";
+import { plural, truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
 import { BuiltinCandidatesPane } from "./builtin-data.ts";
 import { CompatPane } from "./compat.ts";
-import { CostPane, InputTypesPane, ReasoningPane } from "./model-options.ts";
+import { CostPane, InputTypesPane, ModelSpecificApiPane, ReasoningPane } from "./model-options.ts";
 import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
 import { ThinkingMapPane } from "./thinking-map.ts";
 import {
@@ -32,6 +32,7 @@ type FieldRow =
 	| { kind: "subpage"; key: "thinkingLevelMap" | "input" | "cost" | "compat" }
 	| { kind: "number"; key: "contextWindow" | "maxTokens" }
 	| { kind: "builtin" }
+	| { kind: "modelApi" }
 	| { kind: "deleteModel" };
 
 export class ModelFieldsPane implements EditorPane {
@@ -61,7 +62,8 @@ export class ModelFieldsPane implements EditorPane {
 			{ kind: "number", key: "maxTokens" },
 			{ kind: "subpage", key: "compat" },
 		];
-		if (!model.isDraft) rows.push({ kind: "builtin" }, { kind: "deleteModel" });
+		if (model.isDraft) rows.push({ kind: "modelApi" });
+		else rows.push({ kind: "builtin" }, { kind: "modelApi" }, { kind: "deleteModel" });
 		this.rows = rows;
 	}
 
@@ -84,7 +86,7 @@ export class ModelFieldsPane implements EditorPane {
 		lines.push(
 			renderInfoLine(
 				theme,
-				api ? `api: ${api}${current.api ? " (model-level)" : ""}` : "api: unresolved — set API Type",
+				api ? `api: ${api}${current.api ? " (model)" : ""}` : "api: none resolved — see Model-Specific API below",
 				width,
 			),
 		);
@@ -120,7 +122,7 @@ export class ModelFieldsPane implements EditorPane {
 				const unsetText = row.key === "id" ? "required" : `falls back to id`;
 				return renderKeyValueLine(theme, {
 					keyLabel: row.key,
-					valueText: value ?? `unset (${unsetText})`,
+					valueText: value ?? `not set (${unsetText})`,
 					unset: !value,
 					active,
 					paneFocused: this.focused,
@@ -170,10 +172,18 @@ export class ModelFieldsPane implements EditorPane {
 					valueText: "Use Built-in Data",
 					active,
 					paneFocused: this.focused,
-					note: id ? `· ${count} candidate${count === 1 ? "" : "s"}` : "· set id first",
+					note: id ? `· ${count} ${plural(count, "candidate")}` : "· set id first",
 					width,
 				});
 			}
+			case "modelApi":
+				return renderKeyValueLine(theme, {
+					valueText: "Model-Specific API",
+					active,
+					paneFocused: this.focused,
+					note: `· ${this.modelApiSummary(current)}`,
+					width,
+				});
 			case "deleteModel":
 				return renderKeyValueLine(theme, {
 					valueText: "Delete Model",
@@ -182,6 +192,16 @@ export class ModelFieldsPane implements EditorPane {
 					width,
 				});
 		}
+	}
+
+	/** Which connection fields this model overrides, or where they come from when it overrides nothing. */
+	private modelApiSummary(current: Partial<ModelsJsonModel> & { id?: string }): string {
+		const overrides = [current.baseUrl ? "baseUrl" : "", current.api ? "API Type" : ""].filter(Boolean);
+		if (overrides.length > 0) return overrides.join(" + ");
+		const provider = this.host.store.getProvider(this.host.providerId);
+		if (provider?.api || provider?.baseUrl) return "provider defaults";
+		if (this.host.effectiveApi(current) || this.host.effectiveBaseUrl(current)) return "built-in defaults";
+		return "not set";
 	}
 
 	private subpageSummary(
@@ -193,8 +213,8 @@ export class ModelFieldsPane implements EditorPane {
 				const map = current.thinkingLevelMap;
 				const count = map ? Object.keys(map).length : 0;
 				return count > 0
-					? { text: `${count} mapping${count === 1 ? "" : "s"}`, unset: false }
-					: { text: "inherit", unset: true };
+					? { text: `${count} ${plural(count, "mapping")}`, unset: false }
+					: { text: "default", unset: true };
 			}
 			case "input":
 				return current.input
@@ -208,9 +228,12 @@ export class ModelFieldsPane implements EditorPane {
 			case "compat": {
 				const compat = current.compat;
 				const count = compat ? Object.keys(compat).length : 0;
-				return count > 0
-					? { text: `${count} ${count === 1 ? "entry" : "entries"}`, unset: false }
-					: { text: "inherit", unset: true };
+				if (count > 0) return { text: `${count} ${count === 1 ? "entry" : "entries"}`, unset: false };
+				const inherited = this.host.store.getProvider(this.host.providerId)?.compat;
+				const inheritedCount = inherited ? Object.keys(inherited).length : 0;
+				return inheritedCount > 0
+					? { text: `${inheritedCount} from provider`, unset: true }
+					: { text: "none", unset: true };
 			}
 		}
 	}
@@ -283,6 +306,9 @@ export class ModelFieldsPane implements EditorPane {
 				return;
 			case "subpage":
 				this.pushSubpage(row.key);
+				return;
+			case "modelApi":
+				this.host.pushPane(new ModelSpecificApiPane(this.host, this.model));
 				return;
 			case "builtin": {
 				const id = this.model.read().id;

@@ -128,7 +128,7 @@ export interface FieldChange {
 	checked: boolean;
 	/** False = cross-API map/compat: view-only, cannot be applied. */
 	applicable: boolean;
-	/** Left side of the preview, e.g. `unset (falls back to id)`. */
+	/** Left side of the preview, e.g. `not set (falls back to id)`. */
 	currentText: string;
 	/** Right side of the preview, e.g. the reference value. */
 	referenceText: string;
@@ -162,7 +162,7 @@ export function computeFieldChanges(
 		field: "name",
 		checked: unset("name") && reference.name !== reference.id,
 		applicable: true,
-		currentText: current.name ?? `unset (falls back to id${current.id ? ` "${current.id}"` : ""})`,
+		currentText: current.name ?? `not set (falls back to id${current.id ? ` "${current.id}"` : ""})`,
 		referenceText: reference.name,
 	});
 	changes.push({
@@ -206,7 +206,7 @@ export function computeFieldChanges(
 			applicable: sameApi,
 			currentText: current.thinkingLevelMap
 				? `${Object.keys(current.thinkingLevelMap).length} ${plural(Object.keys(current.thinkingLevelMap).length, "mapping")}`
-				: "unset",
+				: "not set",
 			// Cross-api maps are view-only; the preview pane annotates that.
 			referenceText: `${details.length} ${plural(details.length, "mapping")}`,
 			referenceDetails: details,
@@ -220,7 +220,7 @@ export function computeFieldChanges(
 			applicable: sameApi,
 			currentText: current.compat
 				? `${Object.keys(current.compat).length} ${plural(Object.keys(current.compat).length, "entry")}`
-				: "unset",
+				: "not set",
 			referenceText: `${details.length} ${plural(details.length, "entry")}`,
 			referenceDetails: details,
 		});

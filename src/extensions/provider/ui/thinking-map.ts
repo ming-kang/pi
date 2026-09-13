@@ -46,7 +46,7 @@ export class ThinkingMapPane implements EditorPane {
 		if (this.mode.type === "levels") {
 			for (const [rowIndex, level] of THINKING_LEVELS.entries()) {
 				const value = this.map()[level];
-				const status = value === undefined ? "inherit" : value === null ? "null (hidden)" : value;
+				const status = value === undefined ? "default" : value === null ? "null (hidden)" : value;
 				lines.push(
 					renderKeyValueLine(theme, {
 						keyLabel: level,
@@ -63,7 +63,7 @@ export class ThinkingMapPane implements EditorPane {
 			for (const [choiceIndex, label] of [
 				"String target (provider effort)",
 				"Hidden (null)",
-				"Inherit (remove key)",
+				"Default (remove key)",
 			].entries()) {
 				lines.push(
 					renderPlainLine(theme, label, {

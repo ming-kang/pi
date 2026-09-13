@@ -15,7 +15,7 @@ Minimalist visual editor for the `providers` record of `models.json` (`~/.pi/age
 
 `/provider` presents a two-pane editor:
 
-- **Left column:** Navigation list containing Authentication, API Type, Fetch Models, the provider's configured models (display name → `id` → `"New Model"` draft fallback; at most one draft at a time), `+ Add Model`, and `Delete Provider`.
+- **Left column:** Navigation list containing API Auth, Fetch Models, the provider's configured models (display name → `id` → `"New Model"` draft fallback; at most one draft at a time), `+ Add Model`, and `Delete Provider`.
 - **Right column:** Hosts the selected item's field pane and sub-pane stack.
 
 Both columns keep independent selection and scroll positions. The frame height is fixed: instead of resizing, each column scrolls inside a fixed window with a `(n/N)` position indicator (the `/model` selector convention), and pinned rows such as filter inputs and error lines stay on screen. The selected row stays highlighted in both panes as the selection path; only the pane with keyboard focus renders its other rows at full brightness while the unfocused pane's rows dim back.
@@ -37,17 +37,13 @@ Fixed fields keep their `Key: ` prefix while editing, and the selected key and v
 
 ## Provider configuration
 
-### Authentication
+### API Auth
 
-Configures connection credentials at the provider level:
+Configures the provider's connection in one page:
 
-- **`baseUrl`**: Endpoint URL (for example, `http://localhost:11434/v1`).
+- **`baseUrl`**: Endpoint URL (for example, `http://localhost:11434/v1`). The expected shape depends on the API type: OpenAI-style APIs need the version path in the URL (`https://api.openai.com/v1`), while the Anthropic and Mistral clients append `/v1` themselves (`https://api.anthropic.com`). A hint line on the page states the convention for the selected API type.
 - **`apiKey`**: Provider API key or credential expression. Literal keys are masked in the display (e.g. `••••••1234`), while environment variable references (`$VAR`) and command substitutions (`!command`) are displayed verbatim. Values are stored raw in `models.json`; variable and command references resolve dynamically at request time.
-- **Precedence hints**: When a higher-priority credential source is active (such as a saved token in `auth.json` or an environment variable), an informational notice indicates that the higher-priority source takes precedence over the `apiKey` row.
-
-### API Type
-
-Single-select picker over Pi's supported API protocols. Common protocols are listed first:
+- **API Type**: Opens a single-select picker over Pi's supported API protocols. Common protocols are listed first:
 
 1. `openai-responses`
 2. `openai-completions`
@@ -60,7 +56,9 @@ Single-select picker over Pi's supported API protocols. Common protocols are lis
 9. `bedrock-converse-stream`
 10. `pi-messages`
 
-Custom `api` strings already present in `models.json` are preserved. The provider API type can also be set to unset if individual models define their own `api`.
+Custom `api` strings already present in `models.json` are preserved. The provider API type can be cleared when every model defines its own `api` (see Model-Specific API); on a built-in provider the catalog defaults apply.
+
+- **Precedence hints**: When a higher-priority credential source is active (such as a saved token in `auth.json` or an environment variable), an informational notice indicates that the higher-priority source takes precedence over the `apiKey` row.
 
 ## Model configuration
 
@@ -78,6 +76,7 @@ Selecting a model in the left column displays its editable fields in the right c
 - **`contextWindow`**: Positive integer total context token limit.
 - **`maxTokens`**: Positive integer maximum generation token limit.
 - **`compat`**: Sub-pane configuring flags consumed by the selected API implementation. Open dictionary fields (`chatTemplateKwargs` and `chatTemplateArgs`) allow arbitrary keys and Pi thinking variables, including `thinking.budget`. Nested JSON values use the core models.json validation rules. Pressing `Ctrl+X` removes an entry to restore inherited behavior.
+- **Model-Specific API**: Sub-page for model-level `baseUrl` and API Type overrides. Rows display the inherited provider or built-in value dimmed; editing a value writes an override for this model only, and clearing it returns to inheritance.
 
 The active session model and its provider cannot be deleted or renamed; switch models with `/model` first.
 

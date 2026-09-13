@@ -7,14 +7,15 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { compatFieldsForApi } from "../src/extensions/provider/compat-fields.ts";
 import { RefreshCoordinator } from "../src/extensions/provider/refresh.ts";
-import { ModelsJsonStore } from "../src/extensions/provider/store.ts";
+import { DELETE, ModelsJsonStore } from "../src/extensions/provider/store.ts";
 import { createProviderApp, createProviderErrorScreen } from "../src/extensions/provider/ui/app.ts";
 import { BuiltinPreviewPane } from "../src/extensions/provider/ui/builtin-data.ts";
 import { CompatKeyPickerPane, CompatPane } from "../src/extensions/provider/ui/compat.ts";
 import { ProviderEditorScreen } from "../src/extensions/provider/ui/editor.ts";
 import { FetchModelsPane } from "../src/extensions/provider/ui/fetch-models.ts";
-import { CostPane } from "../src/extensions/provider/ui/model-options.ts";
+import { CostPane, ModelApiTypePane, ModelSpecificApiPane } from "../src/extensions/provider/ui/model-options.ts";
 import type { EditorHost, ModelHandle } from "../src/extensions/provider/ui/pane.ts";
+import { ApiTypePane } from "../src/extensions/provider/ui/provider-fields.ts";
 import { ProviderListScreen } from "../src/extensions/provider/ui/provider-list.ts";
 import { windowLines } from "../src/extensions/provider/ui/value-row.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
@@ -167,7 +168,7 @@ describe("provider modal lifecycle", () => {
 			vi.fn(async () => new Response(JSON.stringify({ data: [] }))),
 		);
 		const { app, done, setModel } = appFixture();
-		for (let index = 0; index < 3; index++) app.handleInput("\x1b[B");
+		for (let index = 0; index < 2; index++) app.handleInput("\x1b[B");
 		app.handleInput("\x1b[C");
 		for (let index = 0; index < 6; index++) app.handleInput("\x1b[B");
 		app.handleInput("262144");
@@ -279,15 +280,92 @@ describe("provider editor interactions", () => {
 
 	test("cannot unset the API while a custom model inherits it", async () => {
 		const { screen } = editor();
+		screen.handleInput("\x1b[C"); // API Auth
 		screen.handleInput("\x1b[B");
-		screen.handleInput("\x1b[C");
+		screen.handleInput("\x1b[B"); // API Type row
+		screen.handleInput("\r"); // open the radio sub-page
 		screen.handleInput("\x1b[A");
-		screen.handleInput("\x1b[A");
+		screen.handleInput("\x1b[A"); // not set
 		screen.handleInput("\r");
 		await store.flush();
 		expect(store.getProvider("cpa")?.api).toBe("openai-completions");
-		expect(render(screen)).toContain("rely");
+		expect(render(screen)).toContain("model-level API");
 		screen.dispose();
+	});
+
+	test("the API Auth page groups connection fields and opens the API radio", async () => {
+		const { screen } = editor();
+		screen.handleInput("\x1b[C"); // focus the API Auth pane
+		const page = render(screen);
+		expect(page).toContain("baseUrl: https://old.example/v1");
+		expect(page).toContain("apiKey: not set");
+		expect(page).toContain("API Type: openai-completions");
+		expect(page).toContain("version path"); // openai-style baseUrl hint
+		screen.handleInput("\x1b[B");
+		screen.handleInput("\x1b[B"); // API Type row
+		screen.handleInput("\r"); // push the radio sub-page
+		expect(render(screen)).toContain("● openai-completions");
+		screen.handleInput("\x1b[B"); // anthropic-messages
+		screen.handleInput("\r"); // select applies and returns to API Auth
+		await store.flush();
+		expect(store.getProvider("cpa")?.api).toBe("anthropic-messages");
+		const after = render(screen);
+		expect(after).toContain("API Type: anthropic-messages");
+		expect(after).toContain("bare origin"); // the baseUrl hint follows the API
+		screen.dispose();
+	});
+
+	test("the provider API unset guard checks every model", async () => {
+		store.setModelField("cpa", "k3", ["api"], "anthropic-messages"); // k3 has its own
+		store.addModel("cpa", { id: "m2" }); // m2 still inherits
+		await store.flush();
+		const { host } = hostFixture();
+		const pane = new ApiTypePane(host);
+		pane.setFocused(true);
+		pane.handleInput("\x1b[A");
+		pane.handleInput("\x1b[A"); // not set
+		pane.handleInput("\r");
+		expect(render(pane)).toContain('"m2"');
+		expect(store.getProvider("cpa")?.api).toBe("openai-completions");
+	});
+
+	test("the Model-Specific API page inherits dimmed values and overrides on input", async () => {
+		const { host, model } = hostFixture();
+		const pane = new ModelSpecificApiPane(host, model);
+		pane.setFocused(true);
+		expect(render(pane)).toContain("https://old.example/v1");
+		expect(render(pane)).toContain("· provider");
+		pane.handleInput("https://new.example/v1"); // typing overwrites the inherited value
+		pane.handleInput("\r");
+		await store.flush();
+		expect(store.getModel("cpa", "k3")?.baseUrl).toBe("https://new.example/v1");
+		pane.handleInput("\r"); // tweak the override
+		pane.handleInput("\x15"); // ctrl+u clears it
+		pane.handleInput("\r");
+		await store.flush();
+		expect(store.getModel("cpa", "k3")?.baseUrl).toBeUndefined(); // back to inheriting
+		expect(render(pane)).toContain("· provider");
+	});
+
+	test("the model API radio sets an override and refuses inheritance with no fallback", async () => {
+		const { host, model } = hostFixture();
+		const pane = new ModelApiTypePane(host, model);
+		pane.setFocused(true);
+		expect(render(pane)).toContain("provider: openai-completions");
+		for (let index = 0; index < 3; index++) pane.handleInput("\x1b[B"); // anthropic-messages
+		pane.handleInput("\r");
+		await store.flush();
+		expect(store.getModel("cpa", "k3")?.api).toBe("anthropic-messages");
+		expect(host.popPane).toHaveBeenCalled();
+		// With neither a provider API nor a built-in fallback, the inherit option is guarded.
+		store.setProviderField("cpa", ["api"], DELETE);
+		store.setModelField("cpa", "k3", ["api"], DELETE);
+		await store.flush();
+		const bare = new ModelApiTypePane(host, model);
+		bare.setFocused(true);
+		bare.handleInput("\r"); // first option: nothing to inherit
+		expect(render(bare)).toContain("Nothing to inherit");
+		expect(store.getModel("cpa", "k3")?.api).toBeUndefined();
 	});
 
 	test("new compat fields display their value choice before writing", () => {
@@ -320,7 +398,7 @@ describe("provider editor interactions", () => {
 			vi.fn(async () => new Response(JSON.stringify({ data: [{ id: "remote-1" }] }))),
 		);
 		const { screen } = editor();
-		for (let index = 0; index < 2; index++) screen.handleInput("\x1b[B"); // Fetch Models row
+		screen.handleInput("\x1b[B"); // Fetch Models row
 		screen.handleInput("\x1b[C");
 		expect(render(screen)).toContain("Fetch the model catalog"); // idle, no request fired
 		expect(vi.mocked(fetch)).not.toHaveBeenCalled();
@@ -421,28 +499,27 @@ describe("provider fixed layout", () => {
 
 	test("the selection path stays highlighted in the unfocused pane", () => {
 		const { screen } = editor();
-		screen.handleInput("\x1b[B"); // left selection: API Type
 		const focusedLeft = screen.render(120).join("\n");
-		expect(focusedLeft).toContain(theme.fg("accent", "API Type"));
-		expect(focusedLeft).toContain(theme.fg("text", "Authentication"));
+		expect(focusedLeft).toContain(theme.fg("accent", "API Auth"));
+		expect(focusedLeft).toContain(theme.fg("text", "Fetch Models"));
 		// The unfocused right pane previews with only its active row lit.
-		expect(focusedLeft).toContain(theme.fg("accent", "● openai-completions"));
-		expect(focusedLeft).toContain(theme.fg("dim", "○ anthropic-messages"));
+		expect(focusedLeft).toContain(theme.fg("accent", "baseUrl: "));
+		expect(focusedLeft).toContain(theme.fg("dim", "API Type: "));
 		screen.handleInput("\x1b[C"); // focus moves right
 		const focusedRight = screen.render(120).join("\n");
-		expect(focusedRight).toContain(theme.fg("accent", "API Type"));
-		expect(focusedRight).toContain(theme.fg("dim", "Authentication"));
-		expect(focusedRight).toContain(theme.fg("text", "○ anthropic-messages"));
+		expect(focusedRight).toContain(theme.fg("accent", "API Auth"));
+		expect(focusedRight).toContain(theme.fg("dim", "Fetch Models"));
+		expect(focusedRight).toContain(theme.fg("text", "API Type: "));
 		screen.dispose();
 	});
 
 	test("the left column scrolls with a position indicator", () => {
 		for (let index = 0; index < 14; index++) store.addModel("cpa", { id: `m${index}` });
 		const { screen } = editor();
-		expect(render(screen)).toContain("(1/20)");
+		expect(render(screen)).toContain("(1/19)");
 		expect(screen.render(120).length).toBe(20);
 		for (let index = 0; index < 3; index++) screen.handleInput("\x1b[B");
-		expect(render(screen)).toContain("(4/20)");
+		expect(render(screen)).toContain("(4/19)");
 		expect(screen.render(120).length).toBe(20);
 		screen.dispose();
 	});
@@ -458,7 +535,6 @@ describe("provider fixed layout", () => {
 			),
 		);
 		const { screen } = editor();
-		screen.handleInput("\x1b[B");
 		screen.handleInput("\x1b[B"); // Fetch Models row
 		screen.handleInput("\r"); // focus right and start the request
 		await vi.waitFor(() => expect(render(screen)).toContain("(1/15)"));
@@ -499,7 +575,7 @@ describe("provider fixed layout", () => {
 
 	test("Esc on a fresh model draft discards it in one step", () => {
 		const { screen } = editor();
-		for (let index = 0; index < 4; index++) screen.handleInput("\x1b[B"); // + Add Model
+		for (let index = 0; index < 3; index++) screen.handleInput("\x1b[B"); // + Add Model
 		screen.handleInput("\r"); // creates the draft and opens id editing
 		expect(render(screen)).toContain("New Model");
 		screen.handleInput("\x1b"); // cancels id editing → the empty draft is discarded
@@ -511,7 +587,7 @@ describe("provider fixed layout", () => {
 
 	test("Esc on a draft with fields asks before discarding", async () => {
 		const { screen } = editor();
-		for (let index = 0; index < 4; index++) screen.handleInput("\x1b[B");
+		for (let index = 0; index < 3; index++) screen.handleInput("\x1b[B");
 		screen.handleInput("\r");
 		screen.handleInput("k3"); // duplicate id
 		screen.handleInput("\r"); // the commit fails; the draft keeps the id

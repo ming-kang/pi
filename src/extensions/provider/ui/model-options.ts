@@ -1,9 +1,11 @@
-/** Scalar model settings: reasoning, input modalities, and cost rates. */
+/** Scalar model settings: reasoning, input modalities, cost rates, and the model-specific API override. */
 
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
-import { INPUT_TYPES, type InputType, truncate } from "../constants.ts";
+import { builtinDefaults } from "../catalog.ts";
+import { API_TYPES, INPUT_TYPES, type InputType, truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
 import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
+import { baseUrlHint, validateBaseUrlValue } from "./provider-fields.ts";
 import { isPrintableInput, renderInfoLine, renderKeyValueLine, renderPlainLine, ValueEditor } from "./value-row.ts";
 
 // -------------------------------------------------------------------------
@@ -13,7 +15,7 @@ import { isPrintableInput, renderInfoLine, renderKeyValueLine, renderPlainLine, 
 const REASONING_OPTIONS = [
 	{ label: "true", value: true },
 	{ label: "false", value: false },
-	{ label: "unset (default: false)", value: undefined },
+	{ label: "default (false)", value: undefined },
 ] as const;
 
 /** Radio sub-page for reasoning — consistent with the other nested model settings. */
@@ -114,7 +116,7 @@ export class InputTypesPane implements EditorPane {
 			}),
 		);
 		if (this.model.read().input === undefined) {
-			lines.push(renderInfoLine(theme, "unset — the runtime default is [text].", width));
+			lines.push(renderInfoLine(theme, "Not set — the runtime default is [text].", width));
 		}
 		if (this.error) lines.push(theme.fg("error", truncate(this.error, Math.max(10, width - 2))));
 		return lines;
@@ -307,6 +309,273 @@ export class CostPane implements EditorPane {
 		return [
 			rawKeyHint("type", "overwrite"),
 			keyHint("tui.select.confirm", "edit"),
+			keyHint("tui.select.cancel", "back"),
+		].join("  ");
+	}
+}
+
+// -------------------------------------------------------------------------
+// Model-Specific API
+// -------------------------------------------------------------------------
+
+/**
+ * Model-level baseUrl / API Type overrides. Unset rows show the inherited
+ * provider or built-in value dimmed; typing on a row (or editing the shown
+ * value) writes an override, clearing it returns to inheritance.
+ */
+export class ModelSpecificApiPane implements EditorPane {
+	readonly crumb = "Model-Specific API";
+	private readonly rows = ["baseUrl", "apiType"] as const;
+	private index = 0;
+	private editing: ValueEditor | undefined;
+	private error: string | undefined;
+	private focused = false;
+
+	private readonly host: EditorHost;
+	private readonly model: ModelHandle;
+	constructor(host: EditorHost, model: ModelHandle) {
+		this.host = host;
+		this.model = model;
+	}
+
+	/** Where an unset model field resolves from; undefined when nothing resolves it. */
+	private inherited(key: "api" | "baseUrl"): { value: string; via: "provider" | "built-in" } | undefined {
+		const provider = this.host.store.getProvider(this.host.providerId);
+		const providerValue = key === "api" ? provider?.api : provider?.baseUrl;
+		if (providerValue) return { value: providerValue, via: "provider" };
+		const current = this.model.read();
+		const effective = key === "api" ? this.host.effectiveApi(current) : this.host.effectiveBaseUrl(current);
+		return effective ? { value: effective, via: "built-in" } : undefined;
+	}
+
+	render(width: number): string[] {
+		const theme = this.host.theme;
+		const current = this.model.read();
+		const lines: string[] = [];
+		for (const [rowIndex, row] of this.rows.entries()) {
+			const active = rowIndex === this.index;
+			if (row === "baseUrl") {
+				const override = current.baseUrl;
+				const inherited = override ? undefined : this.inherited("baseUrl");
+				lines.push(
+					renderKeyValueLine(theme, {
+						keyLabel: "baseUrl",
+						valueText: override ?? inherited?.value ?? "not set",
+						unset: !override,
+						note: inherited ? `· ${inherited.via}` : undefined,
+						active,
+						paneFocused: this.focused,
+						editing: this.editing,
+						width,
+					}),
+				);
+			} else {
+				const override = current.api;
+				const inherited = override ? undefined : this.inherited("api");
+				lines.push(
+					renderKeyValueLine(theme, {
+						keyLabel: "API Type",
+						valueText: override ?? inherited?.value ?? "not set",
+						unset: !override,
+						note: inherited ? `· ${inherited.via}` : undefined,
+						active,
+						paneFocused: this.focused,
+						width,
+					}),
+				);
+			}
+		}
+		if (this.error) lines.push(theme.fg("error", truncate(this.error, Math.max(10, width - 2))));
+		const hint = baseUrlHint(this.host.effectiveApi(current));
+		if (hint) lines.push(renderInfoLine(theme, hint, width));
+		return lines;
+	}
+
+	handleInput(data: string): void {
+		const kb = this.host.keybindings;
+		if (this.editing) {
+			if (kb.matches(data, "tui.select.up") || kb.matches(data, "tui.select.down")) return;
+			this.editing.handleInput(data);
+			this.host.refresh();
+			return;
+		}
+		if (kb.matches(data, "tui.select.up")) {
+			this.index = this.index === 0 ? this.rows.length - 1 : this.index - 1;
+			this.host.refresh();
+			return;
+		}
+		if (kb.matches(data, "tui.select.down")) {
+			this.index = (this.index + 1) % this.rows.length;
+			this.host.refresh();
+			return;
+		}
+		if (kb.matches(data, "tui.select.cancel")) {
+			this.host.popPane();
+			return;
+		}
+		if (kb.matches(data, "tui.select.confirm")) {
+			if (this.rows[this.index] === "apiType") this.host.pushPane(new ModelApiTypePane(this.host, this.model));
+			else this.beginEdit("tweak");
+			return;
+		}
+		if (isPrintableInput(data)) {
+			if (this.rows[this.index] === "apiType") return;
+			this.beginEdit("overwrite", data);
+			return;
+		}
+	}
+
+	/** Tweak starts from the inherited value, so adjusting it writes the override directly. */
+	private beginEdit(mode: "overwrite" | "tweak", firstData?: string): void {
+		const current = this.model.read();
+		const base = current.baseUrl ?? this.inherited("baseUrl")?.value ?? "";
+		const editor = new ValueEditor({
+			onCommit: (value) => this.commit(value),
+			onCancel: () => {
+				this.editing = undefined;
+				this.error = undefined;
+				this.host.refresh();
+			},
+		});
+		this.editing = editor;
+		editor.focused = this.focused;
+		if (mode === "overwrite") editor.beginOverwrite(firstData);
+		else editor.beginTweak(base);
+		this.host.refresh();
+	}
+
+	private commit(raw: string): void {
+		const value = raw.trim();
+		if (value) {
+			const invalid = validateBaseUrlValue(value);
+			if (invalid) {
+				this.error = invalid;
+				this.host.refresh();
+				return;
+			}
+		}
+		this.error = undefined;
+		this.editing = undefined;
+		this.host.mutate(() => this.model.setField(["baseUrl"], value === "" ? DELETE : value));
+	}
+
+	setFocused(focused: boolean): void {
+		this.focused = focused;
+		if (this.editing) this.editing.focused = focused;
+	}
+
+	isEditing(): boolean {
+		return this.editing !== undefined;
+	}
+
+	hints(): string {
+		if (this.editing) return [keyHint("tui.input.submit", "save"), keyHint("tui.select.cancel", "cancel")].join("  ");
+		return [
+			rawKeyHint("type", "overwrite"),
+			keyHint("tui.select.confirm", "edit / open"),
+			keyHint("tui.select.cancel", "back"),
+		].join("  ");
+	}
+}
+
+/** Single-select model api: the inherited default plus every known API tag. Enter applies and returns. */
+export class ModelApiTypePane implements EditorPane {
+	readonly crumb = "API Type";
+	private index = 0;
+	private error: string | undefined;
+	private focused = false;
+
+	private readonly host: EditorHost;
+	private readonly model: ModelHandle;
+	constructor(host: EditorHost, model: ModelHandle) {
+		this.host = host;
+		this.model = model;
+
+		const current = model.read().api;
+		const options = this.options();
+		this.index = Math.max(
+			0,
+			options.findIndex((option) => option.value === current),
+		);
+	}
+
+	/** The api this model inherits when it defines none — provider first, then the built-in catalog. */
+	private fallback(): string | undefined {
+		const provider = this.host.store.getProvider(this.host.providerId);
+		return provider?.api ?? builtinDefaults(this.host.providerId, this.model.read().id, provider?.api).api;
+	}
+
+	/** value undefined = inherit; a custom api already stored is preserved and appended. */
+	private options(): { label: string; value: string | undefined }[] {
+		const current = this.model.read().api;
+		const providerApi = this.host.store.getProvider(this.host.providerId)?.api;
+		const fallback = this.fallback();
+		const inheritedLabel = providerApi
+			? `provider: ${providerApi}`
+			: fallback
+				? `built-in: ${fallback}`
+				: "no provider or built-in API";
+		const options: { label: string; value: string | undefined }[] = [{ label: inheritedLabel, value: undefined }];
+		for (const api of API_TYPES) options.push({ label: api, value: api });
+		if (current && !(API_TYPES as readonly string[]).includes(current))
+			options.push({ label: current, value: current });
+		return options;
+	}
+
+	render(width: number): string[] {
+		const theme = this.host.theme;
+		const current = this.model.read().api;
+		const lines = this.options().map((option, rowIndex) => {
+			const selected = option.value === current;
+			return renderPlainLine(theme, `${selected ? "●" : "○"} ${option.label}`, {
+				active: rowIndex === this.index,
+				paneFocused: this.focused,
+				dim: option.value === undefined,
+				width,
+			});
+		});
+		if (this.error) lines.push(theme.fg("error", truncate(this.error, Math.max(10, width - 2))));
+		return lines;
+	}
+
+	handleInput(data: string): void {
+		const kb = this.host.keybindings;
+		const options = this.options();
+		if (kb.matches(data, "tui.select.up")) {
+			this.index = this.index === 0 ? options.length - 1 : this.index - 1;
+			this.host.refresh();
+			return;
+		}
+		if (kb.matches(data, "tui.select.down")) {
+			this.index = (this.index + 1) % options.length;
+			this.host.refresh();
+			return;
+		}
+		if (kb.matches(data, "tui.select.cancel")) {
+			this.host.popPane();
+			return;
+		}
+		if (kb.matches(data, "tui.select.confirm") || kb.matches(data, "app.list.toggle")) {
+			const option = options[this.index]!;
+			if (option.value === undefined && !this.fallback()) {
+				this.error = "Nothing to inherit — pick an API.";
+				this.host.refresh();
+				return;
+			}
+			this.error = undefined;
+			this.host.mutate(() => this.model.setField(["api"], option.value ?? DELETE));
+			this.host.popPane();
+		}
+	}
+
+	setFocused(focused: boolean): void {
+		this.focused = focused;
+	}
+
+	hints(): string {
+		return [
+			rawKeyHint("↑↓", "move"),
+			keyHint("tui.select.confirm", "select"),
 			keyHint("tui.select.cancel", "back"),
 		].join("  ");
 	}

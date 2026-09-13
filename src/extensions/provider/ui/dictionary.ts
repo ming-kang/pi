@@ -164,7 +164,7 @@ export class DictPane implements EditorPane {
 			case "omitPick":
 				return [
 					renderInfoLine(theme, `${mode.key} · omitWhenOff`, width),
-					...["unset", "true", "false"].map((option, optionIndex) =>
+					...["default", "true", "false"].map((option, optionIndex) =>
 						renderPlainLine(theme, option, {
 							active: optionIndex === mode.index,
 							paneFocused: this.focused,

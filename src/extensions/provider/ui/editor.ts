@@ -1,7 +1,7 @@
 /**
  * Two-pane provider editor.
  *
- * Left column: Authentication / API Type / Fetch Models, the provider's
+ * Left column: API Auth / Fetch Models, the provider's
  * models (name → id → "New Model" fallback, one draft at a time), then
  * + Add Model and Delete Provider. Right column hosts the selected item's
  * field pane and sub-pane stack; both columns keep their own selection and
@@ -29,7 +29,7 @@ import { ConfirmPane, InfoPane } from "./dialogs.ts";
 import { FetchModelsPane } from "./fetch-models.ts";
 import { ModelFieldsPane } from "./model-fields.ts";
 import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
-import { ApiTypePane, AuthPane } from "./provider-fields.ts";
+import { ApiAuthPane } from "./provider-fields.ts";
 import { CURSOR, truncateMiddle, windowLines } from "./value-row.ts";
 
 export interface ProviderEditorOptions {
@@ -46,8 +46,7 @@ export interface ProviderEditorOptions {
 export type ProviderEditorResult = "back" | "deleted";
 
 type LeftItem =
-	| { kind: "authentication" }
-	| { kind: "apiType" }
+	| { kind: "apiAuth" }
 	| { kind: "fetch" }
 	| { kind: "separator" }
 	| { kind: "model"; modelId: string }
@@ -204,12 +203,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 	// ------------------------------------------------------------------
 
 	private rebuildLeftItems(): void {
-		const items: LeftItem[] = [
-			{ kind: "authentication" },
-			{ kind: "apiType" },
-			{ kind: "fetch" },
-			{ kind: "separator" },
-		];
+		const items: LeftItem[] = [{ kind: "apiAuth" }, { kind: "fetch" }, { kind: "separator" }];
 		for (const model of this.options.store.getModels(this.options.providerId)) {
 			items.push({ kind: "model", modelId: model.id });
 		}
@@ -245,8 +239,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 		const item = this.leftItems[this.leftIndex];
 		if (!item) return;
 		switch (item.kind) {
-			case "authentication":
-			case "apiType":
+			case "apiAuth":
 			case "model":
 			case "draft":
 				this.focusPane = "right";
@@ -352,11 +345,8 @@ export class ProviderEditorScreen implements Component, Focusable {
 		let text: string;
 		let note: string | undefined;
 		switch (item.kind) {
-			case "authentication":
-				text = "Authentication";
-				break;
-			case "apiType":
-				text = "API Type";
+			case "apiAuth":
+				text = "API Auth";
 				break;
 			case "fetch":
 				text = "Fetch Models";
@@ -431,10 +421,8 @@ export class ProviderEditorScreen implements Component, Focusable {
 
 	private createBasePane(item: LeftItem | undefined): EditorPane {
 		switch (item?.kind) {
-			case "authentication":
-				return new AuthPane(this.host, this.options.registry);
-			case "apiType":
-				return new ApiTypePane(this.host);
+			case "apiAuth":
+				return new ApiAuthPane(this.host, this.options.registry);
 			case "fetch":
 				return new FetchModelsPane(this.host);
 			case "model":
@@ -614,8 +602,12 @@ export class ProviderEditorScreen implements Component, Focusable {
 		const id = (draft.fields.id ?? "").trim();
 		if (!id) return "Model id is required.";
 		if (this.options.store.getModel(this.options.providerId, id)) return `Model "${id}" already exists.`;
-		if (!this.host.effectiveApi(draft.fields)) return "Cannot resolve an api — set API Type first.";
-		if (!this.host.effectiveBaseUrl(draft.fields)) return "Cannot resolve a baseUrl — set Authentication first.";
+		if (!this.host.effectiveApi(draft.fields)) {
+			return "Cannot resolve an api — set one under Model-Specific API or the provider's API Auth.";
+		}
+		if (!this.host.effectiveBaseUrl(draft.fields)) {
+			return "Cannot resolve a baseUrl — set one under Model-Specific API or the provider's API Auth.";
+		}
 		const fields = { ...draft.fields };
 		const model: ModelsJsonModel = { ...fields, id };
 		this.draft = undefined;
@@ -676,11 +668,8 @@ export class ProviderEditorScreen implements Component, Focusable {
 			if (item.kind === "separator") continue;
 			let label = "";
 			switch (item.kind) {
-				case "authentication":
-					label = "Authentication";
-					break;
-				case "apiType":
-					label = "API Type";
+				case "apiAuth":
+					label = "API Auth";
 					break;
 				case "fetch":
 					label = `Fetch Models${this.fetchStatus ? ` ${this.fetchStatus}` : ""}`;

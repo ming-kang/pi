@@ -103,9 +103,7 @@ export class FetchModelsPane implements EditorPane {
 				return [
 					renderInfoLine(
 						theme,
-						catalogUrl
-							? `Fetch the model catalog from ${catalogUrl}`
-							: "Set a baseUrl under Authentication first.",
+						catalogUrl ? `Fetch the model catalog from ${catalogUrl}` : "Set a baseUrl under API Auth first.",
 						width,
 					),
 				];

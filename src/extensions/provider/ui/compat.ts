@@ -106,7 +106,7 @@ export class CompatPane implements EditorPane {
 			lines.push(
 				renderKeyValueLine(theme, {
 					keyLabel: key,
-					valueText: value === undefined ? "unset" : scalarText(value),
+					valueText: value === undefined ? "not set" : scalarText(value),
 					active,
 					paneFocused: this.focused,
 					editing,
