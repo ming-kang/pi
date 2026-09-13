@@ -939,4 +939,25 @@ describe("terminal diagnostics and partial usage", () => {
 		expect(onSettled).toHaveBeenCalledOnce();
 		expect(onSettled.mock.calls[0]![1]).toBeUndefined();
 	});
+
+	it("stores the reported process exit code on the settled task", async () => {
+		const bg = service();
+		const item = job();
+		const call = bg.execute(item.execution);
+		item.completion.resolve({ result: result(), exitCode: 2, status: "failed" });
+		await call;
+		expect(bg.list().at(-1)?.exitCode).toBe(2);
+
+		const reaped = job();
+		const reapedCall = bg.execute(reaped.execution);
+		reaped.completion.resolve({ result: result(), exitCode: null, status: "cancelled" });
+		await reapedCall;
+		expect(bg.list().at(-1)?.exitCode).toBeNull();
+
+		const unreported = job();
+		const unreportedCall = bg.execute(unreported.execution);
+		unreported.completion.resolve({ result: result() });
+		await unreportedCall;
+		expect(bg.list().at(-1)?.exitCode).toBeUndefined();
+	});
 });

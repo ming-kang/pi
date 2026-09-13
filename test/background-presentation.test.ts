@@ -151,6 +151,23 @@ describe("background completion data contract", () => {
 		);
 	});
 
+	it("carries the process exit code through the completion snapshot", () => {
+		const failed = backgroundCompletionMessage(task({ status: "failed", exitCode: 2 }));
+		if (failed.details?.kind !== "bash") throw new Error("Expected shell");
+		expect(failed.details.exitCode).toBe(2);
+		// The persisted-message reader round-trips the field.
+		expect(readBackgroundCompletion(JSON.parse(JSON.stringify(failed.details)))).toMatchObject({ exitCode: 2 });
+
+		const reaped = backgroundCompletionMessage(task({ status: "cancelled", exitCode: null }));
+		if (reaped.details?.kind !== "bash") throw new Error("Expected shell");
+		expect(reaped.details.exitCode).toBeNull();
+
+		const unreported = backgroundCompletionMessage(task());
+		if (unreported.details?.kind !== "bash") throw new Error("Expected shell");
+		expect(unreported.details).not.toHaveProperty("exitCode");
+		expect(readBackgroundCompletion({ kind: "bash", version: 1, exitCode: "2" })).toBeUndefined();
+	});
+
 	it("records truncation when generic results or commands are bounded by supervision", async () => {
 		const service = new BackgroundService({ enabled: true });
 		try {

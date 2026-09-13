@@ -1030,6 +1030,14 @@ describe("BackgroundTasksMenu public service", () => {
 		await vi.advanceTimersByTimeAsync(0);
 		expect(h.render().join("\n")).toContain("1/3 ·");
 	});
+	it("shows the exit code in the bash detail status line", async () => {
+		const h = harness([
+			task("bash-done", { mode: "background", status: "completed", endedAt: Date.now(), exitCode: 0 }),
+		]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.render().join("\n")).toContain("completed · background · 0s ago · exit 0");
+	});
+
 	it("splits header counts into completed and failed, hiding zero segments", async () => {
 		const h = harness([
 			task("bg-run", { mode: "background", status: "running" }),

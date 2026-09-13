@@ -352,4 +352,17 @@ describe("terminal history restoration", () => {
 		zero.restoreHistory([savedTask()]);
 		expect(zero.list()).toEqual([]);
 	});
+
+	it("round-trips the process exit code through restored history", () => {
+		const bg = service();
+		bg.restoreHistory([savedTask("bash-exit", 20, { exitCode: 3 })]);
+		expect(bg.get("bash-exit").exitCode).toBe(3);
+		bg.restoreHistory([savedTask("bash-reaped", 30, { exitCode: null })]);
+		expect(bg.get("bash-reaped").exitCode).toBeNull();
+		bg.restoreHistory([savedTask("bash-unreported", 40)]);
+		expect(bg.get("bash-unreported").exitCode).toBeUndefined();
+		// Malformed values drop the record rather than corrupting the listing.
+		bg.restoreHistory([savedTask("bash-bad", 50, { exitCode: "3" as unknown as number })]);
+		expect(bg.list().find((task) => task.id === "bash-bad")).toBeUndefined();
+	});
 });

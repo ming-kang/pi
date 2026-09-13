@@ -55,6 +55,8 @@ export type BackgroundCompletionSnapshot = BackgroundCompletionBase &
 				command?: BackgroundText;
 				cwd?: string;
 				outputPath?: string;
+				/** Process exit code: a number, or null when signal-reaped. */
+				exitCode?: number | null;
 				output: BackgroundText;
 		  }
 		| {
@@ -78,6 +80,8 @@ export interface BackgroundTask {
 	command?: string;
 	commandTruncated?: boolean;
 	cwd?: string;
+	/** Process exit code (bash): a number, or null when signal-reaped. Absent while running or unreported. */
+	exitCode?: number | null;
 	outputPath?: string;
 	projection?: BackgroundProjection;
 	result?: AgentToolResult<unknown>;
@@ -90,6 +94,8 @@ export interface BackgroundCompletion<T> {
 	status?: BackgroundTerminalStatus;
 	/** Terminal diagnostic, stored independently of log slices and bounded to 4096 bytes. */
 	error?: string;
+	/** Process exit code (bash): a number, or null when signal-reaped. */
+	exitCode?: number | null;
 	/** Authoritative cumulative usage; overrides result.usage and any published snapshot. */
 	usage?: Usage;
 }

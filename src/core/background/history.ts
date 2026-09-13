@@ -120,6 +120,11 @@ export function parseBackgroundHistory(record: unknown): BackgroundTask | undefi
 			if (value !== undefined && typeof value !== "boolean") return undefined;
 			task[key] = value;
 		}
+		const exitCode = field(source, "exitCode");
+		if (exitCode !== undefined) {
+			if (exitCode !== null && (typeof exitCode !== "number" || !Number.isSafeInteger(exitCode))) return undefined;
+			task.exitCode = exitCode;
+		}
 		if (task.command !== undefined && task.command !== field(source, "command")) task.commandTruncated = true;
 		const projection = field(source, "projection");
 		if (projection !== undefined) {

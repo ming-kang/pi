@@ -158,6 +158,13 @@ export function readBackgroundCompletion(value: unknown): BackgroundCompletionSn
 		if (kind === "bash") {
 			const command = field(source, "command");
 			const outputPath = field(source, "outputPath");
+			const exitCode = field(source, "exitCode");
+			if (
+				exitCode !== undefined &&
+				exitCode !== null &&
+				(typeof exitCode !== "number" || !Number.isSafeInteger(exitCode))
+			)
+				return undefined;
 			// A clipped path would name a different file. Omit oversized paths intact.
 			if (outputPath !== undefined && typeof outputPath !== "string") return undefined;
 			snapshot = {
@@ -166,6 +173,7 @@ export function readBackgroundCompletion(value: unknown): BackgroundCompletionSn
 				shell: optionalString(source, "shell", 128),
 				command: command === undefined ? undefined : text(command, 8192),
 				cwd: optionalString(source, "cwd", 4096),
+				...(exitCode !== undefined ? { exitCode } : {}),
 				outputPath:
 					outputPath &&
 					!outputPath.includes("\0") &&
@@ -222,6 +230,7 @@ export function backgroundCompletionSnapshot(task: BackgroundTask): BackgroundCo
 							: { text: task.command, truncated: task.commandTruncated ?? false },
 					cwd: task.cwd,
 					outputPath: task.outputPath,
+					...(task.exitCode !== undefined ? { exitCode: task.exitCode } : {}),
 					output: task.projection?.shell?.output ?? output,
 				}
 			: {

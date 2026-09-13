@@ -311,6 +311,7 @@ export class BackgroundService implements BackgroundContext {
 			if (completion) {
 				storeResult(task, completion.result);
 				if (completion.error !== undefined) task.error = boundText(completion.error, 4096);
+				if (completion.exitCode !== undefined) task.exitCode = completion.exitCode;
 			}
 			if (failed) {
 				task.error = errorText(error);

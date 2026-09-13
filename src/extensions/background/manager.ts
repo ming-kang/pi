@@ -22,7 +22,7 @@ import { keyLabel } from "../../modes/interactive/components/keybinding-hints.ts
 import { STATUS_SPINNER_INTERVAL_MS, statusMarker } from "../../modes/interactive/components/status-marker.ts";
 import { getMarkdownTheme, highlightCode, type Theme, type ThemeColor } from "../../modes/interactive/theme/theme.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
-import { runtimeLabel, taskLabel, workerLabel } from "./task-view.ts";
+import { exitSuffix, runtimeLabel, taskLabel, workerLabel } from "./task-view.ts";
 import { firstCommandLine, formatAge } from "./text.ts";
 
 export type BackgroundManagerHost = Pick<BackgroundContext, "list" | "read" | "kill" | "subscribe" | "pin">;
@@ -393,7 +393,9 @@ export class BackgroundTasksMenu implements Component, Focusable {
 			values.map(
 				(value, index) => `${theme.fg("dim", padEnd(index === 0 ? label : "", DETAIL_LABEL_WIDTH))}${value}`,
 			);
-		const status = worker ? `${glyph} ${worker.status}` : `${glyph} ${task.status} · ${task.mode} · ${time}`;
+		const status = worker
+			? `${glyph} ${worker.status}`
+			: `${glyph} ${task.status} · ${task.mode} · ${time}${exitSuffix(task.exitCode, " · ")}`;
 		if (compact) {
 			const second = worker
 				? field("Worker", [truncateToWidth(clean(worker.label), valueWidth, "…")])

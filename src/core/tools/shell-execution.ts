@@ -177,6 +177,7 @@ export async function runShellCommand(
 		}
 		publish();
 		let failure: ShellFailure | undefined;
+		let exitCode: number | null | undefined;
 		try {
 			if (signal?.aborted) throw new Error("aborted");
 			const execution = operations.exec(context.command, context.cwd, {
@@ -186,7 +187,7 @@ export async function runShellCommand(
 				env: context.env,
 			});
 			managed?.control.accept();
-			const { exitCode } = await execution;
+			({ exitCode } = await execution);
 			if (exitCode === null && managed) {
 				failure = { status: "failed", error: "Command terminated without an exit code" };
 			} else if (exitCode !== 0 && exitCode !== null) {
@@ -209,6 +210,7 @@ export async function runShellCommand(
 		return {
 			status: failure?.status,
 			error: failure?.error,
+			...(exitCode !== undefined ? { exitCode } : {}),
 			result: {
 				content: [{ type: "text", text: failure ? `${text ? `${text}\n\n` : ""}${failure.error}` : text }],
 				details,
