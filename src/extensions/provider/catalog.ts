@@ -10,7 +10,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { getBuiltinModels, getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
 import type { ModelsJsonModel } from "../../core/model-config.ts";
-import { MAX_CANDIDATES } from "./constants.ts";
+import { MAX_CANDIDATES, plural } from "./constants.ts";
 
 export interface CatalogEntry {
 	providerId: string;
@@ -141,10 +141,6 @@ export interface FieldChange {
 const DEFAULT_CONTEXT_WINDOW = 128000;
 const DEFAULT_MAX_TOKENS = 16384;
 
-function plural(count: number, word: string): string {
-	return count === 1 ? word : `${word}s`;
-}
-
 function formatCostRates(cost: { input: number; output: number; cacheRead: number; cacheWrite: number }): string {
 	return `$${cost.input} / $${cost.output} in/out (cache $${cost.cacheRead} / $${cost.cacheWrite})`;
 }
@@ -208,8 +204,11 @@ export function computeFieldChanges(
 			field: "thinkingLevelMap",
 			checked: false,
 			applicable: sameApi,
-			currentText: current.thinkingLevelMap ? `${Object.keys(current.thinkingLevelMap).length} mapping(s)` : "unset",
-			referenceText: `${details.length} mapping(s)${sameApi ? "" : " (different api — view only)"}`,
+			currentText: current.thinkingLevelMap
+				? `${Object.keys(current.thinkingLevelMap).length} ${plural(Object.keys(current.thinkingLevelMap).length, "mapping")}`
+				: "unset",
+			// Cross-api maps are view-only; the preview pane annotates that.
+			referenceText: `${details.length} ${plural(details.length, "mapping")}`,
 			referenceDetails: details,
 		});
 	}
@@ -222,7 +221,7 @@ export function computeFieldChanges(
 			currentText: current.compat
 				? `${Object.keys(current.compat).length} ${plural(Object.keys(current.compat).length, "entry")}`
 				: "unset",
-			referenceText: `${details.length} ${plural(details.length, "entry")}${sameApi ? "" : " (different api — view only)"}`,
+			referenceText: `${details.length} ${plural(details.length, "entry")}`,
 			referenceDetails: details,
 		});
 	}

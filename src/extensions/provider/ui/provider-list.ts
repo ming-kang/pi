@@ -5,6 +5,7 @@ import type { KeybindingsManager } from "../../../core/keybindings.ts";
 import { DynamicBorder } from "../../../modes/interactive/components/dynamic-border.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
+import { plural } from "../constants.ts";
 import type { ModelsJsonStore } from "../store.ts";
 import { renderInfoLine, renderKeyValueLine, renderPlainLine, ValueEditor, windowLines } from "./value-row.ts";
 
@@ -85,10 +86,15 @@ export class ProviderListScreen implements Component, Focusable {
 					id === undefined
 						? undefined
 						: provider
-							? [`${String(provider.models?.length ?? 0)} models`, provider.api].filter(Boolean).join(" · ")
+							? [
+									`${String(provider.models?.length ?? 0)} ${plural(provider.models?.length ?? 0, "model")}`,
+									provider.api,
+								]
+									.filter(Boolean)
+									.join(" · ")
 							: "pending deletion";
 				rows.push(
-					renderPlainLine(theme, row === 0 ? "+ New Provider" : id!, {
+					renderPlainLine(theme, row === 0 ? "+ Add Provider" : id!, {
 						active: row === this.index,
 						paneFocused: this.active,
 						note,
@@ -108,8 +114,7 @@ export class ProviderListScreen implements Component, Focusable {
 				? [keyHint("tui.input.submit", "create"), keyHint("tui.select.cancel", "cancel")]
 				: [
 						rawKeyHint("type", "filter"),
-						keyHint("tui.select.up", "up"),
-						keyHint("tui.select.down", "down"),
+						rawKeyHint("↑↓", "move"),
 						keyHint("tui.select.confirm", "open"),
 						keyHint("tui.select.cancel", "close"),
 					];
@@ -152,7 +157,8 @@ export class ProviderListScreen implements Component, Focusable {
 		} else if (this.index === 0) {
 			this.mode = "newProvider";
 			this.error = undefined;
-			this.input.reset("");
+			// A fruitless search becomes the new id — type once, create once.
+			this.input.reset(this.query);
 		} else {
 			const id = this.filtered()[this.index - 1];
 			if (id) this.done({ kind: "open", providerId: id });

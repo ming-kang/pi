@@ -9,7 +9,7 @@ import type { RefreshCoordinator } from "../refresh.ts";
 import type { ModelsJsonStore } from "../store.ts";
 
 export interface EditorPane {
-	/** Breadcrumb segment appended to the provider/model path, e.g. "cost". */
+	/** Drill-down label shown at the top of the right column while this sub-pane is open, e.g. "cost". */
 	readonly crumb?: string;
 	/**
 	 * Scroll position for the editor's fixed-height right column. `top` and

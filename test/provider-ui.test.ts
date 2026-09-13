@@ -175,7 +175,9 @@ describe("provider modal lifecycle", () => {
 		await store.flush();
 		app.handleInput("\x1b[D");
 		app.handleInput("\x1b[A");
-		app.handleInput("\x1b[C");
+		app.handleInput("\x1b[C"); // → only focuses the fetch pane…
+		expect(render(app)).toContain("Fetch the model catalog");
+		app.handleInput("\r"); // …Enter starts the request
 		await vi.waitFor(() => expect(render(app)).toContain("No matching models"));
 		app.handleInput("\x1b");
 		app.handleInput("\x1b");
@@ -312,6 +314,60 @@ describe("provider editor interactions", () => {
 		expect(render(picker)).toContain(`› ${selected.key}`);
 	});
 
+	test("→ on an action row only focuses its pane; Enter activates it", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(JSON.stringify({ data: [{ id: "remote-1" }] }))),
+		);
+		const { screen } = editor();
+		for (let index = 0; index < 2; index++) screen.handleInput("\x1b[B"); // Fetch Models row
+		screen.handleInput("\x1b[C");
+		expect(render(screen)).toContain("Fetch the model catalog"); // idle, no request fired
+		expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+		screen.handleInput("\r");
+		await vi.waitFor(() => expect(render(screen)).toContain("remote-1"));
+		screen.handleInput("\x1b"); // discard results → left focus
+		screen.handleInput("\x1b[B");
+		screen.handleInput("\x1b[B"); // + Add Model
+		screen.handleInput("\x1b[C");
+		expect(render(screen)).toContain("Press Enter to create a model.");
+		expect(render(screen)).not.toContain("· draft");
+		screen.handleInput("\r"); // Enter on the focused info pane activates the row
+		expect(render(screen)).toContain("New Model");
+		screen.dispose();
+	});
+
+	test("Enter on the fetch results imports the highlighted row when nothing is checked", async () => {
+		const { host } = hostFixture();
+		const imported: string[][] = [];
+		host.importModels = async (models) => {
+			imported.push(models.map((model) => model.id));
+			return undefined;
+		};
+		const pane = new FetchModelsPane(host);
+		pane.setFocused(true);
+		pane.start();
+		await vi.waitFor(() => expect(render(pane)).toContain("new-model"));
+		pane.handleInput("\r");
+		await vi.waitFor(() => expect(imported).toEqual([["new-model"]]));
+		pane.dispose();
+	});
+
+	test("Enter on an already-added fetch row is a no-op, not a discard", async () => {
+		const { host } = hostFixture();
+		host.runFetch = async () => ({ ok: true, models: [{ id: "k3" }], truncated: false });
+		const importModels = vi.fn(async () => undefined);
+		host.importModels = importModels;
+		const pane = new FetchModelsPane(host);
+		pane.setFocused(true);
+		pane.start();
+		await vi.waitFor(() => expect(render(pane)).toContain("Added"));
+		pane.handleInput("\r");
+		expect(importModels).not.toHaveBeenCalled();
+		expect(host.popPane).not.toHaveBeenCalled(); // results stay open; only Esc discards
+		pane.dispose();
+	});
+
 	test("finishing an import after leaving its pane cannot pop another page", async () => {
 		const { host } = hostFixture();
 		let finish!: () => void;
@@ -421,8 +477,10 @@ describe("provider fixed layout", () => {
 		expect(list.render(120).length).toBe(20);
 		list.handleInput("zzz"); // filter to no match
 		expect(list.render(120).length).toBe(20);
-		list.handleInput("\r"); // + New Provider → id entry mode
+		list.handleInput("\r"); // + Add Provider → id entry mode, prefilled from the query
 		expect(list.render(120).length).toBe(20);
+		expect(stripAnsi(list.render(120).join("\n"))).toContain("zzz");
+		list.handleInput("\x15"); // ctrl+u clears the prefilled id
 		list.handleInput("\r"); // empty id → inline error, still fixed height
 		expect(stripAnsi(list.render(120).join("\n"))).toContain("non-empty");
 		expect(list.render(120).length).toBe(20);

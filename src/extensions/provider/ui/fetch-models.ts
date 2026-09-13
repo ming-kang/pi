@@ -18,7 +18,6 @@ type FetchState =
 	| { type: "results"; models: ProbeModel[]; truncated: boolean };
 
 export class FetchModelsPane implements EditorPane {
-	readonly crumb = "Fetch Models";
 	private state: FetchState = { type: "idle" };
 	private controller: AbortController | undefined;
 	private search: ValueEditor;
@@ -252,11 +251,15 @@ export class FetchModelsPane implements EditorPane {
 
 	private importChecked(): void {
 		if (this.state.type !== "results" || this.importing) return;
+		// Nothing checked: import the highlighted row, like a fuzzy picker. Only Esc discards.
+		let chosen: ProbeModel[];
 		if (this.checked.size === 0) {
-			this.exitResults();
-			return;
+			const row = this.rows()[this.index];
+			if (!row || row.added) return;
+			chosen = [row.model];
+		} else {
+			chosen = this.state.models.filter((model) => this.checked.has(model.id));
 		}
-		const chosen = this.state.models.filter((model) => this.checked.has(model.id));
 		const controller = new AbortController();
 		this.controller = controller;
 		this.importing = true;

@@ -132,7 +132,7 @@ export class ModelFieldsPane implements EditorPane {
 				const value = current.reasoning;
 				return renderKeyValueLine(theme, {
 					keyLabel: "reasoning",
-					valueText: `${value === undefined ? "false (default)" : String(value)} →`,
+					valueText: value === undefined ? "false (default)" : String(value),
 					unset: value === undefined,
 					active,
 					paneFocused: this.focused,
@@ -143,7 +143,7 @@ export class ModelFieldsPane implements EditorPane {
 				const summary = this.subpageSummary(row.key, current);
 				return renderKeyValueLine(theme, {
 					keyLabel: row.key,
-					valueText: `${summary.text} →`,
+					valueText: summary.text,
 					unset: summary.unset,
 					active,
 					paneFocused: this.focused,
@@ -167,7 +167,7 @@ export class ModelFieldsPane implements EditorPane {
 				const id = current.id;
 				const count = id ? matchBuiltinModels(id, this.host.effectiveApi(current)).length : 0;
 				return renderKeyValueLine(theme, {
-					valueText: "Use Built-in Data…",
+					valueText: "Use Built-in Data",
 					active,
 					paneFocused: this.focused,
 					note: id ? `· ${count} candidate${count === 1 ? "" : "s"}` : "· set id first",
@@ -451,7 +451,7 @@ export class ModelFieldsPane implements EditorPane {
 		if (this.editing) return [keyHint("tui.input.submit", "save"), keyHint("tui.select.cancel", "cancel")].join("  ");
 		return [
 			rawKeyHint("type", "overwrite"),
-			keyHint("tui.select.confirm", "edit / enter"),
+			keyHint("tui.select.confirm", "edit / open"),
 			keyHint("app.list.toggle", "toggle"),
 			keyHint("app.provider.switchPaneLeft", "focus left"),
 			keyHint("tui.select.cancel", this.model.isDraft ? "discard" : "back"),

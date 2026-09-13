@@ -173,8 +173,12 @@ export class ProviderEditorScreen implements Component, Focusable {
 			this.moveLeft(1);
 			return;
 		}
-		if (kb.matches(data, "app.provider.switchPaneRight") || kb.matches(data, "tui.select.confirm")) {
-			this.activateLeftItem();
+		if (kb.matches(data, "app.provider.switchPaneRight")) {
+			this.activateLeftItem("inspect");
+			return;
+		}
+		if (kb.matches(data, "tui.select.confirm")) {
+			this.activateLeftItem("activate");
 			return;
 		}
 		if (kb.matches(data, "tui.select.cancel")) this.done("back");
@@ -233,7 +237,11 @@ export class ProviderEditorScreen implements Component, Focusable {
 		this.refresh();
 	}
 
-	private activateLeftItem(): void {
+	/**
+	 * Enter activates the row; → only focuses its pane. Action rows therefore
+	 * never fire from a focus move, matching their InfoPane's "Press Enter".
+	 */
+	private activateLeftItem(via: "activate" | "inspect"): void {
 		const item = this.leftItems[this.leftIndex];
 		if (!item) return;
 		switch (item.kind) {
@@ -245,15 +253,22 @@ export class ProviderEditorScreen implements Component, Focusable {
 				this.topPane()?.setFocused(this._focused);
 				this.refresh();
 				return;
-			case "fetch": {
+			case "fetch":
 				this.focusPane = "right";
-				const pane = this.topPane();
-				if (pane instanceof FetchModelsPane) pane.start();
-				pane?.setFocused(this._focused);
+				if (via === "activate") {
+					const pane = this.topPane();
+					if (pane instanceof FetchModelsPane) pane.start();
+				}
+				this.topPane()?.setFocused(this._focused);
 				this.refresh();
 				return;
-			}
 			case "addModel": {
+				if (via === "inspect") {
+					this.focusPane = "right";
+					this.topPane()?.setFocused(this._focused);
+					this.refresh();
+					return;
+				}
 				if (!this.draft) {
 					this.draft = { fields: {} };
 					this.rebuildLeftItems();
@@ -269,6 +284,12 @@ export class ProviderEditorScreen implements Component, Focusable {
 				return;
 			}
 			case "deleteProvider": {
+				if (via === "inspect") {
+					this.focusPane = "right";
+					this.topPane()?.setFocused(this._focused);
+					this.refresh();
+					return;
+				}
 				if (this.host.isCurrentProvider()) {
 					this.host.notify(
 						"The current model's provider cannot be deleted; switch models with /model first.",
@@ -421,12 +442,18 @@ export class ProviderEditorScreen implements Component, Focusable {
 			case "draft":
 				return new ModelFieldsPane(this.host, this.draftHandle());
 			case "addModel":
-				return new InfoPane(this.host, [
-					"Press Enter to create a model.",
-					"A draft is kept in memory until its id is set; Esc on the draft discards it.",
-				]);
+				return new InfoPane(
+					this.host,
+					[
+						"Press Enter to create a model.",
+						"A draft is kept in memory until its id is set; Esc on the draft discards it.",
+					],
+					() => this.activateLeftItem("activate"),
+				);
 			case "deleteProvider":
-				return new InfoPane(this.host, ["Press Enter to delete this provider from models.json."]);
+				return new InfoPane(this.host, ["Press Enter to delete this provider from models.json."], () =>
+					this.activateLeftItem("activate"),
+				);
 			default:
 				return new InfoPane(this.host, []);
 		}
@@ -625,7 +652,8 @@ export class ProviderEditorScreen implements Component, Focusable {
 		const separator = theme.fg("border", " │ ");
 
 		const title = this.renderTitle(width);
-		const crumb = this.renderBreadcrumb(rightWidth);
+		// The crumb marks drill-down depth only; base rows are already named by the left selection.
+		const crumb = truncateToWidth(this.theme.fg("muted", this.topPane()?.crumb ?? ""), rightWidth);
 		const leftLines = this.renderLeft(leftWidth);
 		const pane = this.topPane();
 		const paneLines = pane ? windowLines(theme, pane.render(rightWidth), BODY_ROWS - 1, pane.scrollWindow?.()) : [];
@@ -655,7 +683,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 					label = "API Type";
 					break;
 				case "fetch":
-					label = `Fetch Models${this.fetchStatus ?? ""}`;
+					label = `Fetch Models${this.fetchStatus ? ` ${this.fetchStatus}` : ""}`;
 					break;
 				case "model": {
 					const model = this.options.store.getModel(this.options.providerId, item.modelId);
@@ -685,31 +713,31 @@ export class ProviderEditorScreen implements Component, Focusable {
 		return truncateToWidth(theme.fg("accent", theme.bold(title)), width);
 	}
 
-	private renderBreadcrumb(width: number): string {
-		const parts = [this.options.providerId];
-		const item = this.leftItems[this.leftIndex];
-		if (item?.kind === "model") {
-			const model = this.options.store.getModel(this.options.providerId, item.modelId);
-			if (model) parts.push(modelDisplayName(model));
-		} else if (item?.kind === "draft") {
-			parts.push(this.draft?.fields.name ?? this.draft?.fields.id ?? "New Model");
+	private renderFooter(width: number): string[] {
+		if (this.focusPane === "right") {
+			return [truncateToWidth(this.topPane()?.hints() ?? "", width)];
 		}
-		const crumb = this.topPane()?.crumb;
-		if (crumb) parts.push(crumb);
-		return truncateToWidth(this.theme.fg("muted", parts.join(" › ")), width);
+		const hints = [
+			rawKeyHint("↑↓", "move"),
+			keyHint("tui.select.confirm", this.leftActivateLabel()),
+			keyHint("app.provider.switchPaneRight", "focus right"),
+			keyHint("tui.select.cancel", "back"),
+		].join("  ");
+		return [truncateToWidth(hints, width)];
 	}
 
-	private renderFooter(width: number): string[] {
-		const hints =
-			this.focusPane === "left"
-				? [
-						rawKeyHint("↑↓", "move"),
-						keyHint("tui.select.confirm", "enter"),
-						keyHint("app.provider.switchPaneRight", "focus right"),
-						keyHint("tui.select.cancel", "back"),
-					].join("  ")
-				: (this.topPane()?.hints() ?? "");
-		return [truncateToWidth(hints, width)];
+	/** What Enter does to the selected left-column row, so the footer never lies about action rows. */
+	private leftActivateLabel(): string {
+		switch (this.leftItems[this.leftIndex]?.kind) {
+			case "fetch":
+				return "fetch";
+			case "addModel":
+				return "create";
+			case "deleteProvider":
+				return "delete";
+			default:
+				return "open";
+		}
 	}
 }
 

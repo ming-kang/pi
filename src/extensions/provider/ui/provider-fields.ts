@@ -18,7 +18,6 @@ import {
 
 /** baseUrl / apiKey rows with masking and credential-source hints. */
 export class AuthPane implements EditorPane {
-	readonly crumb = "Authentication";
 	private readonly rows = ["baseUrl", "apiKey"] as const;
 	private index = 0;
 	private editing: ValueEditor | undefined;
@@ -220,7 +219,6 @@ export class AuthPane implements EditorPane {
 
 /** Single-select provider api list; current value marked with ●. */
 export class ApiTypePane implements EditorPane {
-	readonly crumb = "API Type";
 	private index = 0;
 	private focused = false;
 	private error: string | undefined;

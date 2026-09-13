@@ -59,6 +59,12 @@ export function formatError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+/** `1 entry` / `2 entries` — handles the -y → -ies case. */
+export function plural(count: number, word: string): string {
+	if (count === 1) return word;
+	return word.endsWith("y") ? `${word.slice(0, -1)}ies` : `${word}s`;
+}
+
 /** Display truncate by characters (rows are width-truncated again at render time). */
 export function truncate(value: string, max: number): string {
 	if (value.length <= max) return value;

@@ -7,7 +7,7 @@ Minimalist visual editor for the `providers` record of `models.json` (`~/.pi/age
 `/provider` requires interactive TUI mode. The provider list and the editor share the same fixed frame height, so opening a provider never resizes the dialog.
 
 ```text
-/provider         Open the searchable provider list (+ New Provider)
+/provider         Open the searchable provider list (+ Add Provider; a fruitless search prefills the new id)
 /provider <id>    Jump straight into a provider editor
 ```
 
@@ -28,8 +28,8 @@ Fixed fields keep their `Key: ` prefix while editing, and the selected key and v
 |---|---|---|
 | `↑` / `↓` | `up` / `down` | Navigate rows (wraps at list boundaries) |
 | `←` | `app.provider.switchPaneLeft` (`left`) | Focus the left navigation pane |
-| `→` | `app.provider.switchPaneRight` (`right`) | Focus the right detail pane |
-| `Enter` | `enter` | Tweak a value or enter a sub-pane |
+| `→` | `app.provider.switchPaneRight` (`right`) | Focus the right detail pane (never activates an action row) |
+| `Enter` | `enter` | Tweak a value, enter a sub-pane, or activate the selected action row (Fetch Models, + Add Model, Delete Provider) |
 | Printable typing | | Overwrite the highlighted text or numeric value |
 | `Space` | `app.list.toggle` (`space`) | Toggle booleans and checklist items |
 | `Ctrl+X` | `app.provider.removeEntry` (`ctrl+x`) | Remove the selected compat or dictionary entry |
@@ -89,7 +89,7 @@ Accepted catalog shapes are `data[]`, `models[]`, or a bare array. Entries can p
 
 - **Authentication:** Credentials resolve through Pi's canonical resolution chain. Header-only resolved authentication is supported, and the default scheme follows the API type. Unsaved connection changes block discovery. Raw `$VAR` or `!command` placeholders are never transmitted unresolved; discovery aborts if configured credentials cannot be resolved. Known resolved credentials are redacted from server errors.
 - **Limits:** Discovery has a 10-second deadline including preparation and authentication waits. Responses are bounded to 4 MiB (error payloads are bounded to 4 KiB and displayed up to 400 characters). Catalogs are capped at 2,000 models. A response declaring `has_more` is marked partial; further pages are not fetched automatically.
-- **Checklist import:** Discovered models appear in a searchable checklist. Models already configured in `models.json` are marked `Added` and cannot be checked. Selecting models and confirming appends `{ id, name? }` records, saves immediately, and refreshes the provider runtime.
+- **Checklist import:** Discovered models appear in a searchable checklist. Models already configured in `models.json` are marked `Added` and cannot be checked. Confirming imports the checked models — or just the highlighted one when nothing is checked — as `{ id, name? }` records, saves immediately, and refreshes the provider runtime. `Esc` discards the results.
 
 ## Use Built-in Data
 

@@ -1,7 +1,14 @@
 /** /provider edits the current runtime's models.json through a native TUI. */
 
 import type { ExtensionAPI } from "../../core/extensions/types.ts";
-import { COMMAND_DESCRIPTION, COMMAND_NAME, formatError, NO_MODELS_FILE_WARNING, NO_UI_WARNING } from "./constants.ts";
+import {
+	COMMAND_DESCRIPTION,
+	COMMAND_NAME,
+	formatError,
+	NO_MODELS_FILE_WARNING,
+	NO_UI_WARNING,
+	plural,
+} from "./constants.ts";
 import { ModelsJsonStore } from "./store.ts";
 import { createProviderApp, createProviderErrorScreen } from "./ui/app.ts";
 
@@ -20,11 +27,14 @@ export default function providerExtension(pi: ExtensionAPI): void {
 			const items = load.store
 				.getProviderIds()
 				.filter((id) => id.toLowerCase().startsWith(query))
-				.map((id) => ({
-					value: id,
-					label: id,
-					description: `${String(load.store.getModels(id).length)} model(s)`,
-				}));
+				.map((id) => {
+					const count = load.store.getModels(id).length;
+					return {
+						value: id,
+						label: id,
+						description: `${String(count)} ${plural(count, "model")}`,
+					};
+				});
 			return items.length ? items : null;
 		},
 		handler: async (args, ctx) => {

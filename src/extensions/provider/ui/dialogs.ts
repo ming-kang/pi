@@ -5,26 +5,34 @@ import { keyHint } from "../../../modes/interactive/components/keybinding-hints.
 import type { EditorHost, EditorPane } from "./pane.ts";
 import { renderInfoLine, renderPlainLine } from "./value-row.ts";
 
-/** Static dim text lines (e.g. action-row explanations). */
+/** Static dim text lines (e.g. action-row explanations); optionally Enter-activatable. */
 export class InfoPane implements EditorPane {
-	readonly crumb: string | undefined;
 	private readonly lines: string[];
+	private readonly onConfirm: (() => void) | undefined;
 	private readonly host: EditorHost;
-	constructor(host: EditorHost, lines: string[], crumb?: string) {
+	constructor(host: EditorHost, lines: string[], onConfirm?: () => void) {
 		this.host = host;
 
 		this.lines = lines;
-		this.crumb = crumb;
+		this.onConfirm = onConfirm;
 	}
 	render(width: number): string[] {
 		return this.lines.map((line) => renderInfoLine(this.host.theme, line, width));
 	}
 	handleInput(data: string): void {
-		if (this.host.keybindings.matches(data, "tui.select.cancel")) this.host.popPane();
+		if (this.host.keybindings.matches(data, "tui.select.cancel")) {
+			this.host.popPane();
+			return;
+		}
+		// A focused InfoPane stands in for its left-column action row.
+		if (this.onConfirm && this.host.keybindings.matches(data, "tui.select.confirm")) this.onConfirm();
 	}
 	setFocused(): void {}
 	hints(): string {
-		return keyHint("tui.select.cancel", "back");
+		const hints: string[] = [];
+		if (this.onConfirm) hints.push(keyHint("tui.select.confirm", "proceed"));
+		hints.push(keyHint("tui.select.cancel", "back"));
+		return hints.join("  ");
 	}
 }
 
