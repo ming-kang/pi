@@ -1052,4 +1052,22 @@ describe("BackgroundTasksMenu public service", () => {
 		expect(frame).toContain("2 failed");
 		expect(frame).not.toContain("finished");
 	});
+	it("auto-cancels a pending kill confirmation after the timeout", async () => {
+		const h = harness([task("bash-1")]);
+		await vi.advanceTimersByTimeAsync(0);
+		h.menu.handleInput("k");
+		expect(h.render().join("\n")).toContain("Stop bash-1 (whole group)? y/N");
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(h.render().join("\n")).not.toContain("Stop bash-1");
+		h.menu.handleInput("y");
+		expect(h.host.kill).not.toHaveBeenCalled();
+	});
+	it("renders a resize notice instead of the layout in a tiny terminal", async () => {
+		const h = harness([task("bash-1")], 50, 8);
+		await vi.advanceTimersByTimeAsync(0);
+		const frame = h.render().join("\n");
+		expect(frame).toContain("Terminal too small for /bg");
+		expect(frame).toContain("close");
+		expect(frame).not.toContain("npm run build");
+	});
 });

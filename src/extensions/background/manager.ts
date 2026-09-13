@@ -70,6 +70,11 @@ const WIDE_MIN_WIDTH = 100;
 const LIST_MIN_WIDTH = 28;
 const LIST_MAX_WIDTH = 44;
 const NARROW_LIST_MAX_ROWS = 7;
+/** Below this the two-pane layout is unreadable; show a resize notice instead. */
+const MIN_RENDER_WIDTH = 60;
+const MIN_RENDER_HEIGHT = 12;
+/** A pending kill confirmation auto-cancels instead of capturing input forever. */
+const KILL_CONFIRM_TIMEOUT_MS = 5000;
 const DETAIL_LABEL_WIDTH = 10;
 const DETAIL_MAX_ROWS = 9;
 const COMMAND_MAX_ROWS = 3;
@@ -136,6 +141,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	private disposed = false;
 	private focus: "list" | "preview" = "list";
 	private pendingKill?: string;
+	private pendingKillTimer?: ReturnType<typeof setTimeout>;
 	private readonly positions = new Map<string, PreviewPosition>();
 	private readonly renderCache = new Map<string, string[]>();
 	private width: number;
@@ -170,9 +176,17 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		clearInterval(this.pollTimer);
 		clearInterval(this.animationTimer);
 		this.animationTimer = undefined;
+		this.clearPendingKill();
 		this.unsubscribe();
 		this.releasePin?.();
 		this.positions.clear();
+	}
+	private clearPendingKill(): void {
+		this.pendingKill = undefined;
+		if (this.pendingKillTimer) {
+			clearTimeout(this.pendingKillTimer);
+			this.pendingKillTimer = undefined;
+		}
 	}
 	private current(): Row | undefined {
 		return this.rows.find((row) => row.key === this.selected);
@@ -279,7 +293,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		if (this.pendingKill) {
 			// The one raw-key exception: a pending y/N confirmation captures the next input.
 			const id = this.pendingKill;
-			this.pendingKill = undefined;
+			this.clearPendingKill();
 			if (data === "y" || data === "Y") {
 				try {
 					this.feedback = this.options.host.kill(id)
@@ -301,7 +315,16 @@ export class BackgroundTasksMenu implements Component, Focusable {
 			}
 		} else if (kb.matches(data, "app.backgroundTasks.kill")) {
 			const row = this.current();
-			if (row) this.pendingKill = row.task.id;
+			if (row) {
+				this.clearPendingKill();
+				this.pendingKill = row.task.id;
+				this.pendingKillTimer = setTimeout(() => {
+					this.pendingKill = undefined;
+					this.pendingKillTimer = undefined;
+					if (!this.disposed) this.options.tui.requestRender();
+				}, KILL_CONFIRM_TIMEOUT_MS);
+				this.pendingKillTimer.unref?.();
+			}
 		} else if (kb.matches(data, "app.backgroundTasks.focusList")) {
 			this.focus = "list";
 		} else if (kb.matches(data, "app.backgroundTasks.focusPreview") || kb.matches(data, "tui.select.confirm")) {
@@ -609,6 +632,17 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	private emptyLine(width: number): string {
 		return this.centered(width, "No background tasks.");
 	}
+	/** Tiny-terminal fallback: the frame stays, the layout steps aside. */
+	private renderTooSmall(width: number, rows: number): string[] {
+		const { theme, keybindings } = this.options;
+		const rule = () => new DynamicBorder((text) => theme.fg("border", text)).render(width)[0] ?? "";
+		const message = `Terminal too small for /bg — resize to at least ${MIN_RENDER_WIDTH}×${MIN_RENDER_HEIGHT}.`;
+		const bodyHeight = Math.max(1, rows - 4);
+		const body = Array.from({ length: bodyHeight }, () => pad("", width));
+		body[Math.floor(bodyHeight / 2)] = this.centered(width, message);
+		const closeHint = pad(theme.fg("dim", `${keyLabel("tui.select.cancel", { keybindings })} close`), width);
+		return [rule(), ...body, rule(), closeHint, rule()];
+	}
 	private centered(width: number, message: string): string {
 		const leftPad = Math.max(0, Math.floor((width - visibleWidth(message)) / 2));
 		return pad(this.options.theme.fg("muted", `${" ".repeat(leftPad)}${message}`), width);
@@ -632,6 +666,10 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	}
 	render(width: number): string[] {
 		if (width < 1) return [];
+		const terminalRows = this.options.tui.terminal.rows;
+		if (width < MIN_RENDER_WIDTH || terminalRows < MIN_RENDER_HEIGHT) {
+			return this.renderTooSmall(width, terminalRows);
+		}
 		const wasWide = this.wide();
 		this.width = width;
 		if (!wasWide && this.wide()) this.queueTick();
