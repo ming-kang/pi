@@ -38,10 +38,7 @@ describe("compaction budgets on small windows", () => {
 		});
 		harnesses.push(harness);
 		harness.setResponses([
-			{
-				...fauxAssistantMessage(fauxToolCall("large_result", {}), { stopReason: "toolUse" }),
-				usage: usage(8010),
-			},
+			fauxAssistantMessage(fauxToolCall("large_result", {}), { stopReason: "toolUse" }),
 			(context, options) => {
 				expect(JSON.stringify(context.messages)).toContain("This is the PREFIX of a turn");
 				expect(options?.maxTokens).toBe(1600);
@@ -53,7 +50,8 @@ describe("compaction budgets on small windows", () => {
 				expect(request).not.toContain("big-request:");
 				expect(context.messages.some((message) => message.role === "toolResult")).toBe(true);
 				expect(request).toContain(output);
-				return { ...fauxAssistantMessage("Continued successfully."), usage: usage(8500) };
+				// Fresh provider usage must be checked even if the fixture completes within one millisecond.
+				return fauxAssistantMessage("Continued successfully.", { timestamp: Date.now() + 1 });
 			},
 		]);
 
@@ -64,6 +62,8 @@ describe("compaction budgets on small windows", () => {
 		const completion = harness.eventsOfType("compaction_end")[0];
 		expect(completion).toMatchObject({ reason: "threshold", aborted: false, willRetry: false });
 		expect(completion.result?.estimatedTokensAfter).toBeLessThan(12800);
+		const lastAssistant = harness.session.messages.filter((message) => message.role === "assistant").at(-1);
+		expect(lastAssistant?.usage.totalTokens).toBeLessThan(12800);
 		expect(harness.session.getLastAssistantText()).toBe("Continued successfully.");
 	});
 

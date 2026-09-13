@@ -563,7 +563,9 @@ describe("AgentSession compaction characterization", () => {
 		const order: string[] = [];
 		const harness = await createHarness({
 			models: [{ id: "faux-1", contextWindow: 2600, maxTokens: 100 }],
-			settings: { compaction: { enabled: true, triggerPercent: 84.62, keepRecentTokens: 1750 } },
+			// Keep the trigger between pre-compaction usage (~2.6K) and resumed usage (~2.2K),
+			// including the faux provider's system-prompt and tool-schema overhead.
+			settings: { compaction: { enabled: true, triggerPercent: 90, keepRecentTokens: 1750 } },
 			tools: [largeTool],
 			extensionFactories: [
 				(pi) => {
@@ -590,7 +592,8 @@ describe("AgentSession compaction characterization", () => {
 			(context) => {
 				order.push("provider");
 				resumedRequest = JSON.stringify(context.messages);
-				return fauxAssistantMessage("finished after compaction");
+				// Do not let a shared millisecond with compaction classify this fresh usage as stale.
+				return fauxAssistantMessage("finished after compaction", { timestamp: Date.now() + 1 });
 			},
 		]);
 
@@ -600,6 +603,9 @@ describe("AgentSession compaction characterization", () => {
 		await harness.session.prompt("run the large tool");
 
 		expect(order).toEqual(["compaction", "provider"]);
+		expect(harness.eventsOfType("compaction_end")[0].result?.tokensBefore).toBeGreaterThan(2340);
+		const lastAssistant = harness.session.messages.filter((message) => message.role === "assistant").at(-1);
+		expect(lastAssistant?.usage.totalTokens).toBeLessThan(2340);
 		expect(harness.eventsOfType("agent_start")).toHaveLength(agentStartsBefore + 1);
 		expect(harness.eventsOfType("compaction_start").at(-1)).toEqual({
 			type: "compaction_start",
@@ -631,7 +637,7 @@ describe("AgentSession compaction characterization", () => {
 		});
 		const harness = await createHarness({
 			models: [{ id: "faux-1", contextWindow: 2600, maxTokens: 100 }],
-			settings: { compaction: { enabled: true, triggerPercent: 84.62, keepRecentTokens: 1750 } },
+			settings: { compaction: { enabled: true, triggerPercent: 90, keepRecentTokens: 1750 } },
 			tools: [largeTool],
 			extensionFactories: [
 				(pi) => {
@@ -689,7 +695,7 @@ describe("AgentSession compaction characterization", () => {
 		};
 		const harness = await createHarness({
 			models: [{ id: "faux-1", contextWindow: 2600, maxTokens: 100 }],
-			settings: { compaction: { enabled: true, triggerPercent: 84.62, keepRecentTokens: 1750 } },
+			settings: { compaction: { enabled: true, triggerPercent: 90, keepRecentTokens: 1750 } },
 			tools: [terminatingTool],
 			extensionFactories: [
 				(pi) => {
