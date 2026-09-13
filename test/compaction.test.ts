@@ -331,6 +331,20 @@ describe("shouldCompact", () => {
 
 		expect(shouldCompact(95000, 100000, settings)).toBe(false);
 	});
+
+	it("should clamp triggerPercent to 20-95", () => {
+		const low: CompactionSettings = { enabled: true, keepRecentTokens: 20000, triggerPercent: 5 };
+		expect(shouldCompact(20001, 100000, low)).toBe(true);
+		expect(shouldCompact(20000, 100000, low)).toBe(false);
+
+		const high: CompactionSettings = { enabled: true, keepRecentTokens: 20000, triggerPercent: 150 };
+		expect(shouldCompact(95001, 100000, high)).toBe(true);
+		expect(shouldCompact(95000, 100000, high)).toBe(false);
+
+		const invalid: CompactionSettings = { enabled: true, keepRecentTokens: 20000, triggerPercent: Number.NaN };
+		expect(shouldCompact(85001, 100000, invalid)).toBe(true);
+		expect(shouldCompact(85000, 100000, invalid)).toBe(false);
+	});
 });
 
 describe("findCutPoint", () => {

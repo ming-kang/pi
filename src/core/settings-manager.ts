@@ -13,7 +13,7 @@ import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dis
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
 	keepRecentTokens?: number; // default: 20000
-	triggerPercent?: number; // default: 85 - auto-compaction triggers past this percentage of the context window
+	triggerPercent?: number; // default: 85, clamped to 20-95 - auto-compaction triggers past this percentage of the context window
 }
 
 export interface BranchSummarySettings {

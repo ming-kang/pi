@@ -133,6 +133,16 @@ export interface CompactionSettings {
 /** Default trigger line: compact once context exceeds 85% of the window. */
 export const DEFAULT_TRIGGER_PERCENT = 85;
 
+/** triggerPercent is clamped into this range: lower churns compaction too often, higher leaves too little room. */
+export const MIN_TRIGGER_PERCENT = 20;
+export const MAX_TRIGGER_PERCENT = 95;
+
+/** Clamp a configured triggerPercent into [MIN_TRIGGER_PERCENT, MAX_TRIGGER_PERCENT]. */
+export function clampTriggerPercent(value: number): number {
+	if (!Number.isFinite(value)) return DEFAULT_TRIGGER_PERCENT;
+	return Math.min(MAX_TRIGGER_PERCENT, Math.max(MIN_TRIGGER_PERCENT, value));
+}
+
 /** Summary budget reserve (bounds the summary maxTokens). Internal constant, not user-configurable. */
 export const SUMMARY_RESERVE_TOKENS = 16384;
 
@@ -238,11 +248,12 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 
 /**
  * Check if compaction should trigger based on context usage.
- * The trigger line is triggerPercent (default 85) percent of the context window.
+ * The trigger line is triggerPercent (default 85, clamped to 20-95) percent of the context window.
  */
 export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
 	if (!settings.enabled) return false;
-	return contextTokens > (contextWindow * (settings.triggerPercent ?? DEFAULT_TRIGGER_PERCENT)) / 100;
+	const triggerPercent = clampTriggerPercent(settings.triggerPercent ?? DEFAULT_TRIGGER_PERCENT);
+	return contextTokens > (contextWindow * triggerPercent) / 100;
 }
 
 // ============================================================================

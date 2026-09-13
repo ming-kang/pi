@@ -118,7 +118,7 @@ Version checks read the latest `@astralyn/pi` version from npm. Set `PI_SKIP_VER
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `compaction.enabled` | boolean | `true` | Enable auto-compaction |
-| `compaction.triggerPercent` | number | `85` | Percentage of the context window that triggers auto-compaction |
+| `compaction.triggerPercent` | number | `85` | Percentage of the context window that triggers auto-compaction (clamped to 20–95) |
 | `compaction.keepRecentTokens` | number | `20000` | Recent tokens to keep (not summarized) |
 
 ```json
@@ -131,7 +131,7 @@ Version checks read the latest `@astralyn/pi` version from npm. Set `PI_SKIP_VER
 }
 ```
 
-Note: upstream Pi's `compaction.reserveTokens` setting is not supported and is ignored when present; the trigger is always `triggerPercent`.
+Note: upstream Pi's `compaction.reserveTokens` setting is not supported and is ignored when present; the trigger is always `triggerPercent` (values outside 20–95 are clamped).
 
 ### Branch Summary
 

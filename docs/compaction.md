@@ -29,7 +29,7 @@ Auto-compaction triggers when:
 contextTokens > contextWindow × triggerPercent / 100
 ```
 
-By default, `triggerPercent` is 85 (configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`): compaction starts once context usage passes 85% of the model's context window — e.g. ~850K tokens on a 1M window or ~170K on a 200K window — leaving the remainder for the response and the compaction summary.
+By default, `triggerPercent` is 85 (configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`, accepted range 20–95 with out-of-range values clamped): compaction starts once context usage passes 85% of the model's context window — e.g. ~850K tokens on a 1M window or ~170K on a 200K window — leaving the remainder for the response and the compaction summary.
 
 > **Distribution note:** upstream Pi triggers at `contextWindow − reserveTokens` (a fixed 16384-token reserve by default), which on large windows delays compaction until ~98% usage. This distribution replaces that setting with the proportional `triggerPercent`. A `reserveTokens` key left over in an existing settings file is ignored; it no longer has any effect.
 
@@ -414,7 +414,7 @@ Configure compaction in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settin
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `enabled` | `true` | Enable auto-compaction |
-| `triggerPercent` | `85` | Percentage of the context window that triggers auto-compaction |
+| `triggerPercent` | `85` | Percentage of the context window that triggers auto-compaction (clamped to 20–95) |
 | `keepRecentTokens` | `20000` | Recent tokens to keep (not summarized) |
 
 Disable auto-compaction with `"enabled": false`. You can still compact manually with `/compact`.
