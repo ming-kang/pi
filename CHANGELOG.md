@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.85.2] - 2026-09-13
+
 ### Added
 
 - Added an optional `description` per Subagent task, used as the worker label in `/bg` rows, live cards, and report headings (derived from the prompt when omitted). Background completion notifications now end with per-outcome next-step guidance — naming the unfinished workers to re-delegate after a partial failure, or warning not to restart cancelled work unless asked.
