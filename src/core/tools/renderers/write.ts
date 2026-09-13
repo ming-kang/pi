@@ -17,6 +17,7 @@ import {
 	renderToolPath,
 	replaceTabs,
 	str,
+	stripThenRunHeader,
 	thenRunCommandOf,
 } from "../render-utils.ts";
 
@@ -146,9 +147,10 @@ function formatWriteResult(
 	},
 	theme: Theme,
 	expanded: boolean,
+	args?: unknown,
 ): string | undefined {
 	if (!result.isError) {
-		return formatThenRunSection(result, theme, expanded);
+		return formatThenRunSection(result, theme, expanded, args);
 	}
 	const output = result.content
 		.filter((c) => c.type === "text")
@@ -157,7 +159,7 @@ function formatWriteResult(
 	if (!output) {
 		return undefined;
 	}
-	return `\n${theme.fg("error", boundDisplayTail(output, theme, expanded))}`;
+	return `\n${theme.fg("error", boundDisplayTail(stripThenRunHeader(output, args), theme, expanded))}`;
 }
 
 export const writeRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> = {
@@ -186,7 +188,7 @@ export const writeRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rend
 		return component;
 	},
 	renderResult(result, options, theme, context) {
-		const output = formatWriteResult({ ...result, isError: context.isError }, theme, options.expanded);
+		const output = formatWriteResult({ ...result, isError: context.isError }, theme, options.expanded, context.args);
 		if (!output) {
 			const component = (context.lastComponent as Container | undefined) ?? new Container();
 			component.clear();

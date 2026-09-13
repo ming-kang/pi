@@ -73,7 +73,7 @@ export function createWriteToolDefinition(
 			_toolCallId,
 			{ path, content, then_run }: WriteToolInput,
 			signal?: AbortSignal,
-			_onUpdate?,
+			onUpdate?,
 			ctx?: ExtensionContext,
 		) {
 			const thenRun = then_run?.command ? then_run : undefined;
@@ -120,6 +120,13 @@ export function createWriteToolDefinition(
 					signal,
 					readFile: (filePath) => fsReadFile(filePath),
 					ctx,
+					onUpdate: onUpdate
+						? (sectionText) =>
+								onUpdate({
+									content: [...mutationResult.content, { type: "text" as const, text: sectionText }],
+									details: mutationResult.details,
+								})
+						: undefined,
 				});
 				const mutationText = mutationResult.content
 					.filter((block) => block.type === "text")

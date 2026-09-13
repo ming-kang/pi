@@ -164,7 +164,7 @@ export function createEditToolDefinition(
 		parameters: editSchema,
 		constrainedSampling: getExperimentalToolSampling(),
 		prepareArguments: prepareEditArguments,
-		async execute(_toolCallId, input: EditToolInput, signal?: AbortSignal, _onUpdate?, ctx?: ExtensionContext) {
+		async execute(_toolCallId, input: EditToolInput, signal?: AbortSignal, onUpdate?, ctx?: ExtensionContext) {
 			const { path, edits } = validateEditInput(input);
 			const thenRun = input.then_run?.command ? input.then_run : undefined;
 			const absolutePath = resolveToCwd(path, ctx?.cwd || cwd);
@@ -237,6 +237,13 @@ export function createEditToolDefinition(
 					signal,
 					readFile: ops.readFile,
 					ctx,
+					onUpdate: onUpdate
+						? (sectionText) =>
+								onUpdate({
+									content: [...mutationResult.content, { type: "text" as const, text: sectionText }],
+									details: mutationResult.details,
+								})
+						: undefined,
 				});
 				const mutationText = mutationResult.content
 					.filter((block) => block.type === "text")

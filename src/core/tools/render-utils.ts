@@ -104,32 +104,40 @@ export function boundDisplayTail(text: string, theme: Theme, expanded: boolean, 
 	return `${shown.join("\n")}\n${collapsedLinesHint(theme, hidden, "earlier", { total: lines.length })}`;
 }
 
+/** Strip the fused command header from an error message; the call card already shows `$ command`. */
+export function stripThenRunHeader(text: string, args: unknown): string {
+	const command = thenRunCommandOf(args);
+	if (!command) return text;
+	return text.replace(`[then_run] $ ${command}\n`, "");
+}
+
 /**
- * Display section for a fused then_run command: dimmed `$ cmd` plus the bounded
- * output tail. Skipped runs render their note as-is; failed runs throw from the
- * tool and render through the error path instead.
+ * Display section for a fused then_run command. The call card already shows the
+ * `$ command` line, so only the bounded output tail renders here; while the
+ * command is still streaming there are no details yet and the command is read
+ * from the call args instead. Skipped runs render their note as-is; failed runs
+ * throw from the tool and render through the error path instead.
  */
 export function formatThenRunSection(
 	result: { content: Array<{ type: string; text?: string }>; details?: unknown },
 	theme: Theme,
 	expanded: boolean,
+	args?: unknown,
 ): string | undefined {
 	const details = (result.details as { thenRun?: ThenRunDetails } | null | undefined)?.thenRun;
-	if (!details) return undefined;
 	const body = result.content
 		.slice(1)
 		.map((block) => (block.type === "text" ? (block.text ?? "") : ""))
 		.join("\n");
-	if (details.status === "skipped") {
+	if (details?.status === "skipped") {
 		return theme.fg("muted", body);
 	}
-	const prefix = `[then_run] $ ${details.command}\n`;
+	const command = details?.command ?? thenRunCommandOf(args);
+	if (!command || !body) return undefined;
+	const prefix = `[then_run] $ ${command}\n`;
 	const output = body.startsWith(prefix) ? body.slice(prefix.length) : body;
-	let text = theme.fg("muted", `$ ${details.command}`);
-	if (output) {
-		text += `\n${theme.fg("toolOutput", boundDisplayTail(replaceTabs(output), theme, expanded))}`;
-	}
-	return text;
+	if (!output) return undefined;
+	return theme.fg("toolOutput", boundDisplayTail(replaceTabs(output), theme, expanded));
 }
 
 /**

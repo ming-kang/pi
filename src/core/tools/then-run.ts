@@ -87,8 +87,10 @@ export async function executeThenRun(params: {
 	signal?: AbortSignal;
 	readFile: (path: string) => Promise<Buffer>;
 	ctx?: ExtensionContext;
+	/** Streams the model-facing then_run section text while the command runs. */
+	onUpdate?: (sectionText: string) => void;
 }): Promise<ThenRunOutcome> {
-	const { thenRun, absolutePath, cwd, shell, signal, readFile, ctx } = params;
+	const { thenRun, absolutePath, cwd, shell, signal, readFile, ctx, onUpdate } = params;
 	const header = `[then_run] $ ${thenRun.command}`;
 	const details: ThenRunDetails = { command: thenRun.command, status: "skipped", exitCode: null, truncated: false };
 
@@ -120,6 +122,15 @@ export async function executeThenRun(params: {
 		tempFilePrefix: "pi-bash",
 		timeout: thenRun.timeout,
 		signal,
+		onUpdate: onUpdate
+			? (partial) => {
+					const output = partial.content
+						.filter((block) => block.type === "text")
+						.map((block) => block.text)
+						.join("\n");
+					onUpdate(output ? `${header}\n${output}` : header);
+				}
+			: undefined,
 	});
 
 	const output = completion.result.content

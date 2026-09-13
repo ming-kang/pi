@@ -18,6 +18,7 @@ import {
 	formatThenRunSection,
 	renderToolPath,
 	str,
+	stripThenRunHeader,
 	thenRunCommandOf,
 } from "../render-utils.ts";
 
@@ -122,7 +123,14 @@ function formatEditResult(
 		if (!errorText || errorText === previewError) {
 			return undefined;
 		}
-		return theme.fg("error", boundDisplayTail(errorText, theme, expanded));
+		// The call card already shows the preview error and the `$ command` line;
+		// render only what they do not cover.
+		let display =
+			previewError && errorText.startsWith(previewError)
+				? errorText.slice(previewError.length).trimStart()
+				: errorText;
+		display = stripThenRunHeader(display, args);
+		return theme.fg("error", boundDisplayTail(display, theme, expanded));
 	}
 
 	const resultDiff = result.details?.diff;
@@ -130,7 +138,7 @@ function formatEditResult(
 		resultDiff && resultDiff !== previewDiff
 			? boundDiffBody(renderDiff(resultDiff, { filePath: rawPath ?? undefined }), expanded, theme)
 			: undefined;
-	const thenRunSection = formatThenRunSection(result, theme, expanded);
+	const thenRunSection = formatThenRunSection(result, theme, expanded, args);
 	if (diffBody && thenRunSection) {
 		return `${diffBody}\n\n${thenRunSection}`;
 	}

@@ -134,4 +134,28 @@ describe("then_run", () => {
 		expect(textBlocks(result)[0]).toContain("Successfully wrote to plain.txt");
 		expect(result.details).toBeUndefined();
 	});
+
+	it("streams command output through onUpdate while the command runs", async () => {
+		const dir = await createTempDir();
+		const write = createWriteTool(dir);
+		const partials: string[] = [];
+		const result = await write.execute(
+			"call-7",
+			{
+				path: "stream.txt",
+				content: "streamed\n",
+				then_run: { command: "cat stream.txt" },
+			},
+			undefined,
+			(partial) => {
+				partials.push(textBlocks(partial).join("\n"));
+			},
+		);
+
+		expect(partials.length).toBeGreaterThan(0);
+		const last = partials[partials.length - 1] ?? "";
+		expect(last).toContain("Successfully wrote to stream.txt");
+		expect(last).toContain("[then_run] $ cat stream.txt");
+		expect(textBlocks(result)[1]).toContain("streamed");
+	});
 });
