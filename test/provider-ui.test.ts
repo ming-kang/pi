@@ -177,7 +177,7 @@ describe("provider modal lifecycle", () => {
 		app.handleInput("\x1b[D");
 		app.handleInput("\x1b[A");
 		app.handleInput("\x1b[C"); // → only focuses the fetch pane…
-		expect(render(app)).toContain("Fetch the model catalog");
+		expect(render(app)).toContain("· from https://old.example");
 		app.handleInput("\r"); // …Enter starts the request
 		await vi.waitFor(() => expect(render(app)).toContain("No matching models"));
 		app.handleInput("\x1b");
@@ -400,7 +400,7 @@ describe("provider editor interactions", () => {
 		const { screen } = editor();
 		screen.handleInput("\x1b[B"); // Fetch Models row
 		screen.handleInput("\x1b[C");
-		expect(render(screen)).toContain("Fetch the model catalog"); // idle, no request fired
+		expect(render(screen)).toContain("· from https://old.example"); // idle, no request fired
 		expect(vi.mocked(fetch)).not.toHaveBeenCalled();
 		screen.handleInput("\r");
 		await vi.waitFor(() => expect(render(screen)).toContain("remote-1"));
@@ -412,6 +412,44 @@ describe("provider editor interactions", () => {
 		expect(render(screen)).not.toContain("· draft");
 		screen.handleInput("\r"); // Enter on the focused info pane activates the row
 		expect(render(screen)).toContain("New Model");
+		screen.dispose();
+	});
+
+	test("→ on the fetch row lights the idle action row; Enter on it starts the request", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(JSON.stringify({ data: [{ id: "remote-1" }] }))),
+		);
+		const { screen } = editor();
+		screen.handleInput("\x1b[B"); // Fetch Models row
+		const preview = screen.render(120).join("\n");
+		expect(preview).toContain("· from https://old.example");
+		expect(preview).not.toContain(theme.fg("accent", "Fetch Models ·")); // preview carries no marker
+		screen.handleInput("\x1b[C"); // focus the pane without firing
+		expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+		const focused = screen.render(120).join("\n");
+		expect(focused).toContain(theme.fg("accent", "Fetch Models")); // the idle row lights up
+		expect(focused).toContain("focus left");
+		screen.handleInput("\r"); // Enter on the idle row fires
+		await vi.waitFor(() => expect(render(screen)).toContain("remote-1"));
+		expect(vi.mocked(fetch)).toHaveBeenCalledOnce();
+		screen.dispose();
+	});
+
+	test("the fetch pane dead-ends cleanly without a baseUrl", async () => {
+		vi.stubGlobal("fetch", vi.fn());
+		store.setProviderField("cpa", ["baseUrl"], DELETE);
+		await store.flush();
+		const { screen } = editor();
+		screen.handleInput("\x1b[B"); // Fetch Models row
+		screen.handleInput("\r"); // left-row Enter is guarded too
+		expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+		const page = render(screen);
+		expect(page).toContain("Set a baseUrl under API Auth first.");
+		expect(page).not.toContain("enter fetch"); // no phantom action in the footer
+		screen.handleInput("\r"); // pane Enter dead-ends instead of erroring
+		expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+		expect(render(screen)).not.toContain("Enter retries");
 		screen.dispose();
 	});
 
@@ -497,19 +535,22 @@ describe("provider fixed layout", () => {
 		screen.dispose();
 	});
 
-	test("the selection path stays highlighted in the unfocused pane", () => {
+	test("only the focused pane carries the accent selection marker", () => {
 		const { screen } = editor();
 		const focusedLeft = screen.render(120).join("\n");
 		expect(focusedLeft).toContain(theme.fg("accent", "API Auth"));
-		expect(focusedLeft).toContain(theme.fg("text", "Fetch Models"));
-		// The unfocused right pane previews with only its active row lit.
-		expect(focusedLeft).toContain(theme.fg("accent", "baseUrl: "));
-		expect(focusedLeft).toContain(theme.fg("dim", "API Type: "));
+		// The unfocused right pane previews its content without any marker or accent.
+		expect(focusedLeft).toContain(theme.fg("text", "baseUrl: "));
+		expect(focusedLeft).toContain(theme.fg("text", "API Type: "));
+		expect(focusedLeft).not.toContain(theme.fg("accent", "baseUrl: "));
 		screen.handleInput("\x1b[C"); // focus moves right
 		const focusedRight = screen.render(120).join("\n");
-		expect(focusedRight).toContain(theme.fg("accent", "API Auth"));
-		expect(focusedRight).toContain(theme.fg("dim", "Fetch Models"));
-		expect(focusedRight).toContain(theme.fg("text", "API Type: "));
+		expect(focusedRight).toContain(theme.fg("accent", "baseUrl: "));
+		// The unfocused left column loses its marker and accent entirely.
+		expect(focusedRight).toContain(theme.fg("text", "API Auth"));
+		expect(focusedRight).not.toContain(theme.fg("accent", "API Auth"));
+		expect(focusedRight).not.toContain(theme.fg("accent", "Fetch Models"));
+		expect(focusedRight).toContain("focus left");
 		screen.dispose();
 	});
 

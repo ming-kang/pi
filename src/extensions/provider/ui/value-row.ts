@@ -90,28 +90,23 @@ export interface KeyValueLineOptions {
 }
 
 /**
- * Render one `key: value` row. The active row highlights key, colon, and
- * value together in accent — focused or not, so the unfocused pane keeps a
- * visible selection path. Other rows render plain while their pane is
- * focused and dim back when focus leaves; unset fallback values stay dim
- * even on the active row.
+ * Render one `key: value` row. The selection marker and accent appear only
+ * when the row is active AND its pane holds focus — the screen shows exactly
+ * one accent `›`, and that is where the keyboard goes. Unfocused panes keep
+ * their content in text color; unset fallback values stay dim even when lit.
  */
 export function renderKeyValueLine(theme: Theme, opts: KeyValueLineOptions): string {
-	const marker = opts.active ? `${CURSOR} ` : "  ";
+	const lit = opts.active && opts.paneFocused;
+	const marker = lit ? theme.fg("accent", `${CURSOR} `) : "  ";
 	const keyPrefix = opts.keyLabel === undefined ? "" : `${opts.keyLabel}: `;
-	const keyColor = opts.active ? "accent" : opts.paneFocused ? "text" : "dim";
+	const keyColor = lit ? "accent" : "text";
 	const note = opts.note ? theme.fg("dim", ` ${opts.note}`) : "";
 	if (opts.editing) {
-		const head = (opts.active ? theme.fg("accent", marker) : marker) + theme.fg(keyColor, keyPrefix);
 		const body = opts.editing.renderLine(Math.max(1, opts.width - visibleWidth(marker) - visibleWidth(keyPrefix)));
-		return truncateToWidth(head + theme.fg(keyColor, body) + note, opts.width);
+		return truncateToWidth(marker + theme.fg(keyColor, keyPrefix) + theme.fg(keyColor, body) + note, opts.width);
 	}
 	const valueColor = opts.unset ? "dim" : keyColor;
-	const line =
-		(opts.active ? theme.fg("accent", marker) : marker) +
-		theme.fg(keyColor, keyPrefix) +
-		theme.fg(valueColor, opts.valueText ?? "") +
-		note;
+	const line = marker + theme.fg(keyColor, keyPrefix) + theme.fg(valueColor, opts.valueText ?? "") + note;
 	return truncateToWidth(line, opts.width);
 }
 
@@ -125,13 +120,14 @@ export interface PlainLineOptions {
 	width: number;
 }
 
-/** Render a non-key row: action rows, checkboxes, radio options, hints. */
+/** Render a non-key row: action rows, checkboxes, radio options, hints. Same single-accent focus rule as renderKeyValueLine. */
 export function renderPlainLine(theme: Theme, text: string, opts: PlainLineOptions): string {
-	const marker = opts.active ? `${CURSOR} ` : "  ";
+	const lit = (opts.active ?? false) && (opts.paneFocused ?? false);
+	const marker = lit ? theme.fg("accent", `${CURSOR} `) : "  ";
 	const check = opts.checked === undefined ? "" : opts.checked ? "[x] " : "[ ] ";
-	const color = opts.dim ? "dim" : opts.active ? "accent" : opts.paneFocused ? "text" : "dim";
+	const color = opts.dim ? "dim" : lit ? "accent" : "text";
 	const note = opts.note ? theme.fg("dim", ` ${opts.note}`) : "";
-	const line = (opts.active ? theme.fg("accent", marker) : marker) + theme.fg(color, check + text) + note;
+	const line = marker + theme.fg(color, check + text) + note;
 	return truncateToWidth(line, opts.width);
 }
 

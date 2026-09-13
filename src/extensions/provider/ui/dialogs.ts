@@ -3,12 +3,13 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import type { EditorHost, EditorPane } from "./pane.ts";
-import { renderInfoLine, renderPlainLine } from "./value-row.ts";
+import { CURSOR, renderInfoLine, renderPlainLine } from "./value-row.ts";
 
 /** Static dim text lines (e.g. action-row explanations); optionally Enter-activatable. */
 export class InfoPane implements EditorPane {
 	private readonly lines: string[];
 	private readonly onConfirm: (() => void) | undefined;
+	private focused = false;
 	private readonly host: EditorHost;
 	constructor(host: EditorHost, lines: string[], onConfirm?: () => void) {
 		this.host = host;
@@ -17,6 +18,17 @@ export class InfoPane implements EditorPane {
 		this.onConfirm = onConfirm;
 	}
 	render(width: number): string[] {
+		// A confirmable InfoPane carries the pane's single focus marker; pure
+		// guard text offers no action, so it stays an unmarked hint.
+		if (this.focused && this.onConfirm) {
+			return this.lines.map((line, index) => {
+				if (index > 0) return renderInfoLine(this.host.theme, line, width);
+				return truncateToWidth(
+					this.host.theme.fg("accent", `${CURSOR} `) + this.host.theme.fg("text", line),
+					width,
+				);
+			});
+		}
 		return this.lines.map((line) => renderInfoLine(this.host.theme, line, width));
 	}
 	handleInput(data: string): void {
@@ -27,7 +39,9 @@ export class InfoPane implements EditorPane {
 		// A focused InfoPane stands in for its left-column action row.
 		if (this.onConfirm && this.host.keybindings.matches(data, "tui.select.confirm")) this.onConfirm();
 	}
-	setFocused(): void {}
+	setFocused(focused: boolean): void {
+		this.focused = focused;
+	}
 	hints(): string {
 		const hints: string[] = [];
 		if (this.onConfirm) hints.push(keyHint("tui.select.confirm", "proceed"));

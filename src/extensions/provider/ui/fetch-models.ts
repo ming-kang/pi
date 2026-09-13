@@ -9,7 +9,7 @@ import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybi
 import { truncate } from "../constants.ts";
 import { modelCatalogUrl, type ProbeModel } from "../probe.ts";
 import type { EditorHost, EditorPane } from "./pane.ts";
-import { renderInfoLine, renderPlainLine, type ScrollWindowInfo, ValueEditor } from "./value-row.ts";
+import { renderInfoLine, renderPlainLine, type ScrollWindowInfo, truncateMiddle, ValueEditor } from "./value-row.ts";
 
 type FetchState =
 	| { type: "idle" }
@@ -42,6 +42,7 @@ export class FetchModelsPane implements EditorPane {
 	/** Enter pressed on the left-column row (or on the idle pane): start the request. */
 	start(): void {
 		if (this.disposed || this.state.type === "loading" || this.importing) return;
+		if (!this.catalogUrl()) return; // the idle pane explains what to configure first
 		const controller = new AbortController();
 		this.controller = controller;
 		this.state = { type: "loading" };
@@ -78,6 +79,16 @@ export class FetchModelsPane implements EditorPane {
 		return new Set(this.host.store.getModels(this.host.providerId).map((model) => model.id));
 	}
 
+	/** URL the catalog would be fetched from; undefined while no baseUrl is configured. */
+	private catalogUrl(): string | undefined {
+		const baseUrl = this.host.store.getProvider(this.host.providerId)?.baseUrl;
+		try {
+			return baseUrl ? modelCatalogUrl(new URL(baseUrl), this.host.effectiveApi()).href : undefined;
+		} catch {
+			return undefined; // validated before fetching
+		}
+	}
+
 	private rows(): { model: ProbeModel; added: boolean }[] {
 		if (this.state.type !== "results") return [];
 		const existing = this.existingIds();
@@ -91,22 +102,20 @@ export class FetchModelsPane implements EditorPane {
 
 	render(width: number): string[] {
 		const theme = this.host.theme;
-		const baseUrl = this.host.store.getProvider(this.host.providerId)?.baseUrl;
-		let catalogUrl = baseUrl;
-		try {
-			if (baseUrl) catalogUrl = modelCatalogUrl(new URL(baseUrl), this.host.effectiveApi()).href;
-		} catch {
-			/* validated before fetching */
-		}
+		const catalogUrl = this.catalogUrl();
 		switch (this.state.type) {
 			case "idle":
-				return [
-					renderInfoLine(
-						theme,
-						catalogUrl ? `Fetch the model catalog from ${catalogUrl}` : "Set a baseUrl under API Auth first.",
-						width,
-					),
-				];
+				// A real action row, so → moving focus here has a visible effect.
+				return catalogUrl
+					? [
+							renderPlainLine(theme, "Fetch Models", {
+								active: true,
+								paneFocused: this.focused,
+								note: `· from ${truncateMiddle(catalogUrl, Math.max(10, width - 22))}`,
+								width,
+							}),
+						]
+					: [renderInfoLine(theme, "Set a baseUrl under API Auth first.", width)];
 			case "loading":
 				return [
 					renderInfoLine(theme, `Fetching ${catalogUrl ?? ""} …`, width),
@@ -179,7 +188,7 @@ export class FetchModelsPane implements EditorPane {
 		switch (this.state.type) {
 			case "idle":
 				if (kb.matches(data, "tui.select.confirm")) {
-					this.start();
+					this.start(); // guarded internally
 					return;
 				}
 				if (kb.matches(data, "tui.select.cancel")) {
@@ -321,7 +330,9 @@ export class FetchModelsPane implements EditorPane {
 			case "error":
 				return [keyHint("tui.select.confirm", "retry"), keyHint("tui.select.cancel", "back")].join("  ");
 			default:
-				return [keyHint("tui.select.confirm", "fetch"), keyHint("tui.select.cancel", "back")].join("  ");
+				return this.catalogUrl()
+					? [keyHint("tui.select.confirm", "fetch"), keyHint("tui.select.cancel", "back")].join("  ")
+					: keyHint("tui.select.cancel", "back");
 		}
 	}
 }

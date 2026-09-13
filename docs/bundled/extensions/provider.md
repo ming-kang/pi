@@ -18,7 +18,7 @@ Minimalist visual editor for the `providers` record of `models.json` (`~/.pi/age
 - **Left column:** Navigation list containing API Auth, Fetch Models, the provider's configured models (display name → `id` → `"New Model"` draft fallback; at most one draft at a time), `+ Add Model`, and `Delete Provider`.
 - **Right column:** Hosts the selected item's field pane and sub-pane stack.
 
-Both columns keep independent selection and scroll positions. The frame height is fixed: instead of resizing, each column scrolls inside a fixed window with a `(n/N)` position indicator (the `/model` selector convention), and pinned rows such as filter inputs and error lines stay on screen. The selected row stays highlighted in both panes as the selection path; only the pane with keyboard focus renders its other rows at full brightness while the unfocused pane's rows dim back.
+Both columns keep independent selection and scroll positions. The frame height is fixed: instead of resizing, each column scrolls inside a fixed window with a `(n/N)` position indicator (the `/model` selector convention), and pinned rows such as filter inputs and error lines stay on screen. Exactly one accent `›` selection marker is shown at any time — the pane holding keyboard focus; unfocused panes keep their content readable without any selection marker.
 
 Fixed fields keep their `Key: ` prefix while editing, and the selected key and value are highlighted together. Typing or pasting replaces the value; Enter opens the existing value for adjustment. Escape cancels that edit.
 
@@ -82,7 +82,7 @@ The active session model and its provider cannot be deleted or renamed; switch m
 
 ## Fetch Models
 
-For OpenAI-compatible APIs, discovery uses `GET {baseUrl}/models`. Anthropic Messages uses `{baseUrl}/v1/models`, without repeating an existing `/v1` suffix. The right pane shows the discovery URL.
+For OpenAI-compatible APIs, discovery uses `GET {baseUrl}/models`. Anthropic Messages uses `{baseUrl}/v1/models`, without repeating an existing `/v1` suffix. The pane's idle action row shows the discovery URL; `Enter` starts the request. Without a `baseUrl`, the pane instead explains what to configure and discovery cannot start.
 
 Accepted catalog shapes are `data[]`, `models[]`, or a bare array. Entries can provide `id` or `slug`, plus an optional `name`, `display_name`, or `displayName`. Discovery imports identifiers and labels; model capabilities remain explicit configuration or opt-in built-in data. Native Google catalog shapes are not supported.
 

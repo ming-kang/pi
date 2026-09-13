@@ -262,7 +262,6 @@ export class ApiAuthPane implements EditorPane {
 		return [
 			rawKeyHint("type", "overwrite"),
 			keyHint("tui.select.confirm", "edit / open"),
-			keyHint("app.provider.switchPaneLeft", "focus left"),
 			keyHint("tui.select.cancel", "back"),
 		].join("  ");
 	}

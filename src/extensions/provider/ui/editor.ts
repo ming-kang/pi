@@ -338,10 +338,11 @@ export class ProviderEditorScreen implements Component, Focusable {
 	private renderLeftItem(item: LeftItem, active: boolean, focused: boolean, width: number): string {
 		const theme = this.theme;
 		const store = this.options.store;
-		// The selected row stays accent in both focus states: it is the section
-		// the right column edits. Only an unfocused column dims its other rows.
-		const marker = active ? theme.fg("accent", `${CURSOR} `) : "  ";
-		const style = (text: string, dim = false) => theme.fg(active ? "accent" : dim || !focused ? "dim" : "text", text);
+		// Single-accent focus rule: the marker and accent exist only in the
+		// focused column; an unfocused column keeps its content plain.
+		const lit = active && focused;
+		const marker = lit ? theme.fg("accent", `${CURSOR} `) : "  ";
+		const style = (text: string, dim = false) => theme.fg(lit ? "accent" : dim ? "dim" : "text", text);
 		let text: string;
 		let note: string | undefined;
 		switch (item.kind) {
@@ -704,7 +705,11 @@ export class ProviderEditorScreen implements Component, Focusable {
 
 	private renderFooter(width: number): string[] {
 		if (this.focusPane === "right") {
-			return [truncateToWidth(this.topPane()?.hints() ?? "", width)];
+			// The editor owns the way-back hint so every pane's footer is consistent.
+			const hints = [this.topPane()?.hints() ?? "", keyHint("app.provider.switchPaneLeft", "focus left")]
+				.filter(Boolean)
+				.join("  ");
+			return [truncateToWidth(hints, width)];
 		}
 		const hints = [
 			rawKeyHint("↑↓", "move"),
