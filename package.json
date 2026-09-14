@@ -1,13 +1,13 @@
 {
 	"name": "@astralyn/pi",
-	"version": "0.85.2",
+	"version": "0.85.3",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"type": "module",
 	"piConfig": {
 		"configDir": ".pi"
 	},
 	"bin": {
-		"pi": "dist/cli.js"
+		"pi": "dist/bundle/cli.js"
 	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -17,7 +17,7 @@
 			"import": "./dist/index.js"
 		},
 		"./rpc-entry": {
-			"import": "./dist/rpc-entry.js"
+			"import": "./dist/bundle/rpc-entry.js"
 		},
 		"./client": {
 			"source": "./src/client/index.ts"
@@ -39,7 +39,8 @@
 	"scripts": {
 		"clean": "shx rm -rf dist",
 		"prebuild": "npm run check:installed-deps",
-		"build": "tsc -p tsconfig.build.json && npm run copy-assets && npm run build:bundle && shx chmod +x dist/cli.js dist/rpc-entry.js",
+		"build": "npm run build:unbundled && npm run build:bundle",
+		"build:unbundled": "tsc -p tsconfig.build.json && shx chmod +x dist/cli.js dist/rpc-entry.js && npm run copy-assets",
 		"build:bundle": "node scripts/build-bundle.mjs",
 		"copy-assets": "shx mkdir -p dist/modes/interactive/theme && shx cp src/modes/interactive/theme/*.json dist/modes/interactive/theme/ && shx mkdir -p dist/modes/interactive/assets && shx cp src/modes/interactive/assets/*.png dist/modes/interactive/assets/ && shx mkdir -p dist/core/export-html/vendor && shx cp src/core/export-html/template.html src/core/export-html/template.css src/core/export-html/template.js dist/core/export-html/ && shx cp src/core/export-html/vendor/*.js dist/core/export-html/vendor/",
 		"dev": "node scripts/run-source.mjs",
@@ -61,6 +62,7 @@
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {
+		"@earendil-works/chord": "0.85.1",
 		"@earendil-works/pi-agent-core": "0.85.1",
 		"@earendil-works/pi-ai": "0.85.1",
 		"@earendil-works/pi-tui": "0.85.1",
@@ -87,7 +89,6 @@
 		"@anthropic-ai/sandbox-runtime": "0.0.26",
 		"@anthropic-ai/sdk": "0.52.0",
 		"@biomejs/biome": "2.3.5",
-		"@earendil-works/chord": "0.85.1",
 		"@earendil-works/pi-client": "0.85.1",
 		"@earendil-works/pi-protocol": "0.85.1",
 		"@earendil-works/pi-server": "0.85.1",

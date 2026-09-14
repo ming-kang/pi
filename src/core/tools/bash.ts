@@ -21,16 +21,10 @@ import { type ManagedShellExecution, runShellCommand } from "./shell-execution.t
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type TruncationResult } from "./truncate.ts";
 
-export { MAX_BACKGROUND_OUTPUT_BYTES } from "./shell-execution.ts";
-
 const MAX_TIMEOUT_MS = 2_147_483_647;
-export const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
+const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
 
-/**
- * The one timeout rule, shared by this tool and the background extension so a
- * rejected timeout reads the same wherever it is caught.
- */
-export function resolveTimeoutMs(timeout: number | undefined): number | undefined {
+function resolveTimeoutMs(timeout: number | undefined): number | undefined {
 	if (timeout === undefined) return undefined;
 	if (!Number.isFinite(timeout) || timeout <= 0) {
 		throw new Error("Invalid timeout: must be a finite number of seconds");
@@ -81,8 +75,8 @@ export interface BashOperations {
 	 * @returns Promise resolving to exit code (null if killed)
 	 *
 	 * Error contract: reject with `new Error("aborted")` when aborted via `signal`,
-	 * and `new Error("timeout:<seconds>")` on timeout expiry — callers (including
-	 * the background extension) classify outcomes from these exact markers.
+	 * and `new Error("timeout:<seconds>")` on timeout expiry. The shared shell
+	 * execution pipeline classifies outcomes from these exact markers.
 	 */
 	exec: (
 		command: string,

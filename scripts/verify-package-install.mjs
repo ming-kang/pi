@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	existsSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
@@ -50,6 +59,10 @@ const smokeEnvironment = {
 	npm_config_fund: "false",
 	npm_config_update_notifier: "false",
 };
+// npm run exports the caller's allow-scripts policy as an environment option,
+// which newer npm versions reject for a different project. This installation
+// already disables all lifecycle scripts explicitly with --ignore-scripts.
+delete smokeEnvironment.npm_config_allow_scripts;
 
 function readInstalledPackage(packageName) {
 	const packageSegments = packageName.split("/");
@@ -88,8 +101,12 @@ try {
 	const installedPackage = readInstalledPackage("@astralyn/pi");
 	assertEqual(installedPackage.name, "@astralyn/pi", "installed package name");
 	assertEqual(installedPackage.version, expectedVersion, "installed package version");
-	assertEqual(installedPackage.bin?.pi, "dist/cli.js", "installed pi binary target");
-	assertEqual(installedPackage.exports?.["./rpc-entry"]?.import, "./dist/rpc-entry.js", "installed RPC export target");
+	assertEqual(installedPackage.bin?.pi, "dist/bundle/cli.js", "installed pi binary target");
+	assertEqual(
+		installedPackage.exports?.["./rpc-entry"]?.import,
+		"./dist/bundle/rpc-entry.js",
+		"installed RPC export target",
+	);
 	for (const [subpath, source] of [
 		["./client", "./src/client/index.ts"],
 		["./experimental/plugin", "./src/experimental/plugin.ts"],
@@ -111,10 +128,11 @@ try {
 		"CHANGELOG.md",
 		"LICENSE",
 		"README.md",
-		"dist/cli.js",
+		"dist/bundle/cli.js",
+		"dist/bundle/index.js",
 		"dist/index.d.ts",
 		"dist/index.js",
-		"dist/rpc-entry.js",
+		"dist/bundle/rpc-entry.js",
 		"dist/core/export-html/template.html",
 		...expectedExtensionEntrypoints,
 		"dist/modes/interactive/assets/clankolas.png",
@@ -147,23 +165,12 @@ try {
 		}
 	}
 
-	// The bin entrypoints must be the esbuild single-file bundles, not the
-	// tsc output (a few hundred bytes); otherwise cold starts regress to
-	// reading hundreds of files.
-	const bundledCliPath = join(packageDirectory, "dist", "cli.js");
-	const bundledCliSize = statSync(bundledCliPath).size;
-	if (bundledCliSize < 5 * 1024 * 1024) {
-		throw new Error(
-			`Installed dist/cli.js is only ${bundledCliSize} bytes; expected the esbuild single-file bundle.`,
-		);
-	}
-	if (!readFileSync(bundledCliPath, "utf8").startsWith("#!/usr/bin/env node")) {
-		throw new Error("Installed dist/cli.js is missing its shebang.");
-	}
-	for (const bundledPath of ["dist/rpc-entry.js", "dist/image-resize-worker.js"]) {
-		const requiredPath = join(packageDirectory, ...bundledPath.split("/"));
-		if (!existsSync(requiredPath) || !statSync(requiredPath).isFile()) {
-			throw new Error(`Installed package is missing ${bundledPath}.`);
+	const bundledCliPath = join(packageDirectory, "dist", "bundle", "cli.js");
+	for (const entrypoint of ["cli.js", "rpc-entry.js"]) {
+		if (
+			!readFileSync(join(packageDirectory, "dist", "bundle", entrypoint), "utf8").startsWith("#!/usr/bin/env node")
+		) {
+			throw new Error(`Installed bundled ${entrypoint} is missing its shebang.`);
 		}
 	}
 	for (const forbiddenPath of [
@@ -237,17 +244,32 @@ for (const subpath of ["@astralyn/pi/client", "@astralyn/pi/experimental/plugin"
 		stdio: "inherit",
 	});
 
+	for (const fixture of ["package-bundle-extension.ts", "package-bundle-runtime.mjs"]) {
+		copyFileSync(new URL(`../test/fixtures/${fixture}`, import.meta.url), join(installDirectory, fixture));
+	}
+	execFileSync(process.execPath, [join(installDirectory, "package-bundle-runtime.mjs")], {
+		cwd: installDirectory,
+		env: smokeEnvironment,
+		stdio: "inherit",
+		timeout: 60_000,
+		windowsHide: true,
+	});
+
 	const stableVersion = execFileSync(
 		process.execPath,
 		[bundledCliPath, "server", "--server-id", "invalid", "--version"],
 		{ cwd: installDirectory, encoding: "utf8", env: smokeEnvironment },
 	).trim();
 	assertEqual(stableVersion, expectedVersion, "published CLI ignores development-only server dispatch");
-	const rpcVersion = execFileSync(process.execPath, [join(packageDirectory, "dist", "rpc-entry.js"), "--version"], {
-		cwd: installDirectory,
-		encoding: "utf8",
-		env: smokeEnvironment,
-	}).trim();
+	const rpcVersion = execFileSync(
+		process.execPath,
+		[join(packageDirectory, "dist", "bundle", "rpc-entry.js"), "--version"],
+		{
+			cwd: installDirectory,
+			encoding: "utf8",
+			env: smokeEnvironment,
+		},
+	).trim();
 	assertEqual(rpcVersion, expectedVersion, "RPC entrypoint version");
 
 	console.log(`Verified clean installation of @astralyn/pi@${expectedVersion} from ${resolvedInstallSpec}.`);

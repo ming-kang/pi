@@ -4,6 +4,21 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.85.3] - 2026-09-14
+
+### Changed
+
+- Adopted upstream's Node bundling strategy: CLI/RPC entrypoints now live under `dist/bundle/`, share chunks, and load jiti/Babel and OAuth implementations on demand. Chord is an exact production dependency for imports retained by those bundles; its version is unchanged.
+- Replaced the bundle-size installation check with executable, external-extension, OAuth, Bedrock, and image-worker loading checks.
+
+### Fixed
+
+- Fixed bundled Bedrock requests failing to load the missing `bedrock-converse-stream.js` implementation.
+
+### Removed
+
+- Removed the unused distribution Extension API `ctx.getShellSettings()` and exported `ShellSettings` type.
+
 ## [0.85.2] - 2026-09-13
 
 ### Added

@@ -29,7 +29,7 @@ npm run test:isolated -- test/model-selector.test.ts
 npm run test:isolated -- test/model-selector.test.ts -t "configured save binding"
 ```
 
-The build emits the stable SDK and type declarations, then bundles the CLI, RPC entrypoint, and image-resize worker. Run the resulting CLI with `node dist/cli.js`. After deleting sources or changing build exclusions, run `npm run clean` before building.
+The build emits the stable SDK and type declarations, then bundles the Node entrypoints with shared chunks and separately loaded OAuth, Bedrock, and image-worker modules under `dist/bundle/`. Run the resulting CLI with `node dist/bundle/cli.js`. After deleting sources or changing build exclusions, run `npm run clean` before building.
 
 Installed dependency versions are checked before npm builds/tests and repository checks. For a complete suite, omit the isolated runner's arguments:
 

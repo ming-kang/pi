@@ -17,11 +17,11 @@ const packageJson = JSON.parse(
 ) as CodingAgentPackageJson;
 
 describe("package distribution entrypoints", () => {
-	test("uses the standalone package's modular output", () => {
-		expect(packageJson.bin.pi).toBe("dist/cli.js");
+	test("uses bundled executables and the modular SDK", () => {
+		expect(packageJson.bin.pi).toBe("dist/bundle/cli.js");
 		expect(packageJson.main).toBe("./dist/index.js");
 		expect(packageJson.exports["."].import).toBe("./dist/index.js");
-		expect(packageJson.exports["./rpc-entry"].import).toBe("./dist/rpc-entry.js");
+		expect(packageJson.exports["./rpc-entry"].import).toBe("./dist/bundle/rpc-entry.js");
 	});
 
 	// Regression for #9132: internal experimental entrypoints must not be published runtime exports.

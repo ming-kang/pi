@@ -3,9 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { BackgroundService } from "../src/core/background/service.ts";
 import { SUBAGENT_BACKGROUND_REJECTION } from "../src/core/background/types.ts";
 import type { ExtensionContext } from "../src/core/extensions/types.ts";
-import { type BashOperations, createBashToolDefinition, MAX_BACKGROUND_OUTPUT_BYTES } from "../src/core/tools/bash.ts";
+import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { OutputAccumulator } from "../src/core/tools/output-accumulator.ts";
 import { createPowerShellToolDefinition } from "../src/core/tools/powershell.ts";
+import { MAX_BACKGROUND_OUTPUT_BYTES } from "../src/core/tools/shell-execution.ts";
 import { runRead, runWait } from "../src/extensions/background/actions.ts";
 
 const services: BackgroundService[] = [];

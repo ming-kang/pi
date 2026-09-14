@@ -164,7 +164,6 @@ export type {
 	SetLabelHandler,
 	SetModelHandler,
 	SetThinkingLevelHandler,
-	ShellSettings,
 	TerminalInputHandler,
 	TerminalInputOptions,
 	// Events - Tool

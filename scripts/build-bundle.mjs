@@ -1,93 +1,229 @@
 #!/usr/bin/env node
 
-/**
- * Bundles the executable entrypoints into self-contained single files with
- * esbuild, overwriting the tsc output at dist/cli.js and dist/rpc-entry.js.
- * The tsc output remains the stable SDK/library surface (dist/index.js and
- * .d.ts); only the two bin entrypoints and the image-resize worker are
- * bundled, so cold starts read one file instead of hundreds.
- *
- * Native/WASM dependencies stay external and resolve from node_modules at
- * runtime. All other runtime assets (themes, export-html templates, docs)
- * stay external files handled by the copy-assets step and config.ts path
- * resolution, which already special-cases the dist layout.
- */
+// Adapted from upstream v0.85.1: consume installed pi-ai artifacts and keep
+// the stable SDK modular while bundling Node executables and their lazy modules.
 
-import { statSync } from "node:fs";
-import path from "node:path";
+import { chmodSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { isBuiltin } from "node:module";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import * as esbuild from "esbuild";
+import { build } from "esbuild";
 
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const srcDir = path.join(rootDir, "src");
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(scriptDir, "..");
+const codingAgentDir = repoRoot;
+const aiDistDir = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-ai")));
+const codingAgentDistDir = join(codingAgentDir, "dist");
+const bundleDir = join(codingAgentDistDir, "bundle");
+const banner = {
+	js: 'import { createRequire as __piCreateRequire } from "node:module"; const require = __piCreateRequire(import.meta.url);',
+};
+const allowedExternalPackages = new Set([
+	"@earendil-works/chord",
+	"@earendil-works/chord/bundler",
+	"@earendil-works/chord/context",
+	"@earendil-works/chord/delta",
+	"@earendil-works/chord/node",
+	"@silvia-odwyer/photon-node",
+	"@mariozechner/clipboard",
+	"jiti",
+	// Optional native accelerators. Their callers fall back to JavaScript when absent.
+	"bufferutil",
+	"utf-8-validate",
+	// Optional debug output coloring.
+	"supports-color",
+]);
 
-// pi-ai loads OAuth flow modules through variable dynamic imports that
-// bundlers cannot follow; registerBunOAuthFlows registers them statically.
-// The prelude must be the entry module so registration runs at startup.
-const ENTRY_PRELUDE = `#!/usr/bin/env node
-import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
-registerBunOAuthFlows();
-`;
-
-const bundledEntryPlugin = {
-	name: "pi-bundled-entry",
+const lazyJitiPlugin = {
+	name: "lazy-jiti-transform",
 	setup(build) {
-		build.onResolve({ filter: /^pi-bundled-entry:/ }, (args) => ({
-			path: args.path,
-			namespace: "pi-bundled-entry",
+		build.onResolve({ filter: /^jiti\/static$/ }, () => ({
+			namespace: "lazy-jiti",
+			path: "jiti/static",
 		}));
-		build.onLoad({ filter: /.*/, namespace: "pi-bundled-entry" }, (args) => ({
-			contents: `${ENTRY_PRELUDE}import ${JSON.stringify(`./${args.path.slice("pi-bundled-entry:".length)}`)};`,
-			resolveDir: srcDir,
-			loader: "ts",
+		build.onLoad({ filter: /.*/, namespace: "lazy-jiti" }, () => ({
+			contents: `
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+let createJitiImpl;
+
+export function createJiti(...args) {
+	createJitiImpl ??= require("jiti").createJiti;
+	return createJitiImpl(...args);
+}
+`,
+			loader: "js",
 		}));
 	},
 };
 
-const result = await esbuild.build({
-	entryPoints: [
-		{ in: "pi-bundled-entry:cli.ts", out: "cli" },
-		{ in: "pi-bundled-entry:rpc-entry.ts", out: "rpc-entry" },
-		{ in: "src/utils/image-resize-worker.ts", out: "image-resize-worker" },
-	],
-	outdir: "dist",
-	absWorkingDir: rootDir,
-	platform: "node",
-	format: "esm",
-	target: "node22",
-	bundle: true,
-	splitting: false,
-	metafile: true,
-	// src/core/extensions/loader.ts switches user-extension loading to
-	// embedded virtualModules when this is defined.
-	define: { PI_BUNDLED_NODE: "true" },
-	external: ["@silvia-odwyer/photon-node", "@mariozechner/clipboard", "@mariozechner/clipboard-*"],
-	plugins: [bundledEntryPlugin],
-	minifyWhitespace: true,
-	minifySyntax: true,
-	keepNames: true,
-	// Bundled CJS dependencies keep some require() calls that esbuild cannot
-	// rewrite to imports (e.g. cross-spawn requiring node builtins); provide a
-	// real require for the ESM output so the __require shim resolves them.
-	banner: {
-		js: 'import { createRequire as __piCreateRequire } from "node:module"; const require = __piCreateRequire(import.meta.url);',
+const httpsProxyAgentNamedExportPlugin = {
+	name: "https-proxy-agent-named-export",
+	setup(build) {
+		build.onResolve({ filter: /^https-proxy-agent$/ }, (args) => {
+			if (args.kind !== "dynamic-import") return undefined;
+			return {
+				namespace: "https-proxy-agent-named-export",
+				path: args.path,
+			};
+		});
+		build.onLoad(
+			{
+				filter: /^https-proxy-agent$/,
+				namespace: "https-proxy-agent-named-export",
+			},
+			() => ({
+				contents: 'export { HttpsProxyAgent } from "https-proxy-agent";',
+				loader: "js",
+				resolveDir: repoRoot,
+			}),
+		);
 	},
-	logLevel: "silent",
+};
+
+function commonBuildOptions() {
+	return {
+		absWorkingDir: repoRoot,
+		banner,
+		bundle: true,
+		define: { PI_BUNDLED_NODE: "true" },
+		external: [
+			"@earendil-works/chord",
+			"@silvia-odwyer/photon-node",
+			"@mariozechner/clipboard",
+			"@mariozechner/clipboard-*",
+		],
+		format: "esm",
+		legalComments: "none",
+		logLevel: "warning",
+		metafile: true,
+		minifySyntax: true,
+		minifyWhitespace: true,
+		platform: "node",
+		// The source uses jiti/static so Bun embeds its Babel transform. The Node
+		// package replaces it with a synchronous lazy require so jiti loads only
+		// when importing an extension; Babel remains deferred until a cache miss
+		// needs transformation.
+		plugins: [lazyJitiPlugin, httpsProxyAgentNamedExportPlugin],
+		sourcemap: false,
+		target: "node22.19",
+		// Do not apply the monorepo's source-oriented path aliases while bundling
+		// compiled output. Release builds must resolve the same package entries as
+		// an installed npm package.
+		tsconfigRaw: { compilerOptions: {} },
+	};
+}
+
+function validateExternalImports(metafiles) {
+	const unexpected = new Set();
+	for (const metafile of metafiles) {
+		for (const [inputPath, input] of Object.entries(metafile.inputs)) {
+			if (/^dist\/(?:client\/|experimental\/|cli\/experimental\/)/.test(inputPath.replaceAll("\\", "/"))) {
+				throw new Error(`Published entrypoints must not import development-only output: ${inputPath}`);
+			}
+			for (const imported of input.imports) {
+				if (!imported.external || isBuiltin(imported.path) || allowedExternalPackages.has(imported.path)) {
+					continue;
+				}
+				unexpected.add(imported.path);
+			}
+		}
+	}
+	if (unexpected.size > 0) {
+		throw new Error(`Bundle left unexpected external imports: ${Array.from(unexpected).sort().join(", ")}`);
+	}
+}
+
+function findContainingOutput(metafile, inputPath) {
+	for (const [outputPath, output] of Object.entries(metafile.outputs)) {
+		if (Object.keys(output.inputs).some((input) => resolve(repoRoot, input) === inputPath)) {
+			return resolve(repoRoot, outputPath);
+		}
+	}
+	throw new Error(`Could not locate bundled output containing ${relative(repoRoot, inputPath)}`);
+}
+
+function outputBytes(metafiles) {
+	return metafiles.reduce(
+		(total, metafile) =>
+			total + Object.values(metafile.outputs).reduce((subtotal, output) => subtotal + output.bytes, 0),
+		0,
+	);
+}
+
+for (const entry of [
+	join(codingAgentDistDir, "cli.js"),
+	join(codingAgentDistDir, "index.js"),
+	join(codingAgentDistDir, "rpc-entry.js"),
+	join(codingAgentDistDir, "utils", "image-resize-worker.js"),
+	join(aiDistDir, "api", "bedrock-converse-stream.js"),
+	join(aiDistDir, "auth", "oauth", "anthropic.js"),
+]) {
+	if (!existsSync(entry)) {
+		throw new Error(`Bundle input is missing: ${relative(repoRoot, entry)}. Run npm run build:unbundled first.`);
+	}
+}
+
+rmSync(bundleDir, { force: true, recursive: true });
+mkdirSync(bundleDir, { recursive: true });
+
+const mainResult = await build({
+	...commonBuildOptions(),
+	entryNames: "[name]",
+	entryPoints: {
+		cli: join(codingAgentDistDir, "cli.js"),
+		index: join(codingAgentDistDir, "index.js"),
+		"rpc-entry": join(codingAgentDistDir, "rpc-entry.js"),
+	},
+	outdir: bundleDir,
+	chunkNames: "chunks/[name]-[hash]",
+	splitting: true,
 });
 
-const developmentOnlyInput = Object.keys(result.metafile.inputs).find((input) =>
-	/^src\/(?:client\/|experimental\/|cli\/experimental\/)/.test(input.replaceAll("\\", "/")),
+const bedrockLoaderOutput = findContainingOutput(
+	mainResult.metafile,
+	join(aiDistDir, "api", "bedrock-converse-stream.lazy.js"),
 );
-if (developmentOnlyInput) {
-	throw new Error(`Published entrypoints must not import development-only source: ${developmentOnlyInput}`);
+const oauthLoaderOutput = findContainingOutput(mainResult.metafile, join(aiDistDir, "auth", "oauth", "load.js"));
+const imageResizeOutput = findContainingOutput(
+	mainResult.metafile,
+	join(codingAgentDistDir, "utils", "image-resize.js"),
+);
+if (dirname(bedrockLoaderOutput) !== dirname(oauthLoaderOutput)) {
+	throw new Error("Bedrock and OAuth lazy loaders were emitted into different directories");
 }
 
-for (const warning of result.warnings) {
-	console.warn(`esbuild warning: ${warning.text} (${warning.location?.file}:${warning.location?.line})`);
+// These implementations are reached through variable-specifier imports or a
+// worker URL, so the main bundle cannot follow them. Emit one self-contained
+// file per implementation beside the code that resolves it.
+const lazyResult = await build({
+	...commonBuildOptions(),
+	entryNames: "[name]",
+	entryPoints: {
+		anthropic: join(aiDistDir, "auth", "oauth", "anthropic.js"),
+		"bedrock-converse-stream": join(aiDistDir, "api", "bedrock-converse-stream.js"),
+		"github-copilot": join(aiDistDir, "auth", "oauth", "github-copilot.js"),
+		"image-resize-worker": join(codingAgentDistDir, "utils", "image-resize-worker.js"),
+		"kimi-coding": join(aiDistDir, "auth", "oauth", "kimi-coding.js"),
+		"openai-codex": join(aiDistDir, "auth", "oauth", "openai-codex.js"),
+		openrouter: join(aiDistDir, "auth", "oauth", "openrouter.js"),
+		radius: join(aiDistDir, "auth", "oauth", "radius.js"),
+		xai: join(aiDistDir, "auth", "oauth", "xai.js"),
+	},
+	outdir: dirname(bedrockLoaderOutput),
+	splitting: false,
+});
+
+const imageResizeWorkerOutput = resolve(dirname(bedrockLoaderOutput), "image-resize-worker.js");
+if (dirname(imageResizeOutput) !== dirname(imageResizeWorkerOutput)) {
+	throw new Error("Image resize implementation and worker were emitted into different directories");
 }
 
-const outputs = ["dist/cli.js", "dist/rpc-entry.js", "dist/image-resize-worker.js"];
-for (const output of outputs) {
-	const size = statSync(path.join(rootDir, output)).size;
-	console.log(`${output}: ${(size / 1024 / 1024).toFixed(2)} MB`);
-}
+validateExternalImports([mainResult.metafile, lazyResult.metafile]);
+chmodSync(join(bundleDir, "cli.js"), 0o755);
+chmodSync(join(bundleDir, "rpc-entry.js"), 0o755);
+
+const files = new Set([...Object.keys(mainResult.metafile.outputs), ...Object.keys(lazyResult.metafile.outputs)]).size;
+const mib = outputBytes([mainResult.metafile, lazyResult.metafile]) / (1024 * 1024);
+console.log(`Built ${relative(repoRoot, bundleDir)} (${files} files, ${mib.toFixed(1)} MiB)`);
