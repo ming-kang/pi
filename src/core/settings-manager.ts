@@ -8,20 +8,23 @@ import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
-import {
-	clampTriggerPercent,
-	DEFAULT_COMPACTION_SETTINGS,
-	DEFAULT_TRIGGER_PERCENT,
-	type CompactionSettings as ResolvedCompactionSettings,
-} from "./compaction/settings.ts";
+import type { CompactionSettings as CompactionSettingsPolicy } from "./compaction/compaction.ts";
+import { clampTriggerPercent, DEFAULT_TRIGGER_PERCENT, triggerPercentBudget } from "./compaction/settings.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 
 export interface CompactionModelOverride {
+	reserveTokens?: number;
 	keepRecentTokens?: number;
 }
 
+const DEFAULT_COMPACTION_TOKEN_SETTINGS: Required<CompactionModelOverride> = {
+	reserveTokens: 16384,
+	keepRecentTokens: 20000,
+};
+
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
+	reserveTokens?: number; // default: derived from triggerPercent for the model's context window
 	keepRecentTokens?: number; // default: 20000
 	triggerPercent?: number; // default: 85, clamped to 20-95 - auto-compaction triggers past this percentage of the context window
 	modelOverrides?: Record<string, CompactionModelOverride>; // exact "provider/modelId" keys
@@ -844,7 +847,7 @@ export class SettingsManager {
 	}
 
 	getCompactionEnabled(): boolean {
-		return this.settings.compaction?.enabled ?? DEFAULT_COMPACTION_SETTINGS.enabled;
+		return this.settings.compaction?.enabled ?? true;
 	}
 
 	setCompactionEnabled(enabled: boolean): void {
@@ -856,11 +859,11 @@ export class SettingsManager {
 		this.save();
 	}
 
-	/** Resolve a compaction token setting through the model override, then the ordinary setting. */
-	private getCompactionTokenSetting(
+	/** Resolve a configured compaction token setting through the model override, then the ordinary setting. */
+	private getConfiguredCompactionTokenSetting(
 		field: keyof CompactionModelOverride,
 		model?: Pick<Model<string>, "provider" | "id">,
-	): number {
+	): number | undefined {
 		const compaction = this.settings.compaction;
 		const ordinary = compaction?.[field];
 		if (ordinary !== undefined && (typeof ordinary !== "number" || !Number.isSafeInteger(ordinary) || ordinary < 0)) {
@@ -882,7 +885,18 @@ export class SettingsManager {
 				`Invalid compaction.modelOverrides["${modelKey}"].${field} setting: ${String(override)}. Expected a non-negative safe integer.`,
 			);
 		}
-		return override ?? ordinary ?? DEFAULT_COMPACTION_SETTINGS[field];
+		return override ?? ordinary;
+	}
+
+	private getCompactionTokenSetting(
+		field: keyof CompactionModelOverride,
+		model?: Pick<Model<string>, "provider" | "id">,
+	): number {
+		return this.getConfiguredCompactionTokenSetting(field, model) ?? DEFAULT_COMPACTION_TOKEN_SETTINGS[field];
+	}
+
+	getCompactionReserveTokens(model?: Pick<Model<string>, "provider" | "id">): number {
+		return this.getCompactionTokenSetting("reserveTokens", model);
 	}
 
 	getCompactionKeepRecentTokens(model?: Pick<Model<string>, "provider" | "id">): number {
@@ -893,11 +907,28 @@ export class SettingsManager {
 		return clampTriggerPercent(this.settings.compaction?.triggerPercent ?? DEFAULT_TRIGGER_PERCENT);
 	}
 
-	getCompactionSettings(model?: Pick<Model<string>, "provider" | "id">): ResolvedCompactionSettings {
+	/**
+	 * Resolve each token setting through model override, ordinary setting, then built-in default.
+	 *
+	 * Given the model's context window and no configured `reserveTokens`, the
+	 * reserve comes from `triggerPercent` instead of the fixed default.
+	 */
+	getCompactionSettings(
+		model?: Pick<Model<string>, "provider" | "id"> & { contextWindow?: number },
+	): CompactionSettingsPolicy {
+		const enabled = this.getCompactionEnabled();
+		const keepRecentTokens = this.getCompactionKeepRecentTokens(model);
+		const configuredReserve = this.getConfiguredCompactionTokenSetting("reserveTokens", model);
+		if (configuredReserve !== undefined || model?.contextWindow === undefined) {
+			return {
+				enabled,
+				reserveTokens: configuredReserve ?? DEFAULT_COMPACTION_TOKEN_SETTINGS.reserveTokens,
+				keepRecentTokens,
+			};
+		}
 		return {
-			enabled: this.getCompactionEnabled(),
-			keepRecentTokens: this.getCompactionKeepRecentTokens(model),
-			triggerPercent: this.getCompactionTriggerPercent(),
+			enabled,
+			...triggerPercentBudget(model.contextWindow, this.getCompactionTriggerPercent(), keepRecentTokens),
 		};
 	}
 

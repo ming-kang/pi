@@ -30,14 +30,14 @@ describe("ExtensionSelectorComponent", () => {
 		expect(onSelect).toHaveBeenCalledWith("B");
 	});
 
-	it("renders a subtitle under the title", () => {
+	it("renders a description under the title", () => {
 		const selector = new ExtensionSelectorComponent(
 			"Approve?",
 			["A"],
 			() => {},
 			() => {},
 			{
-				subtitle: "Context now 29% full",
+				description: "Context now 29% full",
 			},
 		);
 

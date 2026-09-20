@@ -9,7 +9,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - Adopted upstream v0.86.0. Cost-aware prompt-cache warming (`cacheWarming`, default `streaming`), with `/session` diagnostics, transcript notices, the `cache_warming_decision` extension event, and per-model `promptCache` lifetimes in `models.json`.
 - Added `/bug [description]`: a redacted diagnostics report with an optional transcript or model-written summary, uploaded to Radius or exported as a zip. Crashes are recorded in `~/.pi/agent/crashes.json`, announced once on the next start, and attached to the next report.
 - Added transcript-backed system prompt and tool updates, so instruction and tool changes survive resume and branch navigation while preserving cached prefixes. Sessions persist them as `system` messages, and compaction entries carry a complete prompt/tool checkpoint.
-- Added the public Radius model catalog for immediate and offline model selection, `ctx.modelRegistry.stream()` / `streamSimple()`, an unsubscribe function from `pi.on()`, `compat.allowedFallbackModels`, `retry.maxAgentDelayMs` (60s cap), and per-model `compaction.modelOverrides.keepRecentTokens`.
+- Added the public Radius model catalog for immediate and offline model selection, `ctx.modelRegistry.stream()` / `streamSimple()`, an unsubscribe function from `pi.on()`, `compat.allowedFallbackModels`, `retry.maxAgentDelayMs` (60s cap), and per-model `compaction.modelOverrides`.
 - Added a new `usage` session entry for model-attributed usage that never enters context; session totals, the footer, and `/session` account for it once.
 
 ### Changed
@@ -23,6 +23,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - Tool durations of at least one hour now render as hours, minutes, and seconds in the shared tool chrome.
 - This distribution's `/provider` compat editor drops the removed `deferredToolsMode` and `supportsToolReferences` fields and exposes the mid-conversation system-message and tool-change fields plus `allowedFallbackModels`.
 - `ctx.getContextSnapshot()` messages now begin with the transcript's `system` message, and `systemPrompt` is the prompt replayed from that transcript; BTW reuses the exact request prefix, including a prompt forced by `before_agent_start`.
+- `compaction.triggerPercent` is now a conversion in front of upstream's `reserveTokens` rather than a separate policy: the trigger line is unchanged, `compaction.reserveTokens` works again — globally and per model — and takes precedence, and summary output limits follow upstream's reserve instead of a quarter of the trigger. `prepareCompaction()` takes two arguments again.
+- Selector and timer lifecycles follow upstream again: the session and tree selectors no longer refresh relative timestamps while open, and countdown timers tick on an interval. Confirmation dialogs render their message through upstream's selector `description` option.
 
 ### Fixed
 

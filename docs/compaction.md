@@ -26,12 +26,12 @@ Both use the same structured summary format and track file operations cumulative
 Auto-compaction triggers when:
 
 ```
-contextTokens > contextWindow × triggerPercent / 100
+contextTokens > contextWindow − reserveTokens
 ```
 
-By default, `triggerPercent` is 85 (configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`, accepted range 20–95 with out-of-range values clamped): compaction starts once context usage passes 85% of the model's context window — e.g. ~850K tokens on a 1M window or ~170K on a 200K window. Non-finite SDK values fall back to 85. Retention and summary budgets also shrink for smaller windows or lower trigger percentages, as described below.
+`reserveTokens` comes from `triggerPercent` (default 85, accepted range 20–95 with out-of-range values clamped, configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`): the reserve is whatever is left above that percentage of the active model's context window. Compaction therefore starts once usage passes 85% of the window — ~850K tokens on a 1M window, ~170K on a 200K window. Non-finite values fall back to 85.
 
-> **Distribution note:** upstream Pi triggers at `contextWindow − reserveTokens` (a fixed 16384-token reserve by default), which on large windows delays compaction until ~98% usage. This distribution replaces that setting with the proportional `triggerPercent`. A `reserveTokens` key left over in an existing settings file is ignored; it no longer has any effect.
+> **Distribution note:** upstream Pi's default is a fixed 16384-token reserve, which on large windows delays compaction until ~98% usage. This distribution derives the reserve from `triggerPercent` instead. Setting `compaction.reserveTokens` explicitly — globally or per model — still wins and restores upstream's fixed-reserve behavior for that model.
 
 During a multi-turn agent run, Pi checks this threshold after tools finish and their results are appended, before starting the next assistant response. If the threshold is crossed, Pi compacts inside the same agent run and resumes with the summary and retained messages. It skips this between-turn check when the completed tool batch terminates the run and no queued message requires another response. Pi also checks the threshold before a new user prompt and after a low-level agent run ends.
 
@@ -41,17 +41,15 @@ You can also trigger manually with `/compact [instructions]`, where optional ins
 
 ### How It Works
 
-1. **Find cut point**: Walk backwards from newest message until the effective retention target is reached: `keepRecentTokens` (default 20k), capped at half the configured trigger's token budget
+1. **Find cut point**: Walk backwards from newest message until the effective retention target is reached: `keepRecentTokens` (default 20k), capped at half the trigger line when the reserve comes from `triggerPercent`
 2. **Extract messages**: Collect messages from the previous kept boundary (or session start) up to the cut point
 3. **Generate summary**: Call LLM to summarize with structured format, passing the previous summary as iterative context when present
 4. **Append entry**: Save `CompactionEntry` with summary and `firstKeptEntryId`
 5. **Rebuilds context**: Session rebuilds the context for the next request, using summary + messages from `firstKeptEntryId` onwards
 
-For both automatic and manual compaction, the model's context window limits the recent-message target to half the trigger budget. The internal summary reserve is capped at one quarter of that budget, up to its existing 16384-token maximum. History summaries can use 80% of this reserve and split-turn prefix summaries can use 50%; each is also limited by the model's output cap. This leaves room below the trigger for summary framing and continued work instead of retaining the entire context at a low threshold. The configured settings are not rewritten.
+Retaining more than half the trigger line would leave the compacted context close to the line again, so a derived reserve also caps the recent-message target at half that line. History summaries can use 80% of `reserveTokens` and split-turn prefix summaries can use 50%; each is also limited by the model's output cap, which is the binding limit whenever the derived reserve is large. These are budget targets, not hard bounds on retained content: whole messages and tool-call/result groups remain intact and can exceed the target.
 
-For example, a 64K window with `triggerPercent: 20` triggers above 12.8K tokens. Its recent-message target is at most 6.4K, with output limits of 2560 tokens for a history summary and 1600 for a split-turn prefix summary. Default 200K and 1M windows keep the existing retention and summary budgets. These are budget targets, not hard bounds on retained content: whole messages and tool-call/result groups remain intact and can exceed the target.
-
-SDK callers using `prepareCompaction()` directly should pass `model.contextWindow` as the third argument to apply the same retention cap. The two-argument form preserves the configured retention target when the window is unknown.
+For example, a 64K window with `triggerPercent: 20` triggers above 12.8K tokens, reserves the remaining 51.2K, and retains at most 6.4K of recent messages. The configured settings are not rewritten; `compaction.keepRecentTokens` keeps its configured value for models whose window is unknown.
 
 ```
 Before compaction:
@@ -421,15 +419,14 @@ Configure compaction in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settin
 |---------|---------|-------------|
 | `enabled` | `true` | Enable auto-compaction |
 | `triggerPercent` | `85` | Percentage of the context window that triggers auto-compaction (clamped to 20–95) |
-| `keepRecentTokens` | `20000` | Recent-message retention target, capped at half the trigger token budget when the model window is known |
+| `reserveTokens` | derived | Fixed reserve below the window; overrides `triggerPercent` for the models it applies to |
+| `keepRecentTokens` | `20000` | Recent-message retention target, capped at half the trigger line when the reserve is derived |
 
 Disable auto-compaction with `"enabled": false`. You can still compact manually with `/compact`.
 
-Upstream Pi's `compaction.reserveTokens` setting does not exist here and is ignored when present; the trigger is always the percentage above.
-
 ### Per-model overrides
 
-Use `compaction.modelOverrides` to tune the retention target per model:
+Use `compaction.modelOverrides` to tune the reserve and the retention target per model:
 
 ```json
 {
@@ -437,6 +434,7 @@ Use `compaction.modelOverrides` to tune the retention target per model:
     "keepRecentTokens": 20000,
     "modelOverrides": {
       "some-provider/big-model": {
+        "reserveTokens": 32768,
         "keepRecentTokens": 150000
       }
     }
@@ -444,8 +442,8 @@ Use `compaction.modelOverrides` to tune the retention target per model:
 }
 ```
 
-Keys are exact, case-sensitive `provider/modelId` values, including any slashes within the model ID. Each `keepRecentTokens` value falls back independently from the model override to the ordinary setting to the built-in default. Values must be non-negative safe integers. Invalid values in the matching model override produce an error when read; only omitted fields fall back to the ordinary setting. Model override entries must be objects. Invalid ordinary token settings produce an error when read, even if the active model has a valid override. `enabled` and `triggerPercent` remain global, not model-specific.
+Keys are exact, case-sensitive `provider/modelId` values, including any slashes within the model ID. Each value falls back independently from the model override to the ordinary setting to the built-in default; an override's `reserveTokens` replaces the percentage-derived reserve for that model only. Values must be non-negative safe integers. Invalid values in the matching model override produce an error when read; only omitted fields fall back to the ordinary setting. Model override entries must be objects. Invalid ordinary token settings produce an error when read, even if the active model has a valid override. `enabled` and `triggerPercent` remain global, not model-specific.
 
-These resolved values are used for manual compaction, all automatic threshold checks, overflow recovery, and extension-visible `preparation.settings`. The retention target is still capped at half the trigger budget for the active model's window. Model switches affect subsequent checks and compactions without changing ordinary settings. Compaction already in progress uses the model and settings captured for that operation. Branch summarization settings are unaffected.
+These resolved values are used for manual compaction, all automatic threshold checks, overflow recovery, and extension-visible `preparation.settings`, which carries the resolved `reserveTokens` rather than the percentage. Model switches affect subsequent checks and compactions without changing ordinary settings. Compaction already in progress uses the model and settings captured for that operation. Branch summarization settings are unaffected.
 
 Overrides work in both global and project settings. The files merge recursively before lookup, so a global model-specific value beats a project-wide fallback; a project must override that model entry to change it. See [settings.md](settings.md#per-model-compaction-overrides) for details.

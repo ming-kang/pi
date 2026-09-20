@@ -1,6 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, Model, TranscriptContext } from "@earendil-works/pi-ai";
-import { normalizeContext } from "@earendil-works/pi-ai";
+import { type AssistantMessage, type Model, normalizeContext, type TranscriptContext } from "@earendil-works/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type CompactionPreparation,
@@ -138,7 +137,7 @@ describe("generateSummary reasoning options", () => {
 			tokensBefore: 100,
 			previousSummary: "previous checkpoint",
 			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-			settings: { enabled: true, keepRecentTokens: 20 },
+			settings: { enabled: true, reserveTokens: 2000, keepRecentTokens: 20 },
 		};
 
 		const result = await compact(preparation, createModel(false), "test-key");
@@ -168,7 +167,7 @@ describe("generateSummary reasoning options", () => {
 			isSplitTurn: true,
 			tokensBefore: 100,
 			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-			settings: { enabled: true, keepRecentTokens: 20 },
+			settings: { enabled: true, reserveTokens: 2000, keepRecentTokens: 20 },
 		};
 
 		await expect(compact(preparation, createModel(false), "test-key")).rejects.toThrow(
@@ -201,7 +200,7 @@ describe("generateSummary reasoning options", () => {
 			isSplitTurn: true,
 			tokensBefore: 100,
 			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-			settings: { enabled: true, keepRecentTokens: 20 },
+			settings: { enabled: true, reserveTokens: 2000, keepRecentTokens: 20 },
 		};
 
 		await expect(compact(preparation, createModel(false), "test-key")).rejects.toThrow(
@@ -284,10 +283,10 @@ describe("generateSummary reasoning options", () => {
 			isSplitTurn: true,
 			tokensBefore: 600000,
 			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-			settings: { enabled: true, keepRecentTokens: 20000 },
+			settings: { enabled: true, reserveTokens: 500000, keepRecentTokens: 20000 },
 		};
 
-		const result = await compact(preparation, createModel(false, 8000), "test-key");
+		const result = await compact(preparation, createModel(false, 128000), "test-key");
 
 		expect(result.usage).toEqual({
 			...mockSummaryResponse.usage,
@@ -296,38 +295,6 @@ describe("generateSummary reasoning options", () => {
 			totalTokens: 40,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		});
-		expect(completeSimpleMock.mock.calls.map((call) => call[2]?.maxTokens)).toEqual([8000, 8000]);
-	});
-
-	it.each([false, true])("scales summary output down for a low trigger (split turn: %s)", async (isSplitTurn) => {
-		const preparation: CompactionPreparation = {
-			firstKeptEntryId: "entry-keep",
-			messagesToSummarize: messages,
-			turnPrefixMessages: isSplitTurn ? messages : [],
-			isSplitTurn,
-			tokensBefore: 16000,
-			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-			settings: { enabled: true, keepRecentTokens: 20000, triggerPercent: 20 },
-		};
-		await compact(preparation, { ...createModel(false, 32768), contextWindow: 64000 }, "test-key");
-
-		const outputLimits = completeSimpleMock.mock.calls.map((call) => call[2]?.maxTokens as number);
-		expect(outputLimits).toEqual(isSplitTurn ? [2560, 1600] : [2560]);
-		// Even both summaries plus the retained 6.4K target leave room below the 12.8K trigger.
-		expect(outputLimits.reduce((total, limit) => total + limit, 6400)).toBeLessThan(12800);
-	});
-
-	it.each([200000, 1000000])("preserves the existing summary limits on a %i-token window", async (contextWindow) => {
-		const preparation: CompactionPreparation = {
-			firstKeptEntryId: "entry-keep",
-			messagesToSummarize: messages,
-			turnPrefixMessages: messages,
-			isSplitTurn: true,
-			tokensBefore: 50000,
-			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-			settings: { enabled: true, keepRecentTokens: 20000 },
-		};
-		await compact(preparation, { ...createModel(false, 32768), contextWindow }, "test-key");
-		expect(completeSimpleMock.mock.calls.map((call) => call[2]?.maxTokens)).toEqual([13107, 8192]);
+		expect(completeSimpleMock.mock.calls.map((call) => call[2]?.maxTokens)).toEqual([128000, 128000]);
 	});
 });

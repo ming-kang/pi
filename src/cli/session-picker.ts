@@ -22,22 +22,25 @@ export async function selectSession(
 		const keybindings = KeybindingsManager.create();
 		setKeybindings(keybindings);
 		let resolved = false;
-		let selector: SessionSelectorComponent | undefined;
-		const finish = (result: string | null) => {
-			if (resolved) return;
-			resolved = true;
-			selector?.dispose();
-			ui.stop();
-			resolve(result);
-		};
 
-		selector = new SessionSelectorComponent(
+		const selector = new SessionSelectorComponent(
 			currentSessionsLoader,
 			allSessionsLoader,
-			(path: string) => finish(path),
-			() => finish(null),
+			(path: string) => {
+				if (!resolved) {
+					resolved = true;
+					ui.stop();
+					resolve(path);
+				}
+			},
 			() => {
-				selector?.dispose();
+				if (!resolved) {
+					resolved = true;
+					ui.stop();
+					resolve(null);
+				}
+			},
+			() => {
 				ui.stop();
 				process.exit(0);
 			},

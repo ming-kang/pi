@@ -25,10 +25,7 @@ function seedHistory(harness: Harness, totalTokens = 650): string {
 	return recentUserId;
 }
 
-// Regression coverage for #8133. This distribution has no per-model reserveTokens: the
-// trigger line is triggerPercent of the model window, and the summary reserve derives from
-// that line (see compaction/settings.ts). A 4000-token window at 50% triggers at 2000 tokens,
-// reserves 500 tokens for summaries, and lets the history summary use 400 output tokens.
+// Regression coverage for #8133.
 describe("AgentSession compaction model overrides", () => {
 	const harnesses: Harness[] = [];
 	afterEach(() => {
@@ -46,9 +43,9 @@ describe("AgentSession compaction model overrides", () => {
 				settings: {
 					compaction: {
 						enabled: path !== "manual",
-						triggerPercent: 50,
+						reserveTokens: 10,
 						keepRecentTokens: 20000,
-						modelOverrides: { "faux/faux-1": { keepRecentTokens: 150 } },
+						modelOverrides: { "faux/faux-1": { reserveTokens: 2000, keepRecentTokens: 150 } },
 					},
 				},
 				extensionFactories: [
@@ -86,8 +83,8 @@ describe("AgentSession compaction model overrides", () => {
 			expect(preparations).toHaveLength(1);
 			expect(preparations[0]?.preparation.settings).toEqual({
 				enabled: path !== "manual",
+				reserveTokens: 2000,
 				keepRecentTokens: 150,
-				triggerPercent: 50,
 			});
 			expect(preparations[0]?.reason).toBe(
 				path === "manual" ? "manual" : path === "overflow" ? "overflow" : "threshold",
@@ -111,8 +108,8 @@ describe("AgentSession compaction model overrides", () => {
 			tools: [],
 			settings: {
 				compaction: {
-					triggerPercent: 50,
-					modelOverrides: { "faux/faux-1": { keepRecentTokens: 150 } },
+					reserveTokens: 10,
+					modelOverrides: { "faux/faux-1": { reserveTokens: 2000, keepRecentTokens: 150 } },
 				},
 			},
 		});
@@ -128,7 +125,7 @@ describe("AgentSession compaction model overrides", () => {
 		]);
 		if (path === "manual") await harness.session.compact();
 		else await harness.session.prompt("continue");
-		expect(budgets).toEqual([400]);
+		expect(budgets).toEqual([1600]);
 		expect(harness.sessionManager.getEntries().find((entry) => entry.type === "compaction")).toMatchObject({
 			firstKeptEntryId: recentUserId,
 			summary: "built-in summary",
@@ -145,8 +142,8 @@ describe("AgentSession compaction model overrides", () => {
 			tools: [],
 			settings: {
 				compaction: {
-					keepRecentTokens: 20000,
-					modelOverrides: { "faux/big": { keepRecentTokens: 150 } },
+					reserveTokens: 10,
+					modelOverrides: { "faux/big": { reserveTokens: 8000, keepRecentTokens: 150 } },
 				},
 			},
 			extensionFactories: [
@@ -166,31 +163,25 @@ describe("AgentSession compaction model overrides", () => {
 		harness.setResponses([fauxAssistantMessage("small response"), fauxAssistantMessage("big response")]);
 		await harness.session.prompt("continue on small");
 		expect(harness.eventsOfType("compaction_start")).toHaveLength(0);
-		// Usage recorded under the small model crosses the big model's 85% line: the next check
-		// must apply the active big model's retention override, which is the only setting that
-		// leaves anything to compact in this short history.
-		seedHistory(harness, 9000);
+		// Retain usage from the small model: the next check must use the active big model's policy.
+		seedHistory(harness, 2500);
 		await harness.session.setModel(harness.getModel("big")!);
 		await harness.session.prompt("continue on big");
 		expect(harness.eventsOfType("compaction_end")).toHaveLength(1);
 		expect(harness.eventsOfType("compaction_end")[0]?.result?.summary).toBe("big model summary");
-		expect(harness.settingsManager.getCompactionKeepRecentTokens()).toBe(20000);
+		expect(harness.settingsManager.getCompactionReserveTokens()).toBe(10);
 		await harness.session.setModel(harness.getModel("small")!);
-		expect(harness.settingsManager.getCompactionKeepRecentTokens(harness.session.model)).toBe(20000);
+		expect(harness.settingsManager.getCompactionReserveTokens(harness.session.model)).toBe(10);
 	});
 
 	it("captures model identity before awaiting summarization auth", async () => {
 		const harness = await createHarness({
-			models: [
-				{ id: "first", contextWindow: 4000, maxTokens: 3000 },
-				{ id: "second", contextWindow: 4000, maxTokens: 3000 },
-			],
+			models: [{ id: "first" }, { id: "second" }],
 			settings: {
 				compaction: {
-					triggerPercent: 50,
 					modelOverrides: {
-						"faux/first": { keepRecentTokens: 150 },
-						"faux/second": { keepRecentTokens: 20000 },
+						"faux/first": { reserveTokens: 2000, keepRecentTokens: 150 },
+						"faux/second": { reserveTokens: 4000, keepRecentTokens: 20000 },
 					},
 				},
 			},
@@ -210,6 +201,6 @@ describe("AgentSession compaction model overrides", () => {
 			},
 		]);
 		await harness.session.compact();
-		expect(requests).toEqual([{ id: "first", maxTokens: 400 }]);
+		expect(requests).toEqual([{ id: "first", maxTokens: 1600 }]);
 	});
 });

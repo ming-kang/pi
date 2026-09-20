@@ -3,10 +3,9 @@ import { InMemorySettingsStorage, SettingsManager } from "../src/core/settings-m
 
 const model = { provider: "provider", id: "family/model" };
 const modelKey = "provider/family/model";
-const defaults = { enabled: true, keepRecentTokens: 20000, triggerPercent: 85 };
+const defaults = { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 };
 
-// Regression coverage for #8133. This distribution keeps `keepRecentTokens` as the only
-// compaction token setting; the summary reserve follows the percentage trigger policy.
+// Regression coverage for #8133.
 describe("compaction model overrides", () => {
 	it("uses defaults without compaction settings", () => {
 		const manager = SettingsManager.inMemory();
@@ -14,19 +13,26 @@ describe("compaction model overrides", () => {
 		expect(manager.getCompactionSettings(model)).toEqual(defaults);
 	});
 
-	it("prefers the model override over the ordinary setting and keeps getters consistent", () => {
+	it("resolves each field independently and keeps individual getters consistent", () => {
 		const manager = SettingsManager.inMemory({
 			compaction: {
+				reserveTokens: 8192,
 				keepRecentTokens: 10000,
-				modelOverrides: { [modelKey]: { keepRecentTokens: 400000 } },
+				modelOverrides: { [modelKey]: { reserveTokens: 400000 } },
 			},
 		});
-		expect(manager.getCompactionSettings(model)).toEqual({ ...defaults, keepRecentTokens: 400000 });
-		expect(manager.getCompactionKeepRecentTokens(model)).toBe(400000);
-		expect(manager.getCompactionSettings()).toEqual({ ...defaults, keepRecentTokens: 10000 });
+		expect(manager.getCompactionSettings(model)).toEqual({
+			enabled: true,
+			reserveTokens: 400000,
+			keepRecentTokens: 10000,
+		});
+		expect(manager.getCompactionReserveTokens(model)).toBe(400000);
+		expect(manager.getCompactionKeepRecentTokens(model)).toBe(10000);
+		expect(manager.getCompactionSettings()).toEqual({ enabled: true, reserveTokens: 8192, keepRecentTokens: 10000 });
 
 		manager.applyOverrides({ compaction: { modelOverrides: { [modelKey]: { keepRecentTokens: 30000 } } } });
 		expect(manager.getCompactionKeepRecentTokens(model)).toBe(30000);
+		expect(manager.getCompactionReserveTokens(model)).toBe(400000);
 	});
 
 	it("falls back to built-in defaults for missing fields", () => {
@@ -40,13 +46,13 @@ describe("compaction model overrides", () => {
 		const manager = SettingsManager.inMemory({
 			compaction: {
 				modelOverrides: {
-					[modelKey]: { keepRecentTokens: 400000 },
-					"provider/*": { keepRecentTokens: 1 },
-					"family/model": { keepRecentTokens: 2 },
+					[modelKey]: { reserveTokens: 400000 },
+					"provider/*": { reserveTokens: 1 },
+					"family/model": { reserveTokens: 2 },
 				},
 			},
 		});
-		expect(manager.getCompactionKeepRecentTokens(model)).toBe(400000);
+		expect(manager.getCompactionReserveTokens(model)).toBe(400000);
 		for (const other of [
 			{ provider: "other", id: model.id },
 			{ provider: model.provider, id: "other" },
@@ -61,9 +67,9 @@ describe("compaction model overrides", () => {
 		storage.withLock("global", () =>
 			JSON.stringify({
 				compaction: {
-					keepRecentTokens: 8192,
+					reserveTokens: 8192,
 					modelOverrides: {
-						[modelKey]: { keepRecentTokens: 30000 },
+						[modelKey]: { reserveTokens: 400000, keepRecentTokens: 30000 },
 						"provider/other": { keepRecentTokens: 4096 },
 					},
 				},
@@ -71,13 +77,18 @@ describe("compaction model overrides", () => {
 		);
 		storage.withLock("project", () =>
 			JSON.stringify({
-				compaction: { modelOverrides: { [modelKey]: { keepRecentTokens: 2000 } } },
+				compaction: { reserveTokens: 1024, modelOverrides: { [modelKey]: { keepRecentTokens: 2000 } } },
 			}),
 		);
 		const manager = SettingsManager.fromStorage(storage);
-		expect(manager.getCompactionSettings(model)).toEqual({ ...defaults, keepRecentTokens: 2000 });
+		expect(manager.getCompactionSettings(model)).toEqual({
+			enabled: true,
+			reserveTokens: 400000,
+			keepRecentTokens: 2000,
+		});
 		expect(manager.getCompactionSettings({ provider: "provider", id: "other" })).toEqual({
-			...defaults,
+			enabled: true,
+			reserveTokens: 1024,
 			keepRecentTokens: 4096,
 		});
 		await manager.reload();
@@ -90,7 +101,7 @@ describe("compaction model overrides", () => {
 		const storage = new InMemorySettingsStorage();
 		storage.withLock("global", () =>
 			JSON.stringify({
-				compaction: { modelOverrides: { [modelKey]: { enabled: false, keepRecentTokens: 400000 } } },
+				compaction: { modelOverrides: { [modelKey]: { enabled: false, reserveTokens: 400000 } } },
 			}),
 		);
 		const manager = SettingsManager.fromStorage(storage);
@@ -98,26 +109,22 @@ describe("compaction model overrides", () => {
 		manager.setCompactionEnabled(false);
 		await manager.flush();
 		await manager.reload();
-		expect(manager.getCompactionSettings(model)).toEqual({
-			...defaults,
-			enabled: false,
-			keepRecentTokens: 400000,
-		});
+		expect(manager.getCompactionSettings(model)).toEqual({ ...defaults, enabled: false, reserveTokens: 400000 });
 	});
 
-	describe("model override keepRecentTokens", () => {
+	describe.each(["reserveTokens", "keepRecentTokens"] as const)("model override %s", (field) => {
 		it.each([null, -1, 1.5, "400000", true, {}, [], Number.MAX_SAFE_INTEGER + 1])(
 			"reports invalid token values: %j",
 			(value) => {
 				const storage = new InMemorySettingsStorage();
 				storage.withLock("global", () =>
 					JSON.stringify({
-						compaction: { modelOverrides: { [modelKey]: { keepRecentTokens: value } } },
+						compaction: { modelOverrides: { [modelKey]: { [field]: value } } },
 					}),
 				);
 				const manager = SettingsManager.fromStorage(storage);
 				expect(() => manager.getCompactionSettings(model)).toThrow(
-					`Invalid compaction.modelOverrides["${modelKey}"].keepRecentTokens setting: ${String(value)}. Expected a non-negative safe integer.`,
+					`Invalid compaction.modelOverrides["${modelKey}"].${field} setting: ${String(value)}. Expected a non-negative safe integer.`,
 				);
 				expect(manager.getCompactionSettings()).toEqual(defaults);
 				expect(manager.getCompactionSettings({ provider: "other", id: model.id })).toEqual(defaults);
@@ -126,14 +133,14 @@ describe("compaction model overrides", () => {
 
 		it.each([Number.NaN, Infinity, -Infinity])("reports non-finite runtime values: %s", (value) => {
 			const manager = SettingsManager.inMemory();
-			manager.applyOverrides({ compaction: { modelOverrides: { [modelKey]: { keepRecentTokens: value } } } });
+			manager.applyOverrides({ compaction: { modelOverrides: { [modelKey]: { [field]: value } } } });
 			expect(() => manager.getCompactionSettings(model)).toThrow(
-				`Invalid compaction.modelOverrides["${modelKey}"].keepRecentTokens setting: ${String(value)}`,
+				`Invalid compaction.modelOverrides["${modelKey}"].${field} setting: ${String(value)}`,
 			);
 		});
 	});
 
-	describe("ordinary compaction.keepRecentTokens", () => {
+	describe.each(["reserveTokens", "keepRecentTokens"] as const)("ordinary compaction.%s", (field) => {
 		it.each([null, -1, 1.5, "400000", true, {}, [], Number.MAX_SAFE_INTEGER + 1])(
 			"reports invalid values even when a valid model override exists: %j",
 			(value) => {
@@ -141,13 +148,13 @@ describe("compaction model overrides", () => {
 				storage.withLock("global", () =>
 					JSON.stringify({
 						compaction: {
-							keepRecentTokens: value,
-							modelOverrides: { [modelKey]: { keepRecentTokens: 4096 } },
+							[field]: value,
+							modelOverrides: { [modelKey]: { [field]: 4096 } },
 						},
 					}),
 				);
 				const manager = SettingsManager.fromStorage(storage);
-				const error = `Invalid compaction.keepRecentTokens setting: ${String(value)}. Expected a non-negative safe integer.`;
+				const error = `Invalid compaction.${field} setting: ${String(value)}. Expected a non-negative safe integer.`;
 				expect(() => manager.getCompactionSettings()).toThrow(error);
 				expect(() => manager.getCompactionSettings(model)).toThrow(error);
 			},
@@ -155,10 +162,8 @@ describe("compaction model overrides", () => {
 
 		it.each([Number.NaN, Infinity, -Infinity])("reports non-finite runtime values: %s", (value) => {
 			const manager = SettingsManager.inMemory();
-			manager.applyOverrides({ compaction: { keepRecentTokens: value } });
-			expect(() => manager.getCompactionSettings()).toThrow(
-				`Invalid compaction.keepRecentTokens setting: ${String(value)}`,
-			);
+			manager.applyOverrides({ compaction: { [field]: value } });
+			expect(() => manager.getCompactionSettings()).toThrow(`Invalid compaction.${field} setting: ${String(value)}`);
 		});
 	});
 
@@ -171,11 +176,17 @@ describe("compaction model overrides", () => {
 	});
 
 	it("accepts zero in ordinary settings and model overrides", () => {
-		const manager = SettingsManager.inMemory({ compaction: { keepRecentTokens: 0 } });
-		expect(manager.getCompactionSettings(model)).toEqual({ ...defaults, keepRecentTokens: 0 });
-		manager.applyOverrides({
-			compaction: { keepRecentTokens: 1000, modelOverrides: { [modelKey]: { keepRecentTokens: 0 } } },
+		const manager = SettingsManager.inMemory({
+			compaction: { reserveTokens: 0, keepRecentTokens: 0 },
 		});
-		expect(manager.getCompactionSettings(model)).toEqual({ ...defaults, keepRecentTokens: 0 });
+		expect(manager.getCompactionSettings(model)).toEqual({ enabled: true, reserveTokens: 0, keepRecentTokens: 0 });
+		manager.applyOverrides({
+			compaction: {
+				reserveTokens: 1000,
+				keepRecentTokens: 1000,
+				modelOverrides: { [modelKey]: { reserveTokens: 0, keepRecentTokens: 0 } },
+			},
+		});
+		expect(manager.getCompactionSettings(model)).toEqual({ enabled: true, reserveTokens: 0, keepRecentTokens: 0 });
 	});
 });

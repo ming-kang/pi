@@ -48,8 +48,7 @@ describe("automatic compaction cancellation regressions", () => {
 		const harness = await createHarness({
 			models: [{ id: "faux-1", contextWindow: 200, maxTokens: 50 }],
 			settings: {
-				// Trigger above the seeded 100-token usage so only the post-run check could compact.
-				compaction: { enabled: true, keepRecentTokens: 1, triggerPercent: 75 },
+				compaction: { enabled: true, reserveTokens: 50, keepRecentTokens: 1 },
 				retry: { enabled: false },
 			},
 			extensionFactories: [

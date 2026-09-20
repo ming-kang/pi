@@ -29,7 +29,6 @@ import {
 	type SessionEntry,
 	sessionEntryToContextMessages,
 } from "../session-manager.ts";
-import { type CompactionSettings, getCompactionBudget } from "./settings.ts";
 import {
 	computeFileLists,
 	createFileOps,
@@ -39,17 +38,6 @@ import {
 	SUMMARIZATION_SYSTEM_PROMPT,
 	serializeConversation,
 } from "./utils.ts";
-
-export {
-	type CompactionSettings,
-	clampTriggerPercent,
-	DEFAULT_COMPACTION_SETTINGS,
-	DEFAULT_TRIGGER_PERCENT,
-	MAX_TRIGGER_PERCENT,
-	MIN_TRIGGER_PERCENT,
-	SUMMARY_RESERVE_TOKENS,
-	shouldCompact,
-} from "./settings.ts";
 
 // ============================================================================
 // File Operation Tracking
@@ -147,6 +135,22 @@ function combineUsage(first: Usage, second: Usage): Usage {
 }
 
 // ============================================================================
+// Types
+// ============================================================================
+
+export interface CompactionSettings {
+	enabled: boolean;
+	reserveTokens: number;
+	keepRecentTokens: number;
+}
+
+export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
+	enabled: true,
+	reserveTokens: 16384,
+	keepRecentTokens: 20000,
+};
+
+// ============================================================================
 // Token calculation
 // ============================================================================
 
@@ -238,6 +242,14 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 		trailingTokens,
 		lastUsageIndex: usageInfo.index,
 	};
+}
+
+/**
+ * Check if compaction should trigger based on context usage.
+ */
+export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
+	if (!settings.enabled) return false;
+	return contextTokens > contextWindow - settings.reserveTokens;
 }
 
 // ============================================================================
@@ -395,8 +407,6 @@ export interface CutPointResult {
  *
  * Can cut at user OR assistant messages (never tool results). When cutting at an
  * assistant message with tool calls, its tool results come after and will be kept.
- * When the trailing tool results alone exceed the budget, the cut lands on the last
- * valid cut point: the least the message structure allows us to keep.
  *
  * Returns CutPointResult with:
  * - firstKeptEntryIndex: the entry index to start keeping from
@@ -745,15 +755,13 @@ export interface CompactionPreparation {
 	previousSummary?: string;
 	/** File operations extracted from messagesToSummarize */
 	fileOps: FileOperations;
-	/** Configured compaction settings, before applying the model's budget limits. */
+	/** Compaction settions from settings.jsonl	*/
 	settings: CompactionSettings;
 }
 
-/** Pass the model's context window to adapt retention to the configured trigger. */
 export function prepareCompaction(
 	pathEntries: SessionEntry[],
 	settings: CompactionSettings,
-	contextWindow?: number,
 ): CompactionPreparation | undefined {
 	if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {
 		return undefined;
@@ -779,8 +787,7 @@ export function prepareCompaction(
 
 	const tokensBefore = estimateContextTokens(buildSessionContext(pathEntries).messages).tokens;
 
-	const budget = getCompactionBudget(settings, contextWindow);
-	const cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, budget.keepRecentTokens);
+	const cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens);
 
 	// Get UUID of first kept entry
 	const firstKeptEntry = pathEntries[cutPoint.firstKeptEntryIndex];
@@ -882,8 +889,8 @@ export async function compact(
 		tokensBefore,
 		previousSummary,
 		fileOps,
+		settings,
 	} = preparation;
-	const { summaryReserveTokens } = getCompactionBudget(preparation.settings, model.contextWindow);
 
 	// Generate summaries and merge into one
 	let summary: string;
@@ -896,7 +903,7 @@ export async function compact(
 			const historyResult = await generateSummaryWithUsage(
 				messagesToSummarize,
 				model,
-				summaryReserveTokens,
+				settings.reserveTokens,
 				apiKey,
 				headers,
 				signal,
@@ -915,7 +922,7 @@ export async function compact(
 		const turnPrefixResult = await generateTurnPrefixSummary(
 			turnPrefixMessages,
 			model,
-			summaryReserveTokens,
+			settings.reserveTokens,
 			apiKey,
 			headers,
 			env,
@@ -934,7 +941,7 @@ export async function compact(
 		const result = await generateSummaryWithUsage(
 			messagesToSummarize,
 			model,
-			summaryReserveTokens,
+			settings.reserveTokens,
 			apiKey,
 			headers,
 			signal,

@@ -250,7 +250,7 @@ function choose(
 	context: BugReportContext,
 	title: string,
 	options: string[],
-	subtitle?: string,
+	description?: string,
 ): Promise<string | undefined> {
 	return new Promise((resolve) => {
 		let component: ExtensionSelectorComponent;
@@ -260,7 +260,7 @@ function choose(
 		};
 		component = new ExtensionSelectorComponent(title, options, finish, () => finish(), {
 			tui: context.ui,
-			subtitle,
+			description,
 		});
 		showOverlay(context, component);
 	});

@@ -301,49 +301,25 @@ describe("estimateContextTokens", () => {
 });
 
 describe("shouldCompact", () => {
-	it("should return true when context exceeds the triggerPercent line", () => {
+	it("should return true when context exceeds threshold", () => {
 		const settings: CompactionSettings = {
 			enabled: true,
+			reserveTokens: 10000,
 			keepRecentTokens: 20000,
-			triggerPercent: 90,
 		};
 
 		expect(shouldCompact(95000, 100000, settings)).toBe(true);
 		expect(shouldCompact(89000, 100000, settings)).toBe(false);
 	});
 
-	it("should use the 85% default when triggerPercent is unset", () => {
-		const settings: CompactionSettings = {
-			enabled: true,
-			keepRecentTokens: 20000,
-		};
-
-		expect(shouldCompact(85001, 100000, settings)).toBe(true);
-		expect(shouldCompact(85000, 100000, settings)).toBe(false);
-	});
-
 	it("should return false when disabled", () => {
 		const settings: CompactionSettings = {
 			enabled: false,
+			reserveTokens: 10000,
 			keepRecentTokens: 20000,
-			triggerPercent: 90,
 		};
 
 		expect(shouldCompact(95000, 100000, settings)).toBe(false);
-	});
-
-	it("should clamp triggerPercent to 20-95", () => {
-		const low: CompactionSettings = { enabled: true, keepRecentTokens: 20000, triggerPercent: 5 };
-		expect(shouldCompact(20001, 100000, low)).toBe(true);
-		expect(shouldCompact(20000, 100000, low)).toBe(false);
-
-		const high: CompactionSettings = { enabled: true, keepRecentTokens: 20000, triggerPercent: 150 };
-		expect(shouldCompact(95001, 100000, high)).toBe(true);
-		expect(shouldCompact(95000, 100000, high)).toBe(false);
-
-		const invalid: CompactionSettings = { enabled: true, keepRecentTokens: 20000, triggerPercent: Number.NaN };
-		expect(shouldCompact(85001, 100000, invalid)).toBe(true);
-		expect(shouldCompact(85000, 100000, invalid)).toBe(false);
 	});
 });
 
@@ -425,24 +401,6 @@ describe("findCutPoint", () => {
 		expect(customFitsBudget.firstKeptEntryIndex).toBe(2);
 		expect(customFitsBudget.isSplitTurn).toBe(false);
 		expect(customFitsBudget.turnStartIndex).toBe(-1);
-	});
-
-	it("cuts at the last valid cut point when trailing tool results alone blow the budget", () => {
-		// Tool results are never valid cut points, so no cut point exists at or after
-		// the entry that crosses the budget. Keeping everything would make compaction
-		// a no-op; the cut must land on the last assistant instead.
-		const entries: SessionEntry[] = [
-			createMessageEntry(createUserMessage("task briefing")),
-			createMessageEntry(createToolCallMessage("t1", "searching")),
-			createMessageEntry(createToolResultMessage("t1", 40_000)),
-			createMessageEntry(createToolCallMessage("t2", "searching more")),
-			createMessageEntry(createToolResultMessage("t2", 100_000)),
-		];
-
-		const result = findCutPoint(entries, 0, entries.length, DEFAULT_COMPACTION_SETTINGS.keepRecentTokens);
-		expect(result.firstKeptEntryIndex).toBe(3);
-		expect(result.isSplitTurn).toBe(true);
-		expect(result.turnStartIndex).toBe(0);
 	});
 
 	// Regression test for #9740.

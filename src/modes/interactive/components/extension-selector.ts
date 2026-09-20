@@ -13,8 +13,7 @@ export interface ExtensionSelectorOptions {
 	tui?: TUI;
 	timeout?: number;
 	onToggleToolsExpanded?: () => void;
-	/** Muted line under the title, for context that is not itself a choice. */
-	subtitle?: string;
+	description?: string;
 }
 
 export class ExtensionSelectorComponent extends Container {
@@ -48,7 +47,10 @@ export class ExtensionSelectorComponent extends Container {
 
 		this.titleText = new Text(theme.fg("accent", theme.bold(title)), 1, 0);
 		this.addChild(this.titleText);
-		if (opts?.subtitle) this.addChild(new Text(theme.fg("muted", opts.subtitle), 1, 0));
+		if (opts?.description) {
+			this.addChild(new Spacer(1));
+			this.addChild(new Text(theme.fg("text", opts.description), 1, 0));
+		}
 		this.addChild(new Spacer(1));
 
 		if (opts?.timeout && opts.timeout > 0 && opts.tui) {

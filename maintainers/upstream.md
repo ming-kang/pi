@@ -25,6 +25,12 @@ git log -p -1 -- <path>
 
 An unregistered path can be a prompt wording change; it does not by itself imply an execution or protocol change.
 
+## Keeping deviations small
+
+A deviation earns its maintenance cost only while it does something upstream does not. Retire one as soon as upstream supplies a similar mechanism, even when the result is not identical: prefer upstream's option name, lifecycle, and defaults over an equivalent local variant, and express a policy that must stay as a conversion in front of upstream's mechanism rather than a replacement for it. `compaction/settings.ts` is the reference example — it converts `triggerPercent` into upstream's `reserveTokens` so compaction, its tests, and its SDK signature stay upstream's.
+
+Wholly rewritten documentation pages are the exception. `docs/**` is distribution-owned, and a rewrite that documents real behavior stays even when upstream later edits the same page: resolve such a conflict by keeping this distribution's prose and porting only upstream's factual changes.
+
 ## Synchronization runbook
 
 1. Inspect status and existing work. Start a clean synchronization branch from the intended `main` commit; preserve unrelated work. Fetch only the selected release tag and inspect it with `gh`:

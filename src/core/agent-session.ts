@@ -558,17 +558,8 @@ export class AgentSession {
 		throw new Error(formatNoApiKeyFoundMessage(model.provider));
 	}
 
-	/**
-	 * Resolve summarization auth against a caller-supplied stream function.
-	 *
-	 * Callers that await this while the session stays live must capture
-	 * `this.agent.streamFunction` first and pass it in: a model switch during the
-	 * await would otherwise select auth for one stream function and generate the
-	 * summary with another.
-	 */
 	private async _getSummarizationRequestAuth(
 		model: Model<any>,
-		streamFunction: typeof this.agent.streamFunction,
 		signal?: AbortSignal,
 	): Promise<{
 		model: Model<any>;
@@ -576,7 +567,7 @@ export class AgentSession {
 		headers?: Record<string, string>;
 		env?: Record<string, string>;
 	}> {
-		if (streamFunction === streamSimple) {
+		if (this.agent.streamFunction === streamSimple) {
 			return this._getRequiredRequestAuth(model, signal);
 		}
 
@@ -2165,7 +2156,6 @@ export class AgentSession {
 		signal: AbortSignal,
 		env: Record<string, string> | undefined,
 		reason: "manual" | "threshold" | "overflow",
-		streamFunction: typeof this.agent.streamFunction,
 	): Promise<CompactionResult> {
 		return compact(
 			preparation,
@@ -2175,7 +2165,7 @@ export class AgentSession {
 			customInstructions,
 			signal,
 			this.thinkingLevel,
-			streamFunction,
+			this.agent.streamFunction,
 			env,
 			this.settingsManager.getRetrySettings(),
 			this._summarizationRetryCallbacks({ source: "compaction", reason }),
@@ -2213,25 +2203,22 @@ export class AgentSession {
 			let cancelledByExtension = false;
 
 			try {
-				// Capture before awaiting auth: a model switch during the await would leave the
-				// resolved auth, the model policy, and the summary generator disagreeing.
 				const model = this.model;
 				if (!model) {
 					throw new Error(formatNoModelSelectedMessage());
 				}
 
 				const settings = this.settingsManager.getCompactionSettings(model);
-				const streamFunction = this.agent.streamFunction;
 				const {
 					model: requestModel,
 					apiKey,
 					headers,
 					env,
-				} = await this._getSummarizationRequestAuth(model, streamFunction, this._compactionAbortController.signal);
+				} = await this._getSummarizationRequestAuth(model, this._compactionAbortController.signal);
 
 				const pathEntries = this.sessionManager.getBranch();
 
-				const preparation = prepareCompaction(pathEntries, settings, model.contextWindow);
+				const preparation = prepareCompaction(pathEntries, settings);
 				if (!preparation) {
 					// Check why we can't compact
 					const lastEntry = pathEntries[pathEntries.length - 1];
@@ -2289,7 +2276,6 @@ export class AgentSession {
 						this._compactionAbortController.signal,
 						env,
 						"manual",
-						streamFunction,
 					);
 					summary = result.summary;
 					firstKeptEntryId = result.firstKeptEntryId;
@@ -2545,7 +2531,7 @@ export class AgentSession {
 				}
 
 				const pathEntries = this.sessionManager.getBranch();
-				const preparation = prepareCompaction(pathEntries, settings, model.contextWindow);
+				const preparation = prepareCompaction(pathEntries, settings);
 				if (!preparation) {
 					return false;
 				}
@@ -2556,15 +2542,12 @@ export class AgentSession {
 				this._emit({ type: "compaction_start", reason });
 				abortController.signal.throwIfAborted();
 
-				// Capture before awaiting auth: a model switch during the await would leave the
-				// resolved auth and the summary generator disagreeing about the stream function.
-				const streamFunction = this.agent.streamFunction;
 				const {
 					model: requestModel,
 					apiKey,
 					headers,
 					env,
-				} = await this._getSummarizationRequestAuth(model, streamFunction, abortController.signal);
+				} = await this._getSummarizationRequestAuth(model, abortController.signal);
 				abortController.signal.throwIfAborted();
 
 				let extensionCompaction: CompactionResult | undefined;
@@ -2616,7 +2599,6 @@ export class AgentSession {
 						abortController.signal,
 						env,
 						reason,
-						streamFunction,
 					);
 					summary = compactResult.summary;
 					firstKeptEntryId = compactResult.firstKeptEntryId;
@@ -3520,13 +3502,7 @@ export class AgentSession {
 			let summaryUsage: Usage | undefined;
 			if (options.summarize && entriesToSummarize.length > 0 && !extensionSummary) {
 				const model = this.model!;
-				const streamFunction = this.agent.streamFunction;
-				const {
-					model: requestModel,
-					apiKey,
-					headers,
-					env,
-				} = await this._getSummarizationRequestAuth(model, streamFunction);
+				const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(model);
 				const branchSummarySettings = this.settingsManager.getBranchSummarySettings();
 				const result = await generateBranchSummary(entriesToSummarize, {
 					model: requestModel,
@@ -3537,7 +3513,7 @@ export class AgentSession {
 					customInstructions,
 					replaceInstructions,
 					reserveTokens: branchSummarySettings.reserveTokens,
-					streamFn: streamFunction,
+					streamFn: this.agent.streamFunction,
 					retry: this.settingsManager.getRetrySettings(),
 					callbacks: this._summarizationRetryCallbacks({ source: "branchSummary" }),
 				});
@@ -3799,13 +3775,12 @@ export class AgentSession {
 		if (!model) {
 			throw new Error("No model selected");
 		}
-		const streamFn = this.agent.streamFunction;
 		const {
 			model: requestModel,
 			apiKey,
 			headers,
 			env,
-		} = await this._getSummarizationRequestAuth(model, streamFn, options.signal);
+		} = await this._getSummarizationRequestAuth(model, options.signal);
 		return generateBugReportSummary({
 			messages: this.messages,
 			hint: options.hint,
@@ -3815,7 +3790,7 @@ export class AgentSession {
 			env,
 			signal: options.signal,
 			thinkingLevel: this.thinkingLevel,
-			streamFn,
+			streamFn: this.agent.streamFunction,
 			retry: this.settingsManager.getRetrySettings(),
 			sessionId: this.sessionId,
 		});

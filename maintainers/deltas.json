@@ -59,11 +59,6 @@
 			]
 		},
 		{
-			"path": "src/cli/session-picker.ts",
-			"category": "bugfix",
-			"intent": "Single finish path disposes the selector before resolving"
-		},
-		{
 			"path": "src/cli/startup-ui.ts",
 			"category": "distribution",
 			"intent": "First-time-setup gate compares runtime metadata against config.ts distribution constants"
@@ -89,27 +84,12 @@
 		{
 			"path": "src/core/agent-session.ts",
 			"category": "bugfix",
-			"intent": "Uses one captured stream for summarization across async auth; captures the model, its compaction policy, and the stream before manual-compaction auth; binds detached stable model-context snapshots whose prompt is replayed from the prepared transcript; invalidates stale contexts; hosts the BackgroundSession coordinator through lifecycle pauses and persistence acknowledgements, including nextTurn context retained until persistence; supplies the captured model window to manual and automatic compaction budgets",
+			"intent": "Binds detached stable model-context snapshots whose prompt is replayed from the prepared transcript; invalidates stale contexts; hosts the BackgroundSession coordinator through lifecycle pauses and persistence acknowledgements, including nextTurn context retained until persistence",
 			"tests": [
 				"test/suite/agent-session-compaction.test.ts",
-				"test/suite/agent-session-compaction-model-overrides.test.ts",
 				"test/suite/compaction-budget.test.ts",
-				"test/suite/regressions/6324-branch-summary-ambient-auth.test.ts",
-				"test/suite/regressions/9340-9777-auto-compaction-cancellation.test.ts",
 				"test/agent-session-background.test.ts",
 				"test/context-snapshot.test.ts"
-			]
-		},
-		{
-			"path": "src/core/compaction/compaction.ts",
-			"category": "distribution",
-			"intent": "Compaction uses the shared percentage policy and model-window budgets from compaction/settings.ts, adapting retention and summary limits at low thresholds; the trailing-tool-result cut-point fix is upstream's since v0.86.0",
-			"tests": [
-				"test/compaction.test.ts",
-				"test/compaction-summary-reasoning.test.ts",
-				"test/suite/compaction-budget.test.ts",
-				"test/suite/agent-session-compaction.test.ts",
-				"test/agent-session-auto-compaction-queue.test.ts"
 			]
 		},
 		{
@@ -209,7 +189,7 @@
 		{
 			"path": "src/core/settings-manager.ts",
 			"category": "distribution",
-			"intent": "Default tuiMode is fullscreen; compaction uses the shared defaults and effective clamped triggerPercent, dropping reserveTokens (model overrides carry keepRecentTokens only); keep when syncing upstream",
+			"intent": "Default tuiMode is fullscreen; compaction resolves reserveTokens from triggerPercent for the model's context window when no reserve is configured; keep when syncing upstream",
 			"tests": [
 				"test/compaction-settings.test.ts",
 				"test/settings-manager-compaction.test.ts"
@@ -310,11 +290,6 @@
 			]
 		},
 		{
-			"path": "src/experimental/micro/runtime.ts",
-			"category": "distribution",
-			"intent": "Derives the compaction threshold from the shared triggerPercent policy because this distribution has no reserveTokens setting"
-		},
-		{
 			"path": "src/experimental/plugins/bundled.ts",
 			"category": "distribution",
 			"intent": "resolvePluginExternal also maps this distribution's @astralyn/pi/experimental/plugin specifier to the local plugin module, not only upstream's package name"
@@ -335,32 +310,6 @@
 			"intent": "Re-exports model-context snapshots and editor submit/input types, plus the public Background supervision, projection, text, worker-report, and completion-snapshot types"
 		},
 		{
-			"path": "src/modes/interactive/bug-report.ts",
-			"category": "ui",
-			"intent": "Selector explanations render through the distribution's subtitle option"
-		},
-		{
-			"path": "src/modes/interactive/components/armin.ts",
-			"category": "bugfix",
-			"intent": "Animation timer unref and negative-row guard so the easter egg cannot block shutdown",
-			"tests": [
-				"test/time-driven-ui.test.ts"
-			]
-		},
-		{
-			"path": "src/modes/interactive/components/bash-execution.ts",
-			"category": "bugfix",
-			"intent": "Consistent header color on redraw for excluded-context commands"
-		},
-		{
-			"path": "src/modes/interactive/components/countdown-timer.ts",
-			"category": "bugfix",
-			"intent": "Deadline-driven ticks with unref and idempotent dispose instead of a drifting interval",
-			"tests": [
-				"test/time-driven-ui.test.ts"
-			]
-		},
-		{
 			"path": "src/modes/interactive/components/custom-message.ts",
 			"category": "ui",
 			"intent": "Custom-rendered messages expand/collapse through a MouseRegion gated to unmodified single primary clicks, preserving child handlers and keyboard expansion",
@@ -371,7 +320,7 @@
 		{
 			"path": "src/modes/interactive/components/extension-selector.ts",
 			"category": "ui",
-			"intent": "Selector subtitle line under the title (upstream's description option) and keybinding-aware hint labels",
+			"intent": "Keybinding-aware hint labels",
 			"tests": [
 				"test/extension-selector.test.ts"
 			]
@@ -393,14 +342,6 @@
 			]
 		},
 		{
-			"path": "src/modes/interactive/components/session-selector.ts",
-			"category": "bugfix",
-			"intent": "Disposed guards on async callbacks, unref timers, and live relative timestamps",
-			"tests": [
-				"test/session-selector-path-delete.test.ts"
-			]
-		},
-		{
 			"path": "src/modes/interactive/components/settings-selector.ts",
 			"category": "distribution",
 			"intent": "Provider-attribution wording for the telemetry setting; fullscreen-default mode description"
@@ -414,14 +355,6 @@
 			]
 		},
 		{
-			"path": "src/modes/interactive/components/tree-selector.ts",
-			"category": "bugfix",
-			"intent": "Midnight refresh for relative dates and disposable timers",
-			"tests": [
-				"test/tree-selector.test.ts"
-			]
-		},
-		{
 			"path": "src/modes/interactive/external-editor.ts",
 			"category": "windows-compat",
 			"intent": "Quote-aware editor command parsing via cross-spawn without a shell; upstream shell:true concatenates the unquoted temp file path, so a TEMP containing spaces splits it into multiple argv entries",
@@ -432,7 +365,7 @@
 		{
 			"path": "src/modes/interactive/interactive-mode.ts",
 			"category": "ui",
-			"intent": "Tool grouping and selector disposal, selector subtitle plumbing, canonical guarded ExtensionContext for shortcuts, distribution constants for telemetry and update hints; routes Enter/follow-up through synchronous extension interception before history and queues, exposes editor cursor position, and scopes terminal listeners to editor focus",
+			"intent": "Tool grouping, selector description plumbing for confirmations, canonical guarded ExtensionContext for shortcuts, distribution constants for telemetry and update hints; routes Enter/follow-up through synchronous extension interception before history and queues, exposes editor cursor position, and scopes terminal listeners to editor focus",
 			"tests": [
 				"test/interactive-tui.test.ts",
 				"test/extensions-runner.test.ts",

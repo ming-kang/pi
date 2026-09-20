@@ -48,7 +48,7 @@ class SavingScreen extends Container {
 export function createProviderErrorScreen(tui: TUI, done: () => void, error: string): ExtensionSelectorComponent {
 	return new ExtensionSelectorComponent("models.json cannot be edited", ["Back"], done, done, {
 		tui,
-		subtitle: `${truncate(error, 2400)}\n\nFix the file manually and open /provider again.`,
+		description: `${truncate(error, 2400)}\n\nFix the file manually and open /provider again.`,
 	});
 }
 
@@ -129,7 +129,7 @@ export function createProviderApp(
 					requestClose();
 				},
 				showList,
-				{ tui, subtitle: truncate(error, 2400) },
+				{ tui, description: truncate(error, 2400) },
 			),
 		);
 	}

@@ -142,8 +142,9 @@ Version checks read the latest `@astralyn/pi` version from npm. Set `PI_SKIP_VER
 |---------|------|---------|-------------|
 | `compaction.enabled` | boolean | `true` | Enable auto-compaction |
 | `compaction.triggerPercent` | number | `85` | Percentage of the context window that triggers auto-compaction (clamped to 20–95) |
-| `compaction.keepRecentTokens` | number | `20000` | Recent-message retention target, capped at half the trigger token budget |
-| `compaction.modelOverrides` | object | - | Per-model `keepRecentTokens` overrides keyed by exact `"provider/modelId"` |
+| `compaction.reserveTokens` | number | derived | Fixed reserve below the context window; overrides `triggerPercent` |
+| `compaction.keepRecentTokens` | number | `20000` | Recent-message retention target, capped at half the trigger line when the reserve is derived |
+| `compaction.modelOverrides` | object | - | Per-model `reserveTokens` / `keepRecentTokens` overrides keyed by exact `"provider/modelId"` |
 
 ```json
 {
@@ -155,9 +156,9 @@ Version checks read the latest `@astralyn/pi` version from npm. Set `PI_SKIP_VER
 }
 ```
 
-Note: upstream Pi's `compaction.reserveTokens` setting is not supported and is ignored when present; the trigger is always `triggerPercent` (values outside 20–95 are clamped).
+Compaction triggers at `contextWindow − reserveTokens`. Unless `reserveTokens` is set, the reserve is derived from `triggerPercent` for the active model's window, so large-window models compact at 85% usage instead of upstream's ~98%. Setting `reserveTokens` restores a fixed reserve.
 
-Retention and summary budgets shrink for small windows or low trigger percentages without changing the saved settings. Whole messages and tool-call/result groups can exceed the retention target. See [Compaction](compaction.md#how-it-works) for the budget rules and examples.
+The retention target shrinks with a derived reserve without changing the saved settings. Whole messages and tool-call/result groups can exceed the retention target. See [Compaction](compaction.md#how-it-works) for the budget rules and examples.
 
 #### Per-model compaction overrides
 
@@ -172,6 +173,7 @@ Retention and summary budgets shrink for small windows or low trigger percentage
         "keepRecentTokens": 150000
       },
       "local/small-model": {
+        "reserveTokens": 2048,
         "keepRecentTokens": 4096
       }
     }
@@ -181,7 +183,7 @@ Retention and summary budgets shrink for small windows or low trigger percentage
 
 Keys match exact, case-sensitive `provider/modelId` values, not names or glob patterns. Model IDs may contain slashes (for example, `openrouter/anthropic/claude-sonnet-4`).
 
-`keepRecentTokens` resolves independently: matching model override → ordinary `compaction` setting → built-in default. Token values must be non-negative safe integers. Invalid values in the matching model override produce an error when read; only omitted fields fall back to the ordinary setting. Model override entries must be objects. Invalid ordinary token settings produce an error when read, even if the active model has a valid override. Zero is accepted and keeps no recent messages beyond the cut point's own message group. `enabled` and `triggerPercent` stay global.
+Each token setting resolves independently: matching model override → ordinary `compaction` setting → built-in default. A model override's `reserveTokens` replaces the percentage-derived reserve for that model only. Token values must be non-negative safe integers. Invalid values in the matching model override produce an error when read; only omitted fields fall back to the ordinary setting. Model override entries must be objects. Invalid ordinary token settings produce an error when read, even if the active model has a valid override. Zero is accepted and keeps no recent messages beyond the cut point's own message group. `enabled` and `triggerPercent` stay global.
 
 ### Branch Summary
 

@@ -436,142 +436,10 @@ describe("AgentSession compaction characterization", () => {
 		]);
 	});
 
-	it("notifies extensions when manual compaction fails", async () => {
-		const failedEvents: Array<{
-			reason: "manual" | "threshold" | "overflow";
-			errorMessage?: string;
-			aborted: boolean;
-			willRetry: boolean;
-			fromExtension: boolean;
-		}> = [];
-		const harness = await createHarness({
-			extensionFactories: [
-				(pi) => {
-					pi.on("session_compact_failed", async (event) => {
-						failedEvents.push(event);
-					});
-				},
-			],
-		});
-		harnesses.push(harness);
-		seedCompactableSession(harness);
-		harness.session.agent.streamFunction = () => {
-			throw new Error("manual summary generator blew up");
-		};
-
-		await expect(harness.session.compact()).rejects.toThrow("manual summary generator blew up");
-
-		expect(harness.eventsOfType("compaction_end").at(-1)).toMatchObject({
-			reason: "manual",
-			aborted: false,
-			willRetry: false,
-			errorMessage: "Compaction failed: manual summary generator blew up",
-		});
-		expect(failedEvents).toEqual([
-			expect.objectContaining({
-				type: "session_compact_failed",
-				reason: "manual",
-				aborted: false,
-				willRetry: false,
-				fromExtension: false,
-				errorMessage: "Compaction failed: manual summary generator blew up",
-			}),
-		]);
-	});
-
-	it("keeps the captured manual-compaction streamFn when auth resolution is still pending", async () => {
-		const harness = await createHarness({ withConfiguredAuth: false });
-		harnesses.push(harness);
-		seedCompactableSession(harness);
-		const getCapturedStreamCallCount = useSummaryStreamFn(harness, "manual summary from captured stream");
-		let markAuthStarted: () => void = () => {};
-		const authStarted = new Promise<void>((resolve) => {
-			markAuthStarted = resolve;
-		});
-		let releaseAuth: () => void = () => {};
-		const authReleased = new Promise<void>((resolve) => {
-			releaseAuth = resolve;
-		});
-		vi.spyOn(harness.session.modelRuntime, "getAuth").mockImplementation(async () => {
-			markAuthStarted();
-			await authReleased;
-			return undefined;
-		});
-
-		const compaction = harness.session.compact();
-		await authStarted;
-		let replacementStreamCallCount = 0;
-		harness.session.agent.streamFunction = (model) => {
-			replacementStreamCallCount++;
-			const stream = createAssistantMessageEventStream();
-			queueMicrotask(() => {
-				const message: AssistantMessage = {
-					...fauxAssistantMessage("manual summary from replacement stream"),
-					api: model.api,
-					provider: model.provider,
-					model: model.id,
-				};
-				stream.push({ type: "done", reason: "stop", message });
-			});
-			return stream;
-		};
-		releaseAuth();
-		const result = await compaction;
-
-		expect(getCapturedStreamCallCount()).toBe(1);
-		expect(replacementStreamCallCount).toBe(0);
-		expect(result.summary).toContain("manual summary from captured stream");
-	});
-
-	it("keeps the captured auto-compaction streamFn when auth resolution is still pending", async () => {
-		const harness = await createHarness({ withConfiguredAuth: false });
-		harnesses.push(harness);
-		seedCompactableSession(harness);
-		const getCapturedStreamCallCount = useSummaryStreamFn(harness, "summary from captured stream");
-		let markAuthStarted: () => void = () => {};
-		const authStarted = new Promise<void>((resolve) => {
-			markAuthStarted = resolve;
-		});
-		let releaseAuth: () => void = () => {};
-		const authReleased = new Promise<void>((resolve) => {
-			releaseAuth = resolve;
-		});
-		vi.spyOn(harness.session.modelRuntime, "getAuth").mockImplementation(async () => {
-			markAuthStarted();
-			await authReleased;
-			return undefined;
-		});
-		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
-
-		const compaction = sessionInternals._runAutoCompaction("threshold", false);
-		await authStarted;
-		let replacementStreamCallCount = 0;
-		harness.session.agent.streamFunction = (model) => {
-			replacementStreamCallCount++;
-			const stream = createAssistantMessageEventStream();
-			queueMicrotask(() => {
-				const message: AssistantMessage = {
-					...fauxAssistantMessage("summary from replacement stream"),
-					api: model.api,
-					provider: model.provider,
-					model: model.id,
-				};
-				stream.push({ type: "done", reason: "stop", message });
-			});
-			return stream;
-		};
-		releaseAuth();
-		await compaction;
-
-		expect(getCapturedStreamCallCount()).toBe(1);
-		expect(replacementStreamCallCount).toBe(0);
-		expect(harness.eventsOfType("compaction_end").at(-1)?.result?.summary).toContain("summary from captured stream");
-	});
-
 	it("compacts and resumes after a length stop below the desired output limit", async () => {
 		const harness = await createHarness({
 			models: [{ id: "faux-1", contextWindow: 1000, maxTokens: 100 }],
-			settings: { compaction: { keepRecentTokens: 1, triggerPercent: 95 } },
+			settings: { compaction: { keepRecentTokens: 1, reserveTokens: 0 } },
 			extensionFactories: [
 				(pi) => {
 					pi.on("session_before_compact", async (event) => ({
@@ -607,7 +475,7 @@ describe("AgentSession compaction characterization", () => {
 	it.each([false, true])(
 		"compacts after an oversized tool result in the same run (model override: %s)",
 		async (modelOverride) => {
-			const toolResult = `large-tool-result:${"x".repeat(6800)}`;
+			const toolResult = `large-tool-result:${"x".repeat(8000)}`;
 			const largeTool: AgentTool = {
 				name: "large_result",
 				label: "Large result",
@@ -619,17 +487,15 @@ describe("AgentSession compaction characterization", () => {
 			const observedSettings: unknown[] = [];
 			const harness = await createHarness({
 				models: [{ id: "faux-1", contextWindow: 2600, maxTokens: 100 }],
-				// Keep the trigger between pre-compaction usage (~2.6K) and resumed usage (~2.2K),
-				// including the faux provider's system-prompt and tool-schema overhead.
 				settings: {
 					compaction: modelOverride
 						? {
 								enabled: true,
-								triggerPercent: 90,
+								reserveTokens: 0,
 								keepRecentTokens: 20000,
-								modelOverrides: { "faux/faux-1": { keepRecentTokens: 1750 } },
+								modelOverrides: { "faux/faux-1": { reserveTokens: 400, keepRecentTokens: 1750 } },
 							}
-						: { enabled: true, triggerPercent: 90, keepRecentTokens: 1750 },
+						: { enabled: true, reserveTokens: 400, keepRecentTokens: 1750 },
 				},
 				tools: [largeTool],
 				extensionFactories: [
@@ -658,8 +524,7 @@ describe("AgentSession compaction characterization", () => {
 				(context) => {
 					order.push("provider");
 					resumedRequest = JSON.stringify(context.messages);
-					// Do not let a shared millisecond with compaction classify this fresh usage as stale.
-					return fauxAssistantMessage("finished after compaction", { timestamp: Date.now() + 1 });
+					return fauxAssistantMessage("finished after compaction");
 				},
 			]);
 
@@ -668,11 +533,8 @@ describe("AgentSession compaction characterization", () => {
 			const agentStartsBefore = harness.eventsOfType("agent_start").length;
 			await harness.session.prompt("run the large tool");
 
-			expect(order).toEqual(["compaction", "provider"]);
-			expect(observedSettings[0]).toEqual({ enabled: true, keepRecentTokens: 1750, triggerPercent: 90 });
-			expect(harness.eventsOfType("compaction_end")[0].result?.tokensBefore).toBeGreaterThan(2340);
-			const lastAssistant = harness.session.messages.filter((message) => message.role === "assistant").at(-1);
-			expect(lastAssistant?.usage.totalTokens).toBeLessThan(2340);
+			expect(order.slice(0, 2)).toEqual(["compaction", "provider"]);
+			expect(observedSettings[0]).toEqual({ enabled: true, reserveTokens: 400, keepRecentTokens: 1750 });
 			expect(harness.eventsOfType("agent_start")).toHaveLength(agentStartsBefore + 1);
 			expect(harness.eventsOfType("compaction_start").at(-1)).toEqual({
 				type: "compaction_start",
@@ -705,7 +567,7 @@ describe("AgentSession compaction characterization", () => {
 		});
 		const harness = await createHarness({
 			models: [{ id: "faux-1", contextWindow: 2600, maxTokens: 100 }],
-			settings: { compaction: { enabled: true, triggerPercent: 90, keepRecentTokens: 1750 } },
+			settings: { compaction: { enabled: true, reserveTokens: 400, keepRecentTokens: 1750 } },
 			tools: [largeTool],
 			extensionFactories: [
 				(pi) => {
@@ -763,7 +625,7 @@ describe("AgentSession compaction characterization", () => {
 		};
 		const harness = await createHarness({
 			models: [{ id: "faux-1", contextWindow: 2600, maxTokens: 100 }],
-			settings: { compaction: { enabled: true, triggerPercent: 90, keepRecentTokens: 1750 } },
+			settings: { compaction: { enabled: true, reserveTokens: 400, keepRecentTokens: 1750 } },
 			tools: [terminatingTool],
 			extensionFactories: [
 				(pi) => {
@@ -810,7 +672,7 @@ describe("AgentSession compaction characterization", () => {
 	it("stops after one compact-and-retry when a second response is also truncated", async () => {
 		const harness = await createHarness({
 			models: [{ id: "faux-1", contextWindow: 1_000_000, maxTokens: 100 }],
-			settings: { compaction: { keepRecentTokens: 1, triggerPercent: 95 } },
+			settings: { compaction: { keepRecentTokens: 1, reserveTokens: 0 } },
 			extensionFactories: [
 				(pi) => {
 					pi.on("session_before_compact", async (event) => ({
@@ -965,7 +827,7 @@ describe("AgentSession compaction characterization", () => {
 
 	it("compacts successful overflow responses without retrying", async () => {
 		const harness = await createHarness({
-			settings: { compaction: { enabled: true, keepRecentTokens: 1, triggerPercent: 95 } },
+			settings: { compaction: { enabled: true, keepRecentTokens: 1, reserveTokens: 0 } },
 			models: [{ id: "faux-1", contextWindow: 1, maxTokens: 100 }],
 			extensionFactories: [
 				(pi) => {
@@ -1128,7 +990,7 @@ describe("AgentSession compaction characterization", () => {
 
 	it("does not trigger threshold compaction below the threshold or when disabled", async () => {
 		const belowThresholdHarness = await createHarness({
-			settings: { compaction: { enabled: true, triggerPercent: 95 } },
+			settings: { compaction: { enabled: true, reserveTokens: 1000 } },
 			models: [{ id: "faux-1", contextWindow: 200_000 }],
 		});
 		harnesses.push(belowThresholdHarness);

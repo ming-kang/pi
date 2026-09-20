@@ -1,56 +1,40 @@
-/** Pure compaction policy, shared by settings readers and execution. */
-export interface CompactionSettings {
-	enabled: boolean;
-	keepRecentTokens: number;
-	/** Trigger line as a percentage of the context window. Default: 85 */
-	triggerPercent?: number;
-}
+/**
+ * Percentage trigger line, expressed in upstream's reserve-token budget.
+ *
+ * Compaction itself only knows `reserveTokens`: it triggers once the context
+ * exceeds `contextWindow - reserveTokens`. A fixed reserve behaves very
+ * differently across model windows — 16384 tokens is 8% of a 200k window but
+ * 1.6% of a million-token one — so this distribution configures the trigger as
+ * a percentage of the window and converts it to a reserve for the model in use.
+ * An explicit `compaction.reserveTokens` setting still wins.
+ */
+
+import type { CompactionSettings } from "./compaction.ts";
 
 export const DEFAULT_TRIGGER_PERCENT = 85;
 export const MIN_TRIGGER_PERCENT = 20;
 export const MAX_TRIGGER_PERCENT = 95;
-
-/** Upper bound for the internal summary reserve; not a user setting. */
-export const SUMMARY_RESERVE_TOKENS = 16384;
-
-export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
-	enabled: true,
-	keepRecentTokens: 20000,
-	triggerPercent: DEFAULT_TRIGGER_PERCENT,
-};
 
 export function clampTriggerPercent(value: number): number {
 	if (!Number.isFinite(value)) return DEFAULT_TRIGGER_PERCENT;
 	return Math.min(MAX_TRIGGER_PERCENT, Math.max(MIN_TRIGGER_PERCENT, value));
 }
 
-/** Context size at which auto-compaction triggers for this window. */
-export function triggerTokens(contextWindow: number, settings: CompactionSettings): number {
-	return (contextWindow * clampTriggerPercent(settings.triggerPercent ?? DEFAULT_TRIGGER_PERCENT)) / 100;
-}
-
-export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
-	return settings.enabled && contextTokens > triggerTokens(contextWindow, settings);
-}
-
 /**
- * Leave room below the trigger for summaries and the next response. Recent
- * messages target at most half the trigger; the summary reserve uses at most
- * a quarter. A split turn can use 0.8 + 0.5 of that reserve across two summaries.
- * Cut points still preserve whole messages and tool-call/result groups, so the
- * retained tail can exceed its target when a single group is too large.
+ * Reserve and retention for a trigger line at `triggerPercent` of the window.
+ *
+ * The retained tail stays at or below half the trigger line: keeping more than
+ * that would leave the compacted context close to the line again, so the next
+ * turn would immediately compact a second time.
  */
-export function getCompactionBudget(
-	settings: CompactionSettings,
-	contextWindow?: number,
-): { keepRecentTokens: number; summaryReserveTokens: number } {
-	if (contextWindow === undefined || !Number.isFinite(contextWindow) || contextWindow <= 0) {
-		return { keepRecentTokens: settings.keepRecentTokens, summaryReserveTokens: SUMMARY_RESERVE_TOKENS };
-	}
-	const threshold = triggerTokens(contextWindow, settings);
+export function triggerPercentBudget(
+	contextWindow: number,
+	triggerPercent: number,
+	keepRecentTokens: number,
+): Pick<CompactionSettings, "reserveTokens" | "keepRecentTokens"> {
+	const triggerTokens = (contextWindow * clampTriggerPercent(triggerPercent)) / 100;
 	return {
-		keepRecentTokens: Math.min(settings.keepRecentTokens, Math.max(1, Math.floor(threshold / 2))),
-		// At least two reserve tokens keep both summary output limits positive.
-		summaryReserveTokens: Math.min(SUMMARY_RESERVE_TOKENS, Math.max(2, Math.floor(threshold / 4))),
+		reserveTokens: Math.max(1, Math.round(contextWindow - triggerTokens)),
+		keepRecentTokens: Math.min(keepRecentTokens, Math.max(1, Math.floor(triggerTokens / 2))),
 	};
 }

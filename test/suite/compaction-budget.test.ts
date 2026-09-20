@@ -41,7 +41,8 @@ describe("compaction budgets on small windows", () => {
 			fauxAssistantMessage(fauxToolCall("large_result", {}), { stopReason: "toolUse" }),
 			(context, options) => {
 				expect(JSON.stringify(context.messages)).toContain("This is the PREFIX of a turn");
-				expect(options?.maxTokens).toBe(1600);
+				// The 80% reserve exceeds the model's own output limit, which then caps the summary.
+				expect(options?.maxTokens).toBe(8192);
 				return fauxAssistantMessage("A short summary of the original request.");
 			},
 			(context) => {
@@ -67,7 +68,7 @@ describe("compaction budgets on small windows", () => {
 		expect(harness.session.getLastAssistantText()).toBe("Continued successfully.");
 	});
 
-	it("uses the model budget for manual compaction while preserving the two-argument SDK preparation", async () => {
+	it("uses the model window budget for manual compaction", async () => {
 		const harness = await createHarness({
 			models: [{ id: "faux-1", contextWindow: 64000, maxTokens: 8192 }],
 			settings: { compaction: { enabled: false, triggerPercent: 20 } },
@@ -86,13 +87,16 @@ describe("compaction budgets on small windows", () => {
 		}
 		harness.session.agent.state.messages = harness.sessionManager.buildSessionContext().messages;
 		const entries = harness.sessionManager.getBranch();
-		const settings = harness.settingsManager.getCompactionSettings();
+		const settings = harness.settingsManager.getCompactionSettings(model);
+		// A 20% trigger on a 64K window reserves the remaining 80% and retains at most half the line.
+		expect(settings).toEqual({ enabled: false, reserveTokens: 51200, keepRecentTokens: 6400 });
 		expect(shouldCompact(16000, 64000, { ...settings, enabled: true })).toBe(true);
-		expect(prepareCompaction(entries, settings)).toBeUndefined();
-		expect(prepareCompaction(entries, settings, model.contextWindow)).toBeDefined();
+		expect(prepareCompaction(entries, settings)).toBeDefined();
+		// Without the model window, the default 20K retention keeps this whole session.
+		expect(prepareCompaction(entries, harness.settingsManager.getCompactionSettings())).toBeUndefined();
 		harness.setResponses([
 			(_context, options) => {
-				expect(options?.maxTokens).toBe(2560);
+				expect(options?.maxTokens).toBe(8192);
 				return fauxAssistantMessage("Summary of the first two turns.");
 			},
 		]);
@@ -101,6 +105,6 @@ describe("compaction budgets on small windows", () => {
 
 		expect(result.estimatedTokensAfter).toBeLessThan(12800);
 		expect(harness.faux.state.callCount).toBe(1);
-		expect(harness.settingsManager.getCompactionSettings()).toEqual(settings);
+		expect(harness.settingsManager.getCompactionSettings(model)).toEqual(settings);
 	});
 });

@@ -23,7 +23,6 @@ import {
 	type ModelThinkingLevel,
 	type Usage,
 } from "@earendil-works/pi-ai";
-import { triggerTokens } from "../../core/compaction/settings.ts";
 import { findInitialModel } from "../../core/model-resolver.ts";
 import { ModelRuntime } from "../../core/model-runtime.ts";
 import { SettingsManager } from "../../core/settings-manager.ts";
@@ -80,7 +79,7 @@ export async function openMicro(options: OpenMicroOptions = {}): Promise<OpenMic
 		const compaction = initial?.model ? settings.getCompactionSettings(initial.model) : undefined;
 		const threshold =
 			initial?.model && compaction?.enabled
-				? Math.max(0, Math.floor(triggerTokens(initial.model.contextWindow, compaction)))
+				? Math.max(0, initial.model.contextWindow - compaction.reserveTokens)
 				: 0;
 
 		storage = await JsonlStorage.open(location.path);
@@ -322,9 +321,7 @@ export async function openMicro(options: OpenMicroOptions = {}): Promise<OpenMic
 						{
 							model: ref,
 							thinkingLevel: clampThinkingLevel(model, currentThinking),
-							threshold: compact.enabled
-								? Math.max(0, Math.floor(triggerTokens(model.contextWindow, compact)))
-								: 0,
+							threshold: compact.enabled ? Math.max(0, model.contextWindow - compact.reserveTokens) : 0,
 							keepRecent: compact.keepRecentTokens,
 						},
 						BACKGROUND_CONTEXT,

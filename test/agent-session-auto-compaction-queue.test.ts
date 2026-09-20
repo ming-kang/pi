@@ -250,8 +250,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 		// A successful assistant message with token usage just over the compaction threshold.
 		// Compute this from the selected model so generated catalog context-window changes do not break the test.
 		const compactionSettings = settingsManager.getCompactionSettings();
-		const thresholdTokens =
-			Math.floor(((model.contextWindow ?? 200_000) * (compactionSettings.triggerPercent ?? 85)) / 100) + 1;
+		const thresholdTokens = (model.contextWindow ?? 200_000) - compactionSettings.reserveTokens + 1;
 		const successfulAssistant: AssistantMessage = {
 			role: "assistant",
 			content: [{ type: "text", text: "large successful response" }],

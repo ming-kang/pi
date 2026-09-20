@@ -2612,7 +2612,7 @@ export class InteractiveMode {
 	private showExtensionSelector(
 		title: string,
 		options: string[],
-		opts?: ExtensionUIDialogOptions & { subtitle?: string },
+		opts?: ExtensionUIDialogOptions & { description?: string },
 	): Promise<string | undefined> {
 		return new Promise((resolve) => {
 			if (opts?.signal?.aborted) {
@@ -2642,7 +2642,7 @@ export class InteractiveMode {
 				{
 					tui: this.ui,
 					timeout: opts?.timeout,
-					subtitle: opts?.subtitle,
+					description: opts?.description,
 					onToggleToolsExpanded: () => this.toggleToolOutputExpansion(),
 				},
 			);
@@ -2675,9 +2675,9 @@ export class InteractiveMode {
 		message: string,
 		opts?: ExtensionUIDialogOptions,
 	): Promise<boolean> {
-		// The message is context, not a heading: render it as the selector's muted
-		// subtitle instead of folding it into the accent-bold title.
-		const result = await this.showExtensionSelector(title, ["Yes", "No"], { ...opts, subtitle: message });
+		// The message is context, not a heading: render it as the selector's
+		// description instead of folding it into the accent-bold title.
+		const result = await this.showExtensionSelector(title, ["Yes", "No"], { ...opts, description: message });
 		return result === "Yes";
 	}
 
@@ -5520,7 +5520,6 @@ export class InteractiveMode {
 				},
 				initialSelectedId,
 				initialFilterMode,
-				() => this.ui.requestRender(),
 			);
 			selector.onCopy = async (text) => {
 				if (!text) {
@@ -5534,7 +5533,7 @@ export class InteractiveMode {
 					this.showError(error instanceof Error ? error.message : String(error));
 				}
 			};
-			return { component: selector, focus: selector, dispose: () => selector.dispose() };
+			return { component: selector, focus: selector };
 		});
 	}
 
@@ -5577,7 +5576,7 @@ export class InteractiveMode {
 
 				this.sessionManager.getSessionFile(),
 			);
-			return { component: selector, focus: selector, dispose: () => selector.dispose() };
+			return { component: selector, focus: selector };
 		});
 	}
 

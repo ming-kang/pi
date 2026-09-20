@@ -187,7 +187,6 @@ export class ArminComponent implements Component {
 				this.stopAnimation();
 			}
 		}, 1000 / fps);
-		this.interval.unref?.();
 	}
 
 	private stopAnimation(): void {
@@ -274,11 +273,6 @@ export class ArminComponent implements Component {
 					targetRow = row;
 					break;
 				}
-			}
-
-			if (targetRow < 0) {
-				drop.settled = DISPLAY_HEIGHT;
-				continue;
 			}
 
 			// Move drop down
