@@ -1,12 +1,12 @@
 {
 	"name": "@astralyn/pi",
-	"version": "0.85.3",
+	"version": "0.86.0",
 	"lockfileVersion": 3,
 	"requires": true,
 	"packages": {
 		"": {
 			"name": "@astralyn/pi",
-			"version": "0.85.3",
+			"version": "0.86.0",
 			"license": "MIT",
 			"dependencies": {
 				"@earendil-works/chord": "0.86.0",

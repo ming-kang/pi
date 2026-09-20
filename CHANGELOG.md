@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.86.0] - 2026-09-20
+
 ### Added
 
 - Adopted upstream v0.86.0. Cost-aware prompt-cache warming (`cacheWarming`, default `streaming`), with `/session` diagnostics, transcript notices, the `cache_warming_decision` extension event, and per-model `promptCache` lifetimes in `models.json`.
