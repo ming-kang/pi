@@ -1,4 +1,5 @@
-import type { Context, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { Message, ModelsSimpleStreamOptions, Tool } from "@earendil-works/pi-ai";
+import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import { type TObject, Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BtwAgent } from "../src/extensions/btw/agent.ts";
@@ -12,7 +13,7 @@ describe("SDK context snapshots", () => {
 	});
 
 	it("reuses the prepared main prefix including context hooks, image policy, and signed messages", async () => {
-		const requests: Context[] = [];
+		const requests: Array<{ messages: Message[]; systemPrompt: string; tools: Partial<Tool>[] }> = [];
 		let contexts = 0;
 		const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "never execute" }], details: {} }));
 		const fixture = await createBtwTestSession({
@@ -38,13 +39,16 @@ describe("SDK context snapshots", () => {
 			stream: (_model, context) => {
 				requests.push(
 					structuredClone({
-						...context,
-						tools: context.tools?.map(({ name, description, parameters, constrainedSampling }) => ({
-							name,
-							description,
-							parameters,
-							constrainedSampling,
-						})),
+						messages: [...context.messages],
+						systemPrompt: getCurrentSystemPrompt(context.messages),
+						tools: getCurrentTools(context.messages).map(
+							({ name, description, parameters, constrainedSampling }) => ({
+								name,
+								description,
+								parameters,
+								constrainedSampling,
+							}),
+						),
 					}),
 				);
 				return btwDone(
@@ -117,7 +121,6 @@ describe("SDK context snapshots", () => {
 		const snapshotPromise = fixture.session.getContextSnapshot();
 		await vi.waitFor(() => expect(started).toBe(true));
 		fixture.session.agent.state.messages = [{ role: "user", content: "new branch", timestamp: 2 }];
-		fixture.session.agent.state.systemPrompt = "later system";
 		fixture.session.agent.state.thinkingLevel = "off";
 		release!();
 		const snapshot = await snapshotPromise;

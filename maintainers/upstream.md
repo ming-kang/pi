@@ -69,3 +69,4 @@ An unregistered path can be a prompt wording change; it does not by itself imply
 ## Synchronization records
 
 - [v0.85.1](syncs/v0.85.1.md)
+- [v0.86.0](syncs/v0.86.0.md)

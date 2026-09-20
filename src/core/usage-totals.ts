@@ -105,6 +105,8 @@ function* accountedUsageEntries(entries: readonly SessionEntry[]): Generator<{ k
 				key: `${entry.message.provider}/${entry.message.responseModel ?? entry.message.model}`,
 				usage: entry.message.usage,
 			};
+		} else if (entry.type === "usage") {
+			yield { key: `${entry.provider}/${entry.model}`, usage: entry.usage };
 		} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.usage) {
 			yield { key: "Tools/summaries", usage: entry.message.usage };
 		} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
@@ -123,7 +125,7 @@ export function getAccountedUsages(entries: readonly SessionEntry[]): Usage[] {
 	return Array.from(accountedUsageEntries(entries), ({ usage }) => usage);
 }
 
-/** Group attributable assistant usage by model and all other usage into a separate bucket. */
+/** Group model-attributed usage by model and all other usage into a separate bucket. */
 export function getUsageCostBreakdown(entries: readonly SessionEntry[]): UsageCostBreakdownEntry[] {
 	const totalsByKey = new Map<string, UsageTotals>();
 

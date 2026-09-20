@@ -60,11 +60,46 @@ describe("ToolExecutionComponent parity", () => {
 	beforeAll(() => {
 		initTheme("dark");
 	});
-
 	afterEach(() => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();
 		resetCapabilitiesCache();
+	});
+
+	// Issue #8577: ignore conversions that finish after the image was replaced.
+	test("keeps the final tool image when a partial image conversion finishes late", async () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		let finishConversion!: (result: { data: string; mimeType: string }) => void;
+		const conversion = new Promise<{ data: string; mimeType: string }>((resolve) => {
+			finishConversion = resolve;
+		});
+		vi.spyOn(imageConvert, "convertToPng").mockReturnValue(conversion);
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-image-race",
+			{},
+			{},
+			undefined,
+			createFakeTui(),
+			process.cwd(),
+		);
+
+		component.updateResult(
+			{ content: [{ type: "image", data: "partial-jpeg", mimeType: "image/jpeg" }], isError: false },
+			true,
+		);
+		component.updateResult({
+			content: [{ type: "image", data: "final-png", mimeType: "image/png" }],
+			isError: false,
+		});
+		expect(component.render(120).join("\n")).toContain("final-png");
+
+		finishConversion({ data: "converted-partial", mimeType: "image/png" });
+		await conversion;
+
+		const rendered = component.render(120).join("\n");
+		expect(rendered).toContain("final-png");
+		expect(rendered).not.toContain("converted-partial");
 	});
 
 	test("ignores stale and post-disposal image conversions", async () => {
@@ -392,6 +427,51 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain("Truncated: showing 2000 of 4000 lines");
 		expect(rendered).not.toContain("[Showing lines 2001-4000 of 4000. Full output:");
 	});
+
+	// Issue #9628 (adapted): this distribution's shared tool chrome owns the bash progress row.
+	// It keeps short durations precise, rounds longer ones to whole seconds, renders hours, and
+	// disappears once the tool completes.
+	test.each([
+		{ ms: 4_200, formatted: "4.2s" },
+		{ ms: 59_900, formatted: "59.9s" },
+		{ ms: 59_999, formatted: "1m 0s" },
+		{ ms: 60_000, formatted: "1m 0s" },
+		{ ms: 90_900, formatted: "1m 31s" },
+		{ ms: 1_592_200, formatted: "26m 32s" },
+		{ ms: 3_599_999, formatted: "1h 0m 0s" },
+		{ ms: 3_600_000, formatted: "1h 0m 0s" },
+		{ ms: 7_384_900, formatted: "2h 3m 5s" },
+	])(
+		"bash progress row formats $ms ms as $formatted while running and hides it on completion",
+		({ ms, formatted }) => {
+			vi.useFakeTimers();
+			vi.setSystemTime(0);
+			const component = new ToolExecutionComponent(
+				"bash",
+				"tool-bash-duration",
+				{ command: "long-running-command" },
+				{},
+				createBashToolDefinition(process.cwd(), { exposeSessionEnvironment: false }),
+				createFakeTui(),
+				process.cwd(),
+			);
+			component.markExecutionStarted();
+			component.updateResult({ content: [], isError: false }, true);
+
+			vi.advanceTimersByTime(ms);
+			component.invalidate();
+			const running = stripAnsi(component.render(120).join("\n"));
+
+			component.updateResult({ content: [], isError: false }, false);
+			const completed = stripAnsi(component.render(120).join("\n"));
+
+			vi.advanceTimersByTime(1_000);
+			component.invalidate();
+			expect(stripAnsi(component.render(120).join("\n"))).toBe(completed);
+			expect(running).toContain(`Running… (${formatted})`);
+			expect(completed).not.toContain("Running…");
+		},
+	);
 
 	test("does not duplicate built-in headers when passed the active built-in definition", () => {
 		const component = new ToolExecutionComponent(

@@ -24,7 +24,8 @@ export function clampTriggerPercent(value: number): number {
 	return Math.min(MAX_TRIGGER_PERCENT, Math.max(MIN_TRIGGER_PERCENT, value));
 }
 
-function triggerTokens(contextWindow: number, settings: CompactionSettings): number {
+/** Context size at which auto-compaction triggers for this window. */
+export function triggerTokens(contextWindow: number, settings: CompactionSettings): number {
 	return (contextWindow * clampTriggerPercent(settings.triggerPercent ?? DEFAULT_TRIGGER_PERCENT)) / 100;
 }
 

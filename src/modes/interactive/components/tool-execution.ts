@@ -500,9 +500,11 @@ export class ToolExecutionComponent extends Container {
 			for (let i = 0; i < imageBlocks.length; i++) {
 				const img = imageBlocks[i];
 				if (caps.images && this.showImages && img.data && img.mimeType) {
-					const converted = this.convertedImages.get(i);
-					const imageData = converted?.sourceData === img.data ? converted.data : img.data;
-					const imageMimeType = converted?.sourceMimeType === img.mimeType ? converted.mimeType : img.mimeType;
+					const cached = this.convertedImages.get(i);
+					const converted =
+						cached?.sourceData === img.data && cached.sourceMimeType === img.mimeType ? cached : undefined;
+					const imageData = converted?.data ?? img.data;
+					const imageMimeType = converted?.mimeType ?? img.mimeType;
 					if (caps.images === "kitty" && imageMimeType !== "image/png") continue;
 
 					const spacer = new Spacer(1);

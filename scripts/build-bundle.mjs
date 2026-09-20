@@ -25,11 +25,12 @@ const allowedExternalPackages = new Set([
 	"@earendil-works/chord/delta",
 	"@earendil-works/chord/node",
 	"@silvia-odwyer/photon-node",
-	"@mariozechner/clipboard",
 	"jiti",
 	// Optional native accelerators. Their callers fall back to JavaScript when absent.
 	"bufferutil",
 	"utf-8-validate",
+	// Optional native Kerberos binding, imported only for Negotiate proxy authentication.
+	"kerberos",
 	// Optional debug output coloring.
 	"supports-color",
 ]);
@@ -88,12 +89,7 @@ function commonBuildOptions() {
 		banner,
 		bundle: true,
 		define: { PI_BUNDLED_NODE: "true" },
-		external: [
-			"@earendil-works/chord",
-			"@silvia-odwyer/photon-node",
-			"@mariozechner/clipboard",
-			"@mariozechner/clipboard-*",
-		],
+		external: ["@earendil-works/chord", "@silvia-odwyer/photon-node"],
 		format: "esm",
 		legalComments: "none",
 		logLevel: "warning",

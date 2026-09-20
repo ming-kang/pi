@@ -15,6 +15,7 @@ Pi reads this file at startup and on a model refresh, including when you open `/
   - [Custom Headers](#custom-headers)
 - [Model Configuration](#model-configuration)
   - [Thinking Level Map](#thinking-level-map)
+  - [Prompt Cache Lifetimes](#prompt-cache-lifetimes)
 - [Overriding Built-in Providers](#overriding-built-in-providers)
 - [Per-model Overrides](#per-model-overrides)
 - [Compatibility Options](#compatibility-options)
@@ -246,6 +247,7 @@ A `models` entry supplies a complete custom model definition with useful default
 | `maxTokens` | No | `16384` | Maximum generated tokens. |
 | `samplingParams` | No | omitted | Free-form sampling parameters merged verbatim into every request body; see [Sampling Parameters](#sampling-parameters). |
 | `cost` | No | all rates `0` | Per-million-token rates and optional request-wide price tiers. |
+| `promptCache` | No | omitted | Best-effort prompt cache lifetime in seconds per retention tier; see [Prompt Cache Lifetimes](#prompt-cache-lifetimes). |
 | `headers` | No | omitted | Model-specific request headers; see [Custom Headers](#custom-headers). |
 | `compat` | No | provider `compat` | Compatibility refinements merged with provider defaults. |
 
@@ -272,6 +274,19 @@ When `cost` is supplied on a `models` entry, it must contain all four base rates
   }
 }
 ```
+
+### Prompt Cache Lifetimes
+
+`promptCache` states how long the provider keeps a prompt cache entry alive for each retention tier Pi can request (`short` is the default tier; `long` is used when `PI_CACHE_RETENTION=long`). Values are seconds and are estimates: providers publish ranges, so pick the conservative end.
+
+```json
+{
+  "id": "claude-sonnet-5",
+  "promptCache": { "short": 300, "long": 3600 }
+}
+```
+
+The built-in catalog fills this in for direct Anthropic (5 min / 1 h). Other providers, including direct OpenAI, have no built-in lifetime until their cache-expiry and replay behavior has been validated for warming. A model without a value for the tier a request used is never warmed; custom models and provider overrides can opt in when the backing cache behavior is known. See [Cache Warming](settings.md#cache-warming).
 
 ### Sampling Parameters
 
@@ -390,7 +405,23 @@ The built-in models remain. A new custom `id` is added, while a matching ID is r
 }
 ```
 
-An override supports `name`, `reasoning`, `thinkingLevelMap`, `input`, `cost`, `contextWindow`, `maxTokens`, `samplingParams` (merged per key), `headers`, and `compat`. Its `cost` base rates are individually optional and retain omitted values; a supplied `tiers` array replaces the existing array. Thinking maps merge by level. `compat` merges by field, and its `openRouterRouting`, `vercelGatewayRouting`, and `chatTemplateKwargs` objects merge by key.
+An override supports `name`, `reasoning`, `thinkingLevelMap`, `input`, `cost`, `promptCache` (merged per tier), `contextWindow`, `maxTokens`, `samplingParams` (merged per key), `headers`, and `compat`. Its `cost` base rates are individually optional and retain omitted values; a supplied `tiers` array replaces the existing array. Thinking maps merge by level. `compat` merges by field, and its `openRouterRouting`, `vercelGatewayRouting`, and `chatTemplateKwargs` objects merge by key.
+
+Use a `promptCache` override to enable cache warming through a proxy whose backing cache you know, for example OpenRouter routed to Anthropic:
+
+```json
+{
+  "providers": {
+    "openrouter": {
+      "modelOverrides": {
+        "anthropic/claude-sonnet-4": {
+          "promptCache": { "short": 300 }
+        }
+      }
+    }
+  }
+}
+```
 
 Direct OpenAI GPT-5.6 Sol, Terra, and Luna default to a `272000` context window so requests remain within OpenAI's short-context pricing tier. To use the 1.05M context window, override each model you use:
 
@@ -428,7 +459,10 @@ For `api: "anthropic-messages"`, use these options for Anthropic-compatible endp
 | `forceAdaptiveThinking` | Uses adaptive thinking (`thinking.type: "adaptive"` and `output_config.effort`) regardless of model ID. Default: `false`. |
 | `allowEmptySignature` | Replays an empty thinking signature as `signature: ""` instead of converting the thinking block to text. Default: `false`. |
 | `supportsStrictTools` | Accepts strict JSON-schema tool definitions. Default: `false`; capable built-in Anthropic models set it in their metadata. |
-| `supportsToolReferences` | Accepts deferred tool loading with `tool_reference` blocks. The default is enabled only for supported recent first-party Anthropic models, and otherwise `false`. |
+| `supportsMidConvoEffort` | Accepts effort-only system messages and thinking binding controls. Default: `false`. |
+| `supportsMidConvoSystemMessages` | Accepts system-role messages inside the conversation. When `false`, later system messages fold into the top-level system prompt. Default: `false`. |
+| `supportsMidConvoToolChanges` | Accepts mid-conversation `tool_addition` and `tool_removal` blocks. Requires `supportsMidConvoSystemMessages`. Default: `false`. |
+| `allowedFallbackModels` | Models Anthropic accepts in `fallbacks` for server-side refusal fallback, with local pricing metadata for returned fallback responses. Omit `fallbacks` when empty. |
 
 For example, a proxy that lacks eager streaming but supports long cache retention and adaptive thinking can use:
 
@@ -486,7 +520,8 @@ For `api: "openai-completions"`, Pi auto-detects many defaults from the provider
 | `sessionAffinityFormat` | `openai` sends `session_id`, `x-client-request-id`, and `x-session-affinity`; `openai-nosession` omits `session_id`; `openrouter` sends `x-session-id`. It does not change `prompt_cache_key`. Default: URL-detected. |
 | `supportsStrictMode` | Accepts strict JSON-schema function tools. Default: URL-detected. |
 | `supportsOpenAIGrammarTools` | Emits OpenAI Lark/regex grammar tools. When `false`, grammar-constrained tools fall back to normal function tools. Default: `false`. |
-| `deferredToolsMode` | Provider-specific deferred-tool serialization. The only value is `kimi`. |
+| `supportsMidConvoSystemMessages` | Accepts system or developer messages after the conversation has started. When `false`, later system messages fold into the leading system message. Default: `false`. |
+| `supportsMidConvoToolAdditions` | Accepts tools introduced by mid-conversation system messages. Requires `supportsMidConvoSystemMessages`. Default: `false`. |
 | `supportsLongCacheRetention` | Accepts long prompt-cache retention: `prompt_cache_retention: "24h"`, or `cache_control.ttl: "1h"` with `cacheControlFormat: "anthropic"`. Default: `true` except URL-detected incompatible endpoints. |
 | `openRouterRouting` | OpenRouter routing preferences sent unchanged in the request `provider` field. |
 | `vercelGatewayRouting` | Vercel AI Gateway routing preferences (`only`, `order`) sent as `providerOptions.gateway`. |

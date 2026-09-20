@@ -19,10 +19,10 @@ import {
 	type Api,
 	type AssistantMessage,
 	type AssistantMessageEventStream,
-	type Context,
 	getModel,
 	type Model,
 	type SimpleStreamOptions,
+	type TranscriptContext,
 	Type,
 } from "@earendil-works/pi-ai/compat";
 import { AuthStorage } from "../src/core/auth-storage.ts";
@@ -286,7 +286,7 @@ async function main(): Promise<void> {
 	const baseModel = { ...model, maxTokens: args.maxTokens };
 	const streamSimpleOpenAICodexResponsesForRegistry = (
 		registryModel: Model<Api>,
-		context: Context,
+		context: TranscriptContext,
 		options?: SimpleStreamOptions,
 	): AssistantMessageEventStream =>
 		streamSimpleOpenAICodexResponses(registryModel as Model<"openai-codex-responses">, context, options);

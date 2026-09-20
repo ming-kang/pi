@@ -188,9 +188,9 @@ export async function runShellCommand(
 			});
 			managed?.control.accept();
 			({ exitCode } = await execution);
-			if (exitCode === null && managed) {
+			if (exitCode === null) {
 				failure = { status: "failed", error: "Command terminated without an exit code" };
-			} else if (exitCode !== 0 && exitCode !== null) {
+			} else if (exitCode !== 0) {
 				failure = { status: "failed", error: `Command exited with code ${exitCode}` };
 			}
 		} catch (error) {

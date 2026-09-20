@@ -32,8 +32,31 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `defaultThinkingLevel` | string | - | Global fallback: `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, or `"max"` |
 | `modelThinkingLevels` | object | - | Per-model default thinking levels keyed by `provider/modelId`; set through `/thinking` Ctrl+S or `/settings` |
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output |
-| `showCacheMissNotices` | boolean | `false` | Show transcript notices for significant prompt-cache misses and compaction or branch-summary usage |
+| `showCacheMissNotices` | boolean | `false` | Show transcript notices for significant prompt-cache misses, successful cache-warming usage, compaction or branch-summary usage, and provider recovery diagnostics such as dropped Anthropic thinking blocks |
 | `thinkingBudgets` | object | - | Custom token budgets per thinking level. Anthropic, Google, and Bedrock use these natively. OpenAI-compatible models use them when `compat.thinkingTokenBudgetField` (or `supportsThinkingTokenBudget`) is set. |
+| `cacheWarming` | string | `"streaming"` | Prompt cache-warming mode: `"off"`, `"streaming"`, or `"idle"`. Global setting only. |
+
+#### Cache Warming
+
+Providers drop a prompt cache entry after a period of inactivity, so the first request after a pause pays full input price again. Cache warming re-sends the last request with a one-token output budget shortly before expiry:
+
+- `"off"` disables warming.
+- `"streaming"` protects expensive prefixes during long tool executions and stops as soon as the agent settles.
+- `"idle"` also considers refreshes while waiting for your next prompt, using a fixed 15% continuation probability measured from real usage.
+
+```json
+{
+  "cacheWarming": "idle"
+}
+```
+
+A refresh is sent only when the expected avoided cache-miss cost, minus the cost of the refresh, leaves at least $0.05 of expected savings. Active agent runs use 100% continuation probability. `/session` shows the next decision, continuation probability, expected savings, threshold, and estimated costs. When cache miss notices are enabled, each successful refresh appears in the transcript with its cost; notices identify extension overrides.
+
+Warming stops when the context changes (model switch, compaction, branch navigation). Idle warming stops no later than 30 minutes after the last real provider request; warming during an active agent run stops after 60 minutes. Extensions can override each decision through the [`cache_warming_decision`](extensions.md#cache_warming_decision) event.
+
+Each refresh is billed as a cache read of the full context plus one output token. Usage and cost show up in session totals but never enter model context. Pi schedules candidates at 90% of the cache lifetime while leaving at least ten seconds before expiry.
+
+Warming needs a known cache lifetime for the model and the retention tier the request used (`short`, or `long` with `PI_CACHE_RETENTION=long`). The built-in catalog carries lifetimes for direct Anthropic; custom models and other providers can declare theirs with `promptCache` in `models.json` (see [Prompt Cache Lifetimes](models.md#prompt-cache-lifetimes)). Claude models that use budget-based rather than adaptive thinking are skipped while thinking is on, because Anthropic derives the thinking budget from `max_tokens` and keys the message cache on it, so a one-token request cannot reproduce the entry.
 
 Selecting a model or thinking level with Enter changes only the current session. Ctrl+S in `/model` saves `defaultProvider` and `defaultModel`; Ctrl+S in `/thinking` saves the level under `modelThinkingLevels` for the active model. A per-model value takes precedence over `defaultThinkingLevel`.
 
@@ -120,6 +143,7 @@ Version checks read the latest `@astralyn/pi` version from npm. Set `PI_SKIP_VER
 | `compaction.enabled` | boolean | `true` | Enable auto-compaction |
 | `compaction.triggerPercent` | number | `85` | Percentage of the context window that triggers auto-compaction (clamped to 20–95) |
 | `compaction.keepRecentTokens` | number | `20000` | Recent-message retention target, capped at half the trigger token budget |
+| `compaction.modelOverrides` | object | - | Per-model `keepRecentTokens` overrides keyed by exact `"provider/modelId"` |
 
 ```json
 {
@@ -135,6 +159,30 @@ Note: upstream Pi's `compaction.reserveTokens` setting is not supported and is i
 
 Retention and summary budgets shrink for small windows or low trigger percentages without changing the saved settings. Whole messages and tool-call/result groups can exceed the retention target. See [Compaction](compaction.md#how-it-works) for the budget rules and examples.
 
+#### Per-model compaction overrides
+
+```json
+{
+  "compaction": {
+    "enabled": true,
+    "triggerPercent": 85,
+    "keepRecentTokens": 20000,
+    "modelOverrides": {
+      "some-provider/big-model": {
+        "keepRecentTokens": 150000
+      },
+      "local/small-model": {
+        "keepRecentTokens": 4096
+      }
+    }
+  }
+}
+```
+
+Keys match exact, case-sensitive `provider/modelId` values, not names or glob patterns. Model IDs may contain slashes (for example, `openrouter/anthropic/claude-sonnet-4`).
+
+`keepRecentTokens` resolves independently: matching model override → ordinary `compaction` setting → built-in default. Token values must be non-negative safe integers. Invalid values in the matching model override produce an error when read; only omitted fields fall back to the ordinary setting. Model override entries must be objects. Invalid ordinary token settings produce an error when read, even if the active model has a valid override. Zero is accepted and keeps no recent messages beyond the cut point's own message group. `enabled` and `triggerPercent` stay global.
+
 ### Branch Summary
 
 | Setting | Type | Default | Description |
@@ -149,9 +197,12 @@ Retention and summary budgets shrink for small windows or low trigger percentage
 | `retry.enabled` | boolean | `true` | Enable automatic agent-level retry on transient errors |
 | `retry.maxRetries` | number | `3` | Maximum agent-level retry attempts |
 | `retry.baseDelayMs` | number | `2000` | Base delay for agent-level exponential backoff (2s, 4s, 8s) |
+| `retry.maxAgentDelayMs` | number | `60000` | Max agent-level retry delay (60s) |
 | `retry.provider.timeoutMs` | number | SDK default | Provider/SDK request timeout in milliseconds |
 | `retry.provider.maxRetries` | number | `0` | Provider/SDK retry attempts |
 | `retry.provider.maxRetryDelayMs` | number | `60000` | Max server-requested delay before failing (60s) |
+
+Agent-level retries use exponential backoff capped by `retry.maxAgentDelayMs`, so long retry runs stay responsive after prolonged outages.
 
 When a provider requests a retry delay longer than `retry.provider.maxRetryDelayMs`, the request fails immediately with an informative error instead of waiting silently. Set it to `0` to disable the limit.
 
@@ -163,6 +214,7 @@ Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explic
     "enabled": true,
     "maxRetries": 3,
     "baseDelayMs": 2000,
+    "maxAgentDelayMs": 60000,
     "provider": {
       "timeoutMs": 3600000,
       "maxRetries": 0,

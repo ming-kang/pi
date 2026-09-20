@@ -23,7 +23,7 @@
 		{
 			"path": "examples/",
 			"category": "distribution",
-			"intent": "Import paths renamed to @astralyn/pi and monorepo path references removed"
+			"intent": "Import paths renamed to @astralyn/pi and monorepo path references removed; private example versions are not bumped with upstream releases"
 		},
 		{
 			"path": "install-lock/",
@@ -89,11 +89,13 @@
 		{
 			"path": "src/core/agent-session.ts",
 			"category": "bugfix",
-			"intent": "Uses one captured stream for summarization across async auth; binds detached stable model-context snapshots; invalidates stale contexts; hosts the BackgroundSession coordinator through lifecycle pauses and persistence acknowledgements, including nextTurn context retained until persistence; supplies the captured model window to manual and automatic compaction budgets",
+			"intent": "Uses one captured stream for summarization across async auth; captures the model, its compaction policy, and the stream before manual-compaction auth; binds detached stable model-context snapshots whose prompt is replayed from the prepared transcript; invalidates stale contexts; hosts the BackgroundSession coordinator through lifecycle pauses and persistence acknowledgements, including nextTurn context retained until persistence; supplies the captured model window to manual and automatic compaction budgets",
 			"tests": [
 				"test/suite/agent-session-compaction.test.ts",
+				"test/suite/agent-session-compaction-model-overrides.test.ts",
 				"test/suite/compaction-budget.test.ts",
 				"test/suite/regressions/6324-branch-summary-ambient-auth.test.ts",
+				"test/suite/regressions/9340-9777-auto-compaction-cancellation.test.ts",
 				"test/agent-session-background.test.ts",
 				"test/context-snapshot.test.ts"
 			]
@@ -101,7 +103,7 @@
 		{
 			"path": "src/core/compaction/compaction.ts",
 			"category": "distribution",
-			"intent": "Compaction uses the shared percentage policy and model-window budgets from compaction/settings.ts, adapting retention and summary limits at low thresholds. Also cuts at the last valid point when trailing tool results exceed keepRecentTokens instead of making compaction a no-op (retire that part once upstream supplies an equivalent fix)",
+			"intent": "Compaction uses the shared percentage policy and model-window budgets from compaction/settings.ts, adapting retention and summary limits at low thresholds; the trailing-tool-result cut-point fix is upstream's since v0.86.0",
 			"tests": [
 				"test/compaction.test.ts",
 				"test/compaction-summary-reasoning.test.ts",
@@ -126,9 +128,10 @@
 		{
 			"path": "src/core/extensions/loader.ts",
 			"category": "distribution",
-			"intent": "Standalone package aliases via DISTRIBUTION_PACKAGE_NAME; no monorepo workspace resolution",
+			"intent": "Standalone package aliases and virtual-module keys via DISTRIBUTION_PACKAGE_NAME; no monorepo workspace resolution",
 			"tests": [
-				"test/extensions-discovery.test.ts"
+				"test/extensions-discovery.test.ts",
+				"test/suite/regressions/8237-node-sea-extension-loading.test.ts"
 			]
 		},
 		{
@@ -144,6 +147,14 @@
 			"path": "src/core/extensions/types.ts",
 			"category": "extension-support",
 			"intent": "Tool grouping/result render context with disposable row-local state, canonical ModelRuntime, stale-context helpers, stable snapshots, synchronous editor submission, cursor access and editor-scoped terminal input"
+		},
+		{
+			"path": "src/core/extensions/virtual-modules.ts",
+			"category": "distribution",
+			"intent": "Bundled coding-agent virtual module is keyed by DISTRIBUTION_PACKAGE_NAME instead of the upstream package name",
+			"tests": [
+				"test/suite/regressions/8237-node-sea-extension-loading.test.ts"
+			]
 		},
 		{
 			"path": "src/core/keybindings.ts",
@@ -188,7 +199,7 @@
 		{
 			"path": "src/core/sdk.ts",
 			"category": "distribution",
-			"intent": "CreateAgentSessionOptions.executionRole carries the host-assigned execution identity; subagent-role sessions reject background execution; model preparation records a reusable context prefix and shares request-option resolution with independent context consumers",
+			"intent": "CreateAgentSessionOptions.executionRole carries the host-assigned execution identity; subagent-role sessions reject background execution; model preparation records a reusable context prefix outside the session's request projections and shares request-option resolution with independent context consumers",
 			"tests": [
 				"test/agent-session-background.test.ts",
 				"test/context-snapshot.test.ts",
@@ -198,8 +209,11 @@
 		{
 			"path": "src/core/settings-manager.ts",
 			"category": "distribution",
-			"intent": "Default tuiMode is fullscreen; compaction uses the shared defaults and effective clamped triggerPercent, dropping reserveTokens; keep when syncing upstream",
-			"tests": ["test/compaction-settings.test.ts"]
+			"intent": "Default tuiMode is fullscreen; compaction uses the shared defaults and effective clamped triggerPercent, dropping reserveTokens (model overrides carry keepRecentTokens only); keep when syncing upstream",
+			"tests": [
+				"test/compaction-settings.test.ts",
+				"test/settings-manager-compaction.test.ts"
+			]
 		},
 		{
 			"path": "src/core/tools/bash.ts",
@@ -296,6 +310,11 @@
 			]
 		},
 		{
+			"path": "src/experimental/micro/runtime.ts",
+			"category": "distribution",
+			"intent": "Derives the compaction threshold from the shared triggerPercent policy because this distribution has no reserveTokens setting"
+		},
+		{
 			"path": "src/experimental/plugins/bundled.ts",
 			"category": "distribution",
 			"intent": "resolvePluginExternal also maps this distribution's @astralyn/pi/experimental/plugin specifier to the local plugin module, not only upstream's package name"
@@ -314,6 +333,11 @@
 			"path": "src/index.ts",
 			"category": "extension-support",
 			"intent": "Re-exports model-context snapshots and editor submit/input types, plus the public Background supervision, projection, text, worker-report, and completion-snapshot types"
+		},
+		{
+			"path": "src/modes/interactive/bug-report.ts",
+			"category": "ui",
+			"intent": "Selector explanations render through the distribution's subtitle option"
 		},
 		{
 			"path": "src/modes/interactive/components/armin.ts",
@@ -347,7 +371,7 @@
 		{
 			"path": "src/modes/interactive/components/extension-selector.ts",
 			"category": "ui",
-			"intent": "Selector subtitle line under the title and keybinding-aware hint labels",
+			"intent": "Selector subtitle line under the title (upstream's description option) and keybinding-aware hint labels",
 			"tests": [
 				"test/extension-selector.test.ts"
 			]
@@ -427,7 +451,9 @@
 			"path": "src/modes/rpc/rpc-mode.ts",
 			"category": "extension-support",
 			"intent": "Supplies TUI-only editor submission and cursor APIs as no-ops in the RPC UI context",
-			"tests": ["test/extensions-runner.test.ts"]
+			"tests": [
+				"test/extensions-runner.test.ts"
+			]
 		},
 		{
 			"path": "src/utils/shell.ts",

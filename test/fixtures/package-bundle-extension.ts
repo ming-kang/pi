@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { type ExtensionAPI, SessionManager } from "@astralyn/pi";
-import type { OAuthCredential } from "@earendil-works/pi-ai";
+import { normalizeContext, type OAuthCredential } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
 /** Loaded from an isolated installed package, through its bundled virtual modules. */
@@ -29,7 +29,7 @@ export default async function packageBundleSmoke(pi: ExtensionAPI): Promise<void
 	const result = await bedrock
 		.stream(
 			{ ...model, baseUrl: "http://127.0.0.1:9" },
-			{ messages: [{ role: "user", content: "Offline module-load check", timestamp: 0 }] },
+			normalizeContext({ messages: [{ role: "user", content: "Offline module-load check", timestamp: 0 }] }),
 			{
 				env: { AWS_REGION: "us-east-1", AWS_ACCESS_KEY_ID: "probe", AWS_SECRET_ACCESS_KEY: "probe" },
 				onPayload: () => {

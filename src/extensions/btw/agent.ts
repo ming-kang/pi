@@ -1,5 +1,6 @@
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Message, Models, Usage } from "@earendil-works/pi-ai";
+import { normalizeContext } from "@earendil-works/pi-ai";
 import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import type { ContextSnapshot } from "../../core/extensions/index.ts";
 import {
@@ -185,14 +186,16 @@ export class BtwAgent {
 
 	private fits(messages: AgentMessage[]): boolean {
 		return (
-			estimateContextTokens({
-				systemPrompt: this.agent.state.systemPrompt,
-				tools: this.agent.state.tools,
-				messages: messages.filter(
-					(message): message is Message =>
-						message.role === "user" || message.role === "assistant" || message.role === "toolResult",
-				),
-			}).tokens < this.inputBudget
+			estimateContextTokens(
+				normalizeContext({
+					systemPrompt: this.agent.state.systemPrompt,
+					tools: this.agent.state.tools,
+					messages: messages.filter(
+						(message): message is Message =>
+							message.role === "user" || message.role === "assistant" || message.role === "toolResult",
+					),
+				}),
+			).tokens < this.inputBudget
 		);
 	}
 

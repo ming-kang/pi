@@ -1,5 +1,5 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
@@ -93,7 +93,7 @@ describe("subagent SDK runner", () => {
 		const faux = fauxProvider({ provider: `subagent-prompt-${Date.now()}-${Math.random()}` });
 		faux.setResponses([
 			(context) => {
-				systemPrompt = context.systemPrompt;
+				systemPrompt = getCurrentSystemPrompt(context.messages);
 				return fauxAssistantMessage("prompt checked");
 			},
 		]);
@@ -122,8 +122,8 @@ describe("subagent SDK runner", () => {
 		const faux = fauxProvider({ provider: `subagent-context-${Date.now()}-${Math.random()}` });
 		faux.setResponses([
 			(context) => {
-				systemPrompt = context.systemPrompt;
-				toolNames = context.tools?.map((tool) => tool.name) ?? [];
+				systemPrompt = getCurrentSystemPrompt(context.messages);
+				toolNames = getCurrentTools(context.messages).map((tool) => tool.name);
 				return fauxAssistantMessage("context checked");
 			},
 		]);

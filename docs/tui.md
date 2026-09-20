@@ -803,6 +803,8 @@ export default function (pi: ExtensionAPI) {
 
 Pass `undefined` to `ctx.ui.setEditorComponent()` to restore Pi's default editor.
 
+Custom editors keep standalone status rows by default. Pass `{ embedWorkingStatus: true }` as the fourth `CustomEditor` constructor argument to embed the working, compaction, branch summarization, and retry spinners in the editor border instead.
+
 **Examples:** [modal-editor.ts](../examples/extensions/modal-editor.ts)
 
 ## Debug Logging

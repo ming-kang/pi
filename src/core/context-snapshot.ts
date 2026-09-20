@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { Agent, AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Message, Model, ModelsSimpleStreamOptions, Tool } from "@earendil-works/pi-ai";
 import type { ExtensionRunner } from "./extensions/runner.ts";
 import { convertToLlm } from "./messages.ts";
@@ -12,6 +12,11 @@ export interface ContextSnapshot {
 	leafId: string | null;
 	model: Model<Api>;
 	thinkingLevel: ThinkingLevel;
+	/**
+	 * The prompt replayed from the prepared transcript, which is the text the provider received.
+	 * Before the first request it is the session's current prompt, which a consumer's Agent
+	 * declares itself when `messages` carry no system message.
+	 */
 	systemPrompt: string;
 	messages: Message[];
 	tools: Tool[];
@@ -47,9 +52,10 @@ interface PreparedSource {
 }
 
 /**
- * Records the actual pre-provider message prefix, after context hooks and image policy.
- * A snapshot can reuse it and convert only newly settled messages. In particular, a
- * time-dependent context hook is not rerun over an already prepared cache prefix.
+ * Records the actual pre-provider message prefix, after context hooks, the session's request
+ * projections, and image policy. A snapshot can reuse it and convert only newly settled
+ * messages. In particular, a time-dependent context hook is not rerun over an already
+ * prepared cache prefix.
  */
 export class ContextSnapshotCapture {
 	private readonly settings: SettingsManager;
@@ -62,13 +68,22 @@ export class ContextSnapshotCapture {
 		this.runnerRef = runnerRef;
 	}
 
-	transformContext = async (messages: AgentMessage[]): Promise<AgentMessage[]> => {
-		const runner = this.runnerRef.current;
-		const source = { messages: structuredClone(messages), runner };
-		const transformed = runner ? await runner.emitContext(messages) : messages;
-		this.pending.set(transformed, source);
-		return transformed;
-	};
+	/**
+	 * Record the source of every request context. Install after all other `transformContext`
+	 * wrappers so the recorded prefix is exactly the array the request converts; a wrapper
+	 * installed later would return a different array and the prefix would never be reused.
+	 */
+	install(agent: Agent): void {
+		const transform = agent.transformContext;
+		agent.transformContext = async (messages, signal) => {
+			const runner = this.runnerRef.current;
+			const source = { messages: structuredClone(messages), runner };
+			const transformed = transform ? await transform(messages, signal) : messages;
+			this.pending.set(transformed, source);
+			return transformed;
+		};
+		agent.convertToLlm = this.convertToLlm;
+	}
 
 	convertToLlm = (messages: AgentMessage[]): Message[] => {
 		const blockImages = this.settings.getBlockImages();

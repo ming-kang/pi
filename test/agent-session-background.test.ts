@@ -535,7 +535,8 @@ describe("session-owned background host", () => {
 		await prompting;
 		await vi.waitFor(() => expect(session.messages.some((message) => message.role === "custom")).toBe(true));
 		await session.waitForIdle();
-		expect(session.messages[0].role).toBe("user");
+		// The transcript's system message precedes the conversation; the user's input must come next.
+		expect(session.messages.find((message) => message.role !== "system")?.role).toBe("user");
 	});
 
 	it("waits for the complete main tool batch and settled hooks before starting a notification turn", async () => {

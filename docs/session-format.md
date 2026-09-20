@@ -8,7 +8,7 @@ Sessions are stored as JSONL (JSON Lines) files. Each line is a JSON object with
 ~/.pi/agent/sessions/--<encoded-cwd>--/<timestamp>_<uuid>.jsonl
 ```
 
-Pi resolves the working directory to an absolute path, removes one leading `/` or `\`, replaces every `/`, `\`, and `:` with `-`, then wraps the result in `--`. For example, `/path/to/project` is stored under `--path-to-project--`; `C:\Users\me\project` is stored under `--C--Users-me-project--`.
+Pi resolves the working directory to an absolute path, removes one leading `/` or `\`, replaces every `/`, `\`, and `:` with `-`, then wraps the result in `--`. For example, `/path/to/project` is stored under `--path-to-project--`; `C:\Users\me\project` is stored under `--C--Users-me-project--`. By default the session ID is a UUID; callers can supply their own through the SDK or `--session-id`.
 
 ## Deleting Sessions
 
@@ -92,12 +92,21 @@ interface ToolCall {
   name: string;
   arguments: Record<string, any>;
   thoughtSignature?: string;
+  namespace?: string;
 }
 ```
 
 ### Base Message Types (`@earendil-works/pi-ai`)
 
 ```typescript
+interface SystemMessage {
+  role: "system";
+  content: string | TextContent[];
+  toolsAdded?: Tool[];
+  toolsRemoved?: Array<{ name: string }>;
+  timestamp: number;  // Unix ms
+}
+
 interface UserMessage {
   role: "user";
   content: string | (TextContent | ImageContent)[];
@@ -112,10 +121,14 @@ interface AssistantMessage {
   model: string;
   responseModel?: string;
   responseId?: string;
+  providerThinkingLevel?: string;
   diagnostics?: AssistantMessageDiagnostic[];
   usage: Usage;
-  stopReason: "stop" | "length" | "toolUse" | "error" | "aborted";
+  stopReason: "pending" | "stop" | "length" | "toolUse" | "error" | "aborted" | "deferred";
+  deferred?: DeferredHandle;
   errorMessage?: string;
+  rawStopReason?: string;
+  endTurn?: boolean;
   timestamp: number;
 }
 
@@ -149,7 +162,7 @@ interface Usage {
 }
 ```
 
-The exported pi-ai `StopReason` type also includes `"pending"`, but that value is reserved for partial messages in streaming events. Terminal `done` or `error` events replace it with a final completion reason before Pi persists the assistant message, so `"pending"` must never appear in session JSONL.
+The exported pi-ai `StopReason` type also includes `"pending"`, but that value is reserved for partial messages in streaming events. Terminal `done` or `error` events replace it with a final completion reason before Pi persists the assistant message, so `"pending"` must never appear in session JSONL. `"deferred"` is a terminal reason for a provider response that will complete later; its `deferred` handle carries the provider data needed to retrieve that response.
 
 ### Pi-Specific `AgentMessage` Roles
 
@@ -178,7 +191,7 @@ interface CustomMessage<T = unknown> {
 interface BranchSummaryMessage {
   role: "branchSummary";
   summary: string;
-  fromId: string;                // Entry we branched from
+  fromId: string | null;         // Previous leaf whose abandoned path was summarized
   timestamp: number;
 }
 
@@ -192,7 +205,7 @@ interface CompactionSummaryMessage {
 
 ### `AgentMessage`
 
-`AgentMessage` is the `Message` union from `@earendil-works/pi-ai` plus roles registered through `CustomAgentMessages` in `@earendil-works/pi-agent-core`. Pi registers the four roles above; extensions may register additional roles.
+`AgentMessage` is the `Message` union from `@earendil-works/pi-ai` plus roles registered through `CustomAgentMessages` in `@earendil-works/pi-agent-core`. Pi registers the four roles above alongside the base `system`, `user`, `assistant`, and `toolResult` roles; extensions may register additional roles.
 
 ## Entry Base
 
@@ -201,9 +214,9 @@ All entries (except `SessionHeader`) extend `SessionEntryBase`:
 ```typescript
 interface SessionEntryBase {
   type: string;
-  id: string;
-  parentId: string | null;  // Parent entry ID (null for first entry)
-  timestamp: string;        // ISO timestamp
+  id: string;           // Usually an 8-char hex ID; may fall back to a full UUID
+  parentId: string | null;  // Parent entry ID (null for a root entry)
+  timestamp: string;    // ISO timestamp
 }
 ```
 
@@ -225,11 +238,18 @@ For sessions with a parent (created via `/fork`, `/clone`, or `newSession({ pare
 
 ### SessionMessageEntry
 
-A message in the conversation. The `message` field contains an `AgentMessage`. These examples include the required message fields; optional fields from the message shapes above may also be present.
+A message in the conversation. The `message` field contains an `AgentMessage`. These examples include the required message fields; optional fields from the message shapes above may also be present. System messages carry the prompt and tool loadout: the first request of a session persists one with every prompt section and tool declaration, and later changes persist as system messages that patch `sections` by name (`null` removes one) and list `toolsAdded`/`toolsRemoved`. Replaying them in order yields the current prompt and tools; there is no separate prompt state entry.
 
 ```json
-{"type":"message","id":"a1b2c3d4","parentId":null,"timestamp":"2024-12-03T14:00:01.000Z","message":{"role":"user","content":"Hello","timestamp":1733234401000}}
-{"type":"message","id":"b2c3d4e5","parentId":"a1b2c3d4","timestamp":"2024-12-03T14:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Hi!"}],"api":"anthropic-messages","provider":"anthropic","model":"claude-sonnet-4-5","usage":{"input":10,"output":2,"cacheRead":0,"cacheWrite":0,"totalTokens":12,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1733234402000}}
+{"type":"message","id":"a0b1c2d3","parentId":null,"timestamp":"2024-12-03T14:00:00.000Z","message":{"role":"system","content":"","sections":{"preamble":"You are an expert coding assistant...","tools":"<tools>\n- read: ...\n</tools>","cwd":"/project"},"toolsAdded":[{"name":"read","description":"...","parameters":{}}],"timestamp":1733234400000}}
+{"type":"message","id":"d4e5f6g7","parentId":"c3d4e5f6","timestamp":"2024-12-03T14:04:00.000Z","message":{"role":"system","content":"","sections":{"skills":"<skills>...</skills>"},"toolsRemoved":[{"name":"write"}],"timestamp":1733234640000}}
+```
+
+Sessions created before system messages existed have no leading system message; the first request declares the current prompt as a later system message, which replays the same way.
+
+```json
+{"type":"message","id":"a1b2c3d4","parentId":"prev1234","timestamp":"2024-12-03T14:00:01.000Z","message":{"role":"user","content":"Hello","timestamp":1733234401000}}
+{"type":"message","id":"b2c3d4e5","parentId":"a1b2c3d4","timestamp":"2024-12-03T14:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Hi!"}],"api":"anthropic-messages","provider":"anthropic","model":"claude-sonnet-4-5","usage":{...},"stopReason":"stop","timestamp":1733234402000}}
 {"type":"message","id":"c3d4e5f6","parentId":"b2c3d4e5","timestamp":"2024-12-03T14:00:03.000Z","message":{"role":"toolResult","toolCallId":"call_123","toolName":"bash","content":[{"type":"text","text":"output"}],"isError":false,"timestamp":1733234403000}}
 ```
 
@@ -249,15 +269,28 @@ Emitted when the user changes the thinking/reasoning level.
 {"type":"thinking_level_change","id":"e5f60718","parentId":"d4e5f607","timestamp":"2024-12-03T14:06:00.000Z","thinkingLevel":"high"}
 ```
 
-### CompactionEntry
+### UsageEntry
 
-Created when context is compacted. Stores a summary of earlier messages. `firstKeptEntryId` is required and identifies the earliest pre-compaction path entry retained alongside the summary.
+Records model-attributed usage that is not an assistant message and does not participate in LLM context. `kind` is an arbitrary string identifying the operation; for example, cache warming uses `"cache_warm"`.
 
 ```json
-{"type":"compaction","id":"f6071829","parentId":"e5f60718","timestamp":"2024-12-03T14:10:00.000Z","summary":"User discussed X, Y, Z...","firstKeptEntryId":"c3d4e5f6","tokensBefore":50000}
+{"type":"usage","id":"f6g7h8i9","parentId":"e5f6g7h8","timestamp":"2024-12-03T14:08:00.000Z","kind":"cache_warm","provider":"anthropic","model":"claude-sonnet-4-5","usage":{"input":0,"output":0,"cacheRead":50000,"cacheWrite":0,"totalTokens":50000,"cost":{"input":0,"output":0,"cacheRead":0.015,"cacheWrite":0,"total":0.015}}}
 ```
 
+Usage entries contribute to session token and cost totals. Pi hides them from the conversation tree. Consumers should treat unknown `kind` values as normal usage rather than rejecting them.
+
+### CompactionEntry
+
+Created when context is compacted. Stores a summary of earlier messages and a complete system prompt/tool checkpoint. `firstKeptEntryId` is required and identifies the earliest pre-compaction path entry retained alongside the summary.
+
+```json
+{"type":"compaction","id":"f6g7h8i9","parentId":"e5f6g7h8","timestamp":"2024-12-03T14:10:00.000Z","summary":"User discussed X, Y, Z...","firstKeptEntryId":"c3d4e5f6","tokensBefore":50000,"systemMessage":{"role":"system","content":"You are a coding assistant.","toolsAdded":[],"timestamp":1733235000000}}
+```
+
+`firstKeptEntryId` is required. It identifies the first entry retained from before the compaction entry. When rebuilding context, Pi replaces older summarized entries with the compaction summary and keeps the range beginning at this entry.
+
 Optional fields:
+- `systemMessage`: The replayed prompt sections and tool declarations at the compaction boundary; it becomes the leading system message of the compacted context, and system messages among the kept entries are dropped in its favor. It is absent on older session entries.
 - `usage`: LLM usage from generating the summary; included in session token and cost totals
 - `details`: Implementation-specific data (e.g., `{ readFiles: string[], modifiedFiles: string[] }` for default, or custom data for extensions)
 - `fromHook`: `true` if generated by an extension, `false`/`undefined` if pi-generated (legacy field name)
@@ -269,6 +302,8 @@ Created when switching branches via `/tree` with an LLM generated summary of the
 ```json
 {"type":"branch_summary","id":"0718293a","parentId":"a1b2c3d4","timestamp":"2024-12-03T14:15:00.000Z","fromId":"f6071829","summary":"Branch explored approach A..."}
 ```
+
+`parentId` is the entry from which the new branch continues. `fromId` is the previous leaf whose abandoned path was summarized.
 
 Optional fields:
 - `usage`: LLM usage from generating the summary; included in session token and cost totals
@@ -378,11 +413,12 @@ The session name is displayed in the session selector (`/resume`) instead of the
 
 ## Tree Structure
 
-Entries form a tree:
-- First entry has `parentId: null`
-- Each subsequent entry points to its parent via `parentId`
+Entries normally form one tree, but navigation APIs can create multiple roots:
+- A root entry has `parentId: null`; the first entry is initially the root
+- Each non-root entry points to its parent via `parentId`
 - Branching creates new children from an earlier entry
 - The "leaf" is the current position in the tree
+- Calling `resetLeaf()` or `branchWithSummary(null, ...)` allows a later entry to become another root
 
 ```
 [user msg] ─── [assistant] ─── [user msg] ─── [assistant] ─┬─ [user msg] ← current leaf
@@ -395,7 +431,7 @@ Entries form a tree:
 `buildContextEntries()` follows the active path from root to the current leaf. If the path has no compaction entry, it returns that path unchanged. Otherwise it uses only the latest `CompactionEntry` and returns entries in this order:
 
 1. The latest compaction entry itself.
-2. Path entries starting at that compaction's required `firstKeptEntryId` and ending immediately before the compaction entry.
+2. Non-system path entries starting at that compaction's required `firstKeptEntryId` and ending immediately before the compaction entry.
 3. Every path entry after the compaction entry.
 
 Earlier summarized entries are omitted. Non-message entries in the selected ranges remain in the returned list for rendering and state handling. If a malformed session's `firstKeptEntryId` is not found before the compaction entry, step 2 contributes no entries.
@@ -405,10 +441,10 @@ Earlier summarized entries are omitted. Non-message entries in the selected rang
 1. It determines `thinkingLevel` and `model` from the entire active path, including entries omitted by compaction. A `model_change` sets the model, and an assistant message later on the path sets it from that message's `provider` and `model`.
 2. It projects the selected entries to `AgentMessage[]` in the order above:
    - `message` → the stored `AgentMessage`; parsed user, assistant, or tool-result messages with null or missing `content` are copied with `content: []`.
-   - `compaction` → `CompactionSummaryMessage`.
+   - `compaction` → its complete system checkpoint followed by a `CompactionSummaryMessage`. Pre-compaction system messages are folded into that checkpoint rather than replayed from the retained range.
    - `branch_summary` → `BranchSummaryMessage`.
    - `custom_message` → `CustomMessage`.
-   - `custom`, model/thinking changes, labels, and session-info entries → no message.
+   - `usage`, `custom`, model/thinking changes, labels, and session-info entries → no message.
 
 Use `convertToLlm()` from `@astralyn/pi` when provider-ready `Message[]` are required. It passes base user, assistant, and tool-result messages through; it converts Pi-specific context roles to user messages and omits `bashExecution` messages marked `excludeFromContext`.
 
@@ -434,6 +470,9 @@ for (const line of lines) {
       break;
     case "branch_summary":
       console.log(`[${entry.id}] Branch from ${entry.fromId}`);
+      break;
+    case "usage":
+      console.log(`[${entry.id}] Usage (${entry.kind}): ${entry.usage.totalTokens} tokens`);
       break;
     case "custom":
       console.log(`[${entry.id}] Custom (${entry.customType}): ${JSON.stringify(entry.data)}`);
@@ -463,16 +502,16 @@ Import `SessionManager` and its session types from `@astralyn/pi` as shown above
 - `SessionManager.create(cwd: string, sessionDir?: string, options?: NewSessionOptions): SessionManager` — create a persisted session.
 - `SessionManager.open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager` — open a session file. `cwdOverride` takes precedence over the header's `cwd`.
 - `SessionManager.continueRecent(cwd: string, sessionDir?: string): SessionManager` — open the most recent session or create one.
-- `SessionManager.inMemory(cwd?: string, options?: NewSessionOptions): SessionManager` — create a non-persisted session.
+- `SessionManager.inMemory(cwd?: string, options?: NewSessionOptions, entries?: FileEntry[]): SessionManager` — create a non-persisted session, optionally initialized from entries.
 - `SessionManager.forkFrom(sourcePath: string, targetCwd: string, sessionDir?: string, options?: NewSessionOptions): SessionManager` — fork into another working directory.
 
 ### Static Listing Methods
 
-The optional progress callback has type `(loaded: number, total: number) => void`.
+The optional progress callback has type `SessionListProgress`: `(loaded: number, total: number, partialSessions?: readonly SessionInfo[]) => void`. Periodic updates carry the sessions loaded so far, sorted by activity. The optional `AbortSignal` cancels outstanding transcript reads.
 
-- `SessionManager.list(cwd: string, sessionDir?: string, onProgress?: (loaded: number, total: number) => void): Promise<SessionInfo[]>` — list sessions for a directory.
-- `SessionManager.listAll(onProgress?: (loaded: number, total: number) => void): Promise<SessionInfo[]>` — list all default session directories.
-- `SessionManager.listAll(sessionDir?: string, onProgress?: (loaded: number, total: number) => void): Promise<SessionInfo[]>` — list one supplied session directory. This is an overload of the previous form.
+- `SessionManager.list(cwd: string, sessionDir?: string, onProgress?: SessionListProgress, signal?: AbortSignal): Promise<SessionInfo[]>` — list sessions for a directory.
+- `SessionManager.listAll(onProgress?: SessionListProgress, signal?: AbortSignal): Promise<SessionInfo[]>` — list all default session directories.
+- `SessionManager.listAll(sessionDir?: string, onProgress?: SessionListProgress, signal?: AbortSignal): Promise<SessionInfo[]>` — list one supplied session directory. This is an overload of the previous form.
 
 ### Instance Methods — Session Management
 

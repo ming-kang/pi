@@ -30,6 +30,7 @@ import {
 	type ModelsSimpleStreamOptions,
 	type ModelsStore,
 	type MutableModels,
+	normalizeContext,
 	type Provider,
 	type ProviderHeaders,
 	type ProviderRequestOptions,
@@ -617,6 +618,7 @@ export class ModelRuntime implements Models {
 		context: Context,
 		options?: ModelsApiStreamOptions<TApi>,
 	): AssistantMessageEventStream {
+		const transcript = normalizeContext(context);
 		return lazyStream(model, async () => {
 			const prepared = await this.prepareRequest(
 				model,
@@ -624,7 +626,7 @@ export class ModelRuntime implements Models {
 			);
 			return prepared.provider.stream(
 				prepared.model as Model<TApi>,
-				context,
+				transcript,
 				prepared.options as ApiStreamOptions<TApi>,
 			);
 		});
@@ -639,9 +641,10 @@ export class ModelRuntime implements Models {
 	}
 
 	streamSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): AssistantMessageEventStream {
+		const transcript = normalizeContext(context);
 		return lazyStream(model, async () => {
 			const prepared = await this.prepareRequest(model, options);
-			return prepared.provider.streamSimple(prepared.model, context, prepared.options as SimpleStreamOptions);
+			return prepared.provider.streamSimple(prepared.model, transcript, prepared.options as SimpleStreamOptions);
 		});
 	}
 

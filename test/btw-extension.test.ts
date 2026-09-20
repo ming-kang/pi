@@ -128,7 +128,8 @@ describe("BTW extension lifecycle and persistence", () => {
 		await vi.waitFor(() => expect(view.text).toContain("Private side answer 4"));
 		expect(JSON.stringify(requests[3])).not.toContain("Private first question");
 		expect(JSON.stringify(requests[3])).not.toContain("Private follow-up");
-		expect(fixture.session.messages).toHaveLength(2);
+		// The transcript's system message, the main seed, and its answer.
+		expect(fixture.session.messages).toHaveLength(3);
 		expect(fixture.sessionManager.getEntries()).toEqual(entries);
 		expect(readFileSync(path, "utf8")).toBe(before);
 		expect(readdirSync(fixture.sessionsDirectory)).toEqual(files);

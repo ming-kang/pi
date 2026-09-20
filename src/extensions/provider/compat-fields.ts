@@ -75,7 +75,8 @@ const OPENAI_COMPLETIONS_FIELDS: readonly CompatField<keyof OpenAICompletionsCom
 	{ key: "supportsOpenAIGrammarTools", kind: "boolean", note: "Grammar-constrained tool calls" },
 	{ key: "supportsStrictMode", kind: "boolean", note: "Strict tool schemas" },
 	{ key: "sendSessionAffinityHeaders", kind: "boolean", note: "Send session affinity headers" },
-	{ key: "deferredToolsMode", kind: "enum", options: ["kimi"], note: "Deferred tool-call handling" },
+	{ key: "supportsMidConvoSystemMessages", kind: "boolean", note: "Accepts mid-conversation system messages" },
+	{ key: "supportsMidConvoToolAdditions", kind: "boolean", note: "System messages can add tools mid-conversation" },
 	{ key: "sessionAffinityFormat", kind: "enum", options: SESSION_AFFINITY, note: "Affinity header format" },
 	{ key: "supportsLongCacheRetention", kind: "boolean", note: "Long-lived prompt cache retention" },
 	{ key: "vllmPriority", kind: "number", note: "vLLM scheduling priority" },
@@ -111,7 +112,9 @@ const ANTHROPIC_MESSAGES_FIELDS: readonly CompatField<keyof AnthropicMessagesCom
 	{ key: "allowEmptySignature", kind: "boolean", note: "Tolerate empty thinking signatures" },
 	{ key: "supportsStrictTools", kind: "boolean", note: "Strict tool schemas" },
 	{ key: "supportsMidConvoEffort", kind: "boolean", note: "Effort changes mid-conversation" },
-	{ key: "supportsToolReferences", kind: "boolean", note: "Tool references support" },
+	{ key: "supportsMidConvoSystemMessages", kind: "boolean", note: "Accepts mid-conversation system messages" },
+	{ key: "supportsMidConvoToolChanges", kind: "boolean", note: "Accepts mid-conversation tool changes" },
+	{ key: "allowedFallbackModels", kind: "json", note: "Server-side refusal fallback models" },
 ];
 
 const BEDROCK_FIELDS: readonly CompatField<keyof BedrockCompat>[] = [

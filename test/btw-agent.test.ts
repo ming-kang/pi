@@ -1,5 +1,13 @@
 import { Agent } from "@earendil-works/pi-agent-core";
-import type { Context, Message, Models, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
+import {
+	type Context,
+	getCurrentSystemPrompt,
+	getCurrentTools,
+	type Message,
+	type Models,
+	type ModelsSimpleStreamOptions,
+	normalizeContext,
+} from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { BtwAgent } from "../src/extensions/btw/agent.ts";
 import {
@@ -13,19 +21,20 @@ import {
 import { createBtwMessages } from "../src/extensions/btw/snapshot.ts";
 import { type BtwRequest, btwDone, btwPending, btwResponse, btwSnapshot } from "./helpers/btw.ts";
 
+/** Split the transcript back into the prompt, conversation, and tools the provider resolves. */
 function copyRequest(context: Context, options?: ModelsSimpleStreamOptions): BtwRequest {
-	return {
-		context: structuredClone({
-			...context,
-			tools: context.tools?.map(({ name, description, parameters, constrainedSampling }) => ({
-				name,
-				description,
-				parameters,
-				constrainedSampling,
-			})),
-		}),
-		options,
+	const { messages } = normalizeContext(context);
+	const request: Context = {
+		systemPrompt: getCurrentSystemPrompt(messages),
+		messages: messages.filter((message) => message.role !== "system"),
+		tools: getCurrentTools(messages).map(({ name, description, parameters, constrainedSampling }) => ({
+			name,
+			description,
+			parameters,
+			constrainedSampling,
+		})),
 	};
+	return { context: structuredClone(request), options };
 }
 
 describe("BTW native Agent", () => {

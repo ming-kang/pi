@@ -299,7 +299,7 @@ pi.on("session_before_compact", async (event, ctx) => {
   // preparation.fileOps - extracted file operations
   // preparation.tokensBefore - context tokens before compaction
   // preparation.firstKeptEntryId - where kept messages start
-  // preparation.settings - compaction settings
+  // preparation.settings - effective settings after applying model overrides
 
   // branchEntries - all entries on current branch (for custom state)
   // reason - "manual" (/compact), "threshold", or "overflow"
@@ -426,3 +426,26 @@ Configure compaction in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settin
 Disable auto-compaction with `"enabled": false`. You can still compact manually with `/compact`.
 
 Upstream Pi's `compaction.reserveTokens` setting does not exist here and is ignored when present; the trigger is always the percentage above.
+
+### Per-model overrides
+
+Use `compaction.modelOverrides` to tune the retention target per model:
+
+```json
+{
+  "compaction": {
+    "keepRecentTokens": 20000,
+    "modelOverrides": {
+      "some-provider/big-model": {
+        "keepRecentTokens": 150000
+      }
+    }
+  }
+}
+```
+
+Keys are exact, case-sensitive `provider/modelId` values, including any slashes within the model ID. Each `keepRecentTokens` value falls back independently from the model override to the ordinary setting to the built-in default. Values must be non-negative safe integers. Invalid values in the matching model override produce an error when read; only omitted fields fall back to the ordinary setting. Model override entries must be objects. Invalid ordinary token settings produce an error when read, even if the active model has a valid override. `enabled` and `triggerPercent` remain global, not model-specific.
+
+These resolved values are used for manual compaction, all automatic threshold checks, overflow recovery, and extension-visible `preparation.settings`. The retention target is still capped at half the trigger budget for the active model's window. Model switches affect subsequent checks and compactions without changing ordinary settings. Compaction already in progress uses the model and settings captured for that operation. Branch summarization settings are unaffected.
+
+Overrides work in both global and project settings. The files merge recursively before lookup, so a global model-specific value beats a project-wide fallback; a project must override that model entry to change it. See [settings.md](settings.md#per-model-compaction-overrides) for details.

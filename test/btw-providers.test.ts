@@ -1,4 +1,5 @@
-import type { Api, Context, Model, ProviderStreams, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { Api, Model, ProviderStreams, SimpleStreamOptions, TranscriptContext } from "@earendil-works/pi-ai";
+import { normalizeContext } from "@earendil-works/pi-ai";
 import { streamSimple as anthropic } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { streamSimple as completions } from "@earendil-works/pi-ai/api/openai-completions";
 import { streamSimple as responses } from "@earendil-works/pi-ai/api/openai-responses";
@@ -78,7 +79,7 @@ describe("BTW published provider payloads", () => {
 			const fetch = vi.fn<typeof globalThis.fetch>(async () => {
 				throw new Error("Network forbidden in this test");
 			});
-			const capture = (requestModel: Model<Api>, context: Context, options?: SimpleStreamOptions) =>
+			const capture = (requestModel: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions) =>
 				stream(requestModel, context, {
 					...options,
 					apiKey: "offline-fixture-key",
@@ -93,7 +94,11 @@ describe("BTW published provider payloads", () => {
 				});
 			await capture(
 				model,
-				{ systemPrompt: snapshot.systemPrompt, tools: snapshot.tools, messages: snapshot.messages },
+				normalizeContext({
+					systemPrompt: snapshot.systemPrompt,
+					tools: snapshot.tools,
+					messages: snapshot.messages,
+				}),
 				{ ...snapshot.streamOptions, reasoning: "high" },
 			).result();
 			const side = new BtwAgent(snapshot, { streamSimple: capture }, () => {});
