@@ -58,6 +58,7 @@ export const credentialVariables = [
 	"KIMI_API_KEY",
 	"LLAMA_API_KEY",
 	"LLAMA_BASE_URL",
+	"META_API_KEY",
 	"MINIMAX_API_HOST",
 	"MINIMAX_API_KEY",
 	"MINIMAX_CN_API_KEY",

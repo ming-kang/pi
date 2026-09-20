@@ -9,7 +9,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
-import type { AssistantMessage, ImageContent, Message, Model, Usage } from "@earendil-works/pi-ai/compat";
+import {
+	type AssistantMessage,
+	type ImageContent,
+	isRetryableAssistantError,
+	type Message,
+	type Model,
+	type Usage,
+} from "@earendil-works/pi-ai/compat";
 import type {
 	AutocompleteItem,
 	AutocompleteProvider,
@@ -2077,6 +2084,12 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	private maybeSuggestBugReport(message: AssistantMessage): void {
+		if (message.stopReason !== "error" || isRetryableAssistantError(message)) return;
+		if (/\b(?:abort(?:ed)?|cancel(?:l?ed)?)\b/i.test(message.errorMessage ?? "")) return;
+		this.suggestBugReport();
+	}
+
 	private disposeChatToolComponents(): void {
 		for (const child of this.chatContainer.children) {
 			const disposable = child as { dispose?: () => void };
@@ -3497,7 +3510,7 @@ export class InteractiveMode {
 							});
 						}
 						this.pendingTools.clear();
-						if (this.streamingMessage.stopReason === "error") this.suggestBugReport();
+						this.maybeSuggestBugReport(this.streamingMessage);
 					} else {
 						// Args are now complete - trigger diff computation for edit tools
 						for (const [, component] of this.pendingTools.entries()) {
@@ -3655,7 +3668,6 @@ export class InteractiveMode {
 				// Show error only on final failure (success shows normal response)
 				if (!event.success) {
 					this.showError(`Retry failed after ${event.attempt} attempts: ${event.finalError || "Unknown error"}`);
-					this.suggestBugReport();
 				}
 				this.ui.requestRender();
 				break;
@@ -6357,6 +6369,7 @@ export class InteractiveMode {
 				ui: this.ui,
 				editorContainer: this.editorContainer,
 				editor: this.editor,
+				keybindings: this.keybindings,
 				showStatus: (message) => this.showStatus(message),
 				showError: (message) => this.showError(message),
 			},

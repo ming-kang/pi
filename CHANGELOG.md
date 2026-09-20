@@ -4,6 +4,21 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Added the Meta (Muse subscription) provider: `/login meta` runs the device authorization flow and re-mints the Model API key about once a day, `META_API_KEY` remains available as an API key, and `muse-spark-1.3` is the default Meta model.
+
+### Changed
+
+- Upgraded the seven `@earendil-works/*` dependencies to `0.86.1`.
+
+### Fixed
+
+- `/bug` descriptions now preserve line breaks from pasted diagnostics, because the prompt uses the bracketed-paste aware editor.
+- `/bug` hints no longer appear for user cancellations or retryable provider failures such as service unavailability, including retries that end in failure.
+- Clipboard copy works again in containers and in WSL without WSLg: the OSC 52 fallback is restored when no display is available, WSL writes the Windows clipboard through PowerShell, and oversized payloads report the OSC 52 size limit instead of a generic failure.
+- Inherited z.ai `Prompt too long` errors are recognized as context overflow, and inherited Cerebras models no longer advertise strict tool schemas that caused HTTP 400 errors when strict and non-strict tools were mixed.
+
 ## [0.86.0] - 2026-09-20
 
 ### Added
