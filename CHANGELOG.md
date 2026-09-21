@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.86.1] - 2026-09-21
+
 ### Added
 
 - Added the Meta (Muse subscription) provider: `/login meta` runs the device authorization flow and re-mints the Model API key about once a day, `META_API_KEY` remains available as an API key, and `muse-spark-1.3` is the default Meta model.
