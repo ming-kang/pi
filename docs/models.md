@@ -14,6 +14,7 @@ Pi reads this file at startup and on a model refresh, including when you open `/
   - [Value Resolution](#value-resolution)
   - [Custom Headers](#custom-headers)
 - [Model Configuration](#model-configuration)
+  - [Image Input Limits](#image-input-limits)
   - [Thinking Level Map](#thinking-level-map)
   - [Prompt Cache Lifetimes](#prompt-cache-lifetimes)
 - [Overriding Built-in Providers](#overriding-built-in-providers)
@@ -243,6 +244,7 @@ A `models` entry supplies a complete custom model definition with useful default
 | `reasoning` | No | `false` | Whether the model supports Pi thinking levels. |
 | `thinkingLevelMap` | No | omitted | Maps Pi thinking levels to provider values and declares unsupported levels; see below. |
 | `input` | No | `["text"]` | Supported input kinds: `text` and `image`. |
+| `inputLimits` | No | omitted | Request limits and image preprocessing for this model; see [Image Input Limits](#image-input-limits). |
 | `contextWindow` | No | `128000` | Context window in tokens. |
 | `maxTokens` | No | `16384` | Maximum generated tokens. |
 | `samplingParams` | No | omitted | Free-form sampling parameters merged verbatim into every request body; see [Sampling Parameters](#sampling-parameters). |
@@ -274,6 +276,33 @@ When `cost` is supplied on a `models` entry, it must contain all four base rates
   }
 }
 ```
+
+### Image Input Limits
+
+Use `inputLimits.images.resize` to configure how new images are encoded before they enter conversation history:
+
+```json
+{
+  "id": "vision-model",
+  "input": ["text", "image"],
+  "inputLimits": {
+    "images": {
+      "resize": {
+        "maxWidth": 1568,
+        "maxHeight": 1568,
+        "maxBytes": 524288,
+        "jpegQuality": 75
+      }
+    }
+  }
+}
+```
+
+`maxBytes` is the maximum base64-encoded payload size. Omitted resize fields use Pi's conservative defaults: 2000×2000, 4.5 MiB encoded, and JPEG quality 80. Built-in vision models carry that profile explicitly so unknown gateways never receive larger images than before.
+
+Pi applies the selected model's resize profile to `@file` attachments, the `read` tool, and images returned by tools. Images are encoded once before they enter history, after `before_agent_start` handlers have selected the request model; changing models later does not rewrite historical images or invalidate the cached conversation prefix. The `images.autoResize` setting can disable resizing globally.
+
+The catalog can also record `inputLimits.maxRequestBytes`, `images.maxPerMessage`, and `images.maxPerRequest`. These fields describe hard provider limits; Pi does not yet rewrite or reject conversation history based on them.
 
 ### Prompt Cache Lifetimes
 
@@ -405,7 +434,7 @@ The built-in models remain. A new custom `id` is added, while a matching ID is r
 }
 ```
 
-An override supports `name`, `reasoning`, `thinkingLevelMap`, `input`, `cost`, `promptCache` (merged per tier), `contextWindow`, `maxTokens`, `samplingParams` (merged per key), `headers`, and `compat`. Its `cost` base rates are individually optional and retain omitted values; a supplied `tiers` array replaces the existing array. Thinking maps merge by level. `compat` merges by field, and its `openRouterRouting`, `vercelGatewayRouting`, and `chatTemplateKwargs` objects merge by key.
+An override supports `name`, `reasoning`, `thinkingLevelMap`, `input`, `inputLimits`, `cost`, `promptCache` (merged per tier), `contextWindow`, `maxTokens`, `samplingParams` (merged per key), `headers`, and `compat`. Its `cost` base rates are individually optional and retain omitted values; a supplied `tiers` array replaces the existing array. Thinking maps merge by level. `inputLimits` deep-merges down to the `images.resize` profile. `compat` merges by field, and its `openRouterRouting`, `vercelGatewayRouting`, and `chatTemplateKwargs` objects merge by key.
 
 Use a `promptCache` override to enable cache warming through a proxy whose backing cache you know, for example OpenRouter routed to Anthropic:
 

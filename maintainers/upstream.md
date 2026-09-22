@@ -77,3 +77,4 @@ Wholly rewritten documentation pages are the exception. `docs/**` is distributio
 - [v0.85.1](syncs/v0.85.1.md)
 - [v0.86.0](syncs/v0.86.0.md)
 - [v0.86.1](syncs/v0.86.1.md)
+- [v0.87.0](syncs/v0.87.0.md)

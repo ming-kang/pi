@@ -1,4 +1,10 @@
-import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
+import {
+	Agent,
+	type AgentEvent,
+	type AgentMessage,
+	type AgentTool,
+	type AgentTurnDecision,
+} from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Message, Models, Usage } from "@earendil-works/pi-ai";
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
@@ -92,9 +98,11 @@ export class BtwAgent {
 				// The model's native output ceiling and our response-size guard still bound output.
 				runtime.streamSimple(model, context, { ...snapshot.streamOptions, ...options }),
 			beforeToolCall: async () => ({ block: true, reason: TOOL_DENIAL }),
-			shouldStopAfterTurn: ({ toolResults, context }) => {
+			finishTurn: ({ message, toolResults, context }): AgentTurnDecision | undefined => {
+				// Error and aborted responses are hard exits; the step budget only counts answered turns.
+				if (message.stopReason === "error" || message.stopReason === "aborted") return undefined;
 				this.steps++;
-				if (!toolResults.length) return false;
+				if (!toolResults.length) return undefined;
 				if (this.steps >= MAX_MODEL_STEPS || !this.fits(context.messages)) {
 					const turn = this.turns.at(-1);
 					if (turn) {
@@ -104,9 +112,9 @@ export class BtwAgent {
 								? "Stopped after repeated tool requests. BTW can only answer from its snapshot."
 								: "Context limit reached. Reopen /btw for a new conversation.";
 					}
-					return true;
+					return { action: "end" };
 				}
-				return false;
+				return undefined;
 			},
 		});
 		this.unsubscribe = this.agent.subscribe((event) => this.handleEvent(event));

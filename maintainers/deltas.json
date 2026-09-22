@@ -84,7 +84,7 @@
 		{
 			"path": "src/core/agent-session.ts",
 			"category": "bugfix",
-			"intent": "Binds detached stable model-context snapshots whose prompt is replayed from the prepared transcript; invalidates stale contexts; hosts the BackgroundSession coordinator through lifecycle pauses and persistence acknowledgements, including nextTurn context retained until persistence",
+			"intent": "Binds detached stable model-context snapshots from the canonical session projection with the prompt replayed from the prepared transcript; invalidates stale contexts; hosts the BackgroundSession coordinator through lifecycle pauses and persistence acknowledgements, including nextTurn context retained until persistence, one message-persistence helper that records entry IDs for boundaries and recovery omissions, and Background delivery paused until runs deferred from agent_settled have started",
 			"tests": [
 				"test/suite/agent-session-compaction.test.ts",
 				"test/suite/compaction-budget.test.ts",

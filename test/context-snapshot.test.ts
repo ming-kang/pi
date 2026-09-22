@@ -6,6 +6,17 @@ import { BtwAgent } from "../src/extensions/btw/agent.ts";
 import { btwDone, btwPending, btwResponse } from "./helpers/btw.ts";
 import { createBtwTestSession } from "./helpers/btw-session.ts";
 
+// Prompt images are normalized before they enter history; keep the test payload as-is so the
+// image-policy assertions below see the original bytes.
+vi.mock("../src/utils/image-process.ts", () => ({
+	processImage: async (bytes: Uint8Array, mimeType: string) => ({
+		ok: true as const,
+		data: Buffer.from(bytes).toString("base64"),
+		mimeType,
+		hints: [],
+	}),
+}));
+
 describe("SDK context snapshots", () => {
 	const cleanups: Array<() => Promise<void>> = [];
 	afterEach(async () => {
@@ -116,11 +127,17 @@ describe("SDK context snapshots", () => {
 			],
 		});
 		cleanups.push(fixture.cleanup);
-		fixture.session.agent.state.messages = [{ role: "user", content: "source before wait", timestamp: 1 }];
+		// The canonical session projection is the snapshot source; assigning agent.state.messages
+		// no longer replaces request history.
+		fixture.sessionManager.appendMessage({ role: "user", content: "source before wait", timestamp: 1 });
+		fixture.session.refreshContext();
 		const systemPrompt = fixture.session.systemPrompt;
 		const snapshotPromise = fixture.session.getContextSnapshot();
 		await vi.waitFor(() => expect(started).toBe(true));
-		fixture.session.agent.state.messages = [{ role: "user", content: "new branch", timestamp: 2 }];
+		// Replace the active branch while the hook is still running.
+		fixture.sessionManager.resetLeaf();
+		fixture.sessionManager.appendMessage({ role: "user", content: "new branch", timestamp: 2 });
+		fixture.session.refreshContext();
 		fixture.session.agent.state.thinkingLevel = "off";
 		release!();
 		const snapshot = await snapshotPromise;

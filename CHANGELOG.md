@@ -4,6 +4,32 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Adopted upstream v0.87.0. Session model context is now projected from append-only history: a `context_edit` entry (`ContextEditEntry`) omits or replaces one earlier message for future model requests without changing raw history, usage, or the UI. `sessionManager.appendContextEdit()`, `buildSessionProjection()`, and retain-none compaction (`appendCompaction(summary, null, tokensBefore)`) are public; `/tree` and HTML export list the new entries as bookkeeping.
+- Added actionable `turn_end` and `agent_before_settle` extension boundaries: handlers can append `custom`, `custom_message`, `context_edit`, and `compaction` entries in order and request one continuation. `TurnEndEvent` now carries `messageEntryId`, `toolResultEntryIds`, and `outcome`.
+- Added the `context_with_system` extension event, which sees the full transcript including system messages after every `context` handler has run and Pi has restored the prompt and tool declarations.
+- Added per-model image input limits: `inputLimits.images.resize` in `models.json` (deep-merged by `modelOverrides`) is applied to `@file` attachments, the `read` tool, and tool-result images once, before they enter history and after `before_agent_start` has selected the model.
+- Crash diagnostics now name loaded extensions whose source files appear in the stack trace.
+
+### Changed
+
+- `SessionManager` is canonical for provider context. `agent.state.messages` is a refreshed inspection cache, and assigning it no longer replaces request history: restore with `SessionManager.inMemory(cwd, { id }, entries)`, navigate with `session.navigateTree()`, or append through `session.sessionManager` and call `session.refreshContext()`. `ctx.getContextSnapshot()` and BTW read the same projection.
+- `context` handlers no longer see system messages; Pi replays the prompt and tool declarations after a handler changes the conversation, so filtering or slicing from a compaction summary cannot drop built-in tools ([#9789](https://github.com/earendil-works/pi/issues/9789), [#9822](https://github.com/earendil-works/pi/issues/9822)).
+- Auto-retry and overflow/length recovery now persist `context_edit` omissions for the abandoned attempt instead of dropping it from agent state; compaction, token estimates, and `/session` context usage follow the edited projection.
+- Runs requested from `agent_settled` handlers start after all settled handlers finish, and this distribution keeps Background completion delivery paused until those deferred runs have started.
+- BTW's step and context limits moved from the removed `shouldStopAfterTurn` agent option to `finishTurn`.
+- Upgraded the seven `@earendil-works/*` dependencies to `0.87.0`. Inherited: unknown OpenAI-compatible Chat Completions endpoints no longer receive strict tool schemas unless they advertise support ([#9816](https://github.com/earendil-works/pi/issues/9816)), and chord replicated state is mutated through `change()`/`replace()`.
+- `ExtensionRunner.emit()` no longer accepts `turn_end`; hosts dispatch `turn_end` and `agent_before_settle` through `emitBoundary()`.
+
+### Fixed
+
+- `/bug` no longer offers uploads in offline mode; zip export still works ([#9841](https://github.com/earendil-works/pi/pull/9841)).
+- Text files beginning with `GIF` are no longer misclassified as images by `read` and `@file` input ([#9755](https://github.com/earendil-works/pi/issues/9755)).
+- Malformed prompt template frontmatter is reported as a resource warning instead of being silently ignored ([#9830](https://github.com/earendil-works/pi/pull/9830)).
+- Idle prompt-cache warming stops instead of rebuilding an expired cache when its timer or an extension decision runs late.
+- String context-edit replacements now produce text blocks for assistant and tool-result messages, newly appended or replaced input is no longer summarized before its first provider request, and stale assistant usage captured before a later edit or compaction is no longer reused.
+
 ## [0.86.1] - 2026-09-21
 
 ### Added

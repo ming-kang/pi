@@ -266,8 +266,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		options.tools ?? (options.noTools ? [] : (configuredDefaultToolNames ?? defaultActiveToolNames))
 	).filter((name) => !excludedToolNameSet?.has(name));
 
-	let agent: Agent;
-
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
 	const contextCapture = new ContextSnapshotCapture(settingsManager, extensionRunnerRef);
 	const cacheWarmer = new CacheWarmer(
@@ -304,12 +302,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		});
 	};
 
-	agent = new Agent({
+	const agent = new Agent({
 		initialState: {
 			systemPrompt: "",
 			model,
 			thinkingLevel,
 			tools: [],
+			messages: existingSession.messages,
 		},
 		convertToLlm: contextCapture.convertToLlm,
 		streamFn: async (model, context, options) => {
@@ -338,9 +337,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,
 	});
 
-	// Restore messages if session has existing data
+	// Restore missing settings metadata for older sessions.
 	if (hasExistingSession) {
-		agent.state.messages = existingSession.messages;
 		if (!hasThinkingEntry) {
 			sessionManager.appendThinkingLevelChange(thinkingLevel);
 		}
