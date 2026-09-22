@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.87.0] - 2026-09-22
+
 ### Added
 
 - Adopted upstream v0.87.0. Session model context is now projected from append-only history: a `context_edit` entry (`ContextEditEntry`) omits or replaces one earlier message for future model requests without changing raw history, usage, or the UI. `sessionManager.appendContextEdit()`, `buildSessionProjection()`, and retain-none compaction (`appendCompaction(summary, null, tokensBefore)`) are public; `/tree` and HTML export list the new entries as bookkeeping.
