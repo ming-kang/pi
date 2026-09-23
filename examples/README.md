@@ -1,8 +1,17 @@
 # Examples
 
-Example code for the `@astralyn/pi` SDK and extensions.
+Example code for the `@astralyn/pi` SDK, process integration, and extensions.
 
 ## Standalone
+
+### [rpc-client.ts](rpc-client.ts)
+Runs one prompt through a Pi RPC child process with the typed `RpcClient`: it starts Pi, streams events, and waits for the run to settle.
+
+Build the package before running it from a repository checkout:
+
+```bash
+npx tsx examples/rpc-client.ts "Explain this repository"
+```
 
 ### [rpc-extension-ui.ts](rpc-extension-ui.ts)
 A lightweight RPC chat client that handles extension UI requests; pair it with [the RPC demo extension](extensions/rpc-demo.ts).
@@ -26,5 +35,6 @@ Example extensions demonstrating:
 ## Documentation
 
 - [SDK Reference](sdk/README.md)
+- [RPC Protocol](../docs/rpc.md)
 - [Extensions Documentation](../docs/extensions.md)
 - [Skills Documentation](../docs/skills.md)

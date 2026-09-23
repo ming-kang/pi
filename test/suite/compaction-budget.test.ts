@@ -40,7 +40,11 @@ describe("compaction budgets on small windows", () => {
 		harness.setResponses([
 			fauxAssistantMessage(fauxToolCall("large_result", {}), { stopReason: "toolUse" }),
 			(context, options) => {
-				expect(JSON.stringify(context.messages)).toContain("This is the PREFIX of a turn");
+				// Regression test for #9652: clear boundaries and continuation wording avoid the reasoning-extraction false positive.
+				expect(JSON.stringify(context.messages)).toContain("# Conversation\\n[User]: big-request:");
+				expect(JSON.stringify(context.messages)).toContain(
+					"# Instructions\\nThe messages above are earlier context from an ongoing conversation.",
+				);
 				// The 80% reserve exceeds the model's own output limit, which then caps the summary.
 				expect(options?.maxTokens).toBe(8192);
 				return fauxAssistantMessage("A short summary of the original request.");

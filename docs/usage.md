@@ -168,9 +168,12 @@ See [Pi Packages](packages.md) for package sources and security notes.
 |------|-------------|
 | default | Interactive mode |
 | `-p`, `--print` | Print response and exit |
+| `--mode text` | Text output; still opens the terminal UI when stdin and stdout are terminals |
 | `--mode json` | Output all events as JSON lines; see [JSON mode](json.md) |
 | `--mode rpc` | RPC mode over stdin/stdout; see [RPC mode](rpc.md) |
 | `--export <in> [out]` | Export a session to HTML |
+
+`--mode` accepts only `text`, `json`, or `rpc`. A missing or invalid value is reported as an error and pi exits with a nonzero status instead of falling back to another mode.
 
 In print mode, pi also reads piped stdin and merges it into the initial prompt:
 

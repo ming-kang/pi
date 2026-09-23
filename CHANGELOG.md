@@ -4,9 +4,20 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Adopted upstream v0.87.1: Claude Opus 5.5 through Anthropic with adaptive thinking and a 1M context window, GPT-6 Sol and GPT-6 Luna through OpenAI API keys and Codex subscriptions, and all three through GitHub Copilot.
+
 ### Changed
 
 - Background completion delivery now follows the interactive prompt queueing path: a completion is steered into a running turn and lands right after that turn's current tool batch, instead of waiting for the session to become idle. An idle session still starts a completion turn. User preflight (input hooks, model and authentication checks, compaction) still holds delivery, so a user message is always the first thing a new run sees, and a `bg wait`/`bg read` still defers the announcement of the task it holds pinned.
+- New xAI sessions default to Grok 4.7.
+- Split-turn compaction summaries now separate the conversation from the instructions and use continuation-oriented wording, so a model no longer treats the retained later messages as content it must reconstruct ([#9908](https://github.com/earendil-works/pi/pull/9908)).
+- Upgraded the seven `@earendil-works/*` dependencies to `0.87.1`. Inherited: image-only user messages no longer carry an empty text part that some OpenAI-compatible providers rejected ([#9797](https://github.com/earendil-works/pi/issues/9797)), and Anthropic OAuth requests report the current Claude Code version.
+
+### Fixed
+
+- A missing or invalid `--mode` value is reported as an error and pi exits with a nonzero status instead of silently ignoring it ([#9045](https://github.com/earendil-works/pi/issues/9045)).
 
 ## [0.87.0] - 2026-09-22
 
