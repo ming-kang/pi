@@ -1,7 +1,9 @@
 import { join } from "node:path";
-import { Agent } from "@earendil-works/pi-agent-core";
+import { Agent, type StreamFn } from "@earendil-works/pi-agent-core";
 import {
 	type AssistantMessage,
+	type AssistantMessageEvent,
+	EventStream,
 	fauxAssistantMessage,
 	registerFauxProvider,
 	streamSimple,
@@ -29,6 +31,19 @@ const usage: Usage = {
 	cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 0.3 },
 };
 
+class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
+	constructor() {
+		super(
+			(event) => event.type === "done" || event.type === "error",
+			(event) => {
+				if (event.type === "done") return event.message;
+				if (event.type === "error") return event.error;
+				throw new Error("Unexpected event type");
+			},
+		);
+	}
+}
+
 describe("session-owned background host", () => {
 	const cleanups: (() => void)[] = [];
 	afterEach(() => {
@@ -40,6 +55,7 @@ describe("session-owned background host", () => {
 		factory?: ExtensionFactory,
 		responses?: AssistantMessage[],
 		manager = SessionManager.inMemory(),
+		streamFn: StreamFn = streamSimple,
 	) {
 		const faux = registerFauxProvider();
 		faux.setResponses(responses ?? [fauxAssistantMessage("noticed"), fauxAssistantMessage("user first")]);
@@ -57,7 +73,7 @@ describe("session-owned background host", () => {
 			agent: new Agent({
 				initialState: { model: faux.getModel(), tools: [] },
 				getApiKey: () => "test",
-				streamFn: streamSimple,
+				streamFn,
 			}),
 			sessionManager: manager,
 			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
@@ -539,13 +555,14 @@ describe("session-owned background host", () => {
 		expect(session.messages.find((message) => message.role !== "system")?.role).toBe("user");
 	});
 
-	it("waits for the complete main tool batch and settled hooks before starting a notification turn", async () => {
+	it("steers a completion into the active run after the complete main tool batch", async () => {
 		let releaseTool!: () => void;
 		const toolGate = new Promise<void>((resolve) => {
 			releaseTool = resolve;
 		});
 		let toolStarted = false;
 		let inSettledHook = false;
+		let runs = 0;
 		const session = await host(
 			"main",
 			(pi) => {
@@ -566,6 +583,7 @@ describe("session-owned background host", () => {
 					inSettledHook = false;
 				});
 				pi.on("agent_start", () => {
+					runs++;
 					expect(inSettledHook).toBe(false);
 				});
 			},
@@ -575,23 +593,138 @@ describe("session-owned background host", () => {
 					stopReason: "toolUse",
 					content: [{ type: "toolCall", id: "hold-1", name: "hold", arguments: {} }],
 				},
-				fauxAssistantMessage("batch complete"),
 				fauxAssistantMessage("background noticed"),
 			],
 		);
 		await session.bindExtensions({ backgroundEnabled: true });
 		const execution = await task(session);
+		const steer = vi.spyOn(session.agent, "steer");
 		const prompting = session.prompt("run tool");
 		await vi.waitFor(() => expect(toolStarted).toBe(true));
 		execution.finish();
-		await new Promise((resolve) => setTimeout(resolve, 20));
+		await vi.waitFor(() => expect(steer).toHaveBeenCalledOnce());
+		expect(steer.mock.calls[0]?.[0]).toMatchObject({ role: "custom", customType: "background-completion" });
+		// The completion waits for the batch, so nothing is injected while the tool is still running.
 		expect(session.messages.some((message) => message.role === "custom")).toBe(false);
 		releaseTool();
 		await prompting;
-		await vi.waitFor(() => expect(session.messages.some((message) => message.role === "custom")).toBe(true));
 		await session.waitForIdle();
 		const roles = session.messages.map((message) => message.role);
 		expect(roles.indexOf("custom")).toBeGreaterThan(roles.indexOf("toolResult"));
+		// Steering keeps the completion inside the run that was already active: no new turn.
+		expect(runs).toBe(1);
+		expect(session.background.pendingNotifications()).toEqual([]);
+	});
+
+	it("keeps a completion claimed while it waits in the steering queue for the next run", async () => {
+		let calls = 0;
+		const session = await host(
+			"main",
+			undefined,
+			undefined,
+			SessionManager.inMemory(),
+			(_model, _context, options) => {
+				const stream = new MockAssistantStream();
+				calls++;
+				queueMicrotask(() => stream.push({ type: "start", partial: fauxAssistantMessage("") }));
+				if (calls > 1) {
+					queueMicrotask(() =>
+						stream.push({ type: "done", reason: "stop", message: fauxAssistantMessage("noticed") }),
+					);
+					return stream;
+				}
+				// Hold the first response open until the run is aborted, so the queued completion is
+				// never drained by this run.
+				const watch = () => {
+					if (options?.signal?.aborted) {
+						stream.push({
+							type: "error",
+							reason: "aborted",
+							error: fauxAssistantMessage("Aborted", { stopReason: "aborted" }),
+						});
+						return;
+					}
+					setTimeout(watch, 5);
+				};
+				watch();
+				return stream;
+			},
+		);
+		await session.bindExtensions({ backgroundEnabled: true });
+		const execution = await task(session);
+		const prompting = session.prompt("hold the run");
+		execution.finish();
+		await vi.waitFor(() => expect(session.agent.hasQueuedMessages()).toBe(true));
+		// Aborting leaves the message queued instead of injected, so its claim stays alive rather
+		// than being released for a retry that would persist the same completion twice.
+		await session.abort();
+		await prompting;
+		expect(session.messages.some((message) => message.role === "custom")).toBe(false);
+		expect(session.background.pendingNotifications()).toEqual([]);
+		await session.prompt("next");
+		await session.waitForIdle();
+		const roles = session.messages.map((message) => message.role);
+		expect(roles.filter((role) => role === "custom")).toHaveLength(1);
+		expect(roles.indexOf("custom")).toBeGreaterThan(roles.lastIndexOf("user"));
+		expect(session.background.pendingNotifications()).toEqual([]);
+	});
+
+	it("releases a completion the run emitted but never persisted", async () => {
+		let toolStarted = false;
+		let releaseTool!: () => void;
+		const toolGate = new Promise<void>((resolve) => {
+			releaseTool = resolve;
+		});
+		const session = await host(
+			"main",
+			(pi) => {
+				pi.registerTool({
+					name: "hold",
+					label: "hold",
+					description: "hold",
+					parameters: Type.Object({}),
+					execute: async () => {
+						toolStarted = true;
+						await toolGate;
+						return { content: [{ type: "text", text: "held result" }], details: undefined };
+					},
+				});
+			},
+			[
+				{
+					...fauxAssistantMessage(""),
+					stopReason: "toolUse",
+					content: [{ type: "toolCall", id: "hold-1", name: "hold", arguments: {} }],
+				},
+				fauxAssistantMessage("background noticed"),
+			],
+		);
+		const warning = vi.fn();
+		await session.bindExtensions({ backgroundEnabled: true, onError: warning });
+		const append = session.sessionManager.appendCustomMessageEntry.bind(session.sessionManager);
+		const persist = vi.spyOn(session.sessionManager, "appendCustomMessageEntry").mockImplementation((...args) => {
+			if (args[0] === "background-completion") throw new Error("persistence failed");
+			return append(...args);
+		});
+		const execution = await task(session);
+		const prompting = session.prompt("run tool");
+		await vi.waitFor(() => expect(toolStarted).toBe(true));
+		execution.finish();
+		await vi.waitFor(() => expect(session.agent.hasQueuedMessages()).toBe(true));
+		releaseTool();
+		// The run drains the queued completion and fails to persist it, so no later run can
+		// deliver it: the claim is released instead of waiting for a message that never lands.
+		await prompting;
+		await vi.waitFor(() =>
+			expect(warning).toHaveBeenCalledWith(expect.objectContaining({ event: "background_delivery" })),
+		);
+		expect(session.background.pendingNotifications()).toHaveLength(1);
+		persist.mockRestore();
+		session.retryBackgroundNotifications();
+		const delivered = vi.spyOn(session.background, "markDelivered");
+		await vi.waitFor(() => expect(delivered).toHaveBeenCalledWith(execution.id));
+		expect(session.background.pendingNotifications()).toEqual([]);
+		expect(session.sessionManager.getEntries().filter((entry) => entry.type === "custom_message")).toHaveLength(1);
 	});
 
 	it.each(["reject", "drop"] as const)(

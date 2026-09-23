@@ -217,6 +217,17 @@ export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
 // Types
 // ============================================================================
 
+/**
+ * A background completion handed to the steering queue, keyed by message identity.
+ * `drained` records that the run already emitted the message, so no later run can
+ * deliver it and an unpersisted message must fail its delivery instead of waiting.
+ */
+interface QueuedBackgroundCompletion {
+	drained: boolean;
+	resolve(): void;
+	reject(reason: unknown): void;
+}
+
 function withoutDeletedHeaders(headers: ProviderHeaders | undefined): Record<string, string> | undefined {
 	return headers
 		? Object.fromEntries(Object.entries(headers).filter((entry): entry is [string, string] => entry[1] !== null))
@@ -360,6 +371,8 @@ export class AgentSession {
 	private _pendingNextTurnMessages: CustomMessage[] = [];
 	/** Context-only custom messages queued during a run, flushed once the current turn's tool results are in. */
 	private _pendingCustomMessages: CustomMessage[] = [];
+	/** Background completions queued for steering, awaiting the persistence that confirms delivery. */
+	private readonly _queuedBackgroundCompletions = new Map<AgentMessage, QueuedBackgroundCompletion>();
 
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
@@ -429,17 +442,14 @@ export class AgentSession {
 		this._backgroundHost = new BackgroundSession({
 			manager: this.sessionManager,
 			role: config.executionRole ?? "main",
-			canDeliver: () =>
-				this.isIdle &&
-				!this.agent.state.isStreaming &&
-				this.pendingMessageCount === 0 &&
-				!this.agent.hasQueuedMessages() &&
-				this.model !== undefined,
-			deliver: (message) => {
-				// Completion turns skip before_agent_start, but consume nextTurn context.
-				const asides = this._pendingNextTurnMessages.slice();
-				return this._runAgentPrompt(asides.length ? [message, ...asides] : message);
+			canDeliver: () => {
+				if (this.model === undefined || this.isCompacting) return false;
+				// A completion steered into an active run follows the interactive steering queue, which
+				// already preserves the order of queued user input. An idle delivery starts its own
+				// turn, so it still waits for the queues to drain.
+				return this.isStreaming || (this.pendingMessageCount === 0 && !this.agent.hasQueuedMessages());
 			},
+			deliver: (message) => this._deliverBackgroundCompletion(message),
 			onEntry: (entry) => this._emit({ type: "entry_appended", entry }),
 			onError: (event, error) => this._extensionRunner?.emitError({ extensionPath: "<background>", event, error }),
 		});
@@ -1017,6 +1027,12 @@ export class AgentSession {
 		// Content/details may be replaced, but a persisted replacement is still an ack.
 		const acknowledgeBackground =
 			event.type === "message_end" ? this._backgroundHost.messageAcknowledgement(event.message) : undefined;
+		// A queued completion is tracked by identity too, for the same reason.
+		const queuedBackgroundCompletion =
+			event.type === "message_start" || event.type === "message_end"
+				? this._queuedBackgroundCompletions.get(event.message)
+				: undefined;
+		if (event.type === "message_start" && queuedBackgroundCompletion) queuedBackgroundCompletion.drained = true;
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
@@ -1045,7 +1061,10 @@ export class AgentSession {
 
 		// Handle session persistence
 		if (event.type === "message_end") {
-			if (this._persistMessage(event.message)) acknowledgeBackground?.();
+			if (this._persistMessage(event.message)) {
+				acknowledgeBackground?.();
+				queuedBackgroundCompletion?.resolve();
+			}
 
 			if (event.message.role === "assistant") {
 				const assistantMsg = event.message as AssistantMessage;
@@ -1076,6 +1095,7 @@ export class AgentSession {
 			this._lastAssistantToolResults = event.toolResults;
 			this._flushPendingCustomMessages();
 		}
+		if (event.type === "agent_end") this._failDrainedBackgroundCompletions();
 	};
 
 	private _willRetryAfterAgentEnd(event: Extract<AgentEvent, { type: "agent_end" }>): boolean {
@@ -1274,6 +1294,9 @@ export class AgentSession {
 	 */
 	dispose(): void {
 		this._backgroundHost.dispose();
+		for (const queued of [...this._queuedBackgroundCompletions.values()]) {
+			queued.reject(new Error("the session was disposed"));
+		}
 		try {
 			this.abortRetry();
 			this.abortCompaction();
@@ -1593,6 +1616,53 @@ export class AgentSession {
 		}
 	}
 
+	/**
+	 * Deliver a background completion through the same queueing path as interactive input:
+	 * steering into an active run lands the result right after the current tool batch, and an
+	 * idle session starts its own turn. The promise settles only once the message is persisted,
+	 * or once it can no longer be persisted, so the caller never releases its claim for a
+	 * message the transcript does not contain.
+	 */
+	private _deliverBackgroundCompletion(message: CustomMessage): Promise<void> {
+		if (!this.isStreaming) {
+			// Completion turns skip before_agent_start, but consume nextTurn context.
+			const asides = this._pendingNextTurnMessages.slice();
+			return this._runAgentPrompt(asides.length ? [message, ...asides] : message);
+		}
+		return new Promise<void>((resolve, reject) => {
+			const queued: QueuedBackgroundCompletion = {
+				drained: false,
+				resolve: () => {
+					if (this._queuedBackgroundCompletions.get(message) !== queued) return;
+					this._queuedBackgroundCompletions.delete(message);
+					resolve();
+				},
+				reject: (reason: unknown) => {
+					if (this._queuedBackgroundCompletions.get(message) !== queued) return;
+					this._queuedBackgroundCompletions.delete(message);
+					reject(reason);
+				},
+			};
+			this._queuedBackgroundCompletions.set(message, queued);
+			try {
+				this.agent.steer(message);
+			} catch (error) {
+				queued.reject(error);
+			}
+		});
+	}
+
+	/**
+	 * Fail deliveries the owning run emitted but never persisted. A completion still sitting in
+	 * the steering queue when its run ends stays claimed: the next run delivers it, so failing
+	 * it here would persist the same message twice.
+	 */
+	private _failDrainedBackgroundCompletions(): void {
+		for (const queued of [...this._queuedBackgroundCompletions.values()]) {
+			if (queued.drained) queued.reject(new Error("the completion message was not persisted"));
+		}
+	}
+
 	private async _handlePostAgentRun(): Promise<boolean> {
 		const message = this._lastAssistantMessage;
 		const toolResults = this._lastAssistantToolResults;
@@ -1866,6 +1936,10 @@ export class AgentSession {
 			}
 
 			preflightResult?.(true);
+			// The user's message is now established, so a completion may join this run through the
+			// steering queue instead of waiting for the turn to end. Everything above still holds
+			// the pause, so no delivery can race input hooks, model validation or compaction.
+			resumeBackground();
 			await this._runAgentPrompt(messages);
 		} finally {
 			resumeBackground();
@@ -2154,6 +2228,10 @@ export class AgentSession {
 		this._steeringMessages = [];
 		this._followUpMessages = [];
 		this.agent.clearAllQueues();
+		// Clearing the queues drops queued completions; fail them so their claims retry.
+		for (const queued of [...this._queuedBackgroundCompletions.values()]) {
+			queued.reject(new Error("the completion message was dequeued before delivery"));
+		}
 		this._emitQueueUpdate();
 		return { steering, followUp };
 	}

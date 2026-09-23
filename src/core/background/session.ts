@@ -16,6 +16,11 @@ interface BackgroundSessionOptions {
 	role: "main" | "subagent";
 	/** The main session owns prompt queues, preflight and idle state. */
 	canDeliver(): boolean;
+	/**
+	 * Hand one completion to the host's prompt path. The promise must settle only after the
+	 * message is persisted, or after it can no longer be persisted: a claim is released for
+	 * a delivery attempt that ended without the transcript containing the message.
+	 */
 	deliver(message: CustomMessage): Promise<void>;
 	onEntry(entry: SessionEntry): void;
 	onError(event: string, message: string): void;
@@ -208,7 +213,8 @@ export class BackgroundSession {
 		}
 		const task = service.pendingNotifications().find((task) => !this.failures.has(task.id));
 		if (!task || !service.claimNotification(task.id)) return;
-		// Exactly one completion turn may be in flight; no separate claim registry.
+		// Exactly one completion may be in flight, whether queued for steering or running its
+		// own turn; there is no separate claim registry.
 		const delivery: Delivery = { id: task.id, service, persisted: false };
 		this.delivery = delivery;
 		let deliveryError: unknown;

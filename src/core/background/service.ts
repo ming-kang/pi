@@ -493,6 +493,11 @@ export class BackgroundService implements BackgroundContext {
 		};
 	}
 
+	/**
+	 * Pins defer history eviction and completion delivery, so a live read or a watched row
+	 * never races an automatic notification for the same record. Releasing resumes both, and
+	 * announces the record only when that unblocks a delivery.
+	 */
 	pin(id: string): () => void {
 		const record = this.lookup(id);
 		record.pins++;
@@ -502,6 +507,7 @@ export class BackgroundService implements BackgroundContext {
 			released = true;
 			record.pins--;
 			this.trim();
+			if (!this.closed && this.pauses === 0 && this.candidate(record)) this.emit();
 		};
 	}
 
@@ -523,6 +529,10 @@ export class BackgroundService implements BackgroundContext {
 			.map((record) => this.snapshot(record));
 	}
 
+	/**
+	 * A pinned record is being read or watched, so its completion is not announced yet:
+	 * a terminal `bg wait` or `bg read` delivers the result as its own tool result instead.
+	 */
 	private candidate(record: RecordState): boolean {
 		return (
 			record.visible &&
@@ -531,7 +541,8 @@ export class BackgroundService implements BackgroundContext {
 			record.handedOff &&
 			!record.suppressed &&
 			record.delivery === "pending" &&
-			record.waiters.size === 0
+			record.waiters.size === 0 &&
+			record.pins === 0
 		);
 	}
 

@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Background completion delivery now follows the interactive prompt queueing path: a completion is steered into a running turn and lands right after that turn's current tool batch, instead of waiting for the session to become idle. An idle session still starts a completion turn. User preflight (input hooks, model and authentication checks, compaction) still holds delivery, so a user message is always the first thing a new run sees, and a `bg wait`/`bg read` still defers the announcement of the task it holds pinned.
+
 ## [0.87.0] - 2026-09-22
 
 ### Added
