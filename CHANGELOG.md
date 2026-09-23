@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.87.1] - 2026-09-23
+
 ### Added
 
 - Adopted upstream v0.87.1: Claude Opus 5.5 through Anthropic with adaptive thinking and a 1M context window, GPT-6 Sol and GPT-6 Luna through OpenAI API keys and Codex subscriptions, and all three through GitHub Copilot.
