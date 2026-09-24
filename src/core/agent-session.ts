@@ -4177,12 +4177,7 @@ export class AgentSession {
 		if (!model) {
 			throw new Error("No model selected");
 		}
-		const {
-			model: requestModel,
-			apiKey,
-			headers,
-			env,
-		} = await this._getSummarizationRequestAuth(model, options.signal);
+		const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(model);
 		return generateBugReportSummary({
 			messages: this.messages,
 			hint: options.hint,
