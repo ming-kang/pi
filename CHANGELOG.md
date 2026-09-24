@@ -12,6 +12,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - The Background detach key (`app.backgroundTasks.detach`, default `ctrl+b`) is handled by the bundled background extension, and `BackgroundContext` exposes `detachForeground()`. Bundled extensions register their own configurable keybindings; `keybindings.json` overrides them as before.
 - Extensions can import the SDK as `@earendil-works/pi-coding-agent` again, alongside `@astralyn/pi`, so upstream extensions and the shipped extension examples load unchanged.
 
+### Fixed
+
+- `/provider` Fetch Models honors a configured `Accept` header instead of silently resetting it to `application/json`, and `accept: null` now removes the header like any other configured header.
+
 ## [0.87.1] - 2026-09-23
 
 ### Added

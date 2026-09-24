@@ -7,7 +7,6 @@
  */
 
 import "../keybindings.ts";
-import { formatTokens } from "../../../modes/interactive/components/footer.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { truncate } from "../constants.ts";
 import { modelCatalogUrl, type ProbeModel } from "../probe.ts";
@@ -19,6 +18,15 @@ type FetchState =
 	| { type: "loading" }
 	| { type: "error"; message: string }
 	| { type: "results"; models: ProbeModel[]; truncated: boolean };
+
+/** Compact token count for the row note, e.g. `1.0M`; the thresholds match the footer's usage stats. */
+function formatTokens(count: number): string {
+	if (count < 1000) return count.toString();
+	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+	if (count < 1000000) return `${Math.round(count / 1000)}k`;
+	if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
+	return `${Math.round(count / 1000000)}M`;
+}
 
 /** Dim row note for the declared metadata, e.g. `· 1.0M ctx · 393k out · img · think`. */
 function metadataNote(model: ProbeModel): string | undefined {

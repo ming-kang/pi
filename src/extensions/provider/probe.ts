@@ -198,7 +198,6 @@ function buildHeaders(auth: ModelAuth | undefined, api: string | undefined): Hea
 		if (typeof value === "string") headers.set(key, value);
 		else if (value === null) headers.delete(key);
 	}
-	headers.set("accept", "application/json");
 	if (!auth?.apiKey || hasAuthorization) return headers;
 	const lower = (name: string) => Object.keys(configured).some((key) => key.toLowerCase() === name);
 	if (api === "anthropic-messages") {

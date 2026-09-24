@@ -60,7 +60,7 @@ describe("provider probe", () => {
 		});
 	});
 
-	test("uses the Anthropic catalog path and keeps version with explicit Authorization", async () => {
+	test("uses the Anthropic catalog path and honors configured headers with explicit Authorization", async () => {
 		const { fetch, calls } = mockFetch(() => jsonResponse({ data: [] }));
 		await probeProviderModels({
 			baseUrl: "https://example.test/anthropic",
@@ -71,7 +71,17 @@ describe("provider probe", () => {
 		expect(calls[0]!.url.pathname).toBe("/anthropic/v1/models");
 		const headers = new Headers(calls[0]!.init.headers);
 		expect(headers.get("anthropic-version")).toBe("2023-06-01");
-		expect(headers.get("accept")).toBe("application/json");
+		expect(headers.get("accept")).toBe("text/event-stream");
+	});
+
+	test("a null configured header removes a buildHeaders default", async () => {
+		const { fetch, calls } = mockFetch(() => jsonResponse({ data: [] }));
+		await probeProviderModels({
+			baseUrl: "https://example.test/v1",
+			auth: { headers: { accept: null } },
+			fetch,
+		});
+		expect(new Headers(calls[0]!.init.headers).get("accept")).toBeNull();
 	});
 
 	test("redacts resolved credentials from server errors", async () => {
@@ -435,6 +445,18 @@ describe("provider probe Anthropic-compatible gateways", () => {
 		expect(openai.calls).toHaveLength(1);
 	});
 
+	test("a retry that would repeat the first attempt is skipped", async () => {
+		const { fetch, calls } = mockFetch(() => new Response("", { status: 401 }));
+		await probeProviderModels({
+			// Root base: the retry URL is the same and Bearer auth is already in use.
+			baseUrl: "https://api.example.com",
+			api: "anthropic-messages",
+			auth: { apiKey: "sk-ant-oat01-fixture" },
+			fetch,
+		});
+		expect(calls).toHaveLength(1);
+	});
+
 	test("a failed retry reports both attempts without leaking the key", async () => {
 		const key = "provider-retry-private-key";
 		const { fetch, calls } = mockFetch(() => new Response(`Rejected token ${key}`, { status: 401 }));
@@ -477,6 +499,29 @@ describe("provider probe pagination", () => {
 			truncated: false,
 		});
 		expect(calls[1]!.url.search).toBe("?after_id=claude-b&limit=1000");
+	});
+
+	test("a failed later page keeps the models already listed and stays partial", async () => {
+		const { fetch, calls } = mockFetch((url) =>
+			url.searchParams.get("after_id")
+				? new Response("", { status: 500 })
+				: jsonResponse({ data: [{ id: "a" }], has_more: true, last_id: "a" }),
+		);
+		expect(
+			await probeProviderModels({ baseUrl: "https://api.anthropic.com", api: "anthropic-messages", fetch }),
+		).toEqual({ ok: true, models: [{ id: "a" }], truncated: true });
+		expect(calls).toHaveLength(2);
+	});
+
+	test("a later page in an unsupported shape keeps the models already listed and stays partial", async () => {
+		const { fetch } = mockFetch((url) =>
+			url.searchParams.get("after_id")
+				? jsonResponse({ unexpected: true })
+				: jsonResponse({ data: [{ id: "a" }], has_more: true, last_id: "a" }),
+		);
+		expect(
+			await probeProviderModels({ baseUrl: "https://api.anthropic.com", api: "anthropic-messages", fetch }),
+		).toEqual({ ok: true, models: [{ id: "a" }], truncated: true });
 	});
 
 	test("paging stops at the page cap or a repeated cursor and marks the catalog partial", async () => {
