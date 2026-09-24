@@ -5,19 +5,25 @@
  * credential precedence (auth.json > env > models.json) applies. Raw
  * `$VAR` / `!command` placeholders never reach the wire: a failed resolution
  * aborts before this function is called.
+ *
+ * Entries keep the metadata they declare under common field names: context
+ * window, output limit, image input, and reasoning. Anthropic-compatible
+ * gateways that reject the Anthropic catalog request get one OpenAI-style
+ * retry, and Anthropic catalogs follow their `has_more` pages.
  */
 
 import type { FetchFunction, ModelAuth, ProviderHeaders } from "@earendil-works/pi-ai";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import type { ModelsJsonModel } from "../../core/model-config.ts";
 import { readResponseTextBounded } from "../../utils/http-response.ts";
 import { formatError, PROBE_LIMITS } from "./constants.ts";
 
-export interface ProbeModel {
-	id: string;
-	name?: string;
-}
+/** A catalog entry: its id plus the metadata it declared, already valid as a models.json model. */
+export type ProbeModel = Pick<ModelsJsonModel, "id" | "name" | "contextWindow" | "maxTokens" | "input" | "reasoning">;
 
 export type ProbeResult = { ok: true; models: ProbeModel[]; truncated: boolean } | { ok: false; error: string };
+
+type CatalogPage = { ok: true; json: unknown } | { ok: false; status?: number; error: string };
 
 export async function probeProviderModels(opts: {
 	baseUrl: string;
@@ -49,10 +55,8 @@ export async function probeProviderModels(opts: {
 	const onOuterAbort = () => controller.abort();
 	opts.signal?.addEventListener("abort", onOuterAbort, { once: true });
 
-	try {
-		const url = modelCatalogUrl(baseUrl, opts.api);
-		const headers = buildHeaders(opts.auth, opts.api);
-		const doFetch = opts.fetch ?? globalThis.fetch;
+	const doFetch = opts.fetch ?? globalThis.fetch;
+	const getPage = async (url: URL, headers: Headers): Promise<CatalogPage> => {
 		const response = await doFetch(url, { method: "GET", headers, signal: controller.signal });
 		if (!response.ok) {
 			const body = await readResponseTextBounded(response, {
@@ -61,6 +65,7 @@ export async function probeProviderModels(opts: {
 			});
 			return {
 				ok: false,
+				status: response.status,
 				error: `HTTP ${response.status}${body ? `: ${safeErrorText(body, opts.auth).slice(0, PROBE_LIMITS.maxErrorChars)}` : ""}`,
 			};
 		}
@@ -69,22 +74,65 @@ export async function probeProviderModels(opts: {
 			overflowMessage: `Response exceeds ${PROBE_LIMITS.maxBodyBytes} bytes.`,
 			signal: controller.signal,
 		});
-		let json: unknown;
 		try {
-			json = JSON.parse(text);
+			return { ok: true, json: JSON.parse(text) };
 		} catch {
 			return { ok: false, error: "Model catalog response is not JSON." };
 		}
-		const models = parseCatalogModels(json);
+	};
+
+	try {
+		let url = modelCatalogUrl(baseUrl, opts.api);
+		let headers = buildHeaders(opts.auth, opts.api);
+		let page = await getPage(url, headers);
+		const retry = page.ok
+			? undefined
+			: openAIStyleRetry(baseUrl, opts.auth, opts.api, { url, headers, status: page.status });
+		if (!page.ok && retry) {
+			const retried = await getPage(retry.url, retry.headers);
+			if (!retried.ok) {
+				return {
+					ok: false,
+					error: safeErrorText(
+						`${url.href} → HTTP ${page.status}; OpenAI-style retry ${retry.url.href} → ${retried.error}`,
+						opts.auth,
+					),
+				};
+			}
+			({ url, headers } = retry);
+			page = retried;
+		}
+		if (!page.ok) return { ok: false, error: page.error };
+		const models = parseCatalogModels(page.json);
 		if (models === null) {
 			return {
 				ok: false,
 				error: "JSON has no supported OpenAI-style data[] or models[] catalog with model ids. Add models manually if this endpoint uses another catalog format.",
 			};
 		}
+		// Anthropic lists 20 models per page unless asked for more; follow its cursor.
+		let json = page.json;
+		for (
+			let pages = 1;
+			opts.api === "anthropic-messages" && pages < PROBE_LIMITS.maxPages && models.length < PROBE_LIMITS.maxModels;
+			pages++
+		) {
+			const cursor = nextPageCursor(json);
+			if (!cursor) break;
+			const nextUrl = new URL(url.href);
+			nextUrl.searchParams.set("after_id", cursor);
+			nextUrl.searchParams.set("limit", "1000");
+			const next = await getPage(nextUrl, headers);
+			const more = next.ok ? parseCatalogModels(next.json) : null;
+			// A failed page keeps what is already listed; the catalog stays marked partial.
+			if (!next.ok || !more) break;
+			models.push(...more);
+			// A server ignoring the cursor would repeat this page forever.
+			if (nextPageCursor(next.json) === cursor) break;
+			json = next.json;
+		}
 		const sorted = dedupeSort(models);
-		const morePages = typeof json === "object" && json !== null && "has_more" in json && json.has_more === true;
-		const truncated = sorted.length > PROBE_LIMITS.maxModels || morePages;
+		const truncated = sorted.length > PROBE_LIMITS.maxModels || declaresMorePages(json);
 		return { ok: true, models: sorted.slice(0, PROBE_LIMITS.maxModels), truncated };
 	} catch (error) {
 		if (controller.signal.aborted) {
@@ -103,6 +151,29 @@ export function modelCatalogUrl(base: URL, api?: string): URL {
 	const path = url.pathname.replace(/\/+$/, "");
 	url.pathname = api === "anthropic-messages" && !path.endsWith("/v1") ? `${path}/v1/models` : `${path}/models`;
 	return url;
+}
+
+/**
+ * Anthropic-compatible gateways often serve their catalog OpenAI-style only:
+ * StepFun's /step_plan/v1/models rejects x-api-key but accepts Bearer, and
+ * DeepSeek's /anthropic has no catalog while its root /v1/models does. One
+ * retry with Bearer auth and a trailing /anthropic segment removed covers
+ * both, stays on the same origin, and leaves configured Authorization alone.
+ */
+function openAIStyleRetry(
+	base: URL,
+	auth: ModelAuth | undefined,
+	api: string | undefined,
+	first: { url: URL; headers: Headers; status?: number },
+): { url: URL; headers: Headers } | undefined {
+	if (api !== "anthropic-messages" || ![401, 403, 404].includes(first.status ?? 0)) return undefined;
+	if (Object.keys(auth?.headers ?? {}).some((key) => key.toLowerCase() === "authorization")) return undefined;
+	const root = new URL(base.href);
+	root.pathname = root.pathname.replace(/\/+$/, "").replace(/\/anthropic$/i, "");
+	const url = modelCatalogUrl(root, api);
+	const headers = buildHeaders(auth, undefined);
+	const unchanged = url.href === first.url.href && headers.get("authorization") === first.headers.get("authorization");
+	return unchanged ? undefined : { url, headers };
 }
 
 function safeErrorText(text: string, auth: ModelAuth | undefined): string {
@@ -148,6 +219,100 @@ function buildHeaders(auth: ModelAuth | undefined, api: string | undefined): Hea
 	return headers;
 }
 
+function declaresMorePages(json: unknown): boolean {
+	return typeof json === "object" && json !== null && "has_more" in json && json.has_more === true;
+}
+
+function nextPageCursor(json: unknown): string | undefined {
+	if (!declaresMorePages(json)) return undefined;
+	const lastId = (json as { last_id?: unknown }).last_id;
+	return typeof lastId === "string" && lastId ? lastId : undefined;
+}
+
+// Catalogs name the same metadata differently; each list holds the field
+// paths seen in real /models responses.
+const CONTEXT_WINDOW_FIELDS = [
+	"context_window",
+	"context_window.tokens",
+	"context_length",
+	"top_provider.context_length",
+	"max_input_tokens",
+	"max_context_length",
+	"max_model_len",
+	"context_size",
+	"metadata.context_length",
+];
+const MAX_TOKENS_FIELDS = [
+	"max_output_tokens",
+	"max_completion_tokens",
+	"top_provider.max_completion_tokens",
+	"max_tokens",
+	"max_output_length",
+];
+const INPUT_MODALITY_FIELDS = ["input_modalities", "architecture.input_modalities", "modalities.input"];
+const IMAGE_FLAG_FIELDS = [
+	"supports_vision",
+	"enable_vision_input",
+	"capabilities.vision",
+	"capabilities.image_input.supported",
+];
+const REASONING_FLAG_FIELDS = [
+	"reasoning",
+	"supports_reasoning",
+	"enable_reason",
+	"capabilities.reasoning",
+	"capabilities.thinking.supported",
+];
+const REASONING_LEVEL_FIELDS = ["effort.supported_levels", "reasoning_effort_support_list"];
+/** Capability lists that can name `reasoning` or `vision`. */
+const CAPABILITY_LIST_FIELDS = ["supported_parameters", "tags", "features", "supported_features", "metadata.tags"];
+
+function fieldAt(record: Record<string, unknown>, path: string): unknown {
+	let value: unknown = record;
+	for (const key of path.split(".")) {
+		if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+		value = (value as Record<string, unknown>)[key];
+	}
+	return value;
+}
+
+function listAt(record: Record<string, unknown>, path: string): string[] {
+	const value = fieldAt(record, path);
+	if (!Array.isArray(value)) return [];
+	return value.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.toLowerCase());
+}
+
+/**
+ * Only positive integers count (Anthropic documents 0 as a placeholder). When
+ * fields disagree the smallest wins: overstating a limit overflows requests,
+ * understating it only compacts earlier.
+ */
+function declaredLimit(record: Record<string, unknown>, paths: readonly string[]): number | undefined {
+	let limit: number | undefined;
+	for (const path of paths) {
+		const value = fieldAt(record, path);
+		if (typeof value === "number" && Number.isSafeInteger(value) && value > 0)
+			limit = Math.min(limit ?? value, value);
+	}
+	return limit;
+}
+
+function declaresImageInput(record: Record<string, unknown>): boolean {
+	return (
+		INPUT_MODALITY_FIELDS.some((path) => listAt(record, path).includes("image")) ||
+		IMAGE_FLAG_FIELDS.some((path) => fieldAt(record, path) === true) ||
+		CAPABILITY_LIST_FIELDS.some((path) => listAt(record, path).includes("vision"))
+	);
+}
+
+function declaresReasoning(record: Record<string, unknown>): boolean {
+	return (
+		REASONING_FLAG_FIELDS.some((path) => fieldAt(record, path) === true) ||
+		REASONING_LEVEL_FIELDS.some((path) => listAt(record, path).length > 0) ||
+		CAPABILITY_LIST_FIELDS.some((path) => listAt(record, path).includes("reasoning"))
+	);
+}
+
 function parseCatalogModels(json: unknown): ProbeModel[] | null {
 	if (!json || typeof json !== "object") return null;
 	const payload = json as { models?: unknown; data?: unknown };
@@ -170,7 +335,15 @@ function parseCatalogModels(json: unknown): ProbeModel[] | null {
 					? record.displayName.trim()
 					: undefined;
 		const name = (displayName ?? anthropicName) !== id ? (displayName ?? anthropicName) : undefined;
-		models.push(name ? { id, name } : { id });
+		const model: ProbeModel = name ? { id, name } : { id };
+		const contextWindow = declaredLimit(record, CONTEXT_WINDOW_FIELDS);
+		if (contextWindow) model.contextWindow = contextWindow;
+		const maxTokens = declaredLimit(record, MAX_TOKENS_FIELDS);
+		if (maxTokens) model.maxTokens = maxTokens;
+		// models.json represents only text and image input.
+		if (declaresImageInput(record)) model.input = ["text", "image"];
+		if (declaresReasoning(record)) model.reasoning = true;
+		models.push(model);
 	}
 	return data.length > 0 && models.length === 0 ? null : models;
 }

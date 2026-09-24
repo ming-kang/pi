@@ -82,8 +82,7 @@ export async function importProviderModels(
 	if (fresh.length === 0) return undefined;
 	signal.throwIfAborted();
 	store.batch(() => {
-		for (const model of fresh)
-			store.addModel(providerId, model.name ? { id: model.id, name: model.name } : { id: model.id });
+		for (const model of fresh) store.addModel(providerId, model);
 	});
 	refresher.touch(providerId);
 	// These edits were confirmed. Finish the write even if the originating pane closes.

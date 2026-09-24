@@ -47,6 +47,8 @@ export const PROBE_LIMITS = {
 	maxErrorBytes: 4_096,
 	maxErrorChars: 400,
 	maxModels: 2_000,
+	/** Anthropic catalog pages followed through `has_more`, the first page included. */
+	maxPages: 5,
 } as const;
 
 /** Maximum reference candidates offered by Use Built-in Data. */

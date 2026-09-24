@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AuthResult } from "@earendil-works/pi-ai";
@@ -94,5 +94,40 @@ describe("provider connection operations", () => {
 		writeFileSync(store.path, "{ broken JSON");
 		expect(await importProviderModels(options, [{ id: "new-model" }], new AbortController().signal)).toBeDefined();
 		expect(runtime.refresh).not.toHaveBeenCalled();
+	});
+
+	test("an import saves the metadata each catalog entry declared", async () => {
+		const { options } = fixture();
+		vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+			new Response(
+				JSON.stringify({
+					data: [
+						{
+							id: "deepseek-flash",
+							name: "DeepSeek-V4.1-Flash",
+							context_window: 1048576,
+							max_output_tokens: 393216,
+							input_modalities: ["text", "image"],
+							effort: { supported_levels: ["low", "high", "max"] },
+						},
+						{ id: "plain", object: "model", owned_by: "example" },
+					],
+				}),
+			),
+		);
+		const fetched = await fetchProviderModels(options, new AbortController().signal);
+		if (!fetched.ok) throw new Error(fetched.error);
+		expect(await importProviderModels(options, fetched.models, new AbortController().signal)).toBeUndefined();
+		expect(JSON.parse(readFileSync(store.path, "utf8")).providers.cpa.models).toEqual([
+			{
+				id: "deepseek-flash",
+				name: "DeepSeek-V4.1-Flash",
+				contextWindow: 1048576,
+				maxTokens: 393216,
+				input: ["text", "image"],
+				reasoning: true,
+			},
+			{ id: "plain" },
+		]);
 	});
 });

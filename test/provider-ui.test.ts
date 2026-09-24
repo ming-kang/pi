@@ -469,6 +469,36 @@ describe("provider editor interactions", () => {
 		pane.dispose();
 	});
 
+	test("fetch results summarize the metadata each model declared", async () => {
+		const { host } = hostFixture();
+		host.runFetch = async () => ({
+			ok: true,
+			models: [
+				{
+					id: "deepseek-flash",
+					name: "DeepSeek-V4.1-Flash",
+					contextWindow: 1048576,
+					maxTokens: 393216,
+					input: ["text", "image"],
+					reasoning: true,
+				},
+				{ id: "plain" },
+			],
+			truncated: false,
+		});
+		const pane = new FetchModelsPane(host);
+		pane.setFocused(true);
+		pane.start();
+		await vi.waitFor(() =>
+			expect(render(pane)).toContain("deepseek-flash · DeepSeek-V4.1-Flash · 1.0M ctx · 393k out · img · think"),
+		);
+		const plain = render(pane)
+			.split("\n")
+			.find((line) => line.includes("plain"));
+		expect(plain?.trimEnd()).toMatch(/\[ \] plain$/);
+		pane.dispose();
+	});
+
 	test("Enter on an already-added fetch row is a no-op, not a discard", async () => {
 		const { host } = hostFixture();
 		host.runFetch = async () => ({ ok: true, models: [{ id: "k3" }], truncated: false });

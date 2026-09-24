@@ -1,11 +1,13 @@
 /**
  * Fetch Models pane: idle intro → cancellable loading → error / searchable
- * checklist of the remote catalog. Already-configured ids are marked "Added"
- * and cannot be checked; importing appends new {id, name?} entries, saves
- * once, and refreshes the provider immediately.
+ * checklist of the remote catalog. Rows summarize the metadata each entry
+ * declared; already-configured ids are marked "Added" and cannot be checked.
+ * Importing appends the new entries with that metadata, saves once, and
+ * refreshes the provider immediately.
  */
 
 import "../keybindings.ts";
+import { formatTokens } from "../../../modes/interactive/components/footer.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { truncate } from "../constants.ts";
 import { modelCatalogUrl, type ProbeModel } from "../probe.ts";
@@ -17,6 +19,17 @@ type FetchState =
 	| { type: "loading" }
 	| { type: "error"; message: string }
 	| { type: "results"; models: ProbeModel[]; truncated: boolean };
+
+/** Dim row note for the declared metadata, e.g. `· 1.0M ctx · 393k out · img · think`. */
+function metadataNote(model: ProbeModel): string | undefined {
+	const parts = [
+		model.contextWindow ? `${formatTokens(model.contextWindow)} ctx` : "",
+		model.maxTokens ? `${formatTokens(model.maxTokens)} out` : "",
+		model.input?.includes("image") ? "img" : "",
+		model.reasoning ? "think" : "",
+	].filter(Boolean);
+	return parts.length > 0 ? `· ${parts.join(" · ")}` : undefined;
+}
 
 export class FetchModelsPane implements EditorPane {
 	private state: FetchState = { type: "idle" };
@@ -155,6 +168,7 @@ export class FetchModelsPane implements EditorPane {
 							checked: this.checked.has(row.model.id),
 							active: rowIndex === this.index,
 							paneFocused: this.focused,
+							note: metadataNote(row.model),
 							width,
 						}),
 					);
