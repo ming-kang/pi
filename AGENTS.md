@@ -34,6 +34,13 @@ This repo is a standalone distribution of Pi's coding agent, `@astralyn/pi`. [Ma
 - Always ask before removing functionality or code that appears intentional.
 - Do not preserve backward compatibility unless the user asks for it.
 
+## Principles for Testing
+
+- **Write tests first.** Before you implement, list the realistic ways the code could fail. Write tests for those cases, then implement against them. Don't add unit tests after the fact.
+- **Use E2E tests to verify complex features.** Choose a realistic scenario of medium difficulty, not the easiest happy path. The final run should leave a repeatable artifact (logs, output, screenshots) that someone else can inspect.
+- **Test behavior, not implementation.** Don't write tautological or change-detector tests. Only add a regression test for a bug fix if it covers behavior that nothing else tests.
+- **Run tests in proportion to the change.** While you iterate, run focused checks. Run the full E2E suite once, when the work is done. Never run it for trivial edits like wording or formatting.
+
 ## Dependencies and build
 
 - Pin direct npm dependencies exactly and regenerate `npm-shrinkwrap.json` intentionally when versions or scope change; [Dependency maintenance](maintainers/dependencies.md) owns installation, age exceptions, and lockfile acknowledgement.
