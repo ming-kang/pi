@@ -25,14 +25,22 @@ const concernRequiredKeys = ["id", "why", "paths"];
 const concernAllowedKeys = [...concernRequiredKeys, "tests", "watch"];
 const claimAllowedKeys = ["path", "rewrite"];
 
-// Form and conflict-surface metrics cover runtime source only; documentation,
-// tests, and packaging files are merged by hand.
+// Form and conflict-surface metrics cover runtime source only; wholesale
+// replacements such as CHANGELOG.md would otherwise dominate the ranking.
 export const MEASURED_SCOPE = "src/";
 // A modified path is a rewrite once it deletes or re-indents more upstream
 // lines than a thin patch needs. These thresholds are a policy choice.
 export const MAX_PATCH_DELETIONS = 8;
 export const MAX_PATCH_REINDENT = 10;
 export const DEFAULT_RISK_WINDOW_DAYS = 120;
+// --apply leaves these paths for porting by hand: distribution-owned prose,
+// where this distribution keeps its text and ports upstream facts, and the root
+// manifests, which npm regenerates. Entries match like ledger claims.
+export const REVIEW_PATHS = ["CHANGELOG.md", "README.md", "docs/", "npm-shrinkwrap.json", "package.json"];
+// --apply labels conflict sides with these names, and --check refuses any file
+// that still carries the resulting markers.
+const MERGE_LABELS = { ours: "distribution", base: "baseline", theirs: "upstream" };
+const CONFLICT_MARKER_PATTERN = `^(<<<<<<< ${MERGE_LABELS.ours}|>>>>>>> ${MERGE_LABELS.theirs})`;
 
 const usage = `Usage: node scripts/diff-upstream.mjs [--check [--staged] | --risk [--window <days>] | --target <tag> | --apply <tag>]
 
@@ -41,12 +49,12 @@ in maintainers/upstream.json, annotated with the concern ledger in
 maintainers/concerns.json.
 
   (no flag)        print the deterministic full classification report with conflict-surface metrics
-  --check          verify baseline, dependencies, and ledger rules and print a concise count summary
+  --check          verify baseline, dependencies, ledger rules, and leftover --apply conflict markers and print a concise count summary
   --staged         with --check, verify the index that will be committed
   --risk           rank modified source paths by conflict surface times upstream touches
   --window <days>  with --risk, count upstream touches over this many days before the baseline (default ${DEFAULT_RISK_WINDOW_DAYS})
-  --target <tag>   classify upstream changes from the baseline to a release tag against the ledger
-  --apply <tag>    three-way merge those upstream changes into a clean worktree and advance the baseline`;
+  --target <tag>   classify upstream changes from the baseline to a release tag against the ledger and review paths
+  --apply <tag>    three-way merge those upstream changes into a clean worktree, leave review paths for porting by hand, and advance the baseline`;
 
 function isPlainObject(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -219,13 +227,18 @@ export function validateConcerns(ledger, root, failures, testExists = (path) => 
 	return claims;
 }
 
-function claimMatches(claim, path) {
-	return claim.path === path || (claim.path.endsWith("/") && path.startsWith(claim.path));
+/** Match a ledger-style path: an exact file, or a directory prefix ending in "/". */
+function pathMatches(pattern, path) {
+	return pattern === path || (pattern.endsWith("/") && path.startsWith(pattern));
 }
 
 /** Every claim on a path: its exact file claims and all enclosing directory claims. */
 export function findClaims(claims, path) {
-	return claims.filter((claim) => claimMatches(claim, path));
+	return claims.filter((claim) => pathMatches(claim.path, path));
+}
+
+function isReviewPath(path) {
+	return REVIEW_PATHS.some((review) => pathMatches(review, path));
 }
 
 function concernIds(claims) {
@@ -234,7 +247,14 @@ function concernIds(claims) {
 
 export function createGit(root) {
 	const cwd = resolve(root);
-	const git = (...args) => execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).trimEnd();
+	// Piped stderr keeps probing failures quiet; a thrown error still carries it.
+	const git = (...args) =>
+		execFileSync("git", args, {
+			cwd,
+			encoding: "utf8",
+			maxBuffer: 64 * 1024 * 1024,
+			stdio: ["ignore", "pipe", "pipe"],
+		}).trimEnd();
 	const tryGit = (...args) => {
 		try {
 			return git(...args);
@@ -585,7 +605,7 @@ export function checkClaimRules(claims, measured) {
 	for (const claim of claims) {
 		if (claim.rewrite === undefined) continue;
 		const rewrites = [...measured.values()].some(
-			(metrics) => metrics.form === "rewrite" && claimMatches(claim, metrics.path),
+			(metrics) => metrics.form === "rewrite" && pathMatches(claim.path, metrics.path),
 		);
 		if (!rewrites) {
 			failures.push(
@@ -594,6 +614,22 @@ export function checkClaimRules(claims, measured) {
 		}
 	}
 	return failures;
+}
+
+/**
+ * List files that still carry conflict markers written by --apply. The staged
+ * check reads the index; otherwise the worktree, including untracked files.
+ */
+function findUnresolvedConflicts(staged, git) {
+	try {
+		return git("grep", staged ? "--cached" : "--untracked", "-I", "-l", "-z", "-E", "-e", CONFLICT_MARKER_PATTERN)
+			.split("\0")
+			.filter(Boolean);
+	} catch (error) {
+		// git grep exits 1 when nothing matches.
+		if (error?.status === 1) return [];
+		throw error;
+	}
 }
 
 function writeLine(stream, value) {
@@ -742,14 +778,20 @@ function printRisk(manifest, measured, touches, windowDays, stdout, stderr) {
 }
 
 function readBlob(root, spec) {
-	return execFileSync("git", ["cat-file", "blob", spec], { cwd: root, maxBuffer: 64 * 1024 * 1024 });
+	return execFileSync("git", ["cat-file", "blob", spec], {
+		cwd: root,
+		maxBuffer: 64 * 1024 * 1024,
+		stdio: ["ignore", "pipe", "pipe"],
+	});
 }
 
 /**
  * Three-way merge the upstream changes from the baseline tree to the target
- * tree into the worktree, one path at a time with git merge-file. Paths the
- * distribution dropped stay dropped, and an upstream deletion of a locally
- * changed path is left for review. Returns one { action, path } per change.
+ * tree into the worktree, one path at a time with git merge-file. Review paths
+ * are left for porting by hand, paths the distribution dropped stay dropped, an
+ * upstream deletion of a locally changed path is reported as a conflict, and
+ * added files are registered with intent-to-add so worktree comparisons treat
+ * them as tracked. Returns one { action, path } per change.
  */
 export function applyUpstreamChanges(root, baseTree, targetTree, git) {
 	const scratch = mkdtempSync(join(tmpdir(), "pi-apply-"));
@@ -757,7 +799,12 @@ export function applyUpstreamChanges(root, baseTree, targetTree, git) {
 	try {
 		const changes = parseNameStatus(git("diff", "--name-status", "-z", "--no-renames", baseTree, targetTree));
 		for (const { status, path } of changes) {
-			const local = join(root, path);
+			if (isReviewPath(path)) {
+				results.push({ action: "review", path, detail: { A: "added upstream", D: "deleted upstream" }[status] });
+				continue;
+			}
+			// Absolute, because git merge-file resolves it against cwd: root.
+			const local = resolve(root, path);
 			const exists = existsSync(local);
 			const base = status === "A" ? Buffer.alloc(0) : readBlob(root, `${baseTree}:${path}`);
 			if (status === "D") {
@@ -775,6 +822,8 @@ export function applyUpstreamChanges(root, baseTree, targetTree, git) {
 				if (status === "A") {
 					mkdirSync(dirname(local), { recursive: true });
 					writeFileSync(local, theirs);
+					// Force: upstream's file must be tracked even when a local ignore rule matches it.
+					git("add", "--intent-to-add", "--force", "--", path);
 					results.push({ action: "added", path });
 				} else {
 					results.push({ action: "skipped", path, detail: "dropped locally" });
@@ -795,11 +844,24 @@ export function applyUpstreamChanges(root, baseTree, targetTree, git) {
 			try {
 				execFileSync(
 					"git",
-					["merge-file", "-L", "distribution", "-L", "baseline", "-L", "upstream", local, basePath, theirsPath],
+					[
+						"merge-file",
+						"-L",
+						MERGE_LABELS.ours,
+						"-L",
+						MERGE_LABELS.base,
+						"-L",
+						MERGE_LABELS.theirs,
+						local,
+						basePath,
+						theirsPath,
+					],
 					{ cwd: root, stdio: "pipe" },
 				);
 			} catch (error) {
-				conflicts = typeof error?.status === "number" && error.status > 0 ? error.status : -1;
+				// The exit status counts conflicts up to 127; an error exits with -1, seen as 255.
+				const status = error?.status;
+				conflicts = typeof status === "number" && status > 0 && status <= 127 ? status : -1;
 			}
 			if (conflicts > 0) {
 				results.push({ action: "conflict", path, detail: `${conflicts} conflicting hunk(s)` });
@@ -896,6 +958,15 @@ export function runDiffUpstream({
 		return 1;
 	}
 
+	// Leftover --apply conflict markers need neither the baseline nor the ledger,
+	// so the check reports them together with baseline and dependency failures.
+	const unresolved = releaseTag === undefined && !isRisk ? findUnresolvedConflicts(staged, git) : [];
+	if (isCheck) {
+		for (const path of unresolved) {
+			failures.push(`unresolved --apply conflict markers in ${path}; resolve them before committing`);
+		}
+	}
+
 	const upstreamPackage = verifyBaseline(manifest, failures, warnings, tryGit);
 	if (releaseTag === undefined) {
 		verifyUpstreamDependencies(upstreamPackage, manifest, failures, readJson);
@@ -939,17 +1010,22 @@ export function runDiffUpstream({
 			for (const w of warnings) writeLine(stderr, `warning: ${w}`);
 			const results = applyUpstreamChanges(root, manifest.sourceTree, targetTree, git);
 			const next = { ...manifest, tag: applyTag, commit: targetCommit, sourceTree: targetTree };
-			writeFileSync(
-				join(root, "maintainers", "upstream.json"),
-				`${JSON.stringify(next, null, "	")}
-`,
-			);
+			writeFileSync(join(root, "maintainers", "upstream.json"), `${JSON.stringify(next, null, "\t")}\n`);
 			const counts = {};
-			for (const { action, path, detail } of results) {
-				counts[action] = (counts[action] ?? 0) + 1;
-				writeLine(stdout, `  ${action} ${path}${detail ? ` (${detail})` : ""}`);
+			const describeResult = ({ path, detail }) => `${path}${detail ? ` (${detail})` : ""}`;
+			for (const result of results) {
+				counts[result.action] = (counts[result.action] ?? 0) + 1;
+				if (result.action !== "review") writeLine(stdout, `  ${result.action} ${describeResult(result)}`);
 			}
-			const summary = ["merged", "added", "deleted", "skipped", "conflict"]
+			const review = results.filter((result) => result.action === "review");
+			if (review.length > 0) {
+				writeLine(stdout, "");
+				writeLine(stdout, `Left for porting by hand (${review.length}):`);
+				for (const result of review) writeLine(stdout, `  ${describeResult(result)}`);
+				// The recorded baseline has already moved, so name both trees.
+				writeLine(stdout, `  Inspect each with: git diff ${manifest.sourceTree} ${targetTree} -- <path>`);
+			}
+			const summary = ["merged", "added", "deleted", "skipped", "conflict", "review"]
 				.map((action) => `${counts[action] ?? 0} ${action}`)
 				.join(", ");
 			writeLine(stdout, "");
@@ -976,8 +1052,11 @@ export function runDiffUpstream({
 		const changes = parseNameStatus(
 			git("diff", "--name-status", "-z", "--no-renames", manifest.sourceTree, targetTree),
 		);
-		const removed = changes.filter((entry) => entry.status === "D");
-		const surviving = changes.filter((entry) => entry.status !== "D");
+		// --apply leaves review paths untouched, so they form their own group.
+		const review = changes.filter((entry) => isReviewPath(entry.path));
+		const applied = changes.filter((entry) => !isReviewPath(entry.path));
+		const removed = applied.filter((entry) => entry.status === "D");
+		const surviving = applied.filter((entry) => entry.status !== "D");
 		const isClaimed = (entry) => findClaims(claims, entry.path).length > 0;
 		const registeredCollisions = surviving.filter(isClaimed);
 		const additionCollisions = surviving.filter((entry) => !isClaimed(entry) && localAdditionPaths.has(entry.path));
@@ -1000,6 +1079,7 @@ export function runDiffUpstream({
 		);
 		writeLine(stdout, `  ${String(clean.length).padStart(4)} clear of fork deviations (adoption candidates)`);
 		writeLine(stdout, `  ${String(removed.length).padStart(4)} removed upstream`);
+		writeLine(stdout, `  ${String(review.length).padStart(4)} left for porting by hand (review paths)`);
 
 		printGroups(
 			[
@@ -1011,6 +1091,8 @@ export function runDiffUpstream({
 			claims,
 			stdout,
 		);
+		// Each review path needs its own decision, so no directory claim folds them.
+		printGroups([["Left for porting by hand", review]], [], stdout);
 		return 0;
 	}
 
@@ -1043,7 +1125,7 @@ export function runDiffUpstream({
 
 	const ledgerScope = [...modified, ...dropped];
 	const unregistered = ledgerScope.filter((entry) => findClaims(claims, entry.path).length === 0);
-	const stale = claims.filter((claim) => !ledgerScope.some((entry) => claimMatches(claim, entry.path)));
+	const stale = claims.filter((claim) => !ledgerScope.some((entry) => pathMatches(claim.path, entry.path)));
 	const ruleFailures = ledgerFailures.length === 0 ? checkClaimRules(claims, measured) : [];
 	const concernCount = new Set(claims.map((claim) => claim.concern)).size;
 
@@ -1120,6 +1202,12 @@ export function runDiffUpstream({
 		writeLine(stdout, "");
 		writeLine(stdout, "Ledger rule violations:");
 		for (const f of ruleFailures) writeLine(stdout, `  ${f}`);
+	}
+
+	if (unresolved.length > 0) {
+		writeLine(stdout, "");
+		writeLine(stdout, "Unresolved --apply conflicts (resolve the markers before committing):");
+		for (const path of unresolved) writeLine(stdout, `  ${path}`);
 	}
 
 	return 0;

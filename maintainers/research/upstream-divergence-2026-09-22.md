@@ -333,5 +333,6 @@ export interface EditorHost {
 - **WS-4：** `EditorHost.onInput` 始终限定编辑器焦点，不再带 `scope` 参数；不限定的输入仍用 `ui.onTerminalInput`。本发行版新增的扩展 API 类型集中在 `core/extensions/distribution-api.ts`，由 `types.ts` 一处转出。
 - **WS-5：** 扩展只用到 `openai-completions` 一个 schema，核心只导出它。`rewriteCmdNulRedirects` 移入自有的 `shell-execution.ts` 而非 `bash.ts`，避免加大一个 `rewrite` 文件。
 - **WS-6：** 扩展在模块加载时通过 `core/keybinding-registry.ts` 注册绑定并扩充 `AppKeybindings`，`main.ts` 静态导入捆绑扩展，保证先于任何 `KeybindingsManager` 创建；未新增 `ExtensionAPI` 方法。分离键让出的 `tui.editor.cursorLeft` 默认值也随 background 扩展注册。runner 的保留键列表仍含 `app.backgroundTasks.detach`。
+- **C5 锚点与同步记录头部已在后续提交中删除。** 上游改名会表现为合并冲突、类型错误或覆盖测试失败，锚点只是重复这些信号；风险合计改为在同步记录中可选记录。
 
 仍需真实 TTY 复核：compaction 的继续、取消、切点不可用、保留上下文失败与排队工作；工具行的挂起、成功、错误、折叠、展开、分组与延迟进度；分离快捷键；BTW 的提交拦截与编辑器内按键。

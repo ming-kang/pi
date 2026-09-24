@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import {
 	normalizeRepository,
@@ -42,6 +42,13 @@ function writeJson(path, value) {
 	writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function writeFiles(dir, files) {
+	for (const [name, contents] of Object.entries(files)) {
+		mkdirSync(join(dir, name, ".."), { recursive: true });
+		writeFileSync(join(dir, name), contents);
+	}
+}
+
 function writeLedger(root, concerns = []) {
 	writeJson(join(root, "maintainers", "concerns.json"), { version: 2, concerns });
 }
@@ -69,7 +76,8 @@ function baseManifest() {
 	};
 }
 
-function createTestRepo({ sourceDependencies = runtimeDependencies, sourceDevDependencies } = {}) {
+// `files` are extra upstream files that the distribution carries unchanged.
+function createTestRepo({ sourceDependencies = runtimeDependencies, sourceDevDependencies, files = {} } = {}) {
 	const root = createTemporaryDirectory();
 
 	git(root, "init", "--initial-branch=main");
@@ -96,6 +104,7 @@ function createTestRepo({ sourceDependencies = runtimeDependencies, sourceDevDep
 	mkdirSync(join(sourceDir, "src"));
 	writeFileSync(join(sourceDir, "src", "app.ts"), appSource);
 	writeFileSync(join(sourceDir, ".gitignore"), "maintainers/\nignored.txt\n");
+	writeFiles(sourceDir, files);
 
 	git(root, "add", "packages");
 	git(root, "commit", "-m", "upstream release");
@@ -116,8 +125,9 @@ function createTestRepo({ sourceDependencies = runtimeDependencies, sourceDevDep
 	mkdirSync(join(root, "src"));
 	writeFileSync(join(root, "src", "app.ts"), appSource);
 	writeFileSync(join(root, ".gitignore"), "maintainers/\nignored.txt\n");
+	writeFiles(root, files);
 
-	git(root, "add", "--", "packages", ".gitignore", "package.json", "mod.txt", "drop.txt", "sub", "src");
+	git(root, "add", "--", "packages", ".gitignore", "package.json", "mod.txt", "drop.txt", "sub", "src", ...Object.keys(files));
 	git(root, "commit", "-m", "root mapped");
 
 	const manifest = baseManifest();
@@ -155,9 +165,7 @@ function createTargetTag(repo, additions = {}) {
 	}
 	mkdirSync(join(sourceDir, "src"), { recursive: true });
 	writeFileSync(join(sourceDir, "src", "app.ts"), appSource);
-	for (const [name, contents] of Object.entries(additions)) {
-		writeFileSync(join(sourceDir, name), contents);
-	}
+	writeFiles(sourceDir, additions);
 	writeFileSync(join(sourceDir, ".gitignore"), "maintainers/\nignored.txt\n");
 	git(repo.root, "add", "packages");
 	git(repo.root, "commit", "-m", "upstream v1.2.4");
@@ -416,8 +424,8 @@ describe("diff-upstream worktree collection and CLI execution", () => {
 
 	test("--target classifies upstream changes against the ledger", () => {
 		const repo = createTestRepo();
-		// Recreate the upstream subtree at v1.2.4: mod.txt changes (registered),
-		// sub/a.txt changes (clear), new.txt appears, drop.txt disappears.
+		// Recreate the upstream subtree at v1.2.4: mod.txt and sub/a.txt change (registered),
+		// new.txt appears (clear), drop.txt disappears, and package.json's version moves (review).
 		const sourceDir = join(repo.root, "packages", "coding-agent");
 		mkdirSync(join(sourceDir, "sub"), { recursive: true });
 		writeJson(join(sourceDir, "package.json"), {
@@ -442,8 +450,9 @@ describe("diff-upstream worktree collection and CLI execution", () => {
 		expect(result.stdout).toContain("Target: v1.2.4 packages/coding-agent");
 		expect(result.stdout).toContain("2 touching registered deviations");
 		expect(result.stdout).toContain("0 colliding with fork-owned additions");
-		expect(result.stdout).toContain("2 clear of fork deviations");
+		expect(result.stdout).toContain("1 clear of fork deviations");
 		expect(result.stdout).toContain("1 removed upstream");
+		expect(result.stdout).toContain("1 left for porting by hand");
 		expect(result.stdout).toContain("M mod.txt  [local-fix]");
 		expect(result.stdout).toContain("M sub/ (1 file)  [local-subtree]");
 		expect(result.stdout).toContain("A new.txt");
@@ -468,6 +477,21 @@ describe("diff-upstream worktree collection and CLI execution", () => {
 		expect(result.stdout).toContain("A collision.txt");
 		const adoptionSection = result.stdout.split("Changes clear of fork deviations:")[1] ?? "";
 		expect(adoptionSection).not.toContain("collision.txt");
+	});
+
+	test("--target lists review paths one by one, apart from the ledger groups", () => {
+		const repo = createTestRepo({ files: { "docs/guide.md": "guide\n", "docs/usage.md": "usage\n" } });
+		createTargetTag(repo, { "docs/guide.md": "upstream guide\n", "docs/usage.md": "upstream usage\n" });
+		writeLedger(repo.root, [concern("distribution-docs", ["docs/"])]);
+
+		const result = invoke(repo.root, ["--target", "v1.2.4"]);
+		expect(result.code, result.stderr).toBe(0);
+		expect(result.stdout).toContain("0 touching registered deviations");
+		expect(result.stdout).toContain("3 left for porting by hand");
+		const review = result.stdout.split("Left for porting by hand:")[1] ?? "";
+		for (const line of ["M docs/guide.md", "M docs/usage.md", "M package.json"]) {
+			expect(review).toContain(`  ${line}\n`);
+		}
 	});
 
 	test("--target fails closed when the deviation ledger is invalid", () => {
@@ -527,6 +551,17 @@ describe("diff-upstream --apply", () => {
 		expect(manifest.tag).toBe("v1.2.4");
 		expect(manifest.commit).toBe(git(repo.root, "rev-parse", "v1.2.4^{commit}"));
 		expect(manifest.sourceTree).toBe(git(repo.root, "rev-parse", "v1.2.4:packages/coding-agent"));
+	});
+
+	test("merges through a root given relative to the current directory", () => {
+		const repo = createTestRepo();
+		writeFileSync(join(repo.root, "src", "app.ts"), appSource.replace("console.log(0)", "local()"));
+		commitLocal(repo, "local edit");
+		tagUpstream(repo, { ...unchanged, "src/app.ts": appSource.replace("console.log(11)", "upstream()") });
+
+		const result = invoke(relative(process.cwd(), repo.root), ["--apply", "v1.2.4"]);
+		expect(result.code, result.stdout).toBe(0);
+		expect(read(repo, "src/app.ts")).toContain("upstream()");
 	});
 
 	test("leaves conflict markers and exits nonzero when both sides edit the same lines", () => {
@@ -604,6 +639,109 @@ describe("diff-upstream --apply", () => {
 		expect(result.code).toBe(1);
 		expect(result.stderr).toContain("uncommitted");
 		expect(existsSync(join(repo.root, "new.txt"))).toBe(false);
+	});
+
+	test("leaves distribution-owned prose and root manifests for porting by hand", () => {
+		const repo = createTestRepo({
+			files: { "README.md": "readme\n", "CHANGELOG.md": "changelog\n", "docs/guide.md": "guide\n", "docs/old.md": "old\n" },
+		});
+		writeFileSync(join(repo.root, "docs", "guide.md"), "distribution guide\n");
+		commitLocal(repo, "distribution guide");
+		tagUpstream(repo, {
+			...unchanged,
+			"src/app.ts": appSource,
+			"README.md": "upstream readme\n",
+			"CHANGELOG.md": "upstream changelog\n",
+			"docs/guide.md": "upstream guide\n",
+			"docs/new.md": "new upstream page\n",
+			// docs/old.md is deleted upstream
+		});
+
+		const result = invoke(repo.root, ["--apply", "v1.2.4"]);
+		expect(result.code, result.stdout).toBe(0);
+		expect(read(repo, "README.md")).toBe("readme\n");
+		expect(read(repo, "CHANGELOG.md")).toBe("changelog\n");
+		expect(read(repo, "docs/guide.md")).toBe("distribution guide\n");
+		expect(read(repo, "docs/old.md")).toBe("old\n");
+		expect(existsSync(join(repo.root, "docs", "new.md"))).toBe(false);
+		expect(readJson(join(repo.root, "package.json")).version).toBe("1.2.3");
+		const review = result.stdout.split("Left for porting by hand (6):")[1] ?? "";
+		for (const line of [
+			"CHANGELOG.md",
+			"README.md",
+			"docs/guide.md",
+			"docs/new.md (added upstream)",
+			"docs/old.md (deleted upstream)",
+			"package.json",
+		]) {
+			expect(review).toContain(`  ${line}\n`);
+		}
+		const targetTree = git(repo.root, "rev-parse", "v1.2.4:packages/coding-agent");
+		expect(review).toContain(`git diff ${repo.sourceTree} ${targetTree} -- <path>`);
+		expect(result.stdout).toContain("0 conflict, 6 review");
+	});
+
+	test("still merges Markdown outside the review paths", () => {
+		const repo = createTestRepo({ files: { "examples/README.md": "examples\n", "src/lib/README.md": "lib\n" } });
+		tagUpstream(repo, {
+			...unchanged,
+			"src/app.ts": appSource,
+			"examples/README.md": "upstream examples\n",
+			"src/lib/README.md": "upstream lib\n",
+		});
+
+		const result = invoke(repo.root, ["--apply", "v1.2.4"]);
+		expect(result.code, result.stdout).toBe(0);
+		expect(read(repo, "examples/README.md")).toBe("upstream examples\n");
+		expect(read(repo, "src/lib/README.md")).toBe("upstream lib\n");
+	});
+
+	test("registers added files so the next check treats them as tracked", () => {
+		const repo = createTestRepo();
+		tagUpstream(repo, { ...unchanged, "src/app.ts": appSource, "src/new.ts": "export const added = true;\n" });
+
+		expect(invoke(repo.root, ["--apply", "v1.2.4"]).code).toBe(0);
+		expect(git(repo.root, "ls-files", "--", "src/new.ts")).toBe("src/new.ts");
+		// package.json is a review path, so it keeps the distribution's version.
+		writeLedger(repo.root, [concern("manifest", ["package.json"])]);
+		const check = invoke(repo.root, ["--check"]);
+		expect(check.code, check.stderr).toBe(0);
+	});
+
+	test("fails the check while --apply conflict markers remain", () => {
+		const repo = createTestRepo();
+		writeFileSync(join(repo.root, "src", "app.ts"), appSource.replace("console.log(5)", "local()"));
+		commitLocal(repo, "local edit");
+		tagUpstream(repo, { ...unchanged, "src/app.ts": appSource.replace("console.log(5)", "upstream()") });
+		expect(invoke(repo.root, ["--apply", "v1.2.4"]).code).toBe(1);
+
+		const blocked = invoke(repo.root, ["--check"]);
+		expect(blocked.code).toBe(1);
+		expect(blocked.stderr).toContain("unresolved --apply conflict markers in src/app.ts");
+
+		writeFileSync(join(repo.root, "src", "app.ts"), appSource.replace("console.log(5)", "local();\n\tupstream()"));
+		expect(invoke(repo.root, ["--check"]).stderr).not.toContain("conflict markers");
+	});
+
+	test("the staged check looks for conflict markers in the index", () => {
+		const repo = createTestRepo();
+		git(repo.root, "add", "-f", "--", "maintainers", "npm-shrinkwrap.json");
+		const conflicted = ["<<<<<<< distribution", "local()", "=======", "upstream()", ">>>>>>> upstream", ""];
+		writeFileSync(join(repo.root, "src", "app.ts"), conflicted.join("\n"));
+
+		const unstaged = invoke(repo.root, ["--check", "--staged"]);
+		expect(unstaged.code, unstaged.stderr).toBe(0);
+		git(repo.root, "add", "--", "src/app.ts");
+		const staged = invoke(repo.root, ["--check", "--staged"]);
+		expect(staged.code).toBe(1);
+		expect(staged.stderr).toContain("unresolved --apply conflict markers in src/app.ts");
+	});
+
+	test("a sentence that mentions a conflict marker is not a conflict", () => {
+		const repo = createTestRepo();
+		writeFileSync(join(repo.root, "notes.md"), "Resolve every `<<<<<<< distribution` block by hand.\n");
+		const check = invoke(repo.root, ["--check"]);
+		expect(check.code, check.stderr).toBe(0);
 	});
 });
 
