@@ -12,7 +12,7 @@ These repository-only notes are excluded from npm. Start with [AGENTS.md](../AGE
 | [Upstream synchronization](upstream.md) | Baseline/ledger use and the complete synchronization workflow. |
 | [Release](release.md) | Distribution versioning, publication, verification, and release tags. |
 | [Development](../docs/development.md) | Running, building, and testing a checkout. |
-| [Synchronization records](upstream.md#synchronization-records) | Decisions and validation for individual adopted releases. |
+| `syncs/v<version>.md` | Decisions and validation for one adopted release, written during its [synchronization](upstream.md#synchronization-runbook). |
 
 Link to the owner of a rule rather than maintaining another copy. Keep release-specific path counts and decisions in synchronization records. Update `concerns.json` with the owning concern and covering tests when local behavior changes.
 

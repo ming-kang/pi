@@ -104,11 +104,3 @@ Wholly rewritten documentation pages are the exception. `docs/**` is distributio
    ```
 
    If `main` diverged, reconcile and revalidate the result before merging; do not force the fast-forward or branch deletion. Delete a published remote synchronization branch only when that cleanup is also in scope. Report the resulting commit, worktree state, and any outstanding validation. Publication/versioning remains governed by the release runbook.
-
-## Synchronization records
-
-- [v0.85.1](syncs/v0.85.1.md)
-- [v0.86.0](syncs/v0.86.0.md)
-- [v0.86.1](syncs/v0.86.1.md)
-- [v0.87.0](syncs/v0.87.0.md)
-- [v0.87.1](syncs/v0.87.1.md)
