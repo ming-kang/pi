@@ -86,6 +86,7 @@ function getAliases(): Record<string, string> {
 	const piAiProvidersEntry = resolveImport("@earendil-works/pi-ai/providers/all");
 
 	_aliases = {
+		"@earendil-works/pi-coding-agent": piCodingAgentEntry,
 		[DISTRIBUTION_PACKAGE_NAME]: piCodingAgentEntry,
 		"@earendil-works/pi-agent-core": piAgentCoreEntry,
 		"@earendil-works/pi-tui": piTuiEntry,

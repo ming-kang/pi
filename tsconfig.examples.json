@@ -7,7 +7,8 @@
 		"paths": {
 			"@astralyn/pi": ["./src/index.ts"],
 			"@astralyn/pi/experimental/plugin": ["./src/experimental/plugin.ts"],
-			"@astralyn/pi/*": ["./src/*"]
+			"@astralyn/pi/*": ["./src/*"],
+			"@earendil-works/pi-coding-agent": ["./src/index.ts"]
 		}
 	},
 	"include": ["examples/**/*.ts", "src/**/*.d.ts"],

@@ -8,6 +8,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 - **Breaking for extensions:** main-editor access moved to `ctx.ui.editorHost`, which is defined only where Pi renders the interactive editor. `ctx.ui.onEditorSubmit(handler)` is now `editorHost.onSubmit(handler)`, `ctx.ui.getEditorCursor()` is `editorHost.getCursor()`, and `ctx.ui.onTerminalInput(handler, { scope: "editor" })` is `editorHost.onInput(handler)`; `TerminalInputOptions` is removed and `EditorHost` is exported. Check for `editorHost` instead of calling methods that other modes only stubbed.
 - The Background detach key (`app.backgroundTasks.detach`, default `ctrl+b`) is handled by the bundled background extension, and `BackgroundContext` exposes `detachForeground()`. Bundled extensions register their own configurable keybindings; `keybindings.json` overrides them as before.
+- Extensions can import the SDK as `@earendil-works/pi-coding-agent` again, alongside `@astralyn/pi`, so upstream extensions and the shipped extension examples load unchanged.
 
 ## [0.87.1] - 2026-09-23
 

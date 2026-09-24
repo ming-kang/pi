@@ -8,22 +8,21 @@
  * - API key support via environment variable
  * - Two model definitions
  *
- * Usage (from the repository or package root):
+ * Usage:
  *   # First install dependencies
- *   npm install --prefix examples/extensions/custom-provider-anthropic
+ *   cd packages/coding-agent/examples/extensions/custom-provider && npm install
  *
  *   # With OAuth (run /login custom-anthropic first)
- *   pi -e examples/extensions/custom-provider-anthropic
+ *   pi -e ./packages/coding-agent/examples/extensions/custom-provider
  *
  *   # With API key
- *   CUSTOM_ANTHROPIC_API_KEY=sk-ant-... pi -e examples/extensions/custom-provider-anthropic
+ *   CUSTOM_ANTHROPIC_API_KEY=sk-ant-... pi -e ./packages/coding-agent/examples/extensions/custom-provider
  *
  * Then use /model to select custom-anthropic/claude-sonnet-4-5
  */
 
 import Anthropic from "@anthropic-ai/sdk";
 import type { ContentBlockParam, MessageCreateParamsStreaming } from "@anthropic-ai/sdk/resources/messages.js";
-import type { ExtensionAPI } from "@astralyn/pi";
 import {
 	type Api,
 	type AssistantMessage,
@@ -47,6 +46,7 @@ import {
 	type ToolResultMessage,
 	type TranscriptContext,
 } from "@earendil-works/pi-ai";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // =============================================================================
 // OAuth implementation adapted for the legacy extension compatibility interface.
@@ -157,7 +157,7 @@ async function refreshAnthropicToken(credentials: OAuthCredentials, signal: Abor
 }
 
 // =============================================================================
-// Streaming Implementation Using Public @earendil-works/pi-ai Exports
+// Streaming Implementation (simplified from packages/ai/src/api/anthropic-messages.ts)
 // =============================================================================
 
 // Claude Code tool names for OAuth stealth mode

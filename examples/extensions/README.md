@@ -1,6 +1,6 @@
 # Extension Examples
 
-Example extensions for `@astralyn/pi`.
+Example extensions for pi-coding-agent.
 
 ## Usage
 
@@ -35,13 +35,13 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 | `question.ts` | Demonstrates `ctx.ui.select()` for asking the user questions with custom UI |
 | `questionnaire.ts` | Multi-question input with tab bar navigation between questions |
 | `tool-override.ts` | Override built-in tools (e.g., add logging/access control to `read`) |
-| `bash-spawn-hook.ts` | Wraps bash to adjust the command, cwd, and environment before execution |
 | `dynamic-tools.ts` | Register tools after startup (`session_start`) and at runtime via command, with prompt snippets and tool-specific prompt guidelines |
 | `structured-output.ts` | Final structured-output tool that returns `terminate: true` so the agent can end on the tool call |
 | `built-in-tool-renderer.ts` | Custom compact rendering for built-in tools (read, bash, edit, write) while keeping original behavior |
 | `minimal-mode.ts` | Override built-in tool rendering for minimal display (only tool calls, no output in collapsed mode) |
 | `truncated-tool.ts` | Wraps ripgrep with proper output truncation (50KB/2000 lines) |
 | `ssh.ts` | Delegate all tools to a remote machine via SSH using pluggable operations |
+| `subagent/` | Delegate tasks to specialized subagents with isolated context windows |
 
 ### Commands & UI
 
@@ -51,18 +51,14 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 | `plan-mode/` | Claude Code-style plan mode for read-only exploration with `/plan` command and step tracking |
 | `tools.ts` | Interactive `/tools` command to enable/disable tools with session persistence |
 | `handoff.ts` | Transfer context to a new focused session via `/handoff <goal>` |
-| `commands.ts` | Lists available slash commands, optionally filtered by source |
 | `qna.ts` | Extracts questions from last response into editor via `ctx.ui.setEditorText()` |
 | `status-line.ts` | Shows turn progress in footer via `ctx.ui.setStatus()` with themed colors |
-| `border-status-editor.ts` | Custom editor borders with working state, model, context, cwd, and Git branch |
 | `github-issue-autocomplete.ts` | Adds `#1234` issue completions by stacking a custom autocomplete provider that preloads open issues from `gh issue list` |
 | `widget-placement.ts` | Shows widgets above and below the editor via `ctx.ui.setWidget()` placement |
 | `hidden-thinking-label.ts` | Customizes the collapsed thinking label via `ctx.ui.setHiddenThinkingLabel()` |
 | `working-indicator.ts` | Customizes the streaming working indicator via `ctx.ui.setWorkingIndicator()` |
-| `working-message-test.ts` | Tests custom working-message and indicator persistence across loader recreation |
 | `model-status.ts` | Shows model changes in status bar via `model_select` hook |
 | `snake.ts` | Snake game with custom UI, keyboard handling, and session persistence |
-| `space-invaders.ts` | Space Invaders game with keyboard controls and session persistence |
 | `tic-tac-toe.ts` | Tic-tac-toe vs the agent with `executionMode: "sequential"` tools to prevent race conditions on shared cursor state |
 | `send-user-message.ts` | Demonstrates `pi.sendUserMessage()` for sending user messages from extensions |
 | `timed-confirm.ts` | Demonstrates AbortSignal for auto-dismissing `ctx.ui.confirm()` and `ctx.ui.select()` dialogs |
@@ -81,7 +77,6 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 | `reload-runtime.ts` | Adds `/reload-runtime` and `reload_runtime` tool showing safe reload flow |
 | `interactive-shell.ts` | Run interactive commands (vim, htop) with full terminal via `user_bash` hook |
 | `inline-bash.ts` | Expands `!{command}` patterns in prompts via `input` event transformation |
-| `input-transform.ts` | Transforms or handles typed input through the `input` event |
 | `input-transform-streaming.ts` | Skips expensive input preprocessing for mid-stream steering via `streamingBehavior` |
 
 ### Git Integration
@@ -89,7 +84,6 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 | Extension | Description |
 |-----------|-------------|
 | `git-checkpoint.ts` | Creates git stash checkpoints at each turn for code restoration on fork |
-| `git-merge-and-resolve.ts` | Fetches and merges the upstream branch after turns, then sends conflicts for resolution |
 | `auto-commit-on-exit.ts` | Auto-commits on exit using last assistant message for commit message |
 
 ### System Prompt & Compaction
@@ -97,9 +91,7 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 | Extension | Description |
 |-----------|-------------|
 | `pirate.ts` | Demonstrates `systemPromptAppend` to dynamically modify system prompt |
-| `prompt-customizer.ts` | Adds context-aware guidance based on active tools and skills |
 | `claude-rules.ts` | Scans `.claude/rules/` folder and lists rules in system prompt |
-| `system-prompt-header.ts` | Shows the effective system-prompt length in the status area |
 | `custom-compaction.ts` | Custom compaction that summarizes entire conversation |
 | `trigger-compact.ts` | Triggers compaction when context usage exceeds 100k tokens and adds `/trigger-compact` command |
 
@@ -136,7 +128,6 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 |-----------|-------------|
 | `custom-provider-anthropic/` | Custom Anthropic provider with OAuth support and custom streaming implementation |
 | `custom-provider-gitlab-duo/` | GitLab Duo provider using pi-ai's built-in Anthropic/OpenAI streaming via proxy |
-| `provider-payload.ts` | Logs provider request payloads and response headers to `.pi/provider-payload.log` |
 
 ### External Dependencies
 
@@ -150,11 +141,40 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 See [docs/extensions.md](../../docs/extensions.md) for full documentation.
 
 ```typescript
-import type { ExtensionAPI } from "@astralyn/pi";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 
 export default function (pi: ExtensionAPI) {
-  pi.on("session_start", (_event, ctx) => {
-    ctx.ui.notify("Extension loaded!", "info");
+  // Subscribe to lifecycle events
+  pi.on("tool_call", async (event, ctx) => {
+    if (event.toolName === "bash" && event.input.command?.includes("rm -rf")) {
+      const ok = await ctx.ui.confirm("Dangerous!", "Allow rm -rf?");
+      if (!ok) return { block: true, reason: "Blocked by user" };
+    }
+  });
+
+  // Register custom tools
+  pi.registerTool({
+    name: "greet",
+    label: "Greeting",
+    description: "Generate a greeting",
+    parameters: Type.Object({
+      name: Type.String({ description: "Name to greet" }),
+    }),
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      return {
+        content: [{ type: "text", text: `Hello, ${params.name}!` }],
+        details: {},
+      };
+    },
+  });
+
+  // Register commands
+  pi.registerCommand("hello", {
+    description: "Say hello",
+    handler: async (args, ctx) => {
+      ctx.ui.notify("Hello!", "info");
+    },
   });
 }
 ```

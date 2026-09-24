@@ -226,7 +226,7 @@
 				}
 			],
 			"tests": [
-				"test/extensions-runner.test.ts"
+				"test/extensions-runner-distribution.test.ts"
 			]
 		},
 		{
@@ -250,7 +250,8 @@
 			],
 			"tests": [
 				"test/keybinding-registry.test.ts",
-				"test/keybindings.test.ts"
+				"test/keybindings.test.ts",
+				"test/extensions-runner-distribution.test.ts"
 			]
 		},
 		{

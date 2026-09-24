@@ -6,7 +6,8 @@
 		"moduleResolution": "NodeNext",
 		"paths": {
 			"@astralyn/pi": ["./src/index.ts"],
-			"@astralyn/pi/*": ["./src/*"]
+			"@astralyn/pi/*": ["./src/*"],
+			"@earendil-works/pi-coding-agent": ["./src/index.ts"]
 		}
 	},
 	"include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"],

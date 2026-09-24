@@ -10,12 +10,12 @@
  * 3. Inform the LLM where to find the complete output
  * 4. Custom rendering of tool calls and results
  *
- * The `rg` tool here wraps ripgrep with proper truncation. For Pi's built-in
- * implementation, use the published `createGrepTool` export from `@astralyn/pi`.
+ * The `rg` tool here wraps ripgrep with proper truncation. Compare this to the
+ * built-in `grep` tool in src/core/tools/grep.ts for a more complete implementation.
  */
 
 import { mkdtemp, writeFile } from "node:fs/promises";
-import type { ExtensionAPI } from "@astralyn/pi";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -23,7 +23,7 @@ import {
 	type TruncationResult,
 	truncateHead,
 	withFileMutationQueue,
-} from "@astralyn/pi";
+} from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { execSync } from "child_process";
 import { tmpdir } from "os";

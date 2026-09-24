@@ -6,11 +6,13 @@
  * /workspace write through to the host; other guest filesystem changes are
  * isolated to the VM.
  *
- * Setup (from the repository or package root):
- *   npm install --ignore-scripts --prefix examples/extensions/gondolin
+ * Setup:
+ *   cd packages/coding-agent/examples/extensions/gondolin
+ *   npm install --ignore-scripts
  *
- * Usage (from the project that should be mounted at /workspace):
- *   pi -e /absolute/path/to/pi/examples/extensions/gondolin
+ * Usage:
+ *   cd /path/to/project
+ *   pi -e /path/to/pi/packages/coding-agent/examples/extensions/gondolin
  *
  * Requirements:
  *   - Node.js >= 23.6.0 for @earendil-works/gondolin
@@ -18,7 +20,8 @@
  */
 
 import path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@astralyn/pi";
+import { RealFSProvider, VM } from "@earendil-works/gondolin";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	type BashOperations,
 	createBashTool,
@@ -39,8 +42,7 @@ import {
 	truncateHead,
 	truncateLine,
 	type WriteOperations,
-} from "@astralyn/pi";
-import { RealFSProvider, VM } from "@earendil-works/gondolin";
+} from "@earendil-works/pi-coding-agent";
 
 const GUEST_WORKSPACE = "/workspace";
 const DEFAULT_GREP_LIMIT = 100;

@@ -17,7 +17,7 @@ const packageJson = JSON.parse(
 ) as CodingAgentPackageJson;
 
 describe("package distribution entrypoints", () => {
-	test("uses bundled executables and the modular SDK", () => {
+	test("uses the bundle for executables and modular output for libraries", () => {
 		expect(packageJson.bin.pi).toBe("dist/bundle/cli.js");
 		expect(packageJson.main).toBe("./dist/index.js");
 		expect(packageJson.exports["."].import).toBe("./dist/index.js");

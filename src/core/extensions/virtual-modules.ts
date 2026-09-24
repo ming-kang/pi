@@ -8,7 +8,7 @@ import * as bundledTypeboxCompile from "typebox/compile";
 import * as bundledTypeboxValue from "typebox/value";
 import { DISTRIBUTION_PACKAGE_NAME } from "../../config.ts";
 // This import is safe because loader.ts exports are not re-exported from index.ts.
-// Extensions can therefore import from @astralyn/pi.
+// Extensions can therefore import from @earendil-works/pi-coding-agent.
 import * as bundledPiCodingAgent from "../../index.ts";
 
 /** Modules available to extensions in source and compiled binary runtimes. */
@@ -28,6 +28,7 @@ export const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@earendil-works/pi-ai/compat": bundledPiAiCompat,
 	"@earendil-works/pi-ai/oauth": bundledPiAiOauth,
 	"@earendil-works/pi-ai/providers/all": bundledPiAiProviders,
+	"@earendil-works/pi-coding-agent": bundledPiCodingAgent,
 	[DISTRIBUTION_PACKAGE_NAME]: bundledPiCodingAgent,
 	"@mariozechner/pi-agent-core": bundledPiAgentCore,
 	"@mariozechner/pi-tui": bundledPiTui,

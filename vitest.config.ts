@@ -21,6 +21,10 @@ export default defineConfig({
 		},
 	},
 	resolve: {
-		alias: [{ find: /^@astralyn\/pi$/, replacement: sourceIndex }],
+		alias: [
+			{ find: /^@astralyn\/pi$/, replacement: sourceIndex },
+			// Upstream extension examples import the upstream package name.
+			{ find: /^@earendil-works\/pi-coding-agent$/, replacement: sourceIndex },
+		],
 	},
 });

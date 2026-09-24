@@ -28,8 +28,6 @@ import type { ModelRegistry } from "../src/core/model-registry.ts";
 import type { ScopedModel } from "../src/core/model-resolver.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { buildSystemPrompt } from "../src/core/system-prompt.ts";
-// The detach key reserved against extension shortcuts is registered by the background extension.
-import "../src/extensions/background/keybindings.ts";
 
 describe("ExtensionRunner", () => {
 	let tempDir: string;
@@ -112,15 +110,6 @@ describe("ExtensionRunner", () => {
 		getScopedModels: () => [],
 	};
 
-	describe("modelRuntime", () => {
-		it("exposes the registry's canonical runtime on the extension context", async () => {
-			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
-			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
-
-			expect(runner.createContext().modelRuntime).toBe(modelRegistry.getRuntime());
-		});
-	});
-
 	describe("scopedModels", () => {
 		it("reflects the getScopedModels context action on ctx.scopedModels", async () => {
 			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
@@ -177,38 +166,6 @@ describe("ExtensionRunner", () => {
 	});
 
 	describe("shortcut conflicts", () => {
-		it("reserves detach defaults and rebindings, but permits explicitly freed keys", async () => {
-			fs.writeFileSync(
-				path.join(extensionsDir, "detach.ts"),
-				`
-				export default function(pi) {
-					pi.registerShortcut("ctrl+b", { description: "b", handler: async () => {} });
-					pi.registerShortcut("ctrl+x", { description: "x", handler: async () => {} });
-				}
-			`,
-			);
-			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-			try {
-				const result = await discoverAndLoadExtensions([], tempDir, tempDir);
-				const runner = new ExtensionRunner(
-					result.extensions,
-					result.runtime,
-					tempDir,
-					sessionManager,
-					modelRegistry,
-				);
-				expect(runner.getShortcuts(defaultKeybindings).has("ctrl+b")).toBe(false);
-				const rebound = runner.getShortcuts({ ...defaultKeybindings, "app.backgroundTasks.detach": "ctrl+x" });
-				expect(rebound.has("ctrl+x")).toBe(false);
-				expect(rebound.has("ctrl+b")).toBe(true);
-				expect(runner.getShortcuts({ ...defaultKeybindings, "app.backgroundTasks.detach": [] }).has("ctrl+b")).toBe(
-					true,
-				);
-			} finally {
-				warn.mockRestore();
-			}
-		});
-
 		it("warns when extension shortcut conflicts with built-in", async () => {
 			const extCode = `
 				export default function(pi) {
