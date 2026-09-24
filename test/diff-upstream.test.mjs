@@ -646,8 +646,7 @@ describe("diff-upstream concern ledger", () => {
 			[[concern("empty-watch", ["mod.txt"], { watch: " " })], "watch must be a non-empty string"],
 			[[concern("extra-key", ["mod.txt"], { category: "ui" })], 'unexpected key "category"'],
 			[[concern("extra-claim-key", [{ path: "mod.txt", intent: "x" }])], 'unexpected key "intent"'],
-			[[concern("dir-anchor", [{ path: "sub/", anchors: ["run"] }])], "anchors require a file path"],
-			[[concern("bad-anchor", [{ path: "mod.txt", anchors: ["not a symbol"] }])], "anchors must be a non-empty array"],
+			[[concern("retired-anchors", [{ path: "mod.txt", anchors: ["run"] }])], 'unexpected key "anchors"'],
 			[[concern("empty-rewrite", [{ path: "mod.txt", rewrite: "" }])], "rewrite must be a non-empty string"],
 			[[concern("twice", ["mod.txt", "mod.txt"])], 'claims "mod.txt" more than once'],
 			[[concern("same", ["mod.txt"]), concern("same", ["drop.txt"])], 'duplicate concern id "same"'],
@@ -685,7 +684,7 @@ describe("diff-upstream conflict surface", () => {
 	test("a thin addition is a patch and needs no rewrite reason", () => {
 		const repo = createTestRepo();
 		writeFileSync(join(repo.root, "src", "app.ts"), thin);
-		writeLedger(repo.root, [concern("fork-log", [{ path: "src/app.ts", anchors: ["console.log"] }])]);
+		writeLedger(repo.root, [concern("fork-log", ["src/app.ts"])]);
 
 		const check = invoke(repo.root, ["--check"]);
 		expect(check.code, check.stderr).toBe(0);
@@ -726,26 +725,6 @@ describe("diff-upstream conflict surface", () => {
 		writeFileSync(join(repo.root, "mod.txt"), "replaced\n".repeat(30));
 		writeLedger(repo.root, [concern("replaced-file", ["mod.txt"])]);
 		expect(invoke(repo.root, ["--check"]).code).toBe(0);
-	});
-
-	test("an anchor missing from the changed lines fails the check", () => {
-		const repo = createTestRepo();
-		writeFileSync(join(repo.root, "src", "app.ts"), appSource.replace("{\n", "{\n\tforkHook();\n"));
-		writeLedger(repo.root, [concern("fork-hook", [{ path: "src/app.ts", anchors: ["forkHook", "renamedHook"] }])]);
-
-		const check = invoke(repo.root, ["--check"]);
-		expect(check.code).toBe(1);
-		expect(check.stderr).toContain(
-			'concern "fork-hook" anchor renamedHook does not appear in the changed lines of src/app.ts',
-		);
-		expect(check.stderr).not.toContain("anchor forkHook");
-	});
-
-	test("anchors match whole symbols, not substrings", () => {
-		const repo = createTestRepo();
-		writeFileSync(join(repo.root, "src", "app.ts"), appSource.replace("{\n", "{\n\tforkHookLater();\n"));
-		writeLedger(repo.root, [concern("fork-hook", [{ path: "src/app.ts", anchors: ["forkHook"] }])]);
-		expect(invoke(repo.root, ["--check"]).stderr).toContain("anchor forkHook does not appear");
 	});
 
 	test("the staged check measures the index, not unstaged edits", () => {

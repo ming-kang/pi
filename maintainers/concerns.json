@@ -15,34 +15,24 @@
 				{ "path": "scripts/migrate-sessions.sh" },
 				{
 					"path": "src/cli/startup-ui.ts",
-					"anchors": ["isPrimaryDistribution", "DISTRIBUTION_PACKAGE_NAME"],
 					"rewrite": "The first-run gate compares against this distribution's package metadata, replacing upstream's official-distribution constants."
 				},
-				{
-					"path": "src/config.ts",
-					"anchors": ["DISTRIBUTION_PACKAGE_NAME", "INSTALL_TELEMETRY_URL", "UPDATE_CHANGELOG_HINT"]
-				},
+				{ "path": "src/config.ts" },
 				{
 					"path": "src/core/extensions/loader.ts",
-					"anchors": ["resolveImport", "DISTRIBUTION_PACKAGE_NAME"],
 					"rewrite": "The standalone package resolves bundled libraries from node_modules only, so upstream's monorepo workspace lookup is removed."
 				},
-				{ "path": "src/core/extensions/virtual-modules.ts", "anchors": ["DISTRIBUTION_PACKAGE_NAME"] },
-				{ "path": "src/experimental/plugins/bundled.ts", "anchors": ["DISTRIBUTION_PLUGIN_API"] },
-				{ "path": "src/experimental/source-resolver.ts", "anchors": ["repositoryRoot"] },
-				{
-					"path": "src/modes/interactive/interactive-mode.ts",
-					"anchors": ["INSTALL_TELEMETRY_URL", "UPDATE_CHANGELOG_HINT"]
-				},
+				{ "path": "src/core/extensions/virtual-modules.ts" },
+				{ "path": "src/experimental/plugins/bundled.ts" },
+				{ "path": "src/experimental/source-resolver.ts" },
+				{ "path": "src/modes/interactive/interactive-mode.ts" },
 				{ "path": "src/modes/interactive/components/settings-selector.ts" },
 				{
 					"path": "src/utils/syntax-highlight.ts",
-					"anchors": ["loadAllHighlightLanguages"],
 					"rewrite": "Repository source policy loads every grammar through static imports instead of upstream's deferred dynamic import."
 				},
 				{
 					"path": "src/utils/version-check.ts",
-					"anchors": ["LATEST_VERSION_URL"],
 					"rewrite": "Update checks read the npm registry, whose response replaces upstream's pi.dev payload fields."
 				},
 				{ "path": "tsconfig.build.json" },
@@ -59,7 +49,9 @@
 		{
 			"id": "bundled-extensions",
 			"why": "The distribution's bundled extensions load as hidden built-ins.",
-			"paths": [{ "path": "src/extensions/index.ts", "anchors": ["backgroundExtension", "btwExtension"] }]
+			"paths": [
+				{ "path": "src/extensions/index.ts" }
+			]
 		},
 		{
 			"id": "background-execution",
@@ -67,35 +59,31 @@
 			"paths": [
 				{
 					"path": "src/core/agent-session.ts",
-					"anchors": ["_backgroundHost", "_withBackgroundPaused", "_deliverBackgroundCompletion", "_persistMessage"],
 					"rewrite": "Delivery acknowledgements, the nextTurn persistence contract, and the prompt preflight pause sit inside upstream method bodies; lifecycle pauses are shells over upstream-shaped *Body methods."
 				},
-				{ "path": "src/core/agent-session-runtime.ts", "anchors": ["withBackgroundPaused"] },
-				{ "path": "src/core/agent-session-services.ts", "anchors": ["executionRole"] },
-				{ "path": "src/core/export-html/tool-renderer.ts", "anchors": ["isPartial"] },
-				{ "path": "src/core/extensions/index.ts", "anchors": ["BackgroundContext"] },
-				{ "path": "src/core/extensions/runner.ts", "anchors": ["getBackground", "unboundBackground"] },
-				{ "path": "src/core/extensions/types.ts", "anchors": ["getBackground", "BackgroundContext"] },
-				{ "path": "src/core/sdk.ts", "anchors": ["executionRole"] },
+				{ "path": "src/core/agent-session-runtime.ts" },
+				{ "path": "src/core/agent-session-services.ts" },
+				{ "path": "src/core/export-html/tool-renderer.ts" },
+				{ "path": "src/core/extensions/index.ts" },
+				{ "path": "src/core/extensions/runner.ts" },
+				{ "path": "src/core/extensions/types.ts" },
+				{ "path": "src/core/sdk.ts" },
 				{
 					"path": "src/core/tools/bash.ts",
-					"anchors": ["runShellCommand"],
 					"rewrite": "Shell calls run through session supervision and the shared shell-execution pipeline, replacing upstream's inline execution path."
 				},
-				{ "path": "src/core/tools/output-accumulator.ts", "anchors": ["persistFromStart"] },
+				{ "path": "src/core/tools/output-accumulator.ts" },
 				{ "path": "src/core/tools/powershell.ts" },
 				{
 					"path": "src/core/usage-totals.ts",
-					"anchors": ["getAccountedUsages", "BACKGROUND_USAGE_TYPE"],
 					"rewrite": "The background-usage ledger counts once per task, which turns upstream's accounting loop into a shared generator."
 				},
-				{ "path": "src/index.ts", "anchors": ["BackgroundService"] },
+				{ "path": "src/index.ts" },
 				{
 					"path": "src/modes/interactive/components/footer.ts",
-					"anchors": ["getAccountedUsages"],
 					"rewrite": "Footer totals read the shared accounted-usage ledger instead of summing session entries inline."
 				},
-				{ "path": "src/modes/interactive/interactive-mode.ts", "anchors": ["backgroundEnabled"] }
+				{ "path": "src/modes/interactive/interactive-mode.ts" }
 			],
 			"tests": [
 				"test/agent-session-background.test.ts",
@@ -115,18 +103,20 @@
 			"id": "context-snapshot",
 			"why": "Extensions capture detached, stable model input and request settings without writing to the session.",
 			"paths": [
-				{ "path": "src/core/agent-session.ts", "anchors": ["getContextSnapshot", "_captureModelContext"] },
-				{ "path": "src/core/extensions/index.ts", "anchors": ["ContextSnapshot"] },
-				{ "path": "src/core/extensions/runner.ts", "anchors": ["getContextSnapshotFn"] },
-				{ "path": "src/core/extensions/types.ts", "anchors": ["getContextSnapshot"] },
+				{ "path": "src/core/agent-session.ts" },
+				{ "path": "src/core/extensions/index.ts" },
+				{ "path": "src/core/extensions/runner.ts" },
+				{ "path": "src/core/extensions/types.ts" },
 				{
 					"path": "src/core/sdk.ts",
-					"anchors": ["ContextSnapshotCapture", "resolveModelStreamOptions"],
 					"rewrite": "Request options and the recorded model-input prefix move into modules that other context consumers share, replacing upstream's inline builders."
 				},
-				{ "path": "src/index.ts", "anchors": ["ContextSnapshot"] }
+				{ "path": "src/index.ts" }
 			],
-			"tests": ["test/context-snapshot.test.ts", "test/sdk-stream-options.test.ts"]
+			"tests": [
+				"test/context-snapshot.test.ts",
+				"test/sdk-stream-options.test.ts"
+			]
 		},
 		{
 			"id": "compaction-trigger-percent",
@@ -134,11 +124,13 @@
 			"paths": [
 				{
 					"path": "src/core/settings-manager.ts",
-					"anchors": ["triggerPercentBudget", "getCompactionTriggerPercent"],
 					"rewrite": "Deriving the reserve from triggerPercent needs the configured-versus-default split inside upstream's compaction settings resolver."
 				}
 			],
-			"tests": ["test/compaction-settings.test.ts", "test/settings-manager-compaction.test.ts"]
+			"tests": [
+				"test/compaction-settings.test.ts",
+				"test/settings-manager-compaction.test.ts"
+			]
 		},
 		{
 			"id": "tui-fullscreen-default",
@@ -154,26 +146,24 @@
 			"why": "Native tool rows use the distribution's dot/rail chrome, collapsed hints, and renderer disposal.",
 			"paths": [
 				{ "path": "src/core/tools/edit.ts" },
-				{ "path": "src/core/tools/render-utils.ts", "anchors": ["collapsedLinesHint"] },
+				{ "path": "src/core/tools/render-utils.ts" },
 				{
 					"path": "src/core/tools/renderers/",
 					"rewrite": "Fork call lines and collapsed bodies replace parts of upstream's extracted renderers."
 				},
-				{ "path": "src/modes/interactive/components/custom-message.ts", "anchors": ["isPlainPrimaryClick"] },
+				{ "path": "src/modes/interactive/components/custom-message.ts" },
 				{
 					"path": "src/modes/interactive/components/extension-selector.ts",
-					"anchors": ["keyLabel"],
 					"rewrite": "Selector hints resolve each configured key instead of upstream's fixed hint line."
 				},
-				{ "path": "src/modes/interactive/components/keybinding-hints.ts", "anchors": ["keyLabel", "formatKeyLabel"] },
+				{ "path": "src/modes/interactive/components/keybinding-hints.ts" },
 				{
 					"path": "src/modes/interactive/components/tool-execution.ts",
 					"rewrite": "Dot/rail chrome assembly is interleaved with upstream's call/result shell, so it cannot sit outside the component."
 				},
-				{ "path": "src/modes/interactive/interactive-mode.ts", "anchors": ["disposeChatRows", "PendingToolMap"] },
+				{ "path": "src/modes/interactive/interactive-mode.ts" },
 				{
 					"path": "src/modes/interactive/theme/theme.ts",
-					"anchors": ["THEME_BACKGROUND_KEYS", "BUILTIN_THEME_NAMES"],
 					"rewrite": "Nested color restoration and the bundled theme list change upstream's color and theme-loading functions in place."
 				}
 			],
@@ -191,25 +181,28 @@
 			"id": "tool-grouping",
 			"why": "Consecutive tool calls that share a toolGroup collapse into one summary row.",
 			"paths": [
-				{ "path": "src/core/extensions/types.ts", "anchors": ["toolGroup", "toolGroupSummary"] },
-				{ "path": "src/core/tools/find.ts", "anchors": ["toolGroup"] },
-				{ "path": "src/core/tools/grep.ts", "anchors": ["toolGroup"] },
-				{ "path": "src/core/tools/ls.ts", "anchors": ["toolGroup"] },
-				{ "path": "src/core/tools/read.ts", "anchors": ["toolGroup"] },
-				{ "path": "src/core/tools/tool-definition-wrapper.ts", "anchors": ["toolGroup"] },
+				{ "path": "src/core/extensions/types.ts" },
+				{ "path": "src/core/tools/find.ts" },
+				{ "path": "src/core/tools/grep.ts" },
+				{ "path": "src/core/tools/ls.ts" },
+				{ "path": "src/core/tools/read.ts" },
+				{ "path": "src/core/tools/tool-definition-wrapper.ts" },
 				{ "path": "src/modes/interactive/components/tool-execution.ts" },
-				{ "path": "src/modes/interactive/interactive-mode.ts", "anchors": ["appendToolRow", "isToolChatComponent"] }
+				{ "path": "src/modes/interactive/interactive-mode.ts" }
 			],
-			"tests": ["test/tool-execution-component.test.ts", "test/tools.test.ts"]
+			"tests": [
+				"test/tool-execution-component.test.ts",
+				"test/tools.test.ts"
+			]
 		},
 		{
 			"id": "extension-editor-host",
 			"why": "Extensions reach the main editor through ctx.ui.editorHost: submit interception, cursor, and editor-scoped input.",
 			"paths": [
-				{ "path": "src/core/extensions/index.ts", "anchors": ["EditorHost", "EditorSubmitHandler"] },
-				{ "path": "src/core/extensions/types.ts", "anchors": ["editorHost"] },
-				{ "path": "src/index.ts", "anchors": ["EditorHost"] },
-				{ "path": "src/modes/interactive/interactive-mode.ts", "anchors": ["editorHost", "InteractiveEditorHost"] }
+				{ "path": "src/core/extensions/index.ts" },
+				{ "path": "src/core/extensions/types.ts" },
+				{ "path": "src/index.ts" },
+				{ "path": "src/modes/interactive/interactive-mode.ts" }
 			],
 			"tests": [
 				"test/interactive-editor-submit.test.ts",
@@ -221,57 +214,73 @@
 			"id": "extension-context",
 			"why": "Extensions get one canonical guarded ExtensionContext with the session's ModelRuntime and a detectable stale-context error.",
 			"paths": [
-				{ "path": "src/core/agent-session.ts", "anchors": ["STALE_EXTENSION_CONTEXT_MESSAGE"] },
-				{ "path": "src/core/extensions/index.ts", "anchors": ["isStaleExtensionContextError"] },
-				{ "path": "src/core/extensions/loader.ts", "anchors": ["STALE_EXTENSION_CONTEXT_MESSAGE"] },
-				{ "path": "src/core/extensions/runner.ts", "anchors": ["modelRuntime"] },
-				{ "path": "src/core/extensions/types.ts", "anchors": ["modelRuntime", "isStaleExtensionContextError"] },
-				{ "path": "src/core/model-registry.ts", "anchors": ["getRuntime"] },
+				{ "path": "src/core/agent-session.ts" },
+				{ "path": "src/core/extensions/index.ts" },
+				{ "path": "src/core/extensions/loader.ts" },
+				{ "path": "src/core/extensions/runner.ts" },
+				{ "path": "src/core/extensions/types.ts" },
+				{ "path": "src/core/model-registry.ts" },
 				{
 					"path": "src/modes/interactive/interactive-mode.ts",
-					"anchors": ["createContext"],
 					"rewrite": "Shortcut handlers receive the canonical ExtensionContext, which removes upstream's hand-built shortcut context."
 				}
 			],
-			"tests": ["test/extensions-runner.test.ts"]
+			"tests": [
+				"test/extensions-runner.test.ts"
+			]
 		},
 		{
 			"id": "provider-editor-support",
 			"why": "The bundled /provider editor validates and edits the models.json the runtime loads.",
 			"paths": [
-				{ "path": "src/core/model-config.ts", "anchors": ["OpenAICompletionsCompatSchema", "supportsThinkingTokenBudget"] },
-				{ "path": "src/core/model-runtime.ts", "anchors": ["getModelsPath"] }
+				{ "path": "src/core/model-config.ts" },
+				{ "path": "src/core/model-runtime.ts" }
 			],
-			"tests": ["test/provider-compat-fields.test.ts", "test/model-registry.test.ts"]
+			"tests": [
+				"test/provider-compat-fields.test.ts",
+				"test/model-registry.test.ts"
+			]
 		},
 		{
 			"id": "keybindings",
 			"why": "Extensions register their own configurable keybindings; core merges the registry and reserves the detach key.",
 			"paths": [
-				{ "path": "src/core/keybindings.ts", "anchors": ["getRegisteredKeybindings"] },
-				{ "path": "src/core/extensions/runner.ts", "anchors": ["app.backgroundTasks.detach"] }
+				{ "path": "src/core/keybindings.ts" },
+				{ "path": "src/core/extensions/runner.ts" }
 			],
-			"tests": ["test/keybinding-registry.test.ts", "test/keybindings.test.ts"]
+			"tests": [
+				"test/keybinding-registry.test.ts",
+				"test/keybindings.test.ts"
+			]
 		},
 		{
 			"id": "windows-path-identity",
 			"why": "Path comparisons survive Windows drive-letter case, because realpathSync keeps the caller's spelling.",
 			"paths": [
-				{ "path": "src/core/resource-loader.ts", "anchors": ["samePath", "isPathInside"] },
-				{ "path": "src/core/trust-manager.ts", "anchors": ["findPathKeys", "userAgentsSkillsDirMatcher"] }
+				{ "path": "src/core/resource-loader.ts" },
+				{ "path": "src/core/trust-manager.ts" }
 			],
-			"tests": ["test/resource-loader.test.ts", "test/trust-manager.test.ts"]
+			"tests": [
+				"test/resource-loader.test.ts",
+				"test/trust-manager.test.ts"
+			]
 		},
 		{
 			"id": "windows-shell-normalization",
 			"why": "CMD-style nul redirects become /dev/null so POSIX shells on Windows cannot create undeletable nul files.",
-			"paths": [{ "path": "src/core/tools/bash.ts", "anchors": ["rewriteCmdNulRedirects", "normalizeLocalBashCommand"] }],
-			"tests": ["test/bash-nul-redirect.test.ts"]
+			"paths": [
+				{ "path": "src/core/tools/bash.ts" }
+			],
+			"tests": [
+				"test/bash-nul-redirect.test.ts"
+			]
 		},
 		{
 			"id": "windows-find-glob",
 			"why": "Path-segment globs in find work on Windows, where fd matches no slash-containing pattern.",
-			"paths": [{ "path": "src/core/tools/find.ts", "anchors": ["matchesFindResultPath", "needsWindowsPathFilter"] }],
+			"paths": [
+				{ "path": "src/core/tools/find.ts" }
+			],
 			"tests": [
 				"test/suite/regressions/3302-find-path-glob.test.ts",
 				"test/suite/regressions/6104-find-root-relativization.test.ts"
@@ -281,19 +290,30 @@
 		{
 			"id": "windows-external-editor",
 			"why": "External editor commands parse quotes and spawn without a shell, so a TEMP path with spaces stays one argument.",
-			"paths": [{ "path": "src/modes/interactive/external-editor.ts", "anchors": ["parseEditorCommand"] }],
-			"tests": ["test/external-editor.test.ts"]
+			"paths": [
+				{ "path": "src/modes/interactive/external-editor.ts" }
+			],
+			"tests": [
+				"test/external-editor.test.ts"
+			]
 		},
 		{
 			"id": "auth-min-expiry",
 			"why": "Uppercase --min-expiry units parse as minutes and seconds instead of hours.",
-			"paths": [{ "path": "src/cli/auth-command.ts", "anchors": ["toLowerCase"] }],
-			"tests": ["test/credential-print.test.ts"]
+			"paths": [
+				{ "path": "src/cli/auth-command.ts" }
+			],
+			"tests": [
+				"test/credential-print.test.ts"
+			]
 		},
 		{
 			"id": "docs-and-tests",
 			"why": "Distribution-owned user documentation and tests that track the standalone layout and registered deviations.",
-			"paths": [{ "path": "docs/" }, { "path": "test/" }]
+			"paths": [
+				{ "path": "docs/" },
+				{ "path": "test/" }
+			]
 		}
 	]
 }

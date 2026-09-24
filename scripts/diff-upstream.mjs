@@ -23,7 +23,7 @@ const manifestKeys = ["repository", "tag", "commit", "sourceSubtree", "sourceTre
 const ledgerPath = "maintainers/concerns.json";
 const concernRequiredKeys = ["id", "why", "paths"];
 const concernAllowedKeys = [...concernRequiredKeys, "tests", "watch"];
-const claimAllowedKeys = ["path", "anchors", "rewrite"];
+const claimAllowedKeys = ["path", "rewrite"];
 
 // Form and conflict-surface metrics cover runtime source only; documentation,
 // tests, and packaging files are merged by hand.
@@ -126,7 +126,6 @@ function isValidLedgerPath(value) {
 }
 
 const concernIdPattern = /^[a-z\d]+(?:-[a-z\d]+)*$/;
-const anchorPattern = /^[A-Za-z_$][\w$]*(?:\.[\w$]+)*$/;
 
 /**
  * Validate maintainers/concerns.json and return its flattened path claims.
@@ -207,24 +206,12 @@ export function validateConcerns(ledger, root, failures, testExists = (path) => 
 				failures.push(`${location} claims "${claim.path}" more than once`);
 			}
 			seenPaths.add(claim.path);
-			if (Object.hasOwn(claim, "anchors")) {
-				if (isPrefix) {
-					failures.push(`${location} path "${claim.path}" is a directory; anchors require a file path`);
-				} else if (
-					!Array.isArray(claim.anchors) ||
-					claim.anchors.length === 0 ||
-					claim.anchors.some((anchor) => typeof anchor !== "string" || !anchorPattern.test(anchor))
-				) {
-					failures.push(`${location} path "${claim.path}" anchors must be a non-empty array of symbol names`);
-				}
-			}
 			if (Object.hasOwn(claim, "rewrite") && !isNonEmptyString(claim.rewrite)) {
 				failures.push(`${location} path "${claim.path}" rewrite must be a non-empty string`);
 			}
 			claims.push({
 				concern: typeof concern.id === "string" ? concern.id : `#${index}`,
 				path: claim.path,
-				anchors: Array.isArray(claim.anchors) ? claim.anchors : [],
 				rewrite: claim.rewrite,
 			});
 		}
@@ -484,24 +471,19 @@ function parseNumstat(output) {
 	return counts;
 }
 
-/** Count hunks and collect the added and removed lines of each file in a unified diff. */
+/** Count the hunks of each file in a unified diff. */
 export function parseUnifiedDiff(output) {
 	const files = new Map();
 	let current;
-	let inHunk = false;
 	for (const line of output.split("\n")) {
 		if (line.startsWith("diff --git ")) {
 			current = undefined;
-			inHunk = false;
-		} else if (!inHunk && line.startsWith("+++ ")) {
+		} else if (current === undefined && line.startsWith("+++ ")) {
 			const target = line.slice(4).replace(/\t$/, "");
-			current = { hunks: 0, lines: [] };
+			current = { hunks: 0 };
 			files.set(target.startsWith("b/") ? target.slice(2) : target, current);
 		} else if (current && line.startsWith("@@")) {
 			current.hunks += 1;
-			inHunk = true;
-		} else if (current && inHunk && (line.startsWith("+") || line.startsWith("-"))) {
-			current.lines.push(line.slice(1));
 		}
 	}
 	return files;
@@ -514,8 +496,7 @@ export function classifyForm(path, { deletions, reindent }) {
 
 /**
  * Measure every modified upstream path (M/T) against the baseline tree. Only
- * paths under MEASURED_SCOPE receive a form; the changed lines of all modified
- * paths are kept for anchor checks.
+ * paths under MEASURED_SCOPE receive a form.
  */
 export function measureModified(sourceTree, staged, git) {
 	const base = [...gitDiffArgs(staged), "--diff-filter=MT"];
@@ -530,26 +511,17 @@ export function measureModified(sourceTree, staged, git) {
 			0,
 			surface - (whitespaceFree ? whitespaceFree.additions + whitespaceFree.deletions : 0),
 		);
-		const patch = patches.get(path) ?? { hunks: 0, lines: [] };
+		const patch = patches.get(path) ?? { hunks: 0 };
 		measured.set(path, {
 			path,
 			surface,
 			deletions,
 			reindent,
 			hunks: patch.hunks,
-			lines: patch.lines,
 			form: classifyForm(path, { deletions, reindent }),
 		});
 	}
 	return measured;
-}
-
-function escapeRegExp(value) {
-	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-export function lineMentionsAnchor(line, anchor) {
-	return new RegExp(`(^|[^\\w$])${escapeRegExp(anchor)}([^\\w$]|$)`).test(line);
 }
 
 /**
@@ -597,8 +569,8 @@ function summarizeSurface(measured) {
 }
 
 /**
- * Apply the rewrite-reason and anchor rules (C4, C5). Both only depend on the
- * baseline diff, so they run inside the commit hook without network access.
+ * Apply the rewrite-reason rule. It only depends on the baseline diff, so it
+ * runs inside the commit hook without network access.
  */
 export function checkClaimRules(claims, measured) {
 	const failures = [];
@@ -611,25 +583,14 @@ export function checkClaimRules(claims, measured) {
 		}
 	}
 	for (const claim of claims) {
-		if (claim.rewrite !== undefined) {
-			const rewrites = [...measured.values()].some(
-				(metrics) => metrics.form === "rewrite" && claimMatches(claim, metrics.path),
+		if (claim.rewrite === undefined) continue;
+		const rewrites = [...measured.values()].some(
+			(metrics) => metrics.form === "rewrite" && claimMatches(claim, metrics.path),
+		);
+		if (!rewrites) {
+			failures.push(
+				`concern "${claim.concern}" gives a rewrite reason for ${claim.path}, which no longer measures as rewrite; remove it`,
 			);
-			if (!rewrites) {
-				failures.push(
-					`concern "${claim.concern}" gives a rewrite reason for ${claim.path}, which no longer measures as rewrite; remove it`,
-				);
-			}
-		}
-		if (claim.anchors.length > 0) {
-			const lines = measured.get(claim.path)?.lines ?? [];
-			for (const anchor of claim.anchors) {
-				if (!lines.some((line) => lineMentionsAnchor(line, anchor))) {
-					failures.push(
-						`concern "${claim.concern}" anchor ${anchor} does not appear in the changed lines of ${claim.path}`,
-					);
-				}
-			}
 		}
 	}
 	return failures;
