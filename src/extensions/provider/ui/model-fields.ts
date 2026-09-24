@@ -5,6 +5,7 @@
  * store ops that save immediately.
  */
 
+import "../keybindings.ts";
 import type { ModelsJsonModel } from "../../../core/model-config.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { matchBuiltinModels } from "../catalog.ts";

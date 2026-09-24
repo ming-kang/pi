@@ -79,6 +79,7 @@ export type {
 	CustomToolCallEvent,
 	CustomToolResultEvent,
 	EditorFactory,
+	EditorHost,
 	EditorSubmitEvent,
 	EditorSubmitHandler,
 	EditToolCallEvent,
@@ -182,7 +183,6 @@ export type {
 	SetModelHandler,
 	SetThinkingLevelHandler,
 	TerminalInputHandler,
-	TerminalInputOptions,
 	ThinkingLevelSelectEvent,
 	// Events - Tool
 	ToolCallEvent,

@@ -47,11 +47,9 @@ import type {
 } from "@earendil-works/pi-tui";
 import type { Static, TSchema } from "typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
-import type { BackgroundContext } from "../background/types.ts";
 import type { BashResult } from "../bash-executor.ts";
 import type { CacheWarmingDecisionEvent, CacheWarmingDecisionEventResult } from "../cache-warmer.ts";
 import type { CompactionPreparation, CompactionResult } from "../compaction/index.ts";
-import type { ContextSnapshot } from "../context-snapshot.ts";
 import type { EventBus } from "../event-bus.ts";
 import type { ExecOptions, ExecResult } from "../exec.ts";
 import type { ReadonlyFooterDataProvider } from "../footer-data-provider.ts";
@@ -59,7 +57,6 @@ import type { KeybindingsManager } from "../keybindings.ts";
 import type { CustomMessage } from "../messages.ts";
 import type { ModelRegistry } from "../model-registry.ts";
 import type { ScopedModel } from "../model-resolver.ts";
-import type { ModelRuntime } from "../model-runtime.ts";
 import type {
 	BranchSummaryEntry,
 	CompactionEntry,
@@ -91,10 +88,12 @@ import type {
 	ReadToolInput,
 	WriteToolInput,
 } from "../tools/index.ts";
+import type { BackgroundContext, ContextSnapshot, EditorHost, ModelRuntime } from "./distribution-api.ts";
 
-export type { ContextSnapshot } from "../context-snapshot.ts";
 export type { ExecOptions, ExecResult } from "../exec.ts";
 export type { BuildSystemPromptOptions, NormalizedBuildSystemPromptOptions } from "../system-prompt.ts";
+export type { ContextSnapshot, EditorHost, EditorSubmitEvent, EditorSubmitHandler } from "./distribution-api.ts";
+export { isStaleExtensionContextError, STALE_EXTENSION_CONTEXT_MESSAGE } from "./distribution-api.ts";
 export type { AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode };
 export type { AppKeybinding, KeybindingsManager } from "../keybindings.ts";
 
@@ -121,21 +120,6 @@ export interface ExtensionWidgetOptions {
 
 /** Raw terminal input listener for extensions. */
 export type TerminalInputHandler = (data: string) => { consume?: boolean; data?: string } | undefined;
-
-export interface TerminalInputOptions {
-	/** Only receive input while the main editor has focus, without overlays or autocomplete. */
-	scope?: "editor";
-}
-
-export interface EditorSubmitEvent {
-	/** Expanded, trimmed editor text, before history, command dispatch, or any main-agent queue. */
-	text: string;
-	kind: "prompt" | "command" | "bash";
-	mode: "steer" | "followUp";
-}
-
-/** Handlers must claim input synchronously; start asynchronous work after claiming it. */
-export type EditorSubmitHandler = (event: EditorSubmitEvent) => { handled: true; editorText?: string } | undefined;
 
 /** Working indicator configuration for the interactive streaming loader. */
 export interface WorkingIndicatorOptions {
@@ -167,10 +151,10 @@ export interface ExtensionUIContext {
 	notify(message: string, type?: "info" | "warning" | "error"): void;
 
 	/** Listen to raw terminal input (interactive mode only). Returns an unsubscribe function. */
-	onTerminalInput(handler: TerminalInputHandler, options?: TerminalInputOptions): () => void;
+	onTerminalInput(handler: TerminalInputHandler): () => void;
 
-	/** Intercept editor submissions in TUI mode, including during compaction. First claim wins. */
-	onEditorSubmit(handler: EditorSubmitHandler): () => void;
+	/** Main-editor capabilities; undefined outside the interactive TUI. */
+	readonly editorHost?: EditorHost;
 
 	/** Set status text in the footer/status bar. Pass undefined to clear. */
 	setStatus(key: string, text: string | undefined): void;
@@ -245,9 +229,6 @@ export interface ExtensionUIContext {
 
 	/** Get the current text from the core input editor. */
 	getEditorText(): string;
-
-	/** Get the logical cursor position when the editor exposes it. Indices are zero-based. */
-	getEditorCursor(): { line: number; col: number } | undefined;
 
 	/** Show a multi-line editor for text editing. */
 	editor(title: string, prefill?: string): Promise<string | undefined>;
@@ -336,8 +317,6 @@ export interface CompactOptions {
 export type ExtensionMode = "tui" | "rpc" | "json" | "print";
 
 export interface ExtensionContext {
-	/** Session-owned execution capability; disabled unless the host explicitly enables it. */
-	readonly background: BackgroundContext;
 	/** UI methods for user interaction */
 	ui: ExtensionUIContext;
 	/** Current run mode. Use "tui" to guard terminal-only UI such as custom components. */
@@ -348,10 +327,14 @@ export interface ExtensionContext {
 	cwd: string;
 	/** Session manager (read-only) */
 	sessionManager: ReadonlySessionManager;
-	/** Model registry for model discovery and API key resolution. */
+	/** Model registry for API key resolution */
 	modelRegistry: ModelRegistry;
 	/** Canonical model and authentication runtime shared by the current session. */
 	readonly modelRuntime: ModelRuntime;
+	/** Session-owned execution capability; disabled unless the host explicitly enables it. */
+	readonly background: BackgroundContext;
+	/** Capture detached, stable model input and request settings without writing to the session. */
+	getContextSnapshot(): Promise<ContextSnapshot>;
 	/** Current model (may be undefined) */
 	model: Model<any> | undefined;
 	/** Models scoped to this session (resolved from `--models` /
@@ -375,8 +358,6 @@ export interface ExtensionContext {
 	shutdown(): void;
 	/** Get current context usage for the active model. */
 	getContextUsage(): ContextUsage | undefined;
-	/** Capture detached, stable model input and request settings without writing to the session. */
-	getContextSnapshot(): Promise<ContextSnapshot>;
 	/** Trigger compaction without awaiting completion. */
 	compact(options?: CompactOptions): void;
 	/** Get the current effective system prompt. */
@@ -456,6 +437,10 @@ export interface ToolRenderResultOptions {
 export interface ToolRenderContext<TState = any, TArgs = any, TDetails = unknown> {
 	/** Current tool call arguments. Shared across call/result renders for the same tool call. */
 	args: TArgs;
+	/** Current final or partial result, when one has been received. Error state remains available through isError. */
+	result?: AgentToolResult<TDetails>;
+	/** True when renderCall is producing a collapsed grouped-tool summary. */
+	toolGroupSummary?: boolean;
 	/** Unique id for this tool execution. Stable across call/result renders for the same tool call. */
 	toolCallId: string;
 	/** Invalidate just this tool execution component for redraw. */
@@ -481,10 +466,6 @@ export interface ToolRenderContext<TState = any, TArgs = any, TDetails = unknown
 	showImages: boolean;
 	/** Whether the current result is an error. */
 	isError: boolean;
-	/** Current final or partial result, when one has been received. Error state remains available through isError. */
-	result?: AgentToolResult<TDetails>;
-	/** True when renderCall is producing a collapsed grouped-tool summary. */
-	toolGroupSummary?: boolean;
 }
 
 /**
@@ -1172,20 +1153,6 @@ export function isFindToolResult(e: ToolResultEvent): e is FindToolResultEvent {
 }
 export function isLsToolResult(e: ToolResultEvent): e is LsToolResultEvent {
 	return e.toolName === "ls";
-}
-
-/**
- * Message thrown when a captured extension ctx/pi is used after the owning
- * session was replaced (newSession/fork/switchSession/reload). Single source of
- * truth so extensions can detect the condition with
- * isStaleExtensionContextError instead of matching message text.
- */
-export const STALE_EXTENSION_CONTEXT_MESSAGE =
-	"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().";
-
-/** True when an error came from using a stale extension ctx/pi after session replacement. */
-export function isStaleExtensionContextError(error: unknown): boolean {
-	return error instanceof Error && error.message === STALE_EXTENSION_CONTEXT_MESSAGE;
 }
 
 /**

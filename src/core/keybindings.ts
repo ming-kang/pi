@@ -10,6 +10,7 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { getAgentDir } from "../config.ts";
 import { stripBom } from "../utils/text.ts";
+import { getRegisteredKeybindings } from "./keybinding-registry.ts";
 
 export interface AppKeybindings {
 	"app.interrupt": true;
@@ -48,7 +49,6 @@ export interface AppKeybindings {
 	"app.models.toggleProvider": true;
 	"app.models.reorderUp": true;
 	"app.models.reorderDown": true;
-	"app.list.toggle": true;
 	"app.tree.filter.default": true;
 	"app.tree.filter.noTools": true;
 	"app.tree.filter.userOnly": true;
@@ -56,17 +56,6 @@ export interface AppKeybindings {
 	"app.tree.filter.all": true;
 	"app.tree.filter.cycleForward": true;
 	"app.tree.filter.cycleBackward": true;
-	"app.backgroundTasks.focusList": true;
-	"app.backgroundTasks.focusPreview": true;
-	"app.backgroundTasks.kill": true;
-	"app.backgroundTasks.detach": true;
-	"app.btw.close": true;
-	"app.btw.cancel": true;
-	"app.btw.scrollUp": true;
-	"app.btw.scrollDown": true;
-	"app.provider.switchPaneLeft": true;
-	"app.provider.switchPaneRight": true;
-	"app.provider.removeEntry": true;
 }
 
 export type AppKeybinding = keyof AppKeybindings;
@@ -86,10 +75,6 @@ const windowsKeybindings = useWindowsKeybindings();
 
 export const KEYBINDINGS = {
 	...TUI_KEYBINDINGS,
-	"tui.editor.cursorLeft": {
-		...TUI_KEYBINDINGS["tui.editor.cursorLeft"],
-		defaultKeys: "left",
-	},
 	"tui.editor.undo": {
 		...TUI_KEYBINDINGS["tui.editor.undo"],
 		defaultKeys: process.platform === "win32" ? "ctrl+z" : windowsKeybindings ? "alt+z" : "ctrl+-",
@@ -223,10 +208,6 @@ export const KEYBINDINGS = {
 		defaultKeys: "alt+down",
 		description: "Move model down in order",
 	},
-	"app.list.toggle": {
-		defaultKeys: "space",
-		description: "Toggle selected list item",
-	},
 	"app.tree.filter.default": {
 		defaultKeys: "ctrl+d",
 		description: "Tree filter: default view",
@@ -254,38 +235,6 @@ export const KEYBINDINGS = {
 	"app.tree.filter.cycleBackward": {
 		defaultKeys: "shift+ctrl+o",
 		description: "Tree filter: cycle backward",
-	},
-	"app.backgroundTasks.detach": {
-		defaultKeys: "ctrl+b",
-		description: "Move foreground Bash and Subagent executions to the background",
-	},
-	"app.backgroundTasks.focusList": {
-		defaultKeys: "left",
-		description: "Focus the background task list",
-	},
-	"app.backgroundTasks.focusPreview": {
-		defaultKeys: "right",
-		description: "Focus the background task preview",
-	},
-	"app.backgroundTasks.kill": {
-		defaultKeys: "k",
-		description: "Kill selected background task",
-	},
-	"app.btw.close": { defaultKeys: "escape", description: "Close the BTW conversation" },
-	"app.btw.cancel": { defaultKeys: "ctrl+c", description: "Stop the BTW answer, or close when idle" },
-	"app.btw.scrollUp": { defaultKeys: "up", description: "Scroll BTW up when the editor is empty" },
-	"app.btw.scrollDown": { defaultKeys: "down", description: "Scroll BTW down when the editor is empty" },
-	"app.provider.switchPaneLeft": {
-		defaultKeys: "left",
-		description: "/provider: focus the left pane",
-	},
-	"app.provider.switchPaneRight": {
-		defaultKeys: "right",
-		description: "/provider: focus the right pane",
-	},
-	"app.provider.removeEntry": {
-		defaultKeys: "ctrl+x",
-		description: "/provider: remove the selected compat or dictionary entry",
 	},
 } as const satisfies KeybindingDefinitions;
 
@@ -424,7 +373,7 @@ export class KeybindingsManager extends TuiKeybindingsManager {
 	private configPath: string | undefined;
 
 	constructor(userBindings: KeybindingsConfig = {}, configPath?: string) {
-		super(KEYBINDINGS, userBindings);
+		super({ ...KEYBINDINGS, ...getRegisteredKeybindings() }, userBindings);
 		this.configPath = configPath;
 	}
 

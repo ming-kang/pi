@@ -12,7 +12,8 @@ import type {
 	OpenAICompletionsCompat,
 	OpenAIResponsesCompat,
 } from "@earendil-works/pi-ai";
-import { ModelConfig } from "../../core/model-config.ts";
+import { Compile } from "typebox/compile";
+import { OpenAICompletionsCompatSchema } from "../../core/model-config.ts";
 
 export type CompatValueKind = "boolean" | "enum" | "number" | "stringMap" | "json";
 
@@ -154,6 +155,27 @@ export function compatFieldFor(api: string, key: string): CompatField | undefine
 	return compatFieldsForApi(api).find((field) => field.key === key);
 }
 
+const completionsCompatValidator = Compile(OpenAICompletionsCompatSchema);
+
+/** Validate against models.json's openai-completions compat schema; returns the first errors, if any. */
+function validateCompletionsCompat(value: unknown): string | undefined {
+	if (completionsCompatValidator.Check(value)) return undefined;
+	return completionsCompatValidator
+		.Errors(value)
+		.slice(0, 5)
+		.map((error) => {
+			const path = error.instancePath.replace(/^\//, "").replace(/\//g, ".");
+			// Name the missing property itself, as models.json load errors do.
+			const required =
+				error.keyword === "required"
+					? (error.params as { requiredProperties?: string[] }).requiredProperties?.[0]
+					: undefined;
+			const field = required ? (path ? `${path}.${required}` : required) : path || "root";
+			return `${field}: ${error.message}`;
+		})
+		.join("; ");
+}
+
 /** Parse JSON values and reuse the canonical models.json schema, including nested validation. */
 export function validateJsonCompatValue(key: string, text: string): string | undefined {
 	let value: unknown;
@@ -162,7 +184,7 @@ export function validateJsonCompatValue(key: string, text: string): string | und
 	} catch {
 		return "Value is not valid JSON.";
 	}
-	return ModelConfig.validateCompat("openai-completions", { [key]: value });
+	return validateCompletionsCompat({ [key]: value });
 }
 
 /** Chat-template values share the core schema and the published pi-ai value contract. */
@@ -175,6 +197,6 @@ export function validateChatTemplateKwarg(value: unknown): string | undefined {
 	) {
 		return 'Only "$var" and "omitWhenOff" are allowed.';
 	}
-	const error = ModelConfig.validateCompat("openai-completions", { chatTemplateKwargs: { value } });
+	const error = validateCompletionsCompat({ chatTemplateKwargs: { value } });
 	return error ? `Value must be a scalar or valid $var reference: ${error}` : undefined;
 }

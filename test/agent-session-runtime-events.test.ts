@@ -113,6 +113,55 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 		return { runtimeHost, faux };
 	}
 
+	it("holds the outgoing session's completions while replacement hooks decide", async () => {
+		let reachedHook!: () => void;
+		let releaseHook!: () => void;
+		const reached = new Promise<void>((resolve) => {
+			reachedHook = resolve;
+		});
+		const released = new Promise<void>((resolve) => {
+			releaseHook = resolve;
+		});
+		const { runtimeHost } = await createRuntimeHost((pi) => {
+			pi.on("session_before_switch", async () => {
+				reachedHook();
+				await released;
+				return { cancel: true };
+			});
+		});
+		const session = runtimeHost.session;
+		await session.bindExtensions({ backgroundEnabled: true });
+		let finish!: () => void;
+		const done = new Promise<void>((resolve) => {
+			finish = resolve;
+		});
+		const outcome = await session.background.execute({
+			kind: "bash",
+			title: "worker",
+			toolCallId: "worker",
+			background: true,
+			run: async (control) => {
+				control.accept();
+				await done;
+				return { result: { content: [{ type: "text", text: "done" }], details: undefined } };
+			},
+		});
+		if (outcome.kind !== "background") throw new Error("expected handoff");
+		const delivered = () =>
+			session.sessionManager.getEntries().filter((entry) => entry.type === "custom_message").length;
+
+		const replacing = runtimeHost.newSession();
+		await reached;
+		finish();
+		await vi.waitFor(() => expect(session.background.get(outcome.task.id).status).toBe("completed"));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(delivered()).toBe(0);
+		releaseHook();
+		expect((await replacing).cancelled).toBe(true);
+		await vi.waitFor(() => expect(delivered()).toBe(1));
+		await session.waitForIdle();
+	});
+
 	it("preserves background admission on veto and closes it before shutdown hooks on replacement", async () => {
 		let veto = true;
 		let enabledAtShutdown: boolean | undefined;

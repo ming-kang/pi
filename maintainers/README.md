@@ -14,7 +14,7 @@ These repository-only notes are excluded from npm. Start with [AGENTS.md](../AGE
 | [Development](../docs/development.md) | Running, building, and testing a checkout. |
 | [Synchronization records](upstream.md#synchronization-records) | Decisions and validation for individual adopted releases. |
 
-Link to the owner of a rule rather than maintaining another copy. Keep release-specific path counts and decisions in synchronization records. Update `deltas.json` with path-specific intent and covering tests when local behavior changes.
+Link to the owner of a rule rather than maintaining another copy. Keep release-specific path counts and decisions in synchronization records. Update `concerns.json` with the owning concern, anchors, and covering tests when local behavior changes.
 
 ## Daily work
 

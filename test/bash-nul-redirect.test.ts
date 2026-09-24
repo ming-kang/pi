@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createLocalBashOperations, normalizeLocalBashCommand } from "../src/core/tools/bash.ts";
-import { rewriteCmdNulRedirects } from "../src/utils/shell.ts";
+import { rewriteCmdNulRedirects } from "../src/core/tools/shell-execution.ts";
 
 describe("rewriteCmdNulRedirects", () => {
 	it("rewrites stderr redirects to nul", () => {

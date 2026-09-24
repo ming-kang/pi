@@ -2853,18 +2853,29 @@ pi.on("session_shutdown", () => {
 
 Return `{ consume: true }` to stop dispatch immediately. Return `{ data }` to replace the input seen by later listeners and then Pi's focused component; an empty replacement also prevents focused-component handling after listeners finish. In RPC, JSON, and print modes this is a no-op, so guard terminal-specific behavior with `ctx.mode === "tui"`.
 
-Pass `{ scope: "editor" }` as the second argument to receive input only when the main editor has focus, no overlay is visible, and the editor is not showing autocomplete. Custom editors can expose `isShowingAutocomplete()` for that last check. Subscriptions are removed on extension UI teardown and follow TUI mode changes.
+Subscriptions are removed on extension UI teardown and follow TUI mode changes. For input that should reach you only while the user is typing in the main editor, use `ctx.ui.editorHost.onInput()` below.
 
-### Editor Submission
+### Main Editor Host
 
-`ctx.ui.onEditorSubmit(handler)` intercepts normalized, expanded editor text before command dispatch, editor history, streaming queues, and compaction queues. Enter and the configured follow-up shortcut use the same hook. It is TUI-only and does not intercept programmatic extension messages.
+`ctx.ui.editorHost` exposes the main editor. It is defined only where Pi renders the interactive editor, so check for it instead of checking the mode:
+
+```typescript
+const host = ctx.ui.editorHost;
+if (!host) return; // RPC, JSON, and print modes have no main editor
+const unsubscribeInput = host.onInput((data) => handleKey(data));
+const cursor = host.getCursor(); // { line, col }, zero-based; undefined if the editor does not expose it
+```
+
+`host.onInput(handler)` works like `onTerminalInput()` but only receives input when the main editor has focus, no overlay is visible, and the editor is not showing autocomplete. Custom editors can expose `getCursor()` and `isShowingAutocomplete()` for these checks.
+
+`host.onSubmit(handler)` intercepts normalized, expanded editor text before command dispatch, editor history, streaming queues, and compaction queues. Enter and the configured follow-up shortcut use the same hook. It does not intercept programmatic extension messages.
 
 The event has `text`, `mode` (`"steer"` or `"followUp"`), and `kind` (`"prompt"`, `"command"`, or `"bash"`). Known built-in/extension commands, templates, and skills are classified as commands; unknown slash-prefixed text remains a prompt.
 
 Handlers run synchronously in registration order. Return `{ handled: true }` to claim and clear the input, or `{ handled: true, editorText }` to keep a draft. Return `undefined` to pass through. Start asynchronous work after making the synchronous claim. The first claim wins; a thrown error restores the input and stops dispatch instead of sending it to the main agent.
 
 ```typescript
-const unsubscribe = ctx.ui.onEditorSubmit((event) => {
+const unsubscribe = ctx.ui.editorHost?.onSubmit((event) => {
   if (!panelOpen || event.kind !== "prompt") return undefined;
   if (busy) return { handled: true, editorText: event.text };
   void answerSideQuestion(event.text).catch(showSideError);
@@ -2936,7 +2947,6 @@ ctx.ui.setTitle("pi - my-project");
 // Editor text
 ctx.ui.setEditorText("Prefill text");
 const current = ctx.ui.getEditorText();
-const cursor = ctx.ui.getEditorCursor(); // { line, col }, zero-based; undefined if unsupported
 
 // Paste into editor (triggers paste handling, including collapse for large content)
 ctx.ui.pasteToEditor("pasted content");

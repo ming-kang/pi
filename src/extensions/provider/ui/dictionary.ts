@@ -1,5 +1,6 @@
 /** Open chat-template dictionaries, with typed value-entry states. */
 
+import "../keybindings.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { THINKING_VARIABLES, validateChatTemplateKwarg } from "../compat-fields.ts";
 import { truncate } from "../constants.ts";

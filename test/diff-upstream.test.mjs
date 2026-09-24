@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import {
 	normalizeRepository,
 	runDiffUpstream,
-	validateDeltas,
+	validateConcerns,
 	validateManifest,
 } from "../scripts/diff-upstream.mjs";
 
@@ -19,6 +19,10 @@ const runtimeDependencies = {
 	"@earendil-works/pi-server": "1.2.3",
 	"@earendil-works/pi-tui": "1.2.3",
 };
+
+// Twelve statements in one function, so wrapping them re-indents twelve lines.
+const appBody = Array.from({ length: 12 }, (_, index) => `\tconsole.log(${index});`);
+const appSource = ["export function run() {", ...appBody, "}", ""].join("\n");
 
 const temporaryDirectories = [];
 
@@ -36,6 +40,19 @@ function git(root, ...args) {
 function writeJson(path, value) {
 	mkdirSync(join(path, ".."), { recursive: true });
 	writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function writeLedger(root, concerns = []) {
+	writeJson(join(root, "maintainers", "concerns.json"), { version: 2, concerns });
+}
+
+function concern(id, paths, extra = {}) {
+	return {
+		id,
+		why: `${id} reason.`,
+		paths: paths.map((path) => (typeof path === "string" ? { path } : path)),
+		...extra,
+	};
 }
 
 function readJson(path) {
@@ -76,6 +93,8 @@ function createTestRepo({ sourceDependencies = runtimeDependencies, sourceDevDep
 	for (const name of ["a.txt", "b.txt"]) {
 		writeFileSync(join(sourceDir, "sub", name), `${name}\n`);
 	}
+	mkdirSync(join(sourceDir, "src"));
+	writeFileSync(join(sourceDir, "src", "app.ts"), appSource);
 	writeFileSync(join(sourceDir, ".gitignore"), "maintainers/\nignored.txt\n");
 
 	git(root, "add", "packages");
@@ -94,16 +113,18 @@ function createTestRepo({ sourceDependencies = runtimeDependencies, sourceDevDep
 	for (const name of ["a.txt", "b.txt"]) {
 		writeFileSync(join(root, "sub", name), `${name}\n`);
 	}
+	mkdirSync(join(root, "src"));
+	writeFileSync(join(root, "src", "app.ts"), appSource);
 	writeFileSync(join(root, ".gitignore"), "maintainers/\nignored.txt\n");
 
-	git(root, "add", "--", "packages", ".gitignore", "package.json", "mod.txt", "drop.txt", "sub");
+	git(root, "add", "--", "packages", ".gitignore", "package.json", "mod.txt", "drop.txt", "sub", "src");
 	git(root, "commit", "-m", "root mapped");
 
 	const manifest = baseManifest();
 	manifest.commit = commit;
 	manifest.sourceTree = sourceTree;
 	writeJson(join(root, "maintainers", "upstream.json"), manifest);
-	writeJson(join(root, "maintainers", "deltas.json"), { deltas: [] });
+	writeLedger(root);
 
 	writeJson(join(root, "npm-shrinkwrap.json"), {
 		lockfileVersion: 3,
@@ -132,6 +153,8 @@ function createTargetTag(repo, additions = {}) {
 	for (const name of ["a.txt", "b.txt"]) {
 		writeFileSync(join(sourceDir, "sub", name), `${name}\n`);
 	}
+	mkdirSync(join(sourceDir, "src"), { recursive: true });
+	writeFileSync(join(sourceDir, "src", "app.ts"), appSource);
 	for (const [name, contents] of Object.entries(additions)) {
 		writeFileSync(join(sourceDir, name), contents);
 	}
@@ -153,9 +176,9 @@ function invoke(root, args = []) {
 	return { code, stdout, stderr };
 }
 
-function deltaValidationFailures(entries, root = ".") {
+function ledgerValidationFailures(concerns, root = ".") {
 	const failures = [];
-	validateDeltas({ deltas: entries }, root, failures);
+	validateConcerns({ version: 2, concerns }, root, failures);
 	return failures.join("\n");
 }
 
@@ -272,9 +295,7 @@ describe("diff-upstream manifest and dependency validation", () => {
 			delete sourceDependencies[name];
 		}
 		const repo = createTestRepo({ sourceDependencies, sourceDevDependencies });
-		writeJson(join(repo.root, "maintainers", "deltas.json"), {
-			deltas: [{ path: "package.json", category: "distribution", intent: "Exact runtime dependencies" }],
-		});
+		writeLedger(repo.root, [concern("distribution-identity", ["package.json"])]);
 		const valid = invoke(repo.root, ["--check"]);
 		expect(valid.code, valid.stderr).toBe(0);
 
@@ -310,17 +331,15 @@ describe("diff-upstream manifest and dependency validation", () => {
 describe("diff-upstream worktree collection and CLI execution", () => {
 	test("checks staged changes against the staged ledger rather than an unstaged repair", () => {
 		const repo = createTestRepo();
-		git(repo.root, "add", "-f", "--", "maintainers/upstream.json", "maintainers/deltas.json", "npm-shrinkwrap.json");
+		git(repo.root, "add", "-f", "--", "maintainers/upstream.json", "maintainers/concerns.json", "npm-shrinkwrap.json");
 		writeFileSync(join(repo.root, "mod.txt"), "changed\n");
 		git(repo.root, "add", "mod.txt");
-		writeJson(join(repo.root, "maintainers/deltas.json"), {
-			deltas: [{ path: "mod.txt", category: "bugfix", intent: "Local fix" }],
-		});
+		writeLedger(repo.root, [concern("local-fix", ["mod.txt"])]);
 		expect(invoke(repo.root, ["--check"]).code).toBe(0);
 		const rejected = invoke(repo.root, ["--check", "--staged"]);
 		expect(rejected.code).toBe(1);
 		expect(rejected.stderr).toContain("unregistered upstream deviation: M mod.txt");
-		git(repo.root, "add", "-f", "--", "maintainers/deltas.json");
+		git(repo.root, "add", "-f", "--", "maintainers/concerns.json");
 		writeFileSync(join(repo.root, "sub/a.txt"), "unrelated unstaged change\n");
 		const accepted = invoke(repo.root, ["--check", "--staged"]);
 		expect(accepted.code, accepted.stderr).toBe(0);
@@ -347,20 +366,19 @@ describe("diff-upstream worktree collection and CLI execution", () => {
 		expect(unregistered.stderr).toContain("unregistered upstream deviation: M mod.txt");
 		expect(unregistered.stderr).toContain("unregistered upstream deviation: D drop.txt");
 
-		writeJson(join(repo.root, "maintainers", "deltas.json"), {
-			deltas: [
-				{ path: "drop.txt", category: "distribution", intent: "Dropped file" },
-				{ path: "mod.txt", category: "windows-compat", intent: "Rewrites the file" },
-			],
-		});
+		writeLedger(repo.root, [
+			concern("dropped-file", ["drop.txt"]),
+			concern("rewrites-file", ["mod.txt"]),
+			concern("also-rewrites", ["mod.txt"]),
+		]);
 		const checkResult = invoke(repo.root, ["--check"]);
 		expect(checkResult.code).toBe(0);
 		expect(checkResult.stdout).toContain("Verified 4 worktree differences against v1.2.3");
-		expect(checkResult.stdout).toContain("2 registered deltas");
+		expect(checkResult.stdout).toContain("3 registered concerns");
 
 		const annotatedReport = invoke(repo.root);
 		expect(annotatedReport.code).toBe(0);
-		expect(annotatedReport.stdout).toContain("M mod.txt  [windows-compat] Rewrites the file");
+		expect(annotatedReport.stdout).toContain("M mod.txt  [also-rewrites, rewrites-file]");
 	});
 
 	test("verifies tag and tree integrity and falls back gracefully if tag is missing locally", () => {
@@ -411,16 +429,13 @@ describe("diff-upstream worktree collection and CLI execution", () => {
 		writeFileSync(join(sourceDir, "sub", "a.txt"), "upstream changed\n");
 		writeFileSync(join(sourceDir, "sub", "b.txt"), "b.txt\n");
 		writeFileSync(join(sourceDir, "new.txt"), "new upstream file\n");
+		mkdirSync(join(sourceDir, "src"), { recursive: true });
+		writeFileSync(join(sourceDir, "src", "app.ts"), appSource);
 		writeFileSync(join(sourceDir, ".gitignore"), "maintainers/\nignored.txt\n");
 		git(repo.root, "add", "packages");
 		git(repo.root, "commit", "-m", "upstream v1.2.4");
 		git(repo.root, "tag", "v1.2.4");
-		writeJson(join(repo.root, "maintainers", "deltas.json"), {
-			deltas: [
-				{ path: "mod.txt", category: "bugfix", intent: "Local fix" },
-				{ path: "sub/", category: "distribution", intent: "Local subtree" },
-			],
-		});
+		writeLedger(repo.root, [concern("local-fix", ["mod.txt"]), concern("local-subtree", ["sub/"])]);
 
 		const result = invoke(repo.root, ["--target", "v1.2.4"]);
 		expect(result.code).toBe(0);
@@ -429,8 +444,8 @@ describe("diff-upstream worktree collection and CLI execution", () => {
 		expect(result.stdout).toContain("0 colliding with fork-owned additions");
 		expect(result.stdout).toContain("2 clear of fork deviations");
 		expect(result.stdout).toContain("1 removed upstream");
-		expect(result.stdout).toContain("M mod.txt  [bugfix] Local fix");
-		expect(result.stdout).toContain("M sub/ (1 file)  [distribution] Local subtree");
+		expect(result.stdout).toContain("M mod.txt  [local-fix]");
+		expect(result.stdout).toContain("M sub/ (1 file)  [local-subtree]");
 		expect(result.stdout).toContain("A new.txt");
 		expect(result.stdout).toContain("D drop.txt");
 
@@ -458,100 +473,210 @@ describe("diff-upstream worktree collection and CLI execution", () => {
 	test("--target fails closed when the deviation ledger is invalid", () => {
 		const repo = createTestRepo();
 		createTargetTag(repo);
-		writeJson(join(repo.root, "maintainers", "deltas.json"), {
-			deltas: [{ path: "mod.txt", category: "unknown", intent: "Invalid ledger" }],
-		});
+		writeLedger(repo.root, [concern("Invalid_Id", ["mod.txt"])]);
 
 		const result = invoke(repo.root, ["--target", "v1.2.4"]);
 		expect(result.code).toBe(1);
-		expect(result.stderr).toContain("category must be one of");
+		expect(result.stderr).toContain("id must be kebab-case");
 		expect(result.stdout).not.toContain("adoption candidates");
 	});
 });
 
-describe("diff-upstream deviation ledger", () => {
-	test("prefix entries cover whole directories and stale entries fail the check", () => {
+
+describe("diff-upstream concern ledger", () => {
+	test("directory claims cover whole directories and stale claims fail the check", () => {
 		const repo = createTestRepo();
-		// No deviation matches the prefix, so the entry is stale.
-		writeJson(join(repo.root, "maintainers", "deltas.json"), {
-			deltas: [{ path: "sub/", category: "distribution", intent: "Distribution area" }],
-		});
+		// No deviation matches the directory, so the claim is stale.
+		writeLedger(repo.root, [concern("distribution-area", ["sub/"])]);
 		const stale = invoke(repo.root, ["--check"]);
 		expect(stale.code).toBe(1);
-		expect(stale.stderr).toContain("stale delta entry");
+		expect(stale.stderr).toContain('stale claim (no matching worktree deviation): sub/ in concern "distribution-area"');
 
-		// A modified file under the prefix is covered by the prefix entry.
-		writeFileSync(join(repo.root, "mod.txt"), "changed\n");
-		writeJson(join(repo.root, "maintainers", "deltas.json"), {
-			deltas: [{ path: "mod.txt", category: "bugfix", intent: "Covered" }],
-		});
+		writeFileSync(join(repo.root, "sub", "a.txt"), "changed\n");
 		const covered = invoke(repo.root, ["--check"]);
-		expect(covered.code).toBe(0);
-
-		const reportStale = invoke(repo.root);
-		expect(reportStale.code).toBe(0);
+		expect(covered.code, covered.stderr).toBe(0);
 	});
 
 	test("folds directory-covered paths into one annotated report line", () => {
 		const repo = createTestRepo();
 		writeFileSync(join(repo.root, "sub", "a.txt"), "changed\n");
 		writeFileSync(join(repo.root, "sub", "b.txt"), "changed\n");
-		writeJson(join(repo.root, "maintainers", "deltas.json"), {
-			deltas: [{ path: "sub/", category: "distribution", intent: "Distribution area" }],
-		});
+		writeLedger(repo.root, [concern("distribution-area", ["sub/"])]);
 
 		const report = invoke(repo.root);
 		expect(report.code).toBe(0);
-		expect(report.stdout).toContain("M sub/ (2 files)  [distribution] Distribution area");
+		expect(report.stdout).toContain("M sub/ (2 files)  [distribution-area]");
 		expect(report.stdout).not.toContain("sub/a.txt");
-
-		const check = invoke(repo.root, ["--check"]);
-		expect(check.code).toBe(0);
+		expect(invoke(repo.root, ["--check"]).code).toBe(0);
 	});
 
-	test("rejects schema violations: unknown category, missing intent, bad tests, unknown keys, duplicates, unsorted", () => {
-		const pathCheckRoot = createTemporaryDirectory("pi-delta-schema-test");
+	test("rejects schema violations", () => {
+		const pathCheckRoot = createTemporaryDirectory("pi-ledger-schema-test");
 		const cases = [
-			[{ path: "mod.txt", category: "nope", intent: "x" }, "category must be one of"],
-			[{ path: "mod.txt", category: "ui", intent: "" }, "intent must be a non-empty string"],
-			[
-				{ path: "mod.txt", category: "ui", intent: "x", tests: ["test/missing.test.ts"] },
-				"does not exist",
-				pathCheckRoot,
-			],
-			[{ path: "mod.txt", category: "ui", intent: "x", tests: "nope" }, "tests must be an array"],
-			[{ path: "mod.txt", category: "ui", intent: "x", status: "verified" }, 'unexpected key "status"'],
-			[{ path: "mod.txt", category: "ui", intent: "x", extra: 1 }, 'unexpected key "extra"'],
+			[[concern("Bad_Id", ["mod.txt"])], "id must be kebab-case"],
+			[[{ ...concern("no-why", ["mod.txt"]), why: "" }], "why must be a non-empty string"],
+			[[concern("no-paths", [])], "paths must be a non-empty array"],
+			[[concern("missing-test", ["mod.txt"], { tests: ["test/missing.test.ts"] })], "does not exist", pathCheckRoot],
+			[[concern("bad-tests", ["mod.txt"], { tests: "nope" })], "tests must be an array"],
+			[[concern("empty-watch", ["mod.txt"], { watch: " " })], "watch must be a non-empty string"],
+			[[concern("extra-key", ["mod.txt"], { category: "ui" })], 'unexpected key "category"'],
+			[[concern("extra-claim-key", [{ path: "mod.txt", intent: "x" }])], 'unexpected key "intent"'],
+			[[concern("dir-anchor", [{ path: "sub/", anchors: ["run"] }])], "anchors require a file path"],
+			[[concern("bad-anchor", [{ path: "mod.txt", anchors: ["not a symbol"] }])], "anchors must be a non-empty array"],
+			[[concern("empty-rewrite", [{ path: "mod.txt", rewrite: "" }])], "rewrite must be a non-empty string"],
+			[[concern("twice", ["mod.txt", "mod.txt"])], 'claims "mod.txt" more than once'],
+			[[concern("same", ["mod.txt"]), concern("same", ["drop.txt"])], 'duplicate concern id "same"'],
+			[[concern("absolute", ["/mod.txt"])], "normalized repository-relative POSIX path"],
 		];
-		for (const [entry, expected, root] of cases) {
-			expect(deltaValidationFailures([entry], root)).toContain(expected);
+		for (const [concerns, expected, root] of cases) {
+			expect(ledgerValidationFailures(concerns, root)).toContain(expected);
 		}
+		// Several concerns may claim the same path.
+		expect(ledgerValidationFailures([concern("first", ["mod.txt"]), concern("second", ["mod.txt"])])).toBe("");
 
-		expect(
-			deltaValidationFailures([
-				{ path: "mod.txt", category: "ui", intent: "x" },
-				{ path: "mod.txt", category: "ui", intent: "x" },
-			]),
-		).toContain("duplicate path");
-
-		expect(
-			deltaValidationFailures([
-				{ path: "zzz.txt", category: "ui", intent: "x" },
-				{ path: "mod.txt", category: "ui", intent: "x" },
-			]),
-		).toContain("sorted by path");
+		const wrongShape = [];
+		validateConcerns({ concerns: [] }, ".", wrongShape);
+		expect(wrongShape.join("\n")).toContain('"version": 2');
 	});
 
 	test("missing ledger keeps the report usable but fails the check", () => {
 		const repo = createTestRepo();
-		rmSync(join(repo.root, "maintainers", "deltas.json"));
+		rmSync(join(repo.root, "maintainers", "concerns.json"));
 
 		const report = invoke(repo.root);
 		expect(report.code).toBe(0);
-		expect(report.stderr).toContain("maintainers/deltas.json is missing");
+		expect(report.stderr).toContain("maintainers/concerns.json is missing");
 
 		const check = invoke(repo.root, ["--check"]);
 		expect(check.code).toBe(1);
-		expect(check.stderr).toContain("maintainers/deltas.json is missing");
+		expect(check.stderr).toContain("maintainers/concerns.json is missing");
+	});
+});
+
+describe("diff-upstream conflict surface", () => {
+	const thin = appSource.replace("{\n", "{\n\tconsole.log('fork');\n");
+	const wrapped = ["export function run() {", "\ttry {", ...appBody.map((line) => `\t${line}`), "\t} finally {}", "}", ""];
+
+	test("a thin addition is a patch and needs no rewrite reason", () => {
+		const repo = createTestRepo();
+		writeFileSync(join(repo.root, "src", "app.ts"), thin);
+		writeLedger(repo.root, [concern("fork-log", [{ path: "src/app.ts", anchors: ["console.log"] }])]);
+
+		const check = invoke(repo.root, ["--check"]);
+		expect(check.code, check.stderr).toBe(0);
+		expect(check.stdout).toContain("rewrite surface 0 lines");
+
+		const report = invoke(repo.root);
+		expect(report.stdout).toContain("rewrite 0 lines in 0 files, patch 1 lines in 1 files");
+		expect(report.stdout).toMatch(/patch\s+1\s+0\s+1\s+src\/app\.ts/);
+	});
+
+	test("re-indenting upstream lines is a rewrite that needs a written reason", () => {
+		const repo = createTestRepo();
+		writeFileSync(join(repo.root, "src", "app.ts"), wrapped.join("\n"));
+		writeLedger(repo.root, [concern("wrapped-run", ["src/app.ts"])]);
+
+		const unexplained = invoke(repo.root, ["--check"]);
+		expect(unexplained.code).toBe(1);
+		expect(unexplained.stderr).toContain("src/app.ts measures as rewrite (12 deletions, 24 re-indented lines)");
+
+		writeLedger(repo.root, [
+			concern("wrapped-run", [{ path: "src/app.ts", rewrite: "The body must run inside the fork's try block." }]),
+		]);
+		const explained = invoke(repo.root, ["--check"]);
+		expect(explained.code, explained.stderr).toBe(0);
+		expect(explained.stdout).toContain("rewrite surface 26 lines");
+
+		// Thinning the patch back to a single addition leaves the reason stale.
+		writeFileSync(join(repo.root, "src", "app.ts"), thin);
+		const staleReason = invoke(repo.root, ["--check"]);
+		expect(staleReason.code).toBe(1);
+		expect(staleReason.stderr).toContain(
+			'concern "wrapped-run" gives a rewrite reason for src/app.ts, which no longer measures as rewrite',
+		);
+	});
+
+	test("paths outside the measured scope never need a rewrite reason", () => {
+		const repo = createTestRepo();
+		writeFileSync(join(repo.root, "mod.txt"), "replaced\n".repeat(30));
+		writeLedger(repo.root, [concern("replaced-file", ["mod.txt"])]);
+		expect(invoke(repo.root, ["--check"]).code).toBe(0);
+	});
+
+	test("an anchor missing from the changed lines fails the check", () => {
+		const repo = createTestRepo();
+		writeFileSync(join(repo.root, "src", "app.ts"), appSource.replace("{\n", "{\n\tforkHook();\n"));
+		writeLedger(repo.root, [concern("fork-hook", [{ path: "src/app.ts", anchors: ["forkHook", "renamedHook"] }])]);
+
+		const check = invoke(repo.root, ["--check"]);
+		expect(check.code).toBe(1);
+		expect(check.stderr).toContain(
+			'concern "fork-hook" anchor renamedHook does not appear in the changed lines of src/app.ts',
+		);
+		expect(check.stderr).not.toContain("anchor forkHook");
+	});
+
+	test("anchors match whole symbols, not substrings", () => {
+		const repo = createTestRepo();
+		writeFileSync(join(repo.root, "src", "app.ts"), appSource.replace("{\n", "{\n\tforkHookLater();\n"));
+		writeLedger(repo.root, [concern("fork-hook", [{ path: "src/app.ts", anchors: ["forkHook"] }])]);
+		expect(invoke(repo.root, ["--check"]).stderr).toContain("anchor forkHook does not appear");
+	});
+
+	test("the staged check measures the index, not unstaged edits", () => {
+		const repo = createTestRepo();
+		writeLedger(repo.root, [concern("fork-log", ["src/app.ts"])]);
+		writeFileSync(join(repo.root, "src", "app.ts"), thin);
+		git(repo.root, "add", "-f", "--", "maintainers", "npm-shrinkwrap.json", "src/app.ts");
+		writeFileSync(join(repo.root, "src", "app.ts"), wrapped.join("\n"));
+
+		expect(invoke(repo.root, ["--check"]).stderr).toContain("measures as rewrite");
+		const staged = invoke(repo.root, ["--check", "--staged"]);
+		expect(staged.code, staged.stderr).toBe(0);
+	});
+});
+
+describe("diff-upstream --risk", () => {
+	const thin = appSource.replace("{\n", "{\n\tconsole.log('fork');\n");
+
+	test("ranks modified source paths by surface times upstream touches in the window", () => {
+		const repo = createTestRepo();
+		writeFileSync(join(repo.root, "src", "app.ts"), thin);
+
+		const result = invoke(repo.root, ["--risk", "--window", "30"]);
+		expect(result.code, result.stderr).toBe(0);
+		expect(result.stdout).toMatch(/Touch window: 30 days \(\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}\)/);
+		// One upstream commit added src/app.ts inside the window: risk = 1 line x 1 touch.
+		expect(result.stdout).toMatch(/1\s+1\s+1\s+0\s+1\s+patch\s+src\/app\.ts/);
+		expect(result.stdout).toContain("rewriteSurface: 0");
+		expect(result.stdout).toContain("risk: 1");
+	});
+
+	test("reports n/a and still succeeds without upstream history", () => {
+		const repo = createTestRepo();
+		writeFileSync(join(repo.root, "src", "app.ts"), thin);
+		git(repo.root, "tag", "-d", "v1.2.3");
+		repo.manifest.commit = "c".repeat(40);
+		writeJson(join(repo.root, "maintainers", "upstream.json"), repo.manifest);
+
+		const result = invoke(repo.root, ["--risk"]);
+		expect(result.code).toBe(0);
+		expect(result.stderr).toContain("touches and risk are n/a");
+		expect(result.stdout).toMatch(/n\/a\s+n\/a\s+1\s+0\s+1\s+patch\s+src\/app\.ts/);
+		expect(result.stdout).toContain("risk: n/a");
+	});
+
+	test("rejects --window without --risk and combined modes", () => {
+		const fakeRoot = join(tmpdir(), "pi-diff-cli-argument-parsing-only");
+		for (const args of [
+			["--window", "30"],
+			["--risk", "--check"],
+			["--risk", "--window", "0"],
+			["--risk", "--target", "v1.2.4"],
+		]) {
+			const result = invoke(fakeRoot, args);
+			expect(result.code, args.join(" ")).toBe(2);
+			expect(result.stderr).toContain("Usage:");
+		}
 	});
 });

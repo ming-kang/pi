@@ -5,6 +5,7 @@
  * level deeper and allow free keys per the schema.
  */
 
+import "../keybindings.ts";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { type CompatField, compatFieldFor, compatFieldsForApi, validateJsonCompatValue } from "../compat-fields.ts";

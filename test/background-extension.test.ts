@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { stripTerminalSequences, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { getKeybindings, setKeybindings, stripTerminalSequences, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BackgroundService } from "../src/core/background/service.ts";
 import type { BackgroundControl } from "../src/core/background/types.ts";
@@ -9,6 +9,7 @@ import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
 	ExtensionContext,
+	TerminalInputHandler,
 	ToolDefinition,
 	ToolRenderContext,
 } from "../src/core/extensions/types.ts";
@@ -296,7 +297,10 @@ describe("public Background management", () => {
 		const h = running();
 		await h.outcome;
 		const setStatus = vi.fn();
-		const ctx = { background: h.service, ui: { setStatus } } as unknown as ExtensionContext;
+		const ctx = {
+			background: h.service,
+			ui: { setStatus, onTerminalInput: () => () => {} },
+		} as unknown as ExtensionContext;
 		handlers.get("session_start")?.({}, ctx);
 		expect(setStatus).toHaveBeenLastCalledWith("background", "bg 1 active · 0 finished");
 		handlers.get("session_shutdown")?.({}, ctx);
@@ -305,6 +309,67 @@ describe("public Background management", () => {
 		h.finish();
 		await h.service.wait(h.service.list()[0]!.id, 1000);
 		expect(setStatus).toHaveBeenCalledTimes(calls);
+	});
+
+	it("moves running foreground executions to the background on the detach key", async () => {
+		const previousKeybindings = getKeybindings();
+		setKeybindings(KeybindingsManager.create());
+		try {
+			const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
+			const pi = {
+				on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => void) =>
+					handlers.set(event, handler),
+				registerTool: vi.fn(),
+				registerMessageRenderer: vi.fn(),
+				registerCommand: vi.fn(),
+			} as unknown as ExtensionAPI;
+			createBackgroundExtension()(pi);
+			const service = new BackgroundService({ enabled: true });
+			services.push(service);
+			let input: TerminalInputHandler | undefined;
+			const unsubscribeInput = vi.fn();
+			const notify = vi.fn();
+			const ui = {
+				setStatus: vi.fn(),
+				notify,
+				onTerminalInput: (handler: TerminalInputHandler) => {
+					input = handler;
+					return unsubscribeInput;
+				},
+			};
+			handlers.get("session_start")?.({}, { background: service, ui } as unknown as ExtensionContext);
+			const detachKey = "";
+			expect(getKeybindings().matches(detachKey, "app.backgroundTasks.detach")).toBe(true);
+
+			// Nothing runs yet, so the key falls through to the editor.
+			expect(input?.(detachKey)).toBeUndefined();
+			let finish!: () => void;
+			const done = new Promise<void>((resolve) => {
+				finish = resolve;
+			});
+			const outcome = service.execute({
+				kind: "bash",
+				title: "build",
+				toolCallId: "foreground",
+				background: false,
+				async run(ctx) {
+					ctx.accept();
+					await done;
+					return { result: { content: [{ type: "text", text: "built" }], details: undefined } };
+				},
+			});
+			await vi.waitFor(() => expect(service.list()).toHaveLength(1));
+			expect(input?.("x")).toBeUndefined();
+			expect(input?.(detachKey)).toEqual({ consume: true });
+			expect(notify).toHaveBeenCalledWith("Moved 1 execution to the background. Use /bg to manage tasks.");
+			expect((await outcome).kind).toBe("background");
+			finish();
+
+			handlers.get("session_shutdown")?.({}, { background: service, ui } as unknown as ExtensionContext);
+			expect(unsubscribeInput).toHaveBeenCalledOnce();
+		} finally {
+			setKeybindings(previousKeybindings);
+		}
 	});
 });
 

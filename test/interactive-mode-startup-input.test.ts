@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 
 type SubmitContext = {
-	handleEditorSubmit(this: SubmitContext, text: string, mode: "steer" | "followUp"): Promise<void>;
-	interceptEditorSubmit: () => false;
+	// This distribution offers editor submissions to extensions first.
+	editorHost: { intercept(): boolean };
 	defaultEditor: { onSubmit?: (text: string) => void };
 	editor: {
 		addToHistory?: (text: string) => void;
@@ -31,7 +31,6 @@ type StartupSubmitContext = {
 };
 
 type InteractiveModePrivate = {
-	handleEditorSubmit(this: SubmitContext, text: string, mode: "steer" | "followUp"): Promise<void>;
 	handleStartupSubmit(this: StartupSubmitContext, text: string): void;
 	setupEditorSubmitHandler(this: SubmitContext): void;
 	getUserInput(this: InputContext): Promise<string>;
@@ -41,8 +40,7 @@ const interactiveModePrototype = InteractiveMode.prototype as unknown as Interac
 
 function createSubmitContext(): SubmitContext {
 	return {
-		handleEditorSubmit: interactiveModePrototype.handleEditorSubmit,
-		interceptEditorSubmit: () => false,
+		editorHost: { intercept: () => false },
 		defaultEditor: {},
 		editor: {
 			addToHistory: vi.fn(),

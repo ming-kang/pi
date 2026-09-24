@@ -144,3 +144,6 @@ export function highlight(code: string, options: HighlightOptions = {}): string 
 export function supportsLanguage(name: string): boolean {
 	return hljs.getLanguage(name) !== undefined;
 }
+
+/** Every grammar loads statically with this module; kept so upstream callers stay unchanged. */
+export async function loadAllHighlightLanguages(): Promise<void> {}

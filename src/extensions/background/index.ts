@@ -1,4 +1,6 @@
 /** bg is an observer/controller of the public session-owned Background capability. */
+import "./keybindings.ts";
+import { getKeybindings } from "@earendil-works/pi-tui";
 import { isBackgroundTerminal } from "../../core/background/types.ts";
 import type { ExtensionAPI } from "../../core/extensions/types.ts";
 import { boundedText, describeTaskLine, runKill, runList, runRead, runWait } from "./actions.ts";
@@ -12,9 +14,11 @@ import type { BgDetails, BgNotificationDetails } from "./types.ts";
 export function createBackgroundExtension(): (pi: ExtensionAPI) => void {
 	return (pi) => {
 		let unsubscribe: (() => void) | undefined;
+		let unsubscribeDetachKey: (() => void) | undefined;
 		let closeMenu: (() => void) | undefined;
 		pi.on("session_start", (_event, ctx) => {
 			unsubscribe?.();
+			unsubscribeDetachKey?.();
 			const update = () => {
 				// The status counts backgrounded work only; foreground executions
 				// are already visible as ordinary tool rows in the transcript.
@@ -26,11 +30,24 @@ export function createBackgroundExtension(): (pi: ExtensionAPI) => void {
 				);
 			};
 			unsubscribe = ctx.background.subscribe(update);
+			unsubscribeDetachKey = ctx.ui.onTerminalInput((data) => {
+				if (!getKeybindings().matches(data, "app.backgroundTasks.detach")) return undefined;
+				const count = ctx.background.detachForeground();
+				// Nothing can move: let the key fall through to editor bindings instead of
+				// spending it on a "nothing happened" status line.
+				if (count === 0) return undefined;
+				ctx.ui.notify(
+					`Moved ${count} execution${count === 1 ? "" : "s"} to the background. Use /bg to manage tasks.`,
+				);
+				return { consume: true };
+			});
 			update();
 		});
 		pi.on("session_shutdown", (_event, ctx) => {
 			unsubscribe?.();
 			unsubscribe = undefined;
+			unsubscribeDetachKey?.();
+			unsubscribeDetachKey = undefined;
 			closeMenu?.();
 			closeMenu = undefined;
 			ctx.ui.setStatus("background", undefined);

@@ -1,4 +1,5 @@
 /** Inline observer: selecting or closing a view never changes execution ownership. */
+import "./keybindings.ts";
 import { homedir } from "node:os";
 import {
 	type Component,

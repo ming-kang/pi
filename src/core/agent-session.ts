@@ -504,6 +504,19 @@ export class AgentSession {
 		this._backgroundHost.retry();
 	}
 
+	/**
+	 * Run a lifecycle operation with delivery paused across its asynchronous gaps.
+	 * Lifecycle methods are thin shells over upstream bodies so those keep upstream's shape.
+	 */
+	private async _withBackgroundPaused<T>(operation: () => Promise<T>): Promise<T> {
+		const resumeBackground = this.pauseBackgroundNotifications();
+		try {
+			return await operation();
+		} finally {
+			resumeBackground();
+		}
+	}
+
 	get modelRuntime(): ModelRuntime {
 		return this._modelRuntime;
 	}
@@ -969,25 +982,35 @@ export class AgentSession {
 		resolve();
 	}
 
+	/**
+	 * Background completions stay paused until runs requested by settled handlers have started,
+	 * so a deferred prompt never races a delivery for the same idle gap.
+	 */
 	private async _emitAgentSettled(): Promise<void> {
+		return this._withBackgroundPaused(() => this._emitAgentSettledBody());
+	}
+
+	private async _emitAgentSettledBody(): Promise<void> {
 		this._cacheWarmer?.onAgentSettled();
-		// Background completions stay paused until runs requested by settled handlers have started,
-		// so a deferred prompt never races a delivery for the same idle gap.
-		const resumeBackground = this.pauseBackgroundNotifications();
 		this._isAgentRunActive = false;
+		this._isEmittingAgentSettled = true;
 		try {
-			this._isEmittingAgentSettled = true;
-			try {
-				await this._extensionRunner.emit({ type: "agent_settled" });
-				this._emit({ type: "agent_settled" });
-			} finally {
-				this._isEmittingAgentSettled = false;
-			}
-			for (const action of this._deferredSettledActions.splice(0)) await action();
+			await this._extensionRunner.emit({ type: "agent_settled" });
+			this._emit({ type: "agent_settled" });
 		} finally {
-			this._resolveIdleWaitIfIdle();
-			resumeBackground();
+			this._isEmittingAgentSettled = false;
 		}
+
+		const deferred = this._deferredSettledActions.splice(0);
+		if (deferred.length > 0) {
+			try {
+				for (const action of deferred) await action();
+			} finally {
+				this._resolveIdleWaitIfIdle();
+			}
+			return;
+		}
+		this._resolveIdleWaitIfIdle();
 	}
 
 	/**
@@ -1786,164 +1809,161 @@ export class AgentSession {
 		this.retryBackgroundNotifications();
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		const preflightResult = options?.preflightResult;
-		// Observer commands may stay open indefinitely. Their lifecycle operations
-		// pause independently; only real model input owns the preflight pause.
-		if (expandPromptTemplates && text.startsWith("/")) {
-			try {
-				if (await this._tryExecuteExtensionCommand(text)) {
+		let messages: AgentMessage[] | undefined;
+		let resumeBackground: (() => void) | undefined;
+
+		try {
+			// Handle extension commands first (execute immediately, even during streaming)
+			// Extension commands manage their own LLM interaction via pi.sendMessage()
+			if (expandPromptTemplates && text.startsWith("/")) {
+				const handled = await this._tryExecuteExtensionCommand(text);
+				if (handled) {
+					// Extension command executed, no prompt to send
 					preflightResult?.(true);
 					return;
 				}
-			} catch (error) {
-				preflightResult?.(false);
-				throw error;
 			}
-		}
-		const resumeBackground = this.pauseBackgroundNotifications();
-		try {
-			let messages: AgentMessage[] | undefined;
-			try {
-				if (this._compactionAbortController !== undefined) {
+			// Observer commands above may stay open indefinitely; only real model input owns
+			// the preflight pause, released once the user message is established.
+			resumeBackground = this.pauseBackgroundNotifications();
+
+			if (this._compactionAbortController !== undefined) {
+				throw new Error(
+					"Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.",
+				);
+			}
+
+			// Emit input event for extension interception (before skill/template expansion)
+			const processedInput = await this._runInputHandlers(
+				text,
+				options?.images,
+				options?.source ?? "interactive",
+				this.isStreaming ? options?.streamingBehavior : undefined,
+			);
+			if (!processedInput) {
+				preflightResult?.(true);
+				return;
+			}
+			const { text: currentText, images: currentImages } = processedInput;
+
+			// Expand skill commands (/skill:name args) and prompt templates (/template args)
+			let expandedText = currentText;
+			if (expandPromptTemplates) {
+				expandedText = this._expandSkillCommand(expandedText);
+				expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+			}
+
+			// If streaming, queue via steer() or followUp() based on option
+			if (this.isStreaming) {
+				if (!options?.streamingBehavior) {
 					throw new Error(
-						"Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.",
+						"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
 					);
 				}
-
-				// Emit input event for extension interception (before skill/template expansion)
-				const processedInput = await this._runInputHandlers(
-					text,
-					options?.images,
-					options?.source ?? "interactive",
-					this.isStreaming ? options?.streamingBehavior : undefined,
-				);
-				if (!processedInput) {
-					preflightResult?.(true);
-					return;
+				if (options.streamingBehavior === "followUp") {
+					await this._queueFollowUp(expandedText, currentImages);
+				} else {
+					await this._queueSteer(expandedText, currentImages);
 				}
-				const { text: currentText, images: currentImages } = processedInput;
-
-				// Expand skill commands (/skill:name args) and prompt templates (/template args)
-				let expandedText = currentText;
-				if (expandPromptTemplates) {
-					expandedText = this._expandSkillCommand(expandedText);
-					expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
-				}
-
-				// If streaming, queue via steer() or followUp() based on option
-				if (this.isStreaming) {
-					if (!options?.streamingBehavior) {
-						throw new Error(
-							"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
-						);
-					}
-					if (options.streamingBehavior === "followUp") {
-						await this._queueFollowUp(expandedText, currentImages);
-					} else {
-						await this._queueSteer(expandedText, currentImages);
-					}
-					preflightResult?.(true);
-					return;
-				}
-
-				// Flush any pending bash and custom messages before the new prompt
-				this._flushPendingBashMessages();
-				this._flushPendingCustomMessages();
-
-				// Validate model
-				if (!this.model) {
-					throw new Error(formatNoModelSelectedMessage());
-				}
-
-				const hasConfiguredAuth =
-					this._modelRuntime.hasConfiguredAuth(this.model.provider) ||
-					(await this._modelRuntime.checkAuth(this.model.provider)) !== undefined;
-				if (!hasConfiguredAuth) {
-					const isOAuth = this._modelRuntime.isUsingOAuth(this.model.provider);
-					if (isOAuth) {
-						throw new Error(
-							`Authentication failed for "${this.model.provider}". ` +
-								`Credentials may have expired or network is unavailable. ` +
-								`Run '/login ${this.model.provider}' to re-authenticate.`,
-						);
-					}
-					throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
-				}
-
-				// Check if we need to compact before sending (catches aborted responses).
-				// The user's new prompt is sent below, so do not call agent.continue() here.
-				const lastAssistant = this._findLastAssistantMessage();
-				if (lastAssistant) {
-					await this._checkCompaction(lastAssistant, false);
-				}
-
-				// Emit before_agent_start before normalizing images so extension-driven model
-				// selection determines the resize profile used for the request and history.
-				const selectedToolsBefore = this._baseSystemPromptOptions.selectedTools;
-				const result = await this._extensionRunner.emitBeforeAgentStart(
-					expandedText,
-					currentImages,
-					this._baseSystemPromptOptions,
-				);
-				// Handlers may edit event.systemPromptOptions.selectedTools or call setActiveTools(),
-				// which updates the live loadout instead. An explicit edit wins; otherwise the live
-				// loadout is authoritative, so a setActiveTools() call is not undone here.
-				const handlerEditedTools =
-					result.systemPromptOptions.selectedTools.length !== selectedToolsBefore.length ||
-					result.systemPromptOptions.selectedTools.some((name, index) => name !== selectedToolsBefore[index]);
-				if (!handlerEditedTools) result.systemPromptOptions.selectedTools = this.getActiveToolNames();
-
-				const normalized = await this._normalizePromptImages(currentImages);
-				const userText =
-					normalized.hints.length > 0 ? `${expandedText}\n\n${normalized.hints.join("\n")}` : expandedText;
-
-				// Build messages only after hooks and image normalization have completed.
-				messages = [];
-				const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: userText }];
-				userContent.push(...normalized.images);
-				messages.push({
-					role: "user",
-					content: userContent,
-					timestamp: Date.now(),
-				});
-
-				// Inject any pending "nextTurn" messages as context alongside the user message.
-				// They stay queued until _persistMessage() confirms the append.
-				for (const msg of this._pendingNextTurnMessages) {
-					messages.push(msg);
-				}
-
-				for (const msg of result.messages) {
-					messages.push({
-						role: "custom",
-						customType: msg.customType,
-						// Untyped extensions can pass null/missing content; normalize at ingestion.
-						content: msg.content ?? [],
-						display: msg.display,
-						details: msg.details,
-						timestamp: Date.now(),
-					});
-				}
-				const updateMessage = this._preparePromptAndToolLoadout(result.systemPromptOptions);
-				this._runSystemPromptOptions = result.systemPromptOptions;
-				if (updateMessage) messages.unshift(updateMessage);
-			} catch (error) {
-				preflightResult?.(false);
-				throw error;
-			}
-
-			if (!messages) {
+				preflightResult?.(true);
 				return;
 			}
 
-			preflightResult?.(true);
-			// The user's message is now established, so a completion may join this run through the
-			// steering queue instead of waiting for the turn to end. Everything above still holds
-			// the pause, so no delivery can race input hooks, model validation or compaction.
-			resumeBackground();
-			await this._runAgentPrompt(messages);
+			// Flush any pending bash and custom messages before the new prompt
+			this._flushPendingBashMessages();
+			this._flushPendingCustomMessages();
+
+			// Validate model
+			if (!this.model) {
+				throw new Error(formatNoModelSelectedMessage());
+			}
+
+			const hasConfiguredAuth =
+				this._modelRuntime.hasConfiguredAuth(this.model.provider) ||
+				(await this._modelRuntime.checkAuth(this.model.provider)) !== undefined;
+			if (!hasConfiguredAuth) {
+				const isOAuth = this._modelRuntime.isUsingOAuth(this.model.provider);
+				if (isOAuth) {
+					throw new Error(
+						`Authentication failed for "${this.model.provider}". ` +
+							`Credentials may have expired or network is unavailable. ` +
+							`Run '/login ${this.model.provider}' to re-authenticate.`,
+					);
+				}
+				throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
+			}
+
+			// Check if we need to compact before sending (catches aborted responses).
+			// The user's new prompt is sent below, so do not call agent.continue() here.
+			const lastAssistant = this._findLastAssistantMessage();
+			if (lastAssistant) {
+				await this._checkCompaction(lastAssistant, false);
+			}
+
+			// Emit before_agent_start before normalizing images so extension-driven model
+			// selection determines the resize profile used for the request and history.
+			const selectedToolsBefore = this._baseSystemPromptOptions.selectedTools;
+			const result = await this._extensionRunner.emitBeforeAgentStart(
+				expandedText,
+				currentImages,
+				this._baseSystemPromptOptions,
+			);
+			// Handlers may edit event.systemPromptOptions.selectedTools or call setActiveTools(),
+			// which updates the live loadout instead. An explicit edit wins; otherwise the live
+			// loadout is authoritative, so a setActiveTools() call is not undone here.
+			const handlerEditedTools =
+				result.systemPromptOptions.selectedTools.length !== selectedToolsBefore.length ||
+				result.systemPromptOptions.selectedTools.some((name, index) => name !== selectedToolsBefore[index]);
+			if (!handlerEditedTools) result.systemPromptOptions.selectedTools = this.getActiveToolNames();
+
+			const normalized = await this._normalizePromptImages(currentImages);
+			const userText =
+				normalized.hints.length > 0 ? `${expandedText}\n\n${normalized.hints.join("\n")}` : expandedText;
+
+			// Build messages only after hooks and image normalization have completed.
+			messages = [];
+			const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: userText }];
+			userContent.push(...normalized.images);
+			messages.push({
+				role: "user",
+				content: userContent,
+				timestamp: Date.now(),
+			});
+
+			// Inject any pending "nextTurn" messages as context alongside the user message.
+			// They stay queued until _persistMessage() confirms the append.
+			for (const msg of this._pendingNextTurnMessages) {
+				messages.push(msg);
+			}
+
+			for (const msg of result.messages) {
+				messages.push({
+					role: "custom",
+					customType: msg.customType,
+					// Untyped extensions can pass null/missing content; normalize at ingestion.
+					content: msg.content ?? [],
+					display: msg.display,
+					details: msg.details,
+					timestamp: Date.now(),
+				});
+			}
+			const updateMessage = this._preparePromptAndToolLoadout(result.systemPromptOptions);
+			this._runSystemPromptOptions = result.systemPromptOptions;
+			if (updateMessage) messages.unshift(updateMessage);
+		} catch (error) {
+			preflightResult?.(false);
+			throw error;
 		} finally {
-			resumeBackground();
+			// Delivery is timer-scheduled, so a completion cannot start before the run below does.
+			resumeBackground?.();
 		}
+
+		if (!messages) {
+			return;
+		}
+
+		preflightResult?.(true);
+		await this._runAgentPrompt(messages);
 	}
 
 	/**
@@ -2590,171 +2610,163 @@ export class AgentSession {
 	 * @param customInstructions Optional instructions for the compaction summary
 	 */
 	async compact(customInstructions?: string): Promise<CompactionResult> {
-		const resumeBackground = this.pauseBackgroundNotifications();
+		return this._withBackgroundPaused(() => this._compactBody(customInstructions));
+	}
+
+	private async _compactBody(customInstructions?: string): Promise<CompactionResult> {
+		await this.abort();
+		this._compactionAbortController = new AbortController();
+		this._emit({ type: "compaction_start", reason: "manual" });
+		let fromExtension = false;
+		let cancelledByExtension = false;
+
 		try {
-			await this.abort();
-			this._compactionAbortController = new AbortController();
-			this._emit({ type: "compaction_start", reason: "manual" });
-			let fromExtension = false;
-			let cancelledByExtension = false;
+			const model = this.model;
+			if (!model) {
+				throw new Error(formatNoModelSelectedMessage());
+			}
 
-			try {
-				const model = this.model;
-				if (!model) {
-					throw new Error(formatNoModelSelectedMessage());
+			const settings = this.settingsManager.getCompactionSettings(model);
+			const {
+				model: requestModel,
+				apiKey,
+				headers,
+				env,
+			} = await this._getSummarizationRequestAuth(model, this._compactionAbortController.signal);
+
+			const pathEntries = this.sessionManager.getBranch();
+
+			const preparation = prepareCompaction(pathEntries, settings);
+			if (!preparation) {
+				// Check why we can't compact
+				const lastEntry = pathEntries[pathEntries.length - 1];
+				if (lastEntry?.type === "compaction") {
+					throw new Error("Already compacted");
 				}
+				throw new Error("Nothing to compact (session too small)");
+			}
 
-				const settings = this.settingsManager.getCompactionSettings(model);
-				const {
-					model: requestModel,
-					apiKey,
-					headers,
-					env,
-				} = await this._getSummarizationRequestAuth(model, this._compactionAbortController.signal);
+			let extensionCompaction: CompactionResult | undefined;
 
-				const pathEntries = this.sessionManager.getBranch();
+			if (this._extensionRunner.hasHandlers("session_before_compact")) {
+				const result = (await this._extensionRunner.emit({
+					type: "session_before_compact",
+					preparation,
+					branchEntries: pathEntries,
+					customInstructions,
+					reason: "manual",
+					willRetry: false,
+					signal: this._compactionAbortController.signal,
+				})) as SessionBeforeCompactResult | undefined;
 
-				const preparation = prepareCompaction(pathEntries, settings);
-				if (!preparation) {
-					// Check why we can't compact
-					const lastEntry = pathEntries[pathEntries.length - 1];
-					if (lastEntry?.type === "compaction") {
-						throw new Error("Already compacted");
-					}
-					throw new Error("Nothing to compact (session too small)");
-				}
-
-				let extensionCompaction: CompactionResult | undefined;
-
-				if (this._extensionRunner.hasHandlers("session_before_compact")) {
-					const result = (await this._extensionRunner.emit({
-						type: "session_before_compact",
-						preparation,
-						branchEntries: pathEntries,
-						customInstructions,
-						reason: "manual",
-						willRetry: false,
-						signal: this._compactionAbortController.signal,
-					})) as SessionBeforeCompactResult | undefined;
-
-					if (result?.cancel) {
-						cancelledByExtension = true;
-						throw new Error("Compaction cancelled");
-					}
-
-					if (result?.compaction) {
-						extensionCompaction = result.compaction;
-						fromExtension = true;
-					}
-				}
-
-				let summary: string;
-				let firstKeptEntryId: string;
-				let tokensBefore: number;
-				let usage: Usage | undefined;
-				let details: unknown;
-
-				if (extensionCompaction) {
-					// Extension provided compaction content
-					summary = extensionCompaction.summary;
-					firstKeptEntryId = extensionCompaction.firstKeptEntryId;
-					tokensBefore = extensionCompaction.tokensBefore;
-					usage = extensionCompaction.usage;
-					details = extensionCompaction.details;
-				} else {
-					// Shared default summary generator, also used by automatic compaction.
-					const result = await this._runDefaultCompaction(
-						preparation,
-						requestModel,
-						apiKey,
-						headers,
-						customInstructions,
-						this._compactionAbortController.signal,
-						env,
-						"manual",
-					);
-					summary = result.summary;
-					firstKeptEntryId = result.firstKeptEntryId;
-					tokensBefore = result.tokensBefore;
-					usage = result.usage;
-					details = result.details;
-				}
-
-				if (this._compactionAbortController.signal.aborted) {
+				if (result?.cancel) {
+					cancelledByExtension = true;
 					throw new Error("Compaction cancelled");
 				}
 
-				this.sessionManager.appendCompaction(
-					summary,
-					firstKeptEntryId,
-					tokensBefore,
-					details,
-					fromExtension,
-					usage,
-				);
-				const newEntries = this.sessionManager.getEntries();
-				this._refreshFinalizedContext();
-				const estimatedTokensAfter = estimateMessagesTokens(this.sessionManager.buildSessionProjection().messages);
-
-				// Get the saved compaction entry for the extension event
-				const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
-					| CompactionEntry
-					| undefined;
-
-				if (this._extensionRunner && savedCompactionEntry) {
-					await this._extensionRunner.emit({
-						type: "session_compact",
-						compactionEntry: savedCompactionEntry,
-						fromExtension,
-						reason: "manual",
-						willRetry: false,
-					});
+				if (result?.compaction) {
+					extensionCompaction = result.compaction;
+					fromExtension = true;
 				}
-
-				const compactionResult: CompactionResult = {
-					summary,
-					firstKeptEntryId,
-					tokensBefore,
-					estimatedTokensAfter,
-					usage,
-					details,
-				};
-				// compaction_end listeners may submit queued prompts, so expose idle state before notifying them.
-				this._clearManualCompactionState();
-				this._emit({
-					type: "compaction_end",
-					reason: "manual",
-					result: compactionResult,
-					aborted: false,
-					willRetry: false,
-				});
-				return compactionResult;
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				const aborted = this._compactionAbortController?.signal.aborted === true || cancelledByExtension;
-				const errorMessage = aborted ? undefined : `Compaction failed: ${message}`;
-				this._clearManualCompactionState();
-				this._emit({
-					type: "compaction_end",
-					reason: "manual",
-					result: undefined,
-					aborted,
-					willRetry: false,
-					errorMessage,
-				});
-				await this._emitSessionCompactFailed({
-					reason: "manual",
-					errorMessage,
-					aborted,
-					willRetry: false,
-					fromExtension,
-				});
-				throw error;
-			} finally {
-				this._clearManualCompactionState();
 			}
+
+			let summary: string;
+			let firstKeptEntryId: string;
+			let tokensBefore: number;
+			let usage: Usage | undefined;
+			let details: unknown;
+
+			if (extensionCompaction) {
+				// Extension provided compaction content
+				summary = extensionCompaction.summary;
+				firstKeptEntryId = extensionCompaction.firstKeptEntryId;
+				tokensBefore = extensionCompaction.tokensBefore;
+				usage = extensionCompaction.usage;
+				details = extensionCompaction.details;
+			} else {
+				// Shared default summary generator, also used by automatic compaction.
+				const result = await this._runDefaultCompaction(
+					preparation,
+					requestModel,
+					apiKey,
+					headers,
+					customInstructions,
+					this._compactionAbortController.signal,
+					env,
+					"manual",
+				);
+				summary = result.summary;
+				firstKeptEntryId = result.firstKeptEntryId;
+				tokensBefore = result.tokensBefore;
+				usage = result.usage;
+				details = result.details;
+			}
+
+			if (this._compactionAbortController.signal.aborted) {
+				throw new Error("Compaction cancelled");
+			}
+
+			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
+			const newEntries = this.sessionManager.getEntries();
+			this._refreshFinalizedContext();
+			const estimatedTokensAfter = estimateMessagesTokens(this.sessionManager.buildSessionProjection().messages);
+
+			// Get the saved compaction entry for the extension event
+			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
+				| CompactionEntry
+				| undefined;
+
+			if (this._extensionRunner && savedCompactionEntry) {
+				await this._extensionRunner.emit({
+					type: "session_compact",
+					compactionEntry: savedCompactionEntry,
+					fromExtension,
+					reason: "manual",
+					willRetry: false,
+				});
+			}
+
+			const compactionResult: CompactionResult = {
+				summary,
+				firstKeptEntryId,
+				tokensBefore,
+				estimatedTokensAfter,
+				usage,
+				details,
+			};
+			// compaction_end listeners may submit queued prompts, so expose idle state before notifying them.
+			this._clearManualCompactionState();
+			this._emit({
+				type: "compaction_end",
+				reason: "manual",
+				result: compactionResult,
+				aborted: false,
+				willRetry: false,
+			});
+			return compactionResult;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const aborted = this._compactionAbortController.signal.aborted || cancelledByExtension;
+			const errorMessage = aborted ? undefined : `Compaction failed: ${message}`;
+			this._clearManualCompactionState();
+			this._emit({
+				type: "compaction_end",
+				reason: "manual",
+				result: undefined,
+				aborted,
+				willRetry: false,
+				errorMessage,
+			});
+			await this._emitSessionCompactFailed({
+				reason: "manual",
+				errorMessage,
+				aborted,
+				willRetry: false,
+				fromExtension,
+			});
+			throw error;
 		} finally {
-			resumeBackground();
+			this._clearManualCompactionState();
 		}
 	}
 
@@ -2943,174 +2955,166 @@ export class AgentSession {
 	 * @returns Whether the post-run loop should call `agent.continue()`
 	 */
 	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
-		const resumeBackground = this.pauseBackgroundNotifications();
+		return this._withBackgroundPaused(() => this._runAutoCompactionBody(reason, willRetry));
+	}
+
+	private async _runAutoCompactionBody(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
+		const model = this.model;
+		const settings = this.settingsManager.getCompactionSettings(model);
+		let abortController: AbortController | undefined;
+		let started = false;
+		let fromExtension = false;
+		let cancelledByExtension = false;
+
 		try {
-			const model = this.model;
-			const settings = this.settingsManager.getCompactionSettings(model);
-			let abortController: AbortController | undefined;
-			let started = false;
-			let fromExtension = false;
-			let cancelledByExtension = false;
+			if (!model) {
+				return false;
+			}
 
-			try {
-				if (!model) {
-					return false;
+			const pathEntries = this.sessionManager.getBranch();
+			const preparation = prepareCompaction(pathEntries, settings);
+			if (!preparation) {
+				return false;
+			}
+
+			abortController = new AbortController();
+			this._autoCompactionAbortController = abortController;
+			started = true;
+			this._emit({ type: "compaction_start", reason });
+			abortController.signal.throwIfAborted();
+
+			const {
+				model: requestModel,
+				apiKey,
+				headers,
+				env,
+			} = await this._getSummarizationRequestAuth(model, abortController.signal);
+			abortController.signal.throwIfAborted();
+
+			let extensionCompaction: CompactionResult | undefined;
+
+			if (this._extensionRunner.hasHandlers("session_before_compact")) {
+				const extensionResult = (await this._extensionRunner.emit({
+					type: "session_before_compact",
+					preparation,
+					branchEntries: pathEntries,
+					customInstructions: undefined,
+					reason,
+					willRetry,
+					signal: abortController.signal,
+				})) as SessionBeforeCompactResult | undefined;
+
+				if (extensionResult?.cancel) {
+					cancelledByExtension = true;
+					throw new Error("Compaction cancelled");
 				}
 
-				const pathEntries = this.sessionManager.getBranch();
-				const preparation = prepareCompaction(pathEntries, settings);
-				if (!preparation) {
-					return false;
+				if (extensionResult?.compaction) {
+					extensionCompaction = extensionResult.compaction;
+					fromExtension = true;
 				}
+			}
+			abortController.signal.throwIfAborted();
 
-				abortController = new AbortController();
-				this._autoCompactionAbortController = abortController;
-				started = true;
-				this._emit({ type: "compaction_start", reason });
-				abortController.signal.throwIfAborted();
+			let summary: string;
+			let firstKeptEntryId: string;
+			let tokensBefore: number;
+			let usage: Usage | undefined;
+			let details: unknown;
 
-				const {
-					model: requestModel,
+			if (extensionCompaction) {
+				// Extension provided compaction content
+				summary = extensionCompaction.summary;
+				firstKeptEntryId = extensionCompaction.firstKeptEntryId;
+				tokensBefore = extensionCompaction.tokensBefore;
+				usage = extensionCompaction.usage;
+				details = extensionCompaction.details;
+			} else {
+				// Shared default summary generator, also used by manual compaction.
+				const compactResult = await this._runDefaultCompaction(
+					preparation,
+					requestModel,
 					apiKey,
 					headers,
+					undefined,
+					abortController.signal,
 					env,
-				} = await this._getSummarizationRequestAuth(model, abortController.signal);
-				abortController.signal.throwIfAborted();
-
-				let extensionCompaction: CompactionResult | undefined;
-
-				if (this._extensionRunner.hasHandlers("session_before_compact")) {
-					const extensionResult = (await this._extensionRunner.emit({
-						type: "session_before_compact",
-						preparation,
-						branchEntries: pathEntries,
-						customInstructions: undefined,
-						reason,
-						willRetry,
-						signal: abortController.signal,
-					})) as SessionBeforeCompactResult | undefined;
-
-					if (extensionResult?.cancel) {
-						cancelledByExtension = true;
-						throw new Error("Compaction cancelled");
-					}
-
-					if (extensionResult?.compaction) {
-						extensionCompaction = extensionResult.compaction;
-						fromExtension = true;
-					}
-				}
-				abortController.signal.throwIfAborted();
-
-				let summary: string;
-				let firstKeptEntryId: string;
-				let tokensBefore: number;
-				let usage: Usage | undefined;
-				let details: unknown;
-
-				if (extensionCompaction) {
-					// Extension provided compaction content
-					summary = extensionCompaction.summary;
-					firstKeptEntryId = extensionCompaction.firstKeptEntryId;
-					tokensBefore = extensionCompaction.tokensBefore;
-					usage = extensionCompaction.usage;
-					details = extensionCompaction.details;
-				} else {
-					// Shared default summary generator, also used by manual compaction.
-					const compactResult = await this._runDefaultCompaction(
-						preparation,
-						requestModel,
-						apiKey,
-						headers,
-						undefined,
-						abortController.signal,
-						env,
-						reason,
-					);
-					summary = compactResult.summary;
-					firstKeptEntryId = compactResult.firstKeptEntryId;
-					tokensBefore = compactResult.tokensBefore;
-					usage = compactResult.usage;
-					details = compactResult.details;
-				}
-				abortController.signal.throwIfAborted();
-
-				this.sessionManager.appendCompaction(
-					summary,
-					firstKeptEntryId,
-					tokensBefore,
-					details,
-					fromExtension,
-					usage,
+					reason,
 				);
-				const newEntries = this.sessionManager.getEntries();
-				this._refreshFinalizedContext();
-				const estimatedTokensAfter = estimateMessagesTokens(this.sessionManager.buildSessionProjection().messages);
-
-				// Get the saved compaction entry for the extension event
-				const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
-					| CompactionEntry
-					| undefined;
-
-				if (this._extensionRunner && savedCompactionEntry) {
-					await this._extensionRunner.emit({
-						type: "session_compact",
-						compactionEntry: savedCompactionEntry,
-						fromExtension,
-						reason,
-						willRetry,
-					});
-				}
-
-				const result: CompactionResult = {
-					summary,
-					firstKeptEntryId,
-					tokensBefore,
-					estimatedTokensAfter,
-					usage,
-					details,
-				};
-				this._emit({ type: "compaction_end", reason, result, aborted: false, willRetry });
-
-				if (willRetry) return true;
-
-				// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
-				// Continue once so queued messages are delivered.
-				return this.agent.hasQueuedMessages();
-			} catch (error) {
-				const message = error instanceof Error ? error.message : "compaction failed";
-				const aborted = abortController?.signal.aborted === true || cancelledByExtension;
-				if (started) {
-					const errorMessage = aborted
-						? undefined
-						: reason === "overflow"
-							? `Context overflow recovery failed: ${message}`
-							: `Auto-compaction failed: ${message}`;
-					this._emit({
-						type: "compaction_end",
-						reason,
-						result: undefined,
-						aborted,
-						willRetry: false,
-						errorMessage,
-					});
-					await this._emitSessionCompactFailed({
-						reason,
-						errorMessage,
-						aborted,
-						willRetry: false,
-						fromExtension,
-					});
-				}
-				return false;
-			} finally {
-				if (this._autoCompactionAbortController === abortController) {
-					this._autoCompactionAbortController = undefined;
-				}
-				this._resolveIdleWaitIfIdle();
+				summary = compactResult.summary;
+				firstKeptEntryId = compactResult.firstKeptEntryId;
+				tokensBefore = compactResult.tokensBefore;
+				usage = compactResult.usage;
+				details = compactResult.details;
 			}
+			abortController.signal.throwIfAborted();
+
+			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
+			const newEntries = this.sessionManager.getEntries();
+			this._refreshFinalizedContext();
+			const estimatedTokensAfter = estimateMessagesTokens(this.sessionManager.buildSessionProjection().messages);
+
+			// Get the saved compaction entry for the extension event
+			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
+				| CompactionEntry
+				| undefined;
+
+			if (this._extensionRunner && savedCompactionEntry) {
+				await this._extensionRunner.emit({
+					type: "session_compact",
+					compactionEntry: savedCompactionEntry,
+					fromExtension,
+					reason,
+					willRetry,
+				});
+			}
+
+			const result: CompactionResult = {
+				summary,
+				firstKeptEntryId,
+				tokensBefore,
+				estimatedTokensAfter,
+				usage,
+				details,
+			};
+			this._emit({ type: "compaction_end", reason, result, aborted: false, willRetry });
+
+			if (willRetry) return true;
+
+			// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
+			// Continue once so queued messages are delivered.
+			return this.agent.hasQueuedMessages();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "compaction failed";
+			const aborted = abortController?.signal.aborted === true || cancelledByExtension;
+			if (started) {
+				const errorMessage = aborted
+					? undefined
+					: reason === "overflow"
+						? `Context overflow recovery failed: ${message}`
+						: `Auto-compaction failed: ${message}`;
+				this._emit({
+					type: "compaction_end",
+					reason,
+					result: undefined,
+					aborted,
+					willRetry: false,
+					errorMessage,
+				});
+				await this._emitSessionCompactFailed({
+					reason,
+					errorMessage,
+					aborted,
+					willRetry: false,
+					fromExtension,
+				});
+			}
+			return false;
 		} finally {
-			resumeBackground();
+			if (this._autoCompactionAbortController === abortController) {
+				this._autoCompactionAbortController = undefined;
+			}
+			this._resolveIdleWaitIfIdle();
 		}
 	}
 
@@ -3127,36 +3131,35 @@ export class AgentSession {
 	}
 
 	async bindExtensions(bindings: ExtensionBindings): Promise<void> {
-		const resumeBackground = this.pauseBackgroundNotifications();
-		try {
-			if (bindings.backgroundEnabled !== undefined) {
-				this._backgroundHost.setEnabled(bindings.backgroundEnabled);
-			}
-			if (bindings.uiContext !== undefined) {
-				this._extensionUIContext = bindings.uiContext;
-			}
-			if (bindings.mode !== undefined) {
-				this._extensionMode = bindings.mode;
-			}
-			if (bindings.commandContextActions !== undefined) {
-				this._extensionCommandContextActions = bindings.commandContextActions;
-			}
-			if (bindings.abortHandler !== undefined) {
-				this._extensionAbortHandler = bindings.abortHandler;
-			}
-			if (bindings.shutdownHandler !== undefined) {
-				this._extensionShutdownHandler = bindings.shutdownHandler;
-			}
-			if (bindings.onError !== undefined) {
-				this._extensionErrorListener = bindings.onError;
-			}
+		return this._withBackgroundPaused(() => this._bindExtensionsBody(bindings));
+	}
 
-			this._applyExtensionBindings(this._extensionRunner);
-			await this._extensionRunner.emit(this._sessionStartEvent);
-			await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
-		} finally {
-			resumeBackground();
+	private async _bindExtensionsBody(bindings: ExtensionBindings): Promise<void> {
+		if (bindings.backgroundEnabled !== undefined) {
+			this._backgroundHost.setEnabled(bindings.backgroundEnabled);
 		}
+		if (bindings.uiContext !== undefined) {
+			this._extensionUIContext = bindings.uiContext;
+		}
+		if (bindings.mode !== undefined) {
+			this._extensionMode = bindings.mode;
+		}
+		if (bindings.commandContextActions !== undefined) {
+			this._extensionCommandContextActions = bindings.commandContextActions;
+		}
+		if (bindings.abortHandler !== undefined) {
+			this._extensionAbortHandler = bindings.abortHandler;
+		}
+		if (bindings.shutdownHandler !== undefined) {
+			this._extensionShutdownHandler = bindings.shutdownHandler;
+		}
+		if (bindings.onError !== undefined) {
+			this._extensionErrorListener = bindings.onError;
+		}
+
+		this._applyExtensionBindings(this._extensionRunner);
+		await this._extensionRunner.emit(this._sessionStartEvent);
+		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
 	}
 
 	private async extendResourcesFromExtensions(reason: "startup" | "reload"): Promise<void> {
@@ -3509,38 +3512,37 @@ export class AgentSession {
 	}
 
 	async reload(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
-		const resumeBackground = this.pauseBackgroundNotifications();
-		try {
-			const oldRunner = this._extensionRunner;
-			const previousFlagValues = oldRunner.getFlagValues();
-			this.background.close();
-			await Promise.all([this.background.shutdown(), this.abort()]);
-			await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" });
-			oldRunner.invalidate();
-			await this.settingsManager.reload();
-			this.syncQueueModesFromSettings();
-			resetApiProviders();
-			await this._resourceLoader.reload();
-			this._backgroundHost.replaceService();
-			this._buildRuntime({
-				activeToolNames: this.getActiveToolNames(),
-				flagValues: previousFlagValues,
-				includeAllExtensionTools: true,
-			});
+		return this._withBackgroundPaused(() => this._reloadBody(options));
+	}
 
-			const hasBindings =
-				this.background.enabled ||
-				this._extensionUIContext ||
-				this._extensionCommandContextActions ||
-				this._extensionShutdownHandler ||
-				this._extensionErrorListener;
-			if (hasBindings) {
-				await options?.beforeSessionStart?.();
-				await this._extensionRunner.emit({ type: "session_start", reason: "reload" });
-				await this.extendResourcesFromExtensions("reload");
-			}
-		} finally {
-			resumeBackground();
+	private async _reloadBody(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
+		const oldRunner = this._extensionRunner;
+		const previousFlagValues = oldRunner.getFlagValues();
+		this.background.close();
+		await Promise.all([this.background.shutdown(), this.abort()]);
+		await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" });
+		oldRunner.invalidate();
+		await this.settingsManager.reload();
+		this.syncQueueModesFromSettings();
+		resetApiProviders();
+		await this._resourceLoader.reload();
+		this._backgroundHost.replaceService();
+		this._buildRuntime({
+			activeToolNames: this.getActiveToolNames(),
+			flagValues: previousFlagValues,
+			includeAllExtensionTools: true,
+		});
+
+		const hasBindings =
+			this.background.enabled ||
+			this._extensionUIContext ||
+			this._extensionCommandContextActions ||
+			this._extensionShutdownHandler ||
+			this._extensionErrorListener;
+		if (hasBindings) {
+			await options?.beforeSessionStart?.();
+			await this._extensionRunner.emit({ type: "session_start", reason: "reload" });
+			await this.extendResourcesFromExtensions("reload");
 		}
 	}
 

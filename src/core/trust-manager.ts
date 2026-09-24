@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir, userInfo } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME } from "../config.ts";
+import { findPathKeys, userAgentsSkillsDirMatcher } from "../utils/path-identity.ts";
 import { canonicalizePath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
 
@@ -41,43 +41,10 @@ function normalizeCwd(cwd: string): string {
 	return canonicalizePath(resolvePath(cwd));
 }
 
-function normalizedPathKey(value: string): string {
-	const normalized = normalizeCwd(value);
-	return process.platform === "win32"
-		? normalized.replace(/^([A-Z]):/, (_, drive) => `${drive.toLowerCase()}:`)
-		: normalized;
-}
-
-function pathIdentity(value: string): string | undefined {
-	try {
-		const stats = statSync(value, { bigint: true });
-		return stats.ino === 0n ? undefined : `${stats.dev}:${stats.ino}`;
-	} catch {
-		return undefined;
-	}
-}
-
-function pathsReferToSameLocation(left: string, right: string): boolean {
-	const normalizedLeft = normalizedPathKey(left);
-	const normalizedRight = normalizedPathKey(right);
-	if (normalizedLeft === normalizedRight) return true;
-	if (process.platform !== "win32") return false;
-	const leftIdentity = pathIdentity(normalizedLeft);
-	return leftIdentity !== undefined && leftIdentity === pathIdentity(normalizedRight);
-}
-
-function findMatchingTrustKeys(data: TrustFile, path: string): string[] {
-	if (process.platform !== "win32") {
-		return Object.hasOwn(data, path) ? [path] : [];
-	}
-	return Object.keys(data).filter((key) => pathsReferToSameLocation(key, path));
-}
-
 function findNearestTrustEntry(data: TrustFile, cwd: string): ProjectTrustStoreEntry | null {
 	let currentDir = normalizeCwd(cwd);
 	while (true) {
-		const matchingKey = findMatchingTrustKeys(data, currentDir)[0];
-		const value = matchingKey === undefined ? undefined : data[matchingKey];
+		const value = data[findPathKeys(data, currentDir)[0] ?? currentDir];
 		if (value === true || value === false) {
 			return { path: currentDir, decision: value };
 		}
@@ -216,15 +183,7 @@ function withTrustFileLock<T>(path: string, fn: () => T): T {
  * trusted user resource and is ignored here, even when cwd is $HOME.
  */
 export function hasTrustRequiringProjectResources(cwd: string): boolean {
-	const homeDirs = [process.env.HOME || homedir()];
-	try {
-		homeDirs.push(userInfo().homedir);
-	} catch {
-		// Some restricted runtimes cannot query the operating-system account database.
-	}
-	const globalSkillsDirs = homeDirs.map((home) =>
-		normalizedPathKey(join(normalizedPathKey(home), ".agents", "skills")),
-	);
+	const isUserAgentsSkillsDir = userAgentsSkillsDirMatcher();
 	let currentDir = canonicalizePath(resolvePath(cwd));
 
 	const configDir = join(currentDir, CONFIG_DIR_NAME);
@@ -234,10 +193,7 @@ export function hasTrustRequiringProjectResources(cwd: string): boolean {
 
 	while (true) {
 		const agentsSkillsDir = join(currentDir, ".agents", "skills");
-		if (
-			existsSync(agentsSkillsDir) &&
-			!globalSkillsDirs.some((globalDir) => pathsReferToSameLocation(globalDir, agentsSkillsDir))
-		) {
+		if (!isUserAgentsSkillsDir(agentsSkillsDir) && existsSync(agentsSkillsDir)) {
 			return true;
 		}
 
@@ -276,10 +232,10 @@ export class ProjectTrustStore {
 			const data = readTrustFile(this.trustPath);
 			for (const { path, decision } of decisions) {
 				const key = normalizeCwd(path);
-				for (const matchingKey of findMatchingTrustKeys(data, key)) {
-					delete data[matchingKey];
-				}
-				if (decision !== null) {
+				for (const alias of findPathKeys(data, key)) if (alias !== key) delete data[alias];
+				if (decision === null) {
+					delete data[key];
+				} else {
 					data[key] = decision;
 				}
 			}

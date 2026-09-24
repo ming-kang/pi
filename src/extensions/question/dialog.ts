@@ -1,3 +1,4 @@
+import "./keybindings.ts";
 import { Editor, type EditorTheme, Markdown, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Keybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { keyLabel as configuredKeyLabel } from "../../modes/interactive/components/keybinding-hints.ts";

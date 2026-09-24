@@ -989,4 +989,73 @@ describe("session-owned background host", () => {
 		expect(session.sessionManager.getLeafId()).toBeNull();
 		execution.finish();
 	});
+
+	/** An extension hook that parks inside a lifecycle operation until released. */
+	function hookGate() {
+		let entered!: () => void;
+		let release!: () => void;
+		const reached = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		const released = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		return {
+			armed: false,
+			reached,
+			release,
+			async hold() {
+				entered();
+				await released;
+			},
+		};
+	}
+
+	function deliveredCompletions(session: AgentSession): number {
+		return session.sessionManager.getEntries().filter((entry) => entry.type === "custom_message").length;
+	}
+
+	/** A completion that finishes while `gate` holds the operation open must land only after it. */
+	async function expectCompletionHeldAcross(
+		session: AgentSession,
+		gate: ReturnType<typeof hookGate>,
+		operation: () => Promise<unknown>,
+	) {
+		const execution = await task(session);
+		gate.armed = true;
+		const running = operation();
+		await gate.reached;
+		execution.finish();
+		await vi.waitFor(() => expect(session.background.get(execution.id).status).toBe("completed"));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(deliveredCompletions(session)).toBe(0);
+		gate.release();
+		await running;
+		await vi.waitFor(() => expect(deliveredCompletions(session)).toBe(1));
+		await session.waitForIdle();
+	}
+
+	it("holds completions while extension binding runs its session_start hooks", async () => {
+		const gate = hookGate();
+		const session = await host("main", (pi) => {
+			pi.on("session_start", async () => {
+				if (gate.armed) await gate.hold();
+			});
+		});
+		await session.bindExtensions({ backgroundEnabled: true });
+		await expectCompletionHeldAcross(session, gate, () => session.bindExtensions({}));
+	});
+
+	it("holds completions while agent_settled hooks run after a turn", async () => {
+		const gate = hookGate();
+		const session = await host("main", (pi) => {
+			pi.on("agent_settled", async () => {
+				if (gate.armed) await gate.hold();
+			});
+		});
+		await session.bindExtensions({ backgroundEnabled: true });
+		await expectCompletionHeldAcross(session, gate, () => session.prompt("user request"));
+		const roles = session.messages.filter((message) => message.role !== "system").map((message) => message.role);
+		expect(roles).toEqual(["user", "assistant", "custom", "assistant"]);
+	});
 });

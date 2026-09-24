@@ -18,12 +18,12 @@ Experimental `client` and `experimental/plugin` subpaths expose only the `source
 
 ## Ownership
 
-Core owns global lifecycle, native tool presentation, renderer integration, and configurable keybindings. Extensions are independent public Extension API consumers. Keep tool schemas, execution protocols, and model results stable during presentation work. Only `src/extensions/llama` comes from upstream; the other bundled extensions are distribution additions.
+Core owns global lifecycle, native tool presentation, renderer integration, and the keybinding registry; bundled extensions register their own configurable keybindings in `src/core/keybinding-registry.ts` and reach the main editor only through `ctx.ui.editorHost`. Extensions are independent public Extension API consumers. Keep tool schemas, execution protocols, and model results stable during presentation work. Only `src/extensions/llama` comes from upstream; the other bundled extensions are distribution additions.
 
 Background execution has three ownership boundaries:
 
 - `src/core/background/service.ts` supervises invocation admission, foreground handoff, cancellation, delivery claims, and bounded retention. `history.ts` validates persisted snapshots; restoring a snapshot never restores execution or accounting ownership.
-- `src/core/background/session.ts` connects supervision to the session journal and main-agent completion turns. It persists usage and results before notifying observers, retains one in-flight delivery, and quarantines late settlements. `AgentSession` supplies lifecycle pauses and acknowledges messages only after persistence; queued `nextTurn` context follows the same rule.
+- `src/core/background/session.ts` connects supervision to the session journal and main-agent completion turns. It persists usage and results before notifying observers, retains one in-flight delivery, and quarantines late settlements. `AgentSession` and `AgentSessionRuntime` supply lifecycle pauses through thin shells over upstream-shaped `*Body` methods, and `AgentSession` acknowledges messages only after persistence; queued `nextTurn` context follows the same rule.
 - `src/core/tools/shell-execution.ts` owns shell execution and output collection; the Subagent extension owns worker sessions and its concurrency gate. Executors return results and diagnostics. The native tool boundary decides whether to return a handoff or throw a foreground shell error. The `bg` extension only observes and controls these executions.
 
 Keep execution settlement, message delivery, and history retention distinct. A wait ending does not stop execution, a returned result is not yet a persisted acknowledgement, and hiding a branch does not deliver its pending completions. Delivered history can be released and restored from the selected branch; pending results, pins, and active reads share a separate allowance within the service's total retention bound.

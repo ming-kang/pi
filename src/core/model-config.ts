@@ -74,7 +74,8 @@ const ChatTemplateKwargVariableSchema = Type.Object({
 });
 const ChatTemplateKwargSchema = Type.Union([ChatTemplateKwargScalarSchema, ChatTemplateKwargVariableSchema]);
 
-const OpenAICompletionsCompatSchema = Type.Object({
+/** Exported for the bundled /provider editor, which validates compat values against models.json's own schema. */
+export const OpenAICompletionsCompatSchema = Type.Object({
 	supportsStore: Type.Optional(Type.Boolean()),
 	supportsDeveloperRole: Type.Optional(Type.Boolean()),
 	supportsReasoningEffort: Type.Optional(Type.Boolean()),
@@ -290,31 +291,6 @@ export class ModelConfig {
 	private constructor(providers: ReadonlyMap<string, ModelsJsonProvider>, error?: string) {
 		this.providers = providers;
 		this.error = error;
-	}
-
-	/** Validate a compat object against its API family without reading a file or resolving credentials. */
-	static validateCompat(api: string, value: unknown): string | undefined {
-		const schema =
-			api === "openai-completions"
-				? OpenAICompletionsCompatSchema
-				: api === "anthropic-messages"
-					? AnthropicMessagesCompatSchema
-					: [
-								"openai-responses",
-								"azure-openai-responses",
-								"openai-codex-responses",
-								"bedrock-converse-stream",
-							].includes(api)
-						? OpenAIResponsesCompatSchema
-						: undefined;
-		if (!schema) return undefined;
-		const validator = Compile(schema);
-		if (validator.Check(value)) return undefined;
-		return validator
-			.Errors(value)
-			.slice(0, 5)
-			.map((error) => `${formatValidationPath(error)}: ${error.message}`)
-			.join("; ");
 	}
 
 	static async load(modelsJsonPath: string | undefined): Promise<ModelConfig> {

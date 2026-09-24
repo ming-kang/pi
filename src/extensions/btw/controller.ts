@@ -1,3 +1,4 @@
+import "./keybindings.ts";
 import { getKeybindings } from "@earendil-works/pi-tui";
 import type { EditorSubmitEvent, ExtensionContext } from "../../core/extensions/index.ts";
 import { BtwAgent } from "./agent.ts";
@@ -17,7 +18,8 @@ export class BtwController {
 	private current?: Conversation;
 
 	async open(question: string, ctx: ExtensionContext): Promise<void> {
-		if (ctx.mode !== "tui") {
+		const editorHost = ctx.ui.editorHost;
+		if (!editorHost) {
 			ctx.ui.notify("/btw is available in interactive mode.", "warning");
 			return;
 		}
@@ -44,9 +46,7 @@ export class BtwController {
 				},
 				{ placement: "aboveEditor" },
 			);
-			conversation.unsubscribeKeys = ctx.ui.onTerminalInput((data) => this.handleKey(conversation, data), {
-				scope: "editor",
-			});
+			conversation.unsubscribeKeys = editorHost.onInput((data) => this.handleKey(conversation, data));
 			const snapshot = await pendingSnapshot;
 			if (this.current !== conversation) return;
 			conversation.agent = new BtwAgent(snapshot, ctx.modelRuntime, () => this.refresh(conversation));
@@ -147,7 +147,7 @@ export class BtwController {
 			if (direction) conversation.panel?.scroll(direction);
 			if (direction || cursorUp || cursorDown) return { consume: true };
 		} else if (cursorUp || cursorDown) {
-			const cursor = conversation.ctx.ui.getEditorCursor();
+			const cursor = conversation.ctx.ui.editorHost?.getCursor();
 			// The native editor browses history on Up at the start of the draft.
 			// Let it keep normal movement within multiline and wrapped drafts.
 			if (!cursor || (cursorUp && cursor.line === 0 && cursor.col === 0)) return { consume: true };

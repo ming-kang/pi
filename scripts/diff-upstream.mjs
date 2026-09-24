@@ -19,20 +19,32 @@ const upstreamDependencyNames = [
 // v0.85.0 omitted pi-server's range; newer baselines declare it for source development.
 const legacyUndeclaredDependencies = ["@earendil-works/pi-server"];
 const manifestKeys = ["repository", "tag", "commit", "sourceSubtree", "sourceTree"];
-const deltaRequiredKeys = ["path", "category", "intent"];
-const deltaAllowedKeys = [...deltaRequiredKeys, "tests"];
-const deltaCategories = ["ui", "bugfix", "extension-support", "distribution", "windows-compat"];
+const ledgerPath = "maintainers/concerns.json";
+const concernRequiredKeys = ["id", "why", "paths"];
+const concernAllowedKeys = [...concernRequiredKeys, "tests", "watch"];
+const claimAllowedKeys = ["path", "anchors", "rewrite"];
 
-const usage = `Usage: node scripts/diff-upstream.mjs [--check [--staged] | --target <tag>]
+// Form and conflict-surface metrics cover runtime source only; documentation,
+// tests, and packaging files are merged by hand.
+export const MEASURED_SCOPE = "src/";
+// A modified path is a rewrite once it deletes or re-indents more upstream
+// lines than a thin patch needs. These thresholds are a policy choice.
+export const MAX_PATCH_DELETIONS = 8;
+export const MAX_PATCH_REINDENT = 10;
+export const DEFAULT_RISK_WINDOW_DAYS = 120;
+
+const usage = `Usage: node scripts/diff-upstream.mjs [--check [--staged] | --risk [--window <days>] | --target <tag>]
 
 Compares the current worktree against the recorded upstream baseline
-in maintainers/upstream.json, annotated with the per-path deviation
-ledger in maintainers/deltas.json.
+in maintainers/upstream.json, annotated with the concern ledger in
+maintainers/concerns.json.
 
-  (no flag)       print the deterministic full classification report
-  --check         verify baseline, dependencies, and ledger coverage and print a concise count summary
-  --staged        with --check, verify the index that will be committed
-  --target <tag>  classify upstream changes from the baseline to a release tag against the ledger`;
+  (no flag)        print the deterministic full classification report with conflict-surface metrics
+  --check          verify baseline, dependencies, and ledger rules and print a concise count summary
+  --staged         with --check, verify the index that will be committed
+  --risk           rank modified source paths by conflict surface times upstream touches
+  --window <days>  with --risk, count upstream touches over this many days before the baseline (default ${DEFAULT_RISK_WINDOW_DAYS})
+  --target <tag>   classify upstream changes from the baseline to a release tag against the ledger`;
 
 function isPlainObject(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -101,7 +113,7 @@ export function validateManifest(manifest) {
 	return failures;
 }
 
-function isValidDeltaPath(value) {
+function isValidLedgerPath(value) {
 	return (
 		isNonEmptyString(value) &&
 		!value.startsWith("/") &&
@@ -111,80 +123,124 @@ function isValidDeltaPath(value) {
 	);
 }
 
+const concernIdPattern = /^[a-z\d]+(?:-[a-z\d]+)*$/;
+const anchorPattern = /^[A-Za-z_$][\w$]*(?:\.[\w$]+)*$/;
+
 /**
- * Validate maintainers/deltas.json. Entries with a trailing "/" register a
- * whole directory prefix; all other entries register one exact file.
+ * Validate maintainers/concerns.json and return its flattened path claims.
+ * A claim path with a trailing "/" registers a whole directory prefix; all
+ * other claims register one exact file. Several concerns may claim one path.
  */
-export function validateDeltas(deltas, root, failures, testExists = (path) => existsSync(join(root, path))) {
-	if (!isPlainObject(deltas) || !Array.isArray(deltas.deltas) || Object.keys(deltas).length !== 1) {
-		failures.push('maintainers/deltas.json must be an object with a single "deltas" array');
+export function validateConcerns(ledger, root, failures, testExists = (path) => existsSync(join(root, path))) {
+	if (
+		!isPlainObject(ledger) ||
+		ledger.version !== 2 ||
+		!Array.isArray(ledger.concerns) ||
+		Object.keys(ledger).length !== 2
+	) {
+		failures.push(`${ledgerPath} must be an object with "version": 2 and a "concerns" array`);
 		return [];
 	}
-	const entries = [];
-	const seenPaths = new Set();
-	for (const [index, entry] of deltas.deltas.entries()) {
-		const location = `maintainers/deltas.json entry ${index}`;
-		if (!isPlainObject(entry)) {
+	const claims = [];
+	const seenIds = new Set();
+	for (const [index, concern] of ledger.concerns.entries()) {
+		let location = `${ledgerPath} concern ${index}`;
+		if (!isPlainObject(concern)) {
 			failures.push(`${location} must be an object`);
 			continue;
 		}
-		for (const key of deltaRequiredKeys) {
-			if (!Object.hasOwn(entry, key)) failures.push(`${location} is missing required key "${key}"`);
+		if (typeof concern.id === "string") location = `${ledgerPath} concern "${concern.id}"`;
+		for (const key of concernRequiredKeys) {
+			if (!Object.hasOwn(concern, key)) failures.push(`${location} is missing required key "${key}"`);
 		}
-		for (const key of Object.keys(entry)) {
-			if (!deltaAllowedKeys.includes(key)) failures.push(`${location} has unexpected key "${key}"`);
+		for (const key of Object.keys(concern)) {
+			if (!concernAllowedKeys.includes(key)) failures.push(`${location} has unexpected key "${key}"`);
 		}
-		const isPrefix = typeof entry.path === "string" && entry.path.endsWith("/");
-		const normalizedPath = isPrefix ? entry.path.slice(0, -1) : entry.path;
-		if (!isValidDeltaPath(normalizedPath)) {
-			failures.push(`${location} path must be a normalized repository-relative POSIX path`);
-			continue;
+		if (typeof concern.id !== "string" || !concernIdPattern.test(concern.id)) {
+			failures.push(`${location} id must be kebab-case`);
+		} else if (seenIds.has(concern.id)) {
+			failures.push(`${ledgerPath} has a duplicate concern id "${concern.id}"`);
 		}
-		if (seenPaths.has(entry.path)) {
-			failures.push(`maintainers/deltas.json has a duplicate path "${entry.path}"`);
+		seenIds.add(concern.id);
+		if (!isNonEmptyString(concern.why)) {
+			failures.push(`${location} why must be a non-empty string`);
 		}
-		seenPaths.add(entry.path);
-		if (!deltaCategories.includes(entry.category)) {
-			failures.push(`${location} category must be one of: ${deltaCategories.join(", ")}`);
+		if (Object.hasOwn(concern, "watch") && !isNonEmptyString(concern.watch)) {
+			failures.push(`${location} watch must be a non-empty string`);
 		}
-		if (!isNonEmptyString(entry.intent)) {
-			failures.push(`${location} intent must be a non-empty string`);
-		}
-		if (Object.hasOwn(entry, "tests")) {
-			if (!Array.isArray(entry.tests) || entry.tests.some((test) => !isNonEmptyString(test))) {
+		if (Object.hasOwn(concern, "tests")) {
+			if (!Array.isArray(concern.tests) || concern.tests.some((test) => !isNonEmptyString(test))) {
 				failures.push(`${location} tests must be an array of repository-relative paths`);
 			} else {
-				for (const test of entry.tests) {
+				for (const test of concern.tests) {
 					if (!testExists(test)) {
 						failures.push(`${location} references a test path that does not exist: ${test}`);
 					}
 				}
 			}
 		}
-		entries.push(entry);
-	}
-	const paths = entries.map((entry) => entry.path);
-	const sorted = [...paths].sort();
-	if (paths.some((path, index) => path !== sorted[index])) {
-		failures.push("maintainers/deltas.json entries must be sorted by path");
-	}
-	return entries;
-}
-
-/** Match an entry: an exact path wins over the longest registered directory prefix. */
-export function findDelta(deltaEntries, path) {
-	let prefixMatch;
-	for (const entry of deltaEntries) {
-		if (entry.path === path) return entry;
-		if (
-			entry.path.endsWith("/") &&
-			path.startsWith(entry.path) &&
-			(prefixMatch === undefined || entry.path.length > prefixMatch.path.length)
-		) {
-			prefixMatch = entry;
+		if (!Array.isArray(concern.paths) || concern.paths.length === 0) {
+			failures.push(`${location} paths must be a non-empty array`);
+			continue;
+		}
+		const seenPaths = new Set();
+		for (const claim of concern.paths) {
+			if (!isPlainObject(claim)) {
+				failures.push(`${location} paths entries must be objects`);
+				continue;
+			}
+			for (const key of Object.keys(claim)) {
+				if (!claimAllowedKeys.includes(key)) {
+					failures.push(`${location} path ${JSON.stringify(claim.path)} has unexpected key "${key}"`);
+				}
+			}
+			const isPrefix = typeof claim.path === "string" && claim.path.endsWith("/");
+			if (!isValidLedgerPath(isPrefix ? claim.path.slice(0, -1) : claim.path)) {
+				failures.push(
+					`${location} path ${JSON.stringify(claim.path)} must be a normalized repository-relative POSIX path`,
+				);
+				continue;
+			}
+			if (seenPaths.has(claim.path)) {
+				failures.push(`${location} claims "${claim.path}" more than once`);
+			}
+			seenPaths.add(claim.path);
+			if (Object.hasOwn(claim, "anchors")) {
+				if (isPrefix) {
+					failures.push(`${location} path "${claim.path}" is a directory; anchors require a file path`);
+				} else if (
+					!Array.isArray(claim.anchors) ||
+					claim.anchors.length === 0 ||
+					claim.anchors.some((anchor) => typeof anchor !== "string" || !anchorPattern.test(anchor))
+				) {
+					failures.push(`${location} path "${claim.path}" anchors must be a non-empty array of symbol names`);
+				}
+			}
+			if (Object.hasOwn(claim, "rewrite") && !isNonEmptyString(claim.rewrite)) {
+				failures.push(`${location} path "${claim.path}" rewrite must be a non-empty string`);
+			}
+			claims.push({
+				concern: typeof concern.id === "string" ? concern.id : `#${index}`,
+				path: claim.path,
+				anchors: Array.isArray(claim.anchors) ? claim.anchors : [],
+				rewrite: claim.rewrite,
+			});
 		}
 	}
-	return prefixMatch;
+	return claims;
+}
+
+function claimMatches(claim, path) {
+	return claim.path === path || (claim.path.endsWith("/") && path.startsWith(claim.path));
+}
+
+/** Every claim on a path: its exact file claims and all enclosing directory claims. */
+export function findClaims(claims, path) {
+	return claims.filter((claim) => claimMatches(claim, path));
+}
+
+function concernIds(claims) {
+	return [...new Set(claims.map((claim) => claim.concern))].sort().join(", ");
 }
 
 export function createGit(root) {
@@ -401,6 +457,182 @@ export function collectWorktreeEntries(sourceTree, failures, git) {
 	return [...entries.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
+function gitDiffArgs(staged) {
+	return [
+		"-c",
+		"core.quotePath=false",
+		"diff",
+		...(staged ? ["--cached"] : []),
+		"--no-renames",
+		"--no-color",
+		"--no-ext-diff",
+		"--diff-algorithm=myers",
+		"--src-prefix=a/",
+		"--dst-prefix=b/",
+	];
+}
+
+function parseNumstat(output) {
+	const counts = new Map();
+	for (const record of output.split("\0")) {
+		const match = /^(\d+|-)\t(\d+|-)\t(.+)$/s.exec(record);
+		if (!match || match[1] === "-") continue;
+		counts.set(match[3], { additions: Number(match[1]), deletions: Number(match[2]) });
+	}
+	return counts;
+}
+
+/** Count hunks and collect the added and removed lines of each file in a unified diff. */
+export function parseUnifiedDiff(output) {
+	const files = new Map();
+	let current;
+	let inHunk = false;
+	for (const line of output.split("\n")) {
+		if (line.startsWith("diff --git ")) {
+			current = undefined;
+			inHunk = false;
+		} else if (!inHunk && line.startsWith("+++ ")) {
+			const target = line.slice(4).replace(/\t$/, "");
+			current = { hunks: 0, lines: [] };
+			files.set(target.startsWith("b/") ? target.slice(2) : target, current);
+		} else if (current && line.startsWith("@@")) {
+			current.hunks += 1;
+			inHunk = true;
+		} else if (current && inHunk && (line.startsWith("+") || line.startsWith("-"))) {
+			current.lines.push(line.slice(1));
+		}
+	}
+	return files;
+}
+
+export function classifyForm(path, { deletions, reindent }) {
+	if (!path.startsWith(MEASURED_SCOPE)) return undefined;
+	return deletions > MAX_PATCH_DELETIONS || reindent > MAX_PATCH_REINDENT ? "rewrite" : "patch";
+}
+
+/**
+ * Measure every modified upstream path (M/T) against the baseline tree. Only
+ * paths under MEASURED_SCOPE receive a form; the changed lines of all modified
+ * paths are kept for anchor checks.
+ */
+export function measureModified(sourceTree, staged, git) {
+	const base = [...gitDiffArgs(staged), "--diff-filter=MT"];
+	const numstat = parseNumstat(git(...base, "--numstat", "-z", sourceTree, "--"));
+	const semantic = parseNumstat(git(...base, "-w", "--numstat", "-z", sourceTree, "--"));
+	const patches = parseUnifiedDiff(git(...base, sourceTree, "--"));
+	const measured = new Map();
+	for (const [path, { additions, deletions }] of numstat) {
+		const surface = additions + deletions;
+		const whitespaceFree = semantic.get(path);
+		const reindent = Math.max(
+			0,
+			surface - (whitespaceFree ? whitespaceFree.additions + whitespaceFree.deletions : 0),
+		);
+		const patch = patches.get(path) ?? { hunks: 0, lines: [] };
+		measured.set(path, {
+			path,
+			surface,
+			deletions,
+			reindent,
+			hunks: patch.hunks,
+			lines: patch.lines,
+			form: classifyForm(path, { deletions, reindent }),
+		});
+	}
+	return measured;
+}
+
+function escapeRegExp(value) {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function lineMentionsAnchor(line, anchor) {
+	return new RegExp(`(^|[^\\w$])${escapeRegExp(anchor)}([^\\w$]|$)`).test(line);
+}
+
+/**
+ * Count upstream commits touching each measured source path over the window
+ * ending at the baseline commit. Returns undefined when that history is not
+ * available locally; the commit hook never fetches it.
+ */
+export function countUpstreamTouches(manifest, windowDays, tryGit) {
+	if (tryGit("cat-file", "-t", manifest.commit) !== "commit") return undefined;
+	const committedAt = Number(tryGit("show", "-s", "--format=%ct", manifest.commit));
+	if (!Number.isFinite(committedAt)) return undefined;
+	const end = new Date(committedAt * 1000);
+	const start = new Date(end.getTime() - windowDays * 24 * 60 * 60 * 1000);
+	const prefix = `${manifest.sourceSubtree}/`;
+	const log = tryGit(
+		"-c",
+		"core.quotePath=false",
+		"log",
+		"--no-renames",
+		"--format=",
+		"--name-only",
+		`--since=${start.toISOString()}`,
+		manifest.commit,
+		"--",
+		`${prefix}${MEASURED_SCOPE}`,
+	);
+	if (log === undefined) return undefined;
+	const counts = new Map();
+	for (const line of log.split("\n")) {
+		if (!line.startsWith(prefix)) continue;
+		const path = line.slice(prefix.length);
+		counts.set(path, (counts.get(path) ?? 0) + 1);
+	}
+	return { start, end, counts };
+}
+
+function summarizeSurface(measured) {
+	const summary = { rewrite: { files: 0, surface: 0 }, patch: { files: 0, surface: 0 } };
+	for (const metrics of measured.values()) {
+		if (metrics.form === undefined) continue;
+		summary[metrics.form].files += 1;
+		summary[metrics.form].surface += metrics.surface;
+	}
+	return summary;
+}
+
+/**
+ * Apply the rewrite-reason and anchor rules (C4, C5). Both only depend on the
+ * baseline diff, so they run inside the commit hook without network access.
+ */
+export function checkClaimRules(claims, measured) {
+	const failures = [];
+	for (const metrics of measured.values()) {
+		if (metrics.form !== "rewrite") continue;
+		if (!findClaims(claims, metrics.path).some((claim) => claim.rewrite !== undefined)) {
+			failures.push(
+				`${metrics.path} measures as rewrite (${metrics.deletions} deletions, ${metrics.reindent} re-indented lines); add a rewrite reason to a claiming concern or thin the patch`,
+			);
+		}
+	}
+	for (const claim of claims) {
+		if (claim.rewrite !== undefined) {
+			const rewrites = [...measured.values()].some(
+				(metrics) => metrics.form === "rewrite" && claimMatches(claim, metrics.path),
+			);
+			if (!rewrites) {
+				failures.push(
+					`concern "${claim.concern}" gives a rewrite reason for ${claim.path}, which no longer measures as rewrite; remove it`,
+				);
+			}
+		}
+		if (claim.anchors.length > 0) {
+			const lines = measured.get(claim.path)?.lines ?? [];
+			for (const anchor of claim.anchors) {
+				if (!lines.some((line) => lineMentionsAnchor(line, anchor))) {
+					failures.push(
+						`concern "${claim.concern}" anchor ${anchor} does not appear in the changed lines of ${claim.path}`,
+					);
+				}
+			}
+		}
+	}
+	return failures;
+}
+
 function writeLine(stream, value) {
 	stream.write(`${value}\n`);
 }
@@ -411,58 +643,166 @@ function printFailures(failures, stderr) {
 	for (const f of failures) writeLine(stderr, `  - ${f}`);
 }
 
-/** Load and validate the deviation ledger, reporting problems into failures. */
-function loadDeltaEntries(root, failures, readJson, stagedPaths) {
-	const deltasPath = join(root, "maintainers", "deltas.json");
-	if (!(stagedPaths ? stagedPaths.has("maintainers/deltas.json") : existsSync(deltasPath))) {
-		failures.push("maintainers/deltas.json is missing; register upstream deviations there");
+/** Load and validate the concern ledger, reporting problems into failures. */
+function loadClaims(root, failures, readJson, stagedPaths) {
+	if (!(stagedPaths ? stagedPaths.has(ledgerPath) : existsSync(join(root, ledgerPath)))) {
+		failures.push(`${ledgerPath} is missing; register upstream deviations there`);
 		return [];
 	}
-	const deltasJson = readJson("maintainers/deltas.json", failures);
-	if (deltasJson === undefined) return [];
-	return validateDeltas(deltasJson, root, failures, stagedPaths ? (path) => stagedPaths.has(path) : undefined);
+	const ledger = readJson(ledgerPath, failures);
+	if (ledger === undefined) return [];
+	return validateConcerns(ledger, root, failures, stagedPaths ? (path) => stagedPaths.has(path) : undefined);
 }
 
 /**
- * Format one report group. Paths covered by a directory ledger entry fold
- * into a single annotated line so the report stays scannable.
+ * Format one report group. Paths claimed only through a directory fold into
+ * a single annotated line so the report stays scannable.
  */
-function formatGroupLines(groupEntries, deltaEntries) {
+function formatGroupLines(groupEntries, claims) {
 	const lines = [];
 	const foldedByDir = new Map();
 	for (const entry of groupEntries) {
-		const delta = findDelta(deltaEntries, entry.path);
-		if (delta?.path.endsWith("/")) {
-			let folded = foldedByDir.get(delta.path);
+		const matching = findClaims(claims, entry.path);
+		if (matching.length > 0 && matching.every((claim) => claim.path.endsWith("/"))) {
+			const dir = matching.reduce(
+				(longest, claim) => (claim.path.length > longest.length ? claim.path : longest),
+				"",
+			);
+			let folded = foldedByDir.get(dir);
 			if (folded === undefined) {
-				folded = { delta, statuses: new Set(), count: 0 };
-				foldedByDir.set(delta.path, folded);
+				folded = {
+					dir,
+					concerns: concernIds(claims.filter((claim) => claim.path === dir)),
+					statuses: new Set(),
+					count: 0,
+				};
+				foldedByDir.set(dir, folded);
 				lines.push(folded);
 			}
 			folded.statuses.add(entry.status);
 			folded.count += 1;
 			continue;
 		}
-		const annotation = delta === undefined ? "" : `  [${delta.category}] ${delta.intent}`;
+		const annotation = matching.length === 0 ? "" : `  [${concernIds(matching)}]`;
 		lines.push(`  ${entry.status} ${entry.path}${annotation}`);
 	}
 	return lines.map((line) => {
 		if (typeof line === "string") return line;
 		const status = [...line.statuses].sort().join("/");
 		const noun = line.count === 1 ? "file" : "files";
-		return `  ${status} ${line.delta.path} (${line.count} ${noun})  [${line.delta.category}] ${line.delta.intent}`;
+		return `  ${status} ${line.dir} (${line.count} ${noun})  [${line.concerns}]`;
 	});
 }
 
-function printGroups(groups, deltaEntries, stdout) {
+function printGroups(groups, claims, stdout) {
 	for (const [title, groupEntries] of groups) {
 		if (groupEntries.length === 0) continue;
 		writeLine(stdout, "");
 		writeLine(stdout, `${title}:`);
-		for (const line of formatGroupLines(groupEntries, deltaEntries)) {
+		for (const line of formatGroupLines(groupEntries, claims)) {
 			writeLine(stdout, line);
 		}
 	}
+}
+
+function formatTable(header, rows) {
+	const widths = header.map((cell, column) => Math.max(cell.length, ...rows.map((row) => String(row[column]).length)));
+	const format = (row) =>
+		row
+			.map((cell, column) => (column === row.length - 1 ? String(cell) : String(cell).padStart(widths[column])))
+			.join("  ");
+	return [format(header), ...rows.map(format)].map((line) => `  ${line}`);
+}
+
+function printSurface(measured, stdout) {
+	const scoped = [...measured.values()].filter((metrics) => metrics.form !== undefined);
+	scoped.sort((a, b) => b.surface - a.surface || (a.path < b.path ? -1 : 1));
+	const summary = summarizeSurface(measured);
+	writeLine(stdout, "");
+	writeLine(
+		stdout,
+		`Conflict surface of modified ${MEASURED_SCOPE} paths: rewrite ${summary.rewrite.surface} lines in ${summary.rewrite.files} files, patch ${summary.patch.surface} lines in ${summary.patch.files} files`,
+	);
+	for (const line of formatTable(
+		["form", "surface", "reindent", "hunks", "path"],
+		scoped.map((metrics) => [metrics.form, metrics.surface, metrics.reindent, metrics.hunks, metrics.path]),
+	)) {
+		writeLine(stdout, line);
+	}
+}
+
+function printRisk(manifest, measured, touches, windowDays, stdout, stderr) {
+	const scoped = [...measured.values()].filter((metrics) => metrics.form !== undefined);
+	const rows = scoped.map((metrics) => {
+		const count = touches?.counts.get(metrics.path) ?? 0;
+		return { metrics, touches: touches ? count : undefined, risk: touches ? count * metrics.surface : undefined };
+	});
+	rows.sort(
+		(a, b) =>
+			(b.risk ?? 0) - (a.risk ?? 0) ||
+			b.metrics.surface - a.metrics.surface ||
+			(a.metrics.path < b.metrics.path ? -1 : 1),
+	);
+	const summary = summarizeSurface(measured);
+	writeLine(
+		stdout,
+		`Upstream baseline: ${manifest.tag} ${manifest.sourceSubtree} (tree ${manifest.sourceTree.slice(0, 12)})`,
+	);
+	if (touches) {
+		const day = (date) => date.toISOString().slice(0, 10);
+		writeLine(stdout, `Touch window: ${windowDays} days (${day(touches.start)}..${day(touches.end)})`);
+	} else {
+		writeLine(
+			stderr,
+			`warning: upstream history for ${manifest.commit.slice(0, 12)} is unavailable locally; touches and risk are n/a (fetch ${manifest.tag} to measure them)`,
+		);
+	}
+	writeLine(stdout, "");
+	for (const line of formatTable(
+		["risk", "touches", "surface", "reindent", "hunks", "form", "path"],
+		rows.map(({ metrics, touches: count, risk }) => [
+			risk ?? "n/a",
+			count ?? "n/a",
+			metrics.surface,
+			metrics.reindent,
+			metrics.hunks,
+			metrics.form,
+			metrics.path,
+		]),
+	)) {
+		writeLine(stdout, line);
+	}
+	const totalRisk = touches ? rows.reduce((sum, row) => sum + row.risk, 0) : "n/a";
+	writeLine(stdout, "");
+	writeLine(stdout, `rewriteSurface: ${summary.rewrite.surface}`);
+	writeLine(stdout, `risk: ${totalRisk}`);
+}
+
+function parseArgs(args) {
+	const options = { check: false, staged: false, risk: false, windowDays: undefined, targetTag: undefined };
+	for (let i = 0; i < args.length; i += 1) {
+		const arg = args[i];
+		if (arg === "--check" && !options.check) {
+			options.check = true;
+		} else if (arg === "--staged" && !options.staged) {
+			options.staged = true;
+		} else if (arg === "--risk" && !options.risk) {
+			options.risk = true;
+		} else if (arg === "--window" && options.windowDays === undefined && /^[1-9]\d*$/.test(args[i + 1] ?? "")) {
+			options.windowDays = Number(args[i + 1]);
+			i += 1;
+		} else if (arg === "--target" && options.targetTag === undefined && typeof args[i + 1] === "string") {
+			options.targetTag = args[i + 1];
+			i += 1;
+		} else {
+			return undefined;
+		}
+	}
+	const modes = [options.check, options.risk, options.targetTag !== undefined].filter(Boolean).length;
+	if (modes > 1 || (options.staged && !options.check) || (options.windowDays !== undefined && !options.risk)) {
+		return undefined;
+	}
+	return options;
 }
 
 export function runDiffUpstream({
@@ -471,27 +811,12 @@ export function runDiffUpstream({
 	stdout = process.stdout,
 	stderr = process.stderr,
 } = {}) {
-	let isCheck = false;
-	let staged = false;
-	let targetTag;
-	for (let i = 0; i < args.length; i += 1) {
-		const arg = args[i];
-		if (arg === "--check" && !isCheck) {
-			isCheck = true;
-		} else if (arg === "--staged" && !staged) {
-			staged = true;
-		} else if (arg === "--target" && targetTag === undefined && typeof args[i + 1] === "string") {
-			targetTag = args[i + 1];
-			i += 1;
-		} else {
-			writeLine(stderr, usage);
-			return 2;
-		}
-	}
-	if ((isCheck && targetTag !== undefined) || (staged && !isCheck)) {
+	const options = parseArgs(args);
+	if (options === undefined) {
 		writeLine(stderr, usage);
 		return 2;
 	}
+	const { check: isCheck, staged, risk: isRisk, targetTag } = options;
 	if (targetTag !== undefined && (!targetTag.startsWith("v") || !isStableSemver(targetTag.slice(1)))) {
 		writeLine(stderr, "--target requires an exact stable release tag (v<semver>)");
 		return 2;
@@ -556,7 +881,7 @@ export function runDiffUpstream({
 		}
 
 		const ledgerFailures = [];
-		const deltaEntries = loadDeltaEntries(root, ledgerFailures, readJson, stagedPaths);
+		const claims = loadClaims(root, ledgerFailures, readJson, stagedPaths);
 		for (const w of warnings) writeLine(stderr, `warning: ${w}`);
 		if (ledgerFailures.length > 0) {
 			printFailures(ledgerFailures, stderr);
@@ -573,13 +898,10 @@ export function runDiffUpstream({
 		);
 		const removed = changes.filter((entry) => entry.status === "D");
 		const surviving = changes.filter((entry) => entry.status !== "D");
-		const registeredCollisions = surviving.filter((entry) => findDelta(deltaEntries, entry.path) !== undefined);
-		const additionCollisions = surviving.filter(
-			(entry) => findDelta(deltaEntries, entry.path) === undefined && localAdditionPaths.has(entry.path),
-		);
-		const clean = surviving.filter(
-			(entry) => findDelta(deltaEntries, entry.path) === undefined && !localAdditionPaths.has(entry.path),
-		);
+		const isClaimed = (entry) => findClaims(claims, entry.path).length > 0;
+		const registeredCollisions = surviving.filter(isClaimed);
+		const additionCollisions = surviving.filter((entry) => !isClaimed(entry) && localAdditionPaths.has(entry.path));
+		const clean = surviving.filter((entry) => !isClaimed(entry) && !localAdditionPaths.has(entry.path));
 
 		writeLine(
 			stdout,
@@ -606,7 +928,7 @@ export function runDiffUpstream({
 				["Changes clear of fork deviations", clean],
 				["Removed upstream", removed],
 			],
-			deltaEntries,
+			claims,
 			stdout,
 		);
 		return 0;
@@ -620,6 +942,15 @@ export function runDiffUpstream({
 		printFailures(failures, stderr);
 		return 1;
 	}
+	const measured = measureModified(manifest.sourceTree, staged, git);
+
+	if (isRisk) {
+		for (const w of warnings) writeLine(stderr, `warning: ${w}`);
+		const windowDays = options.windowDays ?? DEFAULT_RISK_WINDOW_DAYS;
+		const touches = countUpstreamTouches(manifest, windowDays, tryGit);
+		printRisk(manifest, measured, touches, windowDays, stdout, stderr);
+		return 0;
+	}
 
 	const modified = entries.filter((e) => e.status === "M" || e.status === "T");
 	const additions = entries.filter((e) => e.status === "A");
@@ -628,16 +959,13 @@ export function runDiffUpstream({
 	// The ledger must cover every modified or dropped upstream path (M/T/D).
 	// Additions are distribution-local and listed without registration.
 	const ledgerFailures = [];
-	const deltaEntries = loadDeltaEntries(root, ledgerFailures, readJson, stagedPaths);
+	const claims = loadClaims(root, ledgerFailures, readJson, stagedPaths);
 
 	const ledgerScope = [...modified, ...dropped];
-	const unregistered = ledgerScope.filter((entry) => findDelta(deltaEntries, entry.path) === undefined);
-	const scopePaths = new Set(ledgerScope.map((entry) => entry.path));
-	const stale = deltaEntries.filter((entry) =>
-		entry.path.endsWith("/")
-			? !ledgerScope.some((scoped) => scoped.path.startsWith(entry.path))
-			: !scopePaths.has(entry.path),
-	);
+	const unregistered = ledgerScope.filter((entry) => findClaims(claims, entry.path).length === 0);
+	const stale = claims.filter((claim) => !ledgerScope.some((entry) => claimMatches(claim, entry.path)));
+	const ruleFailures = ledgerFailures.length === 0 ? checkClaimRules(claims, measured) : [];
+	const concernCount = new Set(claims.map((claim) => claim.concern)).size;
 
 	for (const w of warnings) writeLine(stderr, `warning: ${w}`);
 
@@ -646,14 +974,21 @@ export function runDiffUpstream({
 		for (const entry of unregistered) {
 			writeLine(stderr, `  - unregistered upstream deviation: ${entry.status} ${entry.path}`);
 		}
-		for (const entry of stale) {
-			writeLine(stderr, `  - stale delta entry (no matching worktree deviation): ${entry.path}`);
+		for (const claim of stale) {
+			writeLine(
+				stderr,
+				`  - stale claim (no matching worktree deviation): ${claim.path} in concern "${claim.concern}"`,
+			);
 		}
+		for (const f of ruleFailures) writeLine(stderr, `  - ${f}`);
+		const summary = summarizeSurface(measured);
 		writeLine(
 			stdout,
-			`Verified ${entries.length} ${staged ? "staged" : "worktree"} differences against ${manifest.tag}: ${modified.length} modified upstream (M/T), ${additions.length} distribution-local additions (A), ${dropped.length} dropped upstream (D), ${deltaEntries.length} registered deltas.`,
+			`Verified ${entries.length} ${staged ? "staged" : "worktree"} differences against ${manifest.tag}: ${modified.length} modified upstream (M/T), ${additions.length} distribution-local additions (A), ${dropped.length} dropped upstream (D), ${concernCount} registered concerns, rewrite surface ${summary.rewrite.surface} lines.`,
 		);
-		return ledgerFailures.length > 0 || unregistered.length > 0 || stale.length > 0 ? 1 : 0;
+		return ledgerFailures.length > 0 || unregistered.length > 0 || stale.length > 0 || ruleFailures.length > 0
+			? 1
+			: 0;
 	}
 
 	for (const f of ledgerFailures) writeLine(stderr, `warning: ${f}`);
@@ -671,7 +1006,7 @@ export function runDiffUpstream({
 	writeLine(stdout, `  ${String(modified.length).padStart(4)} modified upstream files (M/T)`);
 	writeLine(stdout, `  ${String(additions.length).padStart(4)} distribution-local additions (A)`);
 	writeLine(stdout, `  ${String(dropped.length).padStart(4)} dropped upstream files (D)`);
-	writeLine(stdout, `  ${String(deltaEntries.length).padStart(4)} registered deltas`);
+	writeLine(stdout, `  ${String(concernCount).padStart(4)} registered concerns`);
 
 	printGroups(
 		[
@@ -679,13 +1014,15 @@ export function runDiffUpstream({
 			["Distribution-local additions (A)", additions],
 			["Dropped upstream files (D)", dropped],
 		],
-		deltaEntries,
+		claims,
 		stdout,
 	);
 
+	printSurface(measured, stdout);
+
 	if (unregistered.length > 0) {
 		writeLine(stdout, "");
-		writeLine(stdout, "Unregistered upstream deviations (add to maintainers/deltas.json):");
+		writeLine(stdout, `Unregistered upstream deviations (add to ${ledgerPath}):`);
 		for (const entry of unregistered) {
 			writeLine(stdout, `  ${entry.status} ${entry.path}`);
 		}
@@ -693,10 +1030,16 @@ export function runDiffUpstream({
 
 	if (stale.length > 0) {
 		writeLine(stdout, "");
-		writeLine(stdout, "Stale delta entries (registered path no longer deviates):");
-		for (const entry of stale) {
-			writeLine(stdout, `  ${entry.path}`);
+		writeLine(stdout, "Stale claims (registered path no longer deviates):");
+		for (const claim of stale) {
+			writeLine(stdout, `  ${claim.path} in concern "${claim.concern}"`);
 		}
+	}
+
+	if (ruleFailures.length > 0) {
+		writeLine(stdout, "");
+		writeLine(stdout, "Ledger rule violations:");
+		for (const f of ruleFailures) writeLine(stdout, `  ${f}`);
 	}
 
 	return 0;

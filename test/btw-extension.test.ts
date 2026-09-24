@@ -31,17 +31,18 @@ async function bindUi(fixture: Awaited<ReturnType<typeof createBtwTestSession>>)
 			widget?.dispose?.();
 			widget = typeof factory === "function" ? factory(tui, ui.theme) : undefined;
 		},
-		onEditorSubmit: (handler) => {
-			submitHandlers.add(handler);
-			return () => submitHandlers.delete(handler);
-		},
-		onTerminalInput: (handler, options) => {
-			expect(options).toEqual({ scope: "editor" });
-			keyHandlers.add(handler);
-			return () => keyHandlers.delete(handler);
+		editorHost: {
+			onSubmit: (handler) => {
+				submitHandlers.add(handler);
+				return () => submitHandlers.delete(handler);
+			},
+			onInput: (handler) => {
+				keyHandlers.add(handler);
+				return () => keyHandlers.delete(handler);
+			},
+			getCursor: () => editor.getCursor(),
 		},
 		getEditorText: () => editor.getExpandedText(),
-		getEditorCursor: () => editor.getCursor(),
 		setEditorText: (text) => editor.setText(text),
 	};
 	await fixture.session.bindExtensions({ uiContext: ui, mode: "tui" });

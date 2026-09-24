@@ -9,7 +9,6 @@ import {
 	getShellConfig,
 	getShellEnv,
 	killProcessTree,
-	rewriteCmdNulRedirects,
 	type ShellConfig,
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
@@ -17,7 +16,7 @@ import {
 import { type BackgroundCompletion, BackgroundExecutionError } from "../background/types.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { createShellRenderers } from "./renderers/bash.ts";
-import { type ManagedShellExecution, runShellCommand } from "./shell-execution.ts";
+import { type ManagedShellExecution, rewriteCmdNulRedirects, runShellCommand } from "./shell-execution.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type TruncationResult } from "./truncate.ts";
 

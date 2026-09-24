@@ -153,6 +153,8 @@ export interface BackgroundContext {
 	/** Observation only: terminal delivery is acknowledged by the host via markDelivered after result persistence. */
 	wait(id: string, timeoutMs?: number, signal?: AbortSignal): Promise<BackgroundTask>;
 	kill(id: string): boolean;
+	/** Move every running foreground execution to the background; returns how many moved. */
+	detachForeground(): number;
 	subscribe(listener: () => void): () => void;
 	pin(id: string): () => void;
 }

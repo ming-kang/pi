@@ -5,6 +5,7 @@
  * once, and refreshes the provider immediately.
  */
 
+import "../keybindings.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { truncate } from "../constants.ts";
 import { modelCatalogUrl, type ProbeModel } from "../probe.ts";

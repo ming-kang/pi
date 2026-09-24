@@ -28,6 +28,8 @@ import type { ModelRegistry } from "../src/core/model-registry.ts";
 import type { ScopedModel } from "../src/core/model-resolver.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { buildSystemPrompt } from "../src/core/system-prompt.ts";
+// The detach key reserved against extension shortcuts is registered by the background extension.
+import "../src/extensions/background/keybindings.ts";
 
 describe("ExtensionRunner", () => {
 	let tempDir: string;

@@ -1,62 +1,71 @@
-import { describe, expect, it, vi } from "vitest";
+import { getKeybindings, setKeybindings } from "@earendil-works/pi-tui";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ExtensionAPI, ExtensionContext, TerminalInputHandler } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
+import { createBackgroundExtension } from "../src/extensions/background/index.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 
-type Listener = (data: string) => { consume?: boolean } | undefined;
+const previousKeybindings = getKeybindings();
+afterEach(() => setKeybindings(previousKeybindings));
+
+/** The bundled background extension with a fake TUI host that records terminal listeners. */
 function harness(bindings = new KeybindingsManager()) {
-	const listeners = new Set<Listener>();
-	const remove = vi.fn();
+	setKeybindings(bindings);
+	const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
+	const pi = {
+		on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => void) => handlers.set(event, handler),
+		registerTool: vi.fn(),
+		registerMessageRenderer: vi.fn(),
+		registerCommand: vi.fn(),
+	} as unknown as ExtensionAPI;
+	createBackgroundExtension()(pi);
+	const listeners = new Set<TerminalInputHandler>();
 	const ctx = {
+		background: { detachForeground: vi.fn(() => 2), list: () => [], subscribe: () => () => {} },
+		abort: vi.fn(),
 		ui: {
-			addInputListener: (fn: Listener) => {
-				listeners.add(fn);
-				return () => {
-					remove();
-					listeners.delete(fn);
-				};
+			setStatus: vi.fn(),
+			notify: vi.fn(),
+			onTerminalInput: (handler: TerminalInputHandler) => {
+				listeners.add(handler);
+				return () => listeners.delete(handler);
 			},
 		},
-		keybindings: bindings,
-		session: { background: { detachForeground: vi.fn(() => 2) }, abort: vi.fn() },
-		showStatus: vi.fn(),
-		isShuttingDown: false,
-		backgroundInputUnsubscribe: undefined as (() => void) | undefined,
 	};
-	const prototype = InteractiveMode.prototype as unknown as { setupBackgroundInputListener(this: typeof ctx): void };
-	const setup = () => prototype.setupBackgroundInputListener.call(ctx);
-	return { ctx, remove, setup, input: (data: string) => [...listeners][0]?.(data), listeners };
+	const emit = (event: string) => handlers.get(event)?.({}, ctx as unknown as ExtensionContext);
+	return { ctx, listeners, emit, input: (data: string) => [...listeners][0]?.(data) };
 }
-describe("interactive Background detach input listener", () => {
-	it("routes independently of focused editor/dialog and never aborts the parent", () => {
+
+describe("Background detach key", () => {
+	it("detaches from any focus through the terminal listener and never aborts the parent", () => {
 		const h = harness();
-		h.setup();
+		h.emit("session_start");
 		expect(h.input("\x02")).toEqual({ consume: true });
-		expect(h.ctx.session.background.detachForeground).toHaveBeenCalledOnce();
-		expect(h.ctx.session.abort).not.toHaveBeenCalled();
-		expect(h.ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining("Moved 2 executions"));
+		expect(h.ctx.background.detachForeground).toHaveBeenCalledOnce();
+		expect(h.ctx.abort).not.toHaveBeenCalled();
+		expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Moved 2 executions"));
 		expect(h.input("x")).toBeUndefined();
 	});
+
 	it("uses the configured action and passes the key through when nothing can detach", () => {
 		const h = harness(new KeybindingsManager({ "app.backgroundTasks.detach": "ctrl+y" }));
-		h.setup();
-		h.ctx.session.background.detachForeground.mockReturnValue(0);
+		h.emit("session_start");
+		h.ctx.background.detachForeground.mockReturnValue(0);
 		expect(h.input("\x02")).toBeUndefined();
 		expect(h.input("\x19")).toBeUndefined();
-		expect(h.ctx.session.background.detachForeground).toHaveBeenCalledOnce();
-		expect(h.ctx.showStatus).not.toHaveBeenCalled();
+		expect(h.ctx.background.detachForeground).toHaveBeenCalledOnce();
+		expect(h.ctx.ui.notify).not.toHaveBeenCalled();
 	});
-	it("rebinds without accumulating listeners, disposes and ignores shutdown input", () => {
+
+	it("rebinds on session start without accumulating listeners and stops on shutdown", () => {
 		const h = harness();
-		h.setup();
-		h.setup();
+		h.emit("session_start");
+		h.emit("session_start");
 		expect(h.listeners.size).toBe(1);
-		expect(h.remove).toHaveBeenCalledOnce();
-		h.ctx.isShuttingDown = true;
-		h.input("\x02");
-		expect(h.ctx.session.background.detachForeground).not.toHaveBeenCalled();
-		h.ctx.backgroundInputUnsubscribe?.();
+		h.emit("session_shutdown");
 		expect(h.listeners.size).toBe(0);
 	});
+
 	it("closes Background synchronously before awaiting terminal drain on normal shutdown", () => {
 		const calls: string[] = [];
 		const context = {
@@ -77,6 +86,7 @@ describe("interactive Background detach input listener", () => {
 		expect(calls).toEqual(["close", "theme", "drain"]);
 		expect(context.isShuttingDown).toBe(true);
 	});
+
 	it("reserves Ctrl+B locally without removing explicit editor overrides", () => {
 		const kb = new KeybindingsManager();
 		expect(kb.getKeys("app.backgroundTasks.detach")).toEqual(["ctrl+b"]);

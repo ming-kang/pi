@@ -40,10 +40,3 @@ describe("Windows keybinding defaults", () => {
 		expect(KEYBINDINGS["app.message.dequeue"].defaultKeys).toBe(windowsKeybindings ? "alt+q" : "alt+up");
 	});
 });
-
-describe("Background panel focus defaults", () => {
-	it("reserves independent list and preview actions", () => {
-		expect(KEYBINDINGS["app.backgroundTasks.focusList"].defaultKeys).toBe("left");
-		expect(KEYBINDINGS["app.backgroundTasks.focusPreview"].defaultKeys).toBe("right");
-	});
-});

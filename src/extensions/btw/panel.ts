@@ -1,3 +1,4 @@
+import "./keybindings.ts";
 import type { Usage } from "@earendil-works/pi-ai";
 import {
 	type Component,

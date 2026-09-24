@@ -2,19 +2,58 @@
 
 Follow [AGENTS.md](../AGENTS.md) and the ownership rules in [Architecture](architecture.md). Synchronization adopts an exact upstream release; [publication](release.md) is a separate operation.
 
-## Baseline and deviation ledger
+## Baseline and concern ledger
 
-`upstream.json` records the repository, exact release tag/commit, source subtree, and root-mapped source tree. Compare against that tree, never a branch tip. `deltas.json` records each modified or dropped upstream path with its reason and covering tests; directory entries end in `/`.
+`upstream.json` records the repository, exact release tag/commit, source subtree, and root-mapped source tree. Compare against that tree, never a branch tip.
 
-| Category | Treatment during synchronization |
+`concerns.json` groups every modified or dropped upstream path under the concerns that need it. Upstream does not generally accept contributor PRs, so treat every deviation as permanent unless it names an observable retirement signal.
+
+| Field | Meaning |
 | --- | --- |
-| `distribution` | Preserve standalone packaging, identity, and distribution-owned documentation. |
-| `bugfix` | Retire when upstream supplies the equivalent fix. |
-| `windows-compat` | Verify with a native Windows reproduction before retiring. |
-| `ui` | Merge upstream behavior into the distribution's presentation. |
-| `extension-support` | Merge public API evolution; retire additions once no consumer needs them or upstream supplies an equivalent. |
+| `id` | Stable kebab-case name. |
+| `why` | One sentence; durable explanations belong in [Architecture](architecture.md). |
+| `paths[].path` | A deviating path; directory claims end in `/`. Several concerns may claim one path. |
+| `paths[].anchors` | Optional symbol names this concern adds or changes in that file. |
+| `paths[].rewrite` | Required when the path measures as `rewrite`: why the patch cannot be thinner. |
+| `tests` | Optional covering tests. |
+| `watch` | Optional observable retirement signal. |
 
-`npm run diff:upstream` prints the complete worktree report. `--check` validates baseline integrity, upstream dependency pins/ranges across installation scopes, and ledger coverage. The commit hook uses `--check --staged` to check the index that will be committed, including its baseline manifest, package metadata, ledger, and referenced test paths. An unstaged ledger repair cannot make that gate pass.
+`--check` fails when:
+
+1. a modified or dropped upstream path has no claim, or a claim matches no deviation;
+2. a listed test path does not exist;
+3. an `id` is not unique kebab-case;
+4. a path measures as `rewrite` without a `rewrite` reason, or a reason remains on a path that no longer measures as `rewrite`;
+5. an anchor does not appear in the added or removed lines of its path, which catches an upstream rename in the same synchronization.
+
+## Conflict surface and risk
+
+Forms and metrics cover modified `src/` paths; documentation, tests, and packaging files are merged by hand. A path is a `rewrite` when it deletes more than 8 upstream lines or re-indents more than 10 (`MAX_PATCH_DELETIONS`, `MAX_PATCH_REINDENT` in the script), otherwise a `patch`. A path upstream does not have is distribution-owned and has no conflict surface.
+
+| Metric | Definition |
+| --- | --- |
+| `surface` | Added plus deleted lines against the baseline. |
+| `reindent` | `surface` minus the same count with whitespace ignored. |
+| `hunks` | Hunks in the baseline diff. |
+| `touches` | Non-merge upstream commits changing the path in the window before the baseline commit. |
+| `risk` | `surface × touches`. |
+
+`npm run diff:upstream` prints the complete worktree report, including each modified source path's form, surface, re-indentation, and hunks. `--check` validates baseline integrity, upstream dependency pins/ranges across installation scopes, and the ledger rules above. The commit hook uses `--check --staged` to check the index that will be committed, including its baseline manifest, package metadata, ledger, and referenced test paths. An unstaged ledger repair cannot make that gate pass.
+
+`npm run diff:upstream -- --risk [--window <days>]` ranks modified source paths by risk over a 120-day default window. It needs the baseline commit's history and reports `n/a` without it; it never fails and is not part of the hook. Prefer moving logic into distribution-owned files and leaving one-line hooks in upstream files, and spend that effort on the highest-risk paths: a large patch in a file upstream never touches costs nothing.
+
+Each synchronization record starts with the budget measured after adoption:
+
+```yaml
+---
+upstreamTag: v<version>
+window: 120
+rewriteSurface: <rewriteSurface from --risk>
+risk: <risk from --risk>
+---
+```
+
+When `rewriteSurface` rises from the previous record, the record states why.
 
 For an unexpected deviation, inspect the actual diff and introducing commit before describing its impact:
 
@@ -45,10 +84,10 @@ Wholly rewritten documentation pages are the exception. `docs/**` is distributio
    ```
 
    If a fresh clone lacks the recorded baseline tree, fetch its exact tag first. Target classification uses the committed HEAD tree; finish or isolate local edits before relying on its collision report.
-2. Read the changed source, tests, APIs, documentation, and examples. Classify changes as adopt, adapt, defer, or not applicable. Review each collision with a registered deviation or distribution-owned addition. Record this release's decisions under `maintainers/syncs/v<version>.md`; keep durable architecture explanations in [Architecture](architecture.md) and per-path intent in the ledger.
+2. Read the changed source, tests, APIs, documentation, and examples. Classify changes as adopt, adapt, defer, or not applicable. Review each collision with a registered deviation or distribution-owned addition. Record this release's decisions under `maintainers/syncs/v<version>.md`; keep durable architecture explanations in [Architecture](architecture.md) and per-concern intent in the ledger.
 3. Apply compatible changes. Review dependency **scope** as well as version using [Dependency maintenance](dependencies.md). Update distribution documentation and `CHANGELOG.md` under `[Unreleased]`. The root package's release version stays unchanged during synchronization.
-4. When adoption is final, update all fields of `upstream.json` and reconcile `deltas.json`. Explicitly register newly adopted upstream paths with `git add --intent-to-add -- <paths>` before the worktree comparison; Git otherwise treats an untracked replacement as a deletion plus a separate file.
-5. Verify the installed dependency tree, focused behavior tests, and interactive changes as required by AGENTS.md. Use a clean build for deleted sources or changed build/package exclusions. Run `npm run check`, the full diff report, and `npm run diff:upstream -- --check`. For entrypoint, dependency-scope, or packaging changes, pack and run `npm run verify:package-install -- <tarball>`. Include validation results and any explicitly assigned follow-up work in the synchronization record.
+4. When adoption is final, update all fields of `upstream.json` and reconcile `concerns.json`. Explicitly register newly adopted upstream paths with `git add --intent-to-add -- <paths>` before the worktree comparison; Git otherwise treats an untracked replacement as a deletion plus a separate file.
+5. Verify the installed dependency tree, focused behavior tests, and interactive changes as required by AGENTS.md. Use a clean build for deleted sources or changed build/package exclusions. Run `npm run check`, the full diff report, `npm run diff:upstream -- --check`, and `npm run diff:upstream -- --risk` for the record's budget header. For entrypoint, dependency-scope, or packaging changes, pack and run `npm run verify:package-install -- <tarball>`. Include validation results and any explicitly assigned follow-up work in the synchronization record.
 6. At an owner-requested checkpoint, inspect status, stage explicit paths, inspect the staged diff, and commit. Follow the lockfile acknowledgement procedure when needed. Existing authorization persists; complete the authorized steps without asking again.
 7. If pushing/CI verification is authorized, push the synchronization branch and run the existing CI workflow on that exact commit:
 

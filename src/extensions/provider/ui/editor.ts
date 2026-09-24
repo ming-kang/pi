@@ -12,6 +12,7 @@
  * ←/→ switch panes, Esc cancels/pops/backs out.
  */
 
+import "../keybindings.ts";
 import { type Component, type Focusable, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { KeybindingsManager } from "../../../core/keybindings.ts";
 import type { ModelsJsonModel } from "../../../core/model-config.ts";

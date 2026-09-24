@@ -1,5 +1,6 @@
 /** Provider connection and API settings panes. */
 
+import "../keybindings.ts";
 import type { ModelsJsonProvider } from "../../../core/model-config.ts";
 import type { ModelRegistry } from "../../../core/model-registry.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";

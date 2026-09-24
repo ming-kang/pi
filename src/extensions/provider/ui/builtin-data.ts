@@ -6,6 +6,7 @@
  * baseUrl, keys) are never touched.
  */
 
+import "../keybindings.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelsJsonModel } from "../../../core/model-config.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";

@@ -1,5 +1,6 @@
 /** Scalar model settings: reasoning, input modalities, cost rates, and the model-specific API override. */
 
+import "../keybindings.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { builtinDefaults } from "../catalog.ts";
 import { API_TYPES, INPUT_TYPES, type InputType, truncate } from "../constants.ts";

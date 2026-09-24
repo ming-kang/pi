@@ -504,7 +504,7 @@ export const DISTRIBUTION_PACKAGE_NAME = "@astralyn/pi";
 /** Upstream reports installs to https://pi.dev; this distribution does not report. */
 export const INSTALL_TELEMETRY_URL: string | undefined = undefined;
 /** Replaces the upstream pi.dev changelog link in the update notification. */
-export const UPDATE_CHANGELOG_HINT = "Run /changelog to view changes.";
+export const UPDATE_CHANGELOG_HINT: string | undefined = "Run /changelog to view changes.";
 export const PACKAGE_NAME: string = pkg.name || DISTRIBUTION_PACKAGE_NAME;
 export const APP_NAME: string = piConfigName || "pi";
 export const APP_TITLE: string = piConfigName ? APP_NAME : "π";

@@ -4,6 +4,7 @@ import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { ArminComponent } from "../src/modes/interactive/components/armin.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { ToolChatContainer } from "../src/modes/interactive/tool-chat.ts";
 
 beforeAll(() => {
 	initTheme("dark");
@@ -68,13 +69,9 @@ describe("InteractiveMode selector lifecycle", () => {
 		const requestRender = vi.fn();
 		const armin = new ArminComponent({ requestRender } as never);
 		const dispose = vi.spyOn(armin, "dispose");
-		const chatContainer = new Container();
+		const chatContainer = new ToolChatContainer();
 		chatContainer.addChild(armin);
-		const disposeChatComponents = Reflect.get(InteractiveMode.prototype, "disposeChatToolComponents") as (this: {
-			chatContainer: Container;
-		}) => void;
 
-		disposeChatComponents.call({ chatContainer });
 		chatContainer.clear();
 		expect(dispose).toHaveBeenCalledTimes(1);
 		expect(chatContainer.children).toHaveLength(0);

@@ -124,11 +124,8 @@ type InteractiveBashContext = {
 	pendingMessagesContainer: { addChild(component: unknown): void };
 	pendingBashComponents: unknown[];
 	isBashMode: boolean;
-	// This distribution routes editor submissions through handleEditorSubmit and its
-	// synchronous extension interception before the bash path.
-	extensionEditorSubmitHandlers: Set<unknown>;
-	handleEditorSubmit(text: string, mode: "steer" | "followUp"): Promise<void>;
-	interceptEditorSubmit(text: string, mode: "steer" | "followUp"): boolean;
+	// This distribution offers editor submissions to extensions before the bash path.
+	editorHost: { intercept(text: string, mode: "steer" | "followUp"): boolean };
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void>;
 	showError(message: string): void;
 	updateEditorBorderColor(): void;
@@ -136,8 +133,6 @@ type InteractiveBashContext = {
 
 const interactiveModePrototype = InteractiveMode.prototype as unknown as {
 	setupEditorSubmitHandler(this: InteractiveBashContext): void;
-	handleEditorSubmit(this: InteractiveBashContext, text: string, mode: "steer" | "followUp"): Promise<void>;
-	interceptEditorSubmit(this: InteractiveBashContext, text: string, mode: "steer" | "followUp"): boolean;
 	handleBashCommand(this: InteractiveBashContext, command: string, excludeFromContext?: boolean): Promise<void>;
 };
 
@@ -253,9 +248,7 @@ describe("Interactive user_bash failure handling (#9068)", () => {
 			pendingMessagesContainer: { addChild: vi.fn() },
 			pendingBashComponents: [],
 			isBashMode: true,
-			extensionEditorSubmitHandlers: new Set(),
-			handleEditorSubmit: interactiveModePrototype.handleEditorSubmit,
-			interceptEditorSubmit: interactiveModePrototype.interceptEditorSubmit,
+			editorHost: { intercept: () => false },
 			handleBashCommand: interactiveModePrototype.handleBashCommand,
 			showError: vi.fn(),
 			updateEditorBorderColor: vi.fn(),
