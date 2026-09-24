@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join, posix, resolve } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { prerelease, satisfies, valid, validRange } from "semver";
 
@@ -33,7 +34,7 @@ export const MAX_PATCH_DELETIONS = 8;
 export const MAX_PATCH_REINDENT = 10;
 export const DEFAULT_RISK_WINDOW_DAYS = 120;
 
-const usage = `Usage: node scripts/diff-upstream.mjs [--check [--staged] | --risk [--window <days>] | --target <tag>]
+const usage = `Usage: node scripts/diff-upstream.mjs [--check [--staged] | --risk [--window <days>] | --target <tag> | --apply <tag>]
 
 Compares the current worktree against the recorded upstream baseline
 in maintainers/upstream.json, annotated with the concern ledger in
@@ -44,7 +45,8 @@ maintainers/concerns.json.
   --staged         with --check, verify the index that will be committed
   --risk           rank modified source paths by conflict surface times upstream touches
   --window <days>  with --risk, count upstream touches over this many days before the baseline (default ${DEFAULT_RISK_WINDOW_DAYS})
-  --target <tag>   classify upstream changes from the baseline to a release tag against the ledger`;
+  --target <tag>   classify upstream changes from the baseline to a release tag against the ledger
+  --apply <tag>    three-way merge those upstream changes into a clean worktree and advance the baseline`;
 
 function isPlainObject(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -778,8 +780,89 @@ function printRisk(manifest, measured, touches, windowDays, stdout, stderr) {
 	writeLine(stdout, `risk: ${totalRisk}`);
 }
 
+function readBlob(root, spec) {
+	return execFileSync("git", ["cat-file", "blob", spec], { cwd: root, maxBuffer: 64 * 1024 * 1024 });
+}
+
+/**
+ * Three-way merge the upstream changes from the baseline tree to the target
+ * tree into the worktree, one path at a time with git merge-file. Paths the
+ * distribution dropped stay dropped, and an upstream deletion of a locally
+ * changed path is left for review. Returns one { action, path } per change.
+ */
+export function applyUpstreamChanges(root, baseTree, targetTree, git) {
+	const scratch = mkdtempSync(join(tmpdir(), "pi-apply-"));
+	const results = [];
+	try {
+		const changes = parseNameStatus(git("diff", "--name-status", "-z", "--no-renames", baseTree, targetTree));
+		for (const { status, path } of changes) {
+			const local = join(root, path);
+			const exists = existsSync(local);
+			const base = status === "A" ? Buffer.alloc(0) : readBlob(root, `${baseTree}:${path}`);
+			if (status === "D") {
+				if (!exists) continue;
+				if (readFileSync(local).equals(base)) {
+					rmSync(local);
+					results.push({ action: "deleted", path });
+				} else {
+					results.push({ action: "conflict", path, detail: "deleted upstream, changed locally" });
+				}
+				continue;
+			}
+			const theirs = readBlob(root, `${targetTree}:${path}`);
+			if (!exists) {
+				if (status === "A") {
+					mkdirSync(dirname(local), { recursive: true });
+					writeFileSync(local, theirs);
+					results.push({ action: "added", path });
+				} else {
+					results.push({ action: "skipped", path, detail: "dropped locally" });
+				}
+				continue;
+			}
+			const ours = readFileSync(local);
+			if (ours.equals(theirs)) continue;
+			if ([base, ours, theirs].some((content) => content.subarray(0, 8000).includes(0))) {
+				results.push({ action: "conflict", path, detail: "binary; distribution version kept" });
+				continue;
+			}
+			const basePath = join(scratch, "base");
+			const theirsPath = join(scratch, "theirs");
+			writeFileSync(basePath, base);
+			writeFileSync(theirsPath, theirs);
+			let conflicts = 0;
+			try {
+				execFileSync(
+					"git",
+					["merge-file", "-L", "distribution", "-L", "baseline", "-L", "upstream", local, basePath, theirsPath],
+					{ cwd: root, stdio: "pipe" },
+				);
+			} catch (error) {
+				conflicts = typeof error?.status === "number" && error.status > 0 ? error.status : -1;
+			}
+			if (conflicts > 0) {
+				results.push({ action: "conflict", path, detail: `${conflicts} conflicting hunk(s)` });
+			} else if (conflicts < 0) {
+				results.push({ action: "conflict", path, detail: "git merge-file failed; distribution version kept" });
+			} else {
+				results.push({ action: "merged", path });
+			}
+		}
+	} finally {
+		rmSync(scratch, { recursive: true, force: true });
+	}
+	return results;
+}
+
 function parseArgs(args) {
-	const options = { check: false, staged: false, risk: false, windowDays: undefined, targetTag: undefined };
+	const options = {
+		check: false,
+		staged: false,
+		risk: false,
+		windowDays: undefined,
+		targetTag: undefined,
+		applyTag: undefined,
+	};
 	for (let i = 0; i < args.length; i += 1) {
 		const arg = args[i];
 		if (arg === "--check" && !options.check) {
@@ -794,11 +877,16 @@ function parseArgs(args) {
 		} else if (arg === "--target" && options.targetTag === undefined && typeof args[i + 1] === "string") {
 			options.targetTag = args[i + 1];
 			i += 1;
+		} else if (arg === "--apply" && options.applyTag === undefined && typeof args[i + 1] === "string") {
+			options.applyTag = args[i + 1];
+			i += 1;
 		} else {
 			return undefined;
 		}
 	}
-	const modes = [options.check, options.risk, options.targetTag !== undefined].filter(Boolean).length;
+	const modes = [options.check, options.risk, options.targetTag !== undefined, options.applyTag !== undefined].filter(
+		Boolean,
+	).length;
 	if (modes > 1 || (options.staged && !options.check) || (options.windowDays !== undefined && !options.risk)) {
 		return undefined;
 	}
@@ -816,9 +904,10 @@ export function runDiffUpstream({
 		writeLine(stderr, usage);
 		return 2;
 	}
-	const { check: isCheck, staged, risk: isRisk, targetTag } = options;
-	if (targetTag !== undefined && (!targetTag.startsWith("v") || !isStableSemver(targetTag.slice(1)))) {
-		writeLine(stderr, "--target requires an exact stable release tag (v<semver>)");
+	const { check: isCheck, staged, risk: isRisk, targetTag, applyTag } = options;
+	const releaseTag = targetTag ?? applyTag;
+	if (releaseTag !== undefined && (!releaseTag.startsWith("v") || !isStableSemver(releaseTag.slice(1)))) {
+		writeLine(stderr, `${targetTag ? "--target" : "--apply"} requires an exact stable release tag (v<semver>)`);
 		return 2;
 	}
 
@@ -847,7 +936,7 @@ export function runDiffUpstream({
 	}
 
 	const upstreamPackage = verifyBaseline(manifest, failures, warnings, tryGit);
-	if (targetTag === undefined) {
+	if (releaseTag === undefined) {
 		verifyUpstreamDependencies(upstreamPackage, manifest, failures, readJson);
 	}
 	if (failures.length > 0) {
@@ -859,25 +948,55 @@ export function runDiffUpstream({
 	// Target mode classifies the upstream release diff against both the ledger
 	// and additions already owned by the clean HEAD tree. It never inspects
 	// staged, unstaged, or untracked worktree state.
-	if (targetTag !== undefined) {
-		const targetCommit = tryGit("rev-parse", "--verify", "--quiet", `refs/tags/${targetTag}^{commit}`);
+	if (releaseTag !== undefined) {
+		const targetCommit = tryGit("rev-parse", "--verify", "--quiet", `refs/tags/${releaseTag}^{commit}`);
 		if (!targetCommit) {
-			failures.push(`target tag ${targetTag} is not available locally; run git fetch upstream --tags`);
+			failures.push(`target tag ${releaseTag} is not available locally; run git fetch upstream --tags`);
 		}
 		const targetTree = targetCommit
 			? tryGit("rev-parse", "--verify", "--quiet", `${targetCommit}:${manifest.sourceSubtree}`)
 			: undefined;
 		if (targetCommit && !targetTree) {
-			failures.push(`target tag ${targetTag} does not contain source subtree ${manifest.sourceSubtree}`);
+			failures.push(`target tag ${releaseTag} does not contain source subtree ${manifest.sourceSubtree}`);
 		}
 		const headTree = tryGit("rev-parse", "--verify", "--quiet", "HEAD^{tree}");
 		if (!headTree) {
 			failures.push("HEAD does not resolve to a tree; commit the distribution before target triage");
 		}
+		if (applyTag !== undefined && tryGit("status", "--porcelain", "--untracked-files=no")) {
+			failures.push("the worktree has uncommitted tracked changes; commit or set them aside before --apply");
+		}
 		if (failures.length > 0) {
 			for (const w of warnings) writeLine(stderr, `warning: ${w}`);
 			printFailures(failures, stderr);
 			return 1;
+		}
+
+		// Apply mode merges the release into the worktree and advances the
+		// baseline, so the ordinary check then measures against the new release.
+		if (applyTag !== undefined) {
+			for (const w of warnings) writeLine(stderr, `warning: ${w}`);
+			const results = applyUpstreamChanges(root, manifest.sourceTree, targetTree, git);
+			const next = { ...manifest, tag: applyTag, commit: targetCommit, sourceTree: targetTree };
+			writeFileSync(
+				join(root, "maintainers", "upstream.json"),
+				`${JSON.stringify(next, null, "	")}
+`,
+			);
+			const counts = {};
+			for (const { action, path, detail } of results) {
+				counts[action] = (counts[action] ?? 0) + 1;
+				writeLine(stdout, `  ${action} ${path}${detail ? ` (${detail})` : ""}`);
+			}
+			const summary = ["merged", "added", "deleted", "skipped", "conflict"]
+				.map((action) => `${counts[action] ?? 0} ${action}`)
+				.join(", ");
+			writeLine(stdout, "");
+			writeLine(
+				stdout,
+				`Applied ${manifest.tag} -> ${applyTag}: ${summary}. maintainers/upstream.json now records ${applyTag}.`,
+			);
+			return counts.conflict ? 1 : 0;
 		}
 
 		const ledgerFailures = [];

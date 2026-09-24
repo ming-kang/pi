@@ -482,6 +482,131 @@ describe("diff-upstream worktree collection and CLI execution", () => {
 	});
 });
 
+describe("diff-upstream --apply", () => {
+	// Replace the upstream subtree with exactly these files and tag it v1.2.4.
+	function tagUpstream(repo, files) {
+		const sourceDir = join(repo.root, "packages", "coding-agent");
+		rmSync(sourceDir, { recursive: true, force: true });
+		const all = {
+			"package.json": `${JSON.stringify({ name: "test-agent", version: "1.2.4", dependencies: runtimeDependencies }, null, 2)}\n`,
+			".gitignore": "maintainers/\nignored.txt\n",
+			...files,
+		};
+		for (const [name, contents] of Object.entries(all)) {
+			if (contents === undefined) continue;
+			mkdirSync(join(sourceDir, name, ".."), { recursive: true });
+			writeFileSync(join(sourceDir, name), contents);
+		}
+		git(repo.root, "add", "-A", "packages");
+		git(repo.root, "commit", "-m", "upstream v1.2.4");
+		git(repo.root, "tag", "v1.2.4");
+	}
+
+	function commitLocal(repo, message) {
+		git(repo.root, "add", "-A", "--", ".", ":!packages");
+		git(repo.root, "commit", "-m", message);
+	}
+
+	const unchanged = { "mod.txt": "mod.txt\n", "drop.txt": "drop.txt\n", "sub/a.txt": "a.txt\n", "sub/b.txt": "b.txt\n" };
+	const read = (repo, path) => readFileSync(join(repo.root, path), "utf8");
+
+	test("merges non-overlapping local and upstream edits and advances the baseline", () => {
+		const repo = createTestRepo();
+		writeFileSync(join(repo.root, "src", "app.ts"), appSource.replace("console.log(0)", "local()"));
+		commitLocal(repo, "local edit");
+		tagUpstream(repo, { ...unchanged, "src/app.ts": appSource.replace("console.log(11)", "upstream()") });
+
+		const result = invoke(repo.root, ["--apply", "v1.2.4"]);
+		expect(result.stderr).toBe("");
+		expect(result.code).toBe(0);
+		const app = read(repo, "src/app.ts");
+		expect(app).toContain("local()");
+		expect(app).toContain("upstream()");
+		expect(result.stdout).toContain("merged src/app.ts");
+		const manifest = readJson(join(repo.root, "maintainers", "upstream.json"));
+		expect(manifest.tag).toBe("v1.2.4");
+		expect(manifest.commit).toBe(git(repo.root, "rev-parse", "v1.2.4^{commit}"));
+		expect(manifest.sourceTree).toBe(git(repo.root, "rev-parse", "v1.2.4:packages/coding-agent"));
+	});
+
+	test("leaves conflict markers and exits nonzero when both sides edit the same lines", () => {
+		const repo = createTestRepo();
+		writeFileSync(join(repo.root, "src", "app.ts"), appSource.replace("console.log(5)", "local()"));
+		commitLocal(repo, "local edit");
+		tagUpstream(repo, { ...unchanged, "src/app.ts": appSource.replace("console.log(5)", "upstream()") });
+
+		const result = invoke(repo.root, ["--apply", "v1.2.4"]);
+		expect(result.code).toBe(1);
+		expect(result.stdout).toContain("conflict src/app.ts");
+		const app = read(repo, "src/app.ts");
+		expect(app).toContain("<<<<<<<");
+		expect(app).toContain("local()");
+		expect(app).toContain("upstream()");
+	});
+
+	test("adds, deletes, and reports paths the distribution dropped or changed", () => {
+		const repo = createTestRepo();
+		rmSync(join(repo.root, "sub", "b.txt"));
+		writeFileSync(join(repo.root, "mod.txt"), "local mod\n");
+		commitLocal(repo, "drop b, edit mod");
+		tagUpstream(repo, {
+			"src/app.ts": appSource,
+			"sub/a.txt": "a.txt\n",
+			"sub/b.txt": "upstream b\n",
+			"new.txt": "new upstream file\n",
+			// drop.txt and mod.txt are deleted upstream
+		});
+
+		const result = invoke(repo.root, ["--apply", "v1.2.4"]);
+		expect(result.code).toBe(1);
+		expect(read(repo, "new.txt")).toBe("new upstream file\n");
+		expect(existsSync(join(repo.root, "drop.txt"))).toBe(false);
+		expect(result.stdout).toContain("added new.txt");
+		expect(result.stdout).toContain("deleted drop.txt");
+		// Locally dropped paths stay dropped; locally changed deletions stay for review.
+		expect(existsSync(join(repo.root, "sub", "b.txt"))).toBe(false);
+		expect(result.stdout).toContain("skipped sub/b.txt");
+		expect(read(repo, "mod.txt")).toBe("local mod\n");
+		expect(result.stdout).toContain("conflict mod.txt");
+	});
+
+	test("merges an upstream addition into a same-named distribution file as a conflict", () => {
+		const repo = createTestRepo();
+		writeFileSync(join(repo.root, "collision.txt"), "local implementation\n");
+		commitLocal(repo, "local addition");
+		tagUpstream(repo, { ...unchanged, "src/app.ts": appSource, "collision.txt": "upstream implementation\n" });
+
+		const result = invoke(repo.root, ["--apply", "v1.2.4"]);
+		expect(result.code).toBe(1);
+		expect(result.stdout).toContain("conflict collision.txt");
+		expect(read(repo, "collision.txt")).toContain("upstream implementation");
+	});
+
+	test("keeps a binary file intact instead of writing text conflict markers into it", () => {
+		const image = (byte) => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, byte, 0, 1]);
+		const repo = createTestRepo();
+		writeFileSync(join(repo.root, "image.png"), image(2));
+		commitLocal(repo, "local image");
+		tagUpstream(repo, { ...unchanged, "src/app.ts": appSource, "image.png": image(3) });
+
+		const result = invoke(repo.root, ["--apply", "v1.2.4"]);
+		expect(result.code).toBe(1);
+		expect(result.stdout).toContain("conflict image.png (binary");
+		expect(readFileSync(join(repo.root, "image.png")).equals(image(2))).toBe(true);
+	});
+
+	test("refuses to run over uncommitted tracked changes", () => {
+		const repo = createTestRepo();
+		tagUpstream(repo, { ...unchanged, "src/app.ts": appSource, "new.txt": "new\n" });
+		writeFileSync(join(repo.root, "mod.txt"), "uncommitted\n");
+
+		const result = invoke(repo.root, ["--apply", "v1.2.4"]);
+		expect(result.code).toBe(1);
+		expect(result.stderr).toContain("uncommitted");
+		expect(existsSync(join(repo.root, "new.txt"))).toBe(false);
+	});
+});
+
 
 describe("diff-upstream concern ledger", () => {
 	test("directory claims cover whole directories and stale claims fail the check", () => {
