@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.87.2] - 2026-09-25
+
 ### Changed
 
 - `/provider` Fetch Models now imports the metadata each catalog entry declares alongside its id and name: context window, output limit, image input, and reasoning support, read from the common field names (`context_window` / `context_length` / `max_model_len`, `max_output_tokens` / `max_tokens`, `input_modalities` or an explicit vision flag, and supported-effort or capability lists). Rows summarize what they declared before import, and the values land in the same editable fields the editor already manages. Only positive integers count, and disagreeing fields resolve to the smallest value so an overstated limit can never overflow a request.
