@@ -28,7 +28,8 @@ export default function fixture(pi: ExtensionAPI): void {
 			toolExecutions++;
 			onUpdate?.({ content: [{ type: "text", text: "Fixture tool is pending…" }], details: {} });
 			await delay(args.ms, undefined, { signal });
-			return { content: [{ type: "text", text: "Fixture tool finished.\nSecond result line.\nThird result line." }], details: {} };
+			// 14 lines exceed the 10-line collapsed preview, so Ctrl+O visibly expands the result.
+			return { content: [{ type: "text", text: Array.from({ length: 14 }, (_, index) => `Fixture result line ${index + 1} of 14.`).join("\n") }], details: {} };
 		},
 	});
 	pi.registerCommand("fixture-status", {

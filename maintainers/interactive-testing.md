@@ -19,7 +19,7 @@ This page was verified on Windows; other platforms use the matching asset from t
 Run from the repository root in PowerShell:
 
 ```powershell
-tui-test run --backend xtermjs --cols 100 --rows 30 --cwd "$PWD" `
+tui-test run --backend xtermjs --cols 100 --rows 40 --cwd "$PWD" `
   --env "PI_CODING_AGENT_DIR=$PWD\.artifacts\tty\agent" --env PI_OFFLINE=1 `
   node scripts/run-source.mjs --no-env --no-session --no-skills --no-prompt-templates `
   --extension test/fixtures/offline-provider.ts --provider offline --model fixture
@@ -62,11 +62,16 @@ tui-test submit "tools slow"
 tui-test expect text "Fixture tool is pending"                        # pending
 tui-test screenshot -o .artifacts/tty/pending.png
 tui-test expect text "Fixture tool is pending" --not --timeout 20000  # settled
-tui-test key press Ctrl+O                                             # expanded or collapsed
 tui-test expect text "Working" --not --timeout 30000                  # run finished
+tui-test submit "tools"
+tui-test expect text "4 earlier lines"                                # collapsed
+tui-test key press Ctrl+O
+tui-test expect text "Fixture result line 1 of 14"                    # expanded
 ```
 
 The answer keeps streaming after the tool settles, and Pi refuses `/reload` until the run finishes, so wait for the `Working` line to disappear first. `/reload` and `/tree` are ordinary commands: `submit "/tree"`, check the screen, then `key press Escape`.
+
+A collapsed tool result shows its last 10 lines. The fixture result has 14 lines so `Ctrl+O` visibly changes the screen: collapsed shows `… (4 earlier lines, ctrl+o to expand)` plus lines 5–14, expanded shows all 14. Use 40 rows so the expanded block fits; at 30 rows it scrolls, and Pi's full redraw clears the terminal scrollback, so `text --full` cannot recover the earlier lines.
 
 ## Limits
 
