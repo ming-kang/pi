@@ -1,6 +1,6 @@
 /** Offline provider for interactive CLI checks; see maintainers/interactive-testing.md. */
 import { setTimeout as delay } from "node:timers/promises";
-import type { AssistantMessage, Context, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Context, SimpleStreamOptions, ToolCall } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@astralyn/pi";
 import { Type } from "typebox";
@@ -9,6 +9,13 @@ function userText(context: Context): string {
 	const message = [...context.messages].reverse().find((entry) => entry.role === "user");
 	if (!message) return "";
 	return typeof message.content === "string" ? message.content : message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+}
+
+/** The tool call a `tools` or `bg` prompt requests; `bg` hands a real Bash command to the background. */
+function requestedToolCall(question: string): Pick<ToolCall, "name" | "arguments"> | undefined {
+	if (question.startsWith("tools")) return { name: "fixture_wait", arguments: { ms: question.includes("slow") ? 15000 : 2000 } };
+	if (question.startsWith("bg")) return { name: "bash", arguments: { command: 'for i in $(seq 45); do echo "Background line $i"; sleep 0.3; done', background: true } };
+	return undefined;
 }
 
 export default function fixture(pi: ExtensionAPI): void {
@@ -46,8 +53,9 @@ export default function fixture(pi: ExtensionAPI): void {
 			void (async () => {
 				try {
 					stream.push({ type: "start", partial: result });
-					if (question.startsWith("tools") && context.messages.at(-1)?.role !== "toolResult") {
-						const call = { type: "toolCall" as const, id: `fixture-${request}`, name: "fixture_wait", arguments: { ms: question.includes("slow") ? 15000 : 2000 } };
+					const tool = context.messages.at(-1)?.role === "toolResult" ? undefined : requestedToolCall(question);
+					if (tool) {
+						const call = { type: "toolCall" as const, id: `fixture-${request}`, ...tool };
 						result.content.push(call);
 						stream.push({ type: "toolcall_start", contentIndex: 0, partial: result });
 						await delay(300, undefined, { signal: options?.signal });
