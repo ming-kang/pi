@@ -11,6 +11,7 @@ These repository-only notes are excluded from npm. Start with [AGENTS.md](../AGE
 | [Dependency maintenance](dependencies.md) | Installation, consistency checks, npm age exceptions, and lockfile acknowledgement. |
 | [Upstream synchronization](upstream.md) | Baseline/ledger use and the complete synchronization workflow. |
 | [Release](release.md) | Distribution versioning, publication, verification, and release tags. |
+| [Interactive testing](interactive-testing.md) | Driving the real interactive CLI with tui-test to verify terminal UI changes. |
 | [Development](../docs/development.md) | Running, building, and testing a checkout. |
 | `syncs/v<version>.md` | Decisions and validation for one adopted release, written during its [synchronization](upstream.md#synchronization-runbook). |
 

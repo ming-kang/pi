@@ -53,7 +53,7 @@ This repo is a standalone distribution of Pi's coding agent, `@astralyn/pi`. [Ma
 - Run focused tests for changed tests or behavior: `npm run test:isolated -- test/<file>.test.ts [-t "<name>"]`. Always run a test you create or modify. Do not run the complete suite unless requested or preparing a release.
 - Tests run offline (`PI_OFFLINE=1`); opt in per test with `allowNetwork()` from `test/test-network-env.ts`. Never use real provider credentials or paid tokens; suite tests use `test/suite/harness.ts` with the faux provider.
 - On native Windows, `npm run test:isolated` runs the complete local suite: it preflights `fd`/`fdfind` and `rg` and isolates home, configuration, cache, and credentials. Treat focused failures as real; Ubuntu CI is authoritative for POSIX-sensitive complete-suite coverage.
-- Verify interactive changes in a real TTY, including their affected pending, settled, collapsed, expanded, `/reload`, and `/tree` states.
+- Verify interactive changes in a real terminal by following [Interactive testing](maintainers/interactive-testing.md): cover the affected pending, settled, collapsed, expanded, `/reload`, and `/tree` states, and view a screenshot when layout or color changes.
 - For entrypoint, dependency-scope, or packaging changes, pack the package and run `npm run verify:package-install -- <tarball>`.
 
 ## Git and commits

@@ -1,4 +1,4 @@
-/** Offline provider for manual verification of the real interactive CLI. */
+/** Offline provider for interactive CLI checks; see maintainers/interactive-testing.md. */
 import { setTimeout as delay } from "node:timers/promises";
 import type { AssistantMessage, Context, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
@@ -30,9 +30,9 @@ export default function fixture(pi: ExtensionAPI): void {
 			ctx.ui.notify(`Fixture: ${requests} requests, ${toolExecutions} tool executions, main idle=${ctx.isIdle()}`);
 		},
 	});
-	pi.registerProvider("btw-tui", {
-		api: "openai-completions", baseUrl: "https://btw.invalid/v1", apiKey: "offline-fixture",
-		models: [{ id: "fixture", name: "BTW terminal fixture", reasoning: true, input: ["text"], contextWindow: 128000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+	pi.registerProvider("offline", {
+		api: "openai-completions", baseUrl: "https://offline.invalid/v1", apiKey: "offline-fixture",
+		models: [{ id: "fixture", name: "Offline fixture", reasoning: true, input: ["text"], contextWindow: 128000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
 		streamSimple: (model, context, options?: SimpleStreamOptions) => {
 			const request = ++requests;
 			const question = userText(context);
