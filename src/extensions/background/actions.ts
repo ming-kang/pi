@@ -23,6 +23,46 @@ function result<T extends BgDetails>(text: string, details: T): AgentToolResult<
 export function describeTaskLine(task: BackgroundTask, now = Date.now()): string {
 	return `${task.id} ${task.kind} ${task.status} (${task.mode}) ${runtimeLabel(task, now)} ${task.title.slice(0, 200)}`;
 }
+
+const UNKNOWN_ID_MESSAGE = "Unknown background task ID";
+const AMBIGUOUS_ID_MESSAGE = "Ambiguous background task ID";
+const LOOKUP_LIST_LIMIT = 10;
+
+/** Task ids a lookup prefix can match: the full id or its kind-stripped suffix. */
+function matchesLookupPrefix(task: BackgroundTask, id: string): boolean {
+	return task.id.startsWith(id) || task.id.slice(task.kind.length + 1).startsWith(id);
+}
+
+/**
+ * Rewrite the service's bare lookup failure into an actionable one: an
+ * unknown id gets the session's current tasks (active first, then recent
+ * finishes) so the next call can use a real id without a separate list call,
+ * and an ambiguous prefix gets exactly the tasks it matched. A missing id
+ * stays an error — it is likely a mistyped id of a task still running.
+ */
+function lookupFailure(background: BackgroundContext, id: string, error: unknown): Error {
+	const message = error instanceof Error ? error.message : String(error);
+	const ambiguous = message.includes(AMBIGUOUS_ID_MESSAGE);
+	if (!ambiguous && !message.includes(UNKNOWN_ID_MESSAGE)) {
+		return error instanceof Error ? error : new Error(message);
+	}
+	if (ambiguous) {
+		const matches = background.list().filter((task) => matchesLookupPrefix(task, id));
+		const lines = matches.map((task) => describeTaskLine(task)).join("\n");
+		return new Error(`Ambiguous background task ID "${id}" matches ${matches.length} tasks:\n${lines}`);
+	}
+	const tasks = background.list();
+	const active = tasks.filter((task) => !isBackgroundTerminal(task.status));
+	const finished = tasks.filter((task) => isBackgroundTerminal(task.status));
+	const shown = [...active, ...finished].slice(0, LOOKUP_LIST_LIMIT);
+	if (shown.length === 0) {
+		return new Error(`No background task "${id}" in this session. No background tasks in this session.`);
+	}
+	const lines = shown.map((task) => describeTaskLine(task)).join("\n");
+	return new Error(
+		`No background task "${id}" in this session. IDs from other sessions are not valid here.\nCurrent tasks:\n${lines}`,
+	);
+}
 /** Reserve space for each independent diagnostic before allowing raw output to fill the budget. */
 function readText(header: string, slice: BackgroundRead): string {
 	const boundedField = (text: string, maxBytes: number) =>
@@ -38,24 +78,29 @@ function readText(header: string, slice: BackgroundRead): string {
 		.join("\n");
 }
 export async function runRead(background: BackgroundContext, input: BgInput): Promise<AgentToolResult<BgReadDetails>> {
-	const mode = input.mode ?? "tail";
-	const slice = await background.read(requireTaskId(input), { mode, bytes: clampReadBytes(input.bytes) });
-	return result(
-		readText(
-			`[${describeTaskLine(slice.task)} · ${slice.totalBytes} bytes${slice.truncated ? " · truncated" : ""}]`,
-			slice,
-		),
-		{
-			action: "read",
-			taskId: slice.task.id,
-			mode,
-			sliceBytes: Buffer.byteLength(slice.text),
-			totalBytes: slice.totalBytes,
-			outputPath: slice.task.outputPath ?? "",
-			kind: slice.task.kind,
-			status: slice.task.status,
-		},
-	);
+	const id = requireTaskId(input);
+	try {
+		const mode = input.mode ?? "tail";
+		const slice = await background.read(id, { mode, bytes: clampReadBytes(input.bytes) });
+		return result(
+			readText(
+				`[${describeTaskLine(slice.task)} · ${slice.totalBytes} bytes${slice.truncated ? " · truncated" : ""}]`,
+				slice,
+			),
+			{
+				action: "read",
+				taskId: slice.task.id,
+				mode,
+				sliceBytes: Buffer.byteLength(slice.text),
+				totalBytes: slice.totalBytes,
+				outputPath: slice.task.outputPath ?? "",
+				kind: slice.task.kind,
+				status: slice.task.status,
+			},
+		);
+	} catch (error) {
+		throw lookupFailure(background, id, error);
+	}
 }
 export async function runWait(
 	background: BackgroundContext,
@@ -63,56 +108,65 @@ export async function runWait(
 	signal?: AbortSignal,
 ): Promise<AgentToolResult<BgWaitDetails>> {
 	const id = requireTaskId(input);
-	const release = background.pin(id);
 	try {
-		const start = Date.now();
-		const task = await background.wait(id, clampWaitMs(input.waitMs), signal);
-		const timedOut = !isBackgroundTerminal(task.status);
-		// A closed host resolves waits early without settling anything; do not claim
-		// the execution merely outlived the wait window.
-		const windowNote = background.closed
-			? " · host closed; execution state unconfirmed"
-			: timedOut
-				? " · wait window expired; execution continues"
-				: "";
-		const slice = await background.read(id, {
-			bytes: BG_WAIT_DELTA_BYTES,
-			sinceBytes: clampSinceBytes(input.sinceBytes),
-		});
-		signal?.throwIfAborted();
-		return result(readText(`[${describeTaskLine(task)}${windowNote}]`, slice), {
-			action: "wait",
-			taskId: task.id,
-			...(!timedOut ? { backgroundTaskId: task.id } : {}),
-			status: task.status,
-			kind: task.kind,
-			timedOut,
-			exitCode: undefined,
-			waitedMs: Date.now() - start,
-			deltaBytes: Buffer.byteLength(slice.text),
-			totalBytes: slice.totalBytes,
-			deltaTruncated: slice.truncated,
-			outputPath: task.outputPath ?? "",
-		});
-	} finally {
-		release();
+		const release = background.pin(id);
+		try {
+			const start = Date.now();
+			const task = await background.wait(id, clampWaitMs(input.waitMs), signal);
+			const timedOut = !isBackgroundTerminal(task.status);
+			// A closed host resolves waits early without settling anything; do not claim
+			// the execution merely outlived the wait window.
+			const windowNote = background.closed
+				? " · host closed; execution state unconfirmed"
+				: timedOut
+					? " · wait window expired; execution continues"
+					: "";
+			const slice = await background.read(id, {
+				bytes: BG_WAIT_DELTA_BYTES,
+				sinceBytes: clampSinceBytes(input.sinceBytes),
+			});
+			signal?.throwIfAborted();
+			return result(readText(`[${describeTaskLine(task)}${windowNote}]`, slice), {
+				action: "wait",
+				taskId: task.id,
+				...(!timedOut ? { backgroundTaskId: task.id } : {}),
+				status: task.status,
+				kind: task.kind,
+				timedOut,
+				exitCode: undefined,
+				waitedMs: Date.now() - start,
+				deltaBytes: Buffer.byteLength(slice.text),
+				totalBytes: slice.totalBytes,
+				deltaTruncated: slice.truncated,
+				outputPath: task.outputPath ?? "",
+			});
+		} finally {
+			release();
+		}
+	} catch (error) {
+		throw lookupFailure(background, id, error);
 	}
 }
 export function runKill(background: BackgroundContext, input: BgInput): AgentToolResult<BgKillDetails> {
-	const task = background.get(requireTaskId(input));
-	const requested = background.kill(task.id);
-	return result(
-		requested
-			? `Cancellation requested for ${task.id}. The task or whole group is stopping; cleanup may still be in progress.`
-			: `No new cancellation requested for ${task.id} (${background.get(task.id).status}).`,
-		{
-			action: "kill",
-			taskId: task.id,
-			command: task.command ?? task.title,
-			requested,
-			status: background.get(task.id).status,
-		},
-	);
+	const id = requireTaskId(input);
+	try {
+		const task = background.get(id);
+		const requested = background.kill(task.id);
+		return result(
+			requested
+				? `Cancellation requested for ${task.id}. The task or whole group is stopping; cleanup may still be in progress.`
+				: `No new cancellation requested for ${task.id} (${background.get(task.id).status}).`,
+			{
+				action: "kill",
+				taskId: task.id,
+				command: task.command ?? task.title,
+				requested,
+				status: background.get(task.id).status,
+			},
+		);
+	} catch (error) {
+		throw lookupFailure(background, id, error);
+	}
 }
 export function runList(background: BackgroundContext): AgentToolResult<BgListDetails> {
 	// Listings cover backgrounded work only; foreground executions deliver

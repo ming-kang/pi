@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-sampling";
 import { getKeybindings, setKeybindings, stripTerminalSequences, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BackgroundService } from "../src/core/background/service.ts";
@@ -86,10 +87,12 @@ describe("public Background management", () => {
 		expect(pi.registerMessageRenderer).toHaveBeenCalledWith("background-task", renderBackgroundNotification);
 		expect(tool?.name).toBe("bg");
 		expect(tool?.renderShell).toBeUndefined();
+		expect(tool?.constrainedSampling).toEqual({ type: "json_schema", strict: "prefer" });
 		expect(JSON.stringify(tool?.parameters)).not.toContain('"create"');
 		expect(JSON.stringify(tool?.parameters)).not.toContain('"command"');
+		expect(() => makeStrictJsonSchema(tool!.parameters)).not.toThrow();
 	});
-	it("points unknown task ids back to the list action", async () => {
+	it("lists the session's current tasks when the id is unknown", async () => {
 		let tool: ToolDefinition<typeof bgSchema, BgDetails, BgRenderState> | undefined;
 		const pi = {
 			on: vi.fn(),
@@ -102,10 +105,13 @@ describe("public Background management", () => {
 		createBackgroundExtension()(pi);
 		const h = running();
 		await h.outcome;
+		const id = h.service.list()[0]!.id;
 		const ctx = { background: h.service } as unknown as ExtensionContext;
-		await expect(
-			tool!.execute("call", { action: "read", taskId: "nope" }, undefined, undefined, ctx),
-		).rejects.toThrow(/Unknown background task ID.*action list/);
+		const failure = tool!.execute("call", { action: "read", taskId: "nope" }, undefined, undefined, ctx);
+		await expect(failure).rejects.toThrow(
+			/No background task "nope" in this session\. IDs from other sessions are not valid here\./,
+		);
+		await expect(failure).rejects.toThrow(new RegExp(`Current tasks:\\n${id} `));
 		h.finish();
 	});
 	it("reads and lists both kinds using the same service", async () => {
@@ -165,6 +171,61 @@ describe("public Background management", () => {
 		expect(textOf(result)).toContain("Cancellation requested");
 		expect(result.details.status).toBe("stopping");
 		expect(h.control.signal.aborted).toBe(true);
+		h.finish();
+	});
+	it("says there are no tasks when an unknown id arrives in an empty session", async () => {
+		const service = new BackgroundService({ enabled: true });
+		services.push(service);
+		await expect(runRead(service, { action: "read", taskId: "nope" })).rejects.toThrow(
+			'No background task "nope" in this session. No background tasks in this session.',
+		);
+		expect(() => runKill(service, { action: "kill", taskId: "nope" })).toThrow(
+			'No background task "nope" in this session. No background tasks in this session.',
+		);
+	});
+	it("enriches unknown ids across read, wait, and kill with the same listing", async () => {
+		const h = running();
+		await h.outcome;
+		const id = h.service.list()[0]!.id;
+		await expect(runRead(h.service, { action: "read", taskId: "nope" })).rejects.toThrow(/Current tasks:/);
+		await expect(runWait(h.service, { action: "wait", taskId: "nope" })).rejects.toThrow(/Current tasks:/);
+		expect(() => runKill(h.service, { action: "kill", taskId: "nope" })).toThrow(
+			new RegExp(`No background task "nope" in this session[\\s\\S]*${id}`),
+		);
+		h.finish();
+	});
+	it("lists exactly the matching tasks for an ambiguous prefix", async () => {
+		const service = new BackgroundService({ enabled: true });
+		services.push(service);
+		const gate = new Promise<void>(() => {});
+		const start = (kind: "bash" | "subagent", title: string) =>
+			service.execute({
+				kind,
+				title,
+				toolCallId: title,
+				background: true,
+				async run(control) {
+					control.accept();
+					await gate;
+					return { result: { content: [{ type: "text", text: "done" }], details: undefined } };
+				},
+			});
+		await Promise.all([start("bash", "first"), start("bash", "second"), start("subagent", "third")]);
+		const ids = service.list().map((task) => task.id);
+		const bashIds = ids.filter((id) => id.startsWith("bash"));
+		expect(bashIds).toHaveLength(2);
+		const failure = runRead(service, { action: "read", taskId: "bash" });
+		await expect(failure).rejects.toThrow('Ambiguous background task ID "bash" matches 2 tasks:');
+		await expect(failure).rejects.toThrow(new RegExp(bashIds[0]!));
+		await expect(failure).rejects.toThrow(new RegExp(bashIds[1]!));
+		await expect(failure).rejects.not.toThrow(new RegExp(ids.find((id) => id.startsWith("subagent"))!));
+	});
+	it("resolves a unique kind-stripped prefix without listing tasks", async () => {
+		const h = running("bash");
+		await h.outcome;
+		const id = h.service.list()[0]!.id;
+		const suffix = id.slice("bash".length + 1);
+		expect(textOf(await runRead(h.service, { action: "read", taskId: suffix }))).toContain("progress");
 		h.finish();
 	});
 	it("keeps missing-log and terminal diagnostics ahead of a long fallback, including waits with no delta", async () => {

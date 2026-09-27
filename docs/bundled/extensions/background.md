@@ -40,7 +40,7 @@ Workers cannot start background work themselves. Their system prompt forbids it 
 | `wait` | `taskId`, optional `waitMs`, `sinceBytes` | Waits within a deadline and returns status plus bounded output/report |
 | `kill` | `taskId` | Requests cancellation of the Bash task or entire Subagent group |
 
-Use the execution ID returned by the native tool or `bg list`. Worker IDs are display identities, not independent management targets.
+Use the execution ID returned by the native tool or `bg list`. Worker IDs are display identities, not independent management targets. An unknown or stale `taskId` fails with the session's current tasks listed inline (active first, then recent finishes), so the next call can use a real ID without a separate list call; an ambiguous prefix lists exactly the tasks it matched.
 
 ```json
 { "action": "read", "taskId": "<execution-id>", "mode": "tail", "bytes": 8192 }
