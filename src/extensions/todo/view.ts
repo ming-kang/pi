@@ -1,5 +1,5 @@
 /**
- * todo/view.ts — v2 presentation: the one-line above-editor widget renderer,
+ * todo/view.ts — v3 presentation: the one-line above-editor widget renderer,
  * tool call/group renderers, the /todos list formatter, and model-facing
  * result text. Wire input (args, details, snapshots) is read defensively and
  * bounded so partial or hostile input cannot grow output without limit.
@@ -170,32 +170,50 @@ function formatTodoList(state: TodoState): string {
 /** /todos command output: full list, subject line plus indented description per task. */
 export const formatCommandList = formatTodoList;
 
-/** Model-facing text for one completed todo call; bounded by list and input limits. */
+// --- Model-facing result text ------------------------------------------------
+
+/** `#1–#3` for a consecutive run, `#1, #2` otherwise. */
+function formatIdRange(ids: number[]): string {
+	const consecutive = ids.length > 1 && ids.every((id, index) => id === ids[0] + index);
+	return consecutive ? `#${ids[0]}–#${ids[ids.length - 1]}` : ids.map((id) => `#${id}`).join(", ");
+}
+
+/**
+ * One-line change summary for a completed call, e.g.
+ * `Created 1 task: #7: Wire parser (in_progress); Updated #1 (pending -> completed): S; demoted #5 to pending; auto-removed completed #1–#3 to stay within 20`.
+ * A call that changed nothing (including `{}`) returns the full list.
+ */
 export function formatTodoContent(change: TodoChange, state: TodoState): string {
-	switch (change.kind) {
-		case "create": {
-			const parts = change.ids.map((id) => {
-				const item = state.items.find((entry) => entry.id === id);
-				return item ? `#${item.id}: ${item.subject}` : `#${id}`;
-			});
-			const noun = change.ids.length === 1 ? "task" : "tasks";
-			return `Created ${change.ids.length} ${noun}${parts.length ? `: ${parts.join("; ")}` : ""}`;
-		}
-		case "update": {
-			const item = state.items.find((entry) => entry.id === change.id);
-			const subject = item ? `: ${item.subject}` : "";
-			const transition = change.from === change.to ? "" : ` (${change.from} -> ${change.to})`;
-			const demoted = change.demotedId !== undefined ? `; demoted #${change.demotedId} to pending` : "";
-			return `Updated #${change.id}${transition}${subject}${demoted}`;
-		}
-		case "list":
-			return formatTodoList(state);
-		case "delete": {
-			const noun = change.removed.length === 1 ? "task" : "tasks";
-			const parts = change.removed.map((entry) => `#${entry.id}: ${entry.subject}`);
-			return `Deleted ${change.removed.length} ${noun}${parts.length ? `: ${parts.join("; ")}` : ""}`;
-		}
+	const parts: string[] = [];
+	if (change.created.length > 0) {
+		const labels = change.created.map((id) => {
+			const item = state.items.find((entry) => entry.id === id);
+			if (!item) return `#${id}`;
+			const suffix = item.status === "pending" ? "" : ` (${item.status})`;
+			return `#${id}: ${item.subject}${suffix}`;
+		});
+		const noun = change.created.length === 1 ? "task" : "tasks";
+		parts.push(`Created ${change.created.length} ${noun}: ${labels.join("; ")}`);
 	}
+	for (const entry of change.updated) {
+		const item = state.items.find((candidate) => candidate.id === entry.id);
+		const subject = item ? `: ${item.subject}` : "";
+		const transition = entry.from === entry.to ? "" : ` (${entry.from} -> ${entry.to})`;
+		parts.push(`Updated #${entry.id}${transition}${subject}`);
+	}
+	if (change.demotedId !== undefined) parts.push(`demoted #${change.demotedId} to pending`);
+	if (change.deleted.length > 0) {
+		const noun = change.deleted.length === 1 ? "task" : "tasks";
+		const labels = change.deleted.map((entry) => `#${entry.id}: ${entry.subject}`);
+		parts.push(`Deleted ${change.deleted.length} ${noun}: ${labels.join("; ")}`);
+	}
+	for (const id of change.absent) parts.push(`#${id} already absent`);
+	if (change.evicted.length > 0) {
+		const ids = change.evicted.map((entry) => entry.id);
+		parts.push(`auto-removed completed ${formatIdRange(ids)} to stay within ${TODO_MAX_ITEMS}`);
+	}
+	if (parts.length === 0) return formatTodoList(state);
+	return parts.join("; ");
 }
 
 // --- Tool calls and collapsed group summaries -------------------------------
@@ -212,7 +230,6 @@ const CALL_SUBJECT_PREVIEW_COUNT = 2;
 const CALL_SUBJECT_PREVIEW_WIDTH = 72;
 const CALL_DESCRIPTION_PREVIEW_LENGTH = 120;
 const GROUP_FAILURE_MAX_LENGTH = 120;
-const TODO_ACTIONS = new Set(["create", "update", "list", "delete"]);
 
 /** Record-like read; proxies that throw on inspection are treated as absent. */
 function safeRecord(value: unknown): Record<string, unknown> | undefined {
@@ -274,33 +291,63 @@ function readArray(value: unknown, limit = CALL_ITEMS_MAX): { values: unknown[];
 	}
 }
 
-/** Id lists: lenient for delete args (invalid entries drop), strict for result changes (any invalid entry rejects). */
-function readIds(value: unknown, strict: boolean): number[] | undefined {
+/** Id lists: invalid entries drop (rendering never rejects the whole call). */
+function readIds(value: unknown): number[] | undefined {
 	const array = readArray(value);
-	if (strict && (!array || array.length === 0 || array.length > CALL_ITEMS_MAX)) return undefined;
-	if (!array) return strict ? undefined : [];
+	if (!array) return undefined;
 	const ids: number[] = [];
 	for (const entry of array.values) {
 		const id = safeId(entry);
-		if (id === undefined) {
-			if (strict) return undefined;
-			continue;
-		}
-		ids.push(id);
+		if (id !== undefined) ids.push(id);
 	}
 	return ids;
 }
 
+interface CreateCallItem {
+	subject: string;
+	description: string;
+	status?: TodoStatus;
+}
+
 /** Create args: sparse or invalid entries drop; the batch caps at the maximum. */
-function batchItems(value: unknown): Array<{ subject: string; description: string }> {
-	const result: Array<{ subject: string; description: string }> = [];
+function batchCreateItems(value: unknown): CreateCallItem[] {
+	const result: CreateCallItem[] = [];
 	for (const raw of readArray(value)?.values ?? []) {
 		const item = safeRecord(raw);
 		if (!item) continue;
-		result.push({
+		const entry: CreateCallItem = {
 			subject: safeSubject(safeValue(item, "subject")),
 			description: safeDescription(safeValue(item, "description")),
-		});
+		};
+		const status = safeStatus(safeValue(item, "status"));
+		if (status) entry.status = status;
+		result.push(entry);
+	}
+	return result;
+}
+
+interface UpdateCallItem {
+	id?: number;
+	subject: string;
+	description: string;
+	status?: TodoStatus;
+}
+
+/** Update args: sparse or invalid entries drop; the batch caps at the maximum. */
+function batchUpdateItems(value: unknown): UpdateCallItem[] {
+	const result: UpdateCallItem[] = [];
+	for (const raw of readArray(value)?.values ?? []) {
+		const item = safeRecord(raw);
+		if (!item) continue;
+		const entry: UpdateCallItem = {
+			subject: safeSubject(safeValue(item, "subject")),
+			description: safeDescription(safeValue(item, "description")),
+		};
+		const id = safeId(safeValue(item, "id"));
+		if (id !== undefined) entry.id = id;
+		const status = safeStatus(safeValue(item, "status"));
+		if (status) entry.status = status;
+		result.push(entry);
 	}
 	return result;
 }
@@ -325,33 +372,36 @@ function formatSubjectPreview(subjects: string[], total: number): string {
 	return `${shown.join(", ")}${hidden ? `, +${hidden} more` : ""}`;
 }
 
-/** v2 details guard shared by the call and group renderers. */
+/** v3 details guard shared by the call and group renderers. */
 function todoDetails(value: unknown): { change: Record<string, unknown>; state: Record<string, unknown> } | undefined {
 	const details = safeRecord(value);
 	if (!details || safeValue(details, "schemaVersion") !== TODO_DETAILS_SCHEMA_VERSION) return undefined;
 	const change = safeRecord(safeValue(details, "change"));
 	const state = safeRecord(safeValue(details, "state"));
 	if (!change || !state) return undefined;
-	const kind = safeString(safeValue(change, "kind"));
-	if (!kind || !TODO_ACTIONS.has(kind)) return undefined;
 	return { change, state };
 }
 
 /** Result ids for an expanded create, only when they match the shown items. */
 function createResultIds(result: AgentToolResult<unknown> | undefined, count: number): number[] | undefined {
 	const details = todoDetails(result?.details);
-	if (!details || safeString(safeValue(details.change, "kind")) !== "create") return undefined;
-	const ids = readIds(safeValue(details.change, "ids"), true);
-	return ids?.length === count ? ids : undefined;
+	if (!details) return undefined;
+	const ids = readIds(safeValue(details.change, "created"));
+	return ids && ids.length === count && count > 0 ? ids : undefined;
 }
 
-/** Removed entries for an expanded delete; absent until a v2 delete result arrives. */
-function deleteResultRemoved(
-	result: AgentToolResult<unknown> | undefined,
-): Array<{ id: number; subject: string }> | undefined {
+/** Removed entries from a settled result, for the expanded delete detail lines. */
+function deleteResultRemoved(result: AgentToolResult<unknown> | undefined): Array<{ id: number; subject: string }> {
 	const details = todoDetails(result?.details);
-	if (!details || safeString(safeValue(details.change, "kind")) !== "delete") return undefined;
-	return removedEntries(safeValue(details.change, "removed"));
+	if (!details) return [];
+	return idSubjectEntries(safeValue(details.change, "deleted"));
+}
+
+/** Absent ids from a settled delete, for the expanded delete detail lines. */
+function deleteResultAbsent(result: AgentToolResult<unknown> | undefined): number[] {
+	const details = todoDetails(result?.details);
+	if (!details) return [];
+	return readIds(safeValue(details.change, "absent")) ?? [];
 }
 
 /** Headline plus the parameters the result never echoes as detail lines. */
@@ -360,47 +410,91 @@ function formatCallParts(
 	theme: Theme,
 	result?: AgentToolResult<unknown>,
 ): { headline: string; details: string[] } {
-	const action = clipText(args?.action, TODO_MAX_SUBJECT_LENGTH);
-	const verb = TODO_ACTIONS.has(action) ? action : undefined;
-	const headline: string[] = [theme.fg("toolTitle", theme.bold(verb ? `todo ${verb}` : "todo"))];
 	const details: string[] = [];
+	const segments: string[] = [];
+	const pushSegment = (verb: string, body: string): void => {
+		const title = segments.length === 0 ? `todo ${verb}` : verb;
+		segments.push(
+			body ? `${theme.fg("toolTitle", theme.bold(title))} ${body}` : theme.fg("toolTitle", theme.bold(title)),
+		);
+	};
 
-	if (verb === "create") {
-		const items = batchItems(args?.items);
-		const rawCount = readArray(args?.items)?.length;
-		if (rawCount !== undefined) {
-			const count = Math.min(rawCount, CALL_ITEMS_MAX);
-			headline.push(theme.fg("dim", `${count} ${count === 1 ? "task" : "tasks"}`));
-			const subjects = items.map((item) => item.subject);
-			const preview = formatSubjectPreview(subjects, count);
-			if (preview) headline.push(theme.fg("dim", "·"), theme.fg("text", preview));
+	const hasCreate = args?.create !== undefined;
+	const hasUpdate = args?.update !== undefined;
+	const hasDelete = args?.delete !== undefined;
+
+	if (hasCreate) {
+		const items = batchCreateItems(args?.create);
+		const rawCount = readArray(args?.create)?.length;
+		// An empty array is strict-mode filler: the call lists the tasks, so the
+		// group earns no segment of its own.
+		if (rawCount !== 0) {
+			const body: string[] = [];
+			if (rawCount !== undefined) {
+				const count = Math.min(rawCount, CALL_ITEMS_MAX);
+				body.push(theme.fg("dim", `${count} ${count === 1 ? "task" : "tasks"}`));
+				const preview = formatSubjectPreview(
+					items.map((item) => item.subject),
+					count,
+				);
+				if (preview) body.push(theme.fg("dim", "·"), theme.fg("text", preview));
+			}
+			pushSegment("create", body.join(" "));
 		}
 		const ids = createResultIds(result, items.length);
 		for (const [index, item] of items.entries()) {
 			const marker = ids ? theme.fg("accent", `#${ids[index]}`) : theme.fg("accent", `${index + 1}.`);
-			details.push(item.subject ? `${marker} ${theme.fg("text", item.subject)}` : marker);
+			const status =
+				item.status && item.status !== "pending"
+					? ` ${theme.fg(STATUS_COLOR[item.status], `(${item.status})`)}`
+					: "";
+			details.push(item.subject ? `${marker} ${theme.fg("text", item.subject)}${status}` : marker);
 			if (item.description) details.push(`    ${theme.fg("dim", descriptionPreview(item.description))}`);
-		}
-	} else if (verb === "update") {
-		const id = safeId(args?.id);
-		if (id !== undefined) headline.push(theme.fg("accent", `#${id}`));
-		const status = safeStatus(args?.status);
-		if (status) headline.push(theme.fg(STATUS_COLOR[status], status));
-		const subject = safeSubject(args?.subject);
-		if (subject) headline.push(theme.fg("text", truncateToWidth(subject, CALL_SUBJECT_PREVIEW_WIDTH, "…")));
-		const description = safeDescription(args?.description);
-		if (description) details.push(`    ${theme.fg("dim", descriptionPreview(description))}`);
-	} else if (verb === "delete") {
-		const ids = readIds(args?.ids, false) ?? [];
-		if (ids.length) headline.push(theme.fg("accent", ids.map((id) => `#${id}`).join(", ")));
-		// The headline already carries the ids, so details only earn their line
-		// once the result names what was actually removed.
-		for (const entry of deleteResultRemoved(result) ?? []) {
-			details.push(`${theme.fg("accent", `#${entry.id}`)} ${theme.fg("text", entry.subject)}`);
 		}
 	}
 
-	return { headline: headline.join(" "), details };
+	if (hasUpdate) {
+		const items = batchUpdateItems(args?.update);
+		const rawCount = readArray(args?.update)?.length;
+		if (rawCount !== 0) {
+			const entries: string[] = [];
+			for (const item of items) {
+				const parts: string[] = [];
+				if (item.id !== undefined) parts.push(theme.fg("accent", `#${item.id}`));
+				if (item.status) parts.push(theme.fg(STATUS_COLOR[item.status], item.status));
+				if (item.subject)
+					parts.push(theme.fg("text", truncateToWidth(item.subject, CALL_SUBJECT_PREVIEW_WIDTH, "…")));
+				if (parts.length > 0) entries.push(parts.join(" "));
+			}
+			pushSegment("update", entries.join(theme.fg("dim", ", ")));
+		}
+		for (const item of items) {
+			if (item.description) details.push(`    ${theme.fg("dim", descriptionPreview(item.description))}`);
+		}
+	}
+
+	if (hasDelete) {
+		const rawCount = readArray(args?.delete)?.length;
+		if (rawCount !== 0) {
+			const ids = readIds(args?.delete) ?? [];
+			pushSegment("delete", ids.length > 0 ? theme.fg("accent", ids.map((id) => `#${id}`).join(", ")) : "");
+		}
+		// The headline already carries the ids, so details only earn their lines
+		// once the result names what was actually removed or already absent.
+		for (const entry of deleteResultRemoved(result)) {
+			details.push(`${theme.fg("accent", `#${entry.id}`)} ${theme.fg("text", entry.subject)}`);
+		}
+		for (const id of deleteResultAbsent(result)) {
+			details.push(theme.fg("dim", `#${id} already absent`));
+		}
+	}
+
+	if (segments.length === 0) {
+		// No group fields at all: the call lists the tasks.
+		segments.push(theme.fg("toolTitle", theme.bold("todo list")));
+	}
+
+	return { headline: segments.join(theme.fg("dim", " ; ")), details };
 }
 
 /** One-line call summary when collapsed; headline plus details when expanded. */
@@ -414,7 +508,7 @@ export function formatTodoCall(
 	return !expanded || details.length === 0 ? headline : [headline, ...details].join("\n");
 }
 
-/** Id -> item index plus status counts over the v2 snapshot (one defensive walk). */
+/** Id -> item index plus status counts over the v3 snapshot (one defensive walk). */
 function stateIndex(state: Record<string, unknown>):
 	| {
 			byId: Map<number, Record<string, unknown>>;
@@ -443,18 +537,34 @@ function stateSubject(map: Map<number, Record<string, unknown>>, id: number): st
 	return item ? safeSubject(safeValue(item, "subject")) : "";
 }
 
-/** Deleted entries: one invalid or empty entry rejects the whole list. */
-function removedEntries(value: unknown): Array<{ id: number; subject: string }> | undefined {
-	const array = readArray(value);
-	if (!array || array.length === 0 || array.length > CALL_ITEMS_MAX) return undefined;
-	const removed: Array<{ id: number; subject: string }> = [];
-	for (const raw of array.values) {
-		const id = safeId(safeValue(safeRecord(raw), "id"));
-		const subject = safeSubject(safeValue(safeRecord(raw), "subject"));
-		if (id === undefined || !subject) return undefined;
-		removed.push({ id, subject });
+/** Id+subject entries (deleted, evicted): invalid entries drop. */
+function idSubjectEntries(value: unknown): Array<{ id: number; subject: string }> {
+	const entries: Array<{ id: number; subject: string }> = [];
+	for (const raw of readArray(value)?.values ?? []) {
+		const item = safeRecord(raw);
+		const id = safeId(safeValue(item, "id"));
+		const subject = safeSubject(safeValue(item, "subject"));
+		if (id === undefined || !subject) continue;
+		entries.push({ id, subject });
 	}
-	return removed;
+	return entries;
+}
+
+/** Updated entries: {id, from, to} records, invalid entries drop. */
+function updatedEntries(value: unknown): Array<{ id: number; from?: TodoStatus; to?: TodoStatus }> {
+	const entries: Array<{ id: number; from?: TodoStatus; to?: TodoStatus }> = [];
+	for (const raw of readArray(value)?.values ?? []) {
+		const item = safeRecord(raw);
+		const id = safeId(safeValue(item, "id"));
+		if (id === undefined) continue;
+		const entry: { id: number; from?: TodoStatus; to?: TodoStatus } = { id };
+		const from = safeStatus(safeValue(item, "from"));
+		if (from) entry.from = from;
+		const to = safeStatus(safeValue(item, "to"));
+		if (to) entry.to = to;
+		entries.push(entry);
+	}
+	return entries;
 }
 
 function formatTodoGroupSuccess(
@@ -465,56 +575,64 @@ function formatTodoGroupSuccess(
 	const parsed = todoDetails(result.details);
 	if (!parsed) return undefined;
 	const { change, state } = parsed;
-	const verb = (word: string) => theme.fg("toolTitle", `todo ${word}`);
-	const withPreview = (word: string, ids: number[], subjects: string[]): string => {
-		const text = formatSubjectPreview(subjects, subjects.length);
-		const consecutive = ids.length > 1 && ids.every((id, index) => id === ids[0] + index);
-		const rendered = consecutive ? `#${ids[0]}–#${ids.at(-1)}` : ids.map((id) => `#${id}`).join(", ");
-		const base = `${verb(word)} ${theme.fg("accent", rendered)}`;
-		return text ? `${base}${theme.fg("dim", " · ")}${theme.fg("text", text)}` : base;
+	const index = stateIndex(state);
+	const segments: string[] = [];
+	const pushVerb = (word: string, body: string): void => {
+		const title = segments.length === 0 ? `todo ${word}` : word;
+		segments.push(body ? `${theme.fg("toolTitle", title)} ${body}` : theme.fg("toolTitle", title));
 	};
-	const kind = safeString(safeValue(change, "kind"));
+	const withPreview = (word: string, ids: number[], subjects: string[]): void => {
+		const text = formatSubjectPreview(subjects, subjects.length);
+		const base = theme.fg("accent", formatIdRange(ids));
+		pushVerb(word, text ? `${base}${theme.fg("dim", " · ")}${theme.fg("text", text)}` : base);
+	};
 
-	if (kind === "create") {
-		const ids = readIds(safeValue(change, "ids"), true);
-		const index = stateIndex(state);
-		if (!ids || !index) return undefined;
-		const subjects = ids.map((id) => stateSubject(index.byId, id));
-		return withPreview("created", ids, subjects);
-	}
-	if (kind === "update") {
-		const id = safeId(safeValue(change, "id"));
-		const index = stateIndex(state);
-		if (id === undefined || !index) return undefined;
-		const to = safeStatus(safeValue(change, "to"));
-		const demotedId = safeId(safeValue(change, "demotedId"));
-		const parts = [verb("updated"), theme.fg("accent", `#${id}`)];
-		if (to) parts.push(theme.fg(STATUS_COLOR[to], to));
-		const subject = stateSubject(index.byId, id) || safeSubject(args?.subject) || "";
-		if (subject) parts.push(theme.fg("text", truncateToWidth(subject, CALL_SUBJECT_PREVIEW_WIDTH, "…")));
-		if (demotedId !== undefined) parts.push(theme.fg("dim", `· demoted #${demotedId}`));
-		return parts.join(" ");
-	}
-	if (kind === "list") {
-		const counts = stateIndex(state)?.counts;
-		if (!counts) return undefined;
-		const parts: string[] = [];
-		if (counts.inProgress > 0) parts.push(`${counts.inProgress} in progress`);
-		if (counts.pending > 0) parts.push(`${counts.pending} pending`);
-		if (counts.completed > 0) parts.push(`${counts.completed} completed`);
-		return `${verb("list")}: ${theme.fg("dim", parts.length ? parts.join(", ") : "no tasks")}`;
-	}
-	if (kind === "delete") {
-		const removed = removedEntries(safeValue(change, "removed"));
-		if (!removed) return undefined;
-		const subjects = removed.map((entry) => entry.subject);
-		return withPreview(
-			"deleted",
-			removed.map((entry) => entry.id),
-			subjects,
+	const created = readIds(safeValue(change, "created")) ?? [];
+	if (created.length > 0 && index) {
+		withPreview(
+			"created",
+			created,
+			created.map((id) => stateSubject(index.byId, id)),
 		);
 	}
-	return undefined;
+	for (const entry of updatedEntries(safeValue(change, "updated"))) {
+		const parts = [theme.fg("accent", `#${entry.id}`)];
+		if (entry.to) parts.push(theme.fg(STATUS_COLOR[entry.to], entry.to));
+		const subject = index ? stateSubject(index.byId, entry.id) : "";
+		if (subject) parts.push(theme.fg("text", truncateToWidth(subject, CALL_SUBJECT_PREVIEW_WIDTH, "…")));
+		pushVerb("updated", parts.join(" "));
+	}
+	const demotedId = safeId(safeValue(change, "demotedId"));
+	if (demotedId !== undefined) segments.push(theme.fg("dim", `demoted #${demotedId}`));
+	const deleted = idSubjectEntries(safeValue(change, "deleted"));
+	if (deleted.length > 0) {
+		withPreview(
+			"deleted",
+			deleted.map((entry) => entry.id),
+			deleted.map((entry) => entry.subject),
+		);
+	}
+	for (const id of readIds(safeValue(change, "absent")) ?? []) {
+		segments.push(theme.fg("dim", `#${id} already absent`));
+	}
+	const evicted = idSubjectEntries(safeValue(change, "evicted"));
+	if (evicted.length > 0) {
+		segments.push(theme.fg("dim", `auto-removed ${evicted.map((entry) => `#${entry.id}`).join(", ")}`));
+	}
+
+	if (segments.length === 0) {
+		// Empty change: the call listed the tasks.
+		if (!index) return undefined;
+		const parts: string[] = [];
+		if (index.counts.inProgress > 0) parts.push(`${index.counts.inProgress} in progress`);
+		if (index.counts.pending > 0) parts.push(`${index.counts.pending} pending`);
+		if (index.counts.completed > 0) parts.push(`${index.counts.completed} completed`);
+		return `${theme.fg("toolTitle", "todo list")}: ${theme.fg("dim", parts.length ? parts.join(", ") : "no tasks")}`;
+	}
+	// The update segment can still pick up the requested subject when the state
+	// no longer holds it (e.g. the task was deleted by a hostile snapshot).
+	void args;
+	return segments.join(theme.fg("dim", " ; "));
 }
 
 export interface TodoGroupRenderContext {

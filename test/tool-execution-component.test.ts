@@ -1029,8 +1029,7 @@ describe("ToolExecutionComponent parity", () => {
 			"todo",
 			"todo-group-created",
 			{
-				action: "create",
-				items: [
+				create: [
 					{ subject: "Wire parser", description: "Parser handles config" },
 					{ subject: "Test parser", description: "Parser tests pass" },
 				],
@@ -1044,8 +1043,8 @@ describe("ToolExecutionComponent parity", () => {
 			{
 				content: [{ type: "text", text: "Created 2 tasks" }],
 				details: {
-					schemaVersion: 2,
-					change: { kind: "create", ids: [4, 5] },
+					schemaVersion: 3,
+					change: { created: [4, 5], updated: [], deleted: [], absent: [], evicted: [] },
 					state: {
 						items: [
 							{ id: 4, subject: "Wire parser", description: "Parser handles config", status: "pending" },
@@ -1062,7 +1061,7 @@ describe("ToolExecutionComponent parity", () => {
 		const failed = new ToolExecutionComponent(
 			"todo",
 			"todo-group-failed",
-			{ action: "update", id: 7 },
+			{ update: [{ id: 7 }] },
 			{},
 			todoDefinition,
 			createFakeTui(),

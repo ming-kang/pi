@@ -53,6 +53,7 @@ export default function todo(pi: ExtensionAPI): void {
 		promptSnippet: TODO_PROMPT_SNIPPET,
 		promptGuidelines: TODO_PROMPT_GUIDELINES,
 		parameters: TodoParamsSchema,
+		constrainedSampling: { type: "json_schema", strict: "prefer" },
 		executionMode: "sequential" as ToolExecutionMode,
 		// Consecutive todo calls collapse into one run like read/find's `explore`
 		// group; the widget already carries the live list, so the transcript only

@@ -159,31 +159,32 @@ describe("formatTodoContent", () => {
 		item(2, "Beta", "in_progress"),
 		item(3, "Gamma", "pending"),
 	]);
+	const noChange = { created: [], updated: [], deleted: [], absent: [], evicted: [] };
 
-	test("summarizes create, update, demotion, list, and delete", () => {
-		expect(formatTodoContent({ kind: "create", ids: [1, 3] }, contentState)).toBe(
+	test("summarizes creates, updates, demotion, deletes, absences, and evictions", () => {
+		expect(formatTodoContent({ ...noChange, created: [1, 3] }, contentState)).toBe(
 			"Created 2 tasks: #1: Alpha; #3: Gamma",
 		);
-		expect(formatTodoContent({ kind: "update", id: 2, from: "pending", to: "in_progress" }, contentState)).toBe(
-			"Updated #2 (pending -> in_progress): Beta",
+		expect(formatTodoContent({ ...noChange, created: [2] }, contentState)).toBe(
+			"Created 1 task: #2: Beta (in_progress)",
 		);
 		expect(
-			formatTodoContent({ kind: "update", id: 2, from: "pending", to: "in_progress", demotedId: 1 }, contentState),
+			formatTodoContent({ ...noChange, updated: [{ id: 2, from: "pending", to: "in_progress" }] }, contentState),
+		).toBe("Updated #2 (pending -> in_progress): Beta");
+		expect(
+			formatTodoContent(
+				{ ...noChange, updated: [{ id: 2, from: "pending", to: "in_progress" }], demotedId: 1 },
+				contentState,
+			),
 		).toBe("Updated #2 (pending -> in_progress): Beta; demoted #1 to pending");
-		expect(formatTodoContent({ kind: "update", id: 1, from: "pending", to: "pending" }, contentState)).toBe(
-			"Updated #1: Alpha",
-		);
-		expect(formatTodoContent({ kind: "list" }, contentState)).toBe(
-			"Todos: 1 in progress, 2 pending, 0 completed\n" +
-				"[>] #2 Beta\n    Do it\n" +
-				"[ ] #1 Alpha\n    Do it\n" +
-				"[ ] #3 Gamma\n    Do it",
-		);
+		expect(
+			formatTodoContent({ ...noChange, updated: [{ id: 1, from: "pending", to: "pending" }] }, contentState),
+		).toBe("Updated #1: Alpha");
 		expect(
 			formatTodoContent(
 				{
-					kind: "delete",
-					removed: [
+					...noChange,
+					deleted: [
 						{ id: 1, subject: "Alpha" },
 						{ id: 3, subject: "Gamma" },
 					],
@@ -191,7 +192,51 @@ describe("formatTodoContent", () => {
 				contentState,
 			),
 		).toBe("Deleted 2 tasks: #1: Alpha; #3: Gamma");
-		expect(formatTodoContent({ kind: "list" }, EMPTY_TODO_STATE)).toBe("No todos.");
+		expect(formatTodoContent({ ...noChange, absent: [9] }, contentState)).toBe("#9 already absent");
+		expect(
+			formatTodoContent(
+				{
+					...noChange,
+					evicted: [
+						{ id: 1, subject: "Alpha" },
+						{ id: 2, subject: "Beta" },
+						{ id: 3, subject: "Gamma" },
+					],
+				},
+				contentState,
+			),
+		).toBe("auto-removed completed #1–#3 to stay within 20");
+	});
+
+	test("joins a combined patch into one summary line", () => {
+		const after = state([item(1, "Alpha", "completed"), item(2, "Beta", "in_progress"), item(4, "Fresh", "pending")]);
+		expect(
+			formatTodoContent(
+				{
+					created: [4],
+					updated: [
+						{ id: 1, from: "in_progress", to: "completed" },
+						{ id: 2, from: "pending", to: "in_progress" },
+					],
+					deleted: [{ id: 3, subject: "Gamma" }],
+					absent: [9],
+					evicted: [],
+				},
+				after,
+			),
+		).toBe(
+			"Created 1 task: #4: Fresh; Updated #1 (in_progress -> completed): Alpha; Updated #2 (pending -> in_progress): Beta; Deleted 1 task: #3: Gamma; #9 already absent",
+		);
+	});
+
+	test("a change-free call returns the full list", () => {
+		expect(formatTodoContent(noChange, contentState)).toBe(
+			"Todos: 1 in progress, 2 pending, 0 completed\n" +
+				"[>] #2 Beta\n    Do it\n" +
+				"[ ] #1 Alpha\n    Do it\n" +
+				"[ ] #3 Gamma\n    Do it",
+		);
+		expect(formatTodoContent(noChange, EMPTY_TODO_STATE)).toBe("No todos.");
 	});
 });
 
@@ -200,8 +245,7 @@ describe("formatTodoCall", () => {
 		expect(
 			formatTodoCall(
 				{
-					action: "create",
-					items: [
+					create: [
 						{ subject: "Fix login redirect", description: "Auth tests pass" },
 						{ subject: "Test parser", description: "Parser tests pass" },
 					],
@@ -210,22 +254,38 @@ describe("formatTodoCall", () => {
 				false,
 			),
 		).toBe("todo create 2 tasks · Fix login redirect, Test parser");
-		expect(formatTodoCall({ action: "update", id: 2, status: "in_progress" }, theme, false)).toBe(
+		expect(formatTodoCall({ update: [{ id: 2, status: "in_progress" }] }, theme, false)).toBe(
 			"todo update #2 in_progress",
 		);
-		expect(formatTodoCall({ action: "delete", ids: [3, 7] }, theme, false)).toBe("todo delete #3, #7");
-		expect(formatTodoCall({ action: "list" }, theme, false)).toBe("todo list");
+		expect(formatTodoCall({ delete: [3, 7] }, theme, false)).toBe("todo delete #3, #7");
+		expect(formatTodoCall({}, theme, false)).toBe("todo list");
+		expect(formatTodoCall({ create: [], update: [], delete: [] }, theme, false)).toBe("todo list");
+	});
+
+	test("renders a combined patch as verb segments", () => {
+		expect(
+			formatTodoCall(
+				{
+					create: [{ subject: "Fresh task", description: "Do it" }],
+					update: [
+						{ id: 1, status: "completed" },
+						{ id: 2, status: "in_progress" },
+					],
+					delete: [9],
+				},
+				theme,
+				false,
+			),
+		).toBe("todo create 1 task · Fresh task ; update #1 completed, #2 in_progress ; delete #9");
 	});
 
 	test("previews at most two subjects and caps create batches at the maximum", () => {
 		const five = {
-			action: "create",
-			items: Array.from({ length: 5 }, (_, index) => ({ subject: `Task ${index + 1}`, description: "Do it" })),
+			create: Array.from({ length: 5 }, (_, index) => ({ subject: `Task ${index + 1}`, description: "Do it" })),
 		};
 		expect(formatTodoCall(five, theme, false)).toBe("todo create 5 tasks · Task 1, Task 2, +3 more");
 		const oversized = {
-			action: "create",
-			items: Array.from({ length: 25 }, (_, index) => ({ subject: `Task ${index + 1}`, description: "Do it" })),
+			create: Array.from({ length: 25 }, (_, index) => ({ subject: `Task ${index + 1}`, description: "Do it" })),
 		};
 		expect(formatTodoCall(oversized, theme, false)).toBe("todo create 20 tasks · Task 1, Task 2, +18 more");
 		const expanded = formatTodoCall(oversized, theme, true);
@@ -241,15 +301,12 @@ describe("formatTodoCall", () => {
 			{ subject: "Beta", description: "" },
 			{ subject: "Gamma", description: "" },
 		];
-		expect(formatTodoCall({ action: "create", items }, theme, false)).toBe(
-			"todo create 3 tasks · Beta, Gamma, +1 more",
-		);
+		expect(formatTodoCall({ create: items }, theme, false)).toBe("todo create 3 tasks · Beta, Gamma, +1 more");
 	});
 
 	test("expanded create shows per-item subjects, indented descriptions, and result ids", () => {
 		const args = {
-			action: "create",
-			items: [
+			create: [
 				{ subject: "Wire parser", description: "Parser handles config" },
 				{ subject: "Test parser", description: "Parser tests pass" },
 			],
@@ -257,8 +314,8 @@ describe("formatTodoCall", () => {
 		const result = {
 			content: [],
 			details: {
-				schemaVersion: 2,
-				change: { kind: "create", ids: [4, 5] },
+				schemaVersion: 3,
+				change: { created: [4, 5], updated: [], deleted: [], absent: [], evicted: [] },
 				state: { items: [item(4, "Wire parser"), item(5, "Test parser")], nextId: 6 },
 			},
 		};
@@ -267,9 +324,26 @@ describe("formatTodoCall", () => {
 		);
 	});
 
+	test("expanded create marks a non-pending status on the item line", () => {
+		const args = {
+			create: [{ subject: "Wire parser", description: "Parser handles config", status: "in_progress" }],
+		};
+		const result = {
+			content: [],
+			details: {
+				schemaVersion: 3,
+				change: { created: [4], updated: [], deleted: [], absent: [], evicted: [] },
+				state: { items: [item(4, "Wire parser", "in_progress")], nextId: 5 },
+			},
+		};
+		expect(formatTodoCall(args, theme, true, result)).toBe(
+			"todo create 1 task · Wire parser\n#4 Wire parser (in_progress)\n    Parser handles config",
+		);
+	});
+
 	test("expanded update shows the replacement description bounded to 120 characters", () => {
 		const lines = formatTodoCall(
-			{ action: "update", id: 2, status: "in_progress", description: "x".repeat(140) },
+			{ update: [{ id: 2, status: "in_progress", description: "x".repeat(140) }] },
 			theme,
 			true,
 		).split("\n");
@@ -277,63 +351,51 @@ describe("formatTodoCall", () => {
 		expect(lines[1]).toBe(`    ${"x".repeat(119)}…`);
 	});
 
-	test("expanded delete names removed tasks instead of repeating the headline ids", () => {
-		const args = { action: "delete", ids: [3, 7] };
+	test("expanded delete names removed tasks and absent ids instead of repeating the headline", () => {
+		const args = { delete: [3, 7] };
 		// The headline already carries the ids, so an unsettled call adds no detail line.
 		expect(formatTodoCall(args, theme, true)).toBe("todo delete #3, #7");
 
 		const result = {
 			content: [],
 			details: {
-				schemaVersion: 2,
+				schemaVersion: 3,
 				change: {
-					kind: "delete",
-					removed: [
-						{ id: 3, subject: "Remove legacy task" },
-						{ id: 7, subject: "Drop unused flag" },
-					],
+					created: [],
+					updated: [],
+					deleted: [{ id: 3, subject: "Remove legacy task" }],
+					absent: [7],
+					evicted: [],
 				},
 				state: { items: [], nextId: 8 },
 			},
 		};
 		expect(formatTodoCall(args, theme, true, result)).toBe(
-			"todo delete #3, #7\n#3 Remove legacy task\n#7 Drop unused flag",
+			"todo delete #3, #7\n#3 Remove legacy task\n#7 already absent",
 		);
-
-		// A create result never feeds the delete detail lines.
-		expect(
-			formatTodoCall(args, theme, true, {
-				content: [],
-				details: { schemaVersion: 2, change: { kind: "create", ids: [3] }, state: { items: [], nextId: 4 } },
-			}),
-		).toBe("todo delete #3, #7");
 	});
 
 	test("tolerates partial, sparse, and hostile args and details", () => {
-		expect(formatTodoCall(undefined, theme, false)).toBe("todo");
-		expect(formatTodoCall({}, theme, false)).toBe("todo");
-		expect(formatTodoCall({ action: "create" }, theme, false)).toBe("todo create");
-		expect(formatTodoCall({ action: "create", items: "nope" }, theme, true)).toBe("todo create");
-		expect(formatTodoCall({ action: "update", id: -1, status: "bogus", subject: 42 }, theme, false)).toBe(
-			"todo update",
-		);
-		expect(formatTodoCall({ action: "delete", ids: [1.5, -2, "x"] }, theme, false)).toBe("todo delete");
+		expect(formatTodoCall(undefined, theme, false)).toBe("todo list");
+		expect(formatTodoCall({ create: "nope" }, theme, true)).toBe("todo create");
+		expect(formatTodoCall({ update: [{ id: -1, status: "bogus", subject: 42 }] }, theme, false)).toBe("todo update");
+		expect(formatTodoCall({ delete: [1.5, -2, "x"] }, theme, false)).toBe("todo delete");
 
 		const sparseItems: unknown[] = new Array(2);
 		sparseItems[1] = { subject: "Valid item", description: "Still renders" };
-		const sparse = formatTodoCall({ action: "create", items: sparseItems }, theme, true);
+		const sparse = formatTodoCall({ create: sparseItems }, theme, true);
 		expect(sparse).toContain("2 tasks");
 		expect(sparse).toContain("1. Valid item");
 
 		expect(
-			formatTodoCall({ action: "create", items: [{ subject: "A", description: "d" }] }, theme, true, {
+			formatTodoCall({ create: [{ subject: "A", description: "d" }] }, theme, true, {
 				content: [],
 				details: "garbage",
 			}),
 		).toBe("todo create 1 task · A\n1. A\n    d");
 
 		const hostileText = formatTodoCall(
-			{ action: "create", items: [{ subject: "x".repeat(10_000), description: "y".repeat(10_000) }] },
+			{ create: [{ subject: "x".repeat(10_000), description: "y".repeat(10_000) }] },
 			theme,
 			true,
 		);
@@ -347,8 +409,9 @@ describe("formatTodoGroupCall", () => {
 	function completed(details: unknown): TodoGroupRenderContext {
 		return { isError: false, isPartial: false, result: { content: [], details } };
 	}
+	const noChange = { created: [], updated: [], deleted: [], absent: [], evicted: [] };
 
-	test("summarizes every v2 action from result details", () => {
+	test("summarizes every v3 change part from result details", () => {
 		const groupState = state([
 			item(1, "One", "in_progress"),
 			item(2, "Two", "pending"),
@@ -357,64 +420,90 @@ describe("formatTodoGroupCall", () => {
 		expect(
 			formatTodoGroupCall(
 				{
-					action: "create",
-					items: [
+					create: [
 						{ subject: "Wire parser", description: "d" },
 						{ subject: "Test parser", description: "d" },
 					],
 				},
 				theme,
 				completed({
-					schemaVersion: 2,
-					change: { kind: "create", ids: [4, 5] },
+					schemaVersion: 3,
+					change: { ...noChange, created: [4, 5] },
 					state: { items: [item(4, "Wire parser"), item(5, "Test parser")], nextId: 6 },
 				}),
 			),
 		).toBe("todo created #4–#5 · Wire parser, Test parser");
 		expect(
 			formatTodoGroupCall(
-				{ action: "create", items: [] },
+				{ create: [] },
 				theme,
 				completed({
-					schemaVersion: 2,
-					change: { kind: "create", ids: [2, 5] },
+					schemaVersion: 3,
+					change: { ...noChange, created: [2, 5] },
 					state: { items: [item(2, "Alpha"), item(5, "Beta")], nextId: 6 },
 				}),
 			),
 		).toBe("todo created #2, #5 · Alpha, Beta");
 		expect(
 			formatTodoGroupCall(
-				{ action: "update", id: 4 },
+				{ update: [{ id: 4, status: "in_progress" }] },
 				theme,
 				completed({
-					schemaVersion: 2,
-					change: { kind: "update", id: 4, from: "pending", to: "in_progress", demotedId: 2 },
+					schemaVersion: 3,
+					change: { ...noChange, updated: [{ id: 4, from: "pending", to: "in_progress" }], demotedId: 2 },
 					state: { items: [item(2, "Second", "pending"), item(4, "Fourth", "in_progress")], nextId: 5 },
 				}),
 			),
-		).toBe("todo updated #4 in_progress Fourth · demoted #2");
+		).toBe("todo updated #4 in_progress Fourth ; demoted #2");
+		expect(formatTodoGroupCall({}, theme, completed({ schemaVersion: 3, change: noChange, state: groupState }))).toBe(
+			"todo list: 1 in progress, 1 pending, 1 completed",
+		);
 		expect(
 			formatTodoGroupCall(
-				{ action: "list" },
-				theme,
-				completed({ schemaVersion: 2, change: { kind: "list" }, state: groupState }),
-			),
-		).toBe("todo list: 1 in progress, 1 pending, 1 completed");
-		expect(
-			formatTodoGroupCall(
-				{ action: "delete", ids: [3] },
+				{ delete: [3] },
 				theme,
 				completed({
-					schemaVersion: 2,
-					change: { kind: "delete", removed: [{ id: 3, subject: "Remove legacy task" }] },
+					schemaVersion: 3,
+					change: { ...noChange, deleted: [{ id: 3, subject: "Remove legacy task" }] },
 					state: groupState,
 				}),
 			),
 		).toBe("todo deleted #3 · Remove legacy task");
+		expect(
+			formatTodoGroupCall(
+				{ delete: [3, 9] },
+				theme,
+				completed({
+					schemaVersion: 3,
+					change: { ...noChange, deleted: [{ id: 3, subject: "Remove legacy task" }], absent: [9] },
+					state: groupState,
+				}),
+			),
+		).toBe("todo deleted #3 · Remove legacy task ; #9 already absent");
+		expect(
+			formatTodoGroupCall(
+				{ create: [{ subject: "Fresh", description: "d" }] },
+				theme,
+				completed({
+					schemaVersion: 3,
+					change: {
+						created: [21],
+						updated: [],
+						deleted: [],
+						absent: [],
+						evicted: [
+							{ id: 1, subject: "Done 1" },
+							{ id: 2, subject: "Done 2" },
+						],
+					},
+					state: { items: [item(21, "Fresh")], nextId: 22 },
+				}),
+			),
+		).toBe("todo created #21 · Fresh ; auto-removed #1, #2");
 	});
 
 	test("bounds group errors to one line of at most 120 characters", () => {
-		const failure = formatTodoGroupCall({ action: "update", id: 7 }, theme, {
+		const failure = formatTodoGroupCall({ update: [{ id: 7 }] }, theme, {
 			isError: true,
 			isPartial: false,
 			result: { content: [{ type: "text", text: `bad request\n${"x".repeat(500)}` }], details: undefined },
@@ -425,47 +514,41 @@ describe("formatTodoGroupCall", () => {
 		expect(failure.length).toBeLessThanOrEqual("todo update #7 failed: ".length + 120);
 	});
 
-	test("falls back for partial, v1, and hostile details without throwing", () => {
-		const v2Create = {
-			schemaVersion: 2,
-			change: { kind: "create", ids: [1] },
+	test("falls back for partial, v2, and hostile details without throwing", () => {
+		const v3Create = {
+			schemaVersion: 3,
+			change: { created: [1], updated: [], deleted: [], absent: [], evicted: [] },
 			state: { items: [item(1, "A")], nextId: 2 },
 		};
 		expect(
-			formatTodoGroupCall({ action: "list" }, theme, {
+			formatTodoGroupCall({}, theme, {
 				isError: false,
 				isPartial: true,
-				result: { content: [], details: v2Create },
+				result: { content: [], details: v3Create },
 			}),
 		).toBe("todo list");
 
-		const v1 = { schemaVersion: 1, action: "create", operation: { kind: "create", ids: [1] }, items: [], nextId: 2 };
-		expect(
-			formatTodoGroupCall({ action: "create", items: [{ subject: "A", description: "d" }] }, theme, completed(v1)),
-		).toBe("todo create 1 task · A");
+		const v2 = { schemaVersion: 2, change: { kind: "create", ids: [1] }, state: { items: [], nextId: 2 } };
+		expect(formatTodoGroupCall({ create: [{ subject: "A", description: "d" }] }, theme, completed(v2))).toBe(
+			"todo create 1 task · A",
+		);
 
 		expect(
-			formatTodoGroupCall(
-				{ action: "list" },
-				theme,
-				completed({ schemaVersion: 2, change: { kind: "list" }, state: { items: "nope" } }),
-			),
+			formatTodoGroupCall({}, theme, completed({ schemaVersion: 3, change: noChange, state: { items: "nope" } })),
 		).toBe("todo list");
 
 		const hostile: unknown[] = [
 			undefined,
 			"garbage",
-			{ schemaVersion: 2 },
-			{ schemaVersion: 2, change: null, state: { items: [] } },
-			{ schemaVersion: 2, change: { kind: "create" }, state: { items: [] } },
-			{ schemaVersion: 2, change: { kind: "create", ids: [0] }, state: { items: [] } },
-			{ schemaVersion: 2, change: { kind: "create", ids: [1] }, state: { items: "nope" } },
-			{ schemaVersion: 2, change: { kind: "update", id: 1.5 }, state: { items: [] } },
-			{ schemaVersion: 2, change: { kind: "list" }, state: { items: Array.from({ length: 10_001 }, () => ({})) } },
-			{ schemaVersion: 2, change: { kind: "weird" }, state: { items: [] } },
+			{ schemaVersion: 3 },
+			{ schemaVersion: 3, change: null, state: { items: [] } },
+			{ schemaVersion: 3, change: { created: "nope" }, state: { items: [] } },
+			{ schemaVersion: 3, change: { created: [1] }, state: { items: "nope" } },
+			{ schemaVersion: 3, change: { updated: [{ id: 1.5 }] }, state: { items: [] } },
+			{ schemaVersion: 3, change: noChange, state: { items: Array.from({ length: 10_001 }, () => ({})) } },
 		];
 		for (const details of hostile) {
-			expect(() => formatTodoGroupCall({ action: "list" }, theme, completed(details))).not.toThrow();
+			expect(() => formatTodoGroupCall({}, theme, completed(details))).not.toThrow();
 		}
 	});
 });
