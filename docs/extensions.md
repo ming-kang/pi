@@ -2299,6 +2299,8 @@ async execute(toolCallId, params) {
 
 **Argument preparation:** `prepareArguments(args)` is optional. If defined, it runs before schema validation and before `execute()`. Use it to mimic an older accepted input shape when pi resumes an older session whose stored tool call arguments no longer match the current schema. Return the object you want validated against `parameters`. Keep the public schema strict. Do not add deprecated compatibility fields to `parameters` just to keep old resumed sessions working.
 
+**Validation feedback:** after `prepareArguments` runs, pi pre-validates the prepared arguments. When validation fails, the error the model sees names the legal fields next to each offending one (`tasks[0].prompt_extra is not a field; fields at tasks[0]: agent, prompt, description, cwd`) and bounds the echoed arguments to about 2KB, so large prompts are not reflected whole into the context.
+
 Example: an older session may contain an `edit` tool call with top-level `oldText` and `newText`, while the current schema only accepts `edits: [{ oldText, newText }]`.
 
 ```typescript
