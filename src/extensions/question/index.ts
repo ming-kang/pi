@@ -15,7 +15,7 @@ import {
 import { createQuestionDialog } from "./dialog.ts";
 import { renderQuestionCall, renderQuestionResult } from "./render.ts";
 import { cancelResult, clarificationResult, errorResult, successResult } from "./results.ts";
-import { QuestionParams, validateQuestions } from "./schema.ts";
+import { normalizeQuestionArguments, QuestionParams, validateQuestions } from "./schema.ts";
 import type { DialogResult, Question, QuestionToolDetails } from "./types.ts";
 
 export default function question(pi: ExtensionAPI): void {
@@ -26,6 +26,8 @@ export default function question(pi: ExtensionAPI): void {
 		promptSnippet: QUESTION_PROMPT_SNIPPET,
 		promptGuidelines: QUESTION_PROMPT_GUIDELINES,
 		parameters: QuestionParams,
+		constrainedSampling: { type: "json_schema", strict: "prefer" },
+		prepareArguments: normalizeQuestionArguments,
 		executionMode: "sequential",
 		renderCall(args, theme, context) {
 			return renderQuestionCall(args, theme, context.expanded);

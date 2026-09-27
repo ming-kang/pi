@@ -2,6 +2,8 @@ import { Type } from "typebox";
 import { QUESTION_LIMITS } from "./limits.ts";
 import type { Question, QuestionOption, QuestionToolError } from "./types.ts";
 
+type QuestionArgs = { questions: Question[] };
+
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 4;
 const MAX_QUESTIONS = 4;
@@ -64,6 +66,60 @@ export const QuestionParams = Type.Object({
 		description: "Related decisions to ask now (1-4); ask only what is needed to unblock progress.",
 	}),
 });
+
+/**
+ * Unambiguous argument normalizations applied before schema validation; the
+ * schema itself stays a single object shape because strict constrained
+ * sampling does not support object unions. Everything else is left for
+ * validation to report.
+ *
+ * - a lone question written flat at the root ({question, header?, options,
+ *   multiSelect?} with no questions) wraps into questions[0];
+ * - a root-level question string fills a questions[0] object that lost its
+ *   own question field to the root;
+ * - a stringified questions array parses back into an array (a parse failure
+ *   stays for validation to reject).
+ */
+export function normalizeQuestionArguments(raw: unknown): QuestionArgs {
+	if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return raw as QuestionArgs;
+	const args: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
+
+	if (typeof args.questions === "string") {
+		try {
+			const parsed: unknown = JSON.parse(args.questions);
+			if (Array.isArray(parsed)) args.questions = parsed;
+		} catch {
+			// Leave the string for schema validation to reject.
+		}
+	}
+
+	const rootQuestion = typeof args.question === "string" ? args.question : undefined;
+	const onlyQuestion =
+		Array.isArray(args.questions) && args.questions.length === 1 ? (args.questions[0] as unknown) : undefined;
+	if (
+		rootQuestion !== undefined &&
+		onlyQuestion !== null &&
+		typeof onlyQuestion === "object" &&
+		!Array.isArray(onlyQuestion) &&
+		(onlyQuestion as Record<string, unknown>).question === undefined
+	) {
+		args.questions = [{ ...(onlyQuestion as Record<string, unknown>), question: rootQuestion }];
+		delete args.question;
+		return args as QuestionArgs;
+	}
+
+	if (args.questions === undefined && rootQuestion !== undefined && args.options !== undefined) {
+		const question: Record<string, unknown> = { question: rootQuestion, options: args.options };
+		if (args.header !== undefined) question.header = args.header;
+		if (args.multiSelect !== undefined) question.multiSelect = args.multiSelect;
+		delete args.question;
+		delete args.options;
+		delete args.header;
+		delete args.multiSelect;
+		args.questions = [question];
+	}
+	return args as QuestionArgs;
+}
 
 /**
  * Checks visible non-whitespace text and cross-field rules the schema cannot

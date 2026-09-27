@@ -1,6 +1,7 @@
+import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-sampling";
 import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
-import { QuestionParams, validateQuestions } from "../src/extensions/question/schema.ts";
+import { normalizeQuestionArguments, QuestionParams, validateQuestions } from "../src/extensions/question/schema.ts";
 import type { Question, QuestionOption } from "../src/extensions/question/types.ts";
 
 function option(label: string, extra?: Partial<QuestionOption>): QuestionOption {
@@ -103,5 +104,72 @@ describe("validateQuestions", () => {
 			question({ options: [option("Alpha", { preview: "```ts\nconst a = 1\n```" }), option("Beta")] }),
 		]);
 		expect(result).toEqual({ ok: true });
+	});
+});
+
+describe("normalizeQuestionArguments", () => {
+	it("wraps a lone question written flat at the root", () => {
+		expect(
+			normalizeQuestionArguments({
+				question: "Which approach?",
+				header: "Approach",
+				options: [option("Alpha"), option("Beta")],
+			}),
+		).toEqual({ questions: [question({ question: "Which approach?", header: "Approach" })] });
+	});
+
+	it("carries multiSelect into the wrapped question", () => {
+		expect(
+			normalizeQuestionArguments({
+				question: "Which approaches?",
+				header: "Approach",
+				options: [option("Alpha"), option("Beta")],
+				multiSelect: true,
+			}),
+		).toEqual({
+			questions: [question({ question: "Which approaches?", header: "Approach", multiSelect: true })],
+		});
+	});
+
+	it("fills a questions[0] that lost its question field to the root", () => {
+		expect(
+			normalizeQuestionArguments({
+				question: "Which approach?",
+				questions: [{ header: "Approach", options: [option("Alpha"), option("Beta")] }],
+			}),
+		).toEqual({ questions: [question({ question: "Which approach?", header: "Approach" })] });
+	});
+
+	it("parses a stringified questions array and leaves broken JSON for validation", () => {
+		const valid = normalizeQuestionArguments({
+			questions: JSON.stringify([question({ question: "Which approach?" })]),
+		});
+		expect(validateSchema.Check(valid)).toBe(true);
+
+		const broken = normalizeQuestionArguments({ questions: "[{not json" });
+		expect(broken).toEqual({ questions: "[{not json" });
+		expect(validateSchema.Check(broken)).toBe(false);
+	});
+
+	it("leaves ambiguous or well-formed shapes untouched", () => {
+		// Well-formed arguments pass through unchanged.
+		const wellFormed = { questions: [question()] };
+		expect(normalizeQuestionArguments(wellFormed)).toEqual(wellFormed);
+		// A root question without options is not enough to wrap.
+		expect(normalizeQuestionArguments({ question: "Which approach?" })).toEqual({
+			question: "Which approach?",
+		});
+		// A root question alongside two full questions is left for validation.
+		const twoQuestions = { question: "stray", questions: [question(), question({ question: "Another?" })] };
+		expect(normalizeQuestionArguments(twoQuestions)).toEqual(twoQuestions);
+		// Non-object arguments pass through for validation to reject.
+		expect(normalizeQuestionArguments(null)).toBeNull();
+		expect(normalizeQuestionArguments("nope")).toBe("nope");
+	});
+});
+
+describe("question strict constrained sampling", () => {
+	it("keeps the schema inside the strict subset", () => {
+		expect(() => makeStrictJsonSchema(QuestionParams)).not.toThrow();
 	});
 });
