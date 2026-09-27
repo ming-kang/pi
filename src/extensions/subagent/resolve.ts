@@ -1,5 +1,5 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type Api, clampThinkingLevel, type Model } from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../../config.ts";
@@ -33,27 +33,44 @@ function isWithin(parent: string, child: string): boolean {
 
 const PATH_SEP = process.platform === "win32" ? "\\" : "/";
 
-export function resolveTaskCwd(parentCwd: string, requestedCwd: string | undefined): string {
+/** Closest existing ancestor directory, for "does not exist" diagnostics. */
+function nearestExistingParent(candidate: string): string {
+	let current = candidate;
+	for (let depth = 0; depth < 64; depth++) {
+		const parent = dirname(current);
+		if (parent === current) return current;
+		if (existsSync(parent)) return parent;
+		current = parent;
+	}
+	return current;
+}
+
+export interface ResolvedTaskCwd {
+	cwd: string;
+	/** False for a directory outside the parent: the task runs untrusted there. */
+	insideParent: boolean;
+}
+
+/**
+ * Resolve the requested cwd against the parent working directory. A directory
+ * outside the parent is allowed but marked untrusted (the runner starts it
+ * without the parent project's trust, so its .pi settings are never loaded);
+ * only a missing or non-directory cwd fails. The inside/outside decision is
+ * always made on canonical paths, so a symlink that points outside the parent
+ * is treated as outside rather than rejected.
+ */
+export function resolveTaskCwd(parentCwd: string, requestedCwd: string | undefined): ResolvedTaskCwd {
 	const value = normalizeCwdInput(requestedCwd);
 	// Models routinely echo the parent working directory back as an absolute
-	// path; accept an absolute cwd that stays inside the parent instead of
-	// failing the whole task over path style.
-	const absolute = value !== undefined && isAbsolute(value);
-	const candidate = absolute ? resolve(value) : resolve(parentCwd, value ?? ".");
-	// Relative inputs get a lexical traversal check before touching the file
-	// system. Absolute inputs may use the real spelling of a symlinked parent,
-	// so their containment is decided by the canonical check below.
-	if (!absolute && !isWithin(resolve(parentCwd), candidate))
-		throw new Error(`Subagent cwd escapes the parent working directory: ${requestedCwd}`);
-	if (!existsSync(candidate) || !statSync(candidate).isDirectory())
-		throw new Error(`Subagent cwd is not a directory: ${candidate}`);
+	// path; accept an absolute cwd instead of failing the task over path style.
+	const candidate = value !== undefined && isAbsolute(value) ? resolve(value) : resolve(parentCwd, value ?? ".");
+	if (!existsSync(candidate)) {
+		throw new Error(`${candidate} does not exist; nearest existing parent: ${nearestExistingParent(candidate)}`);
+	}
+	if (!statSync(candidate).isDirectory()) throw new Error(`Subagent cwd is not a directory: ${candidate}`);
 	const realParent = realpathSync(parentCwd);
 	const realCandidate = realpathSync(candidate);
-	if (!isWithin(realParent, realCandidate)) {
-		if (absolute) throw new Error("cwd must stay inside the parent working directory.");
-		throw new Error(`Subagent cwd escapes the parent working directory: ${requestedCwd}`);
-	}
-	return realCandidate;
+	return { cwd: realCandidate, insideParent: isWithin(realParent, realCandidate) };
 }
 
 // Exactly two layers: a /agents override wins, otherwise the subagent
@@ -108,11 +125,13 @@ export async function resolveSubagentTask(
 	const config = preloadedConfig ?? (await loadSubagentConfig(configAgentDir));
 	const override = config.profiles[agent.name];
 	const model = resolveModel(override, parent);
+	const { cwd, insideParent } = resolveTaskCwd(parentCwd, task.cwd ?? undefined);
 	return {
 		agent,
 		description: taskLabel(task),
 		prompt: task.prompt,
-		cwd: resolveTaskCwd(parentCwd, task.cwd ?? undefined),
+		cwd,
+		insideParent,
 		model,
 		thinking: resolveThinking(override, parent, model),
 	};

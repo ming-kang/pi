@@ -1,3 +1,5 @@
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxProvider, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -138,6 +140,35 @@ describe("subagent SDK runner", () => {
 		expect(toolNames).toEqual(["read", "grep", "find", "ls", "bash"]);
 		expect(toolNames).not.toContain("edit");
 		expect(toolNames).not.toContain("write");
+	});
+
+	it("runs tasks outside the parent directory without the parent project's trust", async () => {
+		const settingsCreate = vi.spyOn(SettingsManager, "create");
+		const outside = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-trust-"));
+		try {
+			const { modelRuntime, model } = await setup(["inside done", "outside done"]);
+			await runSubagentInvocation({
+				params: {
+					tasks: [
+						{ prompt: "Work inside.", description: "Inside task" },
+						{ prompt: "Work outside.", description: "Outside task", cwd: outside },
+					],
+				},
+				parentCwd: process.cwd(),
+				parent: createParentContext(model),
+				modelRuntime,
+				agentDir: process.cwd(),
+				projectTrusted: true,
+				gate: new ConcurrencyGate(1),
+			});
+			const trustByCwd = new Map(settingsCreate.mock.calls.map((call) => [call[0], call[2]?.projectTrusted]));
+			// The task inside the parent inherits the session's trust conclusion;
+			// the one outside must never load that directory's .pi settings under it.
+			expect(trustByCwd.get(realpathSync(process.cwd()))).toBe(true);
+			expect(trustByCwd.get(realpathSync(outside))).toBe(false);
+		} finally {
+			rmSync(outside, { recursive: true, force: true });
+		}
 	});
 
 	it("returns an explicit marker when a completed subagent has no output", async () => {

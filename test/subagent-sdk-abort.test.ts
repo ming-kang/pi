@@ -62,6 +62,7 @@ function task(): ResolvedSubagentTask {
 		description: "Inspect initialization",
 		prompt: "Inspect without starting after abort.",
 		cwd: process.cwd(),
+		insideParent: true,
 		model: model(),
 		thinking: "low",
 	};

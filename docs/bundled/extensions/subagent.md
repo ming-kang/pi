@@ -28,8 +28,10 @@ Each item has:
 prompt       Required self-contained worker briefing
 description? Short task label for the /bg list, live rows, and report headings; derived from the prompt when omitted
 agent?       explorer or general; defaults to explorer
-cwd?         Directory inside the parent working directory
+cwd?         Worker directory; relative paths resolve against the parent working directory
 ```
+
+A `cwd` inside the parent working directory runs with the parent session's project trust. A `cwd` outside it is allowed but runs untrusted: the worker never loads that directory's `.pi` project settings under the parent's trust conclusion. A missing or non-directory `cwd` fails the call and names the nearest existing parent directory.
 
 There is no separate single-task or parallel mode. One item launches one worker; multiple items launch concurrent workers. A session-scoped gate permits at most six active workers across all sibling `subagent` calls, so additional items wait for a slot. Results always follow input order, regardless of completion order.
 

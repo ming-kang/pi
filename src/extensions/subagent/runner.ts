@@ -217,7 +217,10 @@ async function runWithGate(
 				dispatch,
 				modelRuntime: options.modelRuntime,
 				agentDir: options.agentDir,
-				projectTrusted: options.projectTrusted,
+				// Trust follows the directory, not the parent session: a task that
+				// works outside the parent must never load that directory's project
+				// settings under the parent's trust conclusion.
+				projectTrusted: task.insideParent ? options.projectTrusted : false,
 				onProgress,
 			});
 			const state = getState();

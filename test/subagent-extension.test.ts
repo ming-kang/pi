@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { BackgroundService } from "../src/core/background/service.ts";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
 import subagent from "../src/extensions/subagent/index.ts";
-import { SubagentParamsSchema, TaskSchema } from "../src/extensions/subagent/schema.ts";
+import { normalizeSubagentArguments, SubagentParamsSchema, TaskSchema } from "../src/extensions/subagent/schema.ts";
 import type { SdkRunnerOptions } from "../src/extensions/subagent/sdk-runner.ts";
 import type { SubagentDetails, SubagentExecutionResult } from "../src/extensions/subagent/types.ts";
 
@@ -84,7 +84,13 @@ describe("subagent extension registration", () => {
 			"Give every task a short `description` label; it is shown in the /bg list, live rows, and report headings.",
 		]);
 		expect(initialTool?.executionMode).toBeUndefined();
-		expect(initialTool?.prepareArguments).toBeUndefined();
+		expect(initialTool?.constrainedSampling).toEqual({ type: "json_schema", strict: "prefer" });
+		// Root-level single-task arguments normalize into tasks[0] before validation.
+		expect(initialTool?.prepareArguments).toBe(normalizeSubagentArguments);
+		expect(initialTool?.prepareArguments?.({ agent: "general", prompt: "Audit.", background: true })).toEqual({
+			background: true,
+			tasks: [{ agent: "general", prompt: "Audit." }],
+		});
 		// Providers reject tool schemas whose top level is not `type: "object"`,
 		// e.g. a union; keep the parameter schema a plain object.
 		expect((initialTool?.parameters as unknown as { type?: string }).type).toBe("object");

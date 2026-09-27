@@ -12,23 +12,32 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-sampling";
 import lockfile from "proper-lockfile";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AGENT_PROFILES, subagentToolDescription } from "../src/extensions/subagent/agents.ts";
 import { MAX_CONCURRENCY, MAX_TASKS, SUBAGENT_AGENT_NAMES } from "../src/extensions/subagent/constants.ts";
 import { resolveSubagentTask, resolveTaskCwd } from "../src/extensions/subagent/resolve.ts";
-import { SubagentParamsSchema, type SubagentTask } from "../src/extensions/subagent/schema.ts";
+import {
+	normalizeSubagentArguments,
+	SubagentParamsSchema,
+	type SubagentTask,
+} from "../src/extensions/subagent/schema.ts";
 import { loadSubagentConfig, parseSubagentConfig, updateProfileOverride } from "../src/extensions/subagent/settings.ts";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
 const configUpdateFixture = fileURLToPath(new URL("./fixtures/subagent-config-update.ts", import.meta.url));
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 function model(provider: string, id: string, reasoning = true): Model<Api> {
 	return {
@@ -307,19 +316,44 @@ describe("subagent configuration", () => {
 		expect(() => parseSubagentConfig(JSON.stringify({ profiles: {} }))).toThrow(/unsupported version undefined/);
 	});
 
-	it("accepts an absolute cwd inside the parent and rejects escapes", () => {
+	it("marks directories outside the parent as untrusted instead of rejecting them", () => {
 		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-cwd-"));
 		temporaryDirectories.push(root);
-		expect(() => resolveTaskCwd(root, "../outside")).toThrow(/escapes/);
-		// Models routinely echo the parent cwd back as an absolute path.
-		expect(resolveTaskCwd(root, root)).toBe(realpathSync(root));
+		const outside = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-outside-"));
+		temporaryDirectories.push(outside);
+
+		// Relative traversal, an absolute sibling, and the parent itself all
+		// resolve, flagged as outside the parent.
+		const relativeEscape = resolveTaskCwd(root, relative(root, outside));
+		expect(relativeEscape).toEqual({ cwd: realpathSync(outside), insideParent: false });
+		expect(resolveTaskCwd(root, outside)).toEqual({ cwd: realpathSync(outside), insideParent: false });
+		expect(resolveTaskCwd(root, join(root, ".."))).toEqual({
+			cwd: realpathSync(join(root, "..")),
+			insideParent: false,
+		});
+
+		// Inside the parent: default, relative child, absolute child, and the
+		// parent echoed back as an absolute path all stay trusted.
+		expect(resolveTaskCwd(root, undefined)).toEqual({ cwd: realpathSync(root), insideParent: true });
+		expect(resolveTaskCwd(root, root)).toEqual({ cwd: realpathSync(root), insideParent: true });
 		const sub = join(root, "sub");
 		mkdirSync(sub, { recursive: true });
-		expect(resolveTaskCwd(root, sub)).toBe(realpathSync(sub));
-		expect(() => resolveTaskCwd(root, join(root, ".."))).toThrow(/stay inside/);
+		expect(resolveTaskCwd(root, "sub")).toEqual({ cwd: realpathSync(sub), insideParent: true });
+		expect(resolveTaskCwd(root, sub)).toEqual({ cwd: realpathSync(sub), insideParent: true });
 	});
 
-	it("accepts a symlinked parent cwd and still blocks symlink escapes", () => {
+	it("names the nearest existing parent when the cwd does not exist", () => {
+		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-missing-"));
+		temporaryDirectories.push(root);
+		expect(() => resolveTaskCwd(root, join("missing", "deeper"))).toThrow(
+			new RegExp(`does not exist; nearest existing parent: ${escapeRegExp(realpathSync(root))}$`),
+		);
+		const file = join(root, "file.txt");
+		writeFileSync(file, "not a directory");
+		expect(() => resolveTaskCwd(root, "file.txt")).toThrow(/is not a directory/);
+	});
+
+	it("accepts a symlinked parent cwd and treats symlink escapes as outside", () => {
 		const root = mkdtempSync(join(process.env.TEMP ?? "/tmp", "pi-subagent-symlink-"));
 		temporaryDirectories.push(root);
 		const real = join(root, "real");
@@ -332,10 +366,75 @@ describe("subagent configuration", () => {
 
 		// Symlinked parent (macOS /tmp, Windows junctions): the default,
 		// a relative child, and the child's real absolute spelling all resolve.
-		expect(resolveTaskCwd(link, undefined)).toBe(realpathSync(real));
-		expect(resolveTaskCwd(link, "sub")).toBe(realpathSync(join(real, "sub")));
-		expect(resolveTaskCwd(link, realpathSync(join(real, "sub")))).toBe(realpathSync(join(real, "sub")));
-		// A symlink inside the tree that points outside still escapes.
-		expect(() => resolveTaskCwd(link, "escape")).toThrow(/escapes/);
+		expect(resolveTaskCwd(link, undefined)).toEqual({ cwd: realpathSync(real), insideParent: true });
+		expect(resolveTaskCwd(link, "sub")).toEqual({ cwd: realpathSync(join(real, "sub")), insideParent: true });
+		expect(resolveTaskCwd(link, realpathSync(join(real, "sub")))).toEqual({
+			cwd: realpathSync(join(real, "sub")),
+			insideParent: true,
+		});
+		// A symlink inside the tree that points outside runs untrusted.
+		expect(resolveTaskCwd(link, "escape")).toEqual({ cwd: realpathSync(outside), insideParent: false });
+	});
+});
+
+describe("normalizeSubagentArguments", () => {
+	it("wraps a single task written at the root into tasks[0]", () => {
+		expect(
+			normalizeSubagentArguments({
+				agent: "general",
+				prompt: "Audit the rewind extension.",
+				description: "Audit rewind",
+				cwd: "src/extensions",
+			}),
+		).toEqual({
+			tasks: [
+				{
+					agent: "general",
+					prompt: "Audit the rewind extension.",
+					description: "Audit rewind",
+					cwd: "src/extensions",
+				},
+			],
+		});
+	});
+
+	it("keeps background at the root when wrapping a single task", () => {
+		expect(normalizeSubagentArguments({ prompt: "Audit.", background: true })).toEqual({
+			background: true,
+			tasks: [{ prompt: "Audit." }],
+		});
+	});
+
+	it("drops root-level null leftovers from strict-mode sampling", () => {
+		expect(
+			normalizeSubagentArguments({ agent: null, cwd: null, description: null, tasks: [{ prompt: "Audit." }] }),
+		).toEqual({ tasks: [{ prompt: "Audit." }] });
+	});
+
+	it("keeps non-null unknown fields for validation to name", () => {
+		const args = normalizeSubagentArguments({
+			tasks: [{ prompt: "Audit.", prompt_extra: "briefing content" }],
+			timeout: 30,
+		}) as unknown as Record<string, unknown>;
+		expect(args.timeout).toBe(30);
+		expect((args.tasks as Array<Record<string, unknown>>)[0]?.prompt_extra).toBe("briefing content");
+	});
+
+	it("leaves well-formed and non-object arguments untouched", () => {
+		const wellFormed = { tasks: [{ prompt: "Audit." }] };
+		expect(normalizeSubagentArguments(wellFormed)).toEqual(wellFormed);
+		expect(normalizeSubagentArguments(null)).toBeNull();
+		expect(normalizeSubagentArguments("nope")).toBe("nope");
+		// A root prompt does not hijack a call that already carries tasks.
+		expect(normalizeSubagentArguments({ prompt: "stray", tasks: [{ prompt: "Audit." }] })).toEqual({
+			prompt: "stray",
+			tasks: [{ prompt: "Audit." }],
+		});
+	});
+});
+
+describe("subagent strict constrained sampling", () => {
+	it("keeps the schema inside the strict subset", () => {
+		expect(() => makeStrictJsonSchema(SubagentParamsSchema)).not.toThrow();
 	});
 });

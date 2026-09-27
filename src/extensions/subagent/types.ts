@@ -27,6 +27,8 @@ export interface ResolvedSubagentTask {
 	description: string;
 	prompt: string;
 	cwd: string;
+	/** False when cwd sits outside the parent directory: the run starts without the parent project's trust. */
+	insideParent: boolean;
 	model: Model<Api>;
 	thinking: ThinkingLevel;
 }

@@ -42,6 +42,7 @@ function task(): ResolvedSubagentTask {
 		description: "Inspect the reducer",
 		prompt: "Inspect the reducer transitions.",
 		cwd: process.cwd(),
+		insideParent: true,
 		model: model(),
 		thinking: "low",
 	};

@@ -8,7 +8,7 @@ import { SUBAGENT_COMMAND_NAME, SUBAGENT_TOOL_LABEL, SUBAGENT_TOOL_NAME } from "
 import { renderSubagentCall, renderSubagentResult, type SubagentRenderState, scheduleLiveRefresh } from "./render.ts";
 import { type ParentModelContext, subagentGroupTitle } from "./resolve.ts";
 import { ConcurrencyGate, isSubagentError, runSubagentInvocation } from "./runner.ts";
-import { SubagentParamsSchema } from "./schema.ts";
+import { normalizeSubagentArguments, SubagentParamsSchema } from "./schema.ts";
 import { statusSummary } from "./state.ts";
 import type { SubagentDetails } from "./types.ts";
 
@@ -27,6 +27,8 @@ export default function subagent(pi: ExtensionAPI): void {
 			"Give every task a short `description` label; it is shown in the /bg list, live rows, and report headings.",
 		],
 		parameters: SubagentParamsSchema,
+		constrainedSampling: { type: "json_schema", strict: "prefer" },
+		prepareArguments: normalizeSubagentArguments,
 		async execute(toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<SubagentDetails>> {
 			const host = ctx.background;
 			if (host?.closed) throw new Error("Background service is closed");
