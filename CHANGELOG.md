@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.87.4] - 2026-09-28
+
 ### Fixed
 
 - `bg` lookup-failure listings and `bg list` now show the most recently finished tasks instead of the oldest: the service lists records in creation order, so the finished slice previously surfaced a session's first completions. The unknown-id listing also shares the `bg list` scope — foreground executions are counted, not shown — instead of mixing them into "Current tasks".
