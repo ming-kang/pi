@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.87.3] - 2026-09-28
+
 ### Changed
 
 - **Breaking:** the `todo` tool takes one patch per call instead of an `action` discriminator: `{ create: [...] }` adds tasks (with an optional per-item `status`, so a task can be created directly as `in_progress`), `{ update: [{ id, ... }] }` edits tasks by id with blank or omitted fields kept, and `{ delete: [ids] }` removes ids; calling with `{}` lists every task. A call applies its groups in delete, update, create order, so a same-call delete frees capacity for the create. Result details moved to schema version 3 with a flat `change` record (`created`, `updated`, `deleted`, `absent`, `evicted`, `demotedId`); snapshots from v1/v2 sessions are ignored on restore. Deleting an absent id is now a recorded no-op, updating an unknown id fails with the current id list, and when a call would push the list past 20 tasks the oldest completed tasks are removed automatically — only a list with more than 20 open tasks rejects the call. The tool also opts into strict constrained sampling, so providers with JSON-schema mode constrain the arguments at generation time.
