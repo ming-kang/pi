@@ -303,14 +303,16 @@ export function applyTodoPatch(before: TodoState, params: TodoParams): TodoPatch
 	}
 
 	// --- Capacity: completed tasks are reclaimed oldest-first before a call
-	// may fail for space; only a list with more than the cap in open tasks is
-	// rejected.
+	// may fail for space; only a list that stays over the cap is rejected.
+	// Tasks this call created or updated are never reclaimed: silently dropping
+	// a task would be confusing when the same result reports it as touched.
 	const evicted: Array<{ id: number; subject: string }> = [];
 	if (items.length > TODO_MAX_ITEMS) {
 		let overflow = items.length - TODO_MAX_ITEMS;
 		const evictIds = new Set<number>();
+		const touched = new Set<number>([...created, ...updatedIds]);
 		const completedOldestFirst = items
-			.filter((item) => item.status === "completed")
+			.filter((item) => item.status === "completed" && !touched.has(item.id))
 			.sort((first, second) => first.id - second.id);
 		for (const item of completedOldestFirst) {
 			if (overflow <= 0) break;
@@ -318,7 +320,7 @@ export function applyTodoPatch(before: TodoState, params: TodoParams): TodoPatch
 			evicted.push({ id: item.id, subject: item.subject });
 			overflow--;
 		}
-		if (overflow > 0) throw new Error(`at most ${TODO_MAX_ITEMS} open tasks; complete or delete some first`);
+		if (overflow > 0) throw new Error(`at most ${TODO_MAX_ITEMS} tasks; complete or delete some first`);
 		items = items.filter((item) => !evictIds.has(item.id));
 	}
 

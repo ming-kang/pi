@@ -1,7 +1,7 @@
 /**
  * todo — Pi-native task tracking for multi-step work.
  *
- * State is conversation-backed: every tool result carries a full v2 snapshot
+ * State is conversation-backed: every tool result carries a full v3 snapshot
  * in `details`, and lifecycle handlers replay the current branch into the
  * closure store created by createTodoStore(). Resume, /reload, and /tree
  * navigation stay aligned with the conversation without a disk database or

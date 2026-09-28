@@ -446,7 +446,7 @@ describe("todo store capacity", () => {
 	test("rejects only when more than 20 tasks would stay open, atomically", () => {
 		const store = fullStore(20, 0);
 		expect(() => store.execute({ create: [{ subject: "One more", description: "Do it" }] })).toThrow(
-			/at most 20 open tasks; complete or delete some first/,
+			/at most 20 tasks; complete or delete some first/,
 		);
 		expect(store.getState().items).toHaveLength(20);
 
@@ -455,6 +455,47 @@ describe("todo store capacity", () => {
 		const details = store.execute({ create: [{ subject: "One more", description: "Do it" }] });
 		expect(details.change.evicted).toEqual([{ id: 1, subject: "Open 1" }]);
 		expect(details.state.items).toHaveLength(20);
+	});
+
+	test("never reclaims a task the same call completed or created", () => {
+		const store = fullStore(19, 1);
+		expect(store.getState().items).toHaveLength(20);
+		const details = store.execute({
+			update: [{ id: 20, status: "completed" }],
+			create: [{ subject: "Fresh", description: "Do it" }],
+		});
+		expect(details.change.updated).toEqual([{ id: 20, from: "pending", to: "completed" }]);
+		expect(details.change.created).toEqual([21]);
+		// The oldest untouched completed task is reclaimed instead of #20, so a
+		// task never shows up in both `updated` and `evicted` of one result.
+		expect(details.change.evicted).toEqual([{ id: 1, subject: "Done 1" }]);
+		expect(task(details.state, 20).status).toBe("completed");
+		expect(task(details.state, 21).subject).toBe("Fresh");
+		expect(details.state.items).toHaveLength(20);
+	});
+
+	test("a task created as completed is not reclaimed by its own call", () => {
+		const store = fullStore(19, 1);
+		const details = store.execute({
+			create: [{ subject: "Done already", description: "Do it", status: "completed" }],
+		});
+		expect(details.change.created).toEqual([21]);
+		expect(details.change.evicted).toEqual([{ id: 1, subject: "Done 1" }]);
+		expect(task(details.state, 21).status).toBe("completed");
+		expect(details.state.items).toHaveLength(20);
+	});
+
+	test("rejects when only tasks this call touched could be reclaimed", () => {
+		const store = fullStore(20, 0);
+		expect(() =>
+			store.execute({
+				update: [{ id: 1, status: "completed" }],
+				create: [{ subject: "One more", description: "Do it" }],
+			}),
+		).toThrow(/at most 20 tasks; complete or delete some first/);
+		// Atomic: nothing applied, so #1 stays pending.
+		expect(store.getState().items).toHaveLength(20);
+		expect(task(store.getState(), 1).status).toBe("pending");
 	});
 });
 

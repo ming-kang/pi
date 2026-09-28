@@ -68,7 +68,7 @@ Consecutive tool calls collapse into the native `todo` transcript group. Collaps
 
 ## Limits
 
-- At most 20 current tasks. When a call would push the list past 20, the oldest completed tasks are removed automatically to make room; only a list with more than 20 open tasks rejects the call.
+- At most 20 current tasks. When a call would push the list past 20, the oldest completed tasks are removed automatically to make room — except tasks that same call created or updated; if nothing else can be reclaimed, the call is rejected.
 - At most 20 items in one `create`, `update`, or `delete` group.
 - Subjects are limited to 160 characters.
 - Descriptions are limited to 500 characters.
