@@ -23,7 +23,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * `additionalProperties: false`, the non-null fields the schema does not
  * declare, and at every object, the required fields the arguments lack. The
  * validator's own report says where validation failed; these hints say what
- * the legal shape is. Paths use the validator's dotted style
+ * the legal shape is. Union variants (`anyOf`, e.g. a nullable field) are
+ * walked through so nested shapes still get hints. Paths use the validator's
+ * dotted style
  * (`tasks[0].prompt`). Non-null unknown fields are reported rather than
  * silently dropped: a field like `prompt_extra` may carry briefing content
  * the caller intended to send.
@@ -32,6 +34,10 @@ function collectFieldHints(schema: unknown, args: unknown): string[] {
 	const hints: string[] = [];
 	const visit = (node: unknown, value: unknown, path: string): void => {
 		if (hints.length >= FIELD_HINTS_MAX || !isRecord(node)) return;
+		if (Array.isArray(node.anyOf)) {
+			for (const variant of node.anyOf) visit(variant, value, path);
+			return;
+		}
 		if (node.type === "array" && Array.isArray(value)) {
 			for (let index = 0; index < value.length; index++) {
 				visit(node.items, value[index], `${path}[${index}]`);

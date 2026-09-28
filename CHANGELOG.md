@@ -9,6 +9,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - `bg` lookup-failure listings and `bg list` now show the most recently finished tasks instead of the oldest: the service lists records in creation order, so the finished slice previously surfaced a session's first completions. The unknown-id listing also shares the `bg list` scope — foreground executions are counted, not shown — instead of mixing them into "Current tasks".
 - An ambiguous `bg` id prefix now lists exactly the records the prefix matched, including records outside the current branch. The background service throws a typed `BackgroundLookupError` carrying the matched snapshots, instead of the tool re-running a copied prefix match over the visible listing and reporting a wrong count (down to "matches 0 tasks" with an empty list).
 - `todo` capacity reclamation no longer removes a task that the same call created or updated, so a task can never appear in both `created`/`updated` and `evicted` of one result; when only such tasks could be reclaimed, the call is rejected instead.
+- Tool argument validation hints now reach inside nullable (`anyOf`) fields, so an unknown or missing field in a nullable nested object is named like any other.
 
 ## [0.87.3] - 2026-09-28
 

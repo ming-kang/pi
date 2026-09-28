@@ -86,6 +86,40 @@ describe("wrapToolDefinition validation hints", () => {
 		}
 	});
 
+	it("collects hints inside nullable fields, whose schema nests under anyOf", () => {
+		const NullableSchema = Type.Object(
+			{
+				name: Type.String(),
+				meta: Type.Optional(
+					Type.Union([
+						Type.Object(
+							{ label: Type.String(), note: Type.Optional(Type.String()) },
+							{
+								additionalProperties: false,
+							},
+						),
+						Type.Null(),
+					]),
+				),
+			},
+			{ additionalProperties: false },
+		);
+		const wrapped = wrapToolDefinition({
+			name: "job",
+			label: "Job",
+			description: "d",
+			parameters: NullableSchema,
+			execute: vi.fn(),
+		} as ToolDefinition<typeof NullableSchema>);
+		try {
+			wrapped.prepareArguments?.({ name: "x", meta: { label: "y", extra: "z" } });
+			expect.unreachable("validation should have failed");
+		} catch (error) {
+			const message = (error as Error).message;
+			expect(message).toContain("Hint: meta.extra is not a field; fields at meta: label, note");
+		}
+	});
+
 	it("bounds the echoed arguments to about 2KB", () => {
 		const wrapped = wrapToolDefinition(definition());
 		const huge = { tasks: [{ prompt: "x".repeat(50_000), prompt_extra: "y" }] };
