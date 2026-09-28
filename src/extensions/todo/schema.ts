@@ -34,6 +34,7 @@ export const TODO_DETAILS_SCHEMA_VERSION = 3;
  */
 export interface TodoChange {
 	created: number[];
+	/** Explicitly updated tasks, from their prior status to the final snapshot status. */
 	updated: Array<{ id: number; from: TodoStatus; to: TodoStatus }>;
 	deleted: Array<{ id: number; subject: string }>;
 	absent: number[];
@@ -49,7 +50,7 @@ export interface TodoDetails {
 
 const StatusSchema = StringEnum(["pending", "in_progress", "completed"] as const, {
 	description:
-		"Task status: pending for future work, in_progress for the single active task, completed for verified done work. Exactly one task may be in_progress; setting one demotes any other active task to pending.",
+		"Task status: pending for future work, in_progress for the single active task, completed for verified done work. At most one task may be in_progress; setting one demotes any other active task to pending.",
 });
 
 const TaskIdSchema = Type.Integer({ minimum: 1, description: "Positive task id." });

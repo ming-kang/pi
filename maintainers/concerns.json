@@ -51,6 +51,11 @@
 			"why": "The distribution's bundled extensions load as hidden built-ins.",
 			"paths": [
 				{ "path": "src/extensions/index.ts" }
+			],
+			"tests": [
+				"test/todo-extension.test.ts",
+				"test/todo-patch-result.test.ts",
+				"test/todo-render.test.ts"
 			]
 		},
 		{
@@ -175,6 +180,16 @@
 				"test/keybinding-hints.test.ts",
 				"test/theme-picker.test.ts",
 				"test/tool-execution-component.test.ts"
+			]
+		},
+		{
+			"id": "tool-validation-hints",
+			"why": "Tool argument errors include bounded argument echoes and field hints without mixing alternative object requirements.",
+			"paths": [
+				{ "path": "src/core/tools/tool-definition-wrapper.ts" }
+			],
+			"tests": [
+				"test/tool-definition-wrapper.test.ts"
 			]
 		},
 		{

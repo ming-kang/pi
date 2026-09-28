@@ -35,7 +35,10 @@ function collectFieldHints(schema: unknown, args: unknown): string[] {
 	const visit = (node: unknown, value: unknown, path: string): void => {
 		if (hints.length >= FIELD_HINTS_MAX || !isRecord(node)) return;
 		if (Array.isArray(node.anyOf)) {
-			for (const variant of node.anyOf) visit(variant, value, path);
+			// Only nullable single-shape unions have unambiguous field requirements.
+			// Alternative object shapes must not contribute contradictory hints.
+			const variants = node.anyOf.filter((variant: unknown) => !isRecord(variant) || variant.type !== "null");
+			if (value !== null && variants.length === 1) visit(variants[0], value, path);
 			return;
 		}
 		if (node.type === "array" && Array.isArray(value)) {

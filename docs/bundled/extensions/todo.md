@@ -36,7 +36,7 @@ Omit or leave empty any group the call does not need; calling with `{}` lists ev
 { "delete": [3] }
 ```
 
-Tasks have three statuses: `pending`, `in_progress`, and `completed`. Exactly one task may be `in_progress`; one activation per call returns every other active task to `pending` and reports that side effect, while a call that tries to activate two tasks is rejected as a real contradiction. Any status can be reopened or corrected. Listing includes every task, ordered as active, pending by ID, then completed by ID.
+Tasks have three statuses: `pending`, `in_progress`, and `completed`. At most one task may be `in_progress`; one activation per call returns every other active task to `pending` and reports that side effect, while a call that tries to activate two tasks is rejected. Zero active tasks is valid when waiting, before work starts, or after everything is done. Any status can be reopened or corrected. Listing includes every task, ordered as active, pending by ID, then completed by ID.
 
 Todo intentionally has no action discriminator, dependency graph, owner, metadata, active-form label, tombstone, filtering, pagination, `get`, or `clear`. Keep tasks in intended execution order. When work is blocked, return it to `pending`, create a task that resolves the blocker, and activate that task instead.
 
@@ -47,10 +47,10 @@ The whole patch is validated before anything is applied: invalid input leaves th
 The persistent widget displays only subjects:
 
 ```text
-Todos 2/6 · [>] #4 Fix login redirect  [ ] #5 Add regression tests  +4 more (2 pending, 2 completed)
+Todos 2/6 · [>] #4 Fix login redirect  [ ] #5 Add regression tests  +2 more
 ```
 
-`2/6` means completed tasks over total tasks. The active task is shown first, followed by pending tasks in ID order. Completed tasks are represented by the count and overflow summary, not individual segments. As width shrinks, complete pending segments move into `+N more`; the active subject is truncated only after the detailed overflow has fallen back to its short form. The renderer always returns at most one terminal-width-safe line.
+`2/6` means completed tasks over total tasks. The active task is shown first, followed by pending tasks in ID order. `+N more` counts only unfinished tasks that do not fit; it disappears when all unfinished tasks are visible. Completed tasks appear only in the header count. As width shrinks, whole pending segments move into `+N more`; only the active subject may be truncated. The renderer always returns at most one terminal-width-safe line.
 
 The widget is registered only while a `pending` or `in_progress` task exists. It disappears immediately for an empty or fully completed list; there is no completion timer or visibility cache.
 
@@ -68,7 +68,7 @@ Consecutive tool calls collapse into the native `todo` transcript group. Collaps
 
 ## Limits
 
-- At most 20 current tasks. When a call would push the list past 20, the oldest completed tasks are removed automatically to make room — except tasks that same call created or updated; if nothing else can be reclaimed, the call is rejected.
+- At most 20 current tasks. When a call would push the list past 20, the oldest completed tasks are removed automatically to make room, except tasks that same call created or updated. If too few tasks can be reclaimed, the call is rejected without changes. The error lists previously completed IDs: retry with those IDs in `delete` instead of `update` to free space in the same patch, or complete tasks in a separate call before creating more.
 - At most 20 items in one `create`, `update`, or `delete` group.
 - Subjects are limited to 160 characters.
 - Descriptions are limited to 500 characters.
@@ -97,7 +97,7 @@ Todo state is conversation-backed rather than stored in a separate database. Eve
 }
 ```
 
-The assistant tool call already stores the arguments, so result details do not duplicate the patch parameters. The extension keeps one closure-scoped store for its runtime and replays the latest valid v3 snapshot from the current conversation branch on session start and `/tree` navigation. `/reload`, resume, and session replacement create a fresh extension runtime and replay that branch. Compaction does not require a separate replay handler because it does not change the live branch state.
+For explicitly updated tasks, `from` is the status before the call and `to` is the final snapshot status, including any automatic demotion. The assistant tool call already stores the arguments, so result details do not duplicate the patch parameters. The extension keeps one closure-scoped store for its runtime and replays the latest valid v3 snapshot from the current conversation branch on session start and `/tree` navigation. `/reload`, resume, and session replacement create a fresh extension runtime and replay that branch. Compaction does not require a separate replay handler because it does not change the live branch state.
 
 Replay scans tail to head, validates the bounded state, and can fall back past a malformed v3 snapshot. Snapshots from older schema versions (v1/v2) are intentionally ignored and are not migrated: restoring a conversation written before v3 starts with an empty list, while the historical tool-result text remains in the session transcript.
 

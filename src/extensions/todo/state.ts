@@ -216,7 +216,7 @@ export function applyTodoPatch(before: TodoState, params: TodoParams): TodoPatch
 		if (deleteSet.has(entry.id)) throw new Error(`#${entry.id} cannot be in both update and delete`);
 	}
 
-	// Exactly one activation per call: more than one is a real contradiction,
+	// At most one activation per call: more than one is a real contradiction,
 	// since a single task can be in_progress at any time.
 	const activations: string[] = [];
 	createEntries.forEach((entry, index) => {
@@ -250,7 +250,6 @@ export function applyTodoPatch(before: TodoState, params: TodoParams): TodoPatch
 	let items = before.items.filter((item) => !deleteSet.has(item.id));
 
 	// --- Apply: update -------------------------------------------------------
-	const updated: Array<{ id: number; from: TodoStatus; to: TodoStatus }> = [];
 	if (updateEntries.length > 0) {
 		const entriesById = new Map(updateEntries.map((entry) => [entry.id, entry]));
 		items = items.map((item) => {
@@ -262,7 +261,6 @@ export function applyTodoPatch(before: TodoState, params: TodoParams): TodoPatch
 				description: entry.description ?? item.description,
 				status: entry.status ?? item.status,
 			};
-			updated.push({ id: item.id, from: item.status, to: next.status });
 			return next;
 		});
 	}
@@ -320,10 +318,25 @@ export function applyTodoPatch(before: TodoState, params: TodoParams): TodoPatch
 			evicted.push({ id: item.id, subject: item.subject });
 			overflow--;
 		}
-		if (overflow > 0) throw new Error(`at most ${TODO_MAX_ITEMS} tasks; complete or delete some first`);
+		if (overflow > 0) {
+			const completedIds = before.items.filter((item) => item.status === "completed").map((item) => `#${item.id}`);
+			throw new Error(
+				`at most ${TODO_MAX_ITEMS} tasks; complete or delete some first. Patch not applied. Tasks created or updated in this call are not reclaimed. ` +
+					`Delete existing tasks in the same patch to free space (remove those ids from update), or complete tasks in a separate call before creating more. ` +
+					`Completed ids before this call: ${completedIds.join(", ") || "none"}.`,
+			);
+		}
 		items = items.filter((item) => !evictIds.has(item.id));
 	}
 
+	// Report transitions only after activation and capacity have settled the snapshot.
+	const updated = items
+		.filter((item) => updatedIds.has(item.id))
+		.map((item) => ({
+			id: item.id,
+			from: byId.get(item.id)!.status,
+			to: item.status,
+		}));
 	const change: TodoChange = { created, updated, deleted, absent, evicted };
 	if (demotedId !== undefined) change.demotedId = demotedId;
 	return { state: { items, nextId: before.nextId + created.length }, change };

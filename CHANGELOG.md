@@ -4,6 +4,16 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Fixed
+
+- Tool validation hints no longer mix field requirements from alternative `anyOf` object shapes. Nullable single-shape fields still receive nested hints.
+- `todo` update results now report the final status after automatic demotion, keeping summaries consistent with the saved task list.
+
+### Changed
+
+- The Todos widget's `+N more` counts only hidden unfinished tasks and omits the status breakdown in parentheses.
+- `todo` capacity errors explain how to retry and list previously completed task IDs. Tool guidance now states that at most one task may be in progress, with none active while waiting or after completion.
+
 ## [0.87.4] - 2026-09-28
 
 ### Fixed

@@ -71,17 +71,7 @@ function widgetLine(header: string, segments: string[], overflow: string): strin
 	return body ? `${header}${WIDGET_HEADER_SEPARATOR}${body}` : header;
 }
 
-/** Long overflow with counts (zero parts omitted), e.g. `+4 more (4 completed)`. */
-function widgetOverflowLong(remaining: number, counts: { active: number; pending: number; completed: number }): string {
-	const parts = [
-		counts.active > 0 ? `${counts.active} active` : "",
-		counts.pending > 0 ? `${counts.pending} pending` : "",
-		counts.completed > 0 ? `${counts.completed} completed` : "",
-	].filter(Boolean);
-	return `+${remaining} more${parts.length ? ` (${parts.join(", ")})` : ""}`;
-}
-
-/** One-line widget: `Todos 2/6 · [>] #4 s  [ ] #5 s  +N more (…)`; completed tasks are hidden but counted in the overflow. */
+/** One-line widget: `Todos 2/6 · [>] #4 s  [ ] #5 s  +N more`; only hidden open tasks count in the overflow. */
 export function renderWidgetLine(state: TodoState, theme: Theme, width: number): string[] {
 	const safeWidth = Math.max(1, width);
 	const items = state.items;
@@ -93,24 +83,14 @@ export function renderWidgetLine(state: TodoState, theme: Theme, width: number):
 	const total = items.length;
 	const completed = items.filter((item) => item.status === "completed").length;
 	const header = `${theme.fg("accent", "Todos")} ${theme.fg("dim", `${completed}/${total}`)}`;
-	const counts = widgetCounts(state);
 	const shown: Array<{ item: TodoItem; subject: string }> = [];
 	let overflow = "";
 
-	// Best overflow for a trial segment set: the long counts form when it fits,
-	// the short `+N more` form otherwise, undefined when even that overflows.
+	// Count only open tasks not shown by the trial segments.
 	const bestOverflow = (trial: Array<{ item: TodoItem; subject: string }>): string | undefined => {
-		const remaining = total - trial.length;
+		const remaining = candidates.length - trial.length;
 		const segments = trial.map((entry) => widgetSegment(entry.item, entry.subject, theme));
-		const activeShown = trial.some((entry) => entry.item.status === "in_progress") ? 1 : 0;
-		const hidden: typeof counts = {
-			active: counts.active - activeShown,
-			pending: counts.pending - (trial.length - activeShown),
-			completed: counts.completed,
-		};
 		if (remaining <= 0) return visibleWidth(widgetLine(header, segments, "")) <= safeWidth ? "" : undefined;
-		const long = theme.fg("dim", widgetOverflowLong(remaining, hidden));
-		if (visibleWidth(widgetLine(header, segments, long)) <= safeWidth) return long;
 		const short = theme.fg("dim", `+${remaining} more`);
 		return visibleWidth(widgetLine(header, segments, short)) <= safeWidth ? short : undefined;
 	};
@@ -133,7 +113,7 @@ export function renderWidgetLine(state: TodoState, theme: Theme, width: number):
 			continue;
 		}
 		if (candidate.status !== "in_progress") break;
-		const remaining = total - shown.length - 1;
+		const remaining = candidates.length - shown.length - 1;
 		const suffix = remaining > 0 ? `${WIDGET_ITEM_SEPARATOR}+${remaining} more` : "";
 		const prefix = `${header}${WIDGET_HEADER_SEPARATOR}${widgetSegment(candidate, "", theme)}${suffix}`;
 		const available = safeWidth - visibleWidth(prefix);

@@ -37,6 +37,33 @@ function definition(overrides?: Partial<ToolDefinition<typeof SubagentLikeSchema
 }
 
 describe("wrapToolDefinition validation hints", () => {
+	it.each([{ kind: "file", path: "a.txt" }, { kind: "file" }, { kind: "http", url: "https://example.com" }])(
+		"does not mix requirements of alternative object shapes: %j",
+		(mode) => {
+			const wrapped = wrapToolDefinition({
+				name: "transport",
+				label: "Transport",
+				description: "Transport",
+				parameters: Type.Object({
+					count: Type.Integer(),
+					mode: Type.Union([
+						Type.Object({ kind: Type.Literal("file"), path: Type.String() }, { additionalProperties: false }),
+						Type.Object({ kind: Type.Literal("http"), url: Type.String() }, { additionalProperties: false }),
+					]),
+				}),
+				execute: vi.fn(),
+			});
+			try {
+				wrapped.prepareArguments?.({ mode });
+				expect.unreachable("validation should fail for missing count");
+			} catch (error) {
+				const message = (error as Error).message;
+				expect(message).toContain("Hint: count is required");
+				expect(message).not.toContain("Hint: mode.");
+			}
+		},
+	);
+
 	it("returns valid arguments untouched, by reference when nothing was prepared", () => {
 		const raw = { tasks: [{ prompt: "Audit." }] };
 		expect(wrapToolDefinition(definition()).prepareArguments?.(raw)).toBe(raw);

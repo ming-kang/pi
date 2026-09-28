@@ -44,7 +44,7 @@ describe("renderWidgetLine", () => {
 		]);
 		const line = stripAnsi(renderWidgetLine(widgetState, theme, 200)[0]!);
 		// Header then " · ", segments separated by two spaces, no extra middle dots.
-		expect(line).toBe("Todos 2/6 · [>] #4 Four  [ ] #2 Two  [ ] #3 Three  [ ] #5 Five  +2 more (2 completed)");
+		expect(line).toBe("Todos 2/6 · [>] #4 Four  [ ] #2 Two  [ ] #3 Three  [ ] #5 Five");
 	});
 
 	test("orders active first and pending by id, hides descriptions and completed segments", () => {
@@ -62,11 +62,11 @@ describe("renderWidgetLine", () => {
 		expect(line).not.toContain("Sixth done");
 		expect(line).not.toMatch(/\[x\]/);
 		const shown = (line.match(/\[[> ]\] #\d+/g) ?? []).length;
-		const more = Number(line.match(/\+(\d+) more/)![1]);
-		expect(shown + more).toBe(6);
+		const more = Number(line.match(/\+(\d+) more/)?.[1] ?? 0);
+		expect(shown + more).toBe(4);
 	});
 
-	test("drops whole pending segments, shortens the overflow, and truncates only the active subject", () => {
+	test("counts only hidden open tasks and truncates only the active subject", () => {
 		const widgetState = state([
 			item(1, "Done one", "completed"),
 			item(2, "Active subject that is really quite long", "in_progress"),
@@ -75,17 +75,17 @@ describe("renderWidgetLine", () => {
 			item(5, "Pending five subject"),
 			item(6, "Pending six subject"),
 		]);
-		// Wide enough for the long overflow but not for every pending segment.
+		// Completed tasks do not count toward the overflow.
 		expect(stripAnsi(renderWidgetLine(widgetState, theme, 120)[0]!)).toBe(
-			"Todos 1/6 · [>] #2 Active subject that is really quite long  [ ] #3 Pending three subject  +4 more",
+			"Todos 1/6 · [>] #2 Active subject that is really quite long  [ ] #3 Pending three subject  +3 more",
 		);
-		// Narrower: whole pending segments are dropped and the overflow shortens.
+		// Narrower: whole pending segments are dropped.
 		expect(stripAnsi(renderWidgetLine(widgetState, theme, 62)[0]!)).toBe(
-			"Todos 1/6 · [>] #2 Active subject that is really qui…  +5 more",
+			"Todos 1/6 · [>] #2 Active subject that is really qui…  +4 more",
 		);
 		// Narrowest: the active subject truncates down to the last column.
 		expect(stripAnsi(renderWidgetLine(widgetState, theme, 60)[0]!)).toBe(
-			"Todos 1/6 · [>] #2 Active subject that is really q…  +5 more",
+			"Todos 1/6 · [>] #2 Active subject that is really q…  +4 more",
 		);
 		// Extreme widths still yield a single bounded line.
 		expect(renderWidgetLine(widgetState, theme, 1).map(stripAnsi)).toEqual(["…"]);
@@ -105,6 +105,12 @@ describe("renderWidgetLine", () => {
 			expect(lines.length).toBeLessThanOrEqual(1);
 			for (const line of lines) {
 				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+				expect(line).not.toContain("completed");
+				if (width >= 40) {
+					const shown = (stripAnsi(line).match(/\[[> ]\] #\d+/g) ?? []).length;
+					const hidden = Number(stripAnsi(line).match(/\+(\d+) more/)?.[1] ?? 0);
+					expect(shown + hidden).toBe(3);
+				}
 			}
 		}
 	});
