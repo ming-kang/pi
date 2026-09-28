@@ -17,11 +17,10 @@ interface BackgroundSessionOptions {
 	/** The main session owns prompt queues, preflight and idle state. */
 	canDeliver(): boolean;
 	/**
-	 * Hand one completion to the host's prompt path. The promise must settle only after the
-	 * message is persisted, or after it can no longer be persisted: a claim is released for
-	 * a delivery attempt that ended without the transcript containing the message.
+	 * Start a completion turn, or enqueue the message and return waitForPersistence().
+	 * The host owns prompt routing; this adapter owns the queued delivery's lifetime.
 	 */
-	deliver(message: CustomMessage): Promise<void>;
+	deliver(message: CustomMessage, waitForPersistence: () => Promise<void>): Promise<void>;
 	onEntry(entry: SessionEntry): void;
 	onError(event: string, message: string): void;
 }
@@ -36,7 +35,10 @@ export interface QuarantinedBackgroundSettlement {
 interface Delivery {
 	id: string;
 	service: BackgroundService;
-	persisted: boolean;
+	/** Agent-core preserves message identity; extension rewrites mutate it in place. */
+	message: CustomMessage;
+	phase: "pending" | "started" | "persisted";
+	queued?: { resolve(): void; reject(reason: Error): void };
 }
 
 /** Session persistence and completion delivery; execution supervision stays in BackgroundService. */
@@ -212,18 +214,32 @@ export class BackgroundSession {
 			for (const id of this.failures) if (!retained.has(id)) this.failures.delete(id);
 		}
 		const task = service.pendingNotifications().find((task) => !this.failures.has(task.id));
-		if (!task || !service.claimNotification(task.id)) return;
+		if (!task) return;
+		const message = backgroundCompletionMessage(task);
+		if (!service.claimNotification(task.id)) return;
 		// Exactly one completion may be in flight, whether queued for steering or running its
 		// own turn; there is no separate claim registry.
-		const delivery: Delivery = { id: task.id, service, persisted: false };
+		const delivery: Delivery = {
+			id: task.id,
+			service,
+			message,
+			phase: "pending",
+		};
 		this.delivery = delivery;
 		let deliveryError: unknown;
 		try {
-			await this.options.deliver(backgroundCompletionMessage(task));
+			await this.options.deliver(
+				delivery.message,
+				() =>
+					new Promise<void>((resolve, reject) => {
+						if (delivery.phase === "persisted") resolve();
+						else delivery.queued = { resolve, reject };
+					}),
+			);
 		} catch (error) {
 			deliveryError = error;
 		} finally {
-			if (!delivery.persisted) {
+			if (delivery.phase !== "persisted") {
 				service.releaseNotification(task.id);
 				if (service === this.service) this.failures.add(task.id);
 				const reason = deliveryError instanceof Error ? `: ${deliveryError.message}` : "";
@@ -239,21 +255,37 @@ export class BackgroundSession {
 		}
 	}
 
-	/** Capture before message hooks, invoke only after the resulting message was persisted. */
-	messageAcknowledgement(message: AgentMessage): (() => void) | undefined {
-		if (message.role !== "custom" || message.customType !== "background-completion") return;
-		const details = message.details as { taskId?: unknown } | undefined;
+	/** Record dequeueing before message hooks can fail or rewrite the notification. */
+	messageStarted(message: AgentMessage): void {
 		const delivery = this.delivery;
-		if (!delivery || details?.taskId !== delivery.id) return;
-		return () => {
-			if (delivery.persisted) return;
-			delivery.persisted = true;
+		if (delivery?.message === message && delivery.phase === "pending") delivery.phase = "started";
+	}
+
+	/** A queued message that was never emitted remains claimed for the next run. */
+	agentEnded(): void {
+		const delivery = this.delivery;
+		if (delivery?.phase === "started") {
+			delivery.queued?.reject(new Error("the completion message was not persisted"));
+		}
+	}
+
+	queueCleared(): void {
+		this.delivery?.queued?.reject(new Error("the completion message was dequeued before delivery"));
+	}
+
+	/** Acknowledge only successful appends, using identity even when metadata was rewritten. */
+	messagePersisted(message: AgentMessage): void {
+		const delivery = this.delivery;
+		if (delivery?.message === message && delivery.phase !== "persisted") {
+			delivery.phase = "persisted";
 			delivery.service.markDelivered(delivery.id);
-		};
+			delivery.queued?.resolve();
+		}
+		if (message.role === "toolResult") this.acknowledgeWaitResult(message.details);
 	}
 
 	/** A wait result claims delivery only through its final, persisted marker. */
-	acknowledgeWaitResult(details: unknown): void {
+	private acknowledgeWaitResult(details: unknown): void {
 		if (!details || typeof details !== "object" || !("backgroundTaskId" in details)) return;
 		const id = details.backgroundTaskId;
 		if (
@@ -268,6 +300,7 @@ export class BackgroundSession {
 	dispose(): void {
 		this.disposed = true;
 		this.service.close();
+		this.delivery?.queued?.reject(new Error("the session was disposed"));
 		if (this.timer) clearTimeout(this.timer);
 		this.timer = undefined;
 	}

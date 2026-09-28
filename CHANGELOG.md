@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Centralized background completion tracking in the session's Background adapter, removing duplicate queue bookkeeping from the main session while preserving delivery, retry, and usage accounting behavior.
+
 ## [0.87.5] - 2026-09-28
 
 ### Fixed

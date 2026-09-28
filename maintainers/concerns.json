@@ -64,7 +64,7 @@
 			"paths": [
 				{
 					"path": "src/core/agent-session.ts",
-					"rewrite": "Delivery acknowledgements, the nextTurn persistence contract, and the prompt preflight pause sit inside upstream method bodies; lifecycle pauses are shells over upstream-shaped *Body methods."
+					"rewrite": "Message lifecycle notifications, the nextTurn persistence contract, and the prompt preflight pause sit inside upstream method bodies; BackgroundSession owns delivery receipts and lifecycle pauses wrap upstream-shaped *Body methods."
 				},
 				{ "path": "src/core/agent-session-runtime.ts" },
 				{ "path": "src/core/agent-session-services.ts" },
@@ -101,6 +101,7 @@
 				"test/bash-background.test.ts",
 				"test/footer-width.test.ts",
 				"test/suite/agent-session-compaction.test.ts",
+				"test/suite/background-delivery.test.ts",
 				"test/suite/compaction-budget.test.ts"
 			]
 		},
