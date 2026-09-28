@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.87.5] - 2026-09-28
+
 ### Fixed
 
 - Tool validation hints no longer mix field requirements from alternative `anyOf` object shapes. Nullable single-shape fields still receive nested hints.
