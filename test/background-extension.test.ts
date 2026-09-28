@@ -228,6 +228,150 @@ describe("public Background management", () => {
 		expect(textOf(await runRead(h.service, { action: "read", taskId: suffix }))).toContain("progress");
 		h.finish();
 	});
+	it("lists the most recent finishes, not the oldest, when an unknown id lookup fails", async () => {
+		vi.useFakeTimers();
+		const service = new BackgroundService({ enabled: true });
+		services.push(service);
+		const ids: string[] = [];
+		for (let index = 0; index < 12; index++) {
+			await service.execute({
+				kind: "bash",
+				title: `task ${index + 1}`,
+				toolCallId: `call-${index + 1}`,
+				background: true,
+				async run(control) {
+					control.accept();
+					return { result: { content: [{ type: "text", text: "done" }], details: undefined } };
+				},
+			});
+			const id = service.list()[index]!.id;
+			await service.wait(id, 1000);
+			ids.push(id);
+			vi.advanceTimersByTime(1000);
+		}
+		const message = await runRead(service, { action: "read", taskId: "nope" }).then(
+			() => {
+				throw new Error("expected the lookup to fail");
+			},
+			(error: unknown) => (error as Error).message,
+		);
+		expect(message).toContain("Current tasks:");
+		// The ten-row window keeps the newest finishes; the two oldest fall out.
+		expect(message).not.toContain(ids[0]!);
+		expect(message).not.toContain(ids[1]!);
+		for (const id of ids.slice(2)) expect(message).toContain(id);
+	});
+	it("keeps foreground executions out of the unknown-id listing, counted like in bg list", async () => {
+		const service = new BackgroundService({ enabled: true });
+		services.push(service);
+		let foregroundId = "";
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let started!: () => void;
+		const running = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const foreground = service.execute({
+			kind: "bash",
+			title: "inline",
+			toolCallId: "inline",
+			async run(control) {
+				control.accept();
+				foregroundId = control.id;
+				started();
+				await gate;
+				return { result: { content: [{ type: "text", text: "done" }], details: undefined } };
+			},
+		});
+		await running;
+		await service.execute({
+			kind: "bash",
+			title: "backgrounded",
+			toolCallId: "backgrounded",
+			background: true,
+			async run(control) {
+				control.accept();
+				return { result: { content: [{ type: "text", text: "done" }], details: undefined } };
+			},
+		});
+		const backgroundId = service.list().find((task) => task.mode === "background")!.id;
+		const message = await runRead(service, { action: "read", taskId: "nope" }).then(
+			() => {
+				throw new Error("expected the lookup to fail");
+			},
+			(error: unknown) => (error as Error).message,
+		);
+		expect(message).toContain(backgroundId);
+		expect(message).not.toContain(foregroundId);
+		expect(message).toContain("1 foreground execution omitted");
+		release();
+		await foreground;
+	});
+	it("lists exactly the matched tasks for an ambiguous prefix even outside the current branch", async () => {
+		const service = new BackgroundService({ enabled: true, anchor: () => "anchor" });
+		services.push(service);
+		const gates: Array<() => void> = [];
+		const start = (title: string) =>
+			service.execute({
+				kind: "bash",
+				title,
+				toolCallId: title,
+				background: true,
+				async run(control) {
+					control.accept();
+					await new Promise<void>((resolve) => gates.push(resolve));
+					return { result: { content: [{ type: "text", text: "done" }], details: undefined } };
+				},
+			});
+		const outcomes = [start("first"), start("second")];
+		await Promise.all(outcomes);
+		for (const release of gates) release();
+		const ids = service.list().map((task) => task.id);
+		expect(ids).toHaveLength(2);
+		// Settle before leaving the branch: handed-off tasks keep delivery pending,
+		// so trim retains them as invisible records instead of expiring them.
+		await Promise.all(ids.map((id) => service.wait(id, 1000)));
+		await service.cancelOutsideBranch(new Set());
+		expect(service.list()).toHaveLength(0);
+		const message = await runRead(service, { action: "read", taskId: "bash" }).then(
+			() => {
+				throw new Error("expected the lookup to fail");
+			},
+			(error: unknown) => (error as Error).message,
+		);
+		expect(message).toContain('Ambiguous background task ID "bash" matches 2 tasks:');
+		for (const id of ids) expect(message).toContain(id);
+	});
+	it("shows the most recent finishes in bg list, folding older ones into the count", async () => {
+		vi.useFakeTimers();
+		const service = new BackgroundService({ enabled: true });
+		services.push(service);
+		const ids: string[] = [];
+		for (let index = 0; index < 7; index++) {
+			await service.execute({
+				kind: "bash",
+				title: `task ${index + 1}`,
+				toolCallId: `call-${index + 1}`,
+				background: true,
+				async run(control) {
+					control.accept();
+					return { result: { content: [{ type: "text", text: "done" }], details: undefined } };
+				},
+			});
+			const id = service.list()[index]!.id;
+			await service.wait(id, 1000);
+			ids.push(id);
+			vi.advanceTimersByTime(1000);
+		}
+		const text = textOf(runList(service));
+		// BG_LIST_FINISHED_SHOWN is 5: the two oldest finishes fold into the count.
+		expect(text).not.toContain(ids[0]!);
+		expect(text).not.toContain(ids[1]!);
+		for (const id of ids.slice(2)) expect(text).toContain(id);
+		expect(text).toContain("2 more records not shown.");
+	});
 	it("keeps missing-log and terminal diagnostics ahead of a long fallback, including waits with no delta", async () => {
 		const service = new BackgroundService({ enabled: true });
 		services.push(service);

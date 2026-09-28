@@ -17,6 +17,7 @@ import {
 	type BackgroundCompletion,
 	type BackgroundControl,
 	type BackgroundExecution,
+	BackgroundLookupError,
 	SUBAGENT_BACKGROUND_REJECTION,
 } from "../src/core/background/types.ts";
 
@@ -70,6 +71,16 @@ afterEach(() => {
 	for (const instance of services.splice(0)) instance.close();
 	vi.useRealTimers();
 });
+
+function lookupError(run: () => unknown): BackgroundLookupError {
+	try {
+		run();
+	} catch (error) {
+		expect(error).toBeInstanceOf(BackgroundLookupError);
+		return error as BackgroundLookupError;
+	}
+	throw new Error("expected a lookup failure");
+}
 
 describe("BackgroundService execution ownership", () => {
 	it("atomically detaches every silent foreground invocation exactly once", async () => {
@@ -467,6 +478,42 @@ describe("bounded lifecycle and snapshots", () => {
 		first.completion.resolve({ result: result() });
 		second.completion.resolve({ result: result() });
 		await Promise.all(calls);
+	});
+
+	it("throws a typed lookup error carrying exactly the matched tasks", async () => {
+		const bg = service();
+		const first = job();
+		const second = job();
+		const calls = [bg.execute(first.execution), bg.execute(second.execution)];
+		const unknown = lookupError(() => bg.get("nope"));
+		expect(unknown.kind).toBe("unknown");
+		expect(unknown.matches).toEqual([]);
+		const ambiguous = lookupError(() => bg.get("bash-"));
+		expect(ambiguous.kind).toBe("ambiguous");
+		expect(ambiguous.matches.map((task) => task.id).sort()).toEqual([first.control.id, second.control.id].sort());
+		first.completion.resolve({ result: result() });
+		second.completion.resolve({ result: result() });
+		await Promise.all(calls);
+	});
+
+	it("prefix matching still sees records outside the current branch, so the error names them", async () => {
+		const bg = service({ anchor: () => "anchor" });
+		const first = job({ background: true });
+		const second = job({ background: true });
+		// Hand off before settling: an already-available result wins over the
+		// handoff and marks delivery delivered, and trim expires delivered
+		// records once they leave the branch.
+		const calls = [bg.execute(first.execution), bg.execute(second.execution)];
+		await Promise.all(calls);
+		first.completion.resolve({ result: result() });
+		second.completion.resolve({ result: result() });
+		await bg.wait(first.control.id);
+		await bg.wait(second.control.id);
+		await bg.cancelOutsideBranch(new Set());
+		expect(bg.list()).toHaveLength(0);
+		const ambiguous = lookupError(() => bg.get("bash-"));
+		expect(ambiguous.kind).toBe("ambiguous");
+		expect(ambiguous.matches.map((task) => task.id).sort()).toEqual([first.control.id, second.control.id].sort());
 	});
 
 	it("bounds metadata, projections, stored content and intact-or-omitted details", async () => {

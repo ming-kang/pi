@@ -193,3 +193,20 @@ export class BackgroundExecutionError extends Error {
 		this.status = status;
 	}
 }
+
+/**
+ * A failed id lookup, typed so hosts can enrich the message without matching
+ * on message text. `matches` snapshots exactly the records the id or prefix
+ * resolved against — including records outside the current branch, which
+ * list() hides but prefix matching still collides with.
+ */
+export class BackgroundLookupError extends Error {
+	readonly kind: "unknown" | "ambiguous";
+	readonly matches: BackgroundTask[];
+	constructor(kind: "unknown" | "ambiguous", matches: BackgroundTask[]) {
+		super(kind === "ambiguous" ? "Ambiguous background task ID" : "Unknown background task ID");
+		this.name = "BackgroundLookupError";
+		this.kind = kind;
+		this.matches = matches;
+	}
+}

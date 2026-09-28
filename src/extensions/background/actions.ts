@@ -2,6 +2,7 @@
 import { boundText } from "../../core/background/output.ts";
 import {
 	type BackgroundContext,
+	BackgroundLookupError,
 	type BackgroundRead,
 	type BackgroundTask,
 	isBackgroundTerminal,
@@ -24,43 +25,58 @@ export function describeTaskLine(task: BackgroundTask, now = Date.now()): string
 	return `${task.id} ${task.kind} ${task.status} (${task.mode}) ${runtimeLabel(task, now)} ${task.title.slice(0, 200)}`;
 }
 
-const UNKNOWN_ID_MESSAGE = "Unknown background task ID";
-const AMBIGUOUS_ID_MESSAGE = "Ambiguous background task ID";
 const LOOKUP_LIST_LIMIT = 10;
 
-/** Task ids a lookup prefix can match: the full id or its kind-stripped suffix. */
-function matchesLookupPrefix(task: BackgroundTask, id: string): boolean {
-	return task.id.startsWith(id) || task.id.slice(task.kind.length + 1).startsWith(id);
+/**
+ * Finished rows sort most-recent first. list() is creation-ordered, so an
+ * unsorted slice would surface the oldest completions rather than the recent
+ * finishes a caller is most likely looking for.
+ */
+function recentFinishedFirst(tasks: BackgroundTask[]): BackgroundTask[] {
+	return tasks.sort((left, right) => (right.endedAt ?? 0) - (left.endedAt ?? 0));
+}
+
+/**
+ * Listings cover backgrounded work only; foreground executions deliver inline
+ * in the transcript, so they are counted rather than shown. Every listing
+ * (bg list output and lookup-failure messages) shares this scope.
+ */
+function listedTasks(background: BackgroundContext): { tasks: BackgroundTask[]; foregroundOmitted: number } {
+	const all = background.list();
+	const tasks = all.filter((task) => task.mode === "background");
+	return { tasks, foregroundOmitted: all.length - tasks.length };
+}
+
+function foregroundOmissionNote(omitted: number): string {
+	return omitted > 0
+		? `\n${omitted} foreground ${omitted === 1 ? "execution" : "executions"} omitted — foreground work is delivered inline in the transcript.`
+		: "";
 }
 
 /**
  * Rewrite the service's bare lookup failure into an actionable one: an
  * unknown id gets the session's current tasks (active first, then recent
  * finishes) so the next call can use a real id without a separate list call,
- * and an ambiguous prefix gets exactly the tasks it matched. A missing id
- * stays an error — it is likely a mistyped id of a task still running.
+ * and an ambiguous prefix gets exactly the tasks it matched — including
+ * records outside the current branch, which listings hide but the prefix
+ * still collides with.
  */
 function lookupFailure(background: BackgroundContext, id: string, error: unknown): Error {
-	const message = error instanceof Error ? error.message : String(error);
-	const ambiguous = message.includes(AMBIGUOUS_ID_MESSAGE);
-	if (!ambiguous && !message.includes(UNKNOWN_ID_MESSAGE)) {
-		return error instanceof Error ? error : new Error(message);
+	if (!(error instanceof BackgroundLookupError)) return error instanceof Error ? error : new Error(String(error));
+	if (error.kind === "ambiguous") {
+		const lines = error.matches.map((task) => describeTaskLine(task)).join("\n");
+		return new Error(`Ambiguous background task ID "${id}" matches ${error.matches.length} tasks:\n${lines}`);
 	}
-	if (ambiguous) {
-		const matches = background.list().filter((task) => matchesLookupPrefix(task, id));
-		const lines = matches.map((task) => describeTaskLine(task)).join("\n");
-		return new Error(`Ambiguous background task ID "${id}" matches ${matches.length} tasks:\n${lines}`);
-	}
-	const tasks = background.list();
+	const { tasks, foregroundOmitted } = listedTasks(background);
 	const active = tasks.filter((task) => !isBackgroundTerminal(task.status));
-	const finished = tasks.filter((task) => isBackgroundTerminal(task.status));
+	const finished = recentFinishedFirst(tasks.filter((task) => isBackgroundTerminal(task.status)));
 	const shown = [...active, ...finished].slice(0, LOOKUP_LIST_LIMIT);
 	if (shown.length === 0) {
 		return new Error(`No background task "${id}" in this session. No background tasks in this session.`);
 	}
 	const lines = shown.map((task) => describeTaskLine(task)).join("\n");
 	return new Error(
-		`No background task "${id}" in this session. IDs from other sessions are not valid here.\nCurrent tasks:\n${lines}`,
+		`No background task "${id}" in this session. IDs from other sessions are not valid here.\nCurrent tasks:\n${lines}${foregroundOmissionNote(foregroundOmitted)}`,
 	);
 }
 /** Reserve space for each independent diagnostic before allowing raw output to fill the budget. */
@@ -169,23 +185,15 @@ export function runKill(background: BackgroundContext, input: BgInput): AgentToo
 	}
 }
 export function runList(background: BackgroundContext): AgentToolResult<BgListDetails> {
-	// Listings cover backgrounded work only; foreground executions deliver
-	// inline in the transcript, so they are counted here rather than shown.
-	const all = background.list();
-	const tasks = all.filter((task) => task.mode === "background");
-	const foregroundOmitted = all.length - tasks.length;
+	const { tasks, foregroundOmitted } = listedTasks(background);
 	const active = tasks.filter((task) => !isBackgroundTerminal(task.status));
-	const finished = tasks.filter((task) => isBackgroundTerminal(task.status));
+	const finished = recentFinishedFirst(tasks.filter((task) => isBackgroundTerminal(task.status)));
 	const shown = [...active, ...finished.slice(0, BG_LIST_FINISHED_SHOWN)].slice(0, 100);
 	const hidden = tasks.length - shown.length;
-	const foregroundNote =
-		foregroundOmitted > 0
-			? `\n${foregroundOmitted} foreground ${foregroundOmitted === 1 ? "execution" : "executions"} omitted — foreground work is delivered inline in the transcript.`
-			: "";
 	return result(
 		shown.length
-			? `${shown.map((task) => describeTaskLine(task)).join("\n")}${hidden > 0 ? `\n${hidden} more records not shown.` : ""}${foregroundNote}`
-			: `No background tasks. Start work through bash or subagent with background: true.${foregroundNote}`,
+			? `${shown.map((task) => describeTaskLine(task)).join("\n")}${hidden > 0 ? `\n${hidden} more records not shown.` : ""}${foregroundOmissionNote(foregroundOmitted)}`
+			: `No background tasks. Start work through bash or subagent with background: true.${foregroundOmissionNote(foregroundOmitted)}`,
 		{
 			action: "list",
 			running: active.length,

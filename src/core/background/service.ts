@@ -10,6 +10,7 @@ import {
 	type BackgroundControl,
 	type BackgroundExecution,
 	BackgroundExecutionError,
+	BackgroundLookupError,
 	type BackgroundRead,
 	type BackgroundServiceOptions,
 	type BackgroundTask,
@@ -399,8 +400,12 @@ export class BackgroundService implements BackgroundContext {
 		const matches = [...this.records.values()].filter(
 			({ task }) => task.id.startsWith(id) || task.id.slice(task.kind.length + 1).startsWith(id),
 		);
-		if (!id || matches.length !== 1)
-			throw new Error(matches.length > 1 ? "Ambiguous background task ID" : "Unknown background task ID");
+		if (!id || matches.length !== 1) {
+			throw new BackgroundLookupError(
+				matches.length > 1 ? "ambiguous" : "unknown",
+				matches.map((record) => this.snapshot(record)),
+			);
+		}
 		return matches[0]!;
 	}
 
