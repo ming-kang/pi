@@ -61,7 +61,7 @@ This repo is a standalone distribution of Pi's coding agent, `@astralyn/pi`. [Ma
 - Never commit credentials, provider tokens, local configuration, or machine-specific paths.
 - Stage explicit paths; never `git add -A` or `git add .`. Inspect `git status` and the staged diff before committing, and never commit without an owner-requested checkpoint or release.
 - Never run `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, or `git commit --no-verify`. The pre-commit hook is the check gate; do not bypass it.
-- Commit messages: `feat|fix|docs[(scope)]: <summary>`, concise, with further lines only when they carry information.
+- Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/): `<type>[(scope)]: <summary>` with a type such as `feat`, `fix`, `docs`, `refactor`, `test`, or `chore`. Keep them concise, with further lines only when they carry information.
 - The hook also runs `scripts/check-lockfile-commit.mjs` and `npm run diff:upstream -- --check --staged`. An intentional `npm-shrinkwrap.json` change needs review and `PI_ALLOW_LOCKFILE_CHANGE=1` on that commit. A missing baseline tree requires fetching the exact tag in `maintainers/upstream.json`; the hook never fetches or changes refs.
 - Keep the upstream repository as the `upstream` remote. Adopt upstream only from release tags recorded in `maintainers/upstream.json` and compared against that tree, never from a branch tip, and never merge an upstream monorepo tag into this branch. Follow [Upstream synchronization](maintainers/upstream.md).
 
