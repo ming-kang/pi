@@ -9,7 +9,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - Bash and PowerShell result renderers keep their elapsed time when an extension replaces only the call renderer, and release their timers alongside an existing extension cleanup callback.
 - The read preview now follows the shared tool style's folding policy without an additional hidden-result rule in its renderer.
 - Grep call headers again show case-insensitive, literal, and context options (`-i`, `-F`, and `-C`) in both collapsed and expanded views.
-- The Question dialog takes at most half of the terminal (16 rows minimum), so the assistant reply above it stays readable. The tab strip, the question, the chat row, and the key hints stay pinned. Options scroll as whole options with `↑ N more options` / `↓ N more options` hints, and a preview is its own region that always starts at the top and ends with `… N more lines` when clipped.
+- The Question dialog keeps choices in a compact list and shows the focused choice's full description, notes, and Markdown preview in an independently paged area. Wide terminals size the list to its labels, capped at half the usable width, and give the remaining width to details; narrow terminals stack the areas while keeping the focused choice visible. The question body no longer repeats its tab header. `Alt+↑` / `Alt+↓` page through details with a line-position indicator. The dialog stays within half the terminal (16 rows minimum), hints wrap between actions, and clipped note/custom-answer editors keep the cursor visible.
 - `ctx.getContextSnapshot()` reads the provider attribution setting when its headers are transformed, like a real request, instead of when the snapshot was taken.
 
 ### Changed

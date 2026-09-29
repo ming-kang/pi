@@ -55,7 +55,9 @@
 			"tests": [
 				"test/todo-extension.test.ts",
 				"test/todo-patch-result.test.ts",
-				"test/todo-render.test.ts"
+				"test/todo-render.test.ts",
+				"test/question-dialog.test.ts",
+				"test/question-details.test.ts"
 			]
 		},
 		{

@@ -137,6 +137,17 @@ In `/bg`, Up/Down and Page Up/Page Down target the focused pane: row selection/l
 
 Ctrl+B also works while `/bg` owns focus. It does not restart execution, reset shell timeouts, detach individual workers, or affect user `!` commands. With no eligible work it only reports that nothing can be moved. See [Background tasks](bundled/extensions/background.md).
 
+### Question Details
+
+These actions apply while the [question dialog](bundled/extensions/question.md) is showing choices. Up/Down move between choices; the detail paging keys read the focused choice's description, notes, and preview without selecting it.
+
+| Keybinding id | Default | Description |
+| --- | --- | --- |
+| `app.question.pageUp` | `alt+up` | Page up in question details |
+| `app.question.pageDown` | `alt+down` | Page down in question details |
+
+In fullscreen mode, plain Page Up/Down still target the transcript. Notes and custom-answer editors use the ordinary editor bindings.
+
 ### BTW Side Questions
 
 These actions apply while the [BTW panel](bundled/extensions/btw.md) is open and the editor has focus. Autocomplete and dialogs retain priority.

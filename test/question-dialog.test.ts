@@ -12,6 +12,7 @@ const UP = "\x1b[A";
 const DOWN = "\x1b[B";
 const LEFT = "\x1b[D";
 const TAB = "\t";
+const pageHint = process.platform === "darwin" ? "Option+↑/Option+↓ scroll" : "Alt+↑/Alt+↓ scroll";
 
 function question(overrides?: Partial<Question>): Question {
 	return {
@@ -49,9 +50,9 @@ describe("question dialog", () => {
 	it("shows numeric shortcuts, punctuation-free custom copy, and aligned option labels", () => {
 		const singleOutput = createDialog([question()]).view();
 		const multiOutput = createDialog([question({ multiSelect: true })]).view();
-		expect(singleOutput).toContain("1-3 select • Tab notes/custom • Enter select • ←/→ questions • Esc cancel");
+		expect(singleOutput).toContain("↑/↓ navigate • 1-3 select • Tab notes/custom • Enter select • Esc cancel");
 		expect(multiOutput).toContain(
-			"1-3 toggle • Space toggle focused • Tab notes/custom • Enter continue • ←/→ questions • Esc cancel",
+			"↑/↓ navigate • 1-3 toggle • Space toggle focused • Tab notes/custom • Enter continue • Esc cancel",
 		);
 		expect(singleOutput).toContain("Type something");
 		expect(singleOutput).not.toContain("Type something.");
@@ -103,7 +104,11 @@ describe("question dialog", () => {
 			"tui.editor.cursorLeft": ["alt+h", "left"],
 			"tui.editor.cursorRight": ["alt+l", "right"],
 		});
-		const dialog = createDialog([question()], undefined, keybindings);
+		const dialog = createDialog(
+			[question(), question({ header: "Second", question: "Second?" })],
+			undefined,
+			keybindings,
+		);
 		const output = dialog.view();
 		expect(output).toContain(
 			`${process.platform === "darwin" ? "Option" : "Alt"}+H/${process.platform === "darwin" ? "Option" : "Alt"}+L questions`,
@@ -224,7 +229,7 @@ describe("question dialog", () => {
 		const output = dialog.viewAt(40);
 		expect(output).toMatch(/→\s+1\. Alpha/);
 		expect(output).toContain("PREVIEW-1");
-		expect(output).toContain("more lines");
+		expect(output).toContain(pageHint);
 		expect(dialog.component.render(40).length).toBeLessThanOrEqual(20);
 	});
 
@@ -273,37 +278,37 @@ describe("question dialog", () => {
 
 		it("keeps tabs, the question, chat row, and key hints visible while scrolled to the last option", () => {
 			const dialog = createDialog(
-				[question({ options: plainOptions(8) }), question({ question: "Second?", header: "Second" })],
+				[question({ options: plainOptions(12) }), question({ question: "Second?", header: "Second" })],
 				undefined,
 				new KeybindingsManager(),
 				{ rows: 30, columns: 120 },
 			);
-			for (let index = 0; index < 8; index++) dialog.component.handleInput(DOWN);
+			for (let index = 0; index < 12; index++) dialog.component.handleInput(DOWN);
 			expect(dialog.component.render(120).length).toBeLessThanOrEqual(16);
 			const output = dialog.viewAt(120);
-			expect(output).toMatch(/→\s+9\. Type something/);
+			expect(output).toMatch(/→\s+13\. Type something/);
 			expect(output).toContain("Approach");
 			expect(output).toContain("Which approach should we take?");
 			expect(output).toContain("Second");
 			expect(output).toContain("Chat about this");
 			expect(output).toContain("Esc cancel");
 			expect(output).toMatch(/↑ \d+ more options?/);
-			expect(output).not.toContain("↓");
+			expect(output).not.toMatch(/↓ \d+ more options?/);
 		});
 
-		it("says how many options are below and shows only whole options", () => {
-			const dialog = createDialog([question({ options: plainOptions(8) })], undefined, new KeybindingsManager(), {
+		it("counts hidden choices while showing the focused choice's description separately", () => {
+			const dialog = createDialog([question({ options: plainOptions(12) })], undefined, new KeybindingsManager(), {
 				rows: 24,
 				columns: 100,
 			});
 			const output = dialog.viewAt(100);
 			const hint = output.match(/↓ (\d+) more options?/);
 			expect(hint).not.toBeNull();
-			expect(output).not.toContain("↑");
+			expect(output).not.toMatch(/↑ \d+ more options?/);
 			const visible = visibleOptionNumbers(output);
 			expect(visible[0]).toBe(1);
-			expect(visible.length + Number(hint?.[1])).toBe(9);
-			for (const number of visible) expect(output).toContain(`Description ${number}`);
+			expect(visible.length + Number(hint?.[1])).toBe(13);
+			expect(output).toContain("Description 1");
 		});
 
 		it("shows no more-options hint when every option fits", () => {
@@ -322,7 +327,7 @@ describe("question dialog", () => {
 			const output = dialog.viewAt(120);
 			expect(output).toMatch(/→\s+4\. Option 4/);
 			for (let line = 1; line <= 6; line++) expect(output).toContain(`P4-${line}`);
-			expect(output).not.toContain("more lines");
+			expect(output).not.toContain(pageHint);
 			expect(dialog.component.render(120).length).toBeLessThanOrEqual(16);
 		});
 
@@ -356,13 +361,14 @@ describe("question dialog", () => {
 				return dialog;
 			};
 
-			it("keeps the whole focused option and both hints when the preview cannot fit", () => {
+			it("keeps compact choices beside the start of scrollable details", () => {
 				const dialog = open(30);
 				const output = dialog.viewAt(50);
 				expect(output).toMatch(/→\s+2\. Option 2/);
 				expect(output).toContain("end2");
-				expect(output).toMatch(/↑ \d+ more options?/);
+				expect(output).toContain("1. Option 1");
 				expect(output).toMatch(/↓ \d+ more options?/);
+				expect(output).toContain(pageHint);
 				expect(output).toContain("Esc cancel");
 				expect(dialog.component.render(50).length).toBeLessThanOrEqual(16);
 			});
@@ -372,14 +378,14 @@ describe("question dialog", () => {
 				const output = dialog.viewAt(50);
 				expect(output).toMatch(/→\s+2\. Option 2/);
 				expect(output).toContain("end2");
-				expect(output).toMatch(/↓ \d+ more options?/);
+				expect(output).toContain("6. Type something");
 				expect(output).toContain("P2-1");
-				expect(output).toContain("more lines");
+				expect(output).toContain(pageHint);
 				expect(dialog.component.render(50).length).toBeLessThanOrEqual(20);
 			});
 		});
 
-		it("clips a tall preview to the option area and says how many lines are left", () => {
+		it("bounds a tall preview and shows its reading position", () => {
 			const dialog = createDialog([question({ options: previewOptions(40) })], undefined, new KeybindingsManager(), {
 				rows: 30,
 				columns: 120,
@@ -388,7 +394,8 @@ describe("question dialog", () => {
 			dialog.component.handleInput(DOWN);
 			const output = dialog.viewAt(120);
 			expect(output).toContain("P3-1");
-			expect(output).toMatch(/… \d+ more lines/);
+			expect(output).toMatch(/1–\d+\/42/);
+			expect(output).toContain(pageHint);
 			expect(output).toContain("Esc cancel");
 			expect(dialog.component.render(120).length).toBeLessThanOrEqual(16);
 		});

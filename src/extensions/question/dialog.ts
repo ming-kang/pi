@@ -1,8 +1,17 @@
 import "./keybindings.ts";
-import { Editor, type EditorTheme, Markdown, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+	CURSOR_MARKER,
+	Editor,
+	type EditorTheme,
+	Markdown,
+	type TUI,
+	truncateToWidth,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 import type { Keybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { keyLabel as configuredKeyLabel } from "../../modes/interactive/components/keybinding-hints.ts";
 import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
+import { DetailPane } from "./detail-pane.ts";
 import { ruleBorder, wrapWithPrefix } from "./dialog-primitives.ts";
 import { QUESTION_LIMITS } from "./limits.ts";
 import { moreOptionsHint, type WindowItem, windowItems } from "./option-window.ts";
@@ -26,8 +35,6 @@ type DialogView = "question" | "review";
  */
 const DIALOG_MAX_FRACTION = 0.5;
 const DIALOG_MIN_ROWS = 16;
-/** Fewest rows a preview under the options is worth showing in. */
-const MIN_STACKED_PREVIEW_ROWS = 3;
 const VIEWPORT_SCROLL_STEP = 4;
 
 interface VerticalViewport {
@@ -93,6 +100,7 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 		let finished = false;
 		const cache = new WidthCachedRender();
 		const previewCache = new PreviewLinesCache();
+		const details = new DetailPane();
 		const states = questions.map(() => newQuestionState());
 		const optionsByQuestion = questions.map((question) => displayOptions(question));
 
@@ -148,6 +156,7 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 		}
 
 		function setCurrentIdx(index: number): void {
+			details.reset();
 			currentIdx = Math.max(0, Math.min(questions.length - 1, index));
 			view = "question";
 			inputMode = undefined;
@@ -202,6 +211,7 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 		}
 
 		function beginCustomInput(): void {
+			details.reset();
 			const state = currentState();
 			inputMode = "custom";
 			noteTarget = undefined;
@@ -226,6 +236,7 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 		}
 
 		function beginNotesInput(): void {
+			details.reset();
 			const question = currentQuestion();
 			const state = currentState();
 			const option = focusedOption();
@@ -404,6 +415,13 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 				if (currentIdx > 0) setCurrentIdx(currentIdx - 1);
 				return;
 			}
+			if (keyMatches(data, "app.question.pageUp") || keyMatches(data, "app.question.pageDown")) {
+				// Resolve the current pane's height even if another key arrived before a redraw.
+				render(tui.terminal.columns);
+				details.page(keyMatches(data, "app.question.pageUp") ? -1 : 1);
+				refresh();
+				return;
+			}
 			if (keyMatches(data, "tui.editor.cursorRight")) {
 				if (currentIdx < questions.length - 1) setCurrentIdx(currentIdx + 1);
 				else if (firstUnanswered(states) === undefined) showReview();
@@ -515,23 +533,12 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 					: theme.fg(firstUnanswered(states) === undefined ? "success" : "dim", " ✓ Submit "),
 			].join(" ");
 			wrapWithPrefix(" ", tabs, renderWidth, lines);
-			lines.push("");
 		}
 
 		function previewLines(previewText: string, width: number): string[] {
 			return previewCache.get(previewText, width, () =>
 				new Markdown(previewText, 1, 0, getMarkdownTheme()).render(Math.max(1, width)),
 			);
-		}
-
-		/** Fit `lines` into `maxLines` rows; a clipped tail becomes a "… N more lines" row. */
-		function clipLines(lines: string[], maxLines: number, width: number): string[] {
-			if (lines.length <= maxLines) return lines;
-			const kept = Math.max(0, maxLines - 1);
-			return [
-				...lines.slice(0, kept),
-				theme.fg("dim", truncateToWidth(`… ${lines.length - kept} more lines`, Math.max(1, width))),
-			];
 		}
 
 		/** Multi-select checkbox marker; the other row shows no box until a custom answer exists. */
@@ -579,7 +586,7 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 		function renderQuestionFooter(renderWidth: number, digitRange: string): string[] {
 			const state = currentState();
 			const isMulti = currentQuestion().multiSelect === true;
-			const lines: string[] = [""];
+			const lines: string[] = [];
 			const chatPrefix = footerFocused ? theme.fg("accent", "→") : " ";
 			wrapWithPrefix(
 				`${chatPrefix} `,
@@ -591,7 +598,6 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 				lines.push("");
 				wrapWithPrefix(" ", theme.fg("warning", state.warning), renderWidth, lines);
 			}
-			lines.push("");
 			let hints: string;
 			if (inputMode === "notes") {
 				hints = joinHints(editorSubmitAction("save notes"), keyAction("tui.select.cancel", "back"));
@@ -608,23 +614,38 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 				);
 			} else if (isMulti) {
 				hints = joinHints(
+					keyGroupAction(["tui.select.up", "tui.select.down"], "navigate"),
 					`${digitRange} toggle`,
 					keyAction("app.list.toggle", "toggle focused"),
 					keyAction("tui.input.tab", "notes/custom"),
 					keyAction("tui.select.confirm", "continue"),
-					keyGroupAction(["tui.editor.cursorLeft", "tui.editor.cursorRight"], "questions"),
+					questions.length > 1
+						? keyGroupAction(["tui.editor.cursorLeft", "tui.editor.cursorRight"], "questions")
+						: "",
 					keyAction("tui.select.cancel", "cancel"),
 				);
 			} else {
 				hints = joinHints(
+					keyGroupAction(["tui.select.up", "tui.select.down"], "navigate"),
 					`${digitRange} select`,
 					keyAction("tui.input.tab", "notes/custom"),
 					keyAction("tui.select.confirm", "select"),
-					keyGroupAction(["tui.editor.cursorLeft", "tui.editor.cursorRight"], "questions"),
+					questions.length > 1
+						? keyGroupAction(["tui.editor.cursorLeft", "tui.editor.cursorRight"], "questions")
+						: "",
 					keyAction("tui.select.cancel", "cancel"),
 				);
 			}
-			wrapWithPrefix(" ", theme.fg("dim", hints), renderWidth, lines);
+			// Wrap between actions, so a key stays beside the action it performs.
+			let hintLine = "";
+			for (const hint of hints.split(" • ")) {
+				const joined = hintLine ? `${hintLine} • ${hint}` : hint;
+				if (hintLine && visibleWidth(joined) > renderWidth - 1) {
+					wrapWithPrefix(" ", theme.fg("dim", hintLine), renderWidth, lines);
+					hintLine = hint;
+				} else hintLine = joined;
+			}
+			if (hintLine) wrapWithPrefix(" ", theme.fg("dim", hintLine), renderWidth, lines);
 			lines.push(ruleBorder(theme, renderWidth));
 			return lines;
 		}
@@ -644,7 +665,13 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 			const window = windowItems(items, focus, rows);
 			const rowsBefore = (count: number) => items.slice(0, count).reduce((sum, item) => sum + item.height, 0);
 			const from = rowsBefore(window.first);
-			const visible = optionLines.slice(from, rowsBefore(window.last + 1)).slice(0, window.contentRows);
+			const block = optionLines.slice(from, rowsBefore(window.last + 1));
+			const visible = applyVerticalViewport(block, width, window.contentRows, theme, {
+				anchorLine: Math.max(
+					0,
+					block.findIndex((line) => line.includes(CURSOR_MARKER)),
+				),
+			}).lines;
 			if (!window.showAbove && !window.showBelow) return { rows: visible, focusRow: rowsBefore(focus) - from };
 			const hint = (direction: "up" | "down", count: number) =>
 				theme.fg("dim", ` ${truncateToWidth(moreOptionsHint(direction, count), Math.max(1, width - 1))}`);
@@ -682,29 +709,26 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 			const state = currentState();
 			const options = currentOptions();
 			const isMulti = question.multiSelect === true;
-			wrapWithPrefix(
-				" ",
-				`${theme.fg("accent", question.header)}  ${theme.fg("text", question.question)}`,
-				renderWidth,
-				lines,
-			);
-			lines.push("");
+			wrapWithPrefix(" ", theme.fg("text", question.question), renderWidth, lines);
 
-			// The option area gets what the pinned head and footer leave. Options and the
-			// preview are laid out in it as independent regions.
+			// The pinned head and footer leave one bounded area for choices and reading.
 			const footerLines = renderQuestionFooter(renderWidth, `1-${Math.min(9, options.length)}`);
 			const areaRows = Math.max(1, maxRows - lines.length - footerLines.length);
-
-			const hasPreview =
-				inputMode === undefined && !isMulti && options.some((option) => option.kind === "option" && option.preview);
-			const showPreviewSideBySide = hasPreview && renderWidth >= 60;
-			const gap = 2;
-			const listWidth = showPreviewSideBySide ? Math.max(20, Math.floor(renderWidth * 0.4)) : renderWidth;
-			const previewWidth = showPreviewSideBySide ? renderWidth - listWidth - gap : renderWidth;
-			const previewOption = options[state.optionIndex];
-			const previewText =
-				hasPreview && previewOption?.kind === "option" && previewOption.preview ? previewOption.preview : undefined;
-			const preview = previewText ? previewLines(previewText, previewWidth) : undefined;
+			const sideBySide = !inputMode && renderWidth >= 72;
+			// Measure every authored label, reserving the six-column prefix and a checkmark.
+			// Saved answers and focus changes must not move the divider or reflow the preview.
+			const listWidth = sideBySide
+				? Math.min(
+						Math.floor((renderWidth - 3) / 2),
+						Math.max(
+							24,
+							...options.map(
+								(option, index) => 6 + visibleWidth(`${index + 1}. ${option.label.replace(/\s+/gu, " ")}`) + 2,
+							),
+						),
+					)
+				: renderWidth;
+			const detailWidth = sideBySide ? renderWidth - listWidth - 3 : renderWidth;
 
 			const optionLines: string[] = [];
 			const items: WindowItem[] = [];
@@ -730,22 +754,20 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 						? (state.customAnswer?.text ??
 							(state.singleAnswer?.kind === "custom" ? state.singleAnswer.answer : undefined))
 						: undefined;
-				const labelText = customText ? `${option.label}  ✎ ${customText}` : option.label;
+				const labelText = (customText ? `${option.label}  ✎ ${customText}` : option.label).replace(/\s+/gu, " ");
 				const label = `${index + 1}. ${labelText}${selectedSingle ? " ✓" : ""}${note}`;
 				const color = focused ? "accent" : selectedSingle || checked ? "success" : "text";
-				const start = optionLines.length;
-				wrapWithPrefix(`${focusArrow} ${marker} `, theme.fg(color, label), listWidth, optionLines);
-				if (option.kind === "option" && option.description) {
-					wrapWithPrefix("       ", theme.fg("muted", option.description), listWidth, optionLines);
-				}
-				items.push({ height: optionLines.length - start, countsAsOption: true });
+				const row = truncateToWidth(`${focusArrow} ${marker} ${theme.fg(color, label)}`, listWidth);
+				optionLines.push(
+					focused ? theme.bg("selectedBg", row + " ".repeat(Math.max(0, listWidth - visibleWidth(row)))) : row,
+				);
+				items.push({ height: 1, countsAsOption: true });
 			}
 
 			if (inputMode) {
 				const start = optionLines.length;
-				optionLines.push("");
 				const label = inputMode === "notes" ? `Notes for ${noteTarget ?? "option"}:` : "Your answer:";
-				wrapWithPrefix(" ", theme.fg("muted", label), listWidth, optionLines);
+				optionLines.push(theme.fg("muted", truncateToWidth(` ${label}`, listWidth)));
 				for (const line of editor.render(Math.max(1, listWidth - 2))) optionLines.push(` ${line}`);
 				items.push({ height: optionLines.length - start, countsAsOption: false });
 				focusItem = items.length - 1;
@@ -753,42 +775,69 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 
 			const regionStart = lines.length;
 			let focusRow: number;
-			if (showPreviewSideBySide) {
-				const previewRows = preview ?? [theme.fg("dim", "(no preview)")];
-				const rows = Math.min(areaRows, Math.max(optionLines.length, previewRows.length));
-				const left = windowOptionLines(optionLines, items, focusItem, rows, listWidth);
-				const right = clipLines(previewRows, rows, previewWidth);
-				focusRow = left.focusRow;
-				const pad = " ".repeat(gap);
-				for (let row = 0; row < Math.max(left.rows.length, right.length); row++) {
-					const leftText = left.rows[row] ?? "";
-					const leftPadded = leftText + " ".repeat(Math.max(0, listWidth - visibleWidth(leftText)));
-					lines.push(`${leftPadded}${pad}${right[row] ?? ""}`);
-				}
-			} else {
-				// Narrow: the options come first. They keep the focused option and both hints
-				// (or the whole list when it fits, and at least half of the area); the preview
-				// gets the rows left, or a one-line note when fewer than a few remain.
-				let previewBlock: string[] = [];
-				if (preview) {
-					const optionNeed = Math.min(
-						optionLines.length,
-						Math.max(items[focusItem].height + 2, Math.floor((areaRows - 1) / 2)),
-					);
-					const previewRows = areaRows - optionNeed - 1;
-					if (previewRows >= MIN_STACKED_PREVIEW_ROWS) {
-						previewBlock = [
-							ruleBorder(theme, renderWidth, "dim"),
-							...clipLines(preview, Math.min(preview.length, previewRows), renderWidth),
-						];
-					} else if (previewRows >= 0) {
-						previewBlock = [theme.fg("dim", " preview hidden: not enough rows")];
-					}
-				}
-				const optionRows = Math.max(1, areaRows - previewBlock.length);
-				const windowed = windowOptionLines(optionLines, items, focusItem, optionRows, renderWidth);
+			if (inputMode) {
+				const windowed = windowOptionLines(optionLines, items, focusItem, areaRows, renderWidth);
 				focusRow = windowed.focusRow;
-				lines.push(...windowed.rows, ...previewBlock);
+				lines.push(...windowed.rows);
+			} else {
+				const option = options[state.optionIndex];
+				const content: string[] = [];
+				const hasPreview = !footerFocused && !isMulti && option.kind === "option" && Boolean(option.preview);
+				const title = footerFocused ? "Chat about this" : `${hasPreview ? "Preview" : "Details"} · ${option.label}`;
+				// The compact list may elide a long label; its full text stays readable here.
+				if (
+					!footerFocused &&
+					visibleWidth(`${state.optionIndex + 1}. ${option.label.replace(/\s+/gu, " ")}`) > listWidth - 6
+				) {
+					wrapWithPrefix(" ", theme.fg("text", option.label), detailWidth, content);
+				}
+				if (footerFocused) {
+					wrapWithPrefix(
+						" ",
+						theme.fg("muted", "Discuss this question before choosing an answer."),
+						detailWidth,
+						content,
+					);
+				} else if (option.kind === "option") {
+					wrapWithPrefix(" ", theme.fg("muted", option.description), detailWidth, content);
+					const note = state.notesByOption.get(option.label);
+					if (note) wrapWithPrefix(" ", theme.fg("success", `Note: ${note}`), detailWidth, content);
+					if (hasPreview && option.preview) content.push("", ...previewLines(option.preview, detailWidth));
+				} else {
+					const custom =
+						state.customAnswer?.text ??
+						(state.singleAnswer?.kind === "custom" ? state.singleAnswer.answer : undefined);
+					wrapWithPrefix(
+						" ",
+						theme.fg("muted", custom || "Write your own answer instead of choosing an option."),
+						detailWidth,
+						content,
+					);
+				}
+				// On narrow screens reserve reading space first, then show as many compact
+				// choices as fit. The focused choice always remains in the list window.
+				const optionRows = sideBySide ? areaRows : Math.max(1, Math.min(options.length, areaRows - 4));
+				const detailRows = sideBySide ? areaRows : Math.max(1, areaRows - optionRows);
+				const left = windowOptionLines(optionLines, items, focusItem, optionRows, listWidth);
+				const right = details.render(
+					`${currentIdx}:${state.optionIndex}:${footerFocused}`,
+					title,
+					content,
+					detailWidth,
+					detailRows,
+					keyGroupAction(["app.question.pageUp", "app.question.pageDown"], "scroll"),
+					theme,
+				);
+				focusRow = left.focusRow;
+				if (sideBySide) {
+					for (let row = 0; row < Math.max(left.rows.length, right.length); row++) {
+						const leftText = left.rows[row] ?? "";
+						const leftPadded = leftText + " ".repeat(Math.max(0, listWidth - visibleWidth(leftText)));
+						lines.push(`${leftPadded}${theme.fg("dim", " │ ")}${right[row] ?? ""}`);
+					}
+				} else {
+					lines.push(...left.rows, ...right);
+				}
 			}
 			const anchorLine = regionStart + focusRow;
 			lines.push(...footerLines);
