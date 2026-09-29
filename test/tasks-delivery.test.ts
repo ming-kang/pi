@@ -6,7 +6,6 @@ describe("task result persistence receipts", () => {
 	it("acknowledges an explicitly bound wait after persistence, independent of rewritten details", async () => {
 		const host = new TaskSession({
 			manager: SessionManager.inMemory(process.cwd()),
-			role: "main",
 			canDeliver: () => false,
 			deliver: async () => {},
 			onEntry: () => {},

@@ -17,7 +17,7 @@ const TaskSchema = Type.Object(
 	{ additionalProperties: false },
 );
 
-const SubagentLikeSchema = Type.Object(
+const BatchSchema = Type.Object(
 	{
 		background: Type.Optional(Type.Boolean()),
 		tasks: Type.Array(TaskSchema, { minItems: 1 }),
@@ -25,15 +25,15 @@ const SubagentLikeSchema = Type.Object(
 	{ additionalProperties: false },
 );
 
-function definition(overrides?: Partial<ToolDefinition<typeof SubagentLikeSchema>>) {
+function definition(overrides?: Partial<ToolDefinition<typeof BatchSchema>>) {
 	return {
-		name: "subagent",
-		label: "Subagent",
-		description: "Delegate work",
-		parameters: SubagentLikeSchema,
+		name: "batch",
+		label: "Batch",
+		description: "Process a batch",
+		parameters: BatchSchema,
 		execute: vi.fn(),
 		...overrides,
-	} as ToolDefinition<typeof SubagentLikeSchema>;
+	} as ToolDefinition<typeof BatchSchema>;
 }
 
 describe("wrapToolDefinition validation hints", () => {
@@ -83,7 +83,7 @@ describe("wrapToolDefinition validation hints", () => {
 			expect.unreachable("validation should have failed");
 		} catch (error) {
 			const message = (error as Error).message;
-			expect(message).toContain('Validation failed for tool "subagent":');
+			expect(message).toContain('Validation failed for tool "batch":');
 			expect(message).toContain(
 				"Hint: tasks[0].prompt_extra is not a field; fields at tasks[0]: agent, prompt, description, cwd",
 			);
@@ -181,7 +181,7 @@ describe("wrapToolDefinition validation hints", () => {
 			expect.unreachable("validation should have failed");
 		} catch (error) {
 			const message = (error as Error).message;
-			expect(message).toContain('Validation failed for tool "subagent":');
+			expect(message).toContain('Validation failed for tool "batch":');
 			expect(message).not.toContain("Hint:");
 		}
 	});

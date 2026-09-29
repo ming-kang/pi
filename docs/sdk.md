@@ -273,7 +273,7 @@ Both `steer()` and `followUp()` expand file-based prompt templates but error on 
 
 ### Background execution
 
-Background is a session-owned capability, not a daemon or a flag on `createAgentSession()`. Interactive mode enables it. Ordinary SDK sessions and the built-in print, JSON, and RPC hosts leave it disabled and reject native shell or Subagent calls with `background: true`. Normal foreground tools still work, including standalone `createBashTool()` / `createPowerShellTool()` calls without a session context.
+Background is a session-owned capability, not a daemon or a flag on `createAgentSession()`. Interactive mode enables it. Ordinary SDK sessions and the built-in print, JSON, and RPC hosts leave it disabled and reject native shell or extension calls with `background: true`. Normal foreground tools still work, including standalone `createBashTool()` / `createPowerShellTool()` calls without a session context.
 
 An embedding can opt in with `await session.bindExtensions({ tasksEnabled: true })`. Bind before prompting; this also binds extensions and emits their session-start lifecycle. When using `AgentSessionRuntime`, rebind the replacement session through the runtime's rebind callback. Setting `mode` or providing a UI alone does not enable Background.
 
@@ -309,7 +309,7 @@ For a longer-lived embedding, keep the host alive, subscribe to snapshots and ch
 
 Automatic completion messages carry a version-1 `TaskCompletionSnapshot` in `details`, with independent shell output or worker reports, diagnostics and explicit truncation flags. This snapshot is self-contained for transcript replay and is not sent to the model; `content` contains the separately bounded prose generated from it. Current terminal history uses version-2 `task-result` records, with no migration of earlier result records. The usage ledger remains independent. See [Background records](session-format.md#background-records).
 
-`executionRole: "subagent"` on `createAgentSession()` is a trusted host-assigned identity, not a model argument. It prevents enabling Background even through `bindExtensions`; built-in workers also receive a no-background prompt rule. Their shared shell schema retains the optional flag but runtime requests for `background: true` are rejected before startup. Foreground shell access remains normal. This capability restriction is not an OS sandbox.
+`backgroundAllowed: false` on `createAgentSession()` is a host capability ceiling, independent of task kind. It prevents enabling background execution through `bindExtensions` or direct runtime activation, including after reload. Requests for `background: true` are rejected before startup; foreground execution remains available. Omitting this option permits host opt-in but does not enable background execution by itself. This capability restriction is not an OS sandbox.
 
 Reload, replacement/fork, shutdown and branch navigation enforce the [Background lifetime rules](bundled/tasks.md#lifetime). Saved terminal branch history is observational only: no live processes/workers resume, and restoration does not replay accounting or completion events. Managed logs expire with their runtime records; save anything needed before eviction or shutdown.
 

@@ -72,8 +72,8 @@ function saved(id: string, endedAt: number, overrides: Partial<TaskSnapshot> = {
 describe("independent foreground shell history", () => {
 	it.each([
 		{ kind: "bash" as const, format: "log" as const, background: true },
-		{ kind: "subagent", format: "report" as const, background: true },
-		{ kind: "subagent", format: "report" as const, background: false },
+		{ kind: "custom", format: "report" as const, background: true },
+		{ kind: "custom", format: "report" as const, background: false },
 	])("keeps completed $kind, background=$background after 100 foreground shells", async ({ kind, background }) => {
 		const bg = service();
 		const id = await complete(bg, kind, background);
@@ -88,9 +88,9 @@ describe("independent foreground shell history", () => {
 		const bg = service(2);
 		const firstShell = await complete(bg, "bash");
 		const secondShell = await complete(bg, "bash");
-		const firstTask = await complete(bg, "subagent");
+		const firstTask = await complete(bg, "custom");
 		const secondTask = await complete(bg, "bash", true);
-		const thirdTask = await complete(bg, "subagent", true);
+		const thirdTask = await complete(bg, "custom", true);
 		expect(() => bg.get(firstTask)).toThrow("Unknown");
 		expect(bg.get(firstShell).status).toBe("completed");
 		const thirdShell = await complete(bg, "bash");
@@ -113,7 +113,7 @@ describe("independent foreground shell history", () => {
 		for (let i = 0; i < 100; i++) await complete(bg, "bash");
 		expect(bg.get(run.control.id).mode).toBe("background");
 		expect(cleaned).toBe(false);
-		await complete(bg, "subagent");
+		await complete(bg, "custom");
 		expect(() => bg.get(run.control.id)).toThrow("Unknown");
 		await bg.shutdown();
 		expect(cleaned).toBe(true);
@@ -122,14 +122,14 @@ describe("independent foreground shell history", () => {
 	it.each([false, true])("restores both histories independently, reverse input=%s", async (reverse) => {
 		const bg = service();
 		const records = [
-			saved("subagent-background", 1, { kind: "subagent", format: "report", mode: "background" }),
-			saved("subagent-foreground", 2, { kind: "subagent", format: "report" }),
+			saved("custom-background", 1, { kind: "custom", format: "report", mode: "background" }),
+			saved("custom-foreground", 2, { kind: "custom", format: "report" }),
 			...Array.from({ length: 100 }, (_, index) => saved(`bash-${index}`, index + 3)),
 		];
 		bg.restoreHistory(reverse ? records.reverse() : records);
 		expect(bg.list()).toHaveLength(34);
-		expect((await bg.read("subagent-background")).text).toBe("subagent-background");
-		expect((await bg.read("subagent-foreground")).text).toBe("subagent-foreground");
+		expect((await bg.read("custom-background")).text).toBe("custom-background");
+		expect((await bg.read("custom-foreground")).text).toBe("custom-foreground");
 		expect(() => bg.get("bash-67")).toThrow("Unknown");
 		expect(bg.get("bash-68").status).toBe("completed");
 		expect(bg.pendingNotifications()).toEqual([]);
@@ -140,9 +140,9 @@ describe("independent foreground shell history", () => {
 		const id = await complete(bg, "bash");
 		bg.restoreHistory([
 			saved("bash-extra", 3),
-			saved("subagent-restored", 1, { kind: "subagent", format: "report", mode: "background" }),
+			saved("custom-restored", 1, { kind: "custom", format: "report", mode: "background" }),
 		]);
-		expect(bg.list().map((task) => task.id)).toEqual([id, "subagent-restored"]);
+		expect(bg.list().map((task) => task.id)).toEqual([id, "custom-restored"]);
 		expect((await bg.read(id)).text).toBe("saved report");
 	});
 
@@ -156,10 +156,10 @@ describe("independent foreground shell history", () => {
 		}
 		bg.restoreHistory([
 			saved("bash-newer-shell", 100),
-			saved("subagent-older-task", 1, { kind: "subagent", format: "report" }),
+			saved("custom-older-task", 1, { kind: "custom", format: "report" }),
 		]);
 		expect(bg.list()).toHaveLength(4);
-		expect(bg.get("subagent-older-task").status).toBe("completed");
+		expect(bg.get("custom-older-task").status).toBe("completed");
 		expect(() => bg.get("bash-newer-shell")).toThrow("Unknown");
 		for (const release of releases) release();
 		expect(bg.list()).toHaveLength(2);
@@ -168,7 +168,7 @@ describe("independent foreground shell history", () => {
 	it("releases and restores both histories when returning to a branch", async () => {
 		const bg = service(1);
 		const branchA = [
-			saved("subagent-A", 1, { kind: "subagent", format: "report", anchorId: "A" }),
+			saved("custom-A", 1, { kind: "custom", format: "report", anchorId: "A" }),
 			saved("bash-A", 2, { anchorId: "A" }),
 		];
 		const branchB = [
@@ -186,11 +186,10 @@ describe("independent foreground shell history", () => {
 		expect(bg.pendingNotifications()).toEqual([]);
 	});
 
-	it("restores completed subagents from the session journal after runtime replacement", async () => {
+	it("restores completed customs from the session journal after runtime replacement", async () => {
 		const manager = SessionManager.inMemory();
 		const host = new TaskSession({
 			manager,
-			role: "main",
 			canDeliver: () => false,
 			deliver: async () => {},
 			onEntry: () => {},
@@ -200,8 +199,8 @@ describe("independent foreground shell history", () => {
 		});
 		hosts.push(host);
 		host.setEnabled(true);
-		const background = await complete(host.service, "subagent", true);
-		const foreground = await complete(host.service, "subagent");
+		const background = await complete(host.service, "custom", true);
+		const foreground = await complete(host.service, "custom");
 		for (let i = 0; i < 100; i++) await complete(host.service, "bash");
 		const entries = manager.getEntries().length;
 		await host.service.shutdown();

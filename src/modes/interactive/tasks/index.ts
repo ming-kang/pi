@@ -1,6 +1,7 @@
 import { getKeybindings } from "@earendil-works/pi-tui";
 import type { ExtensionUIContext } from "../../../core/extensions/types.ts";
 import { isTaskTerminal, type TasksContext } from "../../../core/tasks/types.ts";
+import { shellTaskView } from "../../../core/tools/renderers/shell-task.ts";
 import { TASKS_DETACH_HINT_DELAY_MS } from "../../../core/tools/tasks/constants.ts";
 import { keyLabel } from "../components/keybinding-hints.ts";
 import { TasksMenu } from "./manager.ts";
@@ -12,6 +13,7 @@ export interface TasksUI {
 
 /** Host-owned task UI; it is available without loading an extension. */
 export function bindTasksUI(ctx: { tasks: TasksContext; ui: ExtensionUIContext }): TasksUI {
+	const releaseViews = ["bash", "powershell"].map((kind) => ctx.tasks.views.register(kind, shellTaskView));
 	let unsubscribe: (() => void) | undefined;
 	let unsubscribeDetachKey: (() => void) | undefined;
 	let closeMenu: (() => void) | undefined;
@@ -63,6 +65,7 @@ export function bindTasksUI(ctx: { tasks: TasksContext; ui: ExtensionUIContext }
 		update();
 	};
 	const dispose = () => {
+		for (const release of releaseViews) release();
 		unsubscribe?.();
 		unsubscribe = undefined;
 		unsubscribeDetachKey?.();
@@ -85,7 +88,14 @@ export function bindTasksUI(ctx: { tasks: TasksContext; ui: ExtensionUIContext }
 						done();
 					};
 					closeMenu = close;
-					return new TasksMenu({ tui, theme, keybindings, host: ctx.tasks, onClose: close });
+					return new TasksMenu({
+						tui,
+						theme,
+						keybindings,
+						host: ctx.tasks,
+						views: ctx.tasks.views,
+						onClose: close,
+					});
 				},
 				{ overlay: true, overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%" } },
 			);

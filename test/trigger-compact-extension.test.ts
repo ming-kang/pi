@@ -5,6 +5,8 @@ import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 
 function createContext(tokens: number | null, compact = vi.fn()): ExtensionContext {
 	return {
+		getExtensionSettings: () => ({}),
+		setExtensionSettings: async () => {},
 		tasks: new TaskRuntime(),
 		mode: "print",
 		hasUI: false,

@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { boundedResult, boundText, TASK_RESULT_BYTES, TASK_TITLE_BYTES } from "./output.ts";
 import { readTaskProjection } from "./presentation.ts";
 import type { TaskSnapshot } from "./types.ts";
+import { readTaskViewData } from "./view-data.ts";
 
 export const TASK_HISTORY_VERSION = 2;
 
@@ -92,6 +93,14 @@ export function parseTaskHistory(record: unknown): TaskSnapshot | undefined {
 		}
 		if (task.command !== undefined && task.command !== field(source, "command")) task.commandTruncated = true;
 		const projection = field(source, "projection");
+		const viewData = field(source, "viewData");
+		if (viewData !== undefined) {
+			try {
+				task.viewData = readTaskViewData(viewData);
+			} catch {
+				/* Keep the readable result if custom view data is invalid. */
+			}
+		}
 		if (projection !== undefined) {
 			task.projection = readTaskProjection(projection);
 		}

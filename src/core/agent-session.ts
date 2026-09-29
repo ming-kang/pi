@@ -222,7 +222,8 @@ function withoutDeletedHeaders(headers: ProviderHeaders | undefined): Record<str
 }
 
 export interface AgentSessionConfig {
-	executionRole?: "main" | "subagent";
+	/** Host capability ceiling. False prohibits background execution even after binding. */
+	backgroundAllowed?: boolean;
 	agent: Agent;
 	sessionManager: SessionManager;
 	settingsManager: SettingsManager;
@@ -426,7 +427,7 @@ export class AgentSession {
 		this.settingsManager = config.settingsManager;
 		this._tasksHost = new TaskSession({
 			manager: this.sessionManager,
-			role: config.executionRole ?? "main",
+			backgroundAllowed: config.backgroundAllowed,
 			canDeliver: () => {
 				if (this.model === undefined || this.isCompacting) return false;
 				// A completion steered into an active run follows the interactive steering queue, which
@@ -3253,6 +3254,8 @@ export class AgentSession {
 			},
 			{
 				getTasks: () => this.tasks,
+				getExtensionSettings: (namespace) => this.settingsManager.getExtensionSettings(namespace),
+				setExtensionSettings: (namespace, value) => this.settingsManager.setExtensionSettings(namespace, value),
 				getModel: () => this.model,
 				getScopedModels: () => this._scopedModels,
 				isIdle: () => this.isIdle,

@@ -63,6 +63,8 @@ const defaultGrepOperations: GrepOperations = {
 };
 
 export interface GrepToolOptions {
+	/** Ignore RIPGREP_CONFIG_PATH, so callers can rely on the native search flags. */
+	ignoreConfig?: boolean;
 	/** Custom operations for grep. Default: local filesystem plus ripgrep */
 	operations?: GrepOperations;
 }
@@ -160,6 +162,7 @@ export function createGrepToolDefinition(
 						};
 
 						const args: string[] = ["--json", "--line-number", "--color=never", "--hidden"];
+						if (options?.ignoreConfig) args.push("--no-config");
 						if (ignoreCase) args.push("--ignore-case");
 						if (literal) args.push("--fixed-strings");
 						if (glob) args.push("--glob", glob);

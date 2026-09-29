@@ -1,7 +1,7 @@
 /**
  * Shared status-marker vocabulary for long-running executions (background
- * tasks, subagent runs): one glyph+color mapping so the /tasks panel, transcript
- * notifications, completion cards and subagent flows describe the same status
+ * tasks): one glyph+color mapping so the /tasks panel, transcript
+ * notifications, completion cards and extension views describe the same status
  * the same way. Pure data; consumers apply theme.fg(marker.color, glyph).
  *
  * Distinct from the tool-call marker in tool-view/style.ts, which expresses a

@@ -111,6 +111,7 @@ export type PackageSource =
 	  };
 
 export interface Settings {
+	extensionSettings?: Record<string, Record<string, unknown>>;
 	lastChangelogVersion?: string;
 	defaultProvider?: string;
 	defaultModel?: string;
@@ -504,6 +505,41 @@ export class SettingsManager {
 
 	getGlobalSettings(): Settings {
 		return structuredClone(this.globalSettings);
+	}
+
+	/** Detached global configuration owned by one extension namespace. */
+	getExtensionSettings(namespace: string): Record<string, unknown> {
+		if (!/^[a-z][a-z0-9-]{0,63}$/.test(namespace)) throw new Error("Invalid extension settings namespace");
+		if (this.globalSettingsLoadError) throw this.globalSettingsLoadError;
+		const value = this.globalSettings.extensionSettings?.[namespace];
+		if (value !== undefined && !isMergeableObject(value)) throw new Error("Invalid extension settings object");
+		return structuredClone(value ?? {});
+	}
+
+	/** Persist one namespace under the shared lock; resolve only after a successful save. */
+	async setExtensionSettings(namespace: string, value: Record<string, unknown>): Promise<void> {
+		this.getExtensionSettings(namespace);
+		if (!isMergeableObject(value)) throw new Error("Expected extension settings object");
+		const encoded = JSON.stringify(value);
+		const snapshot: Record<string, unknown> = JSON.parse(encoded);
+		const write = this.writeQueue.then(() => {
+			this.storage.withLock("global", (current) => {
+				const settings: unknown = current ? JSON.parse(stripBom(current)) : {};
+				if (!isMergeableObject(settings)) throw new Error("Invalid settings object");
+				const namespaces = settings.extensionSettings ?? {};
+				if (!isMergeableObject(namespaces)) throw new Error("Invalid extension settings object");
+				if (JSON.stringify(namespaces[namespace] ?? {}) === encoded) return undefined;
+				return JSON.stringify(
+					{ ...settings, extensionSettings: { ...namespaces, [namespace]: snapshot } },
+					null,
+					2,
+				);
+			});
+			this.globalSettings.extensionSettings = { ...this.globalSettings.extensionSettings, [namespace]: snapshot };
+			this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		});
+		this.writeQueue = write.catch((error) => this.recordError("global", error));
+		await write;
 	}
 
 	getProjectSettings(): Settings {

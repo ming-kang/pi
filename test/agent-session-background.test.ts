@@ -50,7 +50,7 @@ describe("session-owned background host", () => {
 	});
 
 	async function host(
-		role: "main" | "subagent" = "main",
+		backgroundAllowed = true,
 		factory?: ExtensionFactory,
 		responses?: AssistantMessage[],
 		manager = SessionManager.inMemory(),
@@ -78,7 +78,7 @@ describe("session-owned background host", () => {
 			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
 			cwd: process.cwd(),
 			modelRuntime,
-			executionRole: role,
+			backgroundAllowed,
 			resourceLoader: createTestResourceLoader({
 				extensionsResult: await createTestExtensionsResult(factory ? [factory] : []),
 			}),
@@ -94,7 +94,7 @@ describe("session-owned background host", () => {
 			finish = resolve;
 		});
 		const outcome = await session.tasks.execute({
-			kind: "subagent",
+			kind: "custom",
 			format: "report",
 			title: "group",
 			toolCallId: "call",
@@ -116,14 +116,14 @@ describe("session-owned background host", () => {
 		return { id: outcome.task.id, finish, control };
 	}
 
-	it("is disabled unbound and subagent role cannot be enabled", async () => {
+	it("is disabled unbound and a host prohibition survives binding, direct enable and reload", async () => {
 		const session = await host();
 		const ctx = session.extensionRunner.createContext();
 		expect(ctx.tasks).toBe(session.tasks);
 		expect(ctx.tasks.enabled).toBe(false);
 		await session.bindExtensions({ tasksEnabled: true });
 		expect(ctx.tasks.enabled).toBe(true);
-		const worker = await host("subagent");
+		const worker = await host(false);
 		await worker.bindExtensions({ tasksEnabled: true });
 		worker.tasks.setEnabled(true);
 		expect(worker.tasks.enabled).toBe(false);
@@ -132,6 +132,16 @@ describe("session-owned background host", () => {
 			worker.tasks.execute({ kind: "bash", format: "log", title: "no", toolCallId: "no", background: true, run }),
 		).rejects.toThrow("not permitted in this host");
 		expect(run).not.toHaveBeenCalled();
+		await worker.reload();
+		worker.tasks.setEnabled(true);
+		expect(worker.tasks.enabled).toBe(false);
+		const foreground = await worker.tasks.execute({
+			kind: "custom",
+			title: "inline",
+			toolCallId: "inline",
+			run: async () => ({ result: { content: [], details: undefined } }),
+		});
+		expect(foreground.kind).toBe("result");
 	});
 
 	it("settles usage before consumption and schedules a bounded persisted notification", async () => {
@@ -171,7 +181,7 @@ describe("session-owned background host", () => {
 		expect(notification.details).toMatchObject({
 			version: 1,
 			taskId: execution.id,
-			kind: "subagent",
+			kind: "custom",
 			format: "report",
 			status: "completed",
 			startedAt: expect.any(Number),
@@ -193,7 +203,7 @@ describe("session-owned background host", () => {
 		async (mode) => {
 			let marker: unknown;
 			const session = await host(
-				"main",
+				true,
 				(pi) => {
 					pi.registerTool({
 						name: "marker",
@@ -215,7 +225,7 @@ describe("session-owned background host", () => {
 			await session.bindExtensions({ tasksEnabled: true });
 			session.pauseTaskNotifications();
 			const execution = await task(session);
-			marker = mode === "malformed" ? 42 : mode === "foreign" ? "subagent-foreign" : execution.id;
+			marker = mode === "malformed" ? 42 : mode === "foreign" ? "custom-foreign" : execution.id;
 			if (mode === "foreground") {
 				await session.tasks.execute({
 					kind: "bash",
@@ -247,7 +257,7 @@ describe("session-owned background host", () => {
 				readStarted = resolve;
 			});
 			const session = await host(
-				"main",
+				true,
 				(pi) => {
 					if (mode === "remove-marker") {
 						pi.on("tool_result", () => ({ details: {} }));
@@ -321,7 +331,7 @@ describe("session-owned background host", () => {
 		resume();
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(session.messages).toEqual([]);
-		const restored = await host("main", undefined, undefined, session.sessionManager);
+		const restored = await host(true, undefined, undefined, session.sessionManager);
 		expect(restored.tasks.list()).toMatchObject([{ id: execution.id, status: "completed" }]);
 		expect(restored.getSessionStats().tokens.total).toBe(30);
 		expect(restored.tasks.pendingNotifications()).toEqual([]);
@@ -365,7 +375,7 @@ describe("session-owned background host", () => {
 		for (let index = 0; index < 40; index++) {
 			session.sessionManager.appendCustomEntry("task-result", {
 				version: 2,
-				task: { ...snapshot, id: `subagent-history-${index}`, endedAt: snapshot.endedAt! + index + 1 },
+				task: { ...snapshot, id: `custom-history-${index}`, endedAt: snapshot.endedAt! + index + 1 },
 			});
 		}
 		await session.reload();
@@ -380,7 +390,7 @@ describe("session-owned background host", () => {
 		const panel = new Promise<void>((resolve) => {
 			close = resolve;
 		});
-		const session = await host("main", (pi) => {
+		const session = await host(true, (pi) => {
 			pi.registerCommand("observer", {
 				handler: async () => {
 					opened = true;
@@ -533,7 +543,7 @@ describe("session-owned background host", () => {
 		const inputGate = new Promise<void>((resolve) => {
 			acceptInput = resolve;
 		});
-		const session = await host("main", (pi) => {
+		const session = await host(true, (pi) => {
 			pi.on("input", async () => {
 				await inputGate;
 			});
@@ -561,7 +571,7 @@ describe("session-owned background host", () => {
 		let inSettledHook = false;
 		let runs = 0;
 		const session = await host(
-			"main",
+			true,
 			(pi) => {
 				pi.registerTool({
 					name: "hold",
@@ -615,38 +625,32 @@ describe("session-owned background host", () => {
 
 	it("keeps a completion claimed while it waits in the steering queue for the next run", async () => {
 		let calls = 0;
-		const session = await host(
-			"main",
-			undefined,
-			undefined,
-			SessionManager.inMemory(),
-			(_model, _context, options) => {
-				const stream = new MockAssistantStream();
-				calls++;
-				queueMicrotask(() => stream.push({ type: "start", partial: fauxAssistantMessage("") }));
-				if (calls > 1) {
-					queueMicrotask(() =>
-						stream.push({ type: "done", reason: "stop", message: fauxAssistantMessage("noticed") }),
-					);
-					return stream;
-				}
-				// Hold the first response open until the run is aborted, so the queued completion is
-				// never drained by this run.
-				const watch = () => {
-					if (options?.signal?.aborted) {
-						stream.push({
-							type: "error",
-							reason: "aborted",
-							error: fauxAssistantMessage("Aborted", { stopReason: "aborted" }),
-						});
-						return;
-					}
-					setTimeout(watch, 5);
-				};
-				watch();
+		const session = await host(true, undefined, undefined, SessionManager.inMemory(), (_model, _context, options) => {
+			const stream = new MockAssistantStream();
+			calls++;
+			queueMicrotask(() => stream.push({ type: "start", partial: fauxAssistantMessage("") }));
+			if (calls > 1) {
+				queueMicrotask(() =>
+					stream.push({ type: "done", reason: "stop", message: fauxAssistantMessage("noticed") }),
+				);
 				return stream;
-			},
-		);
+			}
+			// Hold the first response open until the run is aborted, so the queued completion is
+			// never drained by this run.
+			const watch = () => {
+				if (options?.signal?.aborted) {
+					stream.push({
+						type: "error",
+						reason: "aborted",
+						error: fauxAssistantMessage("Aborted", { stopReason: "aborted" }),
+					});
+					return;
+				}
+				setTimeout(watch, 5);
+			};
+			watch();
+			return stream;
+		});
 		await session.bindExtensions({ tasksEnabled: true });
 		const execution = await task(session);
 		const prompting = session.prompt("hold the run");
@@ -673,7 +677,7 @@ describe("session-owned background host", () => {
 			releaseTool = resolve;
 		});
 		const session = await host(
-			"main",
+			true,
 			(pi) => {
 				pi.registerTool({
 					name: "hold",
@@ -866,7 +870,7 @@ describe("session-owned background host", () => {
 	});
 
 	it("acknowledges the original notification when an extension role rewrite is rejected", async () => {
-		const session = await host("main", (pi) => {
+		const session = await host(true, (pi) => {
 			pi.on("message_end", (event) => {
 				if (event.message.role === "custom" && event.message.customType === "task-completion")
 					return { message: { role: "user", content: event.message.content, timestamp: Date.now() } };
@@ -882,7 +886,7 @@ describe("session-owned background host", () => {
 	});
 
 	it("acknowledges a persisted notification even when extensions replace its metadata", async () => {
-		const session = await host("main", (pi) => {
+		const session = await host(true, (pi) => {
 			pi.on("message_end", (event) => {
 				if (event.message.role === "custom")
 					return { message: { ...event.message, details: undefined, customType: "transformed" } };
@@ -912,7 +916,7 @@ describe("session-owned background host", () => {
 
 	it("settles cooperative workers and their ledger before extension shutdown hooks", async () => {
 		let ledgerAtShutdown = false;
-		const session = await host("main", (pi) => {
+		const session = await host(true, (pi) => {
 			pi.on("session_shutdown", (_event, ctx) => {
 				ledgerAtShutdown = ctx.sessionManager
 					.getEntries()
@@ -921,7 +925,7 @@ describe("session-owned background host", () => {
 		});
 		await session.bindExtensions({ tasksEnabled: true });
 		await session.tasks.execute({
-			kind: "subagent",
+			kind: "custom",
 			format: "report",
 			title: "worker",
 			toolCallId: "worker",
@@ -944,7 +948,7 @@ describe("session-owned background host", () => {
 
 	it("reload closes admission before async cleanup and replaces captured capability", async () => {
 		let shutdownEnabled: boolean | undefined;
-		const session = await host("main", (pi) => {
+		const session = await host(true, (pi) => {
 			pi.on("session_shutdown", (_event, ctx) => {
 				shutdownEnabled = ctx.tasks.enabled;
 			});
@@ -1029,7 +1033,7 @@ describe("session-owned background host", () => {
 
 	it("holds completions while extension binding runs its session_start hooks", async () => {
 		const gate = hookGate();
-		const session = await host("main", (pi) => {
+		const session = await host(true, (pi) => {
 			pi.on("session_start", async () => {
 				if (gate.armed) await gate.hold();
 			});
@@ -1040,7 +1044,7 @@ describe("session-owned background host", () => {
 
 	it("holds completions while agent_settled hooks run after a turn", async () => {
 		const gate = hookGate();
-		const session = await host("main", (pi) => {
+		const session = await host(true, (pi) => {
 			pi.on("agent_settled", async () => {
 				if (gate.armed) await gate.hold();
 			});

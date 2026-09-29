@@ -70,6 +70,14 @@ function render(value: CustomMessage<unknown>, expanded = false, width = 120, ou
 beforeEach(() => initTheme("dark"));
 
 describe("structured background completion cards", () => {
+	it.each(["bash", "powershell", "custom-report"])("shortens %s UUIDs without assuming an executor", (kind) => {
+		const value = shell();
+		(value.details as TaskCompletionSnapshot).kind = kind;
+		(value.details as TaskCompletionSnapshot).taskId = taskId.replace("bash-", `${kind}-`);
+		const header = render(value).split("\n")[0];
+		expect(header).toContain(`${kind}-12345678`);
+		expect(header).not.toContain("abcd");
+	});
 	it("uses native dot/title/rail chrome and keeps paths and output in the expanded view", () => {
 		const value = shell();
 		const lines = renderTaskCompletion(value, { expanded: false, outputPad: 1 }, theme).render(100);

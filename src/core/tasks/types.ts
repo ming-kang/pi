@@ -1,5 +1,7 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
+import type { TaskViewRegistry } from "./view.ts";
+import type { TaskViewData } from "./view-data.ts";
 
 /** An executor-owned source label, never a dispatch key for the runtime. */
 export type TaskKind = string;
@@ -89,6 +91,7 @@ export interface TaskSnapshot {
 	exitCode?: number | null;
 	outputPath?: string;
 	projection?: TaskProjection;
+	viewData?: TaskViewData;
 	result?: AgentToolResult<unknown>;
 	resultTruncated?: boolean;
 	error?: string;
@@ -119,6 +122,8 @@ export interface TaskControl<T> {
 	 * Final completion.usage, then completion.result.usage, override that snapshot.
 	 */
 	publish(result: AgentToolResult<T>, projection?: TaskProjection): void;
+	/** Publish bounded, versioned display data without changing tool results or completion delivery. */
+	publishView(data: TaskViewData): void;
 	/** Register once; cleanup must own only this exclusively-created file and close its writer first. */
 	setOutputPath(path: string, cleanup?: () => void | Promise<void>): void;
 }
@@ -152,6 +157,7 @@ export interface TaskRead {
 
 /** Session-bound public capability. Captured instances close on runtime replacement. */
 export interface TasksContext {
+	readonly views: TaskViewRegistry;
 	readonly enabled: boolean;
 	readonly closed?: boolean;
 	execute<T>(execution: TaskExecution<T>): Promise<TaskToolOutcome<T>>;
@@ -176,7 +182,7 @@ export interface TaskRuntimeOptions {
 	backgroundAllowed?: boolean;
 	anchor?: () => string | null;
 	maxActive?: number;
-	/** Per-history limit: foreground shells and background tasks/all subagents each get this allowance. */
+	/** Per-history limit: foreground logs and other managed tasks each get this allowance. */
 	maxHistory?: number;
 	/** Best-effort cleanup errors, bounded to 4096 bytes; no retries or execution failure. */
 	onCleanupError?: (message: string) => void;
@@ -191,7 +197,7 @@ export function isTaskTerminal(status: TaskStatus): boolean {
 	return status !== "queued" && status !== "running" && status !== "stopping";
 }
 
-/** Foreground shell logs have their own history; subagent groups remain inspectable in either mode. */
+/** Foreground logs have their own history; reports remain inspectable in either mode. */
 export function isInlineLogTask(task: Pick<TaskSnapshot, "format" | "mode">): boolean {
 	return task.format === "log" && task.mode === "foreground";
 }

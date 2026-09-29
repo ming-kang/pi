@@ -12,7 +12,7 @@ import type { TaskSnapshot } from "./types.ts";
 
 interface TaskSessionOptions {
 	manager: SessionManager;
-	role: "main" | "subagent";
+	backgroundAllowed?: boolean;
 	/** The main session owns input queues, preflight and idle state. */
 	canDeliver(): boolean;
 	/**
@@ -61,7 +61,7 @@ export class TaskSession {
 	}
 
 	setEnabled(enabled: boolean): void {
-		this.enabled = enabled && this.options.role === "main";
+		this.enabled = enabled && this.options.backgroundAllowed !== false;
 		this.service.setEnabled(this.enabled);
 	}
 
@@ -73,13 +73,13 @@ export class TaskSession {
 	}
 
 	private createService(): TaskRuntime {
-		const { manager, role } = this.options;
+		const { manager, backgroundAllowed } = this.options;
 		const generation = ++this.generation;
 		const sessionId = manager.getSessionId();
 		const sessionFile = manager.getSessionFile();
 		const service = new TaskRuntime({
 			enabled: this.enabled,
-			backgroundAllowed: role === "main",
+			backgroundAllowed,
 			anchor: () => manager.getLeafId(),
 			onCleanupError: (message) => this.warn("task_cleanup", message),
 			onSettled: (task, usage) => {

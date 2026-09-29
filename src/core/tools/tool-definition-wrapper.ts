@@ -76,7 +76,7 @@ function collectFieldHints(schema: unknown, args: unknown): string[] {
 /**
  * Rebuild pi-ai's validation error so a model can self-correct: the legal
  * fields are named next to each offending one, and the echoed arguments are
- * bounded (a 50KB subagent prompt must not be reflected whole into context).
+ * bounded (a 50KB tool argument must not be reflected whole into context).
  * The `Validation failed for tool "<name>":` prefix stays intact — the
  * question tool's renderer parses it.
  */

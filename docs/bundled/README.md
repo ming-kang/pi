@@ -11,10 +11,10 @@ These hidden built-ins use the same public Extension API available to external e
 | [`llama.cpp`](../llama-cpp.md) | `/llama` | Manage models served by the local llama.cpp router |
 | [BTW](extensions/btw.md) | `/btw [question]` | Ask temporary side questions with the current context while the main task continues |
 | [DeepWiki](extensions/deepwiki.md) | `deepwiki` | Query indexed public GitHub repository documentation |
+| [Explore](extensions/explore.md) | `explore`, `/explore` | Investigate code with a temporary read-only agent and choose its model |
 | [Question](extensions/question.md) | `question` | Ask structured questions through native interactive UI |
 | [Provider](extensions/provider.md) | `/provider` | Edit models.json providers: connection, API type, and models |
 | [Statusline](extensions/statusline.md) | Footer status | Show concise extension-managed activity state |
-| [Subagent](extensions/subagent.md) | `subagent`, `/agents` | Delegate bounded work to isolated child Pi sessions |
 | [Todo](extensions/todo.md) | `todo`, `/todos` | Track ordered multi-step work in a compact one-line widget |
 | [Web Search](extensions/web-search.md) | `web_search` | Search the live web through MiniMax and DeepSeek with fused results |
 

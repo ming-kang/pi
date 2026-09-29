@@ -355,6 +355,12 @@ const noOpUIContext: ExtensionUIContext = {
 };
 
 export class ExtensionRunner {
+	private getExtensionSettings: ExtensionContext["getExtensionSettings"] = () => {
+		throw new Error("Extension settings are not available in this host");
+	};
+	private setExtensionSettings: ExtensionContext["setExtensionSettings"] = async () => {
+		throw new Error("Extension settings are not available in this host");
+	};
 	private readonly unboundTasks = new TaskRuntime();
 	private getTasks: () => TasksContext = () => this.unboundTasks;
 	private extensions: Extension[];
@@ -434,6 +440,8 @@ export class ExtensionRunner {
 		this.runtime.setThinkingLevel = actions.setThinkingLevel;
 
 		this.getTasks = contextActions.getTasks ?? (() => this.unboundTasks);
+		if (contextActions.getExtensionSettings) this.getExtensionSettings = contextActions.getExtensionSettings;
+		if (contextActions.setExtensionSettings) this.setExtensionSettings = contextActions.setExtensionSettings;
 
 		// Context actions (required)
 		this.getModel = contextActions.getModel;
@@ -824,6 +832,14 @@ export class ExtensionRunner {
 		const getModel = this.getModel;
 		const getScopedModels = this.getScopedModels;
 		return {
+			getExtensionSettings: (namespace) => {
+				runner.assertActive();
+				return runner.getExtensionSettings(namespace);
+			},
+			setExtensionSettings: (namespace, value) => {
+				runner.assertActive();
+				return runner.setExtensionSettings(namespace, value);
+			},
 			get tasks() {
 				runner.assertActive();
 				return runner.getTasks();

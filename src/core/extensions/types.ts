@@ -317,6 +317,10 @@ export interface CompactOptions {
 export type ExtensionMode = "tui" | "rpc" | "json" | "print";
 
 export interface ExtensionContext {
+	/** Read detached global JSON settings for an extension namespace. */
+	getExtensionSettings(namespace: string): Record<string, unknown>;
+	/** Replace one global namespace; rejects on invalid data or failed persistence. */
+	setExtensionSettings(namespace: string, value: Record<string, unknown>): Promise<void>;
 	/** UI methods for user interaction */
 	ui: ExtensionUIContext;
 	/** Current run mode. Use "tui" to guard terminal-only UI such as custom components. */
@@ -1864,6 +1868,8 @@ export interface ExtensionActions {
  * Required by all modes.
  */
 export interface ExtensionContextActions {
+	getExtensionSettings?: ExtensionContext["getExtensionSettings"];
+	setExtensionSettings?: ExtensionContext["setExtensionSettings"];
 	getTasks?: () => TasksContext;
 	getModel: () => Model<any> | undefined;
 	getScopedModels: () => readonly ScopedModel[];

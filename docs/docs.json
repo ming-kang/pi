@@ -69,6 +69,10 @@
           "path": "bundled/extensions/deepwiki.md"
         },
         {
+          "title": "Explore",
+          "path": "bundled/extensions/explore.md"
+        },
+        {
           "title": "Question",
           "path": "bundled/extensions/question.md"
         },
@@ -79,10 +83,6 @@
         {
           "title": "Statusline",
           "path": "bundled/extensions/statusline.md"
-        },
-        {
-          "title": "Subagent",
-          "path": "bundled/extensions/subagent.md"
         },
         {
           "title": "Todo",

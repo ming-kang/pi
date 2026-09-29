@@ -52,8 +52,8 @@ export interface CreateAgentSessionServicesOptions {
  * have been resolved against those services.
  */
 export interface CreateAgentSessionFromServicesOptions {
-	/** Host-assigned execution identity. Subagents cannot enable background execution. */
-	executionRole?: "main" | "subagent";
+	/** Host capability ceiling. False prohibits background execution even after binding. */
+	backgroundAllowed?: boolean;
 	services: AgentSessionServices;
 	sessionManager: SessionManager;
 	sessionStartEvent?: SessionStartEvent;
@@ -219,6 +219,6 @@ export async function createAgentSessionFromServices(
 		noTools: options.noTools,
 		customTools: options.customTools,
 		sessionStartEvent: options.sessionStartEvent,
-		executionRole: options.executionRole,
+		backgroundAllowed: options.backgroundAllowed,
 	});
 }

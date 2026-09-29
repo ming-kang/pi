@@ -16,6 +16,7 @@ export interface AppKeybindings {
 	"app.tasks.detach": true;
 	"app.tasks.focusList": true;
 	"app.tasks.focusPreview": true;
+	"app.tasks.focusInfo": true;
 	"app.tasks.kill": true;
 
 	"app.interrupt": true;
@@ -86,6 +87,7 @@ export const KEYBINDINGS = {
 	"app.tasks.detach": { defaultKeys: "ctrl+b", description: "Move foreground tasks to the background" },
 	"app.tasks.focusList": { defaultKeys: "left", description: "Focus the task list" },
 	"app.tasks.focusPreview": { defaultKeys: "right", description: "Focus the task preview" },
+	"app.tasks.focusInfo": { defaultKeys: "i", description: "Focus task information" },
 	"app.tasks.kill": { defaultKeys: "k", description: "Stop the selected task" },
 
 	"tui.editor.undo": {

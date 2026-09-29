@@ -340,6 +340,8 @@ export type {
 	TaskText,
 	TaskToolOutcome,
 } from "./core/tasks/types.ts";
+export { type TaskView, type TaskViewProvider, TaskViewRegistry } from "./core/tasks/view.ts";
+export type { TaskViewData } from "./core/tasks/view-data.ts";
 export { type EditDiffResult, generateDiffString, generateUnifiedPatch } from "./core/tools/edit-diff.ts";
 // Tools
 export {

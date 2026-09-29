@@ -32,7 +32,7 @@ The tests failed.
 
 The bash renderer shows its own `Elapsed` line while a command runs and a fixed `Took` line after it settles. The shell adds no progress row, and other renderers that refresh over time schedule their own repaints: they arm a timer in renderer state, call the render context's `invalidate()`, and clear the timer on the first settled render. The shell calls `state.dispose()` when a row is disposed, so a timer never outlives its row.
 
-The `Ctrl+B` background hint is not part of a tool row. Once a foreground Bash or Subagent execution has run for ten seconds and can still move, the built-in Tasks UI shows `Ctrl+B to background` in the statusline, next to the `tasks N active` count.
+The `Ctrl+B` background hint is not part of a tool row. Once a foreground managed execution has run for ten seconds and can still move, the built-in Tasks UI shows `Ctrl+B to background` in the statusline, next to the `tasks N active` count.
 
 ## Implementation boundary
 

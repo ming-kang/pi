@@ -18,6 +18,8 @@ import {
 	type TasksContext,
 	type TaskToolOutcome,
 } from "./types.ts";
+import { TaskViewRegistry } from "./view.ts";
+import { readTaskViewData } from "./view-data.ts";
 
 interface ActiveTask {
 	controller: AbortController;
@@ -53,6 +55,7 @@ function storeResult(task: TaskSnapshot, result: AgentToolResult<unknown>, trunc
 
 /** Session-local supervision. Executors own their processes, items and output files. */
 export class TaskRuntime implements TasksContext {
+	readonly views = new TaskViewRegistry();
 	private readonly store: TaskStore;
 	private readonly executions = new Map<string, ActiveTask>();
 	private readonly listeners = new Set<() => void>();
@@ -237,6 +240,11 @@ export class TaskRuntime implements TasksContext {
 				if (Buffer.byteLength(path) > 8192) throw new Error("Background output path is too large");
 				record.cleanup = cleanup;
 				task.outputPath = path;
+				this.emit();
+			},
+			publishView: (data) => {
+				if (record.settled || this.closed) return;
+				task.viewData = readTaskViewData(data);
 				this.emit();
 			},
 		};
@@ -562,6 +570,7 @@ export class TaskRuntime implements TasksContext {
 	close(): void {
 		if (this.closed) return;
 		this._closed = true;
+		this.views.close();
 		this.listeners.clear();
 		for (const record of this.store.records.values()) {
 			record.suppressed = true;

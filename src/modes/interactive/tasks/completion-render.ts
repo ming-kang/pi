@@ -128,7 +128,7 @@ function statusName(status: string): string {
 	return status === "timeout" ? "Timed out" : status ? status[0]!.toUpperCase() + status.slice(1) : "Unknown";
 }
 function shortId(id: string): string {
-	return id.replace(/^(bash|subagent)-(.{8}).+$/, "$1-$2");
+	return id.replace(/^(.+)-([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, "$1-$2");
 }
 
 class CompletionCard implements Component {
@@ -261,13 +261,13 @@ class CompletionCard implements Component {
 				lines.push("", ...wrapTextWithAnsi(`Task ID: ${view.id}`, inner).map((line) => theme.fg("dim", line)));
 			}
 
-			lines.push(theme.fg("dim", "Preview of the saved result · /tasks has task details while retained."));
+			lines.push(theme.fg("dim", "Preview of the saved result."));
 		}
 		const bounded =
 			lines.length > CARD_ROWS
 				? [
 						...lines.slice(0, CARD_ROWS - 1),
-						theme.fg("dim", "… card shortened; inspect retained details in /tasks"),
+						theme.fg("dim", "… card shortened; use tasks read for retained output"),
 					]
 				: lines;
 		return bounded.map((line) => " ".repeat(padding) + truncateToWidth(line, inner, "…") + " ".repeat(padding));
