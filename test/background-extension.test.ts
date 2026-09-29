@@ -3,8 +3,6 @@ import { join } from "node:path";
 import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-sampling";
 import { getKeybindings, setKeybindings, stripTerminalSequences, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BackgroundService } from "../src/core/background/service.ts";
-import type { BackgroundControl } from "../src/core/background/types.ts";
 import type {
 	AgentToolResult,
 	ExtensionAPI,
@@ -16,19 +14,20 @@ import type {
 } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type { CustomMessage } from "../src/core/messages.ts";
-import { runKill, runList, runRead, runWait } from "../src/extensions/background/actions.ts";
-import { renderBackgroundCompletion } from "../src/extensions/background/completion-render.ts";
-import { createBackgroundExtension } from "../src/extensions/background/index.ts";
+import { TaskRuntime } from "../src/core/tasks/runtime.ts";
+import type { TaskControl } from "../src/core/tasks/types.ts";
+import { runKill, runList, runRead, runWait } from "../src/core/tools/tasks/actions.ts";
+import type { tasksSchema } from "../src/core/tools/tasks/schema.ts";
+import type { TasksDetails, TasksNotificationDetails } from "../src/core/tools/tasks/types.ts";
 import {
-	type BgRenderState,
-	renderBackgroundNotification,
-	renderBgCall,
-	renderBgResult,
+	renderLegacyTaskNotification,
+	renderTasksCall,
+	renderTasksResult,
 	scheduleWaitRefresh,
-} from "../src/extensions/background/render.ts";
-import type { bgSchema } from "../src/extensions/background/schema.ts";
-import type { BgDetails, BgNotificationDetails } from "../src/extensions/background/types.ts";
+	type TasksRenderState,
+} from "../src/modes/interactive/tasks/render.ts";
 import type { Theme } from "../src/modes/interactive/theme/theme.ts";
+import { createTasksHarness } from "./test-tasks-ui.ts";
 
 function textOf(result: AgentToolResult<unknown>): string {
 	return result.content
@@ -36,16 +35,16 @@ function textOf(result: AgentToolResult<unknown>): string {
 		.map((part) => part.text)
 		.join("\n");
 }
-const services: BackgroundService[] = [];
+const services: TaskRuntime[] = [];
 afterEach(async () => {
 	for (const service of services.splice(0)) await service.shutdown();
 	vi.useRealTimers();
 });
 function running(kind: "bash" | "subagent" = "bash") {
-	const service = new BackgroundService({ enabled: true });
+	const service = new TaskRuntime({ enabled: true });
 	services.push(service);
 	let finish!: () => void;
-	let control!: BackgroundControl<undefined>;
+	let control!: TaskControl<undefined>;
 	const done = new Promise<void>((resolve) => {
 		finish = resolve;
 	});
@@ -73,7 +72,7 @@ function running(kind: "bash" | "subagent" = "bash") {
 }
 describe("public Background management", () => {
 	it("registers management only, with native presentation", () => {
-		let tool: ToolDefinition<typeof bgSchema, BgDetails, BgRenderState> | undefined;
+		let tool: ToolDefinition<typeof tasksSchema, TasksDetails, TasksRenderState> | undefined;
 		const pi = {
 			on: vi.fn(),
 			registerTool: (value: typeof tool) => {
@@ -82,10 +81,8 @@ describe("public Background management", () => {
 			registerMessageRenderer: vi.fn(),
 			registerCommand: vi.fn(),
 		} as unknown as ExtensionAPI;
-		createBackgroundExtension()(pi);
-		expect(pi.registerMessageRenderer).toHaveBeenCalledWith("background-completion", renderBackgroundCompletion);
-		expect(pi.registerMessageRenderer).toHaveBeenCalledWith("background-task", renderBackgroundNotification);
-		expect(tool?.name).toBe("bg");
+		createTasksHarness()(pi);
+		expect(tool?.name).toBe("tasks");
 		expect(tool?.renderShell).toBeUndefined();
 		expect(tool?.constrainedSampling).toEqual({ type: "json_schema", strict: "prefer" });
 		expect(JSON.stringify(tool?.parameters)).not.toContain('"create"');
@@ -93,7 +90,7 @@ describe("public Background management", () => {
 		expect(() => makeStrictJsonSchema(tool!.parameters)).not.toThrow();
 	});
 	it("lists the session's current tasks when the id is unknown", async () => {
-		let tool: ToolDefinition<typeof bgSchema, BgDetails, BgRenderState> | undefined;
+		let tool: ToolDefinition<typeof tasksSchema, TasksDetails, TasksRenderState> | undefined;
 		const pi = {
 			on: vi.fn(),
 			registerTool: (value: typeof tool) => {
@@ -102,11 +99,11 @@ describe("public Background management", () => {
 			registerMessageRenderer: vi.fn(),
 			registerCommand: vi.fn(),
 		} as unknown as ExtensionAPI;
-		createBackgroundExtension()(pi);
+		createTasksHarness()(pi);
 		const h = running();
 		await h.outcome;
 		const id = h.service.list()[0]!.id;
-		const ctx = { background: h.service } as unknown as ExtensionContext;
+		const ctx = { tasks: h.service } as unknown as ExtensionContext;
 		const failure = tool!.execute("call", { action: "read", taskId: "nope" }, undefined, undefined, ctx);
 		await expect(failure).rejects.toThrow(
 			/No background task "nope" in this session\. IDs from other sessions are not valid here\./,
@@ -136,7 +133,7 @@ describe("public Background management", () => {
 		expect(expired.details).not.toHaveProperty("backgroundTaskId");
 		h.finish();
 		const finished = await runWait(h.service, { action: "wait", taskId: id });
-		expect(finished.details.backgroundTaskId).toBe(id);
+		expect(finished.details.taskId).toBe(id);
 		expect(h.service.pendingNotifications()).toMatchObject([{ id }]);
 		expect((await runRead(h.service, { action: "read", taskId: id })).details).not.toHaveProperty("backgroundTaskId");
 	});
@@ -174,7 +171,7 @@ describe("public Background management", () => {
 		h.finish();
 	});
 	it("says there are no tasks when an unknown id arrives in an empty session", async () => {
-		const service = new BackgroundService({ enabled: true });
+		const service = new TaskRuntime({ enabled: true });
 		services.push(service);
 		await expect(runRead(service, { action: "read", taskId: "nope" })).rejects.toThrow(
 			'No background task "nope" in this session. No background tasks in this session.',
@@ -195,7 +192,7 @@ describe("public Background management", () => {
 		h.finish();
 	});
 	it("lists exactly the matching tasks for an ambiguous prefix", async () => {
-		const service = new BackgroundService({ enabled: true });
+		const service = new TaskRuntime({ enabled: true });
 		services.push(service);
 		const gate = new Promise<void>(() => {});
 		const start = (kind: "bash" | "subagent", title: string) =>
@@ -230,12 +227,13 @@ describe("public Background management", () => {
 	});
 	it("lists the most recent finishes, not the oldest, when an unknown id lookup fails", async () => {
 		vi.useFakeTimers();
-		const service = new BackgroundService({ enabled: true });
+		const service = new TaskRuntime({ enabled: true });
 		services.push(service);
 		const ids: string[] = [];
 		for (let index = 0; index < 12; index++) {
 			await service.execute({
 				kind: "bash",
+				format: "log",
 				title: `task ${index + 1}`,
 				toolCallId: `call-${index + 1}`,
 				background: true,
@@ -261,8 +259,8 @@ describe("public Background management", () => {
 		expect(message).not.toContain(ids[1]!);
 		for (const id of ids.slice(2)) expect(message).toContain(id);
 	});
-	it("keeps foreground executions out of the unknown-id listing, counted like in bg list", async () => {
-		const service = new BackgroundService({ enabled: true });
+	it("keeps foreground executions out of the unknown-id listing, counted like in tasks list", async () => {
+		const service = new TaskRuntime({ enabled: true });
 		services.push(service);
 		let foregroundId = "";
 		let release!: () => void;
@@ -275,6 +273,7 @@ describe("public Background management", () => {
 		});
 		const foreground = service.execute({
 			kind: "bash",
+			format: "log",
 			title: "inline",
 			toolCallId: "inline",
 			async run(control) {
@@ -288,6 +287,7 @@ describe("public Background management", () => {
 		await running;
 		await service.execute({
 			kind: "bash",
+			format: "log",
 			title: "backgrounded",
 			toolCallId: "backgrounded",
 			background: true,
@@ -310,12 +310,13 @@ describe("public Background management", () => {
 		await foreground;
 	});
 	it("lists exactly the matched tasks for an ambiguous prefix even outside the current branch", async () => {
-		const service = new BackgroundService({ enabled: true, anchor: () => "anchor" });
+		const service = new TaskRuntime({ enabled: true, anchor: () => "anchor" });
 		services.push(service);
 		const gates: Array<() => void> = [];
 		const start = (title: string) =>
 			service.execute({
 				kind: "bash",
+				format: "log",
 				title,
 				toolCallId: title,
 				background: true,
@@ -344,14 +345,15 @@ describe("public Background management", () => {
 		expect(message).toContain('Ambiguous background task ID "bash" matches 2 tasks:');
 		for (const id of ids) expect(message).toContain(id);
 	});
-	it("shows the most recent finishes in bg list, folding older ones into the count", async () => {
+	it("shows the most recent finishes in tasks list, folding older ones into the count", async () => {
 		vi.useFakeTimers();
-		const service = new BackgroundService({ enabled: true });
+		const service = new TaskRuntime({ enabled: true });
 		services.push(service);
 		const ids: string[] = [];
 		for (let index = 0; index < 7; index++) {
 			await service.execute({
 				kind: "bash",
+				format: "log",
 				title: `task ${index + 1}`,
 				toolCallId: `call-${index + 1}`,
 				background: true,
@@ -366,17 +368,18 @@ describe("public Background management", () => {
 			vi.advanceTimersByTime(1000);
 		}
 		const text = textOf(runList(service));
-		// BG_LIST_FINISHED_SHOWN is 5: the two oldest finishes fold into the count.
+		// TASKS_LIST_FINISHED_SHOWN is 5: the two oldest finishes fold into the count.
 		expect(text).not.toContain(ids[0]!);
 		expect(text).not.toContain(ids[1]!);
 		for (const id of ids.slice(2)) expect(text).toContain(id);
 		expect(text).toContain("2 more records not shown.");
 	});
 	it("keeps missing-log and terminal diagnostics ahead of a long fallback, including waits with no delta", async () => {
-		const service = new BackgroundService({ enabled: true });
+		const service = new TaskRuntime({ enabled: true });
 		services.push(service);
 		await service.execute({
 			kind: "bash",
+			format: "log",
 			title: "missing log",
 			toolCallId: "missing",
 			background: true,
@@ -430,9 +433,9 @@ describe("public Background management", () => {
 	});
 	it("releases renderer timers when a pending wait row is disposed", () => {
 		vi.useFakeTimers();
-		const state: BgRenderState = {};
+		const state: TasksRenderState = {};
 		const invalidate = vi.fn();
-		const ctx = { state, invalidate } as unknown as ToolRenderContext<BgRenderState>;
+		const ctx = { state, invalidate } as unknown as ToolRenderContext<TasksRenderState>;
 		scheduleWaitRefresh(ctx, true);
 		expect(vi.getTimerCount()).toBe(1);
 		state.dispose?.();
@@ -440,7 +443,7 @@ describe("public Background management", () => {
 		expect(invalidate).not.toHaveBeenCalled();
 		expect(vi.getTimerCount()).toBe(0);
 	});
-	it("closes an open /bg via done on session shutdown without cancelling execution", async () => {
+	it("closes an open /tasks via done on session shutdown without cancelling execution", async () => {
 		const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
 		let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
 		const pi = {
@@ -451,15 +454,16 @@ describe("public Background management", () => {
 				command = value;
 			},
 		} as unknown as ExtensionAPI;
-		createBackgroundExtension()(pi);
+		createTasksHarness()(pi);
 		const h = running();
 		await h.outcome;
 		const done = vi.fn();
 		let menu: { dispose?(): void } | undefined;
 		const ctx = {
-			background: h.service,
+			tasks: h.service,
 			mode: "tui",
 			ui: {
+				onTerminalInput: () => () => {},
 				setStatus: vi.fn(),
 				custom: (factory: Parameters<ExtensionContext["ui"]["custom"]>[0]) =>
 					new Promise<void>((resolve) => {
@@ -498,16 +502,16 @@ describe("public Background management", () => {
 			registerMessageRenderer: vi.fn(),
 			registerCommand: vi.fn(),
 		} as unknown as ExtensionAPI;
-		createBackgroundExtension()(pi);
+		createTasksHarness()(pi);
 		const h = running();
 		await h.outcome;
 		const setStatus = vi.fn();
 		const ctx = {
-			background: h.service,
+			tasks: h.service,
 			ui: { setStatus, onTerminalInput: () => () => {} },
 		} as unknown as ExtensionContext;
 		handlers.get("session_start")?.({}, ctx);
-		expect(setStatus).toHaveBeenLastCalledWith("background", "bg 1 active · 0 finished");
+		expect(setStatus).toHaveBeenLastCalledWith("background", "tasks 1 active · 0 finished");
 		handlers.get("session_shutdown")?.({}, ctx);
 		expect(setStatus).toHaveBeenLastCalledWith("background", undefined);
 		const calls = setStatus.mock.calls.length;
@@ -528,8 +532,8 @@ describe("public Background management", () => {
 				registerMessageRenderer: vi.fn(),
 				registerCommand: vi.fn(),
 			} as unknown as ExtensionAPI;
-			createBackgroundExtension()(pi);
-			const service = new BackgroundService({ enabled: true });
+			createTasksHarness()(pi);
+			const service = new TaskRuntime({ enabled: true });
 			services.push(service);
 			let input: TerminalInputHandler | undefined;
 			const unsubscribeInput = vi.fn();
@@ -542,9 +546,9 @@ describe("public Background management", () => {
 					return unsubscribeInput;
 				},
 			};
-			handlers.get("session_start")?.({}, { background: service, ui } as unknown as ExtensionContext);
+			handlers.get("session_start")?.({}, { tasks: service, ui } as unknown as ExtensionContext);
 			const detachKey = "";
-			expect(getKeybindings().matches(detachKey, "app.backgroundTasks.detach")).toBe(true);
+			expect(getKeybindings().matches(detachKey, "app.tasks.detach")).toBe(true);
 
 			// Nothing runs yet, so the key falls through to the editor.
 			expect(input?.(detachKey)).toBeUndefined();
@@ -554,6 +558,7 @@ describe("public Background management", () => {
 			});
 			const outcome = service.execute({
 				kind: "bash",
+				format: "log",
 				title: "build",
 				toolCallId: "foreground",
 				background: false,
@@ -566,11 +571,11 @@ describe("public Background management", () => {
 			await vi.waitFor(() => expect(service.list()).toHaveLength(1));
 			expect(input?.("x")).toBeUndefined();
 			expect(input?.(detachKey)).toEqual({ consume: true });
-			expect(notify).toHaveBeenCalledWith("Moved 1 execution to the background. Use /bg to manage tasks.");
+			expect(notify).toHaveBeenCalledWith("Moved 1 execution to the background. Use /tasks to manage tasks.");
 			expect((await outcome).kind).toBe("background");
 			finish();
 
-			handlers.get("session_shutdown")?.({}, { background: service, ui } as unknown as ExtensionContext);
+			handlers.get("session_shutdown")?.({}, { tasks: service, ui } as unknown as ExtensionContext);
 			expect(unsubscribeInput).toHaveBeenCalledOnce();
 		} finally {
 			setKeybindings(previousKeybindings);
@@ -590,8 +595,8 @@ describe("public Background management", () => {
 				registerMessageRenderer: vi.fn(),
 				registerCommand: vi.fn(),
 			} as unknown as ExtensionAPI;
-			createBackgroundExtension()(pi);
-			const service = new BackgroundService({ enabled: true });
+			createTasksHarness()(pi);
+			const service = new TaskRuntime({ enabled: true });
 			services.push(service);
 			let input: TerminalInputHandler | undefined;
 			const setStatus = vi.fn();
@@ -603,7 +608,7 @@ describe("public Background management", () => {
 					return () => {};
 				},
 			};
-			const ctx = { background: service, ui } as unknown as ExtensionContext;
+			const ctx = { tasks: service, ui } as unknown as ExtensionContext;
 			handlers.get("session_start")?.({}, ctx);
 			expect(setStatus).toHaveBeenLastCalledWith("background", undefined);
 
@@ -614,6 +619,7 @@ describe("public Background management", () => {
 				});
 				const outcome = service.execute({
 					kind: "bash",
+					format: "log",
 					title: toolCallId,
 					toolCallId,
 					background: false,
@@ -646,7 +652,7 @@ describe("public Background management", () => {
 			expect(setStatus).toHaveBeenLastCalledWith("background", hint);
 			expect(input?.("\x02")).toEqual({ consume: true });
 			// Moved work is counted as background work and no longer needs the hint.
-			expect(setStatus).toHaveBeenLastCalledWith("background", "bg 1 active · 0 finished");
+			expect(setStatus).toHaveBeenLastCalledWith("background", "tasks 1 active · 0 finished");
 			long.finish();
 			await long.outcome;
 
@@ -674,13 +680,13 @@ describe("public Background management", () => {
 	});
 });
 
-describe("renderBackgroundNotification", () => {
+describe("renderLegacyTaskNotification", () => {
 	const plainTheme = {
 		fg: (_color: string, text: string) => text,
 		bold: (text: string) => text,
 	} as unknown as Theme;
 
-	const details: BgNotificationDetails = {
+	const details: TasksNotificationDetails = {
 		taskId: "bg-abc123",
 		command: "npm run build",
 		status: "completed",
@@ -692,7 +698,7 @@ describe("renderBackgroundNotification", () => {
 		tailTruncated: false,
 	};
 
-	function message(overrides?: Partial<BgNotificationDetails>): CustomMessage<BgNotificationDetails> {
+	function message(overrides?: Partial<TasksNotificationDetails>): CustomMessage<TasksNotificationDetails> {
 		return {
 			role: "custom",
 			customType: "background-task",
@@ -704,7 +710,7 @@ describe("renderBackgroundNotification", () => {
 	}
 
 	it("renders a collapsed summary and expands with the output tail", () => {
-		const collapsed = renderBackgroundNotification(message(), { expanded: false, outputPad: 1 }, plainTheme);
+		const collapsed = renderLegacyTaskNotification(message(), { expanded: false, outputPad: 1 }, plainTheme);
 		expect(collapsed).toBeDefined();
 		const collapsedLines = (collapsed?.render(120) ?? []).map(stripTerminalSequences);
 		expect(collapsedLines.join("\n")).toContain("bg-abc123");
@@ -714,7 +720,7 @@ describe("renderBackgroundNotification", () => {
 		expect(collapsedLines.join("\n")).toContain("pi-bg-abc123.log");
 		expect(collapsedLines.join("\n")).not.toContain("/tmp/pi-bg-abc123.log");
 
-		const expanded = renderBackgroundNotification(message(), { expanded: true, outputPad: 1 }, plainTheme);
+		const expanded = renderLegacyTaskNotification(message(), { expanded: true, outputPad: 1 }, plainTheme);
 		const expandedLines = (expanded?.render(120) ?? []).map(stripTerminalSequences);
 		expect(expandedLines.join("\n")).toContain("build finished");
 		expect(expandedLines.join("\n")).toContain("/tmp/pi-bg-abc123.log");
@@ -724,7 +730,7 @@ describe("renderBackgroundNotification", () => {
 		// Each CJK code point occupies two terminal columns, so a count-based
 		// truncation emits roughly twice the intended width and overflows the row.
 		const command = "编译前端资源包".repeat(40);
-		const collapsed = renderBackgroundNotification(
+		const collapsed = renderLegacyTaskNotification(
 			message({ command }),
 			{ expanded: false, outputPad: 1 },
 			plainTheme,
@@ -735,7 +741,7 @@ describe("renderBackgroundNotification", () => {
 
 		// With a description the command gets the tighter 40-column budget, so the
 		// row is shorter still, and the description survives.
-		const labelled = renderBackgroundNotification(
+		const labelled = renderLegacyTaskNotification(
 			message({ command, description: "构建" }),
 			{ expanded: false, outputPad: 1 },
 			plainTheme,
@@ -747,7 +753,7 @@ describe("renderBackgroundNotification", () => {
 
 	it("keeps the end of an oversized tail when expanded", () => {
 		const tailText = `HEAD${"x".repeat(4500)}TAIL`;
-		const expanded = renderBackgroundNotification(
+		const expanded = renderLegacyTaskNotification(
 			message({ tailText }),
 			{ expanded: true, outputPad: 1 },
 			plainTheme,
@@ -759,7 +765,7 @@ describe("renderBackgroundNotification", () => {
 
 	it("falls back to the default renderer for malformed details", () => {
 		expect(
-			renderBackgroundNotification(
+			renderLegacyTaskNotification(
 				message({ taskId: undefined as unknown as string }),
 				{ expanded: false, outputPad: 1 },
 				plainTheme,
@@ -770,53 +776,53 @@ describe("renderBackgroundNotification", () => {
 	it("renders a stalled notification as waiting-for-input with advice on expand", () => {
 		const stalled = message({ stalled: true, status: "running", tailText: "Proceed? (y/n)\n" });
 
-		const collapsed = renderBackgroundNotification(stalled, { expanded: false, outputPad: 1 }, plainTheme);
+		const collapsed = renderLegacyTaskNotification(stalled, { expanded: false, outputPad: 1 }, plainTheme);
 		const collapsedText = (collapsed?.render(120) ?? []).map(stripTerminalSequences).join("\n");
 		expect(collapsedText).toContain("waiting for input");
 		expect(collapsedText).not.toContain("(y/n)");
 
-		const expanded = renderBackgroundNotification(stalled, { expanded: true, outputPad: 1 }, plainTheme);
+		const expanded = renderLegacyTaskNotification(stalled, { expanded: true, outputPad: 1 }, plainTheme);
 		const expandedText = (expanded?.render(120) ?? []).map(stripTerminalSequences).join("\n");
 		expect(expandedText).toContain("Proceed? (y/n)");
 		expect(expandedText).toContain("kill");
 	});
 });
 
-describe("renderBgCall", () => {
+describe("renderTasksCall", () => {
 	const plainTheme = {
 		fg: (_color: string, text: string) => text,
 		bold: (text: string) => text,
 	} as unknown as Theme;
 
 	it("stays renderable while streaming incomplete arguments", () => {
-		const empty = renderBgCall({} as never, plainTheme, {
+		const empty = renderTasksCall({} as never, plainTheme, {
 			expanded: false,
 			isPartial: true,
 		} as ToolRenderContext);
-		expect(empty.render(200).map(stripTerminalSequences).join("\n").trimEnd()).toBe("bg");
+		expect(empty.render(200).map(stripTerminalSequences).join("\n").trimEnd()).toBe("tasks");
 
-		const partialAction = renderBgCall({ action: "cre" } as never, plainTheme, {
+		const partialAction = renderTasksCall({ action: "cre" } as never, plainTheme, {
 			expanded: false,
 			isPartial: true,
 		} as ToolRenderContext);
-		expect(partialAction.render(200).map(stripTerminalSequences).join("\n").trimEnd()).toBe("bg cre");
+		expect(partialAction.render(200).map(stripTerminalSequences).join("\n").trimEnd()).toBe("tasks cre");
 
-		const createWithoutCommand = renderBgCall({ action: "create" } as never, plainTheme, {
+		const createWithoutCommand = renderTasksCall({ action: "create" } as never, plainTheme, {
 			expanded: false,
 			isPartial: true,
 		} as ToolRenderContext);
-		expect(createWithoutCommand.render(200).map(stripTerminalSequences).join("\n").trimEnd()).toBe("bg create");
+		expect(createWithoutCommand.render(200).map(stripTerminalSequences).join("\n").trimEnd()).toBe("tasks create");
 	});
 
 	it("shows the full multi-line create command only when expanded", () => {
 		const args = { action: "create" as const, command: "echo one\necho two\necho three" };
 
-		const collapsed = renderBgCall(args, plainTheme, { expanded: false } as ToolRenderContext);
+		const collapsed = renderTasksCall(args, plainTheme, { expanded: false } as ToolRenderContext);
 		const collapsedText = collapsed.render(200).map(stripTerminalSequences).join("\n");
 		expect(collapsedText).toContain("+2 lines");
 		expect(collapsedText).not.toContain("echo three");
 
-		const expanded = renderBgCall(args, plainTheme, { expanded: true } as ToolRenderContext);
+		const expanded = renderTasksCall(args, plainTheme, { expanded: true } as ToolRenderContext);
 		const expandedText = expanded.render(200).map(stripTerminalSequences).join("\n");
 		expect(expandedText).toContain("echo two");
 		expect(expandedText).toContain("echo three");
@@ -834,20 +840,20 @@ describe("renderBgCall", () => {
 			},
 			RegExp,
 		][] = [
-			[{ action: "read", taskId: "bg-3f", mode: "tail", bytes: 8192 }, /^bg read bg-3f tail/],
-			[{ action: "wait", taskId: "3f", waitMs: 20_000 }, /^bg wait 3f 20s/],
-			[{ action: "kill", taskId: "bg-3f" }, /^bg kill bg-3f/],
-			[{ action: "list" }, /^bg list/],
+			[{ action: "read", taskId: "bg-3f", mode: "tail", bytes: 8192 }, /^tasks read bg-3f tail/],
+			[{ action: "wait", taskId: "3f", waitMs: 20_000 }, /^tasks wait 3f 20s/],
+			[{ action: "kill", taskId: "bg-3f" }, /^tasks kill bg-3f/],
+			[{ action: "list" }, /^tasks list/],
 		];
 		for (const [args, pattern] of cases) {
-			const component = renderBgCall(args as never, plainTheme, { expanded: false } as ToolRenderContext);
+			const component = renderTasksCall(args as never, plainTheme, { expanded: false } as ToolRenderContext);
 			const text = component.render(200).map(stripTerminalSequences).join("\n");
 			expect(text).toMatch(pattern);
 		}
 	});
 
 	it("appends the description label to a create call", () => {
-		const component = renderBgCall(
+		const component = renderTasksCall(
 			{ action: "create", command: "npm run dev", description: "dev server" },
 			plainTheme,
 			{ expanded: false } as ToolRenderContext,
@@ -857,7 +863,7 @@ describe("renderBgCall", () => {
 	});
 });
 
-describe("renderBgCall wait pending line", () => {
+describe("renderTasksCall wait pending line", () => {
 	const plainTheme = {
 		fg: (_color: string, text: string) => text,
 		bold: (text: string) => text,
@@ -866,24 +872,24 @@ describe("renderBgCall wait pending line", () => {
 	it("shows elapsed/window while pending, then settles", () => {
 		vi.useFakeTimers();
 		try {
-			const state: BgRenderState = {};
+			const state: TasksRenderState = {};
 			const context = {
 				expanded: false,
 				executionStarted: true,
 				isPartial: true,
 				state,
 				invalidate: vi.fn(),
-			} as unknown as ToolRenderContext<BgRenderState>;
+			} as unknown as ToolRenderContext<TasksRenderState>;
 
-			const first = renderBgCall({ action: "wait", taskId: "bg-3f" }, plainTheme, context);
-			expect(first.render(200).map(stripTerminalSequences).join("\n")).toMatch(/^bg wait bg-3f waiting 0s\/20s/);
+			const first = renderTasksCall({ action: "wait", taskId: "bg-3f" }, plainTheme, context);
+			expect(first.render(200).map(stripTerminalSequences).join("\n")).toMatch(/^tasks wait bg-3f waiting 0s\/20s/);
 			expect(state.refreshTimer).toBeDefined();
 
 			// The armed timer invalidates and the next render shows elapsed progress.
 			vi.advanceTimersByTime(1000);
 			expect(context.invalidate).toHaveBeenCalledTimes(1);
-			const second = renderBgCall({ action: "wait", taskId: "bg-3f" }, plainTheme, context);
-			expect(second.render(200).map(stripTerminalSequences).join("\n")).toMatch(/^bg wait bg-3f waiting 1s\/20s/);
+			const second = renderTasksCall({ action: "wait", taskId: "bg-3f" }, plainTheme, context);
+			expect(second.render(200).map(stripTerminalSequences).join("\n")).toMatch(/^tasks wait bg-3f waiting 1s\/20s/);
 
 			// Settled: timer cleared, static form returns.
 			const settledContext = {
@@ -891,9 +897,13 @@ describe("renderBgCall wait pending line", () => {
 				executionStarted: true,
 				isPartial: false,
 				state,
-			} as unknown as ToolRenderContext<BgRenderState>;
-			const settled = renderBgCall({ action: "wait", taskId: "bg-3f", waitMs: 20_000 }, plainTheme, settledContext);
-			expect(settled.render(200).map(stripTerminalSequences).join("\n")).toMatch(/^bg wait bg-3f 20s/);
+			} as unknown as ToolRenderContext<TasksRenderState>;
+			const settled = renderTasksCall(
+				{ action: "wait", taskId: "bg-3f", waitMs: 20_000 },
+				plainTheme,
+				settledContext,
+			);
+			expect(settled.render(200).map(stripTerminalSequences).join("\n")).toMatch(/^tasks wait bg-3f 20s/);
 			expect(state.refreshTimer).toBeUndefined();
 		} finally {
 			vi.useRealTimers();
@@ -901,7 +911,7 @@ describe("renderBgCall wait pending line", () => {
 	});
 
 	it("stays static until execution starts", () => {
-		const state: BgRenderState = {};
+		const state: TasksRenderState = {};
 		// Arguments are still streaming, or this is a replayed transcript row that
 		// will never settle. Either way there is nothing to count up to yet.
 		const context = {
@@ -909,30 +919,30 @@ describe("renderBgCall wait pending line", () => {
 			executionStarted: false,
 			isPartial: true,
 			state,
-		} as unknown as ToolRenderContext<BgRenderState>;
+		} as unknown as ToolRenderContext<TasksRenderState>;
 
-		const line = renderBgCall({ action: "wait", taskId: "bg-3f" }, plainTheme, context);
+		const line = renderTasksCall({ action: "wait", taskId: "bg-3f" }, plainTheme, context);
 		expect(line.render(200).map(stripTerminalSequences).join("\n")).not.toContain("waiting");
 		expect(state.refreshTimer).toBeUndefined();
 	});
 
 	it("falls back to the static line without shell state", () => {
-		const component = renderBgCall({ action: "wait", taskId: "bg-3f", waitMs: 5000 }, plainTheme, {
+		const component = renderTasksCall({ action: "wait", taskId: "bg-3f", waitMs: 5000 }, plainTheme, {
 			expanded: false,
 			isPartial: true,
-		} as ToolRenderContext<BgRenderState>);
-		expect(component.render(200).map(stripTerminalSequences).join("\n")).toMatch(/^bg wait bg-3f 5s/);
+		} as ToolRenderContext<TasksRenderState>);
+		expect(component.render(200).map(stripTerminalSequences).join("\n")).toMatch(/^tasks wait bg-3f 5s/);
 	});
 });
 
-describe("renderBgResult summaries", () => {
+describe("renderTasksResult summaries", () => {
 	const plainTheme = {
 		fg: (_color: string, text: string) => text,
 		bold: (text: string) => text,
 	} as unknown as Theme;
 
 	it("carries the description label on a create summary", () => {
-		const component = renderBgResult(
+		const component = renderTasksResult(
 			{
 				content: [{ type: "text", text: "Started background task bg-3f." }],
 				details: {

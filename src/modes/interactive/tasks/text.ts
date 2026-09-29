@@ -32,7 +32,7 @@ export function formatAge(endedAt: number, now = Date.now()): string {
 	return `${Math.floor(hours / 24)}d ago`;
 }
 
-/** The `[a · b · c]` status prefix shared by every model-facing output result. */
+/** The `[a · b · c]` status prefix shared by every context-facing output result. */
 export function noticeLine(parts: (string | false | undefined)[]): string {
 	return `[${parts.filter(Boolean).join(" · ")}]`;
 }

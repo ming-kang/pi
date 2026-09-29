@@ -128,14 +128,14 @@ This routing remains configurable through the ordinary action bindings. For exam
 | `app.suspend` | `ctrl+z` (none on Windows) | Suspend to background |
 | `app.editor.external` | `ctrl+g` | Open in external editor (`externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere) |
 | `app.clipboard.pasteImage` | `ctrl+v` (`alt+v` on Windows and WSL) | Paste image or text from clipboard |
-| `app.backgroundTasks.detach` | `ctrl+b` | Move all eligible current foreground shell tasks and Subagent groups to the background |
-| `app.backgroundTasks.focusList` | `left` | Focus the task list in `/bg` |
-| `app.backgroundTasks.focusPreview` | `right` | Focus the selected preview in `/bg` |
-| `app.backgroundTasks.kill` | `k` | Ask to stop the selected shell task or whole Subagent group in `/bg` (confirmed with `y`) |
+| `app.tasks.detach` | `ctrl+b` | Move all eligible current foreground shell tasks and Subagent groups to the background |
+| `app.tasks.focusList` | `left` | Focus the task list in `/tasks` |
+| `app.tasks.focusPreview` | `right` | Focus the selected preview in `/tasks` |
+| `app.tasks.kill` | `k` | Ask to stop the selected shell task or whole Subagent group in `/tasks` (confirmed with `y`) |
 
-In `/bg`, Up/Down and Page Up/Page Down target the focused pane: row selection/list paging or preview scrolling/paging. Enter focuses the preview; Escape returns to the list before closing. Left/Right focus controls can be rebound independently of editor cursor actions. List paging uses `tui.select.pageUp`/`pageDown`; preview paging uses `tui.editor.pageUp`/`pageDown` (including their default Ctrl+Page Up/Down aliases).
+In `/tasks`, Up/Down and Page Up/Page Down target the focused pane: row selection/list paging or preview scrolling/paging. Enter focuses the preview; Escape returns to the list before closing. Left/Right focus controls can be rebound independently of editor cursor actions. List paging uses `tui.select.pageUp`/`pageDown`; preview paging uses `tui.editor.pageUp`/`pageDown` (including their default Ctrl+Page Up/Down aliases).
 
-Ctrl+B also works while `/bg` owns focus. It does not restart execution, reset shell timeouts, detach individual workers, or affect user `!` commands. With no eligible work it only reports that nothing can be moved. See [Background tasks](bundled/extensions/background.md).
+Ctrl+B also works while `/tasks` owns focus. It does not restart execution, reset shell timeouts, detach individual workers, or affect user `!` commands. With no eligible work it only reports that nothing can be moved. See [Background tasks](bundled/tasks.md).
 
 ### Question Details
 
@@ -254,7 +254,7 @@ Disable the detach action before restoring Ctrl+B as cursor-left (or rebind deta
 {
   "tui.editor.historyPrevious": "ctrl+p",
   "tui.editor.historyNext": "ctrl+n",
-  "app.backgroundTasks.detach": [],
+  "app.tasks.detach": [],
   "tui.editor.cursorLeft": ["left", "ctrl+b"],
   "tui.editor.cursorRight": ["right", "ctrl+f"],
   "tui.editor.cursorWordLeft": ["alt+left", "alt+b"],

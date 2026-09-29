@@ -3,14 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BACKGROUND_RESULT_BYTES } from "../src/core/background/output.ts";
-import { BackgroundService } from "../src/core/background/service.ts";
-import type {
-	BackgroundCompletion,
-	BackgroundControl,
-	BackgroundExecution,
-	BackgroundTask,
-} from "../src/core/background/types.ts";
+import { TASK_RESULT_BYTES } from "../src/core/tasks/output.ts";
+import { TaskRuntime } from "../src/core/tasks/runtime.ts";
+import type { TaskCompletion, TaskControl, TaskExecution, TaskSnapshot } from "../src/core/tasks/types.ts";
 
 const result = (text = "done"): AgentToolResult<{ ok: boolean }> => ({
 	content: [{ type: "text", text }],
@@ -28,16 +23,17 @@ function deferred<T>() {
 	});
 	return { promise, resolve, reject };
 }
-function job(overrides: Partial<BackgroundExecution<{ ok: boolean }>> = {}) {
-	const completion = deferred<BackgroundCompletion<{ ok: boolean }>>();
-	let control!: BackgroundControl<{ ok: boolean }>;
-	const run = vi.fn((next: BackgroundControl<{ ok: boolean }>) => {
+function job(overrides: Partial<TaskExecution<{ ok: boolean }>> = {}) {
+	const completion = deferred<TaskCompletion<{ ok: boolean }>>();
+	let control!: TaskControl<{ ok: boolean }>;
+	const run = vi.fn((next: TaskControl<{ ok: boolean }>) => {
 		control = next;
 		next.accept();
 		return completion.promise;
 	});
-	const execution: BackgroundExecution<{ ok: boolean }> = {
+	const execution: TaskExecution<{ ok: boolean }> = {
 		kind: "bash",
+		format: "log",
 		title: "test",
 		toolCallId: "call",
 		run,
@@ -52,9 +48,9 @@ function job(overrides: Partial<BackgroundExecution<{ ok: boolean }>> = {}) {
 		},
 	};
 }
-const services: BackgroundService[] = [];
-function service(options: ConstructorParameters<typeof BackgroundService>[0] = {}) {
-	const instance = new BackgroundService({ enabled: true, ...options });
+const services: TaskRuntime[] = [];
+function service(options: ConstructorParameters<typeof TaskRuntime>[0] = {}) {
+	const instance = new TaskRuntime({ enabled: true, ...options });
 	services.push(instance);
 	return instance;
 }
@@ -63,12 +59,13 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
-function savedTask(id = "bash-restored", endedAt = 20, overrides: Partial<BackgroundTask> = {}) {
+function savedTask(id = "bash-restored", endedAt = 20, overrides: Partial<TaskSnapshot> = {}) {
 	return {
 		version: 2,
 		task: {
 			id,
 			kind: "bash",
+			format: "log",
 			title: "saved",
 			toolCallId: "call",
 			anchorId: null,
@@ -78,7 +75,7 @@ function savedTask(id = "bash-restored", endedAt = 20, overrides: Partial<Backgr
 			endedAt,
 			result: result("saved report"),
 			...overrides,
-		} satisfies BackgroundTask,
+		} satisfies TaskSnapshot,
 	};
 }
 
@@ -177,7 +174,7 @@ describe("terminal history restoration", () => {
 		for (let index = 0; index < 4; index++) {
 			const id = `bash-pinned-${index}`;
 			bg.restoreHistory([savedTask(id)]);
-			releases.push(bg.pin(id));
+			releases.push(bg.retain(id));
 		}
 		bg.restoreHistory([savedTask("bash-over-budget")]);
 		expect(bg.list()).toHaveLength(4);
@@ -248,7 +245,7 @@ describe("terminal history restoration", () => {
 			["title", {}],
 			["error", []],
 			["outputPath", "x".repeat(10000)],
-			["projection", { workers: [null] }],
+			["projection", { items: [null] }],
 			["result", { content: [null] }],
 		] as const)
 			malformed.push({ version: 2, task: { ...savedTask().task, [key]: value } });
@@ -266,21 +263,22 @@ describe("terminal history restoration", () => {
 			id: huge,
 			label: huge,
 			status: huge,
-			prompt: huge,
+			input: huge,
 			activity: huge,
-			profile: huge,
+			category: huge,
 			description: huge,
 			report: { text: huge, truncated: false },
-			model: huge,
+			context: huge,
 			usage: huge,
 		};
 		const record = savedTask("subagent-group", 20, {
 			kind: "subagent",
+			format: "report",
 			title: huge,
 			command: huge,
 			cwd: huge,
 			error: huge,
-			projection: { text: huge, workers: Array(100).fill(worker) },
+			projection: { text: huge, items: Array(100).fill(worker) },
 			result: { content: [{ type: "text", text: huge }], details: { toJSON: serialize } },
 		});
 		bg.restoreHistory([record]);
@@ -289,16 +287,16 @@ describe("terminal history restoration", () => {
 		expect(Buffer.byteLength(task.command!)).toBeLessThanOrEqual(8192);
 		expect(Buffer.byteLength(task.cwd!)).toBeLessThanOrEqual(4096);
 		expect(Buffer.byteLength(task.error!)).toBeLessThanOrEqual(4096);
-		expect(task.projection?.workers).toHaveLength(8);
+		expect(task.projection?.items).toHaveLength(8);
 		expect(Buffer.byteLength(JSON.stringify(task.projection))).toBeLessThan(128 * 1024);
 		expect(task.result?.details).toBeUndefined();
 		expect(Buffer.byteLength((await bg.read(task.id, { bytes: 999999 })).text)).toBeLessThanOrEqual(
-			BACKGROUND_RESULT_BYTES,
+			TASK_RESULT_BYTES,
 		);
 		expect(serialize).not.toHaveBeenCalled();
 		worker.label = "mutated";
-		expect(bg.get(task.id).projection?.workers?.[0]?.label).not.toBe("mutated");
-		expect(() => bg.get(task.projection!.workers![0]!.id)).toThrow("Unknown");
+		expect(bg.get(task.id).projection?.items?.[0]?.label).not.toBe("mutated");
+		expect(() => bg.get(task.projection!.items![0]!.id)).toThrow("Unknown");
 		const cyclic: Record<string, unknown> = {};
 		cyclic.self = cyclic;
 		bg.restoreHistory([

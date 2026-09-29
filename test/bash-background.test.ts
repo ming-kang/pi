@@ -1,27 +1,27 @@
 import { readFileSync, rmSync, statSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BackgroundService } from "../src/core/background/service.ts";
-import { SUBAGENT_BACKGROUND_REJECTION } from "../src/core/background/types.ts";
 import type { ExtensionContext } from "../src/core/extensions/types.ts";
+import { TaskRuntime } from "../src/core/tasks/runtime.ts";
+import { TASK_BACKGROUND_REJECTION } from "../src/core/tasks/types.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { OutputAccumulator } from "../src/core/tools/output-accumulator.ts";
 import { createPowerShellToolDefinition } from "../src/core/tools/powershell.ts";
 import { MAX_BACKGROUND_OUTPUT_BYTES } from "../src/core/tools/shell-execution.ts";
-import { runRead, runWait } from "../src/extensions/background/actions.ts";
+import { runRead, runWait } from "../src/core/tools/tasks/actions.ts";
 
-const services: BackgroundService[] = [];
+const services: TaskRuntime[] = [];
 const paths = new Set<string>();
-function host(options: ConstructorParameters<typeof BackgroundService>[0] = { enabled: true }) {
-	const background = new BackgroundService(options);
+function host(options: ConstructorParameters<typeof TaskRuntime>[0] = { enabled: true }) {
+	const background = new TaskRuntime(options);
 	services.push(background);
 	background.subscribe(() => {
 		for (const task of background.list()) if (task.outputPath) paths.add(task.outputPath);
 	});
 	return background;
 }
-function context(background: BackgroundService): ExtensionContext {
+function context(background: TaskRuntime): ExtensionContext {
 	return {
-		background,
+		tasks: background,
 		cwd: process.cwd(),
 		model: { provider: "provider", id: "model" },
 		thinkingLevel: "high",
@@ -139,7 +139,7 @@ describe("native managed shell execution", () => {
 			context(background),
 		);
 		if (diagnostic)
-			await expect(call).rejects.toMatchObject({ name: "BackgroundExecutionError", status, message: diagnostic });
+			await expect(call).rejects.toMatchObject({ name: "TaskExecutionError", status, message: diagnostic });
 		else {
 			const result = await call;
 			expect(text(result)).toBe("(no output)");
@@ -196,16 +196,16 @@ describe("native managed shell execution", () => {
 					{ command: "noop", background: true },
 					undefined,
 					undefined,
-					context(host({ enabled: true, role: "subagent" })),
+					context(host({ enabled: true, backgroundAllowed: false })),
 				),
-			).rejects.toThrow(SUBAGENT_BACKGROUND_REJECTION);
+			).rejects.toThrow(TASK_BACKGROUND_REJECTION);
 			expect(spawnHook).not.toHaveBeenCalled();
 			expect(exec).not.toHaveBeenCalled();
 		},
 	);
 
-	it("worker foreground commands preserve the standalone path", async () => {
-		const background = host({ enabled: true, role: "subagent" });
+	it("worker foreground commands use the shared task runtime", async () => {
+		const background = host({ enabled: true, backgroundAllowed: false });
 		const tool = createBashToolDefinition(process.cwd(), {
 			operations: {
 				exec: async (_command, _cwd, { onData }) => {
@@ -222,8 +222,8 @@ describe("native managed shell execution", () => {
 			context(background),
 		);
 		expect(text(result)).toBe("ok");
-		expect(result.details).toBeUndefined();
-		expect(background.list()).toEqual([]);
+		expect(result.details?.fullOutputPath).toBeDefined();
+		expect(background.list()).toMatchObject([{ mode: "foreground", status: "completed" }]);
 	});
 
 	it("detaches a silent command immediately, executes once, and keeps the owned signal and timeout", async () => {
@@ -294,7 +294,8 @@ describe("native managed shell execution", () => {
 			const final = await background.wait(id);
 			expect(text(final.result)).toBe("héllo €");
 			expect(final.status).toBe("completed");
-			expect(final.result?.details).toEqual({ fullOutputPath: result.details?.fullOutputPath });
+			expect(final.outputPath).toBe(result.details?.fullOutputPath);
+			expect(final.result?.details).toBeUndefined();
 		},
 	);
 
@@ -577,7 +578,7 @@ describe("native managed shell execution", () => {
 		const child = execution();
 		const ctx = context(background);
 		const getter = vi.fn(() => background);
-		Object.defineProperty(ctx, "background", { get: getter, configurable: true });
+		Object.defineProperty(ctx, "tasks", { get: getter, configurable: true });
 		const tool = createBashToolDefinition(process.cwd(), { operations: child.operations });
 		const result = await tool.execute("call", { command: "work", background: true }, undefined, undefined, ctx);
 		getter.mockImplementation(() => {

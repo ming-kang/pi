@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { registerKeybindings } from "../src/core/keybinding-registry.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 // Bundled extensions register their keybindings when their modules load.
-import "../src/extensions/background/index.ts";
+import "../src/modes/interactive/tasks/index.ts";
 import "../src/extensions/btw/index.ts";
 import "../src/extensions/provider/index.ts";
 import "../src/extensions/question/index.ts";
@@ -10,15 +10,15 @@ import "../src/extensions/question/index.ts";
 describe("extension-owned keybindings", () => {
 	it("resolves bundled extension bindings in managers created after their modules load", () => {
 		const keybindings = new KeybindingsManager();
-		expect(keybindings.getKeys("app.backgroundTasks.detach")).toEqual(["ctrl+b"]);
-		expect(keybindings.getKeys("app.backgroundTasks.focusList")).toEqual(["left"]);
-		expect(keybindings.getKeys("app.backgroundTasks.focusPreview")).toEqual(["right"]);
+		expect(keybindings.getKeys("app.tasks.detach")).toEqual(["ctrl+b"]);
+		expect(keybindings.getKeys("app.tasks.focusList")).toEqual(["left"]);
+		expect(keybindings.getKeys("app.tasks.focusPreview")).toEqual(["right"]);
 		expect(keybindings.getKeys("app.btw.close")).toEqual(["escape"]);
 		expect(keybindings.getKeys("app.provider.removeEntry")).toEqual(["ctrl+x"]);
 		expect(keybindings.getKeys("app.list.toggle")).toEqual(["space"]);
 		// The detach key displaces the editor's secondary cursor-left binding.
 		expect(keybindings.getKeys("tui.editor.cursorLeft")).toEqual(["left"]);
-		expect(keybindings.matches("\x02", "app.backgroundTasks.detach")).toBe(true);
+		expect(keybindings.matches("\x02", "app.tasks.detach")).toBe(true);
 		expect(keybindings.matches("\x02", "tui.editor.cursorLeft")).toBe(false);
 	});
 

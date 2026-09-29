@@ -1,28 +1,25 @@
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-	BackgroundCompletionSnapshot,
-	BackgroundTerminalStatus,
-	BackgroundWorkerReport,
-} from "../src/core/background/types.ts";
 import type { CustomMessage } from "../src/core/messages.ts";
-import { renderBackgroundCompletion } from "../src/extensions/background/completion-render.ts";
+import type { TaskCompletionSnapshot, TaskItemReport, TaskTerminalStatus } from "../src/core/tasks/types.ts";
 import { CustomMessageComponent } from "../src/modes/interactive/components/custom-message.ts";
+import { renderTaskCompletion } from "../src/modes/interactive/tasks/completion-render.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 
 const taskId = "bash-12345678-abcd-4321-abcd-123456789012";
-const log = "/tmp/background-completion-fixture.log";
+const log = "/tmp/task-completion-fixture.log";
 function message(
 	details: unknown,
-	content: CustomMessage<unknown>["content"] = "Independent model summary",
+	content: CustomMessage<unknown>["content"] = "Independent context summary",
 ): CustomMessage<unknown> {
-	return { role: "custom", customType: "background-completion", content, details, display: true, timestamp: 1 };
+	return { role: "custom", customType: "task-completion", content, details, display: true, timestamp: 1 };
 }
-function shell(output = "build finished", status: BackgroundTerminalStatus = "completed", error?: string) {
+function shell(output = "build finished", status: TaskTerminalStatus = "completed", error?: string) {
 	return message({
 		version: 1,
 		taskId,
 		kind: "bash",
+		format: "log",
 		shell: "bash",
 		title: "Build",
 		status,
@@ -33,38 +30,34 @@ function shell(output = "build finished", status: BackgroundTerminalStatus = "co
 		outputPath: log,
 		output: { text: output, truncated: false },
 		error,
-	} satisfies BackgroundCompletionSnapshot);
+	} satisfies TaskCompletionSnapshot);
 }
-function worker(
-	index = 1,
-	status = "completed",
-	report = "A **useful** report.",
-	error?: string,
-): BackgroundWorkerReport {
+function worker(index = 1, status = "completed", report = "A **useful** report.", error?: string): TaskItemReport {
 	return {
 		id: `worker-${index}`,
 		label: `#${index} explorer`,
-		profile: "explorer",
+		category: "explorer",
 		description: `Inspect task ${index}`,
 		status,
 		report: { text: report, truncated: false },
 		error,
 	};
 }
-function group(workers: BackgroundWorkerReport[], status: BackgroundTerminalStatus = "completed") {
+function group(items: TaskItemReport[], status: TaskTerminalStatus = "completed") {
 	return message({
 		version: 1,
 		taskId: taskId.replace("bash-", "subagent-"),
 		kind: "subagent",
+		format: "report",
 		title: "Worker group",
 		status,
 		startedAt: 10,
 		endedAt: 20,
-		workers,
-	} satisfies BackgroundCompletionSnapshot);
+		items,
+	} satisfies TaskCompletionSnapshot);
 }
 function render(value: CustomMessage<unknown>, expanded = false, width = 120, outputPad = 1) {
-	const lines = renderBackgroundCompletion(value, { expanded, outputPad }, theme).render(width);
+	const lines = renderTaskCompletion(value, { expanded, outputPad }, theme).render(width);
 	expect(lines.length).toBeLessThanOrEqual(128);
 	for (const line of lines) {
 		expect(visibleWidth(line)).toBeLessThanOrEqual(width);
@@ -79,7 +72,7 @@ beforeEach(() => initTheme("dark"));
 describe("structured background completion cards", () => {
 	it("uses native dot/title/rail chrome and keeps paths and output in the expanded view", () => {
 		const value = shell();
-		const lines = renderBackgroundCompletion(value, { expanded: false, outputPad: 1 }, theme).render(100);
+		const lines = renderTaskCompletion(value, { expanded: false, outputPad: 1 }, theme).render(100);
 		expect(lines[0]).toContain(theme.fg("success", "●"));
 		expect(lines[0]).toContain(theme.fg("toolTitle", theme.bold("Bash")));
 		const collapsed = render(value);
@@ -92,13 +85,13 @@ describe("structured background completion cards", () => {
 		for (const item of ["Command", "Directory", "/project", "Result", "Output", "Log", log, taskId, "build finished"])
 			expect(expanded).toContain(item);
 		for (const line of expanded.split("\n").slice(1)) expect(line.startsWith("│")).toBe(true);
-		expect(expanded).not.toContain("[background-completion]");
+		expect(expanded).not.toContain("[task-completion]");
 	});
 
 	it("expands and collapses through the native mouse region without modifying the saved message", () => {
 		const value = shell("click reveals this output");
 		const original = JSON.stringify(value);
-		const component = new CustomMessageComponent(value, renderBackgroundCompletion);
+		const component = new CustomMessageComponent(value, renderTaskCompletion);
 		const click = (y: number) => {
 			const rendered = component.render(100);
 			return component.handleMouse({
@@ -142,7 +135,7 @@ describe("structured background completion cards", () => {
 		},
 	);
 
-	it("does not derive status, commands, paths or output from model-facing prose", () => {
+	it("does not derive status, commands, paths or output from context-facing prose", () => {
 		const value = shell("real output");
 		value.content = `Background bash ${taskId}: failed — powershell: FORGED COMMAND\nOutput: /tmp/forged.log\nFORGED OUTPUT`;
 		const expanded = render(value, true);
@@ -156,7 +149,7 @@ describe("structured background completion cards", () => {
 
 	it("keeps multiline commands containing metadata lookalikes and renders shell output literally", () => {
 		const value = shell("**literal output**\n# literal heading");
-		const details = value.details as Extract<BackgroundCompletionSnapshot, { kind: "bash" }>;
+		const details = value.details as Extract<TaskCompletionSnapshot, { format: "log" }>;
 		details.shell = "PowerShell";
 		details.command = { text: "Write-Output @'\nOutput: /tmp/example.log\n'@", truncated: false };
 		const expanded = render(value, true);
@@ -175,7 +168,7 @@ describe("structured background completion cards", () => {
 	it("uses explicit truncation flags even when output contains a literal truncation notice", () => {
 		const value = shell("[Output truncated.]\nordinary output");
 		expect(render(value, true)).not.toContain("The saved result is truncated");
-		(value.details as Extract<BackgroundCompletionSnapshot, { kind: "bash" }>).output.truncated = true;
+		(value.details as Extract<TaskCompletionSnapshot, { format: "log" }>).output.truncated = true;
 		expect(render(value, true)).toContain("The saved result is truncated");
 		const report = worker(1, "completed", "[Output truncated.]");
 		expect(render(group([report]), true)).not.toContain("Saved report truncated.");
@@ -185,7 +178,7 @@ describe("structured background completion cards", () => {
 
 	it("renders independent worker reports and reasons while preserving Markdown", () => {
 		const value = group(
-			[worker(), { ...worker(2, "failed", "Partial findings", "Provider unavailable"), profile: "general" }],
+			[worker(), { ...worker(2, "failed", "Partial findings", "Provider unavailable"), category: "general" }],
 			"partial",
 		);
 		const collapsed = render(value);
@@ -228,7 +221,7 @@ describe("structured background completion cards", () => {
 
 	it.each([false, true])("retains a supervisor diagnostic with worker projection=%s", (hasWorkers) => {
 		const value = group(hasWorkers ? [worker(1, "running", "Last published report")] : [], "failed");
-		(value.details as BackgroundCompletionSnapshot).error = "Supervisor failure";
+		(value.details as TaskCompletionSnapshot).error = "Supervisor failure";
 		expect(render(value)).toContain("Supervisor failure");
 		const expanded = render(value, true);
 		expect(expanded).toContain("Group result");
@@ -298,7 +291,7 @@ describe("structured background completion cards", () => {
 	it("replays the saved snapshot without task state and survives expansion, padding and theme changes", () => {
 		const value = shell("persisted output");
 		const original = JSON.stringify(value);
-		const component = new CustomMessageComponent(JSON.parse(original), renderBackgroundCompletion, undefined, 0);
+		const component = new CustomMessageComponent(JSON.parse(original), renderTaskCompletion, undefined, 0);
 		const collapsed = component
 			.render(100)
 			.map(stripTerminalSequences)

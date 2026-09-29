@@ -13,6 +13,11 @@ import { stripBom } from "../utils/text.ts";
 import { getRegisteredKeybindings } from "./keybinding-registry.ts";
 
 export interface AppKeybindings {
+	"app.tasks.detach": true;
+	"app.tasks.focusList": true;
+	"app.tasks.focusPreview": true;
+	"app.tasks.kill": true;
+
 	"app.interrupt": true;
 	"app.clear": true;
 	"app.exit": true;
@@ -77,6 +82,12 @@ const windowsKeybindings = useWindowsKeybindings();
 
 export const KEYBINDINGS = {
 	...TUI_KEYBINDINGS,
+	"tui.editor.cursorLeft": { ...TUI_KEYBINDINGS["tui.editor.cursorLeft"], defaultKeys: "left" },
+	"app.tasks.detach": { defaultKeys: "ctrl+b", description: "Move foreground tasks to the background" },
+	"app.tasks.focusList": { defaultKeys: "left", description: "Focus the task list" },
+	"app.tasks.focusPreview": { defaultKeys: "right", description: "Focus the task preview" },
+	"app.tasks.kill": { defaultKeys: "k", description: "Stop the selected task" },
+
 	"tui.editor.undo": {
 		...TUI_KEYBINDINGS["tui.editor.undo"],
 		defaultKeys: process.platform === "win32" ? "ctrl+z" : windowsKeybindings ? "alt+z" : "ctrl+-",

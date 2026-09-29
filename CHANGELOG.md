@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced Background with built-in Tasks: use `/tasks`, the `tasks` tool, and `ctx.tasks`. Bash, PowerShell, and Subagent share task supervision; viewing output no longer delays completion notifications, and task history excludes private tool details. SDK background opt-in is now `tasksEnabled`.
+
 ## [0.87.6] - 2026-09-29
 
 ### Fixed
@@ -219,7 +223,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - Added inherited GPT-6 Astra support for OpenAI API keys and Codex subscriptions, plus the refreshed OpenRouter MAI-Image-2.6 and MAI-Image-2.6 Flash image catalog.
 - Added inherited five-times-faster Alt-wheel scrolling in fullscreen mode and documentation for running this distribution with a custom Docker Sandboxes kit.
 - Added session-owned Background execution for native `bash` and Windows `powershell` with `background: true`, plus a top-level `subagent.background` flag for whole invocation groups. Interactive Ctrl+B moves all eligible current foreground executions to the background without restarting commands/workers or resetting shell timeouts. Workers retain foreground shell access but cannot create background work: both their prompt and trusted execution-role checks enforce the restriction.
-- Exposed `ctx.background` supervision, snapshots, bounded reads/waits, cancellation, subscriptions, and history pins through the public Extension API. SDK sessions keep background execution disabled by default; interactive mode enables it, while embeddings can explicitly opt in and own host lifecycle. Built-in print, JSON, and RPC modes still reject background startup. See [Background](docs/bundled/extensions/background.md) and [SDK](docs/sdk.md#background-execution).
+- Exposed `ctx.background` supervision, snapshots, bounded reads/waits, cancellation, subscriptions, and history pins through the public Extension API. SDK sessions keep background execution disabled by default; interactive mode enables it, while embeddings can explicitly opt in and own host lifecycle. Built-in print, JSON, and RPC modes still reject background startup. See [Background](docs/bundled/tasks.md) and [SDK](docs/sdk.md#background-execution).
 - Added explicit `session.retryBackgroundNotifications()` recovery for failed completion delivery, retaining inspectable results without infinite timer retries. Late settlements from executors that ignore cancellation are quarantined on the originating session (latest 32 bounded in-memory records and a persisted `.background-late.jsonl` audit sidecar), excluded from active totals rather than automatically reconciled.
 - Added independent persisted usage settlement for managed executions, including accrued worker retries, failures, cancellations, and provider-supplied compaction usage; missing provider usage is not fabricated. Session totals and footers count the ledger without requiring a panel visit or result read and without double-counting foreground results; Statusline keeps its active-branch scope and parent context/cache-hit semantics.
 

@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readOutputSlice } from "../src/core/background/output.ts";
+import { readOutputSlice } from "../src/core/tasks/output.ts";
 
 const dirs: string[] = [];
 function file(text: string): string {

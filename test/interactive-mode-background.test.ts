@@ -2,8 +2,8 @@ import { getKeybindings, setKeybindings } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext, TerminalInputHandler } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
-import { createBackgroundExtension } from "../src/extensions/background/index.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { createTasksHarness } from "./test-tasks-ui.ts";
 
 const previousKeybindings = getKeybindings();
 afterEach(() => setKeybindings(previousKeybindings));
@@ -18,10 +18,10 @@ function harness(bindings = new KeybindingsManager()) {
 		registerMessageRenderer: vi.fn(),
 		registerCommand: vi.fn(),
 	} as unknown as ExtensionAPI;
-	createBackgroundExtension()(pi);
+	createTasksHarness()(pi);
 	const listeners = new Set<TerminalInputHandler>();
 	const ctx = {
-		background: { detachForeground: vi.fn(() => 2), list: () => [], subscribe: () => () => {} },
+		tasks: { detachForeground: vi.fn(() => 2), list: () => [], subscribe: () => () => {} },
 		abort: vi.fn(),
 		ui: {
 			setStatus: vi.fn(),
@@ -41,19 +41,19 @@ describe("Background detach key", () => {
 		const h = harness();
 		h.emit("session_start");
 		expect(h.input("\x02")).toEqual({ consume: true });
-		expect(h.ctx.background.detachForeground).toHaveBeenCalledOnce();
+		expect(h.ctx.tasks.detachForeground).toHaveBeenCalledOnce();
 		expect(h.ctx.abort).not.toHaveBeenCalled();
 		expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Moved 2 executions"));
 		expect(h.input("x")).toBeUndefined();
 	});
 
 	it("uses the configured action and passes the key through when nothing can detach", () => {
-		const h = harness(new KeybindingsManager({ "app.backgroundTasks.detach": "ctrl+y" }));
+		const h = harness(new KeybindingsManager({ "app.tasks.detach": "ctrl+y" }));
 		h.emit("session_start");
-		h.ctx.background.detachForeground.mockReturnValue(0);
+		h.ctx.tasks.detachForeground.mockReturnValue(0);
 		expect(h.input("\x02")).toBeUndefined();
 		expect(h.input("\x19")).toBeUndefined();
-		expect(h.ctx.background.detachForeground).toHaveBeenCalledOnce();
+		expect(h.ctx.tasks.detachForeground).toHaveBeenCalledOnce();
 		expect(h.ctx.ui.notify).not.toHaveBeenCalled();
 	});
 
@@ -70,7 +70,7 @@ describe("Background detach key", () => {
 		const calls: string[] = [];
 		const context = {
 			isShuttingDown: false,
-			session: { background: { close: () => calls.push("close") } },
+			session: { tasks: { close: () => calls.push("close") } },
 			themeController: { disableAutoSync: () => calls.push("theme") },
 			ui: {
 				terminal: {
@@ -89,10 +89,10 @@ describe("Background detach key", () => {
 
 	it("reserves Ctrl+B locally without removing explicit editor overrides", () => {
 		const kb = new KeybindingsManager();
-		expect(kb.getKeys("app.backgroundTasks.detach")).toEqual(["ctrl+b"]);
+		expect(kb.getKeys("app.tasks.detach")).toEqual(["ctrl+b"]);
 		expect(kb.getKeys("tui.editor.cursorLeft")).toEqual(["left"]);
-		kb.setUserBindings({ "app.backgroundTasks.detach": [], "tui.editor.cursorLeft": ["left", "ctrl+b"] });
-		expect(kb.matches("\x02", "app.backgroundTasks.detach")).toBe(false);
+		kb.setUserBindings({ "app.tasks.detach": [], "tui.editor.cursorLeft": ["left", "ctrl+b"] });
+		expect(kb.matches("\x02", "app.tasks.detach")).toBe(false);
 		expect(kb.matches("\x02", "tui.editor.cursorLeft")).toBe(true);
 	});
 });

@@ -1,6 +1,6 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
-import type { BackgroundProjection } from "../../core/background/types.ts";
+import type { TaskProjection } from "../../core/tasks/types.ts";
 import type { SubagentAgentName } from "./constants.ts";
 
 // Static built-in subagent profile; the only agents a task can select.
@@ -101,6 +101,6 @@ export interface SubagentExecutionResult {
 	content: string;
 	details: SubagentDetails;
 	/** Internal presentation output, separate from the tool result. */
-	projection: BackgroundProjection;
+	projection: TaskProjection;
 	usage?: Usage;
 }

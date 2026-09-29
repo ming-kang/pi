@@ -1,20 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
-import { BACKGROUND_DETAILS_BYTES, BACKGROUND_RESULT_BYTES } from "../src/core/background/output.ts";
-import {
-	backgroundCompletionMessage,
-	backgroundCompletionSnapshot,
-	readBackgroundCompletion,
-	readBackgroundProjection,
-} from "../src/core/background/presentation.ts";
-import { BackgroundService } from "../src/core/background/service.ts";
-import type { BackgroundTask, BackgroundWorker } from "../src/core/background/types.ts";
 import { convertToLlm } from "../src/core/messages.ts";
 import { SessionManager, sessionEntryToContextMessages } from "../src/core/session-manager.ts";
+import { TASK_DETAILS_BYTES, TASK_RESULT_BYTES } from "../src/core/tasks/output.ts";
+import {
+	readTaskCompletion,
+	readTaskProjection,
+	taskCompletionMessage,
+	taskCompletionSnapshot,
+} from "../src/core/tasks/presentation.ts";
+import { TaskRuntime } from "../src/core/tasks/runtime.ts";
+import type { TaskItem, TaskSnapshot } from "../src/core/tasks/types.ts";
 
-function task(overrides: Partial<BackgroundTask> = {}): BackgroundTask {
+function task(overrides: Partial<TaskSnapshot> = {}): TaskSnapshot {
 	return {
 		id: "bash-contract-task",
 		kind: "bash",
+		format: "log",
 		mode: "background",
 		status: "completed",
 		title: "Build",
@@ -30,17 +31,17 @@ function task(overrides: Partial<BackgroundTask> = {}): BackgroundTask {
 		...overrides,
 	};
 }
-function worker(index: number, text = "report"): BackgroundWorker {
+function worker(index: number, text = "report"): TaskItem {
 	return {
 		id: `worker-${index}`,
 		label: `#${index} explorer`,
-		profile: "explorer",
+		category: "explorer",
 		description: `task-${index}`,
 		status: "completed",
-		prompt: "private prompt",
+		input: "private input",
 		activity: "activity",
 		report: { text, truncated: false },
-		model: "model",
+		context: "context",
 		usage: "display-only usage",
 	};
 }
@@ -54,11 +55,12 @@ describe("background completion data contract", () => {
 			error: "Arbitrary execution failure",
 			result: { content: [{ type: "text", text: "unrelated tool formatting" }], details: { toJSON: serialize } },
 		});
-		const saved = backgroundCompletionMessage(source);
+		const saved = taskCompletionMessage(source);
 		expect(saved.details).toEqual({
 			version: 1,
 			taskId: source.id,
 			kind: "bash",
+			format: "log",
 			title: "Build",
 			status: "failed",
 			startedAt: 10,
@@ -81,69 +83,76 @@ describe("background completion data contract", () => {
 	});
 
 	it("retains a generic projection summary when the final tool result has no text", () => {
-		const saved = backgroundCompletionMessage(
+		const saved = taskCompletionMessage(
 			task({
 				id: "subagent-generic",
 				kind: "subagent",
+				format: "report",
 				projection: { text: "Executor summary" },
 				result: { content: [], details: undefined },
 			}),
 		);
-		expect(saved.details).toMatchObject({ workers: [], output: { text: "Executor summary", truncated: false } });
+		expect(saved.details).toMatchObject({ items: [], output: { text: "Executor summary", truncated: false } });
 		expect(saved.content).toContain("Executor summary");
 	});
 
 	it("keeps worker errors, reports and observed states distinct and excludes live activity", () => {
 		const reports = [worker(1), { ...worker(2, "partial report"), status: "aborted", error: "Stopped by user" }];
-		const saved = backgroundCompletionMessage(
+		const saved = taskCompletionMessage(
 			task({
 				id: "subagent-contract-task",
 				kind: "subagent",
+				format: "report",
 				status: "partial",
-				projection: { workers: reports },
+				projection: { items: reports },
 			}),
 		);
 		expect(saved.details?.kind).toBe("subagent");
-		if (saved.details?.kind !== "subagent") throw new Error("Expected group");
-		expect(saved.details.workers[1]).toMatchObject({
+		if (saved.details?.format !== "report") throw new Error("Expected group");
+		expect(saved.details.items[1]).toMatchObject({
 			status: "aborted",
 			error: "Stopped by user",
 			report: { text: "partial report", truncated: false },
 		});
-		expect(saved.details.workers[0]).not.toHaveProperty("prompt");
-		expect(saved.details.workers[0]).not.toHaveProperty("activity");
-		expect(saved.details.workers[0]).not.toHaveProperty("usage");
+		expect(saved.details.items[0]).not.toHaveProperty("input");
+		expect(saved.details.items[0]).not.toHaveProperty("activity");
+		expect(saved.details.items[0]).not.toHaveProperty("usage");
 		expect(saved.details).not.toHaveProperty("output", expect.anything());
 		expect(saved.content).toContain("### 1. task-1");
 		expect(saved.content).toContain("### 2. task-2");
 		expect(saved.content).toContain("Stopped by user");
 		reports[1]!.report.text = "mutated";
-		expect(saved.details.workers[1]?.report.text).toBe("partial report");
+		expect(saved.details.items[1]?.report.text).toBe("partial report");
 	});
 
 	it("appends a classified next-step hint to non-completed terminal notifications", () => {
-		const cancelled = backgroundCompletionMessage(task({ status: "cancelled" }));
+		const cancelled = taskCompletionMessage(task({ status: "cancelled" }));
 		expect(cancelled.content).toContain(
 			"Next step: the task was cancelled — do not restart it unless the user asks.",
 		);
 
-		const timedOut = backgroundCompletionMessage(task({ status: "timeout" }));
+		const timedOut = taskCompletionMessage(task({ status: "timeout" }));
 		expect(timedOut.content).toContain("Next step: the task hit its timeout");
 
-		const failed = backgroundCompletionMessage(task({ status: "failed" }));
+		const failed = taskCompletionMessage(task({ status: "failed" }));
 		expect(failed.content).toContain("Next step: diagnose from the output above");
 
-		const completed = backgroundCompletionMessage(task({ status: "completed" }));
+		const completed = taskCompletionMessage(task({ status: "completed" }));
 		expect(completed.content).not.toContain("Next step:");
 	});
 
-	it("names unfinished workers in the re-delegation hint for failed or partial groups", () => {
-		const saved = backgroundCompletionMessage(
+	it("preserves executor-provided guidance for failed or partial reports", () => {
+		const saved = taskCompletionMessage(
 			task({
 				id: "subagent-group",
 				kind: "subagent",
+				format: "report",
 				status: "partial",
-				projection: { workers: [worker(1), { ...worker(2), status: "failed" }] },
+				projection: {
+					nextStep:
+						"Next step: re-delegate the unfinished work in a fresh subagent call if still needed (task-2).",
+					items: [worker(1), { ...worker(2), status: "failed" }],
+				},
 			}),
 		);
 		expect(saved.content).toContain(
@@ -152,28 +161,29 @@ describe("background completion data contract", () => {
 	});
 
 	it("carries the process exit code through the completion snapshot", () => {
-		const failed = backgroundCompletionMessage(task({ status: "failed", exitCode: 2 }));
-		if (failed.details?.kind !== "bash") throw new Error("Expected shell");
+		const failed = taskCompletionMessage(task({ status: "failed", exitCode: 2 }));
+		if (failed.details?.format !== "log") throw new Error("Expected shell");
 		expect(failed.details.exitCode).toBe(2);
 		// The persisted-message reader round-trips the field.
-		expect(readBackgroundCompletion(JSON.parse(JSON.stringify(failed.details)))).toMatchObject({ exitCode: 2 });
+		expect(readTaskCompletion(JSON.parse(JSON.stringify(failed.details)))).toMatchObject({ exitCode: 2 });
 
-		const reaped = backgroundCompletionMessage(task({ status: "cancelled", exitCode: null }));
-		if (reaped.details?.kind !== "bash") throw new Error("Expected shell");
+		const reaped = taskCompletionMessage(task({ status: "cancelled", exitCode: null }));
+		if (reaped.details?.format !== "log") throw new Error("Expected shell");
 		expect(reaped.details.exitCode).toBeNull();
 
-		const unreported = backgroundCompletionMessage(task());
-		if (unreported.details?.kind !== "bash") throw new Error("Expected shell");
+		const unreported = taskCompletionMessage(task());
+		if (unreported.details?.format !== "log") throw new Error("Expected shell");
 		expect(unreported.details).not.toHaveProperty("exitCode");
-		expect(readBackgroundCompletion({ kind: "bash", version: 1, exitCode: "2" })).toBeUndefined();
+		expect(readTaskCompletion({ kind: "bash", format: "log", version: 1, exitCode: "2" })).toBeUndefined();
 	});
 
 	it("records truncation when generic results or commands are bounded by supervision", async () => {
-		const service = new BackgroundService({ enabled: true });
+		const service = new TaskRuntime({ enabled: true });
 		try {
 			const literal = "[Output truncated.]";
 			await service.execute({
 				kind: "bash",
+				format: "log",
 				title: "Generic",
 				toolCallId: "first",
 				command: "x".repeat(20000),
@@ -181,61 +191,63 @@ describe("background completion data contract", () => {
 					result: { content: [{ type: "text", text: "界".repeat(50000) }], details: undefined },
 				}),
 			});
-			const first = backgroundCompletionSnapshot(service.list()[0]!);
+			const first = taskCompletionSnapshot(service.list()[0]!);
 			expect(first.kind).toBe("bash");
-			if (first.kind !== "bash") throw new Error("Expected shell");
+			if (first.format !== "log") throw new Error("Expected shell");
 			expect(first.output.truncated).toBe(true);
 			expect(first.command?.truncated).toBe(true);
 			await service.execute({
 				kind: "bash",
+				format: "log",
 				title: "Literal",
 				toolCallId: "second",
 				run: async () => ({ result: { content: [{ type: "text", text: literal }], details: undefined } }),
 			});
-			const second = backgroundCompletionSnapshot(service.list()[1]!);
-			if (second.kind !== "bash") throw new Error("Expected shell");
+			const second = taskCompletionSnapshot(service.list()[1]!);
+			if (second.format !== "log") throw new Error("Expected shell");
 			expect(second.output).toEqual({ text: literal, truncated: false });
 		} finally {
 			service.close();
 		}
 	});
 
-	it("bounds escaped storage and model text while retaining all eight workers", () => {
+	it("bounds escaped storage and context text while retaining all eight items", () => {
 		const huge = '界🙂"\\\u0001\n'.repeat(30000);
 		const reports = Array.from({ length: 8 }, (_, index) => ({
 			...worker(index + 1, huge),
 			description: `task-${index + 1}${huge}`,
 			label: huge,
-			profile: huge,
+			category: huge,
 			error: huge,
-			prompt: huge,
+			input: huge,
 			activity: huge,
 		}));
-		const projection = readBackgroundProjection({ text: huge, workers: reports });
+		const projection = readTaskProjection({ text: huge, items: reports });
 		expect(Buffer.byteLength(JSON.stringify(projection))).toBeLessThan(128 * 1024);
-		const saved = backgroundCompletionMessage(
+		const saved = taskCompletionMessage(
 			task({
 				id: "subagent-large",
 				kind: "subagent",
+				format: "report",
 				title: huge,
 				status: "partial",
 				error: huge,
 				projection,
 			}),
 		);
-		expect(Buffer.byteLength(JSON.stringify(saved.details))).toBeLessThanOrEqual(BACKGROUND_DETAILS_BYTES);
-		expect(Buffer.byteLength(String(saved.content))).toBeLessThanOrEqual(BACKGROUND_RESULT_BYTES);
+		expect(Buffer.byteLength(JSON.stringify(saved.details))).toBeLessThanOrEqual(TASK_DETAILS_BYTES);
+		expect(Buffer.byteLength(String(saved.content))).toBeLessThanOrEqual(TASK_RESULT_BYTES);
 		expect(String(saved.content).split("\n").length).toBeLessThanOrEqual(2000);
 		for (let index = 1; index <= 8; index++) expect(saved.content).toContain(`### ${index}. task-${index}`);
-		if (saved.details?.kind !== "subagent") throw new Error("Expected group");
-		expect(saved.details.workers).toHaveLength(8);
-		expect(saved.details.workers.every((worker) => worker.report.truncated)).toBe(true);
+		if (saved.details?.format !== "report") throw new Error("Expected group");
+		expect(saved.details.items).toHaveLength(8);
+		expect(saved.details.items.every((worker) => worker.report.truncated)).toBe(true);
 		expect(reports[0]?.report.truncated).toBe(false);
 	});
 
-	it("respects model byte and line budgets with long shell metadata and newline-heavy output", () => {
+	it("respects context byte and line budgets with long shell metadata and newline-heavy output", () => {
 		const huge = "界\n".repeat(50000);
-		const saved = backgroundCompletionMessage(
+		const saved = taskCompletionMessage(
 			task({
 				title: huge,
 				command: huge,
@@ -244,21 +256,21 @@ describe("background completion data contract", () => {
 				projection: { shell: { name: "PowerShell", output: { text: huge, truncated: false } } },
 			}),
 		);
-		expect(Buffer.byteLength(JSON.stringify(saved.details))).toBeLessThanOrEqual(BACKGROUND_DETAILS_BYTES);
-		expect(Buffer.byteLength(String(saved.content))).toBeLessThanOrEqual(BACKGROUND_RESULT_BYTES);
+		expect(Buffer.byteLength(JSON.stringify(saved.details))).toBeLessThanOrEqual(TASK_DETAILS_BYTES);
+		expect(Buffer.byteLength(String(saved.content))).toBeLessThanOrEqual(TASK_RESULT_BYTES);
 		expect(String(saved.content).split("\n").length).toBeLessThanOrEqual(2000);
 		expect(saved.content).toContain("Saved output truncated");
 	});
 
-	it("carries details through the session journal and sends only prose to the model", () => {
-		const saved = backgroundCompletionMessage(task());
+	it("carries details through the session journal and sends only prose to the context", () => {
+		const saved = taskCompletionMessage(task());
 		const manager = SessionManager.inMemory();
 		const id = manager.appendCustomMessageEntry(saved.customType, saved.content, saved.display, saved.details);
 		const entry = JSON.parse(JSON.stringify(manager.getEntry(id)));
 		const replay = sessionEntryToContextMessages(entry);
 		expect(replay).toHaveLength(1);
 		if (replay[0]?.role !== "custom") throw new Error("Expected custom message");
-		expect(readBackgroundCompletion(replay[0].details)).toEqual(saved.details);
+		expect(readTaskCompletion(replay[0].details)).toEqual(saved.details);
 		expect(convertToLlm(replay)).toEqual([
 			{
 				role: "user",
@@ -266,25 +278,24 @@ describe("background completion data contract", () => {
 				content: [{ type: "text", text: saved.content }],
 			},
 		]);
-		expect(readBackgroundCompletion(saved.details)).toEqual(saved.details);
+		expect(readTaskCompletion(saved.details)).toEqual(saved.details);
 	});
 
 	it("does not call accessors or serializers during decoding and ignores extra private fields", () => {
 		const getter = vi.fn();
 		const serialize = vi.fn();
-		const saved = backgroundCompletionSnapshot(task());
-		expect(readBackgroundCompletion({ ...saved, toJSON: serialize, privateData: { toJSON: serialize } })).toEqual(
-			saved,
-		);
-		expect(readBackgroundCompletion(Object.defineProperty({ ...saved }, "version", { get: getter }))).toBeUndefined();
+		const saved = taskCompletionSnapshot(task());
+		expect(readTaskCompletion({ ...saved, toJSON: serialize, privateData: { toJSON: serialize } })).toEqual(saved);
+		expect(readTaskCompletion(Object.defineProperty({ ...saved }, "version", { get: getter }))).toBeUndefined();
 		const items = [worker(1)];
 		Object.defineProperty(items, "0", { get: getter });
 		expect(
-			readBackgroundCompletion({
+			readTaskCompletion({
 				...saved,
 				kind: "subagent",
+				format: "report",
 				taskId: "subagent-test",
-				workers: items,
+				items: items,
 			}),
 		).toBeUndefined();
 		expect(getter).not.toHaveBeenCalled();
@@ -303,6 +314,6 @@ describe("background completion data contract", () => {
 		{ output: { text: "missing flag" } },
 		{ command: "not a text snapshot" },
 	])("rejects unsupported or incomplete completion metadata: %j", (overrides) => {
-		expect(readBackgroundCompletion({ ...backgroundCompletionSnapshot(task()), ...overrides })).toBeUndefined();
+		expect(readTaskCompletion({ ...taskCompletionSnapshot(task()), ...overrides })).toBeUndefined();
 	});
 });

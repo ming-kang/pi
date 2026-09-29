@@ -33,9 +33,9 @@ export interface UsageCostBreakdownEntry {
 	tokens: number;
 }
 
-export const BACKGROUND_USAGE_TYPE = "background-usage";
+export const TASK_USAGE_TYPE = "task-usage";
 
-export interface BackgroundUsageRecord {
+export interface TaskUsageRecord {
 	version: 1;
 	taskId: string;
 	usage: Usage;
@@ -50,8 +50,8 @@ function isUsageValue(value: unknown): value is number {
 }
 
 /** Validate persisted ledger data and return only its serializable accounting fields. */
-export function getBackgroundUsageRecord(entry: SessionEntry): BackgroundUsageRecord | undefined {
-	if (entry.type !== "custom" || entry.customType !== BACKGROUND_USAGE_TYPE) return undefined;
+export function getTaskUsageRecord(entry: SessionEntry): TaskUsageRecord | undefined {
+	if (entry.type !== "custom" || entry.customType !== TASK_USAGE_TYPE) return undefined;
 	const data = entry.data;
 	if (!isRecord(data) || data.version !== 1 || typeof data.taskId !== "string" || !data.taskId.trim()) {
 		return undefined;
@@ -112,7 +112,7 @@ function* accountedUsageEntries(entries: readonly SessionEntry[]): Generator<{ k
 		} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
 			yield { key: "Tools/summaries", usage: entry.usage };
 		} else {
-			const record = getBackgroundUsageRecord(entry);
+			const record = getTaskUsageRecord(entry);
 			if (!record || backgroundTasks.has(record.taskId)) continue;
 			backgroundTasks.add(record.taskId);
 			yield { key: "Tools/summaries", usage: record.usage };

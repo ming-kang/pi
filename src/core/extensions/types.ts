@@ -88,7 +88,7 @@ import type {
 	ReadToolInput,
 	WriteToolInput,
 } from "../tools/index.ts";
-import type { BackgroundContext, ContextSnapshot, EditorHost, ModelRuntime } from "./distribution-api.ts";
+import type { ContextSnapshot, EditorHost, ModelRuntime, TasksContext } from "./distribution-api.ts";
 
 export type { ExecOptions, ExecResult } from "../exec.ts";
 export type { BuildSystemPromptOptions, NormalizedBuildSystemPromptOptions } from "../system-prompt.ts";
@@ -332,7 +332,7 @@ export interface ExtensionContext {
 	/** Canonical model and authentication runtime shared by the current session. */
 	readonly modelRuntime: ModelRuntime;
 	/** Session-owned execution capability; disabled unless the host explicitly enables it. */
-	readonly background: BackgroundContext;
+	readonly tasks: TasksContext;
 	/** Capture detached, stable model input and request settings without writing to the session. */
 	getContextSnapshot(): Promise<ContextSnapshot>;
 	/** Current model (may be undefined) */
@@ -1864,7 +1864,7 @@ export interface ExtensionActions {
  * Required by all modes.
  */
 export interface ExtensionContextActions {
-	getBackground?: () => BackgroundContext;
+	getTasks?: () => TasksContext;
 	getModel: () => Model<any> | undefined;
 	getScopedModels: () => readonly ScopedModel[];
 	isIdle: () => boolean;

@@ -1,11 +1,11 @@
 import { describe, expect, test, vi } from "vitest";
 import triggerCompactExtension from "../examples/extensions/trigger-compact.ts";
-import { BackgroundService } from "../src/core/background/service.ts";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "../src/core/extensions/index.ts";
+import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 
 function createContext(tokens: number | null, compact = vi.fn()): ExtensionContext {
 	return {
-		background: new BackgroundService(),
+		tasks: new TaskRuntime(),
 		mode: "print",
 		hasUI: false,
 		ui: {} as ExtensionContext["ui"],

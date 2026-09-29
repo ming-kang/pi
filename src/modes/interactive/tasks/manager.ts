@@ -1,5 +1,4 @@
 /** Inline observer: selecting or closing a view never changes execution ownership. */
-import "./keybindings.ts";
 import { homedir } from "node:os";
 import {
 	type Component,
@@ -10,35 +9,35 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import type { KeybindingsManager } from "../../../core/keybindings.ts";
 import {
-	type BackgroundContext,
-	type BackgroundTask,
-	type BackgroundWorker,
-	isBackgroundTerminal,
-	isForegroundShellTask,
-} from "../../core/background/types.ts";
-import type { KeybindingsManager } from "../../core/keybindings.ts";
-import { DynamicBorder } from "../../modes/interactive/components/dynamic-border.ts";
-import { keyLabel } from "../../modes/interactive/components/keybinding-hints.ts";
-import { STATUS_SPINNER_INTERVAL_MS, statusMarker } from "../../modes/interactive/components/status-marker.ts";
-import { getMarkdownTheme, highlightCode, type Theme, type ThemeColor } from "../../modes/interactive/theme/theme.ts";
-import { sanitizeBinaryOutput } from "../../utils/shell.ts";
+	isInlineLogTask,
+	isTaskTerminal,
+	type TaskItem,
+	type TaskSnapshot,
+	type TasksContext,
+} from "../../../core/tasks/types.ts";
+import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
+import { DynamicBorder } from "../components/dynamic-border.ts";
+import { keyLabel } from "../components/keybinding-hints.ts";
+import { STATUS_SPINNER_INTERVAL_MS, statusMarker } from "../components/status-marker.ts";
+import { getMarkdownTheme, highlightCode, type Theme, type ThemeColor } from "../theme/theme.ts";
 import { exitSuffix, runtimeLabel, taskLabel, workerLabel } from "./task-view.ts";
 import { firstCommandLine, formatAge } from "./text.ts";
 
-export type BackgroundManagerHost = Pick<BackgroundContext, "list" | "read" | "kill" | "subscribe" | "pin">;
-export interface BackgroundTasksMenuOptions {
+export type TasksManagerHost = Pick<TasksContext, "list" | "read" | "kill" | "subscribe" | "retain">;
+export interface TasksMenuOptions {
 	tui: { requestRender(): void; terminal: { rows: number; columns: number } };
 	theme: Theme;
 	keybindings: Pick<KeybindingsManager, "matches" | "getKeys">;
-	host: BackgroundManagerHost;
+	host: TasksManagerHost;
 	onClose(): void;
 	pollIntervalMs?: number;
 }
 interface Row {
 	key: string;
-	task: BackgroundTask;
-	worker?: BackgroundWorker;
+	task: TaskSnapshot;
+	worker?: TaskItem;
 }
 type ListItem = { header: string } | { row: Row };
 interface PreviewPosition {
@@ -80,7 +79,7 @@ const DETAIL_LABEL_WIDTH = 10;
 const DETAIL_MAX_ROWS = 9;
 const COMMAND_MAX_ROWS = 3;
 const ERROR_MAX_ROWS = 2;
-/** Long field values (worker model/usage) wrap up to this many rows instead of truncating. */
+/** Long field values (worker context/usage) wrap up to this many rows instead of truncating. */
 const DETAIL_VALUE_MAX_ROWS = 2;
 const RENDER_CACHE_MAX = 8;
 const clean = (text: string) => sanitizeBinaryOutput(stripTerminalSequences(text));
@@ -124,9 +123,9 @@ function displayPath(path: string, width: number): string {
 	return ellipsizeMiddle(shortened, width);
 }
 
-export class BackgroundTasksMenu implements Component, Focusable {
+export class TasksMenu implements Component, Focusable {
 	focused = false;
-	private readonly options: BackgroundTasksMenuOptions;
+	private readonly options: TasksMenuOptions;
 	private rows: Row[] = [];
 	private runningCount = 0;
 	private finishedCount = 0;
@@ -150,7 +149,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	private feedback?: string;
 	private lastFrame = "";
 
-	constructor(options: BackgroundTasksMenuOptions) {
+	constructor(options: TasksMenuOptions) {
 		this.options = options;
 		this.width = options.tui.terminal.columns;
 		this.sync();
@@ -202,16 +201,14 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	private sync(): void {
 		if (this.disposed) return;
 		const tasks = this.options.host.list();
-		const running = tasks
-			.filter((task) => !isBackgroundTerminal(task.status))
-			.sort((a, b) => b.startedAt - a.startedAt);
+		const running = tasks.filter((task) => !isTaskTerminal(task.status)).sort((a, b) => b.startedAt - a.startedAt);
 		// Finished includes every subagent group and background shell. Foreground
 		// shells deliver inline, except the selected row stays until selection moves.
 		const selectedTask = this.selected?.split("/")[0];
 		const settled = tasks
-			.filter((task) => isBackgroundTerminal(task.status))
+			.filter((task) => isTaskTerminal(task.status))
 			.sort((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt));
-		const finished = settled.filter((task) => !isForegroundShellTask(task) || task.id === selectedTask);
+		const finished = settled.filter((task) => !isInlineLogTask(task) || task.id === selectedTask);
 		this.runningCount = running.length;
 		this.finishedCount = finished.length;
 		this.completedCount = finished.filter((task) => task.status === "completed").length;
@@ -219,7 +216,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		this.hiddenFinished = settled.length - finished.length;
 		this.rows = [...running, ...finished].flatMap((task): Row[] => [
 			{ key: task.id, task },
-			...(task.projection?.workers ?? []).map((worker) => ({ key: `${task.id}/${worker.id}`, task, worker })),
+			...(task.projection?.items ?? []).map((worker) => ({ key: `${task.id}/${worker.id}`, task, worker })),
 		]);
 		if (!this.current()) {
 			this.selected = this.rows[0]?.key;
@@ -229,7 +226,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const id = this.current()?.task.id;
 		if (id !== this.pinned) {
 			// Acquire before releasing so history eviction cannot steal the selection.
-			const release = id ? this.options.host.pin(id) : undefined;
+			const release = id ? this.options.host.retain(id) : undefined;
 			const previous = this.releasePin;
 			this.pinned = id;
 			this.releasePin = release;
@@ -259,7 +256,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	}
 	private async refresh(): Promise<void> {
 		const row = this.current();
-		if (!row || row.worker || row.task.kind !== "bash" || this.busy) return;
+		if (!row || row.worker || row.task.format !== "log" || this.busy) return;
 		const position = this.position();
 		// Keep the bounded output with its row's scroll anchor while browsing.
 		// A new tail can otherwise move even lines that are still inside the read window.
@@ -273,7 +270,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 			position.output = {
 				text: clean(slice.text).split("\n").slice(-2000).join("\n"),
 				readError: slice.readError ? clean(slice.readError).slice(0, 4096) : undefined,
-				settled: isBackgroundTerminal(slice.task.status),
+				settled: isTaskTerminal(slice.task.status),
 			};
 		} catch (error) {
 			if (!this.disposed && this.selected === row.key && (position.follow || !position.output)) {
@@ -314,7 +311,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 				this.options.onClose();
 				return;
 			}
-		} else if (kb.matches(data, "app.backgroundTasks.kill")) {
+		} else if (kb.matches(data, "app.tasks.kill")) {
 			const row = this.current();
 			if (row) {
 				this.clearPendingKill();
@@ -326,9 +323,9 @@ export class BackgroundTasksMenu implements Component, Focusable {
 				}, KILL_CONFIRM_TIMEOUT_MS);
 				this.pendingKillTimer.unref?.();
 			}
-		} else if (kb.matches(data, "app.backgroundTasks.focusList")) {
+		} else if (kb.matches(data, "app.tasks.focusList")) {
 			this.focus = "list";
-		} else if (kb.matches(data, "app.backgroundTasks.focusPreview") || kb.matches(data, "tui.select.confirm")) {
+		} else if (kb.matches(data, "app.tasks.focusPreview") || kb.matches(data, "tui.select.confirm")) {
 			this.focus = "preview";
 			this.queueTick();
 		} else {
@@ -358,7 +355,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const key = this.selected ?? "";
 		let position = this.positions.get(key);
 		if (!position) {
-			position = { scroll: 0, follow: this.current()?.task.kind === "bash" && !this.current()?.worker };
+			position = { scroll: 0, follow: this.current()?.task.format === "log" && !this.current()?.worker };
 			if (this.selected) this.positions.set(key, position);
 		}
 		return position;
@@ -368,7 +365,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const items: ListItem[] = [];
 		let section = "";
 		for (const row of this.rows) {
-			const next = isBackgroundTerminal(row.task.status) ? "Finished" : "Running";
+			const next = isTaskTerminal(row.task.status) ? "Finished" : "Running";
 			if (next !== section) {
 				section = next;
 				items.push({ header: next });
@@ -384,7 +381,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		}
 		this.renderCache.set(key, lines);
 	}
-	private commandLines(task: BackgroundTask, width: number, maxRows: number): string[] {
+	private commandLines(task: TaskSnapshot, width: number, maxRows: number): string[] {
 		const first = firstCommandLine(task.command ?? "");
 		const key = `command|${task.id}|${width}|${first.length}`;
 		let lines = this.renderCache.get(key);
@@ -411,8 +408,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const now = Date.now();
 		const marker = statusMarker(worker?.status ?? task.status, { now });
 		const glyph = theme.fg(marker.color, marker.glyph);
-		const time =
-			isBackgroundTerminal(task.status) && task.endedAt ? formatAge(task.endedAt, now) : runtimeLabel(task, now);
+		const time = isTaskTerminal(task.status) && task.endedAt ? formatAge(task.endedAt, now) : runtimeLabel(task, now);
 		const field = (label: string, values: string[]): string[] =>
 			values.map(
 				(value, index) => `${theme.fg("dim", padEnd(index === 0 ? label : "", DETAIL_LABEL_WIDTH))}${value}`,
@@ -437,7 +433,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 				...field("Status", [status]),
 				...field("Worker", [truncateToWidth(clean(worker.label), valueWidth, "…")]),
 				...field("Group", [truncateToWidth(task.id, valueWidth, "…")]),
-				...field("Model", wrap(worker.model ?? "—")),
+				...field("Model", wrap(worker.context ?? "—")),
 				...field("Usage", wrap(worker.usage ?? "—")),
 			];
 		}
@@ -456,7 +452,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 					.slice(0, ERROR_MAX_ROWS),
 			),
 		];
-		if (task.kind === "bash") {
+		if (task.format === "log") {
 			if (task.command) lines.push(...field("Command", this.commandLines(task, valueWidth, COMMAND_MAX_ROWS)));
 			if (task.cwd)
 				lines.push(...field("Directory", [truncateToWidth(displayPath(task.cwd, valueWidth), valueWidth, "…")]));
@@ -471,7 +467,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const heading = (text: string) => theme.fg("dim", theme.bold(text));
 		const lines = [
 			heading("Prompt"),
-			...this.markdownLines(row.key, "prompt", worker.prompt, width),
+			...this.markdownLines(row.key, "input", worker.input, width),
 			"",
 			heading("Activity"),
 		];
@@ -495,11 +491,11 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const { theme } = this.options;
 		const { task, worker } = row;
 		if (worker) return this.workerLines(row, width);
-		if (task.kind !== "bash") {
-			const workers = task.projection?.workers ?? [];
+		if (task.format !== "log") {
+			const items = task.projection?.items ?? [];
 			const now = Date.now();
-			if (workers.length)
-				return workers.map((w) => {
+			if (items.length)
+				return items.map((w) => {
 					const marker = statusMarker(w.status, { now });
 					// One truncated line per worker — an index of who did what. Model
 					// and usage live in the worker's own detail view.
@@ -511,7 +507,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 				? clean(fallback)
 						.split("\n")
 						.map((line) => theme.fg("toolOutput", line))
-				: [theme.fg("muted", "No workers.")];
+				: [theme.fg("muted", "No items.")];
 		}
 		const text = this.positions.get(row.key)?.output?.text ?? task.projection?.text ?? "Loading…";
 		return clean(text)
@@ -547,7 +543,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 				return entry;
 			});
 		});
-		const entries = row?.task.kind === "bash" && !row.worker ? wrapped.slice(-2000) : wrapped.slice(0, 2000);
+		const entries = row?.task.format === "log" && !row.worker ? wrapped.slice(-2000) : wrapped.slice(0, 2000);
 		const content = entries.map((entry) => entry.text);
 		const max = Math.max(0, content.length - contentHeight);
 		const position = this.position();
@@ -591,7 +587,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		position.anchor = entry ? { line: entry.line, column: entry.column } : undefined;
 		// Only an explicit downward movement resumes shell following, never resize/update.
 		position.follow =
-			delta > 0 && position.scroll === max && this.current()?.task.kind === "bash" && !this.current()?.worker;
+			delta > 0 && position.scroll === max && this.current()?.task.format === "log" && !this.current()?.worker;
 		if (position.follow && !wasFollowing) this.queueTick();
 	}
 	private listRowLine(row: Row, width: number): string {
@@ -602,15 +598,15 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const glyph = theme.fg(marker.color, marker.glyph);
 		const cursor = selected ? theme.fg(this.focus === "list" ? "accent" : "muted", "→ ") : "  ";
 		const indent = row.worker ? "  " : "";
-		const terminal = isBackgroundTerminal(row.task.status);
+		const terminal = isTaskTerminal(row.task.status);
 		// Foreground mode stays explicit, including completed subagent groups.
 		let time = "";
 		if (!row.worker) {
 			time = terminal ? formatAge(row.task.endedAt ?? row.task.startedAt, now) : runtimeLabel(row.task, now);
-			const workers = row.task.projection?.workers;
-			if (workers && workers.length > 0) {
-				const settledCount = workers.filter((w) => w.status !== "queued" && w.status !== "running").length;
-				time = `${settledCount}/${workers.length} · ${time}`;
+			const items = row.task.projection?.items;
+			if (items && items.length > 0) {
+				const settledCount = items.filter((w) => w.status !== "queued" && w.status !== "running").length;
+				time = `${settledCount}/${items.length} · ${time}`;
 			}
 			if (row.task.mode === "foreground") time = `fg · ${time}`;
 		}
@@ -637,7 +633,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	private renderTooSmall(width: number, rows: number): string[] {
 		const { theme, keybindings } = this.options;
 		const rule = () => new DynamicBorder((text) => theme.fg("border", text)).render(width)[0] ?? "";
-		const message = `Terminal too small for /bg — resize to at least ${MIN_RENDER_WIDTH}×${MIN_RENDER_HEIGHT}.`;
+		const message = `Terminal too small for /tasks — resize to at least ${MIN_RENDER_WIDTH}×${MIN_RENDER_HEIGHT}.`;
 		const bodyHeight = Math.max(1, rows - 4);
 		const body = Array.from({ length: bodyHeight }, () => pad("", width));
 		body[Math.floor(bodyHeight / 2)] = this.centered(width, message);
@@ -651,9 +647,9 @@ export class BackgroundTasksMenu implements Component, Focusable {
 	private dividerLine(layout: Layout): string {
 		const { theme } = this.options;
 		const row = this.current();
-		const label = row ? (row.worker ? "Worker" : row.task.kind === "bash" ? "Output" : "Workers") : "Output";
+		const label = row ? (row.worker ? "Worker" : row.task.format === "log" ? "Output" : "Workers") : "Output";
 		const styledLabel = theme.fg(this.focus === "preview" ? "accent" : "muted", label);
-		const shell = row !== undefined && row.task.kind === "bash" && !row.worker;
+		const shell = row !== undefined && row.task.format === "log" && !row.worker;
 		const suffix = shell ? theme.fg("muted", ` · tail · ${this.position().follow ? "following" : "browsing"}`) : "";
 		const range = theme.fg(
 			"muted",
@@ -677,7 +673,7 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const { theme, keybindings } = this.options;
 		const layout = this.layout();
 		const rule = () => new DynamicBorder((text) => theme.fg("border", text)).render(width)[0] ?? "";
-		const title = theme.fg("accent", theme.bold("Background tasks"));
+		const title = theme.fg("accent", theme.bold("Tasks"));
 		// Only non-zero segments show: a quiet header means nothing needs attention.
 		const segments: string[] = [];
 		if (this.runningCount > 0) segments.push(theme.fg("accent", `${this.runningCount} running`));
@@ -695,10 +691,10 @@ export class BackgroundTasksMenu implements Component, Focusable {
 		const pageDown = this.focus === "list" ? "tui.select.pageDown" : "tui.editor.pageDown";
 		const hints = [
 			`${hint("tui.select.up")}/${hint("tui.select.down")} select`,
-			`${hint("app.backgroundTasks.focusList")} list`,
-			`${hint("app.backgroundTasks.focusPreview")}/${hint("tui.select.confirm")} output`,
+			`${hint("app.tasks.focusList")} list`,
+			`${hint("app.tasks.focusPreview")}/${hint("tui.select.confirm")} output`,
 			`${hint(pageUp)}/${hint(pageDown)} page`,
-			`${hint("app.backgroundTasks.kill")} stop`,
+			`${hint("app.tasks.kill")} stop`,
 			`${hint("tui.select.cancel")} close`,
 		].join(" · ");
 		const hintLine = pad(

@@ -17,7 +17,7 @@ import {
 	addUsageToTotals,
 	createUsageTotals,
 	getAccountedUsages,
-	getBackgroundUsageRecord,
+	getTaskUsageRecord,
 	type UsageTotals,
 } from "../../core/usage-totals.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
@@ -105,7 +105,7 @@ function entryUsage(entry: SessionEntry): Usage | undefined {
 		return undefined;
 	}
 	if (entry.type === "branch_summary" || entry.type === "compaction") return entry.usage;
-	return getBackgroundUsageRecord(entry)?.usage;
+	return getTaskUsageRecord(entry)?.usage;
 }
 
 function computeBranchStats(branchEntries: SessionEntry[]): BranchStats {

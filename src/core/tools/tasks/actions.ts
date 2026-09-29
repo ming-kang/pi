@@ -1,27 +1,28 @@
 /** Management only: execution and delivery belong to the session Background service. */
-import { boundText } from "../../core/background/output.ts";
+
+import { runtimeLabel } from "../../../modes/interactive/tasks/task-view.ts";
+import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
+import type { AgentToolResult } from "../../extensions/types.ts";
+import { boundText } from "../../tasks/output.ts";
 import {
-	type BackgroundContext,
-	BackgroundLookupError,
-	type BackgroundRead,
-	type BackgroundTask,
-	isBackgroundTerminal,
-} from "../../core/background/types.ts";
-import type { AgentToolResult } from "../../core/extensions/types.ts";
-import { truncateHead } from "../../core/tools/truncate.ts";
-import { sanitizeBinaryOutput } from "../../utils/shell.ts";
-import { BG_LIST_FINISHED_SHOWN, BG_WAIT_DELTA_BYTES } from "./constants.ts";
-import { type BgInput, clampReadBytes, clampSinceBytes, clampWaitMs, requireTaskId } from "./schema.ts";
-import { runtimeLabel } from "./task-view.ts";
-import type { BgDetails, BgKillDetails, BgListDetails, BgReadDetails, BgWaitDetails } from "./types.ts";
+	isTaskTerminal,
+	TaskLookupError,
+	type TaskRead,
+	type TaskSnapshot,
+	type TasksContext,
+} from "../../tasks/types.ts";
+import { truncateHead } from "../truncate.ts";
+import { TASKS_LIST_FINISHED_SHOWN, TASKS_WAIT_DELTA_BYTES } from "./constants.ts";
+import { clampReadBytes, clampSinceBytes, clampWaitMs, requireTaskId, type TasksInput } from "./schema.ts";
+import type { TasksDetails, TasksKillDetails, TasksListDetails, TasksReadDetails, TasksWaitDetails } from "./types.ts";
 
 export function boundedText(text: string): string {
 	return truncateHead(sanitizeBinaryOutput(text), { maxBytes: 50 * 1024, maxLines: 2000 }).content;
 }
-function result<T extends BgDetails>(text: string, details: T): AgentToolResult<T> {
+function result<T extends TasksDetails>(text: string, details: T): AgentToolResult<T> {
 	return { content: [{ type: "text", text: boundedText(text) }], details };
 }
-export function describeTaskLine(task: BackgroundTask, now = Date.now()): string {
+export function describeTaskLine(task: TaskSnapshot, now = Date.now()): string {
 	return `${task.id} ${task.kind} ${task.status} (${task.mode}) ${runtimeLabel(task, now)} ${task.title.slice(0, 200)}`;
 }
 
@@ -32,16 +33,16 @@ const LOOKUP_LIST_LIMIT = 10;
  * unsorted slice would surface the oldest completions rather than the recent
  * finishes a caller is most likely looking for.
  */
-function recentFinishedFirst(tasks: BackgroundTask[]): BackgroundTask[] {
+function recentFinishedFirst(tasks: TaskSnapshot[]): TaskSnapshot[] {
 	return tasks.sort((left, right) => (right.endedAt ?? 0) - (left.endedAt ?? 0));
 }
 
 /**
  * Listings cover backgrounded work only; foreground executions deliver inline
  * in the transcript, so they are counted rather than shown. Every listing
- * (bg list output and lookup-failure messages) shares this scope.
+ * (tasks list output and lookup-failure messages) shares this scope.
  */
-function listedTasks(background: BackgroundContext): { tasks: BackgroundTask[]; foregroundOmitted: number } {
+function listedTasks(background: TasksContext): { tasks: TaskSnapshot[]; foregroundOmitted: number } {
 	const all = background.list();
 	const tasks = all.filter((task) => task.mode === "background");
 	return { tasks, foregroundOmitted: all.length - tasks.length };
@@ -61,15 +62,15 @@ function foregroundOmissionNote(omitted: number): string {
  * records outside the current branch, which listings hide but the prefix
  * still collides with.
  */
-function lookupFailure(background: BackgroundContext, id: string, error: unknown): Error {
-	if (!(error instanceof BackgroundLookupError)) return error instanceof Error ? error : new Error(String(error));
+function lookupFailure(background: TasksContext, id: string, error: unknown): Error {
+	if (!(error instanceof TaskLookupError)) return error instanceof Error ? error : new Error(String(error));
 	if (error.kind === "ambiguous") {
 		const lines = error.matches.map((task) => describeTaskLine(task)).join("\n");
 		return new Error(`Ambiguous background task ID "${id}" matches ${error.matches.length} tasks:\n${lines}`);
 	}
 	const { tasks, foregroundOmitted } = listedTasks(background);
-	const active = tasks.filter((task) => !isBackgroundTerminal(task.status));
-	const finished = recentFinishedFirst(tasks.filter((task) => isBackgroundTerminal(task.status)));
+	const active = tasks.filter((task) => !isTaskTerminal(task.status));
+	const finished = recentFinishedFirst(tasks.filter((task) => isTaskTerminal(task.status)));
 	const shown = [...active, ...finished].slice(0, LOOKUP_LIST_LIMIT);
 	if (shown.length === 0) {
 		return new Error(`No background task "${id}" in this session. No background tasks in this session.`);
@@ -80,7 +81,7 @@ function lookupFailure(background: BackgroundContext, id: string, error: unknown
 	);
 }
 /** Reserve space for each independent diagnostic before allowing raw output to fill the budget. */
-function readText(header: string, slice: BackgroundRead): string {
+function readText(header: string, slice: TaskRead): string {
 	const boundedField = (text: string, maxBytes: number) =>
 		truncateHead(boundText(sanitizeBinaryOutput(text), maxBytes), { maxBytes, maxLines: 100 }).content;
 	return [
@@ -93,7 +94,7 @@ function readText(header: string, slice: BackgroundRead): string {
 		.filter(Boolean)
 		.join("\n");
 }
-export async function runRead(background: BackgroundContext, input: BgInput): Promise<AgentToolResult<BgReadDetails>> {
+export async function runRead(background: TasksContext, input: TasksInput): Promise<AgentToolResult<TasksReadDetails>> {
 	const id = requireTaskId(input);
 	try {
 		const mode = input.mode ?? "tail";
@@ -119,17 +120,18 @@ export async function runRead(background: BackgroundContext, input: BgInput): Pr
 	}
 }
 export async function runWait(
-	background: BackgroundContext,
-	input: BgInput,
+	background: TasksContext,
+	input: TasksInput,
 	signal?: AbortSignal,
-): Promise<AgentToolResult<BgWaitDetails>> {
+	onReady?: (taskId: string) => void,
+): Promise<AgentToolResult<TasksWaitDetails>> {
 	const id = requireTaskId(input);
 	try {
-		const release = background.pin(id);
+		const release = background.holdDelivery(id);
 		try {
 			const start = Date.now();
 			const task = await background.wait(id, clampWaitMs(input.waitMs), signal);
-			const timedOut = !isBackgroundTerminal(task.status);
+			const timedOut = !isTaskTerminal(task.status);
 			// A closed host resolves waits early without settling anything; do not claim
 			// the execution merely outlived the wait window.
 			const windowNote = background.closed
@@ -138,14 +140,14 @@ export async function runWait(
 					? " · wait window expired; execution continues"
 					: "";
 			const slice = await background.read(id, {
-				bytes: BG_WAIT_DELTA_BYTES,
+				bytes: TASKS_WAIT_DELTA_BYTES,
 				sinceBytes: clampSinceBytes(input.sinceBytes),
 			});
 			signal?.throwIfAborted();
+			if (!timedOut) onReady?.(task.id);
 			return result(readText(`[${describeTaskLine(task)}${windowNote}]`, slice), {
 				action: "wait",
 				taskId: task.id,
-				...(!timedOut ? { backgroundTaskId: task.id } : {}),
 				status: task.status,
 				kind: task.kind,
 				timedOut,
@@ -163,7 +165,7 @@ export async function runWait(
 		throw lookupFailure(background, id, error);
 	}
 }
-export function runKill(background: BackgroundContext, input: BgInput): AgentToolResult<BgKillDetails> {
+export function runKill(background: TasksContext, input: TasksInput): AgentToolResult<TasksKillDetails> {
 	const id = requireTaskId(input);
 	try {
 		const task = background.get(id);
@@ -184,16 +186,16 @@ export function runKill(background: BackgroundContext, input: BgInput): AgentToo
 		throw lookupFailure(background, id, error);
 	}
 }
-export function runList(background: BackgroundContext): AgentToolResult<BgListDetails> {
+export function runList(background: TasksContext): AgentToolResult<TasksListDetails> {
 	const { tasks, foregroundOmitted } = listedTasks(background);
-	const active = tasks.filter((task) => !isBackgroundTerminal(task.status));
-	const finished = recentFinishedFirst(tasks.filter((task) => isBackgroundTerminal(task.status)));
-	const shown = [...active, ...finished.slice(0, BG_LIST_FINISHED_SHOWN)].slice(0, 100);
+	const active = tasks.filter((task) => !isTaskTerminal(task.status));
+	const finished = recentFinishedFirst(tasks.filter((task) => isTaskTerminal(task.status)));
+	const shown = [...active, ...finished.slice(0, TASKS_LIST_FINISHED_SHOWN)].slice(0, 100);
 	const hidden = tasks.length - shown.length;
 	return result(
 		shown.length
 			? `${shown.map((task) => describeTaskLine(task)).join("\n")}${hidden > 0 ? `\n${hidden} more records not shown.` : ""}${foregroundOmissionNote(foregroundOmitted)}`
-			: `No background tasks. Start work through bash or subagent with background: true.${foregroundOmissionNote(foregroundOmitted)}`,
+			: `No background tasks. Start work through its owning tool with background: true.${foregroundOmissionNote(foregroundOmitted)}`,
 		{
 			action: "list",
 			running: active.length,

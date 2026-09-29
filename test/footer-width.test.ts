@@ -197,7 +197,7 @@ describe("FooterComponent width handling", () => {
 	it("counts background ledger costs once across all entries and keeps parent context and cache hit rate", () => {
 		const record = {
 			type: "custom",
-			customType: "background-usage",
+			customType: "task-usage",
 			data: {
 				version: 1,
 				taskId: "group",

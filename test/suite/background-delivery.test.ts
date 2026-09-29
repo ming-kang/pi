@@ -18,7 +18,7 @@ async function startTask(session: AgentSession, title: string) {
 	const finished = new Promise<void>((resolve) => {
 		finish = resolve;
 	});
-	const outcome = await session.background.execute({
+	const outcome = await session.tasks.execute({
 		kind: "subagent",
 		title,
 		toolCallId: title,
@@ -59,7 +59,7 @@ describe("background completion delivery across an interrupted queue", () => {
 						},
 					});
 					pi.on("message_end", (event) => {
-						if (event.message.role === "custom" && event.message.customType === "background-completion") {
+						if (event.message.role === "custom" && event.message.customType === "task-completion") {
 							return { message: { ...event.message, customType: "rewritten-notice", details: undefined } };
 						}
 					});
@@ -77,7 +77,7 @@ describe("background completion delivery across an interrupted queue", () => {
 		]);
 		const { session, sessionManager } = harness;
 		const warning = vi.fn();
-		await session.bindExtensions({ backgroundEnabled: true, onError: warning });
+		await session.bindExtensions({ tasksEnabled: true, onError: warning });
 		const prompting = session.prompt("Run the main task while two workers finish");
 		await vi.waitFor(() => expect(toolStarted).toBe(true));
 		const first = await startTask(session, "first");
@@ -95,7 +95,7 @@ describe("background completion delivery across an interrupted queue", () => {
 			expect(notices()).toEqual([]);
 			session.clearQueue();
 			await vi.waitFor(() =>
-				expect(warning).toHaveBeenCalledWith(expect.objectContaining({ event: "background_delivery" })),
+				expect(warning).toHaveBeenCalledWith(expect.objectContaining({ event: "task_delivery" })),
 			);
 			await vi.waitFor(() => expect(queued()[0]).toMatchObject({ details: { taskId: second.id } }));
 			await session.sendCustomMessage(
@@ -105,25 +105,23 @@ describe("background completion delivery across an interrupted queue", () => {
 			releaseTool();
 			await prompting;
 			await vi.waitFor(() => expect(notices()).toHaveLength(1));
-			expect(session.background.pendingNotifications().map((task) => task.id)).toEqual([first.id]);
+			expect(session.tasks.pendingNotifications().map((task) => task.id)).toEqual([first.id]);
 			expect(
 				sessionManager
 					.getEntries()
 					.some((entry) => entry.type === "custom_message" && entry.customType === "aside"),
 			).toBe(false);
-			session.retryBackgroundNotifications();
+			session.retryTaskNotifications();
 			await vi.waitFor(() => expect(notices()).toHaveLength(2));
 			await session.waitForIdle();
 			const messages = sessionManager.getEntries().filter((entry) => entry.type === "custom_message");
 			expect(messages.map((entry) => entry.customType)).toEqual(["rewritten-notice", "rewritten-notice", "aside"]);
 			expect(String(messages[0].content)).toContain(second.id);
 			expect(String(messages[1].content)).toContain(first.id);
-			expect(session.background.pendingNotifications()).toEqual([]);
+			expect(session.tasks.pendingNotifications()).toEqual([]);
 			const ledger = sessionManager
 				.getEntries()
-				.flatMap((entry) =>
-					entry.type === "custom" && entry.customType === "background-usage" ? [entry.data] : [],
-				);
+				.flatMap((entry) => (entry.type === "custom" && entry.customType === "task-usage" ? [entry.data] : []));
 			expect(ledger).toEqual([
 				{ version: 1, taskId: first.id, usage },
 				{ version: 1, taskId: second.id, usage },

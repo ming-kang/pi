@@ -14,12 +14,12 @@
  * that has to know.
  */
 
-import type { BackgroundKind, BackgroundStatus } from "../../core/background/types.ts";
+import type { TaskKind, TaskStatus } from "../../tasks/types.ts";
 
 /** Historical transcripts used killed rather than cancelled. */
-export type BgTaskStatus = BackgroundStatus | "killed";
+export type TasksTaskStatus = TaskStatus | "killed";
 
-export interface BgCreateDetails {
+export interface TasksCreateDetails {
 	action: "create";
 	taskId: string;
 	outputPath: string;
@@ -27,9 +27,9 @@ export interface BgCreateDetails {
 	description?: string;
 }
 
-export interface BgReadDetails {
-	kind?: BackgroundKind;
-	status?: BackgroundStatus;
+export interface TasksReadDetails {
+	kind?: TaskKind;
+	status?: TaskStatus;
 	action: "read";
 	taskId: string;
 	mode: "head" | "tail";
@@ -38,15 +38,13 @@ export interface BgReadDetails {
 	outputPath: string;
 }
 
-export interface BgWaitDetails {
-	/** Host acknowledges this terminal outcome only after its tool result is persisted. */
-	backgroundTaskId?: string;
-	kind?: BackgroundKind;
+export interface TasksWaitDetails {
+	kind?: TaskKind;
 	action: "wait";
 	taskId: string;
 	/** True when the wait window expired and the task is still running. */
 	timedOut: boolean;
-	status: BgTaskStatus;
+	status: TasksTaskStatus;
 	exitCode: number | null | undefined;
 	waitedMs: number;
 	deltaBytes: number;
@@ -55,15 +53,15 @@ export interface BgWaitDetails {
 	outputPath: string;
 }
 
-export interface BgKillDetails {
+export interface TasksKillDetails {
 	requested?: boolean;
-	status?: BackgroundStatus;
+	status?: TaskStatus;
 	action: "kill";
 	taskId: string;
 	command: string;
 }
 
-export interface BgListDetails {
+export interface TasksListDetails {
 	action: "list";
 	running: number;
 	finished: number;
@@ -73,13 +71,18 @@ export interface BgListDetails {
 	foregroundOmitted?: number;
 }
 
-export type BgDetails = BgCreateDetails | BgReadDetails | BgKillDetails | BgListDetails | BgWaitDetails;
+export type TasksDetails =
+	| TasksCreateDetails
+	| TasksReadDetails
+	| TasksKillDetails
+	| TasksListDetails
+	| TasksWaitDetails;
 
-export interface BgNotificationDetails {
+export interface TasksNotificationDetails {
 	taskId: string;
 	command: string;
 	description?: string;
-	status: BgTaskStatus;
+	status: TasksTaskStatus;
 	/** True for the one-shot "waiting for interactive input" signal; the task keeps running. */
 	stalled?: true;
 	exitCode: number | null | undefined;

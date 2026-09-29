@@ -18,7 +18,7 @@ import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode
 
 type ShutdownThis = {
 	isShuttingDown: boolean;
-	session: { background: { close: () => void } };
+	session: { tasks: { close: () => void } };
 	unregisterSignalHandlers: () => void;
 	runtimeHost: { dispose: () => Promise<void> };
 	ui: { terminal: { drainInput: (ms: number) => Promise<void> } };
@@ -71,7 +71,7 @@ function createContext(order: string[], sessionManager = createSessionManager())
 	return {
 		isShuttingDown: false,
 		session: {
-			background: {
+			tasks: {
 				close: vi.fn(() => {
 					order.push("background:close");
 				}),
@@ -188,7 +188,7 @@ describe("InteractiveMode.shutdown ordering (#5080)", () => {
 		await callShutdown(context, { fromSignal: true });
 
 		expect(order).toEqual([]);
-		expect(context.session.background.close).not.toHaveBeenCalled();
+		expect(context.session.tasks.close).not.toHaveBeenCalled();
 		expect(context.runtimeHost.dispose).not.toHaveBeenCalled();
 	});
 });

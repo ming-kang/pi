@@ -34,7 +34,7 @@ The fixture provider in `test/fixtures/offline-provider.ts` answers without netw
 | --- | --- |
 | `tools` | Calls the `fixture_wait` tool for 2 seconds, then answers. |
 | `tools slow` | Same with a 15-second tool call, long enough to inspect the pending state. |
-| `bg` | Hands a real Bash command to the background; it prints 45 lines over about 15 seconds, so `/bg` shows it running and then completed. Its completion notice starts one more answer. |
+| `bg` | Hands a real Bash command to the background; it prints 45 lines over about 15 seconds, so `/tasks` shows it running and then completed. Its completion notice starts one more answer. |
 | `long` | Streams a 45-line answer. |
 | Anything else | A short answer with a thinking block. |
 

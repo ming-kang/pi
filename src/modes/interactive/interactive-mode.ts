@@ -1,3 +1,4 @@
+import { bindTasksUI, type TasksUI } from "./tasks/index.ts";
 /**
  * Interactive mode for the coding agent.
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
@@ -416,6 +417,7 @@ export interface InteractiveModeOptions {
 }
 
 export class InteractiveMode {
+	private tasksUI?: TasksUI;
 	private runtimeHost: AgentSessionRuntime;
 	private renderer: TuiMainScreen | TuiAltScreen;
 	private ui: TUI;
@@ -584,6 +586,7 @@ export class InteractiveMode {
 		this.options = { ...options, tuiMode };
 		this.autoTrustOnReloadCwd = options.autoTrustOnReloadCwd;
 		this.runtimeHost.setBeforeSessionInvalidate(() => {
+			this.tasksUI?.dispose();
 			this.resetExtensionUI();
 		});
 		this.runtimeHost.setRebindSession(async () => {
@@ -1926,11 +1929,12 @@ export class InteractiveMode {
 	 * Initialize the extension system with TUI-based UI context.
 	 */
 	private async bindCurrentSessionExtensions(): Promise<void> {
+		this.tasksUI?.dispose();
 		const uiContext = this.createExtensionUIContext();
 		await this.session.bindExtensions({
 			uiContext,
 			mode: "tui",
-			backgroundEnabled: true,
+			tasksEnabled: true,
 			abortHandler: () => {
 				this.restoreQueuedMessagesToEditor({ abort: true });
 			},
@@ -1994,6 +1998,7 @@ export class InteractiveMode {
 			},
 		});
 
+		this.tasksUI = bindTasksUI({ tasks: this.session.tasks, ui: uiContext });
 		setRegisteredThemes(this.session.resourceLoader.getThemes().themes);
 		this.setupAutocompleteProvider();
 
@@ -3072,6 +3077,11 @@ export class InteractiveMode {
 			if (this.editorHost.intercept(text, "steer")) return;
 
 			// Handle commands
+			if (text === "/tasks") {
+				this.editor.setText("");
+				await this.tasksUI?.open();
+				return;
+			}
 			if (text === "/settings") {
 				this.showSettingsSelector();
 				this.editor.setText("");
@@ -4130,7 +4140,8 @@ export class InteractiveMode {
 	private async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
-		this.session.background.close();
+		this.tasksUI?.dispose();
+		this.session.tasks.close();
 		// Keep signal handlers registered until terminal cleanup has completed.
 		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
 		// dispatch and re-sends the signal if only its own listeners remain.
@@ -6222,7 +6233,9 @@ export class InteractiveMode {
 		};
 
 		try {
+			this.tasksUI?.dispose();
 			await this.session.reload({ beforeSessionStart: restoreChatBeforeSessionStart });
+			this.tasksUI = bindTasksUI({ tasks: this.session.tasks, ui: this.createExtensionUIContext() });
 			restoreChatBeforeSessionStart();
 			this.keybindings.reload();
 			const activeHeader = this.customHeader ?? this.builtInHeader;

@@ -1086,7 +1086,7 @@ it("renders a settled handoff snapshot without a spinner, elapsed clock, or live
 		const text = renderLines(snapshot, { expanded }).join(" ");
 		expect(text).toContain("Handed to background");
 		expect(text).toContain("subagent-group");
-		expect(text).toContain("/bg");
+		expect(text).toContain("/tasks");
 		expect(text).not.toContain("Still running");
 		expect(text).not.toContain("0 tok");
 		if (expanded) expect(text).toContain("running at handoff");

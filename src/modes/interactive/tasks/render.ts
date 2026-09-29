@@ -1,7 +1,7 @@
 /**
- * Transcript rendering for the background extension: the single bg tool's
+ * Transcript rendering for the native tasks tool: its
  * call/result rows (dispatched on action) and the completion-notification
- * message. Style follows the built-in bash presentation: a `$` prompt row
+ * message. Style follows the built-in bash presentation: a `$` input row
  * with an `&` marker for the background call.
  */
 
@@ -11,16 +11,16 @@ import type {
 	MessageRenderOptions,
 	ToolRenderContext,
 	ToolRenderResultOptions,
-} from "../../core/extensions/types.ts";
-import type { CustomMessage } from "../../core/messages.ts";
-import { formatSize } from "../../core/tools/truncate.ts";
-import { highlightCode, type Theme } from "../../modes/interactive/theme/theme.ts";
-import { type BgInput, clampWaitMs } from "./schema.ts";
+} from "../../../core/extensions/types.ts";
+import type { CustomMessage } from "../../../core/messages.ts";
+import { clampWaitMs, type TasksInput } from "../../../core/tools/tasks/schema.ts";
+import type { TasksDetails, TasksNotificationDetails } from "../../../core/tools/tasks/types.ts";
+import { formatSize } from "../../../core/tools/truncate.ts";
+import { highlightCode, type Theme } from "../theme/theme.ts";
 import { commandLabel, exitSuffix, statusColor, statusGlyph } from "./task-view.ts";
 import { fileNameOf, firstCommandLine, formatDuration } from "./text.ts";
-import type { BgDetails, BgNotificationDetails } from "./types.ts";
 
-type BgRenderInput = Omit<BgInput, "action"> & {
+type TasksRenderInput = Omit<TasksInput, "action"> & {
 	action?: string;
 	command?: string;
 	description?: string;
@@ -37,7 +37,7 @@ const RESULT_EXPAND_LIMIT = 4000;
 const WAIT_REFRESH_MS = 1000;
 
 /** Per-call live-refresh state owned by the shell's render context. */
-export interface BgRenderState {
+export interface TasksRenderState {
 	dispose?: () => void;
 	refreshTimer?: ReturnType<typeof setTimeout>;
 	/** First pending render of a wait call; anchors the elapsed display. */
@@ -50,7 +50,7 @@ export interface BgRenderState {
  * re-arms, so at most one armed timer exists per tool row. Unref'd: it can
  * never hold the process open.
  */
-export function scheduleWaitRefresh(context: ToolRenderContext<BgRenderState>, pending: boolean): void {
+export function scheduleWaitRefresh(context: ToolRenderContext<TasksRenderState>, pending: boolean): void {
 	const state = context.state;
 	if (state === undefined) return; // Standalone render without shell state: nothing to schedule.
 	if (pending) {
@@ -86,20 +86,24 @@ function capForTranscript(text: string, limit: number): string {
 
 // ── tool call ─────────────────────────────────────────────────────────────
 
-export function renderBgCall(args: BgRenderInput, theme: Theme, context: ToolRenderContext<BgRenderState>): Component {
+export function renderTasksCall(
+	args: TasksRenderInput,
+	theme: Theme,
+	context: ToolRenderContext<TasksRenderState>,
+): Component {
 	switch (args.action) {
 		case "create": {
 			// Arguments stream in, so `command` may not have arrived yet.
 			const command = args.command;
 			return typeof command === "string"
 				? renderCreateCall(command, args, theme, context)
-				: new Text(theme.fg("toolTitle", theme.bold("bg create")), 0, 0);
+				: new Text(theme.fg("toolTitle", theme.bold("tasks create")), 0, 0);
 		}
 		case "read": {
 			const mode = args.mode ?? "tail";
 			const size = args.bytes !== undefined ? ` ${formatSize(args.bytes)}` : "";
 			return new Text(
-				`${theme.fg("toolTitle", theme.bold("bg read "))}${theme.fg("accent", args.taskId ?? "")}${theme.fg("muted", ` ${mode}${size}`)}`,
+				`${theme.fg("toolTitle", theme.bold("tasks read "))}${theme.fg("accent", args.taskId ?? "")}${theme.fg("muted", ` ${mode}${size}`)}`,
 				0,
 				0,
 			);
@@ -108,17 +112,17 @@ export function renderBgCall(args: BgRenderInput, theme: Theme, context: ToolRen
 			return renderWaitCall(args, theme, context);
 		case "kill":
 			return new Text(
-				`${theme.fg("toolTitle", theme.bold("bg kill "))}${theme.fg("accent", args.taskId ?? "")}`,
+				`${theme.fg("toolTitle", theme.bold("tasks kill "))}${theme.fg("accent", args.taskId ?? "")}`,
 				0,
 				0,
 			);
 		case "list":
-			return new Text(theme.fg("toolTitle", theme.bold("bg list")), 0, 0);
+			return new Text(theme.fg("toolTitle", theme.bold("tasks list")), 0, 0);
 		default: {
-			// Tool arguments arrive incrementally while the model is still emitting
+			// Tool arguments arrive incrementally while the context is still emitting
 			// JSON. Keep the call row renderable until `action` becomes valid.
 			const action = typeof args.action === "string" ? ` ${theme.fg("dim", args.action)}` : "";
-			return new Text(`${theme.fg("toolTitle", theme.bold("bg"))}${action}`, 0, 0);
+			return new Text(`${theme.fg("toolTitle", theme.bold("tasks"))}${action}`, 0, 0);
 		}
 	}
 }
@@ -127,7 +131,7 @@ export function renderBgCall(args: BgRenderInput, theme: Theme, context: ToolRen
  * Pending wait call: elapsed/wait-window, refreshed once per second by
  * scheduleWaitRefresh until the result settles and takes over the row.
  */
-function renderWaitCall(args: BgRenderInput, theme: Theme, context: ToolRenderContext<BgRenderState>): Component {
+function renderWaitCall(args: TasksRenderInput, theme: Theme, context: ToolRenderContext<TasksRenderState>): Component {
 	const taskId = typeof args.taskId === "string" ? args.taskId.trim() : "";
 	// isPartial alone means "not settled", which also covers argument streaming
 	// and replayed history rows that never settle; executionStarted narrows it to
@@ -142,7 +146,7 @@ function renderWaitCall(args: BgRenderInput, theme: Theme, context: ToolRenderCo
 	if (!pending) {
 		const ms = args.waitMs !== undefined ? ` ${formatDuration(clampWaitMs(args.waitMs))}` : "";
 		return new Text(
-			`${theme.fg("toolTitle", theme.bold("bg wait "))}${theme.fg("accent", args.taskId ?? "")}${theme.fg("muted", ms)}`,
+			`${theme.fg("toolTitle", theme.bold("tasks wait "))}${theme.fg("accent", args.taskId ?? "")}${theme.fg("muted", ms)}`,
 			0,
 			0,
 		);
@@ -151,13 +155,18 @@ function renderWaitCall(args: BgRenderInput, theme: Theme, context: ToolRenderCo
 	if (state.waitStartedAt === undefined) state.waitStartedAt = Date.now();
 	const elapsed = `waiting ${formatDuration(Date.now() - state.waitStartedAt)}/${formatDuration(clampWaitMs(args.waitMs))}`;
 	return new Text(
-		`${theme.fg("toolTitle", theme.bold("bg wait "))}${theme.fg("accent", taskId)} ${theme.fg("muted", elapsed)}`,
+		`${theme.fg("toolTitle", theme.bold("tasks wait "))}${theme.fg("accent", taskId)} ${theme.fg("muted", elapsed)}`,
 		0,
 		0,
 	);
 }
 
-function renderCreateCall(command: string, args: BgRenderInput, theme: Theme, context: ToolRenderContext): Component {
+function renderCreateCall(
+	command: string,
+	args: TasksRenderInput,
+	theme: Theme,
+	context: ToolRenderContext,
+): Component {
 	const lines = command.split(/\r?\n/).filter((line) => line.trim().length > 0);
 	const label = args.description ? theme.fg("muted", ` · ${args.description}`) : "";
 	const suffix = theme.fg("muted", " &") + timeoutSuffix(args.timeout, theme) + label;
@@ -176,11 +185,11 @@ function renderCreateCall(command: string, args: BgRenderInput, theme: Theme, co
 
 // ── tool result ───────────────────────────────────────────────────────────
 
-export function renderBgResult(
-	result: AgentToolResult<BgDetails | undefined>,
+export function renderTasksResult(
+	result: AgentToolResult<TasksDetails | undefined>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
-	context: ToolRenderContext<BgRenderState>,
+	context: ToolRenderContext<TasksRenderState>,
 ): Component {
 	// bg results are always settled today; clear defensively so no live-refresh
 	// timer can outlive its row if a host ever streams partial results.
@@ -201,9 +210,9 @@ export function renderBgResult(
 	return container;
 }
 
-function resultSummaryLine(details: BgDetails, theme: Theme, expanded: boolean): string {
+function resultSummaryLine(details: TasksDetails, theme: Theme, expanded: boolean): string {
 	// Collapsed rows stay compact with the log's file name; the full path
-	// (model-relevant, human-rarely) shows when expanded.
+	// (context-relevant, human-rarely) shows when expanded.
 	const shownPath = (path: string) => (expanded ? path : fileNameOf(path));
 	switch (details.action) {
 		case "create": {
@@ -237,7 +246,7 @@ function resultSummaryLine(details: BgDetails, theme: Theme, expanded: boolean):
 // ── completion notification ───────────────────────────────────────────────
 
 /** One-line summary of a finished task, shared by the notification renderer. */
-function taskSummaryLine(details: BgNotificationDetails, theme: Theme): string {
+function taskSummaryLine(details: TasksNotificationDetails, theme: Theme): string {
 	const runtime = formatDuration(details.runtimeMs);
 	const label = details.description
 		? `${details.description} (${commandLabel(details.command, LABELLED_COMMAND_LIMIT)})`
@@ -259,8 +268,8 @@ function taskSummaryLine(details: BgNotificationDetails, theme: Theme): string {
  * path below. Expanded adds the embedded output tail. Returns undefined for
  * malformed details so the default custom-message rendering takes over.
  */
-export function renderBackgroundNotification(
-	message: CustomMessage<BgNotificationDetails>,
+export function renderLegacyTaskNotification(
+	message: CustomMessage<TasksNotificationDetails>,
 	options: MessageRenderOptions,
 	theme: Theme,
 ): Component | undefined {
@@ -270,7 +279,7 @@ export function renderBackgroundNotification(
 	const container = new Container();
 	container.addChild(new TruncatedText(taskSummaryLine(details, theme), 1, 0));
 	// Collapsed keeps the row compact with the file name; the full path
-	// (model-relevant, human-rarely) shows when expanded.
+	// (context-relevant, human-rarely) shows when expanded.
 	const shownPath = options.expanded ? details.outputPath : fileNameOf(details.outputPath);
 	container.addChild(new Text(theme.fg("muted", shownPath), 1, 0));
 

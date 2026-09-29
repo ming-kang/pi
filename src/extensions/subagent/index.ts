@@ -1,6 +1,6 @@
 import { getAgentDir } from "../../config.ts";
-import type { BackgroundControl, BackgroundProjection, BackgroundTerminalStatus } from "../../core/background/types.ts";
 import type { AgentToolResult, ExtensionAPI } from "../../core/extensions/types.ts";
+import type { TaskControl, TaskProjection, TaskTerminalStatus } from "../../core/tasks/types.ts";
 import { emptyUsage } from "./activity.ts";
 import { subagentToolDescription } from "./agents.ts";
 import { showAgentsCommand } from "./agents-command.ts";
@@ -24,15 +24,15 @@ export default function subagent(pi: ExtensionAPI): void {
 		promptSnippet: "Delegate bounded work to isolated explorer or general workers",
 		promptGuidelines: [
 			"Use `subagent` for bounded work that benefits from isolated context or concurrent investigation; do not delegate a task you can finish with one or two direct tool calls.",
-			"Give every task a short `description` label; it is shown in the /bg list, live rows, and report headings.",
+			"Give every task a short `description` label; it is shown in the /tasks list, live rows, and report headings.",
 		],
 		parameters: SubagentParamsSchema,
 		constrainedSampling: { type: "json_schema", strict: "prefer" },
 		prepareArguments: normalizeSubagentArguments,
 		async execute(toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult<SubagentDetails>> {
-			const host = ctx.background;
+			const host = ctx.tasks;
 			if (host?.closed) throw new Error("Background service is closed");
-			const managed = host?.enabled || params.background === true;
+			const managed = !!host || params.background === true;
 			if (managed && !host) throw new Error("Background execution requires an enabled Background host.");
 			let latest: SubagentDetails = {
 				status: "running",
@@ -41,21 +41,19 @@ export default function subagent(pi: ExtensionAPI): void {
 				usage: emptyUsage(),
 			};
 			const ordinals = new Map<string, number>();
-			const projection = (view: BackgroundProjection): BackgroundProjection => ({
+			const projection = (view: TaskProjection): TaskProjection => ({
 				...view,
-				workers: view.workers?.map((worker) => {
+				items: view.items?.map((worker) => {
 					let ordinal = ordinals.get(worker.id);
 					if (ordinal === undefined) {
 						ordinal = ++workerOrdinal;
 						ordinals.set(worker.id, ordinal);
 					}
-					return { ...worker, label: `#${ordinal} ${worker.profile}` };
+					return { ...worker, label: `#${ordinal} ${worker.category}` };
 				}),
 			});
-			const run = async (
-				control?: BackgroundControl<SubagentDetails>,
-			): Promise<AgentToolResult<SubagentDetails>> => {
-				const update = (details: SubagentDetails, view?: BackgroundProjection): void => {
+			const run = async (control?: TaskControl<SubagentDetails>): Promise<AgentToolResult<SubagentDetails>> => {
+				const update = (details: SubagentDetails, view?: TaskProjection): void => {
 					latest = details;
 					const result: AgentToolResult<SubagentDetails> = {
 						content: [{ type: "text", text: statusSummary(details) }],
@@ -109,7 +107,7 @@ export default function subagent(pi: ExtensionAPI): void {
 				run: async (control) => {
 					const result = await run(control);
 					const status = result.details!.status;
-					const terminal: BackgroundTerminalStatus =
+					const terminal: TaskTerminalStatus =
 						status === "aborted" ? "cancelled" : status === "running" ? "failed" : status;
 					return { result, status: terminal };
 				},
@@ -120,7 +118,7 @@ export default function subagent(pi: ExtensionAPI): void {
 				content: [
 					{
 						type: "text",
-						text: `Subagent group handed to background: ${outcome.task.id}. Completion arrives automatically as a notification — do not poll or immediately wait on it; continue with other work or hand back to the user. Use bg read to inspect progress, bg wait only when your next step is blocked on the result (prefer foreground next time in that case), or bg kill to stop the whole group.`,
+						text: `Subagent group handed to background: ${outcome.task.id}. Completion arrives automatically as a notification — do not poll or immediately wait on it; continue with other work or hand back to the user. Use tasks read to inspect progress, tasks wait only when your next step is blocked on the result (prefer foreground next time in that case), or tasks kill to stop the whole group.`,
 					},
 				],
 				details: { ...latest, endedAt: submittedAt, background: { id: outcome.task.id, submittedAt } },

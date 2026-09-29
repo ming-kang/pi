@@ -1,11 +1,11 @@
 import { open } from "node:fs/promises";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 
-export const BACKGROUND_RESULT_BYTES = 48 * 1024;
-export const BACKGROUND_DETAILS_BYTES = 120 * 1024;
-export const BACKGROUND_READ_BYTES = 8 * 1024;
+export const TASK_RESULT_BYTES = 48 * 1024;
+export const TASK_DETAILS_BYTES = 120 * 1024;
+export const TASK_READ_BYTES = 8 * 1024;
 /** Task title budget, independent of notification wording and rendering. */
-export const BACKGROUND_TITLE_BYTES = 1024;
+export const TASK_TITLE_BYTES = 1024;
 
 export function finiteLimit(value: number | undefined, fallback: number, ceiling: number): number {
 	return value === undefined || !Number.isFinite(value) ? fallback : Math.max(0, Math.min(ceiling, Math.floor(value)));
@@ -28,9 +28,9 @@ function alignedSlice(buffer: Buffer, start: number, end: number): Buffer {
 	return buffer.subarray(start, end);
 }
 
-export function boundText(text: string, bytes = BACKGROUND_RESULT_BYTES): string {
+export function boundText(text: string, bytes = TASK_RESULT_BYTES): string {
 	// Avoid allocating a buffer proportional to an unbounded source.
-	const limit = finiteLimit(bytes, BACKGROUND_RESULT_BYTES, BACKGROUND_RESULT_BYTES);
+	const limit = finiteLimit(bytes, TASK_RESULT_BYTES, TASK_RESULT_BYTES);
 	const prefix = text.slice(0, limit + 1);
 	const buffer = Buffer.from(prefix);
 	return alignedSlice(buffer, 0, Math.min(limit, buffer.length)).toString("utf8");
@@ -38,7 +38,7 @@ export function boundText(text: string, bytes = BACKGROUND_RESULT_BYTES): string
 
 /** Keep valid structured details intact or omit them, never truncate serialized JSON. */
 export function boundedResult(result: AgentToolResult<unknown>): AgentToolResult<unknown> {
-	let remaining = BACKGROUND_RESULT_BYTES;
+	let remaining = TASK_RESULT_BYTES;
 	const content: AgentToolResult<unknown>["content"] = [];
 	for (const block of result.content) {
 		if (remaining <= 0) break;
@@ -48,7 +48,7 @@ export function boundedResult(result: AgentToolResult<unknown>): AgentToolResult
 	}
 	let details: unknown;
 	try {
-		let budget = BACKGROUND_DETAILS_BYTES;
+		let budget = TASK_DETAILS_BYTES;
 		const json = JSON.stringify(result.details, (key, value: unknown) => {
 			// Stop visiting an oversized structure before constructing an unbounded JSON string.
 			budget -= Buffer.byteLength(key) + 3;
@@ -56,7 +56,7 @@ export function boundedResult(result: AgentToolResult<unknown>): AgentToolResult
 			if (budget < 0) throw new Error("Background details exceed the storage budget");
 			return value;
 		});
-		if (json !== undefined && Buffer.byteLength(json) <= BACKGROUND_DETAILS_BYTES) details = JSON.parse(json);
+		if (json !== undefined && Buffer.byteLength(json) <= TASK_DETAILS_BYTES) details = JSON.parse(json);
 	} catch {
 		// Runtime handles and cyclic details cannot enter a serializable snapshot.
 	}
@@ -75,7 +75,7 @@ export async function readOutputSlice(
 	path: string,
 	options: { mode?: "head" | "tail"; bytes?: number; sinceBytes?: number } = {},
 ): Promise<OutputSlice> {
-	const bytes = finiteLimit(options.bytes, BACKGROUND_READ_BYTES, BACKGROUND_RESULT_BYTES);
+	const bytes = finiteLimit(options.bytes, TASK_READ_BYTES, TASK_RESULT_BYTES);
 	const file = await open(path, "r");
 	try {
 		const { size } = await file.stat();
@@ -108,7 +108,7 @@ export function sliceText(
 	options: { mode?: "head" | "tail"; bytes?: number; sinceBytes?: number } = {},
 ): OutputSlice {
 	const buffer = Buffer.from(text);
-	const bytes = finiteLimit(options.bytes, BACKGROUND_READ_BYTES, BACKGROUND_RESULT_BYTES);
+	const bytes = finiteLimit(options.bytes, TASK_READ_BYTES, TASK_RESULT_BYTES);
 	const since = finiteLimit(options.sinceBytes, 0, Number.MAX_SAFE_INTEGER);
 	const floor = since > buffer.length ? 0 : since;
 	const start =

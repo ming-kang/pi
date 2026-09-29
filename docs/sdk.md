@@ -111,8 +111,8 @@ interface AgentSession {
   abort(): Promise<void>;
 
   // Background host controls (see Background execution below)
-  pauseBackgroundNotifications(): () => void;
-  retryBackgroundNotifications(): void;
+  pauseTaskNotifications(): () => void;
+  retryTaskNotifications(): void;
   getSessionStats(): SessionStats;
 
   // Cleanup (does not await Background draining)
@@ -275,13 +275,13 @@ Both `steer()` and `followUp()` expand file-based prompt templates but error on 
 
 Background is a session-owned capability, not a daemon or a flag on `createAgentSession()`. Interactive mode enables it. Ordinary SDK sessions and the built-in print, JSON, and RPC hosts leave it disabled and reject native shell or Subagent calls with `background: true`. Normal foreground tools still work, including standalone `createBashTool()` / `createPowerShellTool()` calls without a session context.
 
-An embedding can opt in with `await session.bindExtensions({ backgroundEnabled: true })`. Bind before prompting; this also binds extensions and emits their session-start lifecycle. When using `AgentSessionRuntime`, rebind the replacement session through the runtime's rebind callback. Setting `mode` or providing a UI alone does not enable Background.
+An embedding can opt in with `await session.bindExtensions({ tasksEnabled: true })`. Bind before prompting; this also binds extensions and emits their session-start lifecycle. When using `AgentSessionRuntime`, rebind the replacement session through the runtime's rebind callback. Setting `mode` or providing a UI alone does not enable Background.
 
 The host must choose:
 
-- **Lifetime and cancellation:** a settled main-agent turn is not the end of background work. `session.abort()` cancels foreground-owned work, not detached work. Use `session.background.kill(id)` for a whole execution, or `await session.background.shutdown(graceMs?)` to close admission, cancel all owned work and drain within a bounded grace period (default 2 seconds, maximum 60 seconds). A non-cooperating executor can outlive that grace period.
-- **Result-driven turns and cost:** automatic completions join the host's prompt queue, so a running turn receives them as steering and an idle session starts a completion turn. Use the nestable `session.pauseBackgroundNotifications()` to defer delivery; its returned release function is idempotent. Pausing does not stop execution or its costs. Budget worker activity and completion-triggered turns explicitly.
-- **Observation and delivery:** `session.background` exposes the [public supervision methods](extensions.md#ctxbackground). `read()` and `wait()` observe; a terminal snapshot alone does not acknowledge model delivery. The bundled `bg wait` result carries `details.backgroundTaskId`, which the host acknowledges only after persisting the tool result. A direct SDK waiter that consumes the result outside model history can explicitly call `session.background.markDelivered(task.id)` after successful consumption. A timeout or cancelled wait does not stop the execution. Failed notification delivery leaves the result available for inspection; after fixing the host failure, call `session.retryBackgroundNotifications()` explicitly. Pi does not retry a failed delivery forever on a timer.
+- **Lifetime and cancellation:** a settled main-agent turn is not the end of background work. `session.abort()` cancels foreground-owned work, not detached work. Use `session.tasks.kill(id)` for a whole execution, or `await session.tasks.shutdown(graceMs?)` to close admission, cancel all owned work and drain within a bounded grace period (default 2 seconds, maximum 60 seconds). A non-cooperating executor can outlive that grace period.
+- **Result-driven turns and cost:** automatic completions join the host's prompt queue, so a running turn receives them as steering and an idle session starts a completion turn. Use the nestable `session.pauseTaskNotifications()` to defer delivery; its returned release function is idempotent. Pausing does not stop execution or its costs. Budget worker activity and completion-triggered turns explicitly.
+- **Observation and delivery:** `session.tasks` exposes the [public supervision methods](extensions.md#ctxtasks). `read()` and `wait()` observe; a terminal snapshot alone does not acknowledge model delivery. The built-in `tasks wait` tool binds a delivery receipt to its tool-call ID; the host confirms it only after persisting the result, even if extensions rewrite its details. A direct SDK waiter that consumes the result outside model history can explicitly call `session.tasks.markDelivered(task.id)` after successful consumption. A timeout or cancelled wait does not stop the execution. Failed notification delivery leaves the result available for inspection; after fixing the host failure, call `session.retryTaskNotifications()` explicitly. Pi does not retry a failed delivery forever on a timer.
 - **Shutdown:** `await runtime.dispose()` handles background shutdown and extension lifecycle when using the runtime API. For a directly owned session, drain Background, abort the main agent, then dispose; synchronous `session.dispose()` alone is not an awaited drain.
 
 A deliberately single-turn embedding can suppress completion-triggered turns and cancel leftover work on exit:
@@ -292,14 +292,14 @@ import { createAgentSession, SessionManager } from "@astralyn/pi";
 const { session } = await createAgentSession({
   sessionManager: SessionManager.inMemory(),
 });
-const resumeNotifications = session.pauseBackgroundNotifications();
+const resumeNotifications = session.pauseTaskNotifications();
 try {
-  await session.bindExtensions({ backgroundEnabled: true });
+  await session.bindExtensions({ tasksEnabled: true });
   await session.prompt("Inspect the project; delegate independent investigations if useful.");
   // Snapshot only: some executions may still be running.
-  console.log(session.background.list());
+  console.log(session.tasks.list());
 } finally {
-  await Promise.all([session.background.shutdown(), session.abort()]);
+  await Promise.all([session.tasks.shutdown(), session.abort()]);
   session.dispose();
   resumeNotifications();
 }
@@ -307,19 +307,19 @@ try {
 
 For a longer-lived embedding, keep the host alive, subscribe to snapshots and choose bounded waits or release notification delivery according to your model-turn policy. Do not use a panel or repeated reads as the billing or cleanup mechanism.
 
-Automatic completion messages carry a version-1 `BackgroundCompletionSnapshot` in `details`, with independent shell output or worker reports, diagnostics and explicit truncation flags. This snapshot is self-contained for transcript replay and is not sent to the model; `content` contains the separately bounded prose generated from it. Current terminal history uses version-2 `background-task-result` records, with no migration of earlier result records. The usage ledger remains independent. See [Background records](session-format.md#background-records).
+Automatic completion messages carry a version-1 `TaskCompletionSnapshot` in `details`, with independent shell output or worker reports, diagnostics and explicit truncation flags. This snapshot is self-contained for transcript replay and is not sent to the model; `content` contains the separately bounded prose generated from it. Current terminal history uses version-2 `task-result` records, with no migration of earlier result records. The usage ledger remains independent. See [Background records](session-format.md#background-records).
 
 `executionRole: "subagent"` on `createAgentSession()` is a trusted host-assigned identity, not a model argument. It prevents enabling Background even through `bindExtensions`; built-in workers also receive a no-background prompt rule. Their shared shell schema retains the optional flag but runtime requests for `background: true` are rejected before startup. Foreground shell access remains normal. This capability restriction is not an OS sandbox.
 
-Reload, replacement/fork, shutdown and branch navigation enforce the [Background lifetime rules](bundled/extensions/background.md#lifetime). Saved terminal branch history is observational only: no live processes/workers resume, and restoration does not replay accounting or completion events. Managed logs expire with their runtime records; save anything needed before eviction or shutdown.
+Reload, replacement/fork, shutdown and branch navigation enforce the [Background lifetime rules](bundled/tasks.md#lifetime). Saved terminal branch history is observational only: no live processes/workers resume, and restoration does not replay accounting or completion events. Managed logs expire with their runtime records; save anything needed before eviction or shutdown.
 
-An executor that ignores abort and settles after its originating runtime/branch has been retired is quarantined, not charged to the active session. The old session exposes the latest 32 bounded records through `quarantinedBackgroundSettlements`; persisted sessions also attempt to append them to `<session-file>.background-late.jsonl`, reporting a diagnostic if the write fails. This is an audit trail, not automatic reconciliation or a promise that the executor stopped. See [Background records](session-format.md#background-records).
+An executor that ignores abort and settles after its originating runtime/branch has been retired is quarantined, not charged to the active session. The old session exposes the latest 32 bounded records through `quarantinedTaskSettlements`; persisted sessions also attempt to append them to `<session-file>.tasks-late.jsonl`, reporting a diagnostic if the write fails. This is an audit trail, not automatic reconciliation or a promise that the executor stopped. See [Background records](session-format.md#background-records).
 
 ### Session statistics
 
 `session.getSessionStats()` returns `sessionFile`, `sessionId`, `userMessages`, `assistantMessages`, `toolCalls`, `toolResults`, `totalMessages`, `tokens`, `cost`, and optional `contextUsage`. `tokens` contains `input`, `output`, `cacheRead`, `cacheWrite`, and `total` (the sum of those four categories); `cost` is accumulated reported cost.
 
-Usage totals cover all session entries, including other branches and compacted history: assistant requests, usage-bearing tool results, compaction/branch summaries, and the first valid `background-usage` record per execution ID. Managed foreground results omit duplicate usage. Background records do not increment message/tool counts, and reads, waits, handoff and history restoration do not add billing. Worker retry, failure, cancellation and compaction usage is included when supplied; missing provider usage is not fabricated. Quarantined late settlements are excluded.
+Usage totals cover all session entries, including other branches and compacted history: assistant requests, usage-bearing tool results, compaction/branch summaries, and the first valid `task-usage` record per execution ID. Managed foreground results omit duplicate usage. Background records do not increment message/tool counts, and reads, waits, handoff and history restoration do not add billing. Worker retry, failure, cancellation and compaction usage is included when supplied; missing provider usage is not fabricated. Quarantined late settlements are excluded.
 
 This differs from the bundled Statusline's active-branch totals. Neither accumulated worker usage nor Background billing changes the parent context-occupancy estimate or the latest parent request's cache-hit ratio.
 

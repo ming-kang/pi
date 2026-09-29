@@ -1,10 +1,10 @@
 import { unlink } from "node:fs/promises";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { boundText } from "../background/output.ts";
-import type { BackgroundCompletion, BackgroundContext, BackgroundControl } from "../background/types.ts";
-import type { BashOperations, BashSpawnContext, BashToolDetails } from "./bash.ts";
+import { boundText } from "../tasks/output.ts";
+import type { TaskCompletion, TaskControl } from "../tasks/types.ts";
 import { OutputAccumulator, type OutputSnapshot } from "./output-accumulator.ts";
 import { BASH_UPDATE_THROTTLE_MS } from "./renderers/bash.ts";
+import type { BashOperations, BashSpawnContext, BashToolDetails } from "./shell-tool.ts";
 import { formatSize, truncateTail } from "./truncate.ts";
 
 /**
@@ -33,8 +33,7 @@ export function rewriteCmdNulRedirects(command: string): string {
 export const MAX_BACKGROUND_OUTPUT_BYTES = 20 * 1024 * 1024;
 
 export interface ManagedShellExecution {
-	host: BackgroundContext;
-	control: BackgroundControl<BashToolDetails | undefined>;
+	control: TaskControl<BashToolDetails | undefined>;
 }
 
 interface ShellExecutionOptions {
@@ -89,7 +88,7 @@ function formatOutput(
 /** One process and one output owner across foreground/background handoff. */
 export async function runShellCommand(
 	options: ShellExecutionOptions,
-): Promise<BackgroundCompletion<BashToolDetails | undefined>> {
+): Promise<TaskCompletion<BashToolDetails | undefined>> {
 	const { operations, context, managed, signal, timeout } = options;
 	const output = new OutputAccumulator({ tempFilePrefix: options.tempFilePrefix, persistFromStart: !!managed });
 	let outputError: Error | undefined;
@@ -103,7 +102,7 @@ export async function runShellCommand(
 		if (outputError) return;
 		outputError = error instanceof Error ? error : new Error(String(error));
 		try {
-			if (managed) managed.host.kill(managed.control.id);
+			if (managed) managed.control.requestCancel();
 		} catch {
 			// Late data must not throw through a process observer.
 		}
@@ -196,7 +195,7 @@ export async function runShellCommand(
 				throw error;
 			}
 			// Detach must check a silent foreground log too, preserving bytes already written.
-			unsubscribe = managed.host.subscribe(checkOutputLimit);
+			unsubscribe = managed.control.onModeChange(checkOutputLimit);
 		}
 		publish();
 		let failure: ShellFailure | undefined;

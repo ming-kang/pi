@@ -1,38 +1,34 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { afterEach, describe, expect, it } from "vitest";
-import { BackgroundService } from "../src/core/background/service.ts";
-import { BackgroundSession } from "../src/core/background/session.ts";
-import type {
-	BackgroundCompletion,
-	BackgroundControl,
-	BackgroundKind,
-	BackgroundTask,
-} from "../src/core/background/types.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
+import { TaskRuntime } from "../src/core/tasks/runtime.ts";
+import { TaskSession } from "../src/core/tasks/session.ts";
+import type { TaskCompletion, TaskControl, TaskKind, TaskSnapshot } from "../src/core/tasks/types.ts";
 
 const result = (text: string): AgentToolResult<undefined> => ({
 	content: [{ type: "text", text }],
 	details: undefined,
 });
-const services: BackgroundService[] = [];
-const hosts: BackgroundSession[] = [];
+const services: TaskRuntime[] = [];
+const hosts: TaskSession[] = [];
 afterEach(() => {
 	for (const host of hosts.splice(0)) host.dispose();
 	for (const service of services.splice(0)) service.close();
 });
 function service(maxHistory = 32) {
-	const instance = new BackgroundService({ enabled: true, maxHistory, maxActive: 1 });
+	const instance = new TaskRuntime({ enabled: true, maxHistory, maxActive: 1 });
 	services.push(instance);
 	return instance;
 }
-function launch(bg: BackgroundService, kind: BackgroundKind, background = false, text = "saved report") {
-	let control!: BackgroundControl<undefined>;
+function launch(bg: TaskRuntime, kind: TaskKind, background = false, text = "saved report") {
+	let control!: TaskControl<undefined>;
 	let finish!: () => void;
-	const completion = new Promise<BackgroundCompletion<undefined>>((resolve) => {
+	const completion = new Promise<TaskCompletion<undefined>>((resolve) => {
 		finish = () => resolve({ result: result(text) });
 	});
 	const caller = bg.execute({
 		kind,
+		format: kind === "bash" ? "log" : "report",
 		title: kind,
 		toolCallId: "call",
 		background,
@@ -44,7 +40,7 @@ function launch(bg: BackgroundService, kind: BackgroundKind, background = false,
 	});
 	return { control, caller, finish };
 }
-async function complete(bg: BackgroundService, kind: BackgroundKind, background = false, text?: string) {
+async function complete(bg: TaskRuntime, kind: TaskKind, background = false, text?: string) {
 	const run = launch(bg, kind, background, text);
 	if (background) expect((await run.caller).kind).toBe("background");
 	run.finish();
@@ -53,12 +49,13 @@ async function complete(bg: BackgroundService, kind: BackgroundKind, background 
 	bg.markDelivered(run.control.id);
 	return run.control.id;
 }
-function saved(id: string, endedAt: number, overrides: Partial<BackgroundTask> = {}) {
+function saved(id: string, endedAt: number, overrides: Partial<TaskSnapshot> = {}) {
 	return {
 		version: 2,
 		task: {
 			id,
 			kind: "bash",
+			format: "log",
 			mode: "foreground",
 			title: id,
 			toolCallId: id,
@@ -68,15 +65,15 @@ function saved(id: string, endedAt: number, overrides: Partial<BackgroundTask> =
 			endedAt,
 			result: result(id),
 			...overrides,
-		} satisfies BackgroundTask,
+		} satisfies TaskSnapshot,
 	};
 }
 
 describe("independent foreground shell history", () => {
 	it.each([
-		{ kind: "bash" as const, background: true },
-		{ kind: "subagent" as const, background: true },
-		{ kind: "subagent" as const, background: false },
+		{ kind: "bash" as const, format: "log" as const, background: true },
+		{ kind: "subagent", format: "report" as const, background: true },
+		{ kind: "subagent", format: "report" as const, background: false },
 	])("keeps completed $kind, background=$background after 100 foreground shells", async ({ kind, background }) => {
 		const bg = service();
 		const id = await complete(bg, kind, background);
@@ -125,8 +122,8 @@ describe("independent foreground shell history", () => {
 	it.each([false, true])("restores both histories independently, reverse input=%s", async (reverse) => {
 		const bg = service();
 		const records = [
-			saved("subagent-background", 1, { kind: "subagent", mode: "background" }),
-			saved("subagent-foreground", 2, { kind: "subagent" }),
+			saved("subagent-background", 1, { kind: "subagent", format: "report", mode: "background" }),
+			saved("subagent-foreground", 2, { kind: "subagent", format: "report" }),
 			...Array.from({ length: 100 }, (_, index) => saved(`bash-${index}`, index + 3)),
 		];
 		bg.restoreHistory(reverse ? records.reverse() : records);
@@ -143,7 +140,7 @@ describe("independent foreground shell history", () => {
 		const id = await complete(bg, "bash");
 		bg.restoreHistory([
 			saved("bash-extra", 3),
-			saved("subagent-restored", 1, { kind: "subagent", mode: "background" }),
+			saved("subagent-restored", 1, { kind: "subagent", format: "report", mode: "background" }),
 		]);
 		expect(bg.list().map((task) => task.id)).toEqual([id, "subagent-restored"]);
 		expect((await bg.read(id)).text).toBe("saved report");
@@ -155,9 +152,12 @@ describe("independent foreground shell history", () => {
 		for (let i = 0; i < 3; i++) {
 			const record = saved(`bash-pinned-${i}`, i);
 			bg.restoreHistory([record]);
-			releases.push(bg.pin(record.task.id));
+			releases.push(bg.retain(record.task.id));
 		}
-		bg.restoreHistory([saved("bash-newer-shell", 100), saved("subagent-older-task", 1, { kind: "subagent" })]);
+		bg.restoreHistory([
+			saved("bash-newer-shell", 100),
+			saved("subagent-older-task", 1, { kind: "subagent", format: "report" }),
+		]);
 		expect(bg.list()).toHaveLength(4);
 		expect(bg.get("subagent-older-task").status).toBe("completed");
 		expect(() => bg.get("bash-newer-shell")).toThrow("Unknown");
@@ -168,7 +168,7 @@ describe("independent foreground shell history", () => {
 	it("releases and restores both histories when returning to a branch", async () => {
 		const bg = service(1);
 		const branchA = [
-			saved("subagent-A", 1, { kind: "subagent", anchorId: "A" }),
+			saved("subagent-A", 1, { kind: "subagent", format: "report", anchorId: "A" }),
 			saved("bash-A", 2, { anchorId: "A" }),
 		];
 		const branchB = [
@@ -188,7 +188,7 @@ describe("independent foreground shell history", () => {
 
 	it("restores completed subagents from the session journal after runtime replacement", async () => {
 		const manager = SessionManager.inMemory();
-		const host = new BackgroundSession({
+		const host = new TaskSession({
 			manager,
 			role: "main",
 			canDeliver: () => false,

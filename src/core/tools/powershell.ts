@@ -6,11 +6,10 @@ import {
 	type BashToolDetails,
 	type BashToolInput,
 	type BashToolOptions,
-	type createBashTool,
 	createLocalShellOperations,
 	createShellToolDefinition,
 	type ShellToolConfig,
-} from "./bash.ts";
+} from "./shell-tool.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
 const UTF8_OUTPUT_PREFIX = "try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}\n";
@@ -56,7 +55,7 @@ export function createPowerShellToolDefinition(
 	});
 }
 
-export function createPowerShellTool(cwd: string, options?: PowerShellToolOptions): ReturnType<typeof createBashTool> {
+export function createPowerShellTool(cwd: string, options?: PowerShellToolOptions) {
 	const definition = createPowerShellToolDefinition(cwd, options);
 	const tool = wrapToolDefinition(definition);
 	Object.assign(tool, {

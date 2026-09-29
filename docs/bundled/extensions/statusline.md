@@ -56,9 +56,9 @@ CTX 2.1%/1.0M                    ↑13k ↓13k R440k CH99.4% $0.074
   out it is dropped so CTX and usage stay readable. Plain text is muted;
   strings that already carry ANSI color are left unchanged.
 
-Background billing uses the first valid `background-usage` record per execution ID; managed foreground results omit duplicate `usage`. Opening `/bg`, detaching, or repeating `bg read`/`wait` does not add billing. Accrued worker retry, cancellation, failure, and provider-supplied compaction usage is included when settled; missing usage is not fabricated. Quarantined late settlements are excluded from active totals. This does not change the footer's active-branch scope (session-wide statistics can include other branches), parent CTX estimate, or latest-parent-request `CH`. See the [persisted record format](../../session-format.md#background-records).
+Background billing uses the first valid `task-usage` record per execution ID; managed foreground results omit duplicate `usage`. Opening `/tasks`, detaching, or repeating `tasks read`/`wait` does not add billing. Accrued worker retry, cancellation, failure, and provider-supplied compaction usage is included when settled; missing usage is not fabricated. Quarantined late settlements are excluded from active totals. This does not change the footer's active-branch scope (session-wide statistics can include other branches), parent CTX estimate, or latest-parent-request `CH`. See the [persisted record format](../../session-format.md#background-records).
 
-The Background extension can supply centered status text such as `bg 2 active · 1 finished`. These counts cover managed executions, including foreground ones; worker rows are not separate groups. The old prompt-stall watchdog and `waiting for input` counts are no longer generated.
+The built-in Tasks UI can supply centered status text such as `tasks 2 active · 1 finished`. These counts cover backgrounded executions; worker rows are not separate groups. The old prompt-stall watchdog and `waiting for input` counts are no longer generated.
 
 Zero-value usage fields are omitted. Without any accounted usage, the right side of line 2 is empty; extension status stays centered either way.
 

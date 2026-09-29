@@ -1,6 +1,6 @@
 # subagent — isolated delegation
 
-Adds the `subagent` tool and `/agents` settings command. It delegates bounded work to isolated in-process `AgentSession` workers; the parent can wait in the foreground or hand the entire invocation to the session-owned [Background service](background.md). This is not a persistent fleet-management system.
+Adds the `subagent` tool and `/agents` settings command. It delegates bounded work to isolated in-process `AgentSession` workers; the parent can wait in the foreground or hand the entire invocation to the session-owned [Background service](../tasks.md). This is not a persistent fleet-management system.
 
 ## Tool contract
 
@@ -26,7 +26,7 @@ Each item has:
 
 ```text
 prompt       Required self-contained worker briefing
-description? Short task label for the /bg list, live rows, and report headings; derived from the prompt when omitted
+description? Short task label for the /tasks list, live rows, and report headings; derived from the prompt when omitted
 agent?       explorer or general; defaults to explorer
 cwd?         Worker directory; relative paths resolve against the parent working directory
 ```
@@ -81,13 +81,13 @@ Only `explorer` and `general` keys are valid. A malformed, unsupported, unreadab
 ## Lifecycle and retry
 
 - By default, the parent call waits until every worker reaches a terminal state. In interactive mode, Ctrl+B hands all eligible foreground invocations to Background without restarting workers or releasing occupied gate slots.
-- Parent abort cancels foreground-owned work, but detached work continues. `bg kill` stops an entire group, including queued workers.
+- Parent abort cancels foreground-owned work, but detached work continues. `tasks kill` stops an entire group, including queued workers.
 - `/reload`, `/new`, `/resume`, `/fork`, and session shutdown cancel and clean up owned active and queued workers; forks never copy live execution handles. `/tree` cancels work whose launch anchor is outside the destination branch.
 - Provider auto-retry remains visible under the expanded task Outcome as `Retrying (n/m) in Xs`.
 - A retryable failure that produced no turns or tool use may be retried at task level up to two more times. Runs with partial work are never restarted.
 - Retry backoff does not hold a concurrency slot; another queued worker can run while the failed task waits.
 - Cancellation of the owning execution interrupts queued and retrying workers immediately.
-- Background completion is delivered as one bounded group summary, with reports in input order, through the host's normal prompt queueing: steered into a running turn right after its current tool batch, or as its own turn when the session is idle. Its saved card has independent profile/status/report/error fields and explicit report-truncation flags; report text is never reparsed as worker metadata. Every worker gets a bounded report share. `bg wait` can deliver the terminal result instead; repeated `bg read` calls do not trigger notifications or billing.
+- Background completion is delivered as one bounded group summary, with reports in input order, through the host's normal prompt queueing: steered into a running turn right after its current tool batch, or as its own turn when the session is idle. Its saved card has independent profile/status/report/error fields and explicit report-truncation flags; report text is never reparsed as worker metadata. Every worker gets a bounded report share. `tasks wait` can deliver the terminal result instead; repeated `tasks read` calls do not trigger notifications or billing.
 - Managed worker usage settles through an independent persisted ledger, not through panel visits or result reads. Accrued usage from retries, failures, cancellations, and provider-supplied worker compaction is retained; missing provider usage is not fabricated. Worker tokens do not count as parent context occupancy.
 
 Child sessions share the parent's canonical model/authentication runtime, so extension-registered providers and current credentials do not need to be mirrored into a second runtime.
@@ -96,9 +96,9 @@ Background support is enabled by interactive mode. Built-in print, JSON, and RPC
 
 ## Transcript UI
 
-After handoff, the transcript row is a settled submission snapshot, not a still-pending worker view. Use `/bg` for live group/worker progress and outcomes: wide terminals show list and detail side by side, narrow terminals enter detail from the list. Worker display numbers there are stable within the extension runtime; transcript ordinals below remain local input positions. Opening detail only observes work and does not make the parent wait again.
+After handoff, the transcript row is a settled submission snapshot, not a still-pending worker view. Use `/tasks` for live group/worker progress and outcomes: wide terminals show list and detail side by side, narrow terminals enter detail from the list. Worker display numbers there are stable within the extension runtime; transcript ordinals below remain local input positions. Opening detail only observes work and does not make the parent wait again.
 
-Completed groups remain in `/bg` under **Finished** whether they ran in the foreground or background; foreground groups keep an `fg` tag. Subagent groups share a bounded history with background shell tasks, separate from foreground shell logs, so ordinary shell commands cannot evict their reports. The same independent histories restore from the selected session branch after reload or restart.
+Completed groups remain in `/tasks` under **Finished** whether they ran in the foreground or background; foreground groups keep an `fg` tag. Subagent groups share a bounded history with background shell tasks, separate from foreground shell logs, so ordinary shell commands cannot evict their reports. The same independent histories restore from the selected session branch after reload or restart.
 
 Pi's native tool chrome owns the aggregate `● Subagent` call marker and the dim continuation rail. The collapsed view is a compact flow containing one cell per task:
 
@@ -145,4 +145,4 @@ Full child transcripts are not stored separately. Activity, errors, reports, usa
 
 ## Deliberate non-features
 
-There are no custom profiles, independently backgrounded workers, cross-session persistent worker identities, unread state, fleet panel, per-worker send/stop/resume control plane, chain mode, swarm/coordinator, worktree isolation, nested agents, MCP, hooks, or agent memory. The shared `/bg` panel and whole-group cancellation/completion summaries are the supported background controls.
+There are no custom profiles, independently backgrounded workers, cross-session persistent worker identities, unread state, fleet panel, per-worker send/stop/resume control plane, chain mode, swarm/coordinator, worktree isolation, nested agents, MCP, hooks, or agent memory. The shared `/tasks` panel and whole-group cancellation/completion summaries are the supported background controls.

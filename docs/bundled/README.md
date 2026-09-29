@@ -9,7 +9,6 @@ These hidden built-ins use the same public Extension API available to external e
 | Feature | Tool or command | Purpose |
 |---|---|---|
 | [`llama.cpp`](../llama-cpp.md) | `/llama` | Manage models served by the local llama.cpp router |
-| [Background](extensions/background.md) | `bg`, `/bg` | Run and manage background shell commands with automatic completion notices |
 | [BTW](extensions/btw.md) | `/btw [question]` | Ask temporary side questions with the current context while the main task continues |
 | [DeepWiki](extensions/deepwiki.md) | `deepwiki` | Query indexed public GitHub repository documentation |
 | [Question](extensions/question.md) | `question` | Ask structured questions through native interactive UI |
@@ -18,6 +17,10 @@ These hidden built-ins use the same public Extension API available to external e
 | [Subagent](extensions/subagent.md) | `subagent`, `/agents` | Delegate bounded work to isolated child Pi sessions |
 | [Todo](extensions/todo.md) | `todo`, `/todos` | Track ordered multi-step work in a compact one-line widget |
 | [Web Search](extensions/web-search.md) | `web_search` | Search the live web through MiniMax and DeepSeek with fused results |
+
+## Tasks
+
+[Tasks](tasks.md) is a built-in capability, with the `tasks` tool and `/tasks` panel for native shell commands and extension-owned work. Ctrl+B hands foreground work to the background without restarting it.
 
 ## Context safety
 

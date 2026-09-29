@@ -102,7 +102,7 @@ export function taskLabel(task: Pick<SubagentTask, "prompt"> & { description?: s
 	return truncate(firstPlainLine(task.prompt), 80);
 }
 
-/** Group title shown in the /bg list, status line, and completion notification. */
+/** Group title shown in the /tasks list, status line, and completion notification. */
 export function subagentGroupTitle(tasks: readonly SubagentTask[]): string {
 	const labels = tasks.map((task) => taskLabel(task));
 	if (labels.length === 1) return truncate(`Subagent · ${labels[0]}`, 100);

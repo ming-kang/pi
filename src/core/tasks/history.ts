@@ -1,15 +1,9 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import {
-	BACKGROUND_DETAILS_BYTES,
-	BACKGROUND_RESULT_BYTES,
-	BACKGROUND_TITLE_BYTES,
-	boundedResult,
-	boundText,
-} from "./output.ts";
-import { readBackgroundProjection } from "./presentation.ts";
-import type { BackgroundTask } from "./types.ts";
+import { boundedResult, boundText, TASK_RESULT_BYTES, TASK_TITLE_BYTES } from "./output.ts";
+import { readTaskProjection } from "./presentation.ts";
+import type { TaskSnapshot } from "./types.ts";
 
-export const BACKGROUND_HISTORY_VERSION = 2;
+export const TASK_HISTORY_VERSION = 2;
 
 /** Read persisted data properties only; never invoke getters or custom serialization. */
 function dataObject(value: unknown): Record<string, unknown> {
@@ -32,47 +26,17 @@ function historyString(value: unknown, bytes: number, exact = false): string {
 	return boundText(value, bytes);
 }
 
-/** Bound traversal before serialization, and omit unsupported/oversized details intact. */
-function historyDetails(value: unknown): unknown {
-	let budget = BACKGROUND_DETAILS_BYTES;
-	function copy(value: unknown, depth: number): unknown {
-		if (--budget < 0 || depth > 32) throw new Error("History details too large");
-		if (value === null || typeof value === "boolean") return value;
-		if (typeof value === "number" && Number.isFinite(value)) return value;
-		if (typeof value === "string") {
-			budget -= value.length;
-			if (budget < 0) throw new Error("History details too large");
-			return value;
-		}
-		if (Array.isArray(value)) {
-			if (value.length > budget) throw new Error("History details too large");
-			return Array.from({ length: value.length }, (_, index) => copy(field(value, String(index)), depth + 1));
-		}
-		const object = dataObject(value);
-		const out: Record<string, unknown> = Object.create(null);
-		for (const key in object) {
-			if (!Object.hasOwn(object, key)) continue;
-			budget -= key.length + 3;
-			out[key] = copy(field(object, key), depth + 1);
-		}
-		return out;
-	}
-	try {
-		return copy(value, 0);
-	} catch {
-		return undefined;
-	}
-}
-
-export function parseBackgroundHistory(record: unknown): BackgroundTask | undefined {
+export function parseTaskHistory(record: unknown): TaskSnapshot | undefined {
 	try {
 		const envelope = dataObject(record);
-		if (field(envelope, "version") !== BACKGROUND_HISTORY_VERSION) return undefined;
+		if (field(envelope, "version") !== TASK_HISTORY_VERSION) return undefined;
 		const source = dataObject(field(envelope, "task"));
 		const kind = field(source, "kind");
 		const mode = field(source, "mode");
 		const status = field(source, "status");
-		if (kind !== "bash" && kind !== "subagent") return undefined;
+		if (typeof kind !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(kind)) return undefined;
+		const format = field(source, "format");
+		if (format !== undefined && format !== "log" && format !== "report") return undefined;
 		if (mode !== "foreground" && mode !== "background") return undefined;
 		if (
 			status !== "completed" &&
@@ -94,14 +58,15 @@ export function parseBackgroundHistory(record: unknown): BackgroundTask | undefi
 		)
 			return undefined;
 		const anchor = field(source, "anchorId");
-		const task: BackgroundTask = {
+		const task: TaskSnapshot = {
 			id: historyString(field(source, "id"), 512, true),
 			kind,
+			format: format ?? "report",
 			mode,
 			status,
 			startedAt,
 			endedAt,
-			title: historyString(field(source, "title"), BACKGROUND_TITLE_BYTES),
+			title: historyString(field(source, "title"), TASK_TITLE_BYTES),
 			toolCallId: historyString(field(source, "toolCallId"), 512, true),
 			anchorId: anchor === null ? null : historyString(anchor, 8192, true),
 		};
@@ -128,7 +93,7 @@ export function parseBackgroundHistory(record: unknown): BackgroundTask | undefi
 		if (task.command !== undefined && task.command !== field(source, "command")) task.commandTruncated = true;
 		const projection = field(source, "projection");
 		if (projection !== undefined) {
-			task.projection = readBackgroundProjection(projection);
+			task.projection = readTaskProjection(projection);
 		}
 		const result = field(source, "result");
 		if (result !== undefined) {
@@ -136,7 +101,7 @@ export function parseBackgroundHistory(record: unknown): BackgroundTask | undefi
 			const blocks = field(object, "content");
 			if (!Array.isArray(blocks)) return undefined;
 			const content: AgentToolResult<unknown>["content"] = [];
-			let remaining = BACKGROUND_RESULT_BYTES;
+			let remaining = TASK_RESULT_BYTES;
 			for (let index = 0; index < blocks.length && remaining > 0; index++) {
 				const block = dataObject(field(blocks, String(index)));
 				const type = field(block, "type");
@@ -149,7 +114,7 @@ export function parseBackgroundHistory(record: unknown): BackgroundTask | undefi
 				remaining -= Math.max(1, Buffer.byteLength(text));
 			}
 			if (content.length < blocks.length) task.resultTruncated = true;
-			task.result = boundedResult({ content, details: historyDetails(field(object, "details")) });
+			task.result = boundedResult({ content, details: undefined });
 		}
 		return task;
 	} catch {

@@ -6,20 +6,20 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-	BACKGROUND_DETAILS_BYTES,
-	BACKGROUND_RESULT_BYTES,
 	boundedResult,
 	boundText,
 	readOutputSlice,
-} from "../src/core/background/output.ts";
-import { BackgroundService } from "../src/core/background/service.ts";
+	TASK_DETAILS_BYTES,
+	TASK_RESULT_BYTES,
+} from "../src/core/tasks/output.ts";
+import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import {
-	type BackgroundCompletion,
-	type BackgroundControl,
-	type BackgroundExecution,
-	BackgroundLookupError,
-	SUBAGENT_BACKGROUND_REJECTION,
-} from "../src/core/background/types.ts";
+	TASK_BACKGROUND_REJECTION,
+	type TaskCompletion,
+	type TaskControl,
+	type TaskExecution,
+	TaskLookupError,
+} from "../src/core/tasks/types.ts";
 
 const result = (text = "done"): AgentToolResult<{ ok: boolean }> => ({
 	content: [{ type: "text", text }],
@@ -37,16 +37,17 @@ function deferred<T>() {
 	});
 	return { promise, resolve, reject };
 }
-function job(overrides: Partial<BackgroundExecution<{ ok: boolean }>> = {}) {
-	const completion = deferred<BackgroundCompletion<{ ok: boolean }>>();
-	let control!: BackgroundControl<{ ok: boolean }>;
-	const run = vi.fn((next: BackgroundControl<{ ok: boolean }>) => {
+function job(overrides: Partial<TaskExecution<{ ok: boolean }>> = {}) {
+	const completion = deferred<TaskCompletion<{ ok: boolean }>>();
+	let control!: TaskControl<{ ok: boolean }>;
+	const run = vi.fn((next: TaskControl<{ ok: boolean }>) => {
 		control = next;
 		next.accept();
 		return completion.promise;
 	});
-	const execution: BackgroundExecution<{ ok: boolean }> = {
+	const execution: TaskExecution<{ ok: boolean }> = {
 		kind: "bash",
+		format: "log",
 		title: "test",
 		toolCallId: "call",
 		run,
@@ -61,9 +62,9 @@ function job(overrides: Partial<BackgroundExecution<{ ok: boolean }>> = {}) {
 		},
 	};
 }
-const services: BackgroundService[] = [];
-function service(options: ConstructorParameters<typeof BackgroundService>[0] = {}) {
-	const instance = new BackgroundService({ enabled: true, ...options });
+const services: TaskRuntime[] = [];
+function service(options: ConstructorParameters<typeof TaskRuntime>[0] = {}) {
+	const instance = new TaskRuntime({ enabled: true, ...options });
 	services.push(instance);
 	return instance;
 }
@@ -72,22 +73,25 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
-function lookupError(run: () => unknown): BackgroundLookupError {
+function lookupError(run: () => unknown): TaskLookupError {
 	try {
 		run();
 	} catch (error) {
-		expect(error).toBeInstanceOf(BackgroundLookupError);
-		return error as BackgroundLookupError;
+		expect(error).toBeInstanceOf(TaskLookupError);
+		return error as TaskLookupError;
 	}
 	throw new Error("expected a lookup failure");
 }
 
-describe("BackgroundService execution ownership", () => {
+describe("TaskRuntime execution ownership", () => {
 	it("atomically detaches every silent foreground invocation exactly once", async () => {
 		const bg = service();
 		const parent = new AbortController();
 		const update = vi.fn();
-		const jobs = [job({ signal: parent.signal, onUpdate: update }), job({ kind: "subagent", signal: parent.signal })];
+		const jobs = [
+			job({ signal: parent.signal, onUpdate: update }),
+			job({ kind: "subagent", format: "report", signal: parent.signal }),
+		];
 		const calls = jobs.map((item) => bg.execute(item.execution));
 		jobs[0]!.control.publish(result("progress"));
 		const observed: string[][] = [];
@@ -113,8 +117,8 @@ describe("BackgroundService execution ownership", () => {
 
 	it("waits for explicit whole-invocation acceptance after detach", async () => {
 		const bg = service();
-		const gate = deferred<BackgroundCompletion<{ ok: boolean }>>();
-		let control!: BackgroundControl<{ ok: boolean }>;
+		const gate = deferred<TaskCompletion<{ ok: boolean }>>();
+		let control!: TaskControl<{ ok: boolean }>;
 		const parent = new AbortController();
 		const settled = vi.fn();
 		const call = bg.execute(
@@ -156,7 +160,7 @@ describe("BackgroundService execution ownership", () => {
 
 	it("preserves async preflight failure after a detach request", async () => {
 		const bg = service();
-		const gate = deferred<BackgroundCompletion<{ ok: boolean }>>();
+		const gate = deferred<TaskCompletion<{ ok: boolean }>>();
 		const call = bg.execute(job({ run: () => gate.promise }).execution);
 		const rejected = expect(call).rejects.toThrow("preflight");
 		bg.detachForeground();
@@ -205,11 +209,13 @@ describe("BackgroundService execution ownership", () => {
 		parent.abort(new Error("already cancelled"));
 		const item = job({ signal: parent.signal });
 		await expect(service().execute(item.execution)).rejects.toThrow("already cancelled");
-		await expect(service({ enabled: false }).execute(job().execution)).rejects.toThrow("not available");
-		const worker = service({ role: "subagent" });
+		await expect(service({ enabled: false }).execute(job({ background: true }).execution)).rejects.toThrow(
+			"not available",
+		);
+		const worker = service({ backgroundAllowed: false });
 		worker.setEnabled(true);
 		expect(worker.enabled).toBe(false);
-		await expect(worker.execute(item.execution)).rejects.toThrow(SUBAGENT_BACKGROUND_REJECTION);
+		await expect(worker.execute({ ...item.execution, background: true })).rejects.toThrow(TASK_BACKGROUND_REJECTION);
 		const closed = service();
 		closed.close();
 		closed.setEnabled(true);
@@ -262,7 +268,7 @@ describe("BackgroundService execution ownership", () => {
 		item.control.publish(result("late"));
 		item.control.setOutputPath("late-path");
 		expect(listener).toHaveBeenCalledTimes(count);
-		expect(bg.get(item.control.id).result).toEqual(result("final"));
+		expect(bg.get(item.control.id).result).toEqual({ ...result("final"), details: undefined });
 		unsubscribe();
 	});
 });
@@ -289,7 +295,7 @@ describe("delivery and accounting", () => {
 			totalTokens: 3,
 			cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, total: 3 },
 		};
-		let bg!: BackgroundService;
+		let bg!: TaskRuntime;
 		const onSettled = vi.fn(() => {
 			expect(bg.pendingNotifications()).toEqual([]);
 		});
@@ -301,7 +307,10 @@ describe("delivery and accounting", () => {
 		item.completion.resolve({ result: { ...result(), usage } });
 		expect(await call).toEqual({ kind: "result", result: result(), status: "completed", error: undefined });
 		expect(onSettled).toHaveBeenCalledTimes(1);
-		expect(onSettled.mock.calls[0]).toEqual([expect.objectContaining({ result: result() }), usage]);
+		expect(onSettled.mock.calls[0]).toEqual([
+			expect.objectContaining({ result: { ...result(), details: undefined } }),
+			usage,
+		]);
 		await bg.read(item.control.id);
 		await bg.wait(item.control.id);
 		expect(onSettled).toHaveBeenCalledTimes(1);
@@ -453,7 +462,7 @@ describe("bounded lifecycle and snapshots", () => {
 		const bg = service({ maxHistory: 1, maxActive: 1 });
 		const first = job();
 		const call = bg.execute(first.execution);
-		const unpin = bg.pin(first.control.id);
+		const unpin = bg.retain(first.control.id);
 		first.completion.resolve({ result: result() });
 		await call;
 		for (let i = 0; i < 3; i++) await bg.execute(job({ run: async () => ({ result: result() }) }).execution);
@@ -523,13 +532,13 @@ describe("bounded lifecycle and snapshots", () => {
 		const call = bg.execute(item.execution);
 		item.control.publish(result(huge), {
 			text: huge,
-			workers: Array.from({ length: 99 }, () => ({
+			items: Array.from({ length: 99 }, () => ({
 				id: huge,
 				label: huge,
 				status: huge,
-				prompt: huge,
+				input: huge,
 				activity: huge,
-				profile: huge,
+				category: huge,
 				description: huge,
 				report: { text: huge, truncated: false },
 			})),
@@ -537,16 +546,16 @@ describe("bounded lifecycle and snapshots", () => {
 		const snapshot = bg.get(item.control.id);
 		expect(Buffer.byteLength(snapshot.title)).toBeLessThanOrEqual(1024);
 		expect(Buffer.byteLength(snapshot.command!)).toBeLessThanOrEqual(8192);
-		expect(snapshot.projection?.workers).toHaveLength(8);
+		expect(snapshot.projection?.items).toHaveLength(8);
 		expect(Buffer.byteLength(JSON.stringify(snapshot.projection))).toBeLessThan(120 * 1024);
 		expect(Buffer.byteLength((await bg.read(item.control.id, { bytes: Infinity })).text)).toBeLessThanOrEqual(8192);
 		const details = { large: huge };
 		const stored = boundedResult({ content: [{ type: "text", text: huge }], details });
 		expect(stored.details).toBeUndefined();
 		expect(Buffer.byteLength(stored.content[0]!.type === "text" ? stored.content[0]!.text : "")).toBeLessThanOrEqual(
-			BACKGROUND_RESULT_BYTES,
+			TASK_RESULT_BYTES,
 		);
-		const intact = { nested: ["a".repeat(BACKGROUND_DETAILS_BYTES - 100)] };
+		const intact = { nested: ["a".repeat(TASK_DETAILS_BYTES - 100)] };
 		expect(boundedResult({ content: [], details: intact }).details).toEqual(intact);
 		item.completion.resolve({ result: result() });
 		await call;
@@ -655,8 +664,8 @@ describe("handoff and cleanup races", () => {
 	it("does not hand off cancelled or closed preflight even if accepted afterward", async () => {
 		const bg = service();
 		const parent = new AbortController();
-		const gate = deferred<BackgroundCompletion<{ ok: boolean }>>();
-		let control!: BackgroundControl<{ ok: boolean }>;
+		const gate = deferred<TaskCompletion<{ ok: boolean }>>();
+		let control!: TaskControl<{ ok: boolean }>;
 		const call = bg.execute(
 			job({
 				background: true,
@@ -678,7 +687,7 @@ describe("handoff and cleanup races", () => {
 	});
 
 	it("checks background accounting before exposing candidates even during callback reentry", async () => {
-		let bg!: BackgroundService;
+		let bg!: TaskRuntime;
 		const settled = vi.fn(() => {
 			expect(bg.pendingNotifications()).toEqual([]);
 		});
@@ -732,7 +741,7 @@ describe("owned output leases", () => {
 			const call = bg.execute(item.execution);
 			const cleanup = vi.fn(() => unlink(path));
 			item.control.setOutputPath(path, cleanup);
-			const release = bg.pin(item.control.id);
+			const release = bg.retain(item.control.id);
 			const reading = bg.read(item.control.id);
 			item.completion.resolve({ result: result("final text") });
 			await call;
@@ -755,7 +764,7 @@ describe("owned output leases", () => {
 		await bg.execute(item.execution);
 		const cleanup = vi.fn();
 		item.control.setOutputPath("owned", cleanup);
-		const release = bg.pin(item.control.id);
+		const release = bg.retain(item.control.id);
 		await bg.shutdown(0);
 		expect(cleanup).not.toHaveBeenCalled();
 		item.completion.resolve({ result: result("saved final text") });
@@ -770,8 +779,8 @@ describe("owned output leases", () => {
 
 	it("accepts cleanup registration from preflight finishing after shutdown grace", async () => {
 		const bg = service();
-		let control!: BackgroundControl<{ ok: boolean }>;
-		const gate = deferred<BackgroundCompletion<{ ok: boolean }>>();
+		let control!: TaskControl<{ ok: boolean }>;
+		const gate = deferred<TaskCompletion<{ ok: boolean }>>();
 		const call = bg.execute(
 			job({
 				run: (next) => {
@@ -824,8 +833,8 @@ describe("owned output leases", () => {
 	it("parent cancellation during detached preflight prevents acceptance and restart", async () => {
 		const bg = service();
 		const parent = new AbortController();
-		const gate = deferred<BackgroundCompletion<{ ok: boolean }>>();
-		let control!: BackgroundControl<{ ok: boolean }>;
+		const gate = deferred<TaskCompletion<{ ok: boolean }>>();
+		let control!: TaskControl<{ ok: boolean }>;
 		const call = bg.execute(
 			job({
 				signal: parent.signal,
@@ -888,7 +897,7 @@ describe("bounded UTF-8 output", () => {
 			const output = await bg.read(item.control.id, { bytes: 1_000_000 });
 			expect(output.totalBytes).toBe(200_000);
 			expect(output.truncated).toBe(true);
-			expect(Buffer.byteLength(output.text)).toBe(BACKGROUND_RESULT_BYTES);
+			expect(Buffer.byteLength(output.text)).toBe(TASK_RESULT_BYTES);
 			item.control.setOutputPath(join(dir, "missing"));
 			expect((await bg.read(item.control.id)).readError).toContain("Output could not be read");
 			item.control.setOutputPath(path);

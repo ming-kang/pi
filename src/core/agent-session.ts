@@ -1,3 +1,4 @@
+import { createTasksToolDefinition } from "./tools/tasks.ts";
 /**
  * AgentSession - Core abstraction for agent lifecycle and session management.
  *
@@ -55,8 +56,6 @@ import { processImage } from "../utils/image-process.ts";
 import { sleep } from "../utils/sleep.ts";
 import { normalizeToolResultImages } from "../utils/tool-result-images.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
-import type { BackgroundService } from "./background/service.ts";
-import { BackgroundSession, type QuarantinedBackgroundSettlement } from "./background/session.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import { generateBugReportSummary } from "./bug-report.ts";
 import type { CacheWarmer, CacheWarmingStatus } from "./cache-warmer.ts";
@@ -131,6 +130,8 @@ import {
 	type NormalizedBuildSystemPromptOptions,
 	normalizeBuildSystemPromptOptions,
 } from "./system-prompt.ts";
+import type { TaskRuntime } from "./tasks/runtime.ts";
+import { type QuarantinedTaskSettlement, TaskSession } from "./tasks/session.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
@@ -259,7 +260,7 @@ export interface AgentSessionConfig {
 
 export interface ExtensionBindings {
 	/** Opt in only when the host owns background completion and exit policy. */
-	backgroundEnabled?: boolean;
+	tasksEnabled?: boolean;
 	uiContext?: ExtensionUIContext;
 	mode?: ExtensionMode;
 	commandContextActions?: ExtensionCommandContextActions;
@@ -334,7 +335,7 @@ function estimateMessagesTokens(messages: AgentMessage[]): number {
 // ============================================================================
 
 export class AgentSession {
-	private readonly _backgroundHost: BackgroundSession;
+	private readonly _tasksHost: TaskSession;
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
 	readonly settingsManager: SettingsManager;
@@ -423,7 +424,7 @@ export class AgentSession {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settingsManager = config.settingsManager;
-		this._backgroundHost = new BackgroundSession({
+		this._tasksHost = new TaskSession({
 			manager: this.sessionManager,
 			role: config.executionRole ?? "main",
 			canDeliver: () => {
@@ -477,30 +478,30 @@ export class AgentSession {
 		if (this._initialActiveToolNames === undefined) this._restoreToolsFromTranscript();
 	}
 
-	get background(): BackgroundService {
-		return this._backgroundHost.service;
+	get tasks(): TaskRuntime {
+		return this._tasksHost.service;
 	}
 
-	get quarantinedBackgroundSettlements(): readonly QuarantinedBackgroundSettlement[] {
-		return this._backgroundHost.quarantinedSettlements;
+	get quarantinedTaskSettlements(): readonly QuarantinedTaskSettlement[] {
+		return this._tasksHost.quarantinedSettlements;
 	}
 
 	/** Pause delivery across asynchronous lifecycle/preflight gaps. Nestable. */
-	pauseBackgroundNotifications(): () => void {
-		return this._backgroundHost.pause();
+	pauseTaskNotifications(): () => void {
+		return this._tasksHost.delivery.pause();
 	}
 
 	/** Explicit retry after a host delivery failure; never spins on a timer by itself. */
-	retryBackgroundNotifications(): void {
-		this._backgroundHost.retry();
+	retryTaskNotifications(): void {
+		this._tasksHost.delivery.retry();
 	}
 
 	/**
 	 * Run a lifecycle operation with delivery paused across its asynchronous gaps.
 	 * Lifecycle methods are thin shells over upstream bodies so those keep upstream's shape.
 	 */
-	private async _withBackgroundPaused<T>(operation: () => Promise<T>): Promise<T> {
-		const resumeBackground = this.pauseBackgroundNotifications();
+	private async _withTasksPaused<T>(operation: () => Promise<T>): Promise<T> {
+		const resumeBackground = this.pauseTaskNotifications();
 		try {
 			return await operation();
 		} finally {
@@ -979,7 +980,7 @@ export class AgentSession {
 	 * so a deferred prompt never races a delivery for the same idle gap.
 	 */
 	private async _emitAgentSettled(): Promise<void> {
-		return this._withBackgroundPaused(() => this._emitAgentSettledBody());
+		return this._withTasksPaused(() => this._emitAgentSettledBody());
 	}
 
 	private async _emitAgentSettledBody(): Promise<void> {
@@ -1014,12 +1015,12 @@ export class AgentSession {
 			const pendingIndex = this._pendingNextTurnMessages.indexOf(message);
 			if (pendingIndex !== -1) this._pendingNextTurnMessages.splice(pendingIndex, 1);
 		}
-		this._backgroundHost.messagePersisted(message);
+		this._tasksHost.delivery.messagePersisted(message);
 	}
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = async (event: AgentEvent): Promise<void> => {
-		if (event.type === "message_start") this._backgroundHost.messageStarted(event.message);
+		if (event.type === "message_start") this._tasksHost.delivery.messageStarted(event.message);
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
@@ -1100,7 +1101,7 @@ export class AgentSession {
 			this._lastAssistantToolResults = event.toolResults;
 			this._flushPendingCustomMessages();
 		}
-		if (event.type === "agent_end") this._backgroundHost.agentEnded();
+		if (event.type === "agent_end") this._tasksHost.delivery.agentEnded();
 	};
 
 	private _willRetryAfterAgentEnd(event: Extract<AgentEvent, { type: "agent_end" }>): boolean {
@@ -1298,7 +1299,7 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
-		this._backgroundHost.dispose();
+		this._tasksHost.dispose();
 		try {
 			this.abortRetry();
 			this.abortCompaction();
@@ -1740,7 +1741,7 @@ export class AgentSession {
 			return;
 		}
 		// A user-initiated prompt is the recovery point for failed completion deliveries.
-		this.retryBackgroundNotifications();
+		this.retryTaskNotifications();
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		const preflightResult = options?.preflightResult;
 		let messages: AgentMessage[] | undefined;
@@ -1759,7 +1760,7 @@ export class AgentSession {
 			}
 			// Observer commands above may stay open indefinitely; only real model input owns
 			// the preflight pause, released once the user message is established.
-			resumeBackground = this.pauseBackgroundNotifications();
+			resumeBackground = this.pauseTaskNotifications();
 
 			if (this._compactionAbortController !== undefined) {
 				throw new Error(
@@ -2187,7 +2188,7 @@ export class AgentSession {
 		this._steeringMessages = [];
 		this._followUpMessages = [];
 		this.agent.clearAllQueues();
-		this._backgroundHost.queueCleared();
+		this._tasksHost.delivery.queueCleared();
 		this._emitQueueUpdate();
 		return { steering, followUp };
 	}
@@ -2546,7 +2547,7 @@ export class AgentSession {
 	 * @param customInstructions Optional instructions for the compaction summary
 	 */
 	async compact(customInstructions?: string): Promise<CompactionResult> {
-		return this._withBackgroundPaused(() => this._compactBody(customInstructions));
+		return this._withTasksPaused(() => this._compactBody(customInstructions));
 	}
 
 	private async _compactBody(customInstructions?: string): Promise<CompactionResult> {
@@ -2891,7 +2892,7 @@ export class AgentSession {
 	 * @returns Whether the post-run loop should call `agent.continue()`
 	 */
 	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
-		return this._withBackgroundPaused(() => this._runAutoCompactionBody(reason, willRetry));
+		return this._withTasksPaused(() => this._runAutoCompactionBody(reason, willRetry));
 	}
 
 	private async _runAutoCompactionBody(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
@@ -3067,12 +3068,13 @@ export class AgentSession {
 	}
 
 	async bindExtensions(bindings: ExtensionBindings): Promise<void> {
-		return this._withBackgroundPaused(() => this._bindExtensionsBody(bindings));
+		return this._withTasksPaused(() => this._bindExtensionsBody(bindings));
 	}
 
 	private async _bindExtensionsBody(bindings: ExtensionBindings): Promise<void> {
-		if (bindings.backgroundEnabled !== undefined) {
-			this._backgroundHost.setEnabled(bindings.backgroundEnabled);
+		if (bindings.tasksEnabled !== undefined) {
+			this._tasksHost.setEnabled(bindings.tasksEnabled);
+			this._refreshToolRegistry();
 		}
 		if (bindings.uiContext !== undefined) {
 			this._extensionUIContext = bindings.uiContext;
@@ -3250,7 +3252,7 @@ export class AgentSession {
 				setThinkingLevel: (level) => this.setThinkingLevel(level),
 			},
 			{
-				getBackground: () => this.background,
+				getTasks: () => this.tasks,
 				getModel: () => this.model,
 				getScopedModels: () => this._scopedModels,
 				isIdle: () => this.isIdle,
@@ -3390,6 +3392,13 @@ export class AgentSession {
 			}
 		}
 
+		if (
+			this.tasks.enabled &&
+			this._initialActiveToolNames?.length !== 0 &&
+			this._toolRegistry.has("tasks") &&
+			isAllowedTool("tasks")
+		)
+			nextActiveToolNames.push("tasks");
 		this.setActiveToolsByName([...new Set(nextActiveToolNames)]);
 	}
 
@@ -3417,6 +3426,12 @@ export class AgentSession {
 			Object.entries(baseToolDefinitions).map(([name, tool]) => [name, tool as ToolDefinition]),
 		);
 
+		this._baseToolDefinitions.set(
+			"tasks",
+			createTasksToolDefinition((callId, taskId) =>
+				this._tasksHost.delivery.prepareWait(callId, taskId),
+			) as ToolDefinition,
+		);
 		const extensionsResult = this._resourceLoader.getExtensions();
 		if (options.flagValues) {
 			for (const [name, value] of options.flagValues) {
@@ -3448,21 +3463,21 @@ export class AgentSession {
 	}
 
 	async reload(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
-		return this._withBackgroundPaused(() => this._reloadBody(options));
+		return this._withTasksPaused(() => this._reloadBody(options));
 	}
 
 	private async _reloadBody(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
 		const oldRunner = this._extensionRunner;
 		const previousFlagValues = oldRunner.getFlagValues();
-		this.background.close();
-		await Promise.all([this.background.shutdown(), this.abort()]);
+		this.tasks.close();
+		await Promise.all([this.tasks.shutdown(), this.abort()]);
 		await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" });
 		oldRunner.invalidate();
 		await this.settingsManager.reload();
 		this.syncQueueModesFromSettings();
 		resetApiProviders();
 		await this._resourceLoader.reload();
-		this._backgroundHost.replaceService();
+		this._tasksHost.replaceService();
 		this._buildRuntime({
 			activeToolNames: this.getActiveToolNames(),
 			flagValues: previousFlagValues,
@@ -3470,7 +3485,7 @@ export class AgentSession {
 		});
 
 		const hasBindings =
-			this.background.enabled ||
+			this.tasks.enabled ||
 			this._extensionUIContext ||
 			this._extensionCommandContextActions ||
 			this._extensionShutdownHandler ||
@@ -3798,7 +3813,7 @@ export class AgentSession {
 			label,
 		};
 
-		const resumeBackground = this.pauseBackgroundNotifications();
+		const resumeBackground = this.pauseTaskNotifications();
 
 		// Set up abort controller for summarization
 		this._branchSummaryAbortController = new AbortController();
@@ -3892,7 +3907,7 @@ export class AgentSession {
 				newLeafId = targetId;
 			}
 
-			await this.background.cancelOutsideBranch(
+			await this.tasks.cancelOutsideBranch(
 				new Set(newLeafId === null ? [] : this.sessionManager.getBranch(newLeafId).map((entry) => entry.id)),
 			);
 
@@ -3927,7 +3942,7 @@ export class AgentSession {
 				this.sessionManager.appendLabelChange(targetId, label);
 			}
 
-			this._backgroundHost.restoreHistory();
+			this._tasksHost.restoreHistory();
 
 			// Update finalized context from the canonical session projection.
 			this._refreshFinalizedContext();

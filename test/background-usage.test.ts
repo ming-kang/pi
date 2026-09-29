@@ -2,10 +2,10 @@ import type { Usage } from "@earendil-works/pi-ai/compat";
 import { describe, expect, it } from "vitest";
 import { SessionManager } from "../src/core/session-manager.ts";
 import {
-	BACKGROUND_USAGE_TYPE,
 	getAccountedUsages,
-	getBackgroundUsageRecord,
+	getTaskUsageRecord,
 	getUsageCostBreakdown,
+	TASK_USAGE_TYPE,
 } from "../src/core/usage-totals.ts";
 
 const usage: Usage = {
@@ -19,32 +19,32 @@ const usage: Usage = {
 
 function ledger(data: unknown) {
 	const manager = SessionManager.inMemory();
-	manager.appendCustomEntry(BACKGROUND_USAGE_TYPE, data);
+	manager.appendCustomEntry(TASK_USAGE_TYPE, data);
 	return manager.getEntries()[0];
 }
 
 describe("background usage accounting", () => {
 	it("accepts a JSON round-trip including optional provider usage", () => {
 		const data = { version: 1, taskId: "group-1", usage: { ...usage, reasoning: 5, cacheWrite1h: 10 } };
-		expect(getBackgroundUsageRecord(ledger(JSON.parse(JSON.stringify(data))))).toEqual(data);
+		expect(getTaskUsageRecord(ledger(JSON.parse(JSON.stringify(data))))).toEqual(data);
 	});
 
 	it.each([undefined, null, {}, { version: 2, taskId: "task", usage }, { version: 1, taskId: "", usage }])(
 		"ignores malformed records: %j",
 		(data) => {
-			expect(getBackgroundUsageRecord(ledger(data))).toBeUndefined();
+			expect(getTaskUsageRecord(ledger(data))).toBeUndefined();
 		},
 	);
 
 	it.each([NaN, Infinity, -1, "10", null, undefined])("rejects invalid usage fields: %s", (value) => {
 		for (const field of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"]) {
 			expect(
-				getBackgroundUsageRecord(ledger({ version: 1, taskId: "task", usage: { ...usage, [field]: value } })),
+				getTaskUsageRecord(ledger({ version: 1, taskId: "task", usage: { ...usage, [field]: value } })),
 			).toBeUndefined();
 		}
 		for (const field of ["input", "output", "cacheRead", "cacheWrite", "total"]) {
 			expect(
-				getBackgroundUsageRecord(
+				getTaskUsageRecord(
 					ledger({ version: 1, taskId: "task", usage: { ...usage, cost: { ...usage.cost, [field]: value } } }),
 				),
 			).toBeUndefined();
@@ -88,8 +88,8 @@ describe("background usage accounting", () => {
 		manager.appendMessage({ ...result, toolCallId: "managed" });
 		manager.appendCompaction("summary", root, 100, undefined, false, usage);
 		manager.branchWithSummary(null, "branch", undefined, false, usage);
-		manager.appendCustomEntry(BACKGROUND_USAGE_TYPE, { version: 1, taskId: "managed", usage });
-		manager.appendCustomEntry(BACKGROUND_USAGE_TYPE, { version: 1, taskId: "managed", usage });
+		manager.appendCustomEntry(TASK_USAGE_TYPE, { version: 1, taskId: "managed", usage });
+		manager.appendCustomEntry(TASK_USAGE_TYPE, { version: 1, taskId: "managed", usage });
 		expect(getAccountedUsages(manager.getEntries())).toHaveLength(5);
 		expect(getUsageCostBreakdown(manager.getEntries())).toEqual([
 			{ key: "Tools/summaries", cost: 4, tokens: 400 },

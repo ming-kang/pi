@@ -1,6 +1,6 @@
-# Background tasks and groups
+# Tasks
 
-The `background` extension provides the `bg` management tool and `/bg` panel. The session's core Background service owns execution, cancellation, output, history and completion delivery. The extension does not launch commands or run a second task registry.
+Tasks is a built-in session capability. The `tasks` tool and `/tasks` panel inspect and control native Bash, PowerShell, and extension-owned work. Execution, retained results, and completion delivery have separate core owners; no Background extension is required.
 
 ## Start or detach work
 
@@ -21,17 +21,17 @@ Start a whole Subagent invocation through its native tool:
 
 Omitting `background` keeps the normal foreground wait. A background submission returns an execution reference, not a successful final outcome. `bg create` has been removed; old stored create results and background notifications still render in transcripts.
 
-In interactive mode, **Ctrl+B** moves all eligible foreground shell tasks and Subagent invocations to the background. Once a foreground execution has run for ten seconds and can still move, the statusline shows `Ctrl+B to background`. It works even when `/bg` owns focus. The same execution continues: no cancellation, restart, new worker or timeout reset. It does not detach individual workers, ordinary file tools, or user `!` shell commands.
+In interactive mode, **Ctrl+B** moves all eligible foreground shell tasks and Subagent invocations to the background. Once a foreground execution has run for ten seconds and can still move, the statusline shows `Ctrl+B to background`. It works even when `/tasks` owns focus. The same execution continues: no cancellation, restart, new worker or timeout reset. It does not detach individual workers, ordinary file tools, or user `!` shell commands.
 
 When nothing is eligible, the key is not consumed: it falls through to other bindings instead of reporting a no-op.
 
-Configure `app.backgroundTasks.detach` in `keybindings.json` to change or disable the shortcut. The default `tui.editor.cursorLeft` is now `left`, freeing Ctrl+B. To restore Emacs cursor behavior, disable or rebind detach before assigning Ctrl+B to cursor-left.
+Configure `app.tasks.detach` in `keybindings.json` to change or disable the shortcut. The default `tui.editor.cursorLeft` is now `left`, freeing Ctrl+B. To restore Emacs cursor behavior, disable or rebind detach before assigning Ctrl+B to cursor-left.
 
-Workers cannot start background work themselves. Their system prompt forbids it and the host-assigned worker role rejects `background: true` before command startup; the shared schema remains unchanged. Foreground commands still work. Workers have no `bg` tool and must not bypass the restriction with shell detachment. Only the parent agent or user can background the whole Subagent invocation.
+Workers cannot start background work themselves. Their system prompt forbids it and the host-assigned worker role rejects `background: true` before command startup; the shared schema remains unchanged. Foreground commands still work. Workers have no `tasks` tool and must not bypass the restriction with shell detachment. Only the parent agent or user can background the whole Subagent invocation.
 
 ## Management tool
 
-`bg` observes existing Bash tasks and whole Subagent groups:
+`tasks` observes existing Bash tasks and whole Subagent groups:
 
 | Action | Parameters | Behavior |
 |---|---|---|
@@ -40,7 +40,7 @@ Workers cannot start background work themselves. Their system prompt forbids it 
 | `wait` | `taskId`, optional `waitMs`, `sinceBytes` | Waits within a deadline and returns status plus bounded output/report |
 | `kill` | `taskId` | Requests cancellation of the Bash task or entire Subagent group |
 
-Use the execution ID returned by the native tool or `bg list`. Worker IDs are display identities, not independent management targets. An unknown or stale `taskId` fails with the session's current tasks listed inline (active first, then recent finishes), so the next call can use a real ID without a separate list call; an ambiguous prefix lists exactly the tasks it matched.
+Use the execution ID returned by the native tool or `tasks list`. Worker IDs are display identities, not independent management targets. An unknown or stale `taskId` fails with the session's current tasks listed inline (active first, then recent finishes), so the next call can use a real ID without a separate list call; an ambiguous prefix lists exactly the tasks it matched.
 
 ```json
 { "action": "read", "taskId": "<execution-id>", "mode": "tail", "bytes": 8192 }
@@ -62,7 +62,7 @@ A cancellation request is not proof that execution has stopped. The task can rem
 
 All model-facing management responses, including listings and error messages, are bounded to 50KB and 2,000 lines overall. Repeated reads do not add usage or restart execution. Completion delivery and usage accounting belong to the host, not panel refreshes.
 
-## `/bg` panel
+## `/tasks` panel
 
 The panel opens as a fullscreen overlay framed by horizontal rules, matching Pi's other selectors. Terminals at least 100 columns wide show the task list beside a detail pane; narrower terminals stack the list, a compressed status summary, and the output region vertically.
 
@@ -76,7 +76,7 @@ The detail pane shows an aligned field table — status with mode and runtime, f
 - Foreground rows carry an `fg` tag; foreground/background mode is explicit in the detail status line.
 - Worker detail shows identity/profile, group, model and usage on separate rows that wrap rather than truncate, plus Prompt, Activity and Outcome from the public projection.
 - Opening a view does not reattach the parent wait. Closing it never kills execution.
-- Selected groups are pinned against history eviction until selection changes or the panel closes.
+- Selected tasks retain their snapshots and output until selection changes or the panel closes. Selection does not delay completion notifications.
 - Completed detail stays open. The panel releases its subscriptions, pin and timers on close or session shutdown.
 
 | Default key | Action |
@@ -91,17 +91,17 @@ The detail pane shows an aligned field table — status with mode and runtime, f
 
 Preview positions are retained per row while the panel is open, including across focus changes, updates and resizes. Worker previews start at the top. Shell previews initially follow the tail; scrolling up switches to **browsing**, which keeps that row's current bounded output snapshot while task status continues updating. Explicit downward scrolling to the bottom resumes **following** and reads the latest tail. Neither mode pauses execution. The range counter on the output divider describes the visible lines within the bounded preview, not the entire log. The detail table stays above the scrolling content; on very short terminals, status and diagnostics take priority.
 
-Controls follow `app.backgroundTasks.focusList`, `app.backgroundTasks.focusPreview`, `tui.select.*`, `app.backgroundTasks.kill`, and `app.backgroundTasks.detach`. List paging uses `tui.select.pageUp`/`pageDown`; preview paging uses `tui.editor.pageUp`/`pageDown`, so the two can be rebound independently. Theme colors are semantic. Only visible selected output is read, at most once per second and within a 128KB request budget (the service may impose a smaller bound), with at most 2,000 viewport lines. Settled output is read once. Unselected work continues collecting progress independently of the panel.
+Controls follow `app.tasks.focusList`, `app.tasks.focusPreview`, `tui.select.*`, `app.tasks.kill`, and `app.tasks.detach`. List paging uses `tui.select.pageUp`/`pageDown`; preview paging uses `tui.editor.pageUp`/`pageDown`, so the two can be rebound independently. Theme colors are semantic. Only visible selected output is read, at most once per second and within a 128KB request budget (the service may impose a smaller bound), with at most 2,000 viewport lines. Settled output is read once. Unselected work continues collecting progress independently of the panel.
 
-Outside TUI mode, `/bg` sends a bounded summary through the host notification UI rather than mounting a component (print/JSON notification UI is a no-op). Whether background startup is supported is an explicit host capability; a panel is never required for execution.
+`/tasks` is an interactive built-in command. SDK hosts can inspect `session.tasks` directly; enabled model sessions use the native `tasks` tool. No panel is required for execution.
 
 ## Completion notifications
 
-Interactive `background-completion` messages have a compact collapsed summary: outcome, execution kind, short ID, and a command or group brief. Failures retain a short reason; log paths, output and worker reports stay out of the collapsed view. In fullscreen mode, left-click the notification to expand or collapse that message independently. The blank spacer above it is not a click target. The configured tool-output expansion binding (default Ctrl+O) remains available for toggling output expansion across the transcript.
+Interactive `task-completion` messages have a compact collapsed summary: outcome, execution kind, short ID, and a command or group brief. Failures retain a short reason; log paths, output and worker reports stay out of the collapsed view. In fullscreen mode, left-click the notification to expand or collapse that message independently. The blank spacer above it is not a click target. The configured tool-output expansion binding (default Ctrl+O) remains available for toggling output expansion across the transcript.
 
 Expanded shell notifications separate **Command**, **Directory**, **Result** or **Error**, a bounded plain-text **Output** tail, **Log** and the full execution ID. Expanded Subagent completions show numbered worker profiles and observed statuses, task descriptions, and Markdown **Report** sections; failures keep their reason separate from any partial report. Each saved output/report carries an explicit truncation flag. Screen line limits are independent of source truncation, and every worker retains a report allowance. These are previews of the saved bounded completion.
 
-Rendering reads the self-contained `BackgroundCompletionSnapshot` in message `details`, so `/reload`, history eviction, expired logs and restart do not require a live task lookup. The session generates model-facing `content` from the same facts; `details` never enters model context or usage accounting. Commands containing `Output:`, worker reports containing headings or error-wrapper examples, and literal truncation notices remain ordinary data. See the [snapshot contract](../../session-format.md#background-records).
+Rendering reads the self-contained `TaskCompletionSnapshot` in message `details`, so `/reload`, history eviction, expired logs and restart do not require a live task lookup. The session generates model-facing `content` from the same facts; `details` never enters model context or usage accounting. Commands containing `Output:`, worker reports containing headings or error-wrapper examples, and literal truncation notices remain ordinary data. See the [snapshot contract](../session-format.md#background-records).
 
 Only the current structured completion format is specialized. Older text-only completions and malformed details receive a bounded plain **Details** view; no text reconstruction or migration is performed. Legacy `background-task` notifications keep their existing renderer. HTML export and `/tree` selector labels continue to display the saved message content.
 
@@ -111,22 +111,22 @@ Background execution belongs to the current session runtime, not a daemon. Paren
 
 The panel is an observer, not a cleanup engine. Admission, bounded history/output retention, completion delivery and headless exit policy are enforced by the core service and hosting mode.
 
-Interactive mode enables Background. Built-in print, JSON, and RPC modes and ordinary SDK sessions leave it disabled and reject `background: true`; normal foreground execution remains available. An SDK embedding can explicitly enable it via `session.bindExtensions({ backgroundEnabled: true })`, but must own cancellation, bounded draining, result-driven turns, and shutdown. See [SDK Background execution](../../sdk.md#background-execution).
+Interactive mode enables Background. Built-in print, JSON, and RPC modes and ordinary SDK sessions leave it disabled and reject `background: true`; normal foreground execution remains available. An SDK embedding can explicitly enable it via `session.bindExtensions({ tasksEnabled: true })`, but must own cancellation, bounded draining, result-driven turns, and shutdown. See [SDK Background execution](../sdk.md#background-execution).
 
 Managed shell output is collected continuously from startup, including before detach. Background shell output is capped at 20 MiB; crossing the cap fails and stops the command. Foreground output retains its existing uncapped log behavior: detaching a command already over the background budget stops it without deleting the prior bytes. No timeout is supplied by default, and a supplied timeout remains measured from command startup, in seconds, across detach.
 
 Managed logs are ephemeral: they are retained with the runtime record and cleaned up when that record is evicted or the runtime shuts down. Save needed output elsewhere before then. The core defaults to eight active managed executions and two independent terminal histories: 32 background shell tasks/Subagent groups, plus 32 foreground shell records. Each Subagent invocation counts as one group, whether it ran in the foreground or background. Foreground shell traffic can only evict older foreground shell records. Pending delivery, pins, active reads and cleanup use a separate allowance within the bounded total; pins temporarily defer history eviction, not runtime shutdown. These are service limits, not new user settings.
 
-Terminal snapshots persist as version-2 `background-task-result` custom entries, including the structured presentation projection; usage remains in independent version-1 `background-usage` entries. `/bg` restores only version-2 terminal history from the selected branch, selecting the newest records independently for each history. Older result records are left in the session file and are not migrated or restored. This is observation only: live execution never resumes after restart, and restoration does not replay accounting or completion events. A saved log path is not a durable attachment. See [session format](../../session-format.md#background-records).
+Terminal snapshots persist as version-2 `task-result` custom entries, including the structured presentation projection; usage remains in independent version-1 `task-usage` entries. `/tasks` restores only version-2 terminal history from the selected branch, selecting the newest records independently for each history. Older result records are left in the session file and are not migrated or restored. This is observation only: live execution never resumes after restart, and restoration does not replay accounting or completion events. A saved log path is not a durable attachment. See [session format](../session-format.md#background-records).
 
 Delivered history outside the selected branch can be released and restored on return, so it does not fill the new branch's history budget. Undelivered completions stay protected while their branch is hidden. Pending delivery, pins and active reads use a separate allowance within the total runtime retention cap; restoration respects the same cap.
 
-Completion delivery follows the same queueing path as interactive input. While the agent is running, a completion is steered into that run, so it lands right after the current tool batch — exactly like a message the user types mid-run, and behind any already queued steering. An idle session starts a completion turn instead. User preflight (input hooks, model and authentication checks, compaction) still holds delivery, so a user message is always the first thing a new run sees. One bounded completion is in flight at a time. A Subagent group produces one summary, not a separate wake-up per worker. A terminal `bg wait` coordinates with automatic delivery only after its tool result is persisted: while a `bg wait`, `bg read` or a watched `/bg` row holds a task pinned, that task is not announced, and aborting during output reading does not lose the pending completion. Direct SDK waits remain observational until explicitly acknowledged. Progress and repeated reads do not inject messages or add usage. `agent_settled` still describes the main agent, not the end of all background executions.
+Completion delivery follows the same queueing path as interactive input. While the agent is running, a completion is steered into that run, so it lands right after the current tool batch — exactly like a message the user types mid-run, and behind any already queued steering. An idle session starts a completion turn instead. User preflight (input hooks, model and authentication checks, compaction) still holds delivery, so a user message is always the first thing a new run sees. One bounded completion is in flight at a time. A Subagent group produces one summary, not a separate wake-up per worker. A terminal `tasks wait` coordinates with automatic delivery only after its tool result is persisted: while `tasks wait` prepares a result for persistence, that task is not announced, and aborting during output reading does not lose the pending completion. Direct SDK waits remain observational until explicitly acknowledged. Plain reads and panel selection retain output without delaying notifications. Progress and repeated reads do not inject messages or add usage. `agent_settled` still describes the main agent, not the end of all background executions.
 
-Failed completion delivery leaves the terminal result available for inspection rather than silently discarding it, and warns through the extension error channel. The next user prompt retries delivery automatically; SDK hosts can also call `session.retryBackgroundNotifications()` explicitly after resolving the failure. There is no infinite timer retry loop. A completion that a run emitted but never persisted, and a completion dropped by clearing the queue, fail the same way; one still sitting in the queue when its run ends stays claimed, because the next run delivers that same message.
+Failed completion delivery leaves the terminal result available for inspection rather than silently discarding it, and warns through the extension error channel. The next user prompt retries delivery automatically; SDK hosts can also call `session.retryTaskNotifications()` explicitly after resolving the failure. There is no infinite timer retry loop. A completion that a run emitted but never persisted, and a completion dropped by clearing the queue, fail the same way; one still sitting in the queue when its run ends stays claimed, because the next run delivers that same message.
 
 Queued extension `nextTurn` context accompanies completion turns and stays queued until each message is persisted. A failed or partially persisted turn therefore retries only the context that has not been saved.
 
-If an executor ignores cancellation and settles after bounded cleanup has retired its runtime or branch, the old session quarantines its bounded result and reported usage: the latest 32 records remain in memory, and persisted sessions also append `<session-file>.background-late.jsonl`. These audit records are excluded from active totals and are not automatically reconciled. A completed cleanup grace period is not proof that an uncooperative executor stopped.
+If an executor ignores cancellation and settles after bounded cleanup has retired its runtime or branch, the old session quarantines its bounded result and reported usage: the latest 32 records remain in memory, and persisted sessions also append `<session-file>.tasks-late.jsonl`. These audit records are excluded from active totals and are not automatically reconciled. A completed cleanup grace period is not proof that an uncooperative executor stopped.
 
 The previous extension-owned interactive-prompt stall watchdog was not ported. Pi no longer automatically flags a prompt-looking shell tail as `waiting for input` or sends stall remediation notifications. Use non-interactive commands and inspect/stop stalled work manually; legacy stall notifications still render from saved transcripts.

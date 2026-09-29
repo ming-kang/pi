@@ -1,3 +1,4 @@
+import { renderTasksCall, renderTasksResult } from "../../../modes/interactive/tasks/render.ts";
 /**
  * Built-in tool renderers, without the tools themselves.
  *
@@ -31,6 +32,11 @@ export {
 /** Renderers for every built-in tool, keyed by tool name. */
 export function createAllToolRenderers(): Record<ToolName, ToolRenderers> {
 	return {
+		tasks: {
+			renderCall: (args, theme, context) =>
+				renderTasksCall(args as Parameters<typeof renderTasksCall>[0], theme, context),
+			renderResult: renderTasksResult,
+		},
 		read: readRenderers,
 		bash: createShellRenderers({ name: "bash", prompt: "$" }),
 		powershell: createShellRenderers({ name: "powershell", prompt: "PS>" }),

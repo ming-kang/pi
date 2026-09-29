@@ -25,26 +25,6 @@ export {
 	type SessionStats,
 } from "./core/agent-session.ts";
 export { readStoredCredential } from "./core/auth-storage.ts";
-export { BackgroundService } from "./core/background/service.ts";
-export type {
-	BackgroundCompletion,
-	BackgroundCompletionSnapshot,
-	BackgroundContext,
-	BackgroundControl,
-	BackgroundExecution,
-	BackgroundKind,
-	BackgroundMode,
-	BackgroundProjection,
-	BackgroundRead,
-	BackgroundServiceOptions,
-	BackgroundStatus,
-	BackgroundTask,
-	BackgroundTerminalStatus,
-	BackgroundText,
-	BackgroundToolOutcome,
-	BackgroundWorker,
-	BackgroundWorkerReport,
-} from "./core/background/types.ts";
 export type { CacheWarmingDecision, CacheWarmingStatus } from "./core/cache-warmer.ts";
 // Compaction
 export {
@@ -340,6 +320,26 @@ export {
 	type SkillFrontmatter,
 } from "./core/skills.ts";
 export { createSyntheticSourceInfo } from "./core/source-info.ts";
+export { TaskRuntime } from "./core/tasks/runtime.ts";
+export type {
+	TaskCompletion,
+	TaskCompletionSnapshot,
+	TaskControl,
+	TaskExecution,
+	TaskItem,
+	TaskItemReport,
+	TaskKind,
+	TaskMode,
+	TaskProjection,
+	TaskRead,
+	TaskRuntimeOptions,
+	TaskSnapshot,
+	TaskStatus,
+	TasksContext,
+	TaskTerminalStatus,
+	TaskText,
+	TaskToolOutcome,
+} from "./core/tasks/types.ts";
 export { type EditDiffResult, generateDiffString, generateUnifiedPatch } from "./core/tools/edit-diff.ts";
 // Tools
 export {

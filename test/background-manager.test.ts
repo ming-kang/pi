@@ -2,11 +2,11 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sliceText } from "../src/core/background/output.ts";
-import { BackgroundService } from "../src/core/background/service.ts";
-import type { BackgroundTask, BackgroundWorker } from "../src/core/background/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
-import { type BackgroundManagerHost, BackgroundTasksMenu } from "../src/extensions/background/manager.ts";
+import { sliceText } from "../src/core/tasks/output.ts";
+import { TaskRuntime } from "../src/core/tasks/runtime.ts";
+import type { TaskItem, TaskSnapshot } from "../src/core/tasks/types.ts";
+import { type TasksManagerHost, TasksMenu } from "../src/modes/interactive/tasks/manager.ts";
 import { initTheme, type Theme } from "../src/modes/interactive/theme/theme.ts";
 
 const theme = {
@@ -14,12 +14,13 @@ const theme = {
 	bg: (_: string, text: string) => text,
 	bold: (text: string) => text,
 } as unknown as Theme;
-const menus: BackgroundTasksMenu[] = [];
-function task(id: string, overrides: Partial<BackgroundTask> = {}): BackgroundTask {
+const menus: TasksMenu[] = [];
+function task(id: string, overrides: Partial<TaskSnapshot> = {}): TaskSnapshot {
 	return {
 		id,
 		title: "build",
 		kind: "bash",
+		format: "log",
 		mode: "foreground",
 		status: "running",
 		startedAt: Date.now(),
@@ -31,16 +32,16 @@ function task(id: string, overrides: Partial<BackgroundTask> = {}): BackgroundTa
 		...overrides,
 	};
 }
-function worker(id: string, overrides: Partial<BackgroundWorker> = {}): BackgroundWorker {
+function worker(id: string, overrides: Partial<TaskItem> = {}): TaskItem {
 	return {
 		id,
 		label: "#2 Explorer",
 		status: "running",
-		model: "model/thinking",
+		context: "context/thinking",
 		usage: "1k tokens",
-		prompt: "Inspect module",
+		input: "Inspect module",
 		activity: "Read file.ts",
-		profile: "explorer",
+		category: "explorer",
 		description: "Inspect module",
 		report: { text: "", truncated: false },
 		...overrides,
@@ -52,7 +53,7 @@ function harness(tasks = [task("bash-1")], width = 100, rows = 24, pollIntervalM
 	const releases: string[] = [];
 	const pins: string[] = [];
 	const unsubscribe = vi.fn();
-	const host: BackgroundManagerHost = {
+	const host: TasksManagerHost = {
 		list: () => [...tasks],
 		read: vi.fn(async (id) => ({
 			task: tasks.find((t) => t.id === id)!,
@@ -70,7 +71,7 @@ function harness(tasks = [task("bash-1")], width = 100, rows = 24, pollIntervalM
 			listener = fn;
 			return unsubscribe;
 		},
-		pin: (id) => {
+		retain: (id) => {
 			pins.push(id);
 			return () => {
 				releases.push(id);
@@ -80,7 +81,7 @@ function harness(tasks = [task("bash-1")], width = 100, rows = 24, pollIntervalM
 	const tui = { requestRender: vi.fn(), terminal: { columns: width, rows } };
 	const onClose = vi.fn();
 	const keybindings = new KeybindingsManager();
-	const menu = new BackgroundTasksMenu({ tui, host, theme, keybindings, onClose, pollIntervalMs });
+	const menu = new TasksMenu({ tui, host, theme, keybindings, onClose, pollIntervalMs });
 	menus.push(menu);
 	return {
 		menu,
@@ -103,7 +104,7 @@ function harness(tasks = [task("bash-1")], width = 100, rows = 24, pollIntervalM
 		},
 	};
 }
-describe("BackgroundTasksMenu public service", () => {
+describe("TasksMenu public service", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
 		// Command highlighting and worker Markdown use the shared global theme.
@@ -135,7 +136,7 @@ describe("BackgroundTasksMenu public service", () => {
 	it("keeps animating while a selected output read is pending", async () => {
 		vi.setSystemTime(0);
 		const h = harness([task("bash-1")], 60);
-		let resolve!: (value: Awaited<ReturnType<BackgroundManagerHost["read"]>>) => void;
+		let resolve!: (value: Awaited<ReturnType<TasksManagerHost["read"]>>) => void;
 		vi.mocked(h.host.read).mockImplementationOnce(
 			() =>
 				new Promise((done) => {
@@ -154,13 +155,14 @@ describe("BackgroundTasksMenu public service", () => {
 		await vi.advanceTimersByTimeAsync(0);
 		expect(frames.at(-1)).toContain("new output");
 	});
-	it("starts animation for newly running workers and stops it when they settle", async () => {
+	it("starts animation for newly running items and stops it when they settle", async () => {
 		vi.setSystemTime(0);
 		const activeWorker = worker("worker-1", { status: "queued" });
 		const group = task("group-1", {
 			kind: "subagent",
+			format: "report",
 			status: "stopping",
-			projection: { workers: [activeWorker] },
+			projection: { items: [activeWorker] },
 		});
 		const h = harness([group], 140, 24, 60_000);
 		await h.open();
@@ -214,8 +216,9 @@ describe("BackgroundTasksMenu public service", () => {
 	it("renders group and worker rows and worker projections, killing only the group after confirmation", async () => {
 		const group = task("group-1", {
 			kind: "subagent",
+			format: "report",
 			command: undefined,
-			projection: { workers: [worker(`subagent-${randomUUID()}-worker-2`)] },
+			projection: { items: [worker(`subagent-${randomUUID()}-worker-2`)] },
 		});
 		const h = harness([group], 140);
 		await vi.advanceTimersByTimeAsync(0);
@@ -240,7 +243,7 @@ describe("BackgroundTasksMenu public service", () => {
 			"Outcome",
 			"Still running",
 			"1k tokens",
-			"model/thinking",
+			"context/thinking",
 		])
 			expect(frame).toContain(text);
 		h.menu.handleInput("k");
@@ -250,13 +253,14 @@ describe("BackgroundTasksMenu public service", () => {
 		expect(h.host.kill).toHaveBeenCalledWith("group-1");
 		expect(h.pins).toEqual(["group-1"]);
 	});
-	it("keeps group worker lines compact and wraps worker model and usage instead of truncating", async () => {
-		const model = `provider/${"very-long-model-name-".repeat(4)} · high`;
+	it("keeps group worker lines compact and wraps worker context and usage instead of truncating", async () => {
+		const context = `provider/${"very-long-context-name-".repeat(4)} · high`;
 		const group = task("group-1", {
 			kind: "subagent",
+			format: "report",
 			command: undefined,
 			projection: {
-				workers: [worker("worker-1", { model, usage: "123 tokens · $0.0001 · 2 tool calls" })],
+				items: [worker("worker-1", { context, usage: "123 tokens · $0.0001 · 2 tool calls" })],
 			},
 		});
 		const h = harness([group], 140);
@@ -276,14 +280,15 @@ describe("BackgroundTasksMenu public service", () => {
 		const first = task("first");
 		const second = task("second", {
 			kind: "subagent",
+			format: "report",
 			command: undefined,
 			projection: {
-				workers: [
+				items: [
 					worker("worker-7", {
 						label: "General",
-						prompt: "unique prompt",
+						input: "unique input",
 						activity: "",
-						model: undefined,
+						context: undefined,
 						usage: undefined,
 					}),
 				],
@@ -295,7 +300,7 @@ describe("BackgroundTasksMenu public service", () => {
 		h.tasks.reverse();
 		h.change();
 		await vi.advanceTimersByTimeAsync(1000);
-		expect(h.render().join("\n")).toContain("unique prompt");
+		expect(h.render().join("\n")).toContain("unique input");
 		expect(h.pins).toEqual(["first", "second"]);
 		expect(h.releases).toEqual(["first"]);
 	});
@@ -407,7 +412,7 @@ describe("BackgroundTasksMenu public service", () => {
 	it("does not let a pending tail read replace the snapshot after the user starts browsing", async () => {
 		const h = harness([task("bash-1")], 140);
 		await h.open();
-		let resolve!: (value: Awaited<ReturnType<BackgroundManagerHost["read"]>>) => void;
+		let resolve!: (value: Awaited<ReturnType<TasksManagerHost["read"]>>) => void;
 		vi.mocked(h.host.read).mockImplementationOnce(
 			() =>
 				new Promise((done) => {
@@ -445,7 +450,7 @@ describe("BackgroundTasksMenu public service", () => {
 	});
 	it("honors a rebound kill control", async () => {
 		const h = harness();
-		h.keybindings.setUserBindings({ "app.backgroundTasks.kill": "x" });
+		h.keybindings.setUserBindings({ "app.tasks.kill": "x" });
 		h.menu.handleInput("k");
 		expect(h.render().join("\n")).not.toContain("Stop bash-1");
 		expect(h.host.kill).not.toHaveBeenCalled();
@@ -479,10 +484,11 @@ describe("BackgroundTasksMenu public service", () => {
 		"keeps actual missing-log and task errors visible while following a long fallback at width %i",
 		async (width) => {
 			vi.useRealTimers();
-			const service = new BackgroundService({ enabled: true });
+			const service = new TaskRuntime({ enabled: true });
 			try {
 				await service.execute({
 					kind: "bash",
+					format: "log",
 					title: "missing log",
 					toolCallId: "call",
 					background: true,
@@ -502,7 +508,7 @@ describe("BackgroundTasksMenu public service", () => {
 				await service.wait(service.list()[0]!.id);
 				const read = await service.read(service.list()[0]!.id);
 				expect(read.readError).toContain("ENOENT");
-				const menu = new BackgroundTasksMenu({
+				const menu = new TasksMenu({
 					tui: { requestRender: vi.fn(), terminal: { columns: width, rows: 24 } },
 					host: service,
 					theme,
@@ -534,7 +540,7 @@ describe("BackgroundTasksMenu public service", () => {
 	});
 	it("disposes subscriptions, pin leases and timers; late reads cannot repaint", async () => {
 		const h = harness([task("bash-1")], 60);
-		let resolve!: (value: Awaited<ReturnType<BackgroundManagerHost["read"]>>) => void;
+		let resolve!: (value: Awaited<ReturnType<TasksManagerHost["read"]>>) => void;
 		vi.mocked(h.host.read).mockImplementation(
 			() =>
 				new Promise((r) => {
@@ -583,8 +589,8 @@ describe("BackgroundTasksMenu public service", () => {
 	it("honors rebound focus, selection and independent list/preview page actions", async () => {
 		const h = harness([task("alpha"), task("bravo")], 140);
 		h.keybindings.setUserBindings({
-			"app.backgroundTasks.focusList": "h",
-			"app.backgroundTasks.focusPreview": "l",
+			"app.tasks.focusList": "h",
+			"app.tasks.focusPreview": "l",
 			"tui.select.up": "u",
 			"tui.select.down": "d",
 			"tui.select.pageUp": "g",
@@ -675,7 +681,7 @@ describe("BackgroundTasksMenu public service", () => {
 		expect({ wideList, widePreview, narrowPreview, narrowList }).toMatchInlineSnapshot(`
 			{
 			  "narrowList": "────────────────────────────────────────────────────────────
-			Background tasks                                   1 running
+			Tasks                                              1 running
 			Running                                                     
 			→ · npm run build                                    fg · 0s
 			Status    · running · foreground · 0s                       
@@ -699,7 +705,7 @@ describe("BackgroundTasksMenu public service", () => {
 			↑/↓ select · ← list · →/Enter output · PgUp/PgDn page · K s…
 			────────────────────────────────────────────────────────────",
 			  "narrowPreview": "────────────────────────────────────────────────────────────
-			Background tasks                                   1 running
+			Tasks                                              1 running
 			Running                                                     
 			→ · npm run build                                    fg · 0s
 			Status    · running · foreground · 0s                       
@@ -723,7 +729,7 @@ describe("BackgroundTasksMenu public service", () => {
 			↑/↓ select · ← list · →/Enter output · PgUp/PgDn page · K s…
 			────────────────────────────────────────────────────────────",
 			  "wideList": "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-			Background tasks                                                                                                                   1 running
+			Tasks                                                                                                                              1 running
 			Running                                     │Status    · running · foreground · 0s                                                          
 			→ · npm run build                    fg · 0s│Task      bash-1                                                                               
 			                                            │Command   npm run build                                                                        
@@ -747,7 +753,7 @@ describe("BackgroundTasksMenu public service", () => {
 			↑/↓ select · ← list · →/Enter output · PgUp/PgDn page · K stop · Esc close                                                                  
 			────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
 			  "widePreview": "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-			Background tasks                                                                                                                   1 running
+			Tasks                                                                                                                              1 running
 			Running                                     │Status    · running · foreground · 0s                                                          
 			→ · npm run build                    fg · 0s│Task      bash-1                                                                               
 			                                            │Command   npm run build                                                                        
@@ -780,7 +786,7 @@ describe("BackgroundTasksMenu public service", () => {
 			const h = harness(undefined, 140);
 			await vi.advanceTimersByTimeAsync(0);
 			h.render();
-			expect(fg).toHaveBeenCalledWith("accent", "Background tasks");
+			expect(fg).toHaveBeenCalledWith("accent", "Tasks");
 			expect(fg).toHaveBeenCalledWith("accent", "→ ");
 			expect(fg).toHaveBeenCalledWith("muted", "Output");
 			fg.mockClear();
@@ -800,12 +806,13 @@ describe("BackgroundTasksMenu public service", () => {
 			[
 				task("group", {
 					kind: "subagent",
+					format: "report",
 					command: undefined,
 					projection: {
-						workers: [
+						items: [
 							worker("long-worker-id", {
 								label: "#1 Explorer",
-								prompt: Array.from({ length: 40 }, (_, i) => `prompt-${i}`).join("\n"),
+								input: Array.from({ length: 40 }, (_, i) => `input-${i}`).join("\n"),
 								activity: "activity",
 								description: "Long task",
 								report: { text: "outcome", truncated: false },
@@ -820,18 +827,18 @@ describe("BackgroundTasksMenu public service", () => {
 		await h.open();
 		expect(h.host.read).not.toHaveBeenCalled();
 		const initial = h.render().join("\n");
-		expect(initial).toContain("prompt-0");
+		expect(initial).toContain("input-0");
 		expect(initial).toMatch(/1–\d+\/\d+/);
 		expect(initial).not.toMatch(/paused|following|browsing|long-worker-id/);
 		h.menu.handleInput("\x1b[6~");
-		expect(h.render().join("\n")).not.toContain("prompt-0");
+		expect(h.render().join("\n")).not.toContain("input-0");
 		h.change();
 		h.menu.handleInput("\x1b[D");
 		h.menu.handleInput("\x1b[C");
 		const frame = h.render().join("\n");
 		expect(frame).toContain("14–26/47"); // the browsed position is retained across focus changes
-		expect(frame).toContain("prompt-12");
-		expect(frame).not.toContain("prompt-0");
+		expect(frame).toContain("input-12");
+		expect(frame).not.toContain("input-0");
 	});
 	it("orders running newest-first above finished and never selects section headers", () => {
 		vi.setSystemTime(1_000_000);
@@ -951,12 +958,13 @@ describe("BackgroundTasksMenu public service", () => {
 	it.each([60, 140])("shows completed foreground subagents when opening the panel at width %s", async (width) => {
 		const group = task("subagent-fg", {
 			kind: "subagent",
+			format: "report",
 			title: "Subagent group",
 			command: undefined,
 			status: "completed",
 			endedAt: Date.now(),
 			projection: {
-				workers: [
+				items: [
 					worker("worker-1", { status: "completed", report: { text: "Saved worker report", truncated: false } }),
 				],
 			},
@@ -981,16 +989,17 @@ describe("BackgroundTasksMenu public service", () => {
 	it("keeps a foreground subagent in Finished after settlement and selection moves away", async () => {
 		const group = task("subagent-fg", {
 			kind: "subagent",
+			format: "report",
 			title: "Subagent group",
 			command: undefined,
-			projection: { workers: [worker("worker-1")] },
+			projection: { items: [worker("worker-1")] },
 		});
 		const h = harness([group, task("bash-live")], 140);
 		h.menu.handleInput("\x1b[B");
 		group.status = "completed";
 		group.endedAt = Date.now();
-		group.projection!.workers![0]!.status = "completed";
-		group.projection!.workers![0]!.report.text = "Finished while watched";
+		group.projection!.items![0]!.status = "completed";
+		group.projection!.items![0]!.report.text = "Finished while watched";
 		h.change();
 		await vi.advanceTimersByTimeAsync(0);
 		expect(h.render().join("\n")).toContain("Finished while watched");
@@ -1005,9 +1014,10 @@ describe("BackgroundTasksMenu public service", () => {
 	it("shows the worker description in its list row", async () => {
 		const group = task("group-1", {
 			kind: "subagent",
+			format: "report",
 			mode: "background",
 			command: undefined,
-			projection: { workers: [worker("worker-1")] },
+			projection: { items: [worker("worker-1")] },
 		});
 		const h = harness([group]);
 		await vi.advanceTimersByTimeAsync(0);
@@ -1016,10 +1026,11 @@ describe("BackgroundTasksMenu public service", () => {
 	it("shows settled/total progress on subagent group rows", async () => {
 		const group = task("group-1", {
 			kind: "subagent",
+			format: "report",
 			mode: "background",
 			command: undefined,
 			projection: {
-				workers: [
+				items: [
 					worker("worker-1", { status: "completed" }),
 					worker("worker-2", { status: "running" }),
 					worker("worker-3", { status: "queued" }),
@@ -1066,7 +1077,7 @@ describe("BackgroundTasksMenu public service", () => {
 		const h = harness([task("bash-1")], 50, 8);
 		await vi.advanceTimersByTimeAsync(0);
 		const frame = h.render().join("\n");
-		expect(frame).toContain("Terminal too small for /bg");
+		expect(frame).toContain("Terminal too small for /tasks");
 		expect(frame).toContain("close");
 		expect(frame).not.toContain("npm run build");
 	});

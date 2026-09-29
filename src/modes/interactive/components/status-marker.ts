@@ -1,6 +1,6 @@
 /**
  * Shared status-marker vocabulary for long-running executions (background
- * tasks, subagent runs): one glyph+color mapping so the /bg panel, transcript
+ * tasks, subagent runs): one glyph+color mapping so the /tasks panel, transcript
  * notifications, completion cards and subagent flows describe the same status
  * the same way. Pure data; consumers apply theme.fg(marker.color, glyph).
  *

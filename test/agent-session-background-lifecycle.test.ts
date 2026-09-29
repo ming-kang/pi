@@ -12,7 +12,7 @@ import {
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import { getBackgroundUsageRecord } from "../src/core/usage-totals.ts";
+import { getTaskUsageRecord } from "../src/core/usage-totals.ts";
 import type { ExtensionFactory } from "../src/index.ts";
 
 describe("AgentSessionRuntime background lifecycle", () => {
@@ -118,12 +118,12 @@ describe("AgentSessionRuntime background lifecycle", () => {
 			});
 		});
 		const session = runtimeHost.session;
-		await session.bindExtensions({ backgroundEnabled: true });
+		await session.bindExtensions({ tasksEnabled: true });
 		let finish!: () => void;
 		const done = new Promise<void>((resolve) => {
 			finish = resolve;
 		});
-		const outcome = await session.background.execute({
+		const outcome = await session.tasks.execute({
 			kind: "bash",
 			title: "worker",
 			toolCallId: "worker",
@@ -141,7 +141,7 @@ describe("AgentSessionRuntime background lifecycle", () => {
 		const replacing = runtimeHost.newSession();
 		await reached;
 		finish();
-		await vi.waitFor(() => expect(session.background.get(outcome.task.id).status).toBe("completed"));
+		await vi.waitFor(() => expect(session.tasks.get(outcome.task.id).status).toBe("completed"));
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(delivered()).toBe(0);
 		releaseHook();
@@ -156,19 +156,19 @@ describe("AgentSessionRuntime background lifecycle", () => {
 		const { runtimeHost } = await createRuntimeHost((pi) => {
 			pi.on("session_before_switch", () => ({ cancel: veto }));
 			pi.on("session_shutdown", (_event, ctx) => {
-				enabledAtShutdown = ctx.background.enabled;
+				enabledAtShutdown = ctx.tasks.enabled;
 			});
 		});
-		await runtimeHost.session.bindExtensions({ backgroundEnabled: true });
-		const old = runtimeHost.session.background;
+		await runtimeHost.session.bindExtensions({ tasksEnabled: true });
+		const old = runtimeHost.session.tasks;
 		expect((await runtimeHost.newSession()).cancelled).toBe(true);
 		expect(old.enabled).toBe(true);
 		veto = false;
 		await runtimeHost.newSession();
 		expect(enabledAtShutdown).toBe(false);
 		expect(old.enabled).toBe(false);
-		expect(runtimeHost.session.background).not.toBe(old);
-		expect(runtimeHost.session.background.enabled).toBe(false);
+		expect(runtimeHost.session.tasks).not.toBe(old);
+		expect(runtimeHost.session.tasks.enabled).toBe(false);
 	});
 
 	it("fork veto preserves workers and a current-leaf fork copies cooperative shutdown usage", async () => {
@@ -177,11 +177,11 @@ describe("AgentSessionRuntime background lifecycle", () => {
 			pi.on("session_before_fork", () => ({ cancel: veto }));
 		});
 		const old = runtimeHost.session;
-		await old.bindExtensions({ backgroundEnabled: true });
+		await old.bindExtensions({ tasksEnabled: true });
 		await old.prompt("persist source");
 		const leaf = old.sessionManager.getLeafId()!;
 		let signal!: AbortSignal;
-		const outcome = await old.background.execute({
+		const outcome = await old.tasks.execute({
 			kind: "subagent",
 			title: "billable",
 			toolCallId: "billable",
@@ -205,28 +205,28 @@ describe("AgentSessionRuntime background lifecycle", () => {
 		if (outcome.kind !== "background") throw new Error("expected handoff");
 		expect((await runtimeHost.fork(leaf, { position: "at" })).cancelled).toBe(true);
 		expect(signal.aborted).toBe(false);
-		expect(old.background.enabled).toBe(true);
+		expect(old.tasks.enabled).toBe(true);
 		veto = false;
 		await runtimeHost.fork(leaf, { position: "at" });
 		expect(signal.aborted).toBe(true);
-		const ledger = runtimeHost.session.sessionManager.getEntries().map(getBackgroundUsageRecord).filter(Boolean);
+		const ledger = runtimeHost.session.sessionManager.getEntries().map(getTaskUsageRecord).filter(Boolean);
 		expect(ledger).toHaveLength(1);
 		expect(ledger[0]).toMatchObject({ taskId: outcome.task.id, usage: { input: 7 } });
-		expect(runtimeHost.session.background.list()).toMatchObject([{ id: outcome.task.id, status: "cancelled" }]);
-		expect(runtimeHost.session.background.pendingNotifications()).toEqual([]);
+		expect(runtimeHost.session.tasks.list()).toMatchObject([{ id: outcome.task.id, status: "cancelled" }]);
+		expect(runtimeHost.session.tasks.pendingNotifications()).toEqual([]);
 	});
 
 	it("persists late ignored-abort accounting beside the source, never into a replacement session", async () => {
 		const { runtimeHost } = await createRuntimeHost(() => {});
 		const old = runtimeHost.session;
-		await old.bindExtensions({ backgroundEnabled: true });
+		await old.bindExtensions({ tasksEnabled: true });
 		await old.prompt("persist source");
 		const source = old.sessionFile!;
 		let finish!: () => void;
 		const gate = new Promise<void>((resolve) => {
 			finish = resolve;
 		});
-		const outcome = await old.background.execute({
+		const outcome = await old.tasks.execute({
 			kind: "subagent",
 			title: "late",
 			toolCallId: "late",
@@ -244,16 +244,16 @@ describe("AgentSessionRuntime background lifecycle", () => {
 			},
 		});
 		if (outcome.kind !== "background") throw new Error("expected handoff");
-		const shutdown = old.background.shutdown.bind(old.background);
-		vi.spyOn(old.background, "shutdown").mockImplementation(() => shutdown(0));
+		const shutdown = old.tasks.shutdown.bind(old.tasks);
+		vi.spyOn(old.tasks, "shutdown").mockImplementation(() => shutdown(0));
 		await runtimeHost.newSession();
 		const original = readFileSync(source, "utf8");
 		const replacementEntries = runtimeHost.session.sessionManager.getEntries();
 		finish();
-		await vi.waitFor(() => expect(old.quarantinedBackgroundSettlements).toHaveLength(1));
+		await vi.waitFor(() => expect(old.quarantinedTaskSettlements).toHaveLength(1));
 		expect(readFileSync(source, "utf8")).toBe(original);
 		expect(runtimeHost.session.sessionManager.getEntries()).toEqual(replacementEntries);
-		const record = JSON.parse(readFileSync(`${source}.background-late.jsonl`, "utf8").trim());
+		const record = JSON.parse(readFileSync(`${source}.tasks-late.jsonl`, "utf8").trim());
 		expect(record).toMatchObject({ sessionId: old.sessionId, task: { id: outcome.task.id }, usage: { input: 9 } });
 	});
 });

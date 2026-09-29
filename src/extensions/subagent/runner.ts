@@ -1,6 +1,6 @@
 import { isRetryableAssistantError } from "@earendil-works/pi-ai/compat";
-import type { BackgroundProjection } from "../../core/background/types.ts";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
+import type { TaskProjection } from "../../core/tasks/types.ts";
 import { emptyUsage, mergeUsage, toNestedUsage } from "./activity.ts";
 import { boundSubagentDetails, resultContent } from "./budget.ts";
 import { abortableSleep, createRunCancellation, type RunCancellation } from "./cancellation.ts";
@@ -83,7 +83,7 @@ export interface SubagentInvocationOptions {
 	projectTrusted: boolean;
 	signal?: AbortSignal;
 	gate: ConcurrencyGate;
-	onUpdate?: (details: SubagentDetails, projection: BackgroundProjection) => void;
+	onUpdate?: (details: SubagentDetails, projection: TaskProjection) => void;
 	/** Whole-batch preflight and initial publication finished; no worker has started. */
 	onAccepted?: () => void;
 	onConfigWarning?: (message: string) => void;
@@ -101,20 +101,24 @@ function aggregateUsage(runs: readonly SubagentRunState[]): SubagentUsage {
 }
 
 /** Capture report provenance before the tool-details budget can discard it. */
-function backgroundProjection(
+function taskProjection(
 	runs: readonly SubagentRunState[],
 	tasks: readonly ResolvedSubagentTask[],
 	details: SubagentDetails,
-): BackgroundProjection {
+): TaskProjection {
 	return {
 		text: statusSummary(details),
-		workers: runs.map((run, index) => ({
+		nextStep:
+			details.status === "failed" || details.status === "partial"
+				? "Next step: re-delegate the unfinished work in a fresh subagent call if still needed."
+				: undefined,
+		items: runs.map((run, index) => ({
 			id: run.id,
 			label: run.agent,
-			profile: run.agent,
+			category: run.agent,
 			description: run.description,
 			status: run.status,
-			prompt: tasks[index]?.prompt ?? run.description,
+			input: tasks[index]?.prompt ?? run.description,
 			activity:
 				run.currentActivity ??
 				run.activities
@@ -123,7 +127,7 @@ function backgroundProjection(
 					.join("\n"),
 			report: { text: run.report, truncated: run.reportTruncated },
 			error: run.error,
-			model: `${run.model} · ${run.thinking}`,
+			context: `${run.model} · ${run.thinking}`,
 			usage: `${run.usage.totalTokens} tokens · $${run.usage.cost.toFixed(4)} · ${run.usage.toolUses} tool calls`,
 		})),
 	};
@@ -141,7 +145,7 @@ function emitDetails(
 		startedAt,
 		usage: aggregateUsage(runs),
 	};
-	onUpdate?.(boundSubagentDetails(details), backgroundProjection(runs, tasks, details));
+	onUpdate?.(boundSubagentDetails(details), taskProjection(runs, tasks, details));
 	return details;
 }
 
@@ -309,7 +313,7 @@ export async function runSubagentInvocation(options: SubagentInvocationOptions):
 		return {
 			content: resultContent(latestDetails),
 			details: boundSubagentDetails(latestDetails),
-			projection: backgroundProjection(runs, resolved, latestDetails),
+			projection: taskProjection(runs, resolved, latestDetails),
 			usage: toNestedUsage(latestDetails.usage),
 		};
 	} finally {

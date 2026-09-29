@@ -145,7 +145,7 @@ describe("statusline usage", () => {
 			id: "ledger",
 			parentId: "branch",
 			timestamp: "2026-01-01T00:00:04.000Z",
-			customType: "background-usage",
+			customType: "task-usage",
 			data: { version: 1, taskId: "group", usage: usage(500, 100, 900, 0, 2) },
 		});
 		entries.push(record);

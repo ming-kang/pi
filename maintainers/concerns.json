@@ -5,28 +5,56 @@
 			"id": "distribution-identity",
 			"why": "Standalone @astralyn/pi packaging, identity, update source, and disabled install telemetry.",
 			"paths": [
-				{ "path": ".gitignore" },
-				{ "path": "CHANGELOG.md" },
-				{ "path": "README.md" },
-				{ "path": "examples/" },
-				{ "path": "install-lock/" },
-				{ "path": "npm-shrinkwrap.json" },
-				{ "path": "package.json" },
-				{ "path": "scripts/migrate-sessions.sh" },
+				{
+					"path": ".gitignore"
+				},
+				{
+					"path": "CHANGELOG.md"
+				},
+				{
+					"path": "README.md"
+				},
+				{
+					"path": "examples/"
+				},
+				{
+					"path": "install-lock/"
+				},
+				{
+					"path": "npm-shrinkwrap.json"
+				},
+				{
+					"path": "package.json"
+				},
+				{
+					"path": "scripts/migrate-sessions.sh"
+				},
 				{
 					"path": "src/cli/startup-ui.ts",
 					"rewrite": "The first-run gate compares against this distribution's package metadata, replacing upstream's official-distribution constants."
 				},
-				{ "path": "src/config.ts" },
+				{
+					"path": "src/config.ts"
+				},
 				{
 					"path": "src/core/extensions/loader.ts",
 					"rewrite": "The standalone package resolves bundled libraries from node_modules only, so upstream's monorepo workspace lookup is removed."
 				},
-				{ "path": "src/core/extensions/virtual-modules.ts" },
-				{ "path": "src/experimental/plugins/bundled.ts" },
-				{ "path": "src/experimental/source-resolver.ts" },
-				{ "path": "src/modes/interactive/interactive-mode.ts" },
-				{ "path": "src/modes/interactive/components/settings-selector.ts" },
+				{
+					"path": "src/core/extensions/virtual-modules.ts"
+				},
+				{
+					"path": "src/experimental/plugins/bundled.ts"
+				},
+				{
+					"path": "src/experimental/source-resolver.ts"
+				},
+				{
+					"path": "src/modes/interactive/interactive-mode.ts"
+				},
+				{
+					"path": "src/modes/interactive/components/settings-selector.ts"
+				},
 				{
 					"path": "src/utils/syntax-highlight.ts",
 					"rewrite": "Repository source policy loads every grammar through static imports instead of upstream's deferred dynamic import."
@@ -35,9 +63,15 @@
 					"path": "src/utils/version-check.ts",
 					"rewrite": "Update checks read the npm registry, whose response replaces upstream's pi.dev payload fields."
 				},
-				{ "path": "tsconfig.build.json" },
-				{ "path": "tsconfig.examples.json" },
-				{ "path": "vitest.config.ts" }
+				{
+					"path": "tsconfig.build.json"
+				},
+				{
+					"path": "tsconfig.examples.json"
+				},
+				{
+					"path": "vitest.config.ts"
+				}
 			],
 			"tests": [
 				"test/version-check.test.ts",
@@ -50,7 +84,9 @@
 			"id": "bundled-extensions",
 			"why": "The distribution's bundled extensions load as hidden built-ins.",
 			"paths": [
-				{ "path": "src/extensions/index.ts" }
+				{
+					"path": "src/extensions/index.ts"
+				}
 			],
 			"tests": [
 				"test/todo-extension.test.ts",
@@ -62,35 +98,69 @@
 		},
 		{
 			"id": "background-execution",
-			"why": "Supervision, delivery, and bounded retention of background and foreground shell and Subagent executions.",
+			"why": "Native Tasks supervision, retained output, persistence receipts, and extension-owned execution.",
 			"paths": [
 				{
 					"path": "src/core/agent-session.ts",
-					"rewrite": "Usage stats count each task once through the shared ledger, which replaces the accounting loop in getSessionStats and the nextTurn queue clearing; every other hook is an added line, and BackgroundSession owns delivery receipts while lifecycle pauses wrap upstream-shaped *Body methods."
+					"rewrite": "TaskSession owns result and usage persistence; TaskDelivery owns queued completion and tool-call receipts. Lifecycle pauses wrap upstream-shaped Body methods, and the native tasks tool is bound to the session."
 				},
-				{ "path": "src/core/agent-session-runtime.ts" },
-				{ "path": "src/core/agent-session-services.ts" },
-				{ "path": "src/core/export-html/tool-renderer.ts" },
-				{ "path": "src/core/extensions/index.ts" },
-				{ "path": "src/core/extensions/runner.ts" },
-				{ "path": "src/core/extensions/types.ts" },
-				{ "path": "src/core/sdk.ts" },
+				{
+					"path": "src/core/agent-session-runtime.ts"
+				},
+				{
+					"path": "src/core/agent-session-services.ts"
+				},
+				{
+					"path": "src/core/export-html/tool-renderer.ts"
+				},
+				{
+					"path": "src/core/extensions/index.ts"
+				},
+				{
+					"path": "src/core/extensions/runner.ts"
+				},
+				{
+					"path": "src/core/extensions/types.ts"
+				},
+				{
+					"path": "src/core/sdk.ts"
+				},
 				{
 					"path": "src/core/tools/bash.ts",
 					"rewrite": "Shell calls run through session supervision and the shared shell-execution pipeline, replacing upstream's inline execution path."
 				},
-				{ "path": "src/core/tools/output-accumulator.ts" },
-				{ "path": "src/core/tools/powershell.ts" },
+				{
+					"path": "src/core/tools/output-accumulator.ts"
+				},
+				{
+					"path": "src/core/tools/powershell.ts"
+				},
 				{
 					"path": "src/core/usage-totals.ts",
-					"rewrite": "The background-usage ledger counts once per task, which turns upstream's accounting loop into a shared generator."
+					"rewrite": "The task-usage ledger counts once per task, which turns upstream's accounting loop into a shared generator."
 				},
-				{ "path": "src/index.ts" },
+				{
+					"path": "src/index.ts"
+				},
 				{
 					"path": "src/modes/interactive/components/footer.ts",
 					"rewrite": "Footer totals read the shared accounted-usage ledger instead of summing session entries inline."
 				},
-				{ "path": "src/modes/interactive/interactive-mode.ts" }
+				{
+					"path": "src/modes/interactive/interactive-mode.ts"
+				},
+				{
+					"path": "src/core/tools/index.ts"
+				},
+				{
+					"path": "src/core/tools/renderers/index.ts"
+				},
+				{
+					"path": "src/core/slash-commands.ts"
+				},
+				{
+					"path": "src/modes/interactive/components/custom-message.ts"
+				}
 			],
 			"tests": [
 				"test/agent-session-background.test.ts",
@@ -104,19 +174,33 @@
 				"test/footer-width.test.ts",
 				"test/suite/agent-session-compaction.test.ts",
 				"test/suite/background-delivery.test.ts",
-				"test/suite/compaction-budget.test.ts"
+				"test/suite/compaction-budget.test.ts",
+				"test/tasks-runtime.test.ts",
+				"test/tasks-delivery.test.ts"
 			]
 		},
 		{
 			"id": "context-snapshot",
 			"why": "Extensions capture detached, stable model input and request settings without writing to the session.",
 			"paths": [
-				{ "path": "src/core/agent-session.ts" },
-				{ "path": "src/core/extensions/index.ts" },
-				{ "path": "src/core/extensions/runner.ts" },
-				{ "path": "src/core/extensions/types.ts" },
-				{ "path": "src/core/sdk.ts" },
-				{ "path": "src/index.ts" }
+				{
+					"path": "src/core/agent-session.ts"
+				},
+				{
+					"path": "src/core/extensions/index.ts"
+				},
+				{
+					"path": "src/core/extensions/runner.ts"
+				},
+				{
+					"path": "src/core/extensions/types.ts"
+				},
+				{
+					"path": "src/core/sdk.ts"
+				},
+				{
+					"path": "src/index.ts"
+				}
 			],
 			"tests": [
 				"test/context-snapshot.test.ts",
@@ -141,9 +225,15 @@
 			"id": "tui-fullscreen-default",
 			"why": "The interactive TUI defaults to fullscreen mode.",
 			"paths": [
-				{ "path": "src/cli/args.ts" },
-				{ "path": "src/core/settings-manager.ts" },
-				{ "path": "src/modes/interactive/components/settings-selector.ts" }
+				{
+					"path": "src/cli/args.ts"
+				},
+				{
+					"path": "src/core/settings-manager.ts"
+				},
+				{
+					"path": "src/modes/interactive/components/settings-selector.ts"
+				}
 			]
 		},
 		{
@@ -151,18 +241,34 @@
 			"why": "Tool rows are compact dot/rail blocks owned by src/modes/interactive/tool-view/; upstream's Box shell is dropped.",
 			"watch": "Upstream fixes to the dropped tool-execution.ts (image conversion, click to expand, lifecycle) and to the renderers are ported by hand; --target lists them. Retire the fork if upstream ships a shell whose look is configurable.",
 			"paths": [
-				{ "path": "src/core/tools/edit.ts" },
+				{
+					"path": "src/core/tools/edit.ts"
+				},
 				{
 					"path": "src/core/tools/renderers/",
 					"rewrite": "Bash keeps a truncating, highlighted call line and its background handoff text, and Edit hangs its bounded preview off the rail instead of a background Box."
 				},
-				{ "path": "src/core/extensions/types.ts" },
-				{ "path": "src/experimental/client-tui-chat.ts" },
-				{ "path": "src/experimental/micro/tui.ts" },
-				{ "path": "src/experimental/mini/tui/view.ts" },
-				{ "path": "src/modes/interactive/components/index.ts" },
-				{ "path": "src/modes/interactive/components/tool-execution.ts" },
-				{ "path": "src/modes/interactive/interactive-mode.ts" }
+				{
+					"path": "src/core/extensions/types.ts"
+				},
+				{
+					"path": "src/experimental/client-tui-chat.ts"
+				},
+				{
+					"path": "src/experimental/micro/tui.ts"
+				},
+				{
+					"path": "src/experimental/mini/tui/view.ts"
+				},
+				{
+					"path": "src/modes/interactive/components/index.ts"
+				},
+				{
+					"path": "src/modes/interactive/components/tool-execution.ts"
+				},
+				{
+					"path": "src/modes/interactive/interactive-mode.ts"
+				}
 			],
 			"tests": [
 				"test/bash-tool-rendering.test.ts",
@@ -181,18 +287,24 @@
 					"rewrite": "The bundled theme list replaces the two-theme loader and the inline background-key set in upstream's theme-loading functions."
 				}
 			],
-			"tests": ["test/bundled-themes.test.ts"]
+			"tests": [
+				"test/bundled-themes.test.ts"
+			]
 		},
 		{
 			"id": "interactive-hints",
 			"why": "Selectors and custom messages resolve each configured key for compact hints, and custom messages expand on click.",
 			"paths": [
-				{ "path": "src/modes/interactive/components/custom-message.ts" },
+				{
+					"path": "src/modes/interactive/components/custom-message.ts"
+				},
 				{
 					"path": "src/modes/interactive/components/extension-selector.ts",
 					"rewrite": "Selector hints resolve each configured key instead of upstream's fixed hint line."
 				},
-				{ "path": "src/modes/interactive/components/keybinding-hints.ts" }
+				{
+					"path": "src/modes/interactive/components/keybinding-hints.ts"
+				}
 			],
 			"tests": [
 				"test/custom-message-click.test.ts",
@@ -204,7 +316,9 @@
 			"id": "tool-validation-hints",
 			"why": "Tool argument errors include bounded argument echoes and field hints without mixing alternative object requirements.",
 			"paths": [
-				{ "path": "src/core/tools/tool-definition-wrapper.ts" }
+				{
+					"path": "src/core/tools/tool-definition-wrapper.ts"
+				}
 			],
 			"tests": [
 				"test/tool-definition-wrapper.test.ts"
@@ -214,10 +328,18 @@
 			"id": "extension-editor-host",
 			"why": "Extensions reach the main editor through ctx.ui.editorHost: submit interception, cursor, and editor-scoped input.",
 			"paths": [
-				{ "path": "src/core/extensions/index.ts" },
-				{ "path": "src/core/extensions/types.ts" },
-				{ "path": "src/index.ts" },
-				{ "path": "src/modes/interactive/interactive-mode.ts" }
+				{
+					"path": "src/core/extensions/index.ts"
+				},
+				{
+					"path": "src/core/extensions/types.ts"
+				},
+				{
+					"path": "src/index.ts"
+				},
+				{
+					"path": "src/modes/interactive/interactive-mode.ts"
+				}
 			],
 			"tests": [
 				"test/interactive-editor-submit.test.ts",
@@ -229,12 +351,24 @@
 			"id": "extension-context",
 			"why": "Extensions get one canonical guarded ExtensionContext with the session's ModelRuntime and a detectable stale-context error.",
 			"paths": [
-				{ "path": "src/core/agent-session.ts" },
-				{ "path": "src/core/extensions/index.ts" },
-				{ "path": "src/core/extensions/loader.ts" },
-				{ "path": "src/core/extensions/runner.ts" },
-				{ "path": "src/core/extensions/types.ts" },
-				{ "path": "src/core/model-registry.ts" },
+				{
+					"path": "src/core/agent-session.ts"
+				},
+				{
+					"path": "src/core/extensions/index.ts"
+				},
+				{
+					"path": "src/core/extensions/loader.ts"
+				},
+				{
+					"path": "src/core/extensions/runner.ts"
+				},
+				{
+					"path": "src/core/extensions/types.ts"
+				},
+				{
+					"path": "src/core/model-registry.ts"
+				},
 				{
 					"path": "src/modes/interactive/interactive-mode.ts",
 					"rewrite": "Shortcut handlers receive the canonical ExtensionContext, which removes upstream's hand-built shortcut context."
@@ -248,8 +382,12 @@
 			"id": "provider-editor-support",
 			"why": "The bundled /provider editor validates and edits the models.json the runtime loads.",
 			"paths": [
-				{ "path": "src/core/model-config.ts" },
-				{ "path": "src/core/model-runtime.ts" }
+				{
+					"path": "src/core/model-config.ts"
+				},
+				{
+					"path": "src/core/model-runtime.ts"
+				}
 			],
 			"tests": [
 				"test/provider-compat-fields.test.ts",
@@ -260,8 +398,12 @@
 			"id": "keybindings",
 			"why": "Extensions register their own configurable keybindings; core merges the registry and reserves the detach key.",
 			"paths": [
-				{ "path": "src/core/keybindings.ts" },
-				{ "path": "src/core/extensions/runner.ts" }
+				{
+					"path": "src/core/keybindings.ts"
+				},
+				{
+					"path": "src/core/extensions/runner.ts"
+				}
 			],
 			"tests": [
 				"test/keybinding-registry.test.ts",
@@ -273,8 +415,12 @@
 			"id": "windows-path-identity",
 			"why": "Path comparisons survive Windows drive-letter case, because realpathSync keeps the caller's spelling.",
 			"paths": [
-				{ "path": "src/core/resource-loader.ts" },
-				{ "path": "src/core/trust-manager.ts" }
+				{
+					"path": "src/core/resource-loader.ts"
+				},
+				{
+					"path": "src/core/trust-manager.ts"
+				}
 			],
 			"tests": [
 				"test/resource-loader.test.ts",
@@ -285,7 +431,9 @@
 			"id": "windows-shell-normalization",
 			"why": "CMD-style nul redirects become /dev/null so POSIX shells on Windows cannot create undeletable nul files.",
 			"paths": [
-				{ "path": "src/core/tools/bash.ts" }
+				{
+					"path": "src/core/tools/bash.ts"
+				}
 			],
 			"tests": [
 				"test/bash-nul-redirect.test.ts"
@@ -295,7 +443,9 @@
 			"id": "windows-find-glob",
 			"why": "Path-segment globs in find work on Windows, where fd matches no slash-containing pattern.",
 			"paths": [
-				{ "path": "src/core/tools/find.ts" }
+				{
+					"path": "src/core/tools/find.ts"
+				}
 			],
 			"tests": [
 				"test/suite/regressions/3302-find-path-glob.test.ts",
@@ -307,7 +457,9 @@
 			"id": "windows-external-editor",
 			"why": "External editor commands parse quotes and spawn without a shell, so a TEMP path with spaces stays one argument.",
 			"paths": [
-				{ "path": "src/modes/interactive/external-editor.ts" }
+				{
+					"path": "src/modes/interactive/external-editor.ts"
+				}
 			],
 			"tests": [
 				"test/external-editor.test.ts"
@@ -317,7 +469,9 @@
 			"id": "auth-min-expiry",
 			"why": "Uppercase --min-expiry units parse as minutes and seconds instead of hours.",
 			"paths": [
-				{ "path": "src/cli/auth-command.ts" }
+				{
+					"path": "src/cli/auth-command.ts"
+				}
 			],
 			"tests": [
 				"test/auth-min-expiry.test.ts"
@@ -327,8 +481,12 @@
 			"id": "docs-and-tests",
 			"why": "Distribution-owned user documentation and tests that track the standalone layout and registered deviations.",
 			"paths": [
-				{ "path": "docs/" },
-				{ "path": "test/" }
+				{
+					"path": "docs/"
+				},
+				{
+					"path": "test/"
+				}
 			]
 		}
 	]

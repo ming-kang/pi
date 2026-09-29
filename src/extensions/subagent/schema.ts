@@ -23,7 +23,7 @@ export const TaskSchema = Type.Object(
 		}),
 		description: nullable(
 			Type.String({ minLength: 1, maxLength: 80 }),
-			"Short task label (3-5 words) shown in the /bg list, live rows, and report headings; null or omit to derive it from the prompt",
+			"Short task label (3-5 words) shown in the /tasks list, live rows, and report headings; null or omit to derive it from the prompt",
 		),
 		cwd: nullable(
 			Type.String({ minLength: 1, maxLength: 4_096 }),

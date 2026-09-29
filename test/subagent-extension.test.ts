@@ -1,7 +1,7 @@
 import { Compile } from "typebox/compile";
 import { describe, expect, it, vi } from "vitest";
-import { BackgroundService } from "../src/core/background/service.ts";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
+import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import subagent from "../src/extensions/subagent/index.ts";
 import { normalizeSubagentArguments, SubagentParamsSchema, TaskSchema } from "../src/extensions/subagent/schema.ts";
 import type { SdkRunnerOptions } from "../src/extensions/subagent/sdk-runner.ts";
@@ -81,7 +81,7 @@ describe("subagent extension registration", () => {
 		expect(initialTool?.promptSnippet).toBe("Delegate bounded work to isolated explorer or general workers");
 		expect(initialTool?.promptGuidelines).toEqual([
 			"Use `subagent` for bounded work that benefits from isolated context or concurrent investigation; do not delegate a task you can finish with one or two direct tool calls.",
-			"Give every task a short `description` label; it is shown in the /bg list, live rows, and report headings.",
+			"Give every task a short `description` label; it is shown in the /tasks list, live rows, and report headings.",
 		]);
 		expect(initialTool?.executionMode).toBeUndefined();
 		expect(initialTool?.constrainedSampling).toEqual({ type: "json_schema", strict: "prefer" });
@@ -262,7 +262,7 @@ describe("subagent extension registration", () => {
 function managedHarness(enabled = true) {
 	let tool!: ToolDefinition<typeof SubagentParamsSchema, SubagentDetails>;
 	const settled = vi.fn();
-	const service = new BackgroundService({ enabled, onSettled: settled });
+	const service = new TaskRuntime({ enabled, onSettled: settled });
 	const execute = vi.spyOn(service, "execute");
 	const shutdown: Array<() => Promise<void>> = [];
 	subagent({
@@ -276,7 +276,7 @@ function managedHarness(enabled = true) {
 		},
 	} as unknown as ExtensionAPI);
 	const ctx = {
-		background: service,
+		tasks: service,
 		cwd: process.cwd(),
 		model: { id: "m", provider: "test", reasoning: false },
 		modelRegistry: {},
@@ -303,15 +303,15 @@ it.each([false, true])("keeps report truncation provenance outside tool details,
 	try {
 		await h.tool.execute("projection", { tasks: [{ prompt: "Inspect task" }] }, undefined, undefined, h.ctx);
 		const task = h.service.list()[0]!;
-		const projected = task.projection?.workers?.[0];
+		const projected = task.projection?.items?.[0];
 		expect(projected).toMatchObject({
-			profile: "explorer",
+			category: "explorer",
 			description: "Inspect task",
 			report: { truncated: clipped },
 		});
 		expect(projected?.error).toBe(clipped ? "Independent failure reason" : undefined);
 		if (!clipped) expect(projected?.report.text).toBe(report);
-		expect((task.result?.details as SubagentDetails).runs[0]).not.toHaveProperty("reportTruncated");
+		expect(task.result?.details).toBeUndefined();
 	} finally {
 		await h.service.shutdown();
 	}
@@ -372,20 +372,20 @@ it.each([true, false])(
 		for (const cleanup of h.shutdown) await cleanup(); // Managed executions are not owned by this closure.
 		for (const worker of workers) expect(worker.options.scope.signal.aborted).toBe(false);
 		const initial = h.service.list()[0]!;
-		expect(initial.projection?.workers).toHaveLength(7);
-		expect(initial.projection?.workers?.[0]).toMatchObject({ label: "#1 explorer", prompt: "task 0" });
+		expect(initial.projection?.items).toHaveLength(7);
+		expect(initial.projection?.items?.[0]).toMatchObject({ label: "#1 explorer", input: "task 0" });
 		for (const worker of workers.slice(0, 6)) worker.finish();
 		await vi.waitFor(() => expect(workers).toHaveLength(7));
 		workers[6]!.finish();
 		const final = await h.service.wait(initial.id, 1000);
 		expect(final.status).toBe("completed");
-		expect(final.projection?.workers?.[0]).toMatchObject({
-			profile: "explorer",
+		expect(final.projection?.items?.[0]).toMatchObject({
+			category: "explorer",
 			description: expect.any(String),
 			report: { text: "task 0", truncated: false },
 		});
-		expect(final.projection?.workers?.map((worker) => worker.id)).toEqual(
-			initial.projection?.workers?.map((worker) => worker.id),
+		expect(final.projection?.items?.map((worker) => worker.id)).toEqual(
+			initial.projection?.items?.map((worker) => worker.id),
 		);
 		expect(updates).toHaveBeenCalledTimes(callsAtHandoff);
 		expect(h.settled).toHaveBeenCalledTimes(1);
@@ -427,7 +427,7 @@ it("rejects a closed captured host before foreground fallback can start workers"
 	expect(h.service.list()).toEqual([]);
 });
 
-it("keeps disabled-host foreground fallback, while explicit background reaches host rejection", async () => {
+it("uses task supervision for foreground work when background handoff is disabled", async () => {
 	runSdkTaskMock.mockReset();
 	runSdkTaskMock.mockImplementation(async (options: SdkRunnerOptions) => {
 		options.dispatch({
@@ -447,16 +447,16 @@ it("keeps disabled-host foreground fallback, while explicit background reaches h
 		h.ctx,
 	);
 	expect(result.details?.status).toBe("completed");
-	expect(h.execute).not.toHaveBeenCalled();
+	expect(h.execute).toHaveBeenCalledOnce();
 	await expect(
 		h.tool.execute("disabled", { background: true, tasks: [{ prompt: "work" }] }, undefined, undefined, h.ctx),
 	).rejects.toThrow("not available");
-	expect(h.execute).toHaveBeenCalledTimes(1);
+	expect(h.execute).toHaveBeenCalledTimes(2);
 	expect(runSdkTaskMock).toHaveBeenCalledTimes(1);
 	await expect(
 		h.tool.execute("missing", { background: true, tasks: [{ prompt: "work" }] }, undefined, undefined, {
 			...h.ctx,
-			background: undefined,
+			tasks: undefined,
 		} as unknown as ExtensionContext),
 	).rejects.toThrow("Background host");
 });

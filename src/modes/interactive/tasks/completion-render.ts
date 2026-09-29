@@ -1,4 +1,4 @@
-/** Human-facing completion cards. The persisted model message remains untouched. */
+/** Human-facing completion cards. The persisted context message remains untouched. */
 import {
 	type Component,
 	Markdown,
@@ -6,32 +6,33 @@ import {
 	truncateToWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { readBackgroundCompletion } from "../../core/background/presentation.ts";
-import type { BackgroundTerminalStatus } from "../../core/background/types.ts";
-import type { MessageRenderOptions } from "../../core/extensions/types.ts";
-import type { CustomMessage } from "../../core/messages.ts";
-import { type StatusMarkerColor, statusMarker } from "../../modes/interactive/components/status-marker.ts";
-import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
-import { FramedComponent } from "../../modes/interactive/tool-view/style.ts";
-import { sanitizeBinaryOutput } from "../../utils/shell.ts";
+import type { MessageRenderOptions } from "../../../core/extensions/types.ts";
+import type { CustomMessage } from "../../../core/messages.ts";
+import { readTaskCompletion } from "../../../core/tasks/presentation.ts";
+import type { TaskTerminalStatus } from "../../../core/tasks/types.ts";
+import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
+import { type StatusMarkerColor, statusMarker } from "../components/status-marker.ts";
+import { getMarkdownTheme, type Theme } from "../theme/theme.ts";
+import { FramedComponent } from "../tool-view/style.ts";
 
 const SOURCE_LIMIT = 64 * 1024;
 const CARD_ROWS = 128;
 const OUTPUT_ROWS = 20;
 const REPORT_ROWS = 24;
 
-interface WorkerReport {
+interface ItemReport {
 	index: number;
 	description: string;
-	profile: string;
+	category: string;
 	status: string;
 	report: string;
 	error?: string;
 	truncated: boolean;
 }
 interface CompletionView {
-	kind?: "bash" | "subagent";
-	status?: BackgroundTerminalStatus;
+	kind?: string;
+	format?: "log" | "report";
+	status?: TaskTerminalStatus;
 	id?: string;
 	shell?: string;
 	command?: string;
@@ -39,7 +40,7 @@ interface CompletionView {
 	path?: string;
 	diagnostic?: string;
 	body: string;
-	workers?: WorkerReport[];
+	items?: ItemReport[];
 	truncated: boolean;
 }
 
@@ -78,31 +79,32 @@ function savedText(message: CustomMessage<unknown>): { text: string; clipped: bo
 }
 
 function completionView(message: CustomMessage<unknown>): CompletionView {
-	const snapshot = readBackgroundCompletion(message.details);
+	const snapshot = readTaskCompletion(message.details);
 	if (!snapshot) {
 		const { text, clipped } = savedText(message);
 		return { body: text, truncated: clipped };
 	}
 	const view: CompletionView = {
 		kind: snapshot.kind,
+		format: snapshot.format,
 		status: snapshot.status,
 		id: clean(snapshot.taskId),
 		body: "",
 		diagnostic: snapshot.error === undefined ? undefined : clean(snapshot.error),
 		truncated: false,
 	};
-	if (snapshot.kind === "bash") {
+	if (snapshot.format === "log") {
 		view.shell = snapshot.shell === undefined ? undefined : clean(snapshot.shell);
 		view.command = snapshot.command === undefined ? undefined : clean(snapshot.command.text);
 		view.cwd = snapshot.cwd === undefined ? undefined : clean(snapshot.cwd);
 		view.path = snapshot.outputPath === undefined ? undefined : clean(snapshot.outputPath);
 		view.body = clean(snapshot.output.text);
 		view.truncated = snapshot.output.truncated || snapshot.command?.truncated === true;
-	} else if (snapshot.workers.length) {
-		view.workers = snapshot.workers.map((worker, index) => ({
+	} else if (snapshot.items.length) {
+		view.items = snapshot.items.map((worker, index) => ({
 			index: index + 1,
 			description: clean(worker.description),
-			profile: clean(worker.profile),
+			category: clean(worker.category),
 			status: clean(worker.status),
 			report: clean(worker.report.text),
 			error: worker.error === undefined ? undefined : clean(worker.error),
@@ -115,7 +117,7 @@ function completionView(message: CustomMessage<unknown>): CompletionView {
 	return view;
 }
 
-function failedWorker(worker: WorkerReport): boolean {
+function failedWorker(worker: ItemReport): boolean {
 	return !!worker.error || worker.status === "failed" || worker.status === "aborted" || worker.status === "cancelled";
 }
 
@@ -164,9 +166,9 @@ class CompletionCard implements Component {
 		const lines: string[] = [];
 		const status = view.status ? statusName(view.status) : "Result received";
 		const kind =
-			view.kind === "subagent"
-				? "Subagent"
-				: view.kind === "bash"
+			view.format === "report"
+				? view.kind || "Task"
+				: view.format === "log"
 					? view.shell === "bash"
 						? "Bash"
 						: view.shell || "Shell"
@@ -176,15 +178,15 @@ class CompletionCard implements Component {
 		);
 		if (!options.expanded) {
 			if (view.command) lines.push(theme.fg("toolOutput", `$ ${view.command.split("\n")[0]}`));
-			else if (view.workers)
+			else if (view.items)
 				lines.push(
 					theme.fg(
 						"muted",
-						`${view.workers.length} worker${view.workers.length === 1 ? "" : "s"} · reports available`,
+						`${view.items.length} worker${view.items.length === 1 ? "" : "s"} · reports available`,
 					),
 				);
 			if (view.diagnostic) lines.push(theme.fg(color(view.status), view.diagnostic));
-			const problem = view.workers?.find(failedWorker);
+			const problem = view.items?.find(failedWorker);
 			if (problem) {
 				lines.push(
 					theme.fg(
@@ -215,9 +217,9 @@ class CompletionCard implements Component {
 				for (const line of selected) lines.push(indent + line);
 				if (!tail && omitted) lines.push(theme.fg("dim", `${indent}… ${omitted} more display lines omitted`));
 			};
-			if (view.kind === "subagent" && view.diagnostic)
+			if (view.format === "report" && view.diagnostic)
 				section("Group result", view.diagnostic, 4, false, false, view.status === "failed");
-			if (view.kind === "bash") {
+			if (view.format === "log") {
 				if (view.command) section("Command", view.command, 8);
 				if (view.cwd) section("Directory", view.cwd, 2);
 				section(
@@ -230,13 +232,13 @@ class CompletionCard implements Component {
 				);
 				section("Output", !view.body.trim() ? "No output." : view.body, OUTPUT_ROWS, false, true);
 				if (view.path) section("Log", view.path, 4);
-			} else if (view.workers) {
-				const reportBudget = Math.min(REPORT_ROWS, Math.max(6, Math.floor(72 / view.workers.length)));
-				for (const worker of view.workers) {
+			} else if (view.items) {
+				const reportBudget = Math.min(REPORT_ROWS, Math.max(6, Math.floor(72 / view.items.length)));
+				for (const worker of view.items) {
 					const marker = statusMarker(worker.status);
 					lines.push(
 						"",
-						`${theme.fg(marker.color, `${marker.glyph} #${worker.index} ${statusName(worker.profile)}`)}${theme.fg("muted", ` · ${statusName(worker.status)}`)}`,
+						`${theme.fg(marker.color, `${marker.glyph} #${worker.index} ${statusName(worker.category)}`)}${theme.fg("muted", ` · ${statusName(worker.status)}`)}`,
 					);
 					lines.push(theme.fg("muted", `Task: ${worker.description}`));
 					if (failedWorker(worker)) {
@@ -259,18 +261,21 @@ class CompletionCard implements Component {
 				lines.push("", ...wrapTextWithAnsi(`Task ID: ${view.id}`, inner).map((line) => theme.fg("dim", line)));
 			}
 
-			lines.push(theme.fg("dim", "Preview of the saved result · /bg has task details while retained."));
+			lines.push(theme.fg("dim", "Preview of the saved result · /tasks has task details while retained."));
 		}
 		const bounded =
 			lines.length > CARD_ROWS
-				? [...lines.slice(0, CARD_ROWS - 1), theme.fg("dim", "… card shortened; inspect retained details in /bg")]
+				? [
+						...lines.slice(0, CARD_ROWS - 1),
+						theme.fg("dim", "… card shortened; inspect retained details in /tasks"),
+					]
 				: lines;
 		return bounded.map((line) => " ".repeat(padding) + truncateToWidth(line, inner, "…") + " ".repeat(padding));
 	}
 }
 
 /** Always return a compact, replay-safe component, including for unknown historical formats. */
-export function renderBackgroundCompletion(
+export function renderTaskCompletion(
 	message: CustomMessage<unknown>,
 	options: MessageRenderOptions,
 	theme: Theme,

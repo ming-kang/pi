@@ -1,19 +1,19 @@
 import type { CustomMessage } from "../messages.ts";
 import { truncateHead } from "../tools/truncate.ts";
-import { BACKGROUND_DETAILS_BYTES, BACKGROUND_RESULT_BYTES, BACKGROUND_TITLE_BYTES, boundText } from "./output.ts";
+import { boundText, TASK_DETAILS_BYTES, TASK_RESULT_BYTES, TASK_TITLE_BYTES } from "./output.ts";
 import type {
-	BackgroundCompletionSnapshot,
-	BackgroundProjection,
-	BackgroundTask,
-	BackgroundTerminalStatus,
-	BackgroundText,
-	BackgroundWorker,
-	BackgroundWorkerReport,
+	TaskCompletionSnapshot,
+	TaskItem,
+	TaskItemReport,
+	TaskProjection,
+	TaskSnapshot,
+	TaskTerminalStatus,
+	TaskText,
 } from "./types.ts";
 
 const OUTPUT_BYTES = 40 * 1024;
 const REPORT_BYTES = 4 * 1024;
-const MAX_WORKERS = 8;
+const MAX_ITEMS = 8;
 const MODEL_LINES = 2000;
 
 /** Read data properties only, including at the persisted-message boundary. */
@@ -50,7 +50,7 @@ function optionalString(source: object, key: string, bytes: number): string | un
 	return value === undefined ? undefined : string(value, bytes);
 }
 
-function text(value: unknown, bytes: number): BackgroundText {
+function text(value: unknown, bytes: number): TaskText {
 	const source = object(value);
 	const original = field(source, "text");
 	const truncated = field(source, "truncated");
@@ -59,12 +59,12 @@ function text(value: unknown, bytes: number): BackgroundText {
 	return { text: bounded, truncated: truncated || bounded !== original };
 }
 
-function workerReport(value: unknown): BackgroundWorkerReport {
+function itemReport(value: unknown): TaskItemReport {
 	const source = object(value);
 	return {
 		id: string(field(source, "id"), 256),
 		label: string(field(source, "label"), 512),
-		profile: string(field(source, "profile"), 128),
+		category: string(field(source, "category"), 128),
 		description: string(field(source, "description"), 512),
 		status: string(field(source, "status"), 128),
 		report: text(field(source, "report"), REPORT_BYTES),
@@ -72,15 +72,18 @@ function workerReport(value: unknown): BackgroundWorkerReport {
 	};
 }
 
-function workers<T>(value: unknown, read: (value: unknown) => T): T[] {
-	if (!Array.isArray(value)) throw new Error("Expected workers");
-	return Array.from({ length: Math.min(value.length, MAX_WORKERS) }, (_, index) => read(field(value, String(index))));
+function items<T>(value: unknown, read: (value: unknown) => T): T[] {
+	if (!Array.isArray(value)) throw new Error("Expected items");
+	return Array.from({ length: Math.min(value.length, MAX_ITEMS) }, (_, index) => read(field(value, String(index))));
 }
 
 /** Shared by live publication and history restoration; never imports an executor's private details. */
-export function readBackgroundProjection(value: unknown): BackgroundProjection {
+export function readTaskProjection(value: unknown): TaskProjection {
 	const source = object(value);
-	const projection: BackgroundProjection = { text: optionalString(source, "text", 16 * 1024) };
+	const projection: TaskProjection = {
+		nextStep: optionalString(source, "nextStep", 2048),
+		text: optionalString(source, "text", 16 * 1024),
+	};
 	const shell = field(source, "shell");
 	if (shell !== undefined) {
 		const fields = object(shell);
@@ -89,15 +92,15 @@ export function readBackgroundProjection(value: unknown): BackgroundProjection {
 			output: text(field(fields, "output"), OUTPUT_BYTES),
 		};
 	}
-	const reports = field(source, "workers");
+	const reports = field(source, "items");
 	if (reports !== undefined) {
-		projection.workers = workers(reports, (value): BackgroundWorker => {
+		projection.items = items(reports, (value): TaskItem => {
 			const fields = object(value);
 			return {
-				...workerReport(value),
-				prompt: string(field(fields, "prompt"), 4096),
+				...itemReport(value),
+				input: string(field(fields, "input"), 4096),
 				activity: string(field(fields, "activity"), 1024),
-				model: optionalString(fields, "model", 256),
+				context: optionalString(fields, "context", 256),
 				usage: optionalString(fields, "usage", 256),
 			};
 		});
@@ -105,7 +108,7 @@ export function readBackgroundProjection(value: unknown): BackgroundProjection {
 	return projection;
 }
 
-function terminalStatus(value: unknown): BackgroundTerminalStatus {
+function terminalStatus(value: unknown): TaskTerminalStatus {
 	if (
 		value === "completed" ||
 		value === "partial" ||
@@ -118,13 +121,15 @@ function terminalStatus(value: unknown): BackgroundTerminalStatus {
 }
 
 /** Only this format is understood. Invalid/older details receive the renderer's bounded plain-text fallback. */
-export function readBackgroundCompletion(value: unknown): BackgroundCompletionSnapshot | undefined {
+export function readTaskCompletion(value: unknown): TaskCompletionSnapshot | undefined {
 	try {
 		const source = object(value);
 		if (field(source, "version") !== 1) return undefined;
 		const taskId = field(source, "taskId");
 		const kind = field(source, "kind");
-		if (kind !== "bash" && kind !== "subagent") return undefined;
+		if (typeof kind !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(kind)) return undefined;
+		const format = field(source, "format");
+		if (format !== "log" && format !== "report") return undefined;
 		if (
 			typeof taskId !== "string" ||
 			!taskId.startsWith(`${kind}-`) ||
@@ -148,14 +153,15 @@ export function readBackgroundCompletion(value: unknown): BackgroundCompletionSn
 		const common = {
 			version: 1 as const,
 			taskId,
-			title: string(field(source, "title"), BACKGROUND_TITLE_BYTES),
+			title: string(field(source, "title"), TASK_TITLE_BYTES),
 			status: terminalStatus(field(source, "status")),
 			startedAt,
 			endedAt,
 			error: optionalString(source, "error", 4096),
+			nextStep: optionalString(source, "nextStep", 2048),
 		};
-		let snapshot: BackgroundCompletionSnapshot;
-		if (kind === "bash") {
+		let snapshot: TaskCompletionSnapshot;
+		if (format === "log") {
 			const command = field(source, "command");
 			const outputPath = field(source, "outputPath");
 			const exitCode = field(source, "exitCode");
@@ -170,6 +176,7 @@ export function readBackgroundCompletion(value: unknown): BackgroundCompletionSn
 			snapshot = {
 				...common,
 				kind,
+				format,
 				shell: optionalString(source, "shell", 128),
 				command: command === undefined ? undefined : text(command, 8192),
 				cwd: optionalString(source, "cwd", 4096),
@@ -188,18 +195,19 @@ export function readBackgroundCompletion(value: unknown): BackgroundCompletionSn
 			snapshot = {
 				...common,
 				kind,
-				workers: workers(field(source, "workers"), workerReport),
+				format,
+				items: items(field(source, "items"), itemReport),
 				output: output === undefined ? undefined : text(output, OUTPUT_BYTES),
 			};
 		}
-		return Buffer.byteLength(JSON.stringify(snapshot)) <= BACKGROUND_DETAILS_BYTES ? snapshot : undefined;
+		return Buffer.byteLength(JSON.stringify(snapshot)) <= TASK_DETAILS_BYTES ? snapshot : undefined;
 	} catch {
 		return undefined;
 	}
 }
 
-export function backgroundCompletionSnapshot(task: BackgroundTask): BackgroundCompletionSnapshot {
-	const output: BackgroundText = {
+export function taskCompletionSnapshot(task: TaskSnapshot): TaskCompletionSnapshot {
+	const output: TaskText = {
 		text:
 			task.result?.content
 				.filter((block) => block.type === "text")
@@ -217,12 +225,14 @@ export function backgroundCompletionSnapshot(task: BackgroundTask): BackgroundCo
 		startedAt: task.startedAt,
 		endedAt: task.endedAt,
 		error: task.error,
+		nextStep: task.projection?.nextStep,
 	};
-	const snapshot = readBackgroundCompletion(
-		task.kind === "bash"
+	const snapshot = readTaskCompletion(
+		task.format === "log"
 			? {
 					...common,
-					kind: "bash",
+					kind: task.kind,
+					format: "log",
 					shell: task.projection?.shell?.name,
 					command:
 						task.command === undefined
@@ -235,9 +245,10 @@ export function backgroundCompletionSnapshot(task: BackgroundTask): BackgroundCo
 				}
 			: {
 					...common,
-					kind: "subagent",
-					workers: task.projection?.workers ?? [],
-					output: task.projection?.workers?.length ? undefined : output,
+					kind: task.kind,
+					format: "report",
+					items: task.projection?.items ?? [],
+					output: task.projection?.items?.length ? undefined : output,
 				},
 	);
 	if (!snapshot) throw new Error("Invalid background completion snapshot");
@@ -245,9 +256,9 @@ export function backgroundCompletionSnapshot(task: BackgroundTask): BackgroundCo
 }
 
 const singleLine = (value: string) => value.replace(/\s+/gu, " ").trim();
-const OMISSION = "\n[Saved output truncated; use bg read for retained task details.]";
+const OMISSION = "\n[Saved output truncated; use tasks read for retained task details.]";
 
-function modelText(value: BackgroundText, bytes: number, lines: number): string {
+function modelText(value: TaskText, bytes: number, lines: number): string {
 	const result = truncateHead(value.text, {
 		maxBytes: Math.max(0, bytes - Buffer.byteLength(OMISSION)),
 		maxLines: Math.max(1, lines - 1),
@@ -256,7 +267,7 @@ function modelText(value: BackgroundText, bytes: number, lines: number): string 
 }
 
 /** One bounded action hint per terminal outcome; completed work needs none. */
-function nextStepLine(snapshot: BackgroundCompletionSnapshot): string {
+function nextStepLine(snapshot: TaskCompletionSnapshot): string {
 	switch (snapshot.status) {
 		case "cancelled":
 			return "Next step: the task was cancelled — do not restart it unless the user asks.";
@@ -264,19 +275,7 @@ function nextStepLine(snapshot: BackgroundCompletionSnapshot): string {
 			return "Next step: the task hit its timeout; inspect the partial output above, then rerun with a longer timeout or in smaller pieces if still needed.";
 		case "failed":
 		case "partial": {
-			if (snapshot.kind === "subagent") {
-				const unfinished = snapshot.workers
-					.filter((worker) => worker.status !== "completed")
-					.map((worker) => singleLine(worker.description))
-					.filter(Boolean);
-				const names =
-					unfinished.length > 3
-						? `${unfinished.slice(0, 3).join(", ")}, +${unfinished.length - 3} more`
-						: unfinished.join(", ");
-				return names
-					? `Next step: re-delegate the unfinished work in a fresh subagent call if still needed (${names}).`
-					: "Next step: re-delegate the work in a fresh subagent call if still needed.";
-			}
+			if (snapshot.nextStep) return snapshot.nextStep;
 			return "Next step: diagnose from the output above before retrying; rerun only what is still needed.";
 		}
 		default:
@@ -284,13 +283,13 @@ function nextStepLine(snapshot: BackgroundCompletionSnapshot): string {
 	}
 }
 
-/** The model and the card share facts; only the model receives this prose projection. */
-function notificationText(snapshot: BackgroundCompletionSnapshot): string {
+/** The context and the card share facts; only the context receives this prose projection. */
+function notificationText(snapshot: TaskCompletionSnapshot): string {
 	const header = [
 		`Background ${snapshot.kind} ${snapshot.taskId}: ${snapshot.status} — ${singleLine(snapshot.title)}`,
 		snapshot.error ? `Error: ${singleLine(snapshot.error)}` : "",
 	].filter(Boolean);
-	if (snapshot.kind === "bash") {
+	if (snapshot.format === "log") {
 		if (snapshot.command) header.push(`Command:\n${modelText(snapshot.command, 8192, 128)}`);
 		if (snapshot.cwd) header.push(`cwd: ${singleLine(snapshot.cwd)}`);
 		if (snapshot.outputPath) header.push(`Output: ${singleLine(snapshot.outputPath)}`);
@@ -298,17 +297,17 @@ function notificationText(snapshot: BackgroundCompletionSnapshot): string {
 	const prefix = `${header.join("\n")}\n\n`;
 	const guidance = nextStepLine(snapshot);
 	const suffix = guidance ? `\n\n${guidance}` : "";
-	const remaining = BACKGROUND_RESULT_BYTES - Buffer.byteLength(prefix) - Buffer.byteLength(suffix);
+	const remaining = TASK_RESULT_BYTES - Buffer.byteLength(prefix) - Buffer.byteLength(suffix);
 	const lines = MODEL_LINES - prefix.split("\n").length - (guidance ? 3 : 0);
-	if (snapshot.kind === "subagent" && snapshot.workers.length) {
-		// Allocate before formatting, so one verbose report cannot erase later workers.
-		const budget = Math.floor((remaining - 8 * snapshot.workers.length) / snapshot.workers.length);
-		const lineBudget = Math.floor((lines - 4 * snapshot.workers.length) / snapshot.workers.length);
+	if (snapshot.format === "report" && snapshot.items.length) {
+		// Allocate before formatting, so one verbose report cannot erase later items.
+		const budget = Math.floor((remaining - 8 * snapshot.items.length) / snapshot.items.length);
+		const lineBudget = Math.floor((lines - 4 * snapshot.items.length) / snapshot.items.length);
 		return (
 			prefix +
-			snapshot.workers
+			snapshot.items
 				.map((worker, index) => {
-					const heading = `### ${index + 1}. ${singleLine(worker.description)} (${singleLine(worker.profile)}) — ${singleLine(worker.status)}\n\n`;
+					const heading = `### ${index + 1}. ${singleLine(worker.description)} (${singleLine(worker.category)}) — ${singleLine(worker.status)}\n\n`;
 					const reason = worker.error ? `Error: ${singleLine(worker.error)}\n\n` : "";
 					const body = worker.report.text
 						? worker.report
@@ -324,11 +323,11 @@ function notificationText(snapshot: BackgroundCompletionSnapshot): string {
 	);
 }
 
-export function backgroundCompletionMessage(task: BackgroundTask): CustomMessage<BackgroundCompletionSnapshot> {
-	const details = backgroundCompletionSnapshot(task);
+export function taskCompletionMessage(task: TaskSnapshot): CustomMessage<TaskCompletionSnapshot> {
+	const details = taskCompletionSnapshot(task);
 	return {
 		role: "custom",
-		customType: "background-completion",
+		customType: "task-completion",
 		display: true,
 		content: notificationText(details),
 		details,
