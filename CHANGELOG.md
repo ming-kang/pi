@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.87.6] - 2026-09-29
+
 ### Fixed
 
 - Bash and PowerShell result renderers keep their elapsed time when an extension replaces only the call renderer, and release their timers alongside an existing extension cleanup callback.
