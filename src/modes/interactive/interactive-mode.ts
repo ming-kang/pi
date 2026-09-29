@@ -166,7 +166,6 @@ import {
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
 import { ThinkingSelectorComponent } from "./components/thinking-selector.ts";
-import { ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
@@ -190,14 +189,8 @@ import {
 	theme,
 } from "./theme/theme.ts";
 import { InteractiveThemeController } from "./theme/theme-controller.ts";
-import {
-	appendToolRow,
-	disposeChatRows,
-	isToolChatComponent,
-	PendingToolMap,
-	ToolChatContainer,
-	toolDetachHint,
-} from "./tool-chat.ts";
+import { disposeChatRows, PendingToolMap, ToolChatContainer } from "./tool-view/chat.ts";
+import { ToolExecutionComponent } from "./tool-view/tool-execution.ts";
 import { createInteractiveTui, createInteractiveTuiReference } from "./tui-renderer.ts";
 
 export { createInteractiveTui, createInteractiveTuiReference } from "./tui-renderer.ts";
@@ -3412,14 +3405,13 @@ export class InteractiveMode {
 									{
 										showImages: this.settingsManager.getShowImages(),
 										imageWidthCells: this.settingsManager.getImageWidthCells(),
-										detachHint: toolDetachHint(this.keybindings),
 									},
 									this.getRegisteredToolDefinition(content.name),
 									this.ui,
 									this.sessionManager.getCwd(),
 								);
 								component.setExpanded(this.toolOutputExpanded);
-								appendToolRow(this.chatContainer, component, this.toolOutputExpanded);
+								this.chatContainer.addChild(component);
 								this.pendingTools.set(content.id, component);
 							} else {
 								const component = this.pendingTools.get(content.id);
@@ -3489,14 +3481,13 @@ export class InteractiveMode {
 						{
 							showImages: this.settingsManager.getShowImages(),
 							imageWidthCells: this.settingsManager.getImageWidthCells(),
-							detachHint: toolDetachHint(this.keybindings),
 						},
 						this.getRegisteredToolDefinition(event.toolName),
 						this.ui,
 						this.sessionManager.getCwd(),
 					);
 					component.setExpanded(this.toolOutputExpanded);
-					appendToolRow(this.chatContainer, component, this.toolOutputExpanded);
+					this.chatContainer.addChild(component);
 					this.pendingTools.set(event.toolCallId, component);
 				}
 				component.markExecutionStarted();
@@ -3889,14 +3880,13 @@ export class InteractiveMode {
 							{
 								showImages: this.settingsManager.getShowImages(),
 								imageWidthCells: this.settingsManager.getImageWidthCells(),
-								detachHint: toolDetachHint(this.keybindings),
 							},
 							this.getRegisteredToolDefinition(content.name),
 							this.ui,
 							this.sessionManager.getCwd(),
 						);
 						component.setExpanded(this.toolOutputExpanded);
-						appendToolRow(this.chatContainer, component, this.toolOutputExpanded);
+						this.chatContainer.addChild(component);
 
 						if (message.stopReason === "aborted" || message.stopReason === "error") {
 							let errorMessage: string;
@@ -4810,7 +4800,7 @@ export class InteractiveMode {
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);
 						for (const child of this.chatContainer.children) {
-							if (isToolChatComponent(child)) {
+							if (child instanceof ToolExecutionComponent) {
 								child.setShowImages(enabled);
 							}
 						}
@@ -4818,7 +4808,7 @@ export class InteractiveMode {
 					onImageWidthCellsChange: (width) => {
 						this.settingsManager.setImageWidthCells(width);
 						for (const child of this.chatContainer.children) {
-							if (isToolChatComponent(child)) {
+							if (child instanceof ToolExecutionComponent) {
 								child.setImageWidthCells(width);
 							}
 						}

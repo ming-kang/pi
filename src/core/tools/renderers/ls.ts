@@ -7,10 +7,11 @@
  */
 
 import { Text } from "@earendil-works/pi-tui";
+import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../../extensions/types.ts";
 import type { LsToolDetails } from "../ls.ts";
-import { collapsedLinesHint, getTextOutput, renderToolPath, str } from "../render-utils.ts";
+import { getTextOutput, renderToolPath, str } from "../render-utils.ts";
 import { DEFAULT_MAX_BYTES, formatSize } from "../truncate.ts";
 
 function formatLsCall(args: { path?: string; limit?: number } | undefined, theme: Theme, cwd: string): string {
@@ -40,7 +41,7 @@ function formatLsResult(
 		const remaining = lines.length - maxLines;
 		text += `\n${displayLines.map((line) => theme.fg("toolOutput", line)).join("\n")}`;
 		if (remaining > 0) {
-			text += `\n${collapsedLinesHint(theme, remaining, "more")}`;
+			text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 		}
 	}
 

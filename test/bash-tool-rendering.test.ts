@@ -2,8 +2,8 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { createPowerShellToolDefinition } from "../src/core/tools/powershell.ts";
-import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { ToolExecutionComponent } from "../src/modes/interactive/tool-view/tool-execution.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 function createRenderer(command: unknown, timeout?: number): ToolExecutionComponent {
@@ -24,30 +24,6 @@ function createRenderer(command: unknown, timeout?: number): ToolExecutionCompon
 
 function renderCall(component: ToolExecutionComponent, width: number): string {
 	return stripAnsi(component.render(width).join("\n"));
-}
-
-function createDetachHintRenderer(
-	toolName: string,
-	options: { detachable?: boolean; keyLabel?: string } = {},
-): ToolExecutionComponent {
-	const tool =
-		toolName === "bash"
-			? createBashToolDefinition(process.cwd(), { operations: { exec: async () => ({ exitCode: 0 }) } })
-			: undefined;
-	return new ToolExecutionComponent(
-		toolName,
-		`${toolName}-detach-hint-test`,
-		toolName === "bash" ? { command: "sleep 60" } : { tasks: [] },
-		{
-			detachHint: {
-				isDetachable: (name: string) => options.detachable ?? name === toolName,
-				keyLabel: () => options.keyLabel ?? "Ctrl+B",
-			},
-		},
-		tool,
-		{ requestRender: () => {} } as never,
-		process.cwd(),
-	);
 }
 
 describe("bash tool call rendering", () => {
@@ -152,35 +128,52 @@ describe("bash tool call rendering", () => {
 		}
 	});
 
-	test("delays running duration until the two-second threshold", () => {
+	test("shows Elapsed while running and a fixed Took once settled, without a shell progress row", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
 		const component = createRenderer("npm run check");
 		component.markExecutionStarted();
 		component.updateResult({ content: [], isError: false }, true);
 
-		expect(renderCall(component, 120)).not.toContain("Running");
-		vi.advanceTimersByTime(1999);
-		expect(renderCall(component, 120)).not.toContain("Running");
-		vi.advanceTimersByTime(1);
-		expect(renderCall(component, 120)).toContain("Running… (2.0s)");
-		expect(renderCall(component, 120)).not.toContain("run in background");
-
-		vi.setSystemTime(59_950);
-		component.invalidate();
-		expect(renderCall(component, 120)).toContain("Running… (1m 0s)");
-		vi.setSystemTime(119_500);
-		component.invalidate();
-		const roundedMinutes = renderCall(component, 120);
-		expect(roundedMinutes).toContain("Running… (2m 0s)");
-		expect(roundedMinutes).not.toContain("1m 60s");
+		vi.advanceTimersByTime(4000);
+		const running = renderCall(component, 120);
+		expect(running).toContain("Elapsed 4.0s");
+		expect(running).not.toContain("Running");
+		expect(running).not.toContain("background");
 
 		component.updateResult({ content: [{ type: "text", text: "(no output)" }], isError: false }, false);
-		const completed = renderCall(component, 120);
-		expect(completed).toContain("(no output)");
-		expect(completed).not.toContain("run in background");
-		expect(completed).not.toContain("Running");
-		expect(completed).not.toContain("Took");
+		const settled = renderCall(component, 120);
+		expect(settled).toContain("(no output)");
+		expect(settled).toContain("Took 4.0s");
+		expect(settled).not.toContain("Elapsed");
+
+		vi.advanceTimersByTime(60_000);
+		component.invalidate();
+		expect(renderCall(component, 120)).toBe(settled);
+	});
+
+	test("stops the Elapsed refresh when the row is disposed while running", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+		const requestRender = vi.fn();
+		const tool = createBashToolDefinition(process.cwd(), { operations: { exec: async () => ({ exitCode: 0 }) } });
+		const component = new ToolExecutionComponent(
+			"bash",
+			"bash-dispose",
+			{ command: "sleep 60" },
+			{},
+			tool,
+			{ requestRender } as never,
+			process.cwd(),
+		);
+		component.markExecutionStarted();
+		component.updateResult({ content: [], isError: false }, true);
+		vi.advanceTimersByTime(2000);
+		component.dispose();
+		const requests = requestRender.mock.calls.length;
+		vi.advanceTimersByTime(5000);
+		expect(requestRender).toHaveBeenCalledTimes(requests);
+		expect(vi.getTimerCount()).toBe(0);
 	});
 
 	test.each([createBashToolDefinition, createPowerShellToolDefinition])(
@@ -201,7 +194,7 @@ describe("bash tool call rendering", () => {
 			component.markExecutionStarted();
 			component.updateResult({ content: [], isError: false }, true);
 			vi.advanceTimersByTime(3000);
-			if (tool.name === "bash") expect(renderCall(component, 120)).toContain("Running");
+			expect(renderCall(component, 120)).toContain("Elapsed 3.0s");
 			component.updateResult(
 				{
 					content: [{ type: "text", text: "Command running in background" }],
@@ -216,7 +209,8 @@ describe("bash tool call rendering", () => {
 				const rendered = renderCall(component, 120);
 				expect(rendered).toContain("Moved to background · bash-task");
 				expect(rendered).toContain("Full output: output.log");
-				expect(rendered).not.toContain("Running");
+				expect(rendered).toContain("Took 3.0s");
+				expect(rendered).not.toContain("Elapsed");
 				expect(rendered).not.toContain("exit code");
 			}
 		},
@@ -234,66 +228,5 @@ describe("bash tool call rendering", () => {
 
 	afterEach(() => {
 		vi.useRealTimers();
-	});
-});
-
-describe("detach hint on long-running foreground cards", () => {
-	afterEach(() => {
-		vi.useRealTimers();
-	});
-
-	test("appears after the delay with the resolved key label and clears on settlement", () => {
-		vi.useFakeTimers();
-		vi.setSystemTime(0);
-		const component = createDetachHintRenderer("bash");
-		component.markExecutionStarted();
-		component.updateResult({ content: [], isError: false }, true);
-
-		vi.setSystemTime(9_999);
-		component.invalidate();
-		expect(renderCall(component, 120)).not.toContain("run in background");
-
-		vi.setSystemTime(10_000);
-		component.invalidate();
-		expect(renderCall(component, 120)).toContain("Press Ctrl+B to run in background, /bg to manage");
-
-		component.updateResult({ content: [{ type: "text", text: "done" }], isError: false }, false);
-		expect(renderCall(component, 120)).not.toContain("run in background");
-	});
-
-	test("hides when the key is unbound or the tool is not detachable", () => {
-		vi.useFakeTimers();
-		vi.setSystemTime(0);
-		const unbound = createDetachHintRenderer("bash", { keyLabel: "" });
-		unbound.markExecutionStarted();
-		unbound.updateResult({ content: [], isError: false }, true);
-		vi.setSystemTime(15_000);
-		unbound.invalidate();
-		expect(renderCall(unbound, 120)).not.toContain("run in background");
-
-		const fixed = createDetachHintRenderer("bash", { detachable: false });
-		fixed.markExecutionStarted();
-		fixed.updateResult({ content: [], isError: false }, true);
-		vi.setSystemTime(15_000);
-		fixed.invalidate();
-		expect(renderCall(fixed, 120)).not.toContain("run in background");
-	});
-
-	test("shows on subagent cards without the generic running line", () => {
-		vi.useFakeTimers();
-		vi.setSystemTime(0);
-		const component = createDetachHintRenderer("subagent");
-		component.markExecutionStarted();
-		component.updateResult({ content: [], isError: false }, true);
-
-		vi.setSystemTime(5_000);
-		component.invalidate();
-		expect(renderCall(component, 120)).not.toContain("Running…");
-
-		vi.setSystemTime(11_000);
-		component.invalidate();
-		const frame = renderCall(component, 120);
-		expect(frame).not.toContain("Running…");
-		expect(frame).toContain("Press Ctrl+B to run in background, /bg to manage");
 	});
 });

@@ -333,14 +333,13 @@ export class Theme {
 	fg(color: ThemeColor, text: string): string {
 		const ansi = this.fgColors.get(color);
 		if (!ansi) throw new Error(`Unknown theme color: ${color}`);
-		// Re-apply this color after nested fg resets so composed fragments keep the outer color.
-		return `${ansi}${text.replaceAll("\x1b[39m", ansi)}\x1b[39m`;
+		return `${ansi}${text}\x1b[39m`; // Reset only foreground color
 	}
 
 	bg(color: ThemeBg, text: string): string {
 		const ansi = this.bgColors.get(color);
 		if (!ansi) throw new Error(`Unknown theme background color: ${color}`);
-		return `${ansi}${text.replaceAll("\x1b[49m", ansi)}\x1b[49m`;
+		return `${ansi}${text}\x1b[49m`; // Reset only background color
 	}
 
 	bold(text: string): string {

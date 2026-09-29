@@ -7,27 +7,24 @@
  */
 
 import { Text } from "@earendil-works/pi-tui";
+import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../../extensions/types.ts";
 import type { FindToolDetails } from "../find.ts";
-import { collapsedLinesHint, getTextOutput, invalidArgText, renderToolPath, str } from "../render-utils.ts";
+import { getTextOutput, invalidArgText, shortenPath, str } from "../render-utils.ts";
 import { DEFAULT_MAX_BYTES, formatSize } from "../truncate.ts";
 
-function formatFindCall(
-	args: { pattern: string; path?: string; limit?: number } | undefined,
-	theme: Theme,
-	cwd: string,
-): string {
+function formatFindCall(args: { pattern: string; path?: string; limit?: number } | undefined, theme: Theme): string {
 	const pattern = str(args?.pattern);
 	const rawPath = str(args?.path);
+	const path = rawPath !== null ? shortenPath(rawPath || ".") : null;
 	const limit = args?.limit;
 	const invalidArg = invalidArgText(theme);
 	let text =
 		theme.fg("toolTitle", theme.bold("find")) +
 		" " +
 		(pattern === null ? invalidArg : theme.fg("accent", pattern || "")) +
-		theme.fg("toolOutput", " in ") +
-		renderToolPath(rawPath, theme, cwd, { emptyFallback: "." });
+		theme.fg("toolOutput", ` in ${path === null ? invalidArg : path}`);
 	if (limit !== undefined) {
 		text += theme.fg("toolOutput", ` (limit ${limit})`);
 	}
@@ -51,7 +48,7 @@ function formatFindResult(
 		const remaining = lines.length - maxLines;
 		text += `\n${displayLines.map((line) => theme.fg("toolOutput", line)).join("\n")}`;
 		if (remaining > 0) {
-			text += `\n${collapsedLinesHint(theme, remaining, "more")}`;
+			text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 		}
 	}
 
@@ -69,7 +66,7 @@ function formatFindResult(
 export const findRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> = {
 	renderCall(args, theme, context) {
 		const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-		text.setText(formatFindCall(args as any, theme, context.cwd));
+		text.setText(formatFindCall(args as any, theme));
 		return text;
 	},
 	renderResult(result, options, theme, context) {

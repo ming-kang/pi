@@ -21,7 +21,7 @@ Start a whole Subagent invocation through its native tool:
 
 Omitting `background` keeps the normal foreground wait. A background submission returns an execution reference, not a successful final outcome. `bg create` has been removed; old stored create results and background notifications still render in transcripts.
 
-In interactive mode, **Ctrl+B** moves all eligible foreground shell tasks and Subagent invocations to the background. It works even when `/bg` owns focus. The same execution continues: no cancellation, restart, new worker or timeout reset. It does not detach individual workers, ordinary file tools, or user `!` shell commands.
+In interactive mode, **Ctrl+B** moves all eligible foreground shell tasks and Subagent invocations to the background. Once a foreground execution has run for ten seconds and can still move, the statusline shows `Ctrl+B to background`. It works even when `/bg` owns focus. The same execution continues: no cancellation, restart, new worker or timeout reset. It does not detach individual workers, ordinary file tools, or user `!` shell commands.
 
 When nothing is eligible, the key is not consumed: it falls through to other bindings instead of reporting a no-op.
 

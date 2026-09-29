@@ -576,6 +576,102 @@ describe("public Background management", () => {
 			setKeybindings(previousKeybindings);
 		}
 	});
+
+	it("advertises the detach key only after ten seconds and only while a foreground execution can move", async () => {
+		const previousKeybindings = getKeybindings();
+		setKeybindings(KeybindingsManager.create());
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+		try {
+			const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
+			const pi = {
+				on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => void) =>
+					handlers.set(event, handler),
+				registerTool: vi.fn(),
+				registerMessageRenderer: vi.fn(),
+				registerCommand: vi.fn(),
+			} as unknown as ExtensionAPI;
+			createBackgroundExtension()(pi);
+			const service = new BackgroundService({ enabled: true });
+			services.push(service);
+			let input: TerminalInputHandler | undefined;
+			const setStatus = vi.fn();
+			const ui = {
+				setStatus,
+				notify: vi.fn(),
+				onTerminalInput: (handler: TerminalInputHandler) => {
+					input = handler;
+					return () => {};
+				},
+			};
+			const ctx = { background: service, ui } as unknown as ExtensionContext;
+			handlers.get("session_start")?.({}, ctx);
+			expect(setStatus).toHaveBeenLastCalledWith("background", undefined);
+
+			const start = (toolCallId: string) => {
+				let finish!: () => void;
+				const done = new Promise<void>((resolve) => {
+					finish = resolve;
+				});
+				const outcome = service.execute({
+					kind: "bash",
+					title: toolCallId,
+					toolCallId,
+					background: false,
+					async run(control) {
+						control.accept();
+						await done;
+						return { result: { content: [{ type: "text", text: "ok" }], details: undefined } };
+					},
+				});
+				return { finish, outcome };
+			};
+			const hint = "Ctrl+B to background";
+
+			// A command that finishes before the delay never shows the hint, and leaves no timer behind.
+			const quick = start("quick");
+			await vi.advanceTimersByTimeAsync(9_999);
+			expect(setStatus).toHaveBeenLastCalledWith("background", undefined);
+			quick.finish();
+			await quick.outcome;
+			expect(setStatus).toHaveBeenLastCalledWith("background", undefined);
+			expect(vi.getTimerCount()).toBe(0);
+			await vi.advanceTimersByTimeAsync(20_000);
+			expect(setStatus).toHaveBeenLastCalledWith("background", undefined);
+
+			// A command still running at ten seconds gets the hint, and moving it clears the hint.
+			const long = start("long");
+			await vi.advanceTimersByTimeAsync(9_999);
+			expect(setStatus).toHaveBeenLastCalledWith("background", undefined);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(setStatus).toHaveBeenLastCalledWith("background", hint);
+			expect(input?.("\x02")).toEqual({ consume: true });
+			// Moved work is counted as background work and no longer needs the hint.
+			expect(setStatus).toHaveBeenLastCalledWith("background", "bg 1 active · 0 finished");
+			long.finish();
+			await long.outcome;
+
+			// A cancelled execution that is still stopping cannot be moved, so the key is not advertised.
+			const stubborn = start("stubborn");
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(setStatus.mock.lastCall?.[1]).toEqual(expect.stringContaining(hint));
+			service.kill(service.list().find((task) => task.toolCallId === "stubborn")!.id);
+			expect(setStatus.mock.lastCall?.[1]).not.toContain("Ctrl+B");
+			stubborn.finish();
+			await stubborn.outcome;
+
+			// Shutting the session down cancels a pending hint.
+			const last = start("last");
+			await vi.advanceTimersByTimeAsync(5_000);
+			expect(vi.getTimerCount()).toBeGreaterThan(0);
+			handlers.get("session_shutdown")?.({}, ctx);
+			expect(vi.getTimerCount()).toBe(0);
+			last.finish();
+			await last.outcome;
+		} finally {
+			vi.useRealTimers();
+			setKeybindings(previousKeybindings);
+		}
+	});
 });
 
 describe("renderBackgroundNotification", () => {

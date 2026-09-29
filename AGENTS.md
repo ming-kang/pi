@@ -8,7 +8,7 @@ This repo is a standalone distribution of Pi's coding agent, `@astralyn/pi`. [Ma
 - Consume the exact installed `@earendil-works/*` npm dependencies; never vendor, patch, monkey-patch, or recreate them.
 - Classify dependencies by their consumers; dependency scope, ownership, and bundling rationale are owned by [Architecture](maintainers/architecture.md#dependency-boundary).
 - Extensions are self-contained under `src/extensions/`, use the Extension API, and never import another extension's internals. Prefer small domain-neutral duplication to coupling.
-- Keep presentation native: the call/result shell, states, and fallback rendering stay in `src/modes/interactive/components/tool-execution.ts` and the built-in renderers, and `renderShell: "self"` is only for a tool that intentionally owns its complete UI. [Native tool presentation](docs/bundled/tool-presentation.md) owns the details.
+- Tool presentation belongs to this distribution: a tool call is a compact marker-and-rail block whose look is defined only in `src/modes/interactive/tool-view/style.ts`, with its lifecycle in `tool-view/`. Never hard-code the glyphs, spacing, or colors elsewhere, and never add timers or progress rows to the shell; a renderer that needs one schedules its own. Upstream's `components/tool-execution.ts` is dropped, so port its fixes by hand. `renderShell: "self"` is only for a tool that intentionally owns its complete UI. [Native tool presentation](docs/bundled/tool-presentation.md) owns the details.
 - Keep functional UI with its owning extension and use semantic theme helpers, not hard-coded colors. Display-only work must not change a tool schema, execution protocol, or result structure.
 
 ## Conversational style

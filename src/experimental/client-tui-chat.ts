@@ -4,9 +4,9 @@ import { Container, Spacer, Text, TruncatedText, type TUI } from "@earendil-work
 import { createAllToolRenderers } from "../core/tools/renderers/index.ts";
 import { AssistantMessageComponent } from "../modes/interactive/components/assistant-message.ts";
 import { type StatusIndicator, WorkingStatusIndicator } from "../modes/interactive/components/status-indicator.ts";
-import { ToolExecutionComponent, type ToolRenderers } from "../modes/interactive/components/tool-execution.ts";
 import { UserMessageComponent } from "../modes/interactive/components/user-message.ts";
 import { theme } from "../modes/interactive/theme/theme.ts";
+import { ToolExecutionComponent, type ToolRenderers } from "../modes/interactive/tool-view/tool-execution.ts";
 
 function userMessageText(message: AgentMessage): string {
 	if (message.role !== "user") return "";

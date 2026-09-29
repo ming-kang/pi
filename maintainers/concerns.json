@@ -149,38 +149,56 @@
 		},
 		{
 			"id": "tool-presentation",
-			"why": "Native tool rows use the distribution's dot/rail chrome, collapsed hints, and renderer disposal.",
+			"why": "Tool rows are compact dot/rail blocks owned by src/modes/interactive/tool-view/; upstream's Box shell is dropped.",
+			"watch": "Upstream fixes to the dropped tool-execution.ts (image conversion, click to expand, lifecycle) and to the renderers are ported by hand; --target lists them. Retire the fork if upstream ships a shell whose look is configurable.",
 			"paths": [
 				{ "path": "src/core/tools/edit.ts" },
-				{ "path": "src/core/tools/render-utils.ts" },
 				{
 					"path": "src/core/tools/renderers/",
-					"rewrite": "Fork call lines and collapsed bodies replace parts of upstream's extracted renderers."
+					"rewrite": "Bash keeps a truncating, highlighted call line and its background handoff text, and Edit hangs its bounded preview off the rail instead of a background Box."
 				},
+				{ "path": "src/core/extensions/types.ts" },
+				{ "path": "src/experimental/client-tui-chat.ts" },
+				{ "path": "src/experimental/micro/tui.ts" },
+				{ "path": "src/experimental/mini/tui/view.ts" },
+				{ "path": "src/modes/interactive/components/index.ts" },
+				{ "path": "src/modes/interactive/components/tool-execution.ts" },
+				{ "path": "src/modes/interactive/interactive-mode.ts" }
+			],
+			"tests": [
+				"test/bash-tool-rendering.test.ts",
+				"test/edit-tool-no-full-redraw.test.ts",
+				"test/todo-render.test.ts",
+				"test/tool-execution-component.test.ts",
+				"test/tool-view.test.ts"
+			]
+		},
+		{
+			"id": "bundled-themes",
+			"why": "The ice-cream themes ship as built-ins beside dark and light.",
+			"paths": [
+				{
+					"path": "src/modes/interactive/theme/theme.ts",
+					"rewrite": "The bundled theme list replaces the two-theme loader and the inline background-key set in upstream's theme-loading functions."
+				}
+			],
+			"tests": ["test/theme-picker.test.ts"]
+		},
+		{
+			"id": "interactive-hints",
+			"why": "Selectors and custom messages resolve each configured key for compact hints, and custom messages expand on click.",
+			"paths": [
 				{ "path": "src/modes/interactive/components/custom-message.ts" },
 				{
 					"path": "src/modes/interactive/components/extension-selector.ts",
 					"rewrite": "Selector hints resolve each configured key instead of upstream's fixed hint line."
 				},
-				{ "path": "src/modes/interactive/components/keybinding-hints.ts" },
-				{
-					"path": "src/modes/interactive/components/tool-execution.ts",
-					"rewrite": "Dot/rail chrome assembly is interleaved with upstream's call/result shell, so it cannot sit outside the component."
-				},
-				{ "path": "src/modes/interactive/interactive-mode.ts" },
-				{
-					"path": "src/modes/interactive/theme/theme.ts",
-					"rewrite": "Nested color restoration and the bundled theme list change upstream's color and theme-loading functions in place."
-				}
+				{ "path": "src/modes/interactive/components/keybinding-hints.ts" }
 			],
 			"tests": [
-				"test/bash-tool-rendering.test.ts",
 				"test/custom-message.test.ts",
-				"test/edit-tool-no-full-redraw.test.ts",
 				"test/extension-selector.test.ts",
-				"test/keybinding-hints.test.ts",
-				"test/theme-picker.test.ts",
-				"test/tool-execution-component.test.ts"
+				"test/keybinding-hints.test.ts"
 			]
 		},
 		{
@@ -191,24 +209,6 @@
 			],
 			"tests": [
 				"test/tool-definition-wrapper.test.ts"
-			]
-		},
-		{
-			"id": "tool-grouping",
-			"why": "Consecutive tool calls that share a toolGroup collapse into one summary row.",
-			"paths": [
-				{ "path": "src/core/extensions/types.ts" },
-				{ "path": "src/core/tools/find.ts" },
-				{ "path": "src/core/tools/grep.ts" },
-				{ "path": "src/core/tools/ls.ts" },
-				{ "path": "src/core/tools/read.ts" },
-				{ "path": "src/core/tools/tool-definition-wrapper.ts" },
-				{ "path": "src/modes/interactive/components/tool-execution.ts" },
-				{ "path": "src/modes/interactive/interactive-mode.ts" }
-			],
-			"tests": [
-				"test/tool-execution-component.test.ts",
-				"test/tools.test.ts"
 			]
 		},
 		{

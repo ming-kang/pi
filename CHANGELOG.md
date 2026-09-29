@@ -6,6 +6,11 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Changed
 
+- Tool calls in the transcript are compact blocks: a status dot and a rail, with no blank line between consecutive tools. `read`, `grep`, `find`, and `ls` show only their header until expanded, and a failed call always shows its error. Consecutive calls no longer merge into a collapsed group.
+- The bash `Elapsed` and `Took` lines come from the renderer again. The shell no longer adds a `Running…` row.
+- The `Ctrl+B` background hint moved from the tool row to the statusline, where the Background extension shows `Ctrl+B to background` once a foreground Bash or Subagent execution has run for ten seconds and can still move.
+- The tool marker and rail are defined in one style module, and the background completion card uses the same frame.
+- Extension API: removed `toolGroup` from tool definitions, `toolGroupSummary` from the render context, and `detachHint` from `ToolExecutionOptions`.
 - Centralized background completion tracking in the session's Background adapter, removing duplicate queue bookkeeping from the main session while preserving delivery, retry, and usage accounting behavior.
 
 ## [0.87.5] - 2026-09-28

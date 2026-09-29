@@ -2277,8 +2277,6 @@ pi.registerTool(myTool);
 
 **Constrained sampling:** `constrainedSampling: { type: "json_schema", strict: "prefer" }` requests provider-side schema enforcement when the active provider supports it, otherwise normal tool calling is used. Use `strict: "require"` only when the request should fail on unsupported providers. For provider-specific grammars, use `{ type: "grammar", variants: { openai_lark: "...", openai_regex: "..." } }`; each variant is optional, and unsupported providers fall back to normal function tools. `constrainedSampling: false` explicitly opts out (the same behavior as omitting it).
 
-**Tool groups:** `toolGroup: "my-group"` is a freeform display identifier. Adjacent default-shell tool rows with the same identifier collapse together in the interactive transcript; it does not change execution. In the collapsed group header, `renderCall` receives `context.toolGroupSummary === true`. Tools with `renderShell: "self"` are not grouped.
-
 **Usage accounting:** For unmanaged tools, if a tool makes nested LLM calls, return their combined `Usage` as `usage`. Pi persists it on the tool result and includes it in footer, `/session`, and RPC session totals. `tool_result` handlers can inspect or replace this value. Managed executions instead settle usage independently through [`ctx.background`](#ctxbackground); do not duplicate it on the handoff or managed foreground result.
 
 **Signaling errors:** To mark a tool execution as failed (sets `isError: true` on the result and reports it to the LLM), throw an error from `execute`. Returning a value never sets the error flag regardless of what properties you include in the return object.
@@ -2500,7 +2498,7 @@ export default function (pi: ExtensionAPI) {
 
 Tools can provide `renderCall` and `renderResult` for custom TUI display. See [tui.md](tui.md) for the full component API.
 
-By default, tool output is wrapped in Pi's native call/result shell, which owns the status dot, result rail, padding, and fallback rendering. A defined `renderCall` or `renderResult` must return a `Component`. If a slot renderer is not defined, `tool-execution.ts` uses fallback rendering for that slot.
+By default, tool output is wrapped in Pi's native call/result shell, which owns the status dot, result rail, spacing between consecutive tool rows, and fallback rendering. A defined `renderCall` or `renderResult` must return a `Component`. If a slot renderer is not defined, the shell uses fallback rendering for that slot. Return content without leading padding: the shell trims leading blank result lines and adds no blank line between consecutive tool rows.
 
 Set `renderShell: "self"` when the tool should render its own shell instead of using the native shell. This is useful for tools that need complete control over framing or background behavior, for example large previews that must stay visually stable after the tool settles.
 
@@ -2531,7 +2529,6 @@ pi.registerTool({
 - `invalidate()` - request a rerender of this tool row
 - `toolCallId`, `cwd`, `executionStarted`, `argsComplete`, `isPartial`, `expanded`, `showImages`, `isError`
 - `result` - the current partial or final result, if one has arrived
-- `toolGroupSummary` - true while `renderCall` builds a collapsed group header
 
 Use `context.state` for cross-slot shared state. Keep slot-local caches on the returned component instance when you want to reuse and mutate the same component across renders.
 

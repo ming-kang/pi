@@ -11,8 +11,8 @@ import type { BackgroundTerminalStatus } from "../../core/background/types.ts";
 import type { MessageRenderOptions } from "../../core/extensions/types.ts";
 import type { CustomMessage } from "../../core/messages.ts";
 import { type StatusMarkerColor, statusMarker } from "../../modes/interactive/components/status-marker.ts";
-import { ToolChromeComponent } from "../../modes/interactive/components/tool-chrome.ts";
 import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
+import { FramedComponent } from "../../modes/interactive/tool-view/style.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
 
 const SOURCE_LIMIT = 64 * 1024;
@@ -141,13 +141,12 @@ class CompletionCard implements Component {
 	invalidate(): void {}
 	render(width: number): string[] {
 		if (width < 1) return [];
-		const theme = this.theme;
-		const chrome = new ToolChromeComponent(
+		const chrome = new FramedComponent(
 			{ render: (contentWidth) => this.renderContent(contentWidth), invalidate() {} },
-			`${theme.fg(color(this.view.status), "●")} `,
-			{ continuationPrefix: theme.fg("dim", "│ "), blankLinePrefix: theme.fg("dim", "│") },
+			"header",
+			() => color(this.view.status),
 		);
-		// Native chrome reserves two cells; clip defensively for one-cell terminals.
+		// The gutter reserves its own cells; clip defensively for one-cell terminals.
 		return chrome.render(width).map((line) => truncateToWidth(line, width, ""));
 	}
 	private renderContent(width: number): string[] {

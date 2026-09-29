@@ -8,11 +8,12 @@
 
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { renderDiff } from "../../../modes/interactive/components/diff.ts";
+import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition } from "../../extensions/types.ts";
 import type { EditToolDetails } from "../edit.ts";
 import { computeEditsDiff, type Edit, type EditDiffError, type EditDiffResult } from "../edit-diff.ts";
-import { collapsedLinesHint, renderToolPath, str } from "../render-utils.ts";
+import { renderToolPath, str } from "../render-utils.ts";
 
 type EditPreview = EditDiffResult | EditDiffError;
 export type EditRenderState = {
@@ -75,26 +76,13 @@ function formatEditCall(args: RenderableEditArgs | undefined, theme: Theme, cwd:
 	return `${theme.fg("toolTitle", theme.bold("edit"))} ${pathDisplay}`;
 }
 const EDIT_COLLAPSED_DIFF_LINES = 10;
-function diffStat(diff: string): { added: number; removed: number } {
-	let added = 0;
-	let removed = 0;
-	for (const line of diff.split("\n")) {
-		if (line.startsWith("+")) added++;
-		else if (line.startsWith("-")) removed++;
-	}
-	return { added, removed };
-}
-function formatDiffStat(diff: string, theme: Theme): string {
-	const { added, removed } = diffStat(diff);
-	return ` ${theme.fg("toolDiffAdded", `+${added}`)} ${theme.fg("toolDiffRemoved", `-${removed}`)}`;
-}
 function boundDiffBody(renderedDiff: string, expanded: boolean, theme: Theme): string {
 	if (expanded) return renderedDiff;
 	const lines = renderedDiff.split("\n");
 	if (lines.length <= EDIT_COLLAPSED_DIFF_LINES) return renderedDiff;
 	const shown = lines.slice(0, EDIT_COLLAPSED_DIFF_LINES);
 	const remaining = lines.length - shown.length;
-	return `${shown.join("\n")}\n${collapsedLinesHint(theme, remaining, "more")}`;
+	return `${shown.join("\n")}${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 }
 function formatEditResult(
 	args: RenderableEditArgs | undefined,
@@ -134,11 +122,8 @@ function buildEditCallComponent(
 ): EditCallRenderComponent {
 	component.clear();
 
+	component.addChild(new Text(formatEditCall(args, theme, cwd), 0, 0));
 	const preview = component.preview;
-	const previewDiff = preview && !("error" in preview) ? preview.diff : undefined;
-	let headline = formatEditCall(args, theme, cwd);
-	if (previewDiff !== undefined) headline += formatDiffStat(previewDiff, theme);
-	component.addChild(new Text(headline, 0, 0));
 
 	if (!preview) {
 		return component;

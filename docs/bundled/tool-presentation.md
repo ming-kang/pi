@@ -1,45 +1,56 @@
 # Native tool presentation
 
-The `@astralyn/pi` package uses Pi's native tool transcript presentation rather than replacing it with a separate `tools-view` extension.
+The `@astralyn/pi` package draws every tool call in the interactive transcript as one compact block: a status dot and a rail. Tools in the transcript are not cards, have no background color, and show no timers of their own.
 
 ## Visual language
 
 ```text
-● ToolName(args)
-│ first result line
-│ second result line
+I'll look at the code.
+
+● read src/app.ts:1-80
+● grep /useState/ in src
+● edit src/app.ts
+│  1 const a = 0
+│ -2 const b = 1
+│ +2 const b = 2
+● $ npm test
+│ ... (14 earlier lines, ctrl+o to expand)
+│ FAIL a.test.ts
 │
-│ final result line
+│ Command exited with code 1
+│
+│ Took 4.2s
+
+The tests failed.
 ```
 
-The dim result rail continues through every visual line; an empty output line renders as a bare `│`. Calls keep their status in the leading dot: warning while pending or running, green after success, and red after failure. For bash commands that are still running after two seconds, the shell adds a live result row such as `Running… (2.1s)` and removes it when the call settles. Other tools with live progress render it themselves; tools using `renderShell: "self"` continue to own their entire presentation.
+- The dot is the tool's state: the warning color while the call is pending or running, green after success, and red after failure.
+- The rail continues through every visual line that belongs to the same tool. A blank output line renders as a bare `│`.
+- Tool blocks sit directly under each other with no blank line. Text before or after a run of tools keeps one blank line.
+- `read`, `grep`, `find`, and `ls` show only their header until expanded. A failed call always shows its error.
+- Consecutive calls never merge into a group. Every call keeps its own row, and the configured expand-tools key (`Ctrl+O` by default) or a click on the row shows its complete result.
 
-Time-driven renderers schedule their own repaints: while a result is partial they arm a timer in renderer state and call the render context's `invalidate()`, clearing the timer on the first settled render. Renderers compute elapsed/countdown values from absolute timestamps or deadlines, so a delayed repaint never changes the underlying wall-clock meaning.
+The bash renderer shows its own `Elapsed` line while a command runs and a fixed `Took` line after it settles. The shell adds no progress row, and other renderers that refresh over time schedule their own repaints: they arm a timer in renderer state, call the render context's `invalidate()`, and clear the timer on the first settled render. The shell calls `state.dispose()` when a row is disposed, so a timer never outlives its row.
+
+The `Ctrl+B` background hint is not part of a tool row. Once a foreground Bash or Subagent execution has run for ten seconds and can still move, the Background extension shows `Ctrl+B to background` in the statusline, next to the `bg N active` count.
 
 ## Implementation boundary
 
-The native tool presentation owns:
+The look is defined in one place, `src/modes/interactive/tool-view/style.ts`: the marker and rail glyphs, their colors, the spacing between blocks, and which tools fold their result. `FramedComponent` in the same file hangs a component's lines off the marker or the rail and derives the gutter width from the glyphs.
 
-- the default call/result shell;
-- pending, success, and error states;
-- call titles and generic argument summaries;
-- collapsed and expanded result behavior;
-- generic fallback rendering;
-- image placement and conversion.
+`tool-view/tool-execution.ts` owns one call's lifecycle: pending, success and error states, expansion, image placement and Kitty conversion, and renderer disposal. `tool-view/chat.ts` owns the chat container that removes the blank line between consecutive tool rows and disposes rows when the chat clears. Extension tools and built-in tools use the same shell, so a third-party tool gets the same dot and rail without any change.
 
-Built-in renderers remain responsible for semantic content such as file paths, syntax highlighting, search results, Diff previews, and command output. The outer shell is native so built-in tools, bundled extensions, and compatible third-party tools share the same presentation.
-
-Consecutive tools may opt into a shared collapsed group through `toolGroup`. Built-in `read`, `find`, `grep`, and `ls` calls use the `explore` group, and the bundled `todo` tool uses the `todo` group: their call rows render as one compact run with a single leading gap, while the configured expand-tools key (`Ctrl+O` by default) restores each tool's complete call and result. Collapsed Todo rows are result-aware: successful v2 snapshots report actual created IDs and subjects, update status and automatic active-task demotion, list counts, or deleted IDs rather than only echoing arguments. Failures include a sanitized reason capped at 120 characters; missing, malformed, or older result details fall back safely to the call summary.
+Built-in renderers remain responsible for semantic content such as file paths, syntax highlighting, search results, Diff previews, and command output. They return plain components; the shell frames them.
 
 ## Renderer inheritance
 
 | Tool definition | Behavior |
 |---|---|
-| No `renderCall`/`renderResult` | Uses the package's native call and result fallback. |
+| No `renderCall`/`renderResult` | Uses the native call and result fallback. |
 | Custom renderer with the default shell | Uses the native shell around the custom content. |
 | `renderShell: "self"` | Keeps complete ownership of the tool's layout. |
 
-Built-in tool definitions are also used when an extension overrides only one renderer slot. A custom call renderer can inherit the built-in result renderer, and vice versa.
+Built-in tool definitions are also used when an extension overrides only one renderer slot. A custom call renderer can inherit the built-in result renderer, and vice versa. An extension that overrides a built-in tool with its own result renderer controls what that row shows, including when it is collapsed.
 
 Renderer failures fall back to native generic output rather than breaking the transcript.
 
@@ -49,29 +60,25 @@ When no semantic renderer is available:
 
 - arguments are serialized into a bounded one-line summary;
 - output is collapsed to the most recent ten visual lines;
-- a shared hint above the tail reports the number of hidden earlier lines and the configured expand key;
+- a hint above the tail reports the number of hidden earlier lines and the configured expand key;
 - expanding restores the complete output;
 - historical tools that are no longer registered still receive the same shell;
-- failed calls use the error-colored bullet while result details keep the result rail.
+- failed calls use the error-colored dot while result details keep the rail.
 
 The fallback does not change tool schemas, execution logic, or result protocols.
 
 ## Built-in behavior preserved
 
-The native path continues to preserve:
+The presentation continues to preserve:
 
 - `read`, `bash`, `grep`, `find`, `ls`, `write`, and `edit` semantics;
 - faithful width-aware raw command previews for Bash, with honest multi-line and width truncation markers;
-- shell-wide running duration after the two-second progress threshold, with lifecycle-safe refresh disposal and no permanent completion timer;
-- path links and consistent search flags/limits across built-in renderers;
-- Diff statistics plus a ten-line collapsed Diff preview for `edit`, with the complete Diff restored on expand;
+- a ten-line collapsed Diff preview for `edit`, with the complete Diff restored on expand;
 - syntax highlighting;
 - image output and Kitty conversion;
-- native collapsed/expanded handling;
+- click to expand and collapse;
 - custom UI explicitly using `renderShell: "self"`;
-- independently refreshed custom elapsed time and retry countdowns without a duplicate generic progress row.
-
-Built-in result truncation hints share the same `… (N earlier/more lines, … to expand)` language and correct singular/plural forms. `edit` uses the native outer shell while keeping its asynchronous Diff preview and final Diff result.
+- independently refreshed custom elapsed time and retry countdowns.
 
 ## Deliberately rejected approaches
 
@@ -81,6 +88,7 @@ The package does not use:
 - same-name re-registration to replace built-in tools;
 - a global renderer registry exposed through Extension API;
 - a restored `tools-view` extension;
-- forced decoration of third-party tools that explicitly own their shell.
+- forced decoration of third-party tools that explicitly own their shell;
+- merging consecutive calls into a collapsed group, or a shell-level progress row.
 
-Those approaches either depend on private runtime internals, change execution ownership, or cannot reliably cover independently loaded extensions.
+Those approaches either depend on private runtime internals, change execution ownership, cannot reliably cover independently loaded extensions, or add presentation that the compact block does not need.

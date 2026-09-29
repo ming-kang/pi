@@ -705,12 +705,11 @@ describe("todo extension wiring", () => {
 		return { commands, handlers, tool };
 	}
 
-	test("registers the v3 tool schema, prompt, strict sampling, and sequential grouped execution", () => {
+	test("registers the v3 tool schema, prompt, strict sampling, and sequential execution", () => {
 		const { tool } = setup();
 		expect(tool.name).toBe(TODO_TOOL_NAME);
 		expect(tool.label).toBe("Todo");
 		expect(tool.executionMode).toBe("sequential");
-		expect(tool.toolGroup).toBe(TODO_TOOL_NAME);
 		expect(tool.constrainedSampling).toEqual({ type: "json_schema", strict: "prefer" });
 		expect(tool.promptSnippet).toContain("task list");
 		expect(tool.promptGuidelines?.length).toBeGreaterThan(0);

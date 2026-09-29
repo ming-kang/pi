@@ -4,10 +4,6 @@ import type { Static, TSchema } from "typebox";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { truncateHead } from "./truncate.ts";
 
-type PresentableAgentTool<TParams extends TSchema = TSchema, TDetails = unknown> = AgentTool<TParams, TDetails> & {
-	toolGroup?: string;
-};
-
 const RECEIVED_ARGUMENTS_MARKER = "\n\nReceived arguments:\n";
 const HINT_MARKER = "\n\nHint: ";
 const RECEIVED_ARGUMENTS_MAX_BYTES = 2 * 1024;
@@ -134,14 +130,13 @@ function wrapPrepareArguments<TParams extends TSchema, TDetails>(
 export function wrapToolDefinition<TParams extends TSchema, TDetails = unknown>(
 	definition: ToolDefinition<TParams, TDetails>,
 	ctxFactory?: () => ExtensionContext,
-): PresentableAgentTool<TParams, TDetails> {
+): AgentTool<TParams, TDetails> {
 	return {
 		name: definition.name,
 		label: definition.label,
 		description: definition.description,
 		parameters: definition.parameters,
 		constrainedSampling: definition.constrainedSampling,
-		toolGroup: definition.toolGroup,
 		prepareArguments: wrapPrepareArguments(definition),
 		executionMode: definition.executionMode,
 		execute: (toolCallId, params, signal, onUpdate, ctx?: ExtensionContext) =>
@@ -164,7 +159,7 @@ export function wrapToolDefinitions(
  * provides plain AgentTool overrides that do not include prompt metadata or renderers.
  */
 export function createToolDefinitionFromAgentTool<TParams extends TSchema, TDetails>(
-	tool: PresentableAgentTool<TParams, TDetails>,
+	tool: AgentTool<TParams, TDetails>,
 ): ToolDefinition<TParams, TDetails> {
 	return {
 		name: tool.name,
@@ -172,7 +167,6 @@ export function createToolDefinitionFromAgentTool<TParams extends TSchema, TDeta
 		description: tool.description,
 		parameters: tool.parameters,
 		constrainedSampling: tool.constrainedSampling,
-		toolGroup: tool.toolGroup,
 		prepareArguments: tool.prepareArguments,
 		executionMode: tool.executionMode,
 		execute: async (toolCallId, params, signal, onUpdate) => tool.execute(toolCallId, params, signal, onUpdate),

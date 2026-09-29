@@ -24,3 +24,6 @@ export const BG_WAIT_DELTA_BYTES = 32 * 1024;
 export const BG_WAIT_DEFAULT_MS = 20_000;
 export const BG_WAIT_MIN_MS = 1_000;
 export const BG_WAIT_MAX_MS = 60_000;
+
+/** How long a foreground execution runs before the statusline advertises the detach key. */
+export const BG_DETACH_HINT_DELAY_MS = 10_000;

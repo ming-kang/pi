@@ -24,7 +24,7 @@ import {
 } from "./constants.ts";
 import { type TodoDetails, TodoParamsSchema } from "./schema.ts";
 import { createTodoStore, replayTodosFromBranch, type TodoStore } from "./state.ts";
-import { formatCommandList, formatTodoCall, formatTodoContent, formatTodoGroupCall } from "./view.ts";
+import { formatCommandList, formatTodoCall, formatTodoContent, formatTodoSummary } from "./view.ts";
 import { TodoWidget } from "./widget.ts";
 
 interface TodoSessionCtx {
@@ -55,10 +55,6 @@ export default function todo(pi: ExtensionAPI): void {
 		parameters: TodoParamsSchema,
 		constrainedSampling: { type: "json_schema", strict: "prefer" },
 		executionMode: "sequential" as ToolExecutionMode,
-		// Consecutive todo calls collapse into one run like read/find's `explore`
-		// group; the widget already carries the live list, so the transcript only
-		// needs the sequence of operations.
-		toolGroup: TODO_TOOL_NAME,
 
 		async execute(_toolCallId, params, _signal, _onUpdate): Promise<AgentToolResult<TodoDetails>> {
 			// Validation errors throw before any state mutation, so the store is
@@ -68,13 +64,22 @@ export default function todo(pi: ExtensionAPI): void {
 			return { content: [{ type: "text", text }], details };
 		},
 
+		// The widget already carries the live list, so a collapsed row is one
+		// result-aware line and the result text appears only when expanded.
 		renderCall(args, theme, context) {
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 			text.setText(
-				context.toolGroupSummary
-					? formatTodoGroupCall(args, theme, context)
-					: formatTodoCall(args, theme, context.expanded, context.result),
+				context.expanded
+					? formatTodoCall(args, theme, true, context.result)
+					: formatTodoSummary(args, theme, context),
 			);
+			return text;
+		},
+
+		renderResult(result, options, theme, context) {
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const output = result.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
+			text.setText(options.expanded ? theme.fg("toolOutput", output) : "");
 			return text;
 		},
 	});

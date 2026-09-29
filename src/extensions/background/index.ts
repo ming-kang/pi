@@ -3,9 +3,10 @@ import "./keybindings.ts";
 import { getKeybindings } from "@earendil-works/pi-tui";
 import { isBackgroundTerminal } from "../../core/background/types.ts";
 import type { ExtensionAPI } from "../../core/extensions/types.ts";
+import { keyLabel } from "../../modes/interactive/components/keybinding-hints.ts";
 import { boundedText, describeTaskLine, runKill, runList, runRead, runWait } from "./actions.ts";
 import { renderBackgroundCompletion } from "./completion-render.ts";
-import { BG_COMPLETION_TYPE, BG_NOTIFICATION_TYPE } from "./constants.ts";
+import { BG_COMPLETION_TYPE, BG_DETACH_HINT_DELAY_MS, BG_NOTIFICATION_TYPE } from "./constants.ts";
 import { BackgroundTasksMenu } from "./manager.ts";
 import { type BgRenderState, renderBackgroundNotification, renderBgCall, renderBgResult } from "./render.ts";
 import { BG_PROMPT_GUIDELINES, BG_PROMPT_SNIPPET, BG_TOOL_DESCRIPTION, bgSchema } from "./schema.ts";
@@ -16,18 +17,38 @@ export function createBackgroundExtension(): (pi: ExtensionAPI) => void {
 		let unsubscribe: (() => void) | undefined;
 		let unsubscribeDetachKey: (() => void) | undefined;
 		let closeMenu: (() => void) | undefined;
+		let hintTimer: ReturnType<typeof setTimeout> | undefined;
 		pi.on("session_start", (_event, ctx) => {
 			unsubscribe?.();
 			unsubscribeDetachKey?.();
 			const update = () => {
-				// The status counts backgrounded work only; foreground executions
-				// are already visible as ordinary tool rows in the transcript.
-				const tasks = ctx.background.list().filter((task) => task.mode === "background");
+				clearTimeout(hintTimer);
+				hintTimer = undefined;
+				const all = ctx.background.list();
+				// The counts cover backgrounded work only; foreground executions are already
+				// visible as ordinary tool rows in the transcript.
+				const tasks = all.filter((task) => task.mode === "background");
 				const running = tasks.filter((task) => !isBackgroundTerminal(task.status)).length;
-				ctx.ui.setStatus(
-					"background",
-					tasks.length ? `bg ${running} active · ${tasks.length - running} finished` : undefined,
+				const parts: string[] = [];
+				if (tasks.length) parts.push(`bg ${running} active · ${tasks.length - running} finished`);
+				// Teach the detach key once something has run long enough to be worth moving, and
+				// only while it can move: a stopping execution is aborted, so the key does nothing.
+				const detachKey = keyLabel("app.backgroundTasks.detach");
+				const now = Date.now();
+				const movable = all.filter(
+					(task) => task.mode === "foreground" && (task.status === "running" || task.status === "queued"),
 				);
+				const waits = movable
+					.map((task) => task.startedAt + BG_DETACH_HINT_DELAY_MS - now)
+					.filter((wait) => wait > 0);
+				if (detachKey && movable.length > waits.length) parts.push(`${detachKey} to background`);
+				if (detachKey && waits.length > 0) {
+					// The service notifies on state changes, not on time, so wake up when the next
+					// execution crosses the threshold.
+					hintTimer = setTimeout(update, Math.min(...waits));
+					hintTimer.unref?.();
+				}
+				ctx.ui.setStatus("background", parts.length ? parts.join(" · ") : undefined);
 			};
 			unsubscribe = ctx.background.subscribe(update);
 			unsubscribeDetachKey = ctx.ui.onTerminalInput((data) => {
@@ -48,6 +69,8 @@ export function createBackgroundExtension(): (pi: ExtensionAPI) => void {
 			unsubscribe = undefined;
 			unsubscribeDetachKey?.();
 			unsubscribeDetachKey = undefined;
+			clearTimeout(hintTimer);
+			hintTimer = undefined;
 			closeMenu?.();
 			closeMenu = undefined;
 			ctx.ui.setStatus("background", undefined);

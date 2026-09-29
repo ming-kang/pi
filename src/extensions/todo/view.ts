@@ -209,7 +209,7 @@ const CALL_ITEMS_MAX = TODO_MAX_BATCH_ITEMS;
 const CALL_SUBJECT_PREVIEW_COUNT = 2;
 const CALL_SUBJECT_PREVIEW_WIDTH = 72;
 const CALL_DESCRIPTION_PREVIEW_LENGTH = 120;
-const GROUP_FAILURE_MAX_LENGTH = 120;
+const SUMMARY_FAILURE_MAX_LENGTH = 120;
 
 /** Record-like read; proxies that throw on inspection are treated as absent. */
 function safeRecord(value: unknown): Record<string, unknown> | undefined {
@@ -547,7 +547,7 @@ function updatedEntries(value: unknown): Array<{ id: number; from?: TodoStatus; 
 	return entries;
 }
 
-function formatTodoGroupSuccess(
+function formatTodoSuccessSummary(
 	args: TodoCallArgs | undefined,
 	theme: Theme,
 	result: AgentToolResult<unknown>,
@@ -615,18 +615,14 @@ function formatTodoGroupSuccess(
 	return segments.join(theme.fg("dim", " ; "));
 }
 
-export interface TodoGroupRenderContext {
+export interface TodoSummaryContext {
 	isError: boolean;
 	isPartial: boolean;
 	result?: AgentToolResult<unknown>;
 }
 
-/** Compact result-aware summary used only by collapsed todo tool groups. */
-export function formatTodoGroupCall(
-	args: TodoCallArgs | undefined,
-	theme: Theme,
-	context: TodoGroupRenderContext,
-): string {
+/** Compact result-aware one-line summary of a collapsed todo row. */
+export function formatTodoSummary(args: TodoCallArgs | undefined, theme: Theme, context: TodoSummaryContext): string {
 	if (context.isError) {
 		let reason = "tool failed";
 		try {
@@ -637,7 +633,8 @@ export function formatTodoGroupCall(
 					.replace(/\s+/g, " ")
 					.trim();
 				if (!text) continue;
-				reason = text.length > GROUP_FAILURE_MAX_LENGTH ? `${text.slice(0, GROUP_FAILURE_MAX_LENGTH - 1)}…` : text;
+				reason =
+					text.length > SUMMARY_FAILURE_MAX_LENGTH ? `${text.slice(0, SUMMARY_FAILURE_MAX_LENGTH - 1)}…` : text;
 				break;
 			}
 		} catch {
@@ -646,7 +643,7 @@ export function formatTodoGroupCall(
 		return `${formatTodoCall(args, theme, false)} ${theme.fg("error", `failed: ${reason}`)}`;
 	}
 	if (!context.isPartial && context.result) {
-		const summary = formatTodoGroupSuccess(args, theme, context.result);
+		const summary = formatTodoSuccessSummary(args, theme, context.result);
 		if (summary) return summary;
 	}
 	return formatTodoCall(args, theme, false);

@@ -4,8 +4,8 @@ import type { ExtensionAPI, ToolDefinition } from "../src/core/extensions/types.
 import subagent from "../src/extensions/subagent/index.ts";
 import type { SubagentParamsSchema } from "../src/extensions/subagent/schema.ts";
 import type { SubagentDetails, SubagentRunDetails } from "../src/extensions/subagent/types.ts";
-import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { ToolExecutionComponent } from "../src/modes/interactive/tool-view/tool-execution.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 const SPINNER_CLASS = "[·✢✼✶✻✽]";

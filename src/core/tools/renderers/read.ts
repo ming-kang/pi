@@ -10,13 +10,13 @@ import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } 
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { getReadmePath } from "../../../config.ts";
-import { keyText } from "../../../modes/interactive/components/keybinding-hints.ts";
+import { keyHint, keyText } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { getLanguageFromPath, highlightCode, type Theme } from "../../../modes/interactive/theme/theme.ts";
 import { formatPathRelativeToCwdOrAbsolute } from "../../../utils/paths.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../../extensions/types.ts";
 import { resolveToCwd } from "../path-utils.ts";
 import type { ReadToolDetails } from "../read.ts";
-import { collapsedLinesHint, getTextOutput, renderToolPath, replaceTabs, str } from "../render-utils.ts";
+import { getTextOutput, renderToolPath, replaceTabs, str } from "../render-utils.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "../truncate.ts";
 
 interface CompactReadClassification {
@@ -29,7 +29,7 @@ function formatReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): st
 	if (args?.offset === undefined && args?.limit === undefined) return "";
 	const startLine = args.offset ?? 1;
 	const endLine = args.limit !== undefined ? startLine + args.limit - 1 : "";
-	return theme.fg("muted", `:${startLine}${endLine ? `-${endLine}` : ""}`);
+	return theme.fg("warning", `:${startLine}${endLine ? `-${endLine}` : ""}`);
 }
 function formatReadCall(args: ReadRenderArgs | undefined, theme: Theme, cwd: string): string {
 	const pathDisplay = renderToolPath(str(args?.file_path ?? args?.path), theme, cwd);
@@ -89,9 +89,8 @@ function formatCompactReadCall(
 	classification: CompactReadClassification,
 	args: ReadRenderArgs | undefined,
 	theme: Theme,
-	showExpandHint = true,
 ): string {
-	const expandHint = showExpandHint ? theme.fg("dim", ` (${keyText("app.tools.expand")} to expand)`) : "";
+	const expandHint = theme.fg("dim", ` (${keyText("app.tools.expand")} to expand)`);
 	if (classification.kind === "skill") {
 		return (
 			theme.fg("customMessageLabel", `\x1b[1m[skill]\x1b[22m `) +
@@ -132,7 +131,7 @@ function formatReadResult(
 	const remaining = lines.length - maxLines;
 	let text = `\n${displayLines.map((line) => (lang ? replaceTabs(line) : theme.fg("toolOutput", replaceTabs(line)))).join("\n")}`;
 	if (remaining > 0) {
-		text += `\n${collapsedLinesHint(theme, remaining, "more")}`;
+		text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 	}
 
 	const truncation = result.details?.truncation;
@@ -154,9 +153,7 @@ export const readRenderers: Pick<ToolDefinition<any, ReadToolDetails | undefined
 		const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 		const classification = !context.expanded ? getCompactReadClassification(args, context.cwd) : undefined;
 		text.setText(
-			classification
-				? formatCompactReadCall(classification, args, theme, !context.toolGroupSummary)
-				: formatReadCall(args, theme, context.cwd),
+			classification ? formatCompactReadCall(classification, args, theme) : formatReadCall(args, theme, context.cwd),
 		);
 		return text;
 	},

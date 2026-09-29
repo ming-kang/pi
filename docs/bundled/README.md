@@ -27,7 +27,7 @@ See [Compaction](../compaction.md).
 
 ## Tool presentation
 
-Native tool calls use a consistent `●` call and `│` result shell with bounded collapsed output. Built-in semantic renderers remain responsible for paths, diffs, syntax highlighting, command output, and images.
+Native tool calls are compact blocks: a `●` marker whose color is the tool's state and a `│` rail for everything that belongs to it, with no blank line between consecutive tools. Built-in semantic renderers remain responsible for paths, diffs, syntax highlighting, command output, and images.
 
 See [Native tool presentation](tool-presentation.md).
 

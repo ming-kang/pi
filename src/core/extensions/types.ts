@@ -439,8 +439,6 @@ export interface ToolRenderContext<TState = any, TArgs = any, TDetails = unknown
 	args: TArgs;
 	/** Current final or partial result, when one has been received. Error state remains available through isError. */
 	result?: AgentToolResult<TDetails>;
-	/** True when renderCall is producing a collapsed grouped-tool summary. */
-	toolGroupSummary?: boolean;
 	/** Unique id for this tool execution. Stable across call/result renders for the same tool call. */
 	toolCallId: string;
 	/** Invalidate just this tool execution component for redraw. */
@@ -486,8 +484,6 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	parameters: TParams;
 	/** Optional provider-side constrained sampling request for this tool. Set false to explicitly disable it, equivalent to leaving it undefined. */
 	constrainedSampling?: false | ConstrainedSamplingConfig;
-	/** Optional freeform group identifier for collapsed tool-call aggregation. */
-	toolGroup?: string;
 	/** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
 	renderShell?: "default" | "self";
 

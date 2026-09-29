@@ -33,9 +33,9 @@ import {
 	OAuthSelectorComponent,
 } from "../../modes/interactive/components/oauth-selector.ts";
 import { type StatusIndicator, WorkingStatusIndicator } from "../../modes/interactive/components/status-indicator.ts";
-import { ToolExecutionComponent, type ToolRenderers } from "../../modes/interactive/components/tool-execution.ts";
 import { UserMessageComponent } from "../../modes/interactive/components/user-message.ts";
 import { getEditorTheme, initTheme, theme } from "../../modes/interactive/theme/theme.ts";
+import { ToolExecutionComponent, type ToolRenderers } from "../../modes/interactive/tool-view/tool-execution.ts";
 import type { MicroAuthView, MicroController, MicroProviderAccount, MicroView, MicroViewSource } from "./api.ts";
 
 const SELECT_THEME: SelectListTheme = {

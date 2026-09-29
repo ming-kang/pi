@@ -7,11 +7,12 @@
  */
 
 import { type Component, Container, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { truncateToVisualLines } from "../../../modes/interactive/components/visual-truncate.ts";
 import { highlightCode, theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../../extensions/types.ts";
 import type { BashToolDetails, ShellToolConfig } from "../bash.ts";
-import { collapsedLinesHint, getTextOutput, invalidArgText, str } from "../render-utils.ts";
+import { getTextOutput, invalidArgText, str } from "../render-utils.ts";
 import { DEFAULT_MAX_BYTES, formatSize } from "../truncate.ts";
 
 const BASH_PREVIEW_LINES = 5;
@@ -72,6 +73,17 @@ class BashResultRenderComponent extends Container {
 		cachedLines: undefined,
 		cachedSkipped: undefined,
 	};
+}
+function formatDuration(ms: number): string {
+	const seconds = ms / 1000;
+	if (seconds < 60) return `${seconds.toFixed(1)}s`;
+
+	const totalSeconds = Math.floor(seconds);
+	const minutes = Math.floor(totalSeconds / 60);
+	const remainder = totalSeconds % 60;
+	if (minutes < 60) return `${minutes}m ${remainder}s`;
+
+	return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${remainder}s`;
 }
 function formatShellPrompt(prompt: string): string {
 	return theme.fg("toolTitle", theme.bold(`${prompt} `));
@@ -134,6 +146,8 @@ function rebuildBashResultRenderComponent(
 	},
 	options: ToolRenderResultOptions,
 	showImages: boolean,
+	startedAt: number | undefined,
+	endedAt: number | undefined,
 ): void {
 	const state = component.state;
 	component.clear();
@@ -170,8 +184,10 @@ function rebuildBashResultRenderComponent(
 						state.cachedWidth = width;
 					}
 					if (state.cachedSkipped && state.cachedSkipped > 0) {
-						const hint = collapsedLinesHint(theme, state.cachedSkipped, "earlier");
-						return ["", truncateToWidth(hint, width, "…"), ...(state.cachedLines ?? [])];
+						const hint =
+							theme.fg("muted", `... (${state.cachedSkipped} earlier lines,`) +
+							` ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+						return ["", truncateToWidth(hint, width, "..."), ...(state.cachedLines ?? [])];
 					}
 					return ["", ...(state.cachedLines ?? [])];
 				},
@@ -200,6 +216,12 @@ function rebuildBashResultRenderComponent(
 		}
 		component.addChild(new Text(`\n${theme.fg("warning", `[${warnings.join(". ")}]`)}`, 0, 0));
 	}
+
+	if (startedAt !== undefined) {
+		const label = options.isPartial ? "Elapsed" : "Took";
+		const endTime = endedAt ?? Date.now();
+		component.addChild(new Text(`\n${theme.fg("muted", `${label} ${formatDuration(endTime - startedAt)}`)}`, 0, 0));
+	}
 }
 
 /** Shell renderers are shared by bash and powershell, which differ in the prompt and highlight language. */
@@ -208,15 +230,42 @@ export function createShellRenderers(
 ): Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> {
 	return {
 		renderCall(args, _theme, context) {
+			const state = context.state;
+			if (context.executionStarted && state.startedAt === undefined) {
+				state.startedAt = Date.now();
+				state.endedAt = undefined;
+			}
 			const component =
 				(context.lastComponent as BashCallRenderComponent | undefined) ?? new BashCallRenderComponent(config);
 			component.update(args as { command?: string; timeout?: number } | undefined, context.expanded);
 			return component;
 		},
 		renderResult(result, options, _theme, context) {
+			const state = context.state;
+			state.dispose ??= () => {
+				if (state.interval) clearInterval(state.interval);
+				state.interval = undefined;
+			};
+			if (state.startedAt !== undefined && options.isPartial && !state.interval) {
+				state.interval = setInterval(() => context.invalidate(), 1000);
+			}
+			if (!options.isPartial || context.isError) {
+				state.endedAt ??= Date.now();
+				if (state.interval) {
+					clearInterval(state.interval);
+					state.interval = undefined;
+				}
+			}
 			const component =
 				(context.lastComponent as BashResultRenderComponent | undefined) ?? new BashResultRenderComponent();
-			rebuildBashResultRenderComponent(component, result as any, options, context.showImages);
+			rebuildBashResultRenderComponent(
+				component,
+				result as any,
+				options,
+				context.showImages,
+				state.startedAt,
+				state.endedAt,
+			);
 			component.invalidate();
 			return component;
 		},

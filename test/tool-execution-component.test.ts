@@ -1,25 +1,16 @@
 import { join, resolve } from "node:path";
-import {
-	resetCapabilitiesCache,
-	setCapabilities,
-	Text,
-	type TUI,
-	type TuiMouseEvent,
-	visibleWidth,
-} from "@earendil-works/pi-tui";
+import { resetCapabilitiesCache, setCapabilities, Text, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { getReadmePath } from "../src/config.ts";
 import type { ExtensionAPI, ToolDefinition } from "../src/core/extensions/types.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
-import { createFindToolDefinition } from "../src/core/tools/find.ts";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
 import { withBuiltInRenderers } from "../src/core/tools/renderers/index.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
 import todo from "../src/extensions/todo/index.ts";
-import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
-import { ToolGroupComponent } from "../src/modes/interactive/components/tool-group.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
+import { ToolExecutionComponent } from "../src/modes/interactive/tool-view/tool-execution.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 import * as imageConvert from "../src/utils/image-convert.ts";
 
@@ -206,7 +197,7 @@ describe("ToolExecutionComponent parity", () => {
 		expect(requestRender).toHaveBeenCalledTimes(finalRenderRequests);
 	});
 
-	test("disposes grouped tools idempotently and stops self-scheduled refreshes", () => {
+	test("disposes idempotently and stops self-scheduled refreshes", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
 		const requestRender = vi.fn();
@@ -241,9 +232,8 @@ describe("ToolExecutionComponent parity", () => {
 		vi.advanceTimersByTime(1000);
 		expect(resultRenderCount).toBe(initialRenderCount + 1);
 
-		const group = new ToolGroupComponent("custom", [component]);
-		group.dispose();
-		group.dispose();
+		component.dispose();
+		component.dispose();
 		const disposedRenderCount = resultRenderCount;
 		const disposedRenderRequests = requestRender.mock.calls.length;
 		vi.advanceTimersByTime(1000);
@@ -335,27 +325,6 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).not.toContain(":1");
 	});
 
-	test("assigns explore tool group to read and find tools", () => {
-		expect(createReadToolDefinition(process.cwd()).toolGroup).toBe("explore");
-		expect(createFindToolDefinition(process.cwd()).toolGroup).toBe("explore");
-	});
-
-	test("keeps self-rendered tools out of native tool groups", () => {
-		const definition = createReadToolDefinition(process.cwd());
-		definition.renderShell = "self";
-		const component = new ToolExecutionComponent(
-			"read",
-			"tool-self-rendered-read",
-			{ path: "README.md" },
-			{},
-			definition,
-			createFakeTui(),
-			process.cwd(),
-		);
-
-		expect(component.toolGroup).toBeUndefined();
-	});
-
 	test("preserves legacy file_path rendering compatibility for built-in tools", () => {
 		const component = new ToolExecutionComponent(
 			"read",
@@ -427,51 +396,6 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain("Truncated: showing 2000 of 4000 lines");
 		expect(rendered).not.toContain("[Showing lines 2001-4000 of 4000. Full output:");
 	});
-
-	// Issue #9628 (adapted): this distribution's shared tool chrome owns the bash progress row.
-	// It keeps short durations precise, rounds longer ones to whole seconds, renders hours, and
-	// disappears once the tool completes.
-	test.each([
-		{ ms: 4_200, formatted: "4.2s" },
-		{ ms: 59_900, formatted: "59.9s" },
-		{ ms: 59_999, formatted: "1m 0s" },
-		{ ms: 60_000, formatted: "1m 0s" },
-		{ ms: 90_900, formatted: "1m 31s" },
-		{ ms: 1_592_200, formatted: "26m 32s" },
-		{ ms: 3_599_999, formatted: "1h 0m 0s" },
-		{ ms: 3_600_000, formatted: "1h 0m 0s" },
-		{ ms: 7_384_900, formatted: "2h 3m 5s" },
-	])(
-		"bash progress row formats $ms ms as $formatted while running and hides it on completion",
-		({ ms, formatted }) => {
-			vi.useFakeTimers();
-			vi.setSystemTime(0);
-			const component = new ToolExecutionComponent(
-				"bash",
-				"tool-bash-duration",
-				{ command: "long-running-command" },
-				{},
-				createBashToolDefinition(process.cwd(), { exposeSessionEnvironment: false }),
-				createFakeTui(),
-				process.cwd(),
-			);
-			component.markExecutionStarted();
-			component.updateResult({ content: [], isError: false }, true);
-
-			vi.advanceTimersByTime(ms);
-			component.invalidate();
-			const running = stripAnsi(component.render(120).join("\n"));
-
-			component.updateResult({ content: [], isError: false }, false);
-			const completed = stripAnsi(component.render(120).join("\n"));
-
-			vi.advanceTimersByTime(1_000);
-			component.invalidate();
-			expect(stripAnsi(component.render(120).join("\n"))).toBe(completed);
-			expect(running).toContain(`Running… (${formatted})`);
-			expect(completed).not.toContain("Running…");
-		},
-	);
 
 	test("does not duplicate built-in headers when passed the active built-in definition", () => {
 		const component = new ToolExecutionComponent(
@@ -626,15 +550,10 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain("arg:bar");
 	});
 
-	test("passes partial and completed results to normal and grouped call renderers", () => {
+	test("passes partial and completed results to call renderers", () => {
 		type ResultDetails = { marker: string };
 		const parameters = Type.Object({});
-		const observations: Array<{
-			groupSummary: boolean;
-			isPartial: boolean;
-			marker: string | undefined;
-			content: string | undefined;
-		}> = [];
+		const observations: Array<{ isPartial: boolean; marker: string | undefined; content: string | undefined }> = [];
 		const toolDefinition: ToolDefinition<typeof parameters, ResultDetails> = {
 			name: "custom_tool",
 			label: "custom tool",
@@ -644,7 +563,6 @@ describe("ToolExecutionComponent parity", () => {
 			renderCall: (_args, _theme, context) => {
 				const firstContent = context.result?.content[0];
 				observations.push({
-					groupSummary: context.toolGroupSummary === true,
 					isPartial: context.isPartial,
 					marker: context.result?.details.marker,
 					content: firstContent?.type === "text" ? firstContent.text : undefined,
@@ -670,26 +588,9 @@ describe("ToolExecutionComponent parity", () => {
 			{ content: [{ type: "text", text: "final output" }], details: { marker: "final" }, isError: false },
 			false,
 		);
-		component.renderCallSummary(120);
 
-		expect(observations).toContainEqual({
-			groupSummary: false,
-			isPartial: true,
-			marker: "partial",
-			content: "partial output",
-		});
-		expect(observations).toContainEqual({
-			groupSummary: false,
-			isPartial: false,
-			marker: "final",
-			content: "final output",
-		});
-		expect(observations).toContainEqual({
-			groupSummary: true,
-			isPartial: false,
-			marker: "final",
-			content: "final output",
-		});
+		expect(observations).toContainEqual({ isPartial: true, marker: "partial", content: "partial output" });
+		expect(observations).toContainEqual({ isPartial: false, marker: "final", content: "final output" });
 	});
 
 	test("falls back when custom renderers are absent", () => {
@@ -946,88 +847,11 @@ describe("ToolExecutionComponent parity", () => {
 		});
 	}
 
-	test("renders collapsed tool groups as one card with the hint on the last summary", () => {
-		const readDefinition = createReadToolDefinition(process.cwd());
-		const skillRead = new ToolExecutionComponent(
-			"read",
-			"tool-group-skill",
-			{ path: join(process.cwd(), "attio", "SKILL.md") },
-			{},
-			readDefinition,
-			createFakeTui(),
-			process.cwd(),
-		);
-		const rangedRead = new ToolExecutionComponent(
-			"read",
-			"tool-group-ranged-read",
-			{ path: "packages/ai/CHANGELOG.md", offset: 1, limit: 90 },
-			{},
-			readDefinition,
-			createFakeTui(),
-			process.cwd(),
-		);
-		const group = new ToolGroupComponent("explore");
-		group.addTool(skillRead);
-		group.addTool(rangedRead);
-
-		const rendered = stripAnsi(group.render(120).join("\n"));
-		const renderedLines = rendered.split("\n");
-		expect(rendered).not.toContain("Explore");
-		expect(rendered).toContain("[skill] attio");
-		expect(rendered).toContain("read packages/ai/CHANGELOG.md:1-90");
-		expect(rendered.match(/to expand/g)?.length ?? 0).toBe(1);
-		expect(renderedLines[0]).toBe("");
-		expect(renderedLines.some((line) => line.startsWith("● [skill] attio") && !line.includes("to expand"))).toBe(
-			true,
-		);
-		expect(
-			renderedLines.some(
-				(line) => line.startsWith("● read packages/ai/CHANGELOG.md:1-90") && line.includes("to expand"),
-			),
-		).toBe(true);
-
-		const narrowLines = group.render(40);
-		expect(narrowLines.some((line) => stripAnsi(line).includes("to expand"))).toBe(true);
-		expect(narrowLines.every((line) => visibleWidth(line) <= 40)).toBe(true);
-
-		group.setExpanded(true);
-		const expanded = stripAnsi(group.render(120).join("\n"));
-		expect(expanded).not.toContain("Explore");
-		expect(expanded).not.toContain("to expand");
-	});
-
-	test("shows one bounded final error under collapsed explore groups", () => {
-		const readDefinition = createReadToolDefinition(process.cwd());
-		const failedRead = new ToolExecutionComponent(
-			"read",
-			"tool-group-failed-read",
-			{ path: "missing.txt" },
-			{},
-			readDefinition,
-			createFakeTui(),
-			process.cwd(),
-		);
-		failedRead.updateResult(
-			{
-				content: [{ type: "text", text: `File not found: missing.txt\n${"x".repeat(500)}` }],
-				isError: true,
-			},
-			false,
-		);
-		const group = new ToolGroupComponent("explore", [failedRead]);
-
-		const lines = group.render(60);
-		const rendered = stripAnsi(lines.join("\n"));
-		expect(rendered).toContain("File not found: missing.txt");
-		expect(rendered).not.toContain("x".repeat(100));
-		expect(lines.every((line) => visibleWidth(line) <= 60)).toBe(true);
-	});
-
-	test("shows todo group result summaries and a bounded error in collapsed groups", () => {
+	test("shows a collapsed todo row as one result-aware line and the result text only when expanded", () => {
 		const todoDefinition = createTodoToolDefinition();
 		const created = new ToolExecutionComponent(
 			"todo",
-			"todo-group-created",
+			"todo-created",
 			{
 				create: [
 					{ subject: "Wire parser", description: "Parser handles config" },
@@ -1057,10 +881,15 @@ describe("ToolExecutionComponent parity", () => {
 			},
 			false,
 		);
+		const collapsed = stripAnsi(created.render(500).join("\n"));
+		expect(collapsed).toContain("● todo created #4–#5 · Wire parser, Test parser");
+		expect(collapsed).not.toContain("Created 2 tasks");
+		created.setExpanded(true);
+		expect(stripAnsi(created.render(500).join("\n"))).toContain("│ Created 2 tasks");
 
 		const failed = new ToolExecutionComponent(
 			"todo",
-			"todo-group-failed",
+			"todo-failed",
 			{ update: [{ id: 7 }] },
 			{},
 			todoDefinition,
@@ -1068,21 +897,14 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		failed.updateResult(
-			{
-				content: [{ type: "text", text: `bad request\n${"x".repeat(500)}` }],
-				isError: true,
-			},
+			{ content: [{ type: "text", text: `bad request\n${"x".repeat(500)}` }], isError: true },
 			false,
 		);
-
-		const group = new ToolGroupComponent("todo");
-		group.addTool(created);
-		group.addTool(failed);
-		const rendered = stripAnsi(group.render(500).join("\n"));
-		expect(rendered).toContain("todo created #4–#5 · Wire parser, Test parser");
-		expect(rendered).toContain("todo update #7 failed: bad request");
-		expect(rendered).not.toContain("x".repeat(200));
-		expect(rendered.split("\n").filter((line) => line.includes("todo update #7"))).toHaveLength(1);
+		const failedRows = stripAnsi(failed.render(500).join("\n"));
+		expect(failedRows).toContain("todo update #7 failed: bad request");
+		expect(failedRows).not.toContain("x".repeat(200));
+		expect(failedRows.split("\n").filter((line) => line.includes("todo update #7"))).toHaveLength(1);
+		expect(failed.render(500).join("\n")).toContain(theme.fg("error", "●"));
 	});
 
 	for (const scenario of [

@@ -6,12 +6,16 @@ import {
 	Image,
 	MouseRegion,
 	Spacer,
-	Text,
 	type TUI,
 	type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
 import type { ToolDefinition, ToolRenderContext, ToolRenderResultOptions } from "../../../core/extensions/types.ts";
-import type { Theme } from "../theme/theme.ts";
+import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
+import { createAllToolRenderers } from "../../../core/tools/renderers/index.ts";
+import { convertToPng } from "../../../utils/image-convert.ts";
+import { type Theme, theme } from "../theme/theme.ts";
+import { createCallFallback, FallbackResultComponent } from "./fallback.ts";
+import { FramedComponent, type ToolStatus, toolMarkerColor, toolStatus, toolStyle } from "./style.ts";
 
 /**
  * What this component needs from a tool: how to draw it. It neither executes tools nor reads their
@@ -22,7 +26,6 @@ import type { Theme } from "../theme/theme.ts";
  */
 export interface ToolRenderers {
 	renderShell?: "default" | "self";
-	toolGroup?: string;
 	renderCall?: (args: any, theme: Theme, context: ToolRenderContext<any, any>) => Component;
 	renderResult?: (
 		result: AgentToolResult<any>,
@@ -32,20 +35,9 @@ export interface ToolRenderers {
 	) => Component;
 }
 
-import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
-import { convertToPng } from "../../../utils/image-convert.ts";
-import { theme } from "../theme/theme.ts";
-import { FallbackResultComponent, formatElapsed, formatFallbackArgs, ToolChromeComponent } from "./tool-chrome.ts";
-
 export interface ToolExecutionOptions {
 	showImages?: boolean;
 	imageWidthCells?: number;
-	/** Long-running foreground cards advertise backgrounding. Absent means no hint (e.g. hosts without background execution). */
-	detachHint?: {
-		isDetachable(toolName: string): boolean;
-		/** Current key label; empty string means unbound and hides the hint. */
-		keyLabel(): string;
-	};
 }
 
 interface ConvertedImage {
@@ -60,12 +52,14 @@ interface PendingImageConversion {
 	sourceMimeType: string;
 }
 
-const PROGRESS_THRESHOLD_MS = 2000;
-const PROGRESS_REFRESH_INTERVAL_MS = 1000;
-/** Delay before a long-running detachable card advertises backgrounding. */
-const DETACH_HINT_DELAY_MS = 10_000;
+let builtInRenderers: ReturnType<typeof createAllToolRenderers> | undefined;
 
+/**
+ * One tool call in the transcript: a marker line for the call and a rail for its result.
+ * `style.ts` owns how that looks; this class owns the call's lifecycle.
+ */
 export class ToolExecutionComponent extends Container {
+	private gap: Spacer;
 	private contentContainer: Container;
 	private selfRenderContainer: Container;
 	private selfRenderHeight = 0;
@@ -82,7 +76,6 @@ export class ToolExecutionComponent extends Container {
 	private imageWidthCells: number;
 	private isPartial = true;
 	private toolDefinition?: ToolRenderers;
-	readonly toolGroup: string | undefined;
 	private ui: TUI;
 	private cwd: string;
 	private executionStarted = false;
@@ -95,9 +88,6 @@ export class ToolExecutionComponent extends Container {
 	private convertedImages = new Map<number, ConvertedImage>();
 	private pendingImageConversions = new Map<number, PendingImageConversion>();
 	private hideComponent = false;
-	private progressStartedAt?: number;
-	private refreshTimer?: NodeJS.Timeout;
-	private readonly detachHint?: ToolExecutionOptions["detachHint"];
 	private disposed = false;
 
 	constructor(
@@ -114,18 +104,17 @@ export class ToolExecutionComponent extends Container {
 		this.toolCallId = toolCallId;
 		this.args = args;
 		this.toolDefinition = toolDefinition;
-		this.toolGroup = this.getRenderShell() === "self" ? undefined : this.toolDefinition?.toolGroup;
 		this.showImages = options.showImages ?? true;
 		this.imageWidthCells = options.imageWidthCells ?? 60;
-		this.detachHint = options.detachHint;
 		this.ui = ui;
 		this.cwd = cwd;
 
-		this.addChild(new Spacer(1));
+		this.gap = new Spacer(toolStyle.gap.afterOther);
+		this.addChild(this.gap);
 
 		this.contentContainer = new Container();
 		this.selfRenderContainer = new Container();
-		this.addChild(this.getRenderShell() === "self" ? this.selfRenderContainer : this.contentContainer);
+		this.addChild(this.isSelfRendered() ? this.selfRenderContainer : this.contentContainer);
 
 		this.updateDisplay();
 	}
@@ -138,30 +127,20 @@ export class ToolExecutionComponent extends Container {
 		return this.toolDefinition?.renderResult;
 	}
 
-	private hasRendererDefinition(): boolean {
-		return this.toolDefinition !== undefined;
+	private isSelfRendered(): boolean {
+		return this.toolDefinition?.renderShell === "self";
 	}
 
-	private getRenderShell(): "default" | "self" {
-		return this.toolDefinition?.renderShell ?? "default";
+	private status(): ToolStatus {
+		return toolStatus({ isPartial: this.isPartial, isError: this.result?.isError ?? false });
 	}
 
-	private shouldRenderGenericProgress(): boolean {
-		return this.toolName === "bash" && this.getRenderShell() !== "self";
+	/** Blank lines above this row; the chat sets it from what precedes the row. */
+	setLeadingGap(lines: number): void {
+		this.gap.setLines(lines);
 	}
 
-	private shouldRenderDetachHint(): boolean {
-		return this.getRenderShell() !== "self" && this.detachHint?.isDetachable(this.toolName) === true;
-	}
-
-	/** The hint label, or undefined when the hint is unavailable or the key is unbound. */
-	private detachHintText(): string | undefined {
-		if (!this.shouldRenderDetachHint()) return undefined;
-		const key = this.detachHint?.keyLabel();
-		return key ? `Press ${key} to run in background, /bg to manage` : undefined;
-	}
-
-	private getRenderContext(lastComponent: Component | undefined, toolGroupSummary = false): ToolRenderContext {
+	private getRenderContext(lastComponent: Component | undefined): ToolRenderContext {
 		return {
 			args: this.args,
 			toolCallId: this.toolCallId,
@@ -185,34 +164,11 @@ export class ToolExecutionComponent extends Container {
 						details: this.result.details,
 					}
 				: undefined,
-			toolGroupSummary,
 		};
 	}
 
-	private createCallFallback(): Component {
-		const args = formatFallbackArgs(this.args);
-		const suffix = args ? theme.fg("dim", `(${args})`) : "";
-		return new Text(`${theme.fg("toolTitle", theme.bold(this.toolName))}${suffix}`, 0, 0);
-	}
-
-	private wrapCall(component: Component): Component {
-		const color = this.isPartial ? "warning" : this.result?.isError ? "error" : "success";
-		// Continuation lines share the result rail so the whole block reads as one
-		// unit hanging off the dot instead of an indented island above a lone rail.
-		const rail = theme.fg("dim", "│ ");
-		return new ToolChromeComponent(component, `${theme.fg(color, "●")} `, {
-			continuationPrefix: rail,
-			blankLinePrefix: theme.fg("dim", "│"),
-		});
-	}
-
-	private wrapResult(component: Component): Component {
-		const rail = theme.fg("dim", "│ ");
-		return new ToolChromeComponent(component, rail, {
-			trimLeadingBlankLines: true,
-			continuationPrefix: rail,
-			blankLinePrefix: theme.fg("dim", "│"),
-		});
+	private frame(component: Component, kind: "header" | "body"): Component {
+		return new FramedComponent(component, kind, () => toolMarkerColor(this.status()));
 	}
 
 	private createResultFallback(): Component | undefined {
@@ -221,6 +177,18 @@ export class ToolExecutionComponent extends Container {
 			return undefined;
 		}
 		return new FallbackResultComponent(output, this.expanded);
+	}
+
+	/**
+	 * A successful result of an explore tool stays hidden until expanded; a failure always shows.
+	 * Only the built-in result renderer is folded, so an extension that overrides the tool with its
+	 * own renderResult keeps control of what its row shows.
+	 */
+	private hidesCollapsedResult(): boolean {
+		if (this.expanded || this.result?.isError || !toolStyle.collapsed.headerOnly.has(this.toolName)) return false;
+		builtInRenderers ??= createAllToolRenderers();
+		const builtIn = (builtInRenderers as Record<string, ToolRenderers>)[this.toolName];
+		return builtIn?.renderResult !== undefined && builtIn.renderResult === this.getResultRenderer();
 	}
 
 	private createResultRegion(component: Component): MouseRegion {
@@ -239,31 +207,8 @@ export class ToolExecutionComponent extends Container {
 	markExecutionStarted(): void {
 		if (this.disposed) return;
 		this.executionStarted = true;
-		if (this.shouldRenderGenericProgress() || this.shouldRenderDetachHint()) {
-			if (this.progressStartedAt === undefined) {
-				this.progressStartedAt = Date.now();
-			}
-			if (this.refreshTimer === undefined) {
-				this.refreshTimer = setInterval(() => {
-					if (this.disposed || !this.isPartial) {
-						this.clearRefreshTimer();
-						return;
-					}
-					this.invalidate();
-					this.ui.requestRender();
-				}, PROGRESS_REFRESH_INTERVAL_MS);
-				this.refreshTimer.unref?.();
-			}
-		}
 		this.updateDisplay();
 		this.ui.requestRender();
-	}
-
-	private clearRefreshTimer(): void {
-		if (this.refreshTimer) {
-			clearInterval(this.refreshTimer);
-			this.refreshTimer = undefined;
-		}
 	}
 
 	setArgsComplete(): void {
@@ -282,7 +227,6 @@ export class ToolExecutionComponent extends Container {
 	): void {
 		this.result = result;
 		this.isPartial = isPartial;
-		if (!isPartial) this.clearRefreshTimer();
 		this.updateDisplay();
 		this.maybeConvertImagesForKitty();
 	}
@@ -357,33 +301,12 @@ export class ToolExecutionComponent extends Container {
 		this.updateDisplay();
 	}
 
-	getFinalErrorSummary(): string | undefined {
-		if (this.isPartial || !this.result?.isError) return undefined;
-		const summary = this.getTextOutput().replace(/\s+/gu, " ").trim();
-		return summary || undefined;
-	}
-
-	renderCallSummary(width: number): string[] {
-		const callRenderer = this.getCallRenderer();
-		let component: Component;
-		if (!callRenderer) {
-			component = this.createCallFallback();
-		} else {
-			try {
-				component = callRenderer(this.args, theme, this.getRenderContext(undefined, true));
-			} catch {
-				component = this.createCallFallback();
-			}
-		}
-		return this.wrapCall(component).render(width);
-	}
-
 	override render(width: number): string[] {
 		if (this.hideComponent) {
 			return [];
 		}
 
-		if (this.getRenderShell() === "self") {
+		if (this.isSelfRendered()) {
 			const contentLines = this.selfRenderContainer.render(width);
 			this.selfRenderHeight = contentLines.length;
 			if (contentLines.length === 0 && this.imageComponents.length === 0) {
@@ -412,7 +335,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	override handleMouse(event: TuiMouseEvent): ReturnType<Container["handleMouse"]> {
-		if (!this.hasRendererDefinition() || this.getRenderShell() !== "self") return super.handleMouse(event);
+		if (!this.isSelfRendered()) return super.handleMouse(event);
 		if (event.y <= 0 || event.y > this.selfRenderHeight) return undefined;
 		return this.selfRenderContainer.handleMouse({
 			...event,
@@ -424,22 +347,22 @@ export class ToolExecutionComponent extends Container {
 	private updateDisplay(): void {
 		let hasContent = false;
 		this.hideComponent = false;
-		const selfRendered = this.getRenderShell() === "self";
+		const selfRendered = this.isSelfRendered();
 		const renderContainer = selfRendered ? this.selfRenderContainer : this.contentContainer;
 		renderContainer.clear();
 
 		const addCall = (component: Component) => {
-			renderContainer.addChild(selfRendered ? component : this.createResultRegion(this.wrapCall(component)));
+			renderContainer.addChild(selfRendered ? component : this.createResultRegion(this.frame(component, "header")));
 			hasContent = true;
 		};
 		const addResult = (component: Component) => {
-			renderContainer.addChild(selfRendered ? component : this.createResultRegion(this.wrapResult(component)));
+			renderContainer.addChild(selfRendered ? component : this.createResultRegion(this.frame(component, "body")));
 			hasContent = true;
 		};
 
 		const callRenderer = this.getCallRenderer();
 		if (!callRenderer) {
-			addCall(this.createCallFallback());
+			addCall(createCallFallback(this.toolName, this.args));
 		} else {
 			try {
 				const component = callRenderer(this.args, theme, this.getRenderContext(this.callRendererComponent));
@@ -447,11 +370,11 @@ export class ToolExecutionComponent extends Container {
 				addCall(component);
 			} catch {
 				this.callRendererComponent = undefined;
-				addCall(this.createCallFallback());
+				addCall(createCallFallback(this.toolName, this.args));
 			}
 		}
 
-		if (this.result) {
+		if (this.result && (selfRendered || !this.hidesCollapsedResult())) {
 			const resultRenderer = this.getResultRenderer();
 			if (!resultRenderer) {
 				const component = this.createResultFallback();
@@ -471,17 +394,6 @@ export class ToolExecutionComponent extends Container {
 					const component = this.createResultFallback();
 					if (component) addResult(component);
 				}
-			}
-		}
-
-		if (this.executionStarted && this.isPartial && this.progressStartedAt !== undefined) {
-			const elapsedMs = Date.now() - this.progressStartedAt;
-			if (this.shouldRenderGenericProgress() && elapsedMs >= PROGRESS_THRESHOLD_MS) {
-				addResult(new Text(theme.fg("muted", `Running… (${formatElapsed(elapsedMs)})`), 0, 0));
-			}
-			if (elapsedMs >= DETACH_HINT_DELAY_MS) {
-				const hint = this.detachHintText();
-				if (hint) addResult(new Text(theme.fg("dim", hint), 0, 0));
 			}
 		}
 
@@ -534,7 +446,6 @@ export class ToolExecutionComponent extends Container {
 	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
-		this.clearRefreshTimer();
 		(this.rendererState as { dispose?: () => void }).dispose?.();
 		this.pendingImageConversions.clear();
 	}

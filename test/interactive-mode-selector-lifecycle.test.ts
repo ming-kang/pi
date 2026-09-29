@@ -4,7 +4,7 @@ import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { ArminComponent } from "../src/modes/interactive/components/armin.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
-import { ToolChatContainer } from "../src/modes/interactive/tool-chat.ts";
+import { ToolChatContainer } from "../src/modes/interactive/tool-view/chat.ts";
 
 beforeAll(() => {
 	initTheme("dark");

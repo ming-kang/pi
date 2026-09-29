@@ -5,9 +5,9 @@ import {
 	formatCommandList,
 	formatTodoCall,
 	formatTodoContent,
-	formatTodoGroupCall,
+	formatTodoSummary,
 	renderWidgetLine,
-	type TodoGroupRenderContext,
+	type TodoSummaryContext,
 } from "../src/extensions/todo/view.ts";
 import { initTheme, theme as realTheme, type Theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -411,20 +411,20 @@ describe("formatTodoCall", () => {
 	});
 });
 
-describe("formatTodoGroupCall", () => {
-	function completed(details: unknown): TodoGroupRenderContext {
+describe("formatTodoSummary", () => {
+	function completed(details: unknown): TodoSummaryContext {
 		return { isError: false, isPartial: false, result: { content: [], details } };
 	}
 	const noChange = { created: [], updated: [], deleted: [], absent: [], evicted: [] };
 
 	test("summarizes every v3 change part from result details", () => {
-		const groupState = state([
+		const summaryState = state([
 			item(1, "One", "in_progress"),
 			item(2, "Two", "pending"),
 			item(3, "Three", "completed"),
 		]);
 		expect(
-			formatTodoGroupCall(
+			formatTodoSummary(
 				{
 					create: [
 						{ subject: "Wire parser", description: "d" },
@@ -440,7 +440,7 @@ describe("formatTodoGroupCall", () => {
 			),
 		).toBe("todo created #4–#5 · Wire parser, Test parser");
 		expect(
-			formatTodoGroupCall(
+			formatTodoSummary(
 				{ create: [] },
 				theme,
 				completed({
@@ -451,7 +451,7 @@ describe("formatTodoGroupCall", () => {
 			),
 		).toBe("todo created #2, #5 · Alpha, Beta");
 		expect(
-			formatTodoGroupCall(
+			formatTodoSummary(
 				{ update: [{ id: 4, status: "in_progress" }] },
 				theme,
 				completed({
@@ -461,33 +461,33 @@ describe("formatTodoGroupCall", () => {
 				}),
 			),
 		).toBe("todo updated #4 in_progress Fourth ; demoted #2");
-		expect(formatTodoGroupCall({}, theme, completed({ schemaVersion: 3, change: noChange, state: groupState }))).toBe(
+		expect(formatTodoSummary({}, theme, completed({ schemaVersion: 3, change: noChange, state: summaryState }))).toBe(
 			"todo list: 1 in progress, 1 pending, 1 completed",
 		);
 		expect(
-			formatTodoGroupCall(
+			formatTodoSummary(
 				{ delete: [3] },
 				theme,
 				completed({
 					schemaVersion: 3,
 					change: { ...noChange, deleted: [{ id: 3, subject: "Remove legacy task" }] },
-					state: groupState,
+					state: summaryState,
 				}),
 			),
 		).toBe("todo deleted #3 · Remove legacy task");
 		expect(
-			formatTodoGroupCall(
+			formatTodoSummary(
 				{ delete: [3, 9] },
 				theme,
 				completed({
 					schemaVersion: 3,
 					change: { ...noChange, deleted: [{ id: 3, subject: "Remove legacy task" }], absent: [9] },
-					state: groupState,
+					state: summaryState,
 				}),
 			),
 		).toBe("todo deleted #3 · Remove legacy task ; #9 already absent");
 		expect(
-			formatTodoGroupCall(
+			formatTodoSummary(
 				{ create: [{ subject: "Fresh", description: "d" }] },
 				theme,
 				completed({
@@ -508,8 +508,8 @@ describe("formatTodoGroupCall", () => {
 		).toBe("todo created #21 · Fresh ; auto-removed #1, #2");
 	});
 
-	test("bounds group errors to one line of at most 120 characters", () => {
-		const failure = formatTodoGroupCall({ update: [{ id: 7 }] }, theme, {
+	test("bounds summary errors to one line of at most 120 characters", () => {
+		const failure = formatTodoSummary({ update: [{ id: 7 }] }, theme, {
 			isError: true,
 			isPartial: false,
 			result: { content: [{ type: "text", text: `bad request\n${"x".repeat(500)}` }], details: undefined },
@@ -527,7 +527,7 @@ describe("formatTodoGroupCall", () => {
 			state: { items: [item(1, "A")], nextId: 2 },
 		};
 		expect(
-			formatTodoGroupCall({}, theme, {
+			formatTodoSummary({}, theme, {
 				isError: false,
 				isPartial: true,
 				result: { content: [], details: v3Create },
@@ -535,12 +535,12 @@ describe("formatTodoGroupCall", () => {
 		).toBe("todo list");
 
 		const v2 = { schemaVersion: 2, change: { kind: "create", ids: [1] }, state: { items: [], nextId: 2 } };
-		expect(formatTodoGroupCall({ create: [{ subject: "A", description: "d" }] }, theme, completed(v2))).toBe(
+		expect(formatTodoSummary({ create: [{ subject: "A", description: "d" }] }, theme, completed(v2))).toBe(
 			"todo create 1 task · A",
 		);
 
 		expect(
-			formatTodoGroupCall({}, theme, completed({ schemaVersion: 3, change: noChange, state: { items: "nope" } })),
+			formatTodoSummary({}, theme, completed({ schemaVersion: 3, change: noChange, state: { items: "nope" } })),
 		).toBe("todo list");
 
 		const hostile: unknown[] = [
@@ -554,7 +554,7 @@ describe("formatTodoGroupCall", () => {
 			{ schemaVersion: 3, change: noChange, state: { items: Array.from({ length: 10_001 }, () => ({})) } },
 		];
 		for (const details of hostile) {
-			expect(() => formatTodoGroupCall({}, theme, completed(details))).not.toThrow();
+			expect(() => formatTodoSummary({}, theme, completed(details))).not.toThrow();
 		}
 	});
 });
