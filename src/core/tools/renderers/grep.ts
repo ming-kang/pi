@@ -15,7 +15,17 @@ import { getTextOutput, invalidArgText, shortenPath, str } from "../render-utils
 import { DEFAULT_MAX_BYTES, formatSize } from "../truncate.ts";
 
 function formatGrepCall(
-	args: { pattern: string; path?: string; glob?: string; limit?: number } | undefined,
+	args:
+		| {
+				pattern: string;
+				path?: string;
+				glob?: string;
+				ignoreCase?: boolean;
+				literal?: boolean;
+				context?: number;
+				limit?: number;
+		  }
+		| undefined,
 	theme: Theme,
 ): string {
 	const pattern = str(args?.pattern);
@@ -30,6 +40,11 @@ function formatGrepCall(
 		(pattern === null ? invalidArg : theme.fg("accent", `/${pattern || ""}/`)) +
 		theme.fg("toolOutput", ` in ${path === null ? invalidArg : path}`);
 	if (glob) text += theme.fg("toolOutput", ` (${glob})`);
+	const flags: string[] = [];
+	if (args?.ignoreCase === true) flags.push("-i");
+	if (args?.literal === true) flags.push("-F");
+	if (typeof args?.context === "number") flags.push(`-C ${args.context}`);
+	if (flags.length > 0) text += theme.fg("toolOutput", ` (${flags.join(" ")})`);
 	if (limit !== undefined) text += theme.fg("toolOutput", ` limit ${limit}`);
 	return text;
 }

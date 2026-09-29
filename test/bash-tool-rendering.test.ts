@@ -1,4 +1,4 @@
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { createPowerShellToolDefinition } from "../src/core/tools/powershell.ts";
@@ -173,6 +173,86 @@ describe("bash tool call rendering", () => {
 		const requests = requestRender.mock.calls.length;
 		vi.advanceTimersByTime(5000);
 		expect(requestRender).toHaveBeenCalledTimes(requests);
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	test.each([createBashToolDefinition, createPowerShellToolDefinition])(
+		"keeps inherited result timing with a custom call renderer (%#)",
+		(factory) => {
+			vi.useFakeTimers();
+			vi.setSystemTime(0);
+			const tool = factory(process.cwd(), { operations: { exec: async () => ({ exitCode: 0 }) } });
+			const requestRender = vi.fn();
+			const definition: typeof tool = { ...tool, renderCall: () => new Text("Custom shell header", 0, 0) };
+			const component = new ToolExecutionComponent(
+				tool.name,
+				"custom-header",
+				{ command: "sleep 30" },
+				{},
+				definition,
+				{ requestRender } as never,
+				process.cwd(),
+			);
+			component.markExecutionStarted();
+			component.updateResult({ content: [], isError: false }, true);
+			requestRender.mockClear();
+			vi.advanceTimersByTime(3000);
+			expect(requestRender).toHaveBeenCalledTimes(3);
+			component.setExpanded(true);
+			component.invalidate();
+			expect(renderCall(component, 80)).toContain("Elapsed 3.0s");
+			component.updateResult({ content: [{ type: "text", text: "done" }], isError: false });
+			expect(renderCall(component, 80)).toContain("Took 3.0s");
+			vi.advanceTimersByTime(5000);
+			component.invalidate();
+			expect(renderCall(component, 80)).toContain("Took 3.0s");
+			expect(vi.getTimerCount()).toBe(0);
+			component.dispose();
+		},
+	);
+
+	test.each([false, true])("cleans up shell timing alongside an extension disposer (throws=%s)", (throws) => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+		const tool = createBashToolDefinition(process.cwd(), { operations: { exec: async () => ({ exitCode: 0 }) } });
+		const cleanup = vi.fn(() => {
+			if (throws) throw new Error("extension cleanup failed");
+		});
+		const definition: typeof tool = {
+			...tool,
+			renderCall(args, theme, context) {
+				context.state.dispose ??= cleanup;
+				return tool.renderCall!(args, theme, context);
+			},
+		};
+		const component = new ToolExecutionComponent(
+			"bash",
+			"composed-cleanup",
+			{ command: "sleep 30" },
+			{},
+			definition,
+			{ requestRender() {} } as never,
+			process.cwd(),
+		);
+		component.markExecutionStarted();
+		component.updateResult({ content: [], isError: false }, true);
+		vi.advanceTimersByTime(2000);
+		component.invalidate();
+		expect(renderCall(component, 80)).toContain("Elapsed 2.0s");
+		if (throws) expect(() => component.dispose()).toThrow("extension cleanup failed");
+		else component.dispose();
+		component.dispose();
+		expect(cleanup).toHaveBeenCalledOnce();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	test("does not invent timing for a replayed shell result", () => {
+		vi.useFakeTimers();
+		const component = createRenderer("echo done");
+		component.updateResult({ content: [{ type: "text", text: "done" }], isError: false });
+		component.setExpanded(true);
+		component.invalidate();
+		expect(renderCall(component, 80)).not.toMatch(/Elapsed|Took/);
 		expect(vi.getTimerCount()).toBe(0);
 	});
 

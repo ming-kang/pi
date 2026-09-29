@@ -186,6 +186,44 @@ describe("collapsed results", () => {
 		expect(plain(component.render(80)).join("\n")).toContain("│ src/a.ts:1: todo");
 	});
 
+	test("lets the style policy enable a bounded read preview", () => {
+		const original = toolStyle.collapsed.headerOnly;
+		try {
+			toolStyle.collapsed.headerOnly = new Set([...original].filter((name) => name !== "read"));
+			const component = row("read", "read-preview", { path: "notes.txt" }, createReadToolDefinition(process.cwd()));
+			component.updateResult(
+				textResult(Array.from({ length: 15 }, (_, index) => `read line ${index + 1}`).join("\n")),
+			);
+			const collapsed = plain(component.render(80)).join("\n");
+			expect(collapsed).toContain("read line 1\n");
+			expect(collapsed).toContain("read line 10\n");
+			expect(collapsed).not.toContain("read line 11");
+			expect(collapsed).toContain("5 more lines");
+			component.setExpanded(true);
+			expect(plain(component.render(80)).join("\n")).toContain("read line 15");
+		} finally {
+			toolStyle.collapsed.headerOnly = original;
+		}
+	});
+
+	test.each([false, true])("discloses grep search options (expanded=%s)", (expanded) => {
+		const component = row(
+			"grep",
+			"grep-options",
+			{ pattern: "a.b", path: "src", glob: "*.ts", literal: true, ignoreCase: true, context: 2, limit: 10 },
+			withBuiltInRenderers("grep", undefined),
+		);
+		component.setExpanded(expanded);
+		const rendered = plain(component.render(100)).join("\n");
+		for (const value of ["/a.b/", "src", "*.ts", "-i", "-F", "-C 2", "limit 10"]) {
+			expect(rendered).toContain(value);
+		}
+		component.updateArgs({ pattern: "a.b", ignoreCase: false, literal: false, context: 0 });
+		const defaults = plain(component.render(100)).join("\n");
+		expect(defaults).not.toMatch(/-i|-F/);
+		expect(defaults).toContain("-C 0");
+	});
+
 	test("shows the error of a failed explore tool even when collapsed", () => {
 		const component = grepRow();
 		component.updateResult(textResult("regex parse error", true), false);

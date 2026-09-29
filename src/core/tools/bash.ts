@@ -236,9 +236,7 @@ export interface BashToolOptions {
 }
 
 export type BashRenderState = {
-	startedAt: number | undefined;
-	endedAt: number | undefined;
-	interval: NodeJS.Timeout | undefined;
+	dispose?: () => void;
 };
 
 export interface ShellToolConfig {

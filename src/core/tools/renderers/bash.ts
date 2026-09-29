@@ -10,8 +10,8 @@ import { type Component, Container, Text, truncateToWidth, visibleWidth } from "
 import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { truncateToVisualLines } from "../../../modes/interactive/components/visual-truncate.ts";
 import { highlightCode, theme } from "../../../modes/interactive/theme/theme.ts";
-import type { ToolDefinition, ToolRenderResultOptions } from "../../extensions/types.ts";
-import type { BashToolDetails, ShellToolConfig } from "../bash.ts";
+import type { ToolDefinition, ToolRenderContext, ToolRenderResultOptions } from "../../extensions/types.ts";
+import type { BashRenderState, BashToolDetails, ShellToolConfig } from "../bash.ts";
 import { getTextOutput, invalidArgText, str } from "../render-utils.ts";
 import { DEFAULT_MAX_BYTES, formatSize } from "../truncate.ts";
 
@@ -74,6 +74,38 @@ class BashResultRenderComponent extends Container {
 		cachedSkipped: undefined,
 	};
 }
+
+const shellTiming = Symbol("shellTiming");
+interface ShellTiming {
+	startedAt: number;
+	endedAt?: number;
+	interval?: ReturnType<typeof setInterval>;
+	disposed: boolean;
+}
+interface ShellRenderState extends BashRenderState {
+	[shellTiming]?: ShellTiming;
+}
+
+/** Either slot can initialize timing, since extensions may replace the other slot. */
+function getShellTiming(context: ToolRenderContext<ShellRenderState>): ShellTiming | undefined {
+	if (!context.executionStarted) return undefined;
+	const state = context.state;
+	if (state[shellTiming]) return state[shellTiming];
+	const timing: ShellTiming = { startedAt: Date.now(), disposed: false };
+	state[shellTiming] = timing;
+	const previousDispose = state.dispose;
+	state.dispose = () => {
+		try {
+			previousDispose?.call(state);
+		} finally {
+			clearInterval(timing.interval);
+			timing.interval = undefined;
+			timing.disposed = true;
+		}
+	};
+	return timing;
+}
+
 function formatDuration(ms: number): string {
 	const seconds = ms / 1000;
 	if (seconds < 60) return `${seconds.toFixed(1)}s`;
@@ -230,30 +262,22 @@ export function createShellRenderers(
 ): Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> {
 	return {
 		renderCall(args, _theme, context) {
-			const state = context.state;
-			if (context.executionStarted && state.startedAt === undefined) {
-				state.startedAt = Date.now();
-				state.endedAt = undefined;
-			}
+			getShellTiming(context);
 			const component =
 				(context.lastComponent as BashCallRenderComponent | undefined) ?? new BashCallRenderComponent(config);
 			component.update(args as { command?: string; timeout?: number } | undefined, context.expanded);
 			return component;
 		},
 		renderResult(result, options, _theme, context) {
-			const state = context.state;
-			state.dispose ??= () => {
-				if (state.interval) clearInterval(state.interval);
-				state.interval = undefined;
-			};
-			if (state.startedAt !== undefined && options.isPartial && !state.interval) {
-				state.interval = setInterval(() => context.invalidate(), 1000);
-			}
-			if (!options.isPartial || context.isError) {
-				state.endedAt ??= Date.now();
-				if (state.interval) {
-					clearInterval(state.interval);
-					state.interval = undefined;
+			const timing = getShellTiming(context);
+			if (timing) {
+				if (!options.isPartial || context.isError) {
+					timing.endedAt ??= Date.now();
+					clearInterval(timing.interval);
+					timing.interval = undefined;
+				} else if (!timing.disposed && timing.interval === undefined) {
+					timing.interval = setInterval(() => context.invalidate(), 1000);
+					timing.interval.unref?.();
 				}
 			}
 			const component =
@@ -263,8 +287,8 @@ export function createShellRenderers(
 				result as any,
 				options,
 				context.showImages,
-				state.startedAt,
-				state.endedAt,
+				timing?.startedAt,
+				timing?.endedAt,
 			);
 			component.invalidate();
 			return component;

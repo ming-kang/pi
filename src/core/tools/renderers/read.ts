@@ -117,10 +117,6 @@ function formatReadResult(
 	_cwd: string,
 	isError: boolean,
 ): string {
-	if (!options.expanded && !isError) {
-		return "";
-	}
-
 	const rawPath = str(args?.file_path ?? args?.path);
 	const output = getTextOutput(result, showImages);
 	const lang = !isError && rawPath ? getLanguageFromPath(rawPath) : undefined;

@@ -52,6 +52,8 @@ Built-in renderers remain responsible for semantic content such as file paths, s
 
 Built-in tool definitions are also used when an extension overrides only one renderer slot. A custom call renderer can inherit the built-in result renderer, and vice versa. An extension that overrides a built-in tool with its own result renderer controls what that row shows, including when it is collapsed.
 
+The inherited Bash result renderer keeps its elapsed time even with a custom call renderer. Call and result renderers share `state`; a renderer that adds a `dispose()` callback must also call the previous callback so both renderers can release their resources.
+
 Renderer failures fall back to native generic output rather than breaking the transcript.
 
 ## Generic fallback
