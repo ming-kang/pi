@@ -219,13 +219,193 @@ describe("question dialog", () => {
 			],
 			undefined,
 			new KeybindingsManager(),
-			{ rows: 24, columns: 40 },
+			{ rows: 40, columns: 40 },
 		);
 		const output = dialog.viewAt(40);
 		expect(output).toMatch(/→\s+1\. Alpha/);
 		expect(output).toContain("PREVIEW-1");
-		expect(output).toContain("preview lines hidden");
-		expect(dialog.component.render(40).length).toBeLessThanOrEqual(24);
+		expect(output).toContain("more lines");
+		expect(dialog.component.render(40).length).toBeLessThanOrEqual(20);
+	});
+
+	describe("height budget", () => {
+		const previewOf = (option: number, lines: number) =>
+			Array.from({ length: lines }, (_, line) => `P${option}-${line + 1}`).join("\n");
+		const previewOptions = (lines: number, count = 5) =>
+			Array.from({ length: count }, (_, index) => ({
+				label: `Option ${index + 1}`,
+				description: `Description ${index + 1}`,
+				preview: previewOf(index + 1, lines),
+			}));
+		const plainOptions = (count: number) =>
+			Array.from({ length: count }, (_, index) => ({
+				label: `Option ${index + 1}`,
+				description: `Description ${index + 1}`,
+			}));
+		const visibleOptionNumbers = (output: string) =>
+			[...output.matchAll(/^\s*[→ ]\s+(\d+)\. Option/gm)].map((match) => Number(match[1]));
+
+		it("leaves at least half of a tall terminal to the transcript", () => {
+			for (const [rows, columns] of [
+				[40, 120],
+				[40, 50],
+				[60, 100],
+			]) {
+				const dialog = createDialog(
+					[question({ options: previewOptions(30, 8) })],
+					undefined,
+					new KeybindingsManager(),
+					{ rows, columns },
+				);
+				expect(dialog.component.render(columns).length).toBeLessThanOrEqual(Math.floor(rows / 2));
+			}
+		});
+
+		it("never exceeds the terminal on very short terminals", () => {
+			const dialog = createDialog(
+				[question({ options: previewOptions(30, 8) })],
+				undefined,
+				new KeybindingsManager(),
+				{ rows: 10, columns: 100 },
+			);
+			expect(dialog.component.render(100).length).toBeLessThanOrEqual(10);
+		});
+
+		it("keeps tabs, the question, chat row, and key hints visible while scrolled to the last option", () => {
+			const dialog = createDialog(
+				[question({ options: plainOptions(8) }), question({ question: "Second?", header: "Second" })],
+				undefined,
+				new KeybindingsManager(),
+				{ rows: 30, columns: 120 },
+			);
+			for (let index = 0; index < 8; index++) dialog.component.handleInput(DOWN);
+			expect(dialog.component.render(120).length).toBeLessThanOrEqual(16);
+			const output = dialog.viewAt(120);
+			expect(output).toMatch(/→\s+9\. Type something/);
+			expect(output).toContain("Approach");
+			expect(output).toContain("Which approach should we take?");
+			expect(output).toContain("Second");
+			expect(output).toContain("Chat about this");
+			expect(output).toContain("Esc cancel");
+			expect(output).toMatch(/↑ \d+ more options?/);
+			expect(output).not.toContain("↓");
+		});
+
+		it("says how many options are below and shows only whole options", () => {
+			const dialog = createDialog([question({ options: plainOptions(8) })], undefined, new KeybindingsManager(), {
+				rows: 24,
+				columns: 100,
+			});
+			const output = dialog.viewAt(100);
+			const hint = output.match(/↓ (\d+) more options?/);
+			expect(hint).not.toBeNull();
+			expect(output).not.toContain("↑");
+			const visible = visibleOptionNumbers(output);
+			expect(visible[0]).toBe(1);
+			expect(visible.length + Number(hint?.[1])).toBe(9);
+			for (const number of visible) expect(output).toContain(`Description ${number}`);
+		});
+
+		it("shows no more-options hint when every option fits", () => {
+			const output = createDialog([question({ options: plainOptions(3) })]).view();
+			expect(output).not.toMatch(/more options?/);
+		});
+
+		it("shows the whole preview beside a focused option that sits deep in the list", () => {
+			const dialog = createDialog([question({ options: previewOptions(6) })], undefined, new KeybindingsManager(), {
+				rows: 30,
+				columns: 120,
+			});
+			dialog.component.handleInput(DOWN);
+			dialog.component.handleInput(DOWN);
+			dialog.component.handleInput(DOWN);
+			const output = dialog.viewAt(120);
+			expect(output).toMatch(/→\s+4\. Option 4/);
+			for (let line = 1; line <= 6; line++) expect(output).toContain(`P4-${line}`);
+			expect(output).not.toContain("more lines");
+			expect(dialog.component.render(120).length).toBeLessThanOrEqual(16);
+		});
+
+		it("starts the preview at the top of the option area, whichever option is focused", () => {
+			const dialog = createDialog([question({ options: previewOptions(6) })], undefined, new KeybindingsManager(), {
+				rows: 30,
+				columns: 120,
+			});
+			const firstPreviewRow = (output: string, option: number) =>
+				output.split("\n").findIndex((line) => line.includes(`P${option}-1`));
+			const before = firstPreviewRow(dialog.viewAt(120), 1);
+			dialog.component.handleInput(DOWN);
+			dialog.component.handleInput(DOWN);
+			expect(firstPreviewRow(dialog.viewAt(120), 3)).toBe(before);
+		});
+
+		describe("narrow layout", () => {
+			const wrappedOptions = Array.from({ length: 5 }, (_, index) => ({
+				label: `Option ${index + 1}`,
+				description: `Description ${index + 1} ${"wraps across several lines ".repeat(2)}end${index + 1}`,
+				preview: previewOf(index + 1, 12),
+			}));
+			const open = (rows: number) => {
+				const dialog = createDialog(
+					[question({ options: wrappedOptions }), question({ question: "Second?", header: "Second" })],
+					undefined,
+					new KeybindingsManager(),
+					{ rows, columns: 50 },
+				);
+				dialog.component.handleInput(DOWN);
+				return dialog;
+			};
+
+			it("keeps the whole focused option and both hints when the preview cannot fit", () => {
+				const dialog = open(30);
+				const output = dialog.viewAt(50);
+				expect(output).toMatch(/→\s+2\. Option 2/);
+				expect(output).toContain("end2");
+				expect(output).toMatch(/↑ \d+ more options?/);
+				expect(output).toMatch(/↓ \d+ more options?/);
+				expect(output).toContain("Esc cancel");
+				expect(dialog.component.render(50).length).toBeLessThanOrEqual(16);
+			});
+
+			it("gives the preview only the rows the option window leaves", () => {
+				const dialog = open(40);
+				const output = dialog.viewAt(50);
+				expect(output).toMatch(/→\s+2\. Option 2/);
+				expect(output).toContain("end2");
+				expect(output).toMatch(/↓ \d+ more options?/);
+				expect(output).toContain("P2-1");
+				expect(output).toContain("more lines");
+				expect(dialog.component.render(50).length).toBeLessThanOrEqual(20);
+			});
+		});
+
+		it("clips a tall preview to the option area and says how many lines are left", () => {
+			const dialog = createDialog([question({ options: previewOptions(40) })], undefined, new KeybindingsManager(), {
+				rows: 30,
+				columns: 120,
+			});
+			dialog.component.handleInput(DOWN);
+			dialog.component.handleInput(DOWN);
+			const output = dialog.viewAt(120);
+			expect(output).toContain("P3-1");
+			expect(output).toMatch(/… \d+ more lines/);
+			expect(output).toContain("Esc cancel");
+			expect(dialog.component.render(120).length).toBeLessThanOrEqual(16);
+		});
+
+		it("scrolls the options and the preview independently", () => {
+			const dialog = createDialog(
+				[question({ options: previewOptions(40, 12) })],
+				undefined,
+				new KeybindingsManager(),
+				{ rows: 30, columns: 120 },
+			);
+			for (let index = 0; index < 11; index++) dialog.component.handleInput(DOWN);
+			const output = dialog.viewAt(120);
+			expect(output).toMatch(/→\s+12\. Option 12/);
+			expect(output).toMatch(/↑ \d+ more options?/);
+			expect(output).toContain("P12-1");
+		});
 	});
 
 	it("scrolls long review content without losing submit and edit behavior", () => {

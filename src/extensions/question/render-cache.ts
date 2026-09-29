@@ -1,22 +1,21 @@
 /**
- * Memoize rendered preview lines by (previewText, width, maxLines) so editor
- * keystrokes don't re-parse the preview markdown on every frame. Questions are
- * immutable for a dialog's lifetime and carry few previews, so no eviction.
+ * Memoize rendered preview lines by (previewText, width) so editor keystrokes and
+ * option scrolling don't re-parse the preview markdown on every frame. Questions
+ * are immutable for a dialog's lifetime and carry few previews, so no eviction.
  */
 export class PreviewLinesCache {
-	private cache = new Map<string, Map<string, string[]>>();
+	private cache = new Map<string, Map<number, string[]>>();
 
-	get(previewText: string, width: number, maxLines: number, compute: () => string[]): string[] {
-		let byDimensions = this.cache.get(previewText);
-		if (!byDimensions) {
-			byDimensions = new Map();
-			this.cache.set(previewText, byDimensions);
+	get(previewText: string, width: number, compute: () => string[]): string[] {
+		let byWidth = this.cache.get(previewText);
+		if (!byWidth) {
+			byWidth = new Map();
+			this.cache.set(previewText, byWidth);
 		}
-		const key = `${width}x${maxLines}`;
-		let lines = byDimensions.get(key);
+		let lines = byWidth.get(width);
 		if (!lines) {
 			lines = compute();
-			byDimensions.set(key, lines);
+			byWidth.set(width, lines);
 		}
 		return lines;
 	}

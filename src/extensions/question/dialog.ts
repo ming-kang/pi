@@ -5,6 +5,7 @@ import { keyLabel as configuredKeyLabel } from "../../modes/interactive/componen
 import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
 import { ruleBorder, wrapWithPrefix } from "./dialog-primitives.ts";
 import { QUESTION_LIMITS } from "./limits.ts";
+import { moreOptionsHint, type WindowItem, windowItems } from "./option-window.ts";
 import { PreviewLinesCache, WidthCachedRender } from "./render-cache.ts";
 import {
 	displayOptions,
@@ -18,14 +19,15 @@ import type { DialogResult, DisplayOption, InputMode, Question, QuestionAnswer, 
 
 type DialogView = "question" | "review";
 
-const PREVIEW_MAX_LINES = 16;
 /**
- * Estimated non-preview rows in the stacked (narrow) layout: top/bottom rules,
- * tab strip + blank, question line + blank, up to 5 option rows with
- * descriptions, the "Chat about this" row, warning slot, and the hint line.
- * Reserved so the preview clamps short of the terminal height.
+ * The dialog replaces the editor in the bottom dock, and the dock grows with its
+ * content. Capping the dialog at half the terminal keeps the transcript (often the
+ * assistant reply the question refers to) readable while the dialog is open.
  */
-const PREVIEW_CHROME_ROWS = 18;
+const DIALOG_MAX_FRACTION = 0.5;
+const DIALOG_MIN_ROWS = 16;
+/** Fewest rows a preview under the options is worth showing in. */
+const MIN_STACKED_PREVIEW_ROWS = 3;
 const VIEWPORT_SCROLL_STEP = 4;
 
 interface VerticalViewport {
@@ -34,14 +36,19 @@ interface VerticalViewport {
 	maxStart: number;
 }
 
+function dialogRowBudget(terminalRows: number): number {
+	const rows = Math.max(1, Math.floor(terminalRows));
+	return Math.min(rows, Math.max(DIALOG_MIN_ROWS, Math.floor(rows * DIALOG_MAX_FRACTION)));
+}
+
+/** Clamp `lines` to `maxRows` between the first and last line, scrolling around the anchor. */
 function applyVerticalViewport(
 	lines: string[],
 	width: number,
-	terminalRows: number,
+	maxRows: number,
 	theme: Theme,
 	options: { anchorLine?: number; preferredStart?: number } = {},
 ): VerticalViewport {
-	const maxRows = Math.max(1, Math.floor(terminalRows));
 	if (lines.length <= maxRows) return { lines, start: 0, maxStart: 0 };
 	if (maxRows < 5) {
 		const anchor = Math.max(0, Math.min(lines.length - 1, options.anchorLine ?? 0));
@@ -511,20 +518,20 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 			lines.push("");
 		}
 
-		function previewLines(previewText: string, width: number, terminalRows: number): string[] {
-			const maxLines = Math.max(4, Math.min(PREVIEW_MAX_LINES, terminalRows - PREVIEW_CHROME_ROWS));
-			return previewCache.get(previewText, width, maxLines, () => {
-				const markdown = new Markdown(previewText, 1, 0, getMarkdownTheme());
-				const rendered = markdown.render(Math.max(1, width));
-				if (rendered.length <= maxLines) return rendered;
-				return [
-					...rendered.slice(0, maxLines),
-					theme.fg(
-						"dim",
-						truncateToWidth(`… ${rendered.length - maxLines} preview lines hidden`, Math.max(1, width)),
-					),
-				];
-			});
+		function previewLines(previewText: string, width: number): string[] {
+			return previewCache.get(previewText, width, () =>
+				new Markdown(previewText, 1, 0, getMarkdownTheme()).render(Math.max(1, width)),
+			);
+		}
+
+		/** Fit `lines` into `maxLines` rows; a clipped tail becomes a "… N more lines" row. */
+		function clipLines(lines: string[], maxLines: number, width: number): string[] {
+			if (lines.length <= maxLines) return lines;
+			const kept = Math.max(0, maxLines - 1);
+			return [
+				...lines.slice(0, kept),
+				theme.fg("dim", truncateToWidth(`… ${lines.length - kept} more lines`, Math.max(1, width))),
+			];
 		}
 
 		/** Multi-select checkbox marker; the other row shows no box until a custom answer exists. */
@@ -568,16 +575,102 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 			);
 		}
 
+		/** Chat row, warning, and key hints: always visible below the scrolling option area. */
+		function renderQuestionFooter(renderWidth: number, digitRange: string): string[] {
+			const state = currentState();
+			const isMulti = currentQuestion().multiSelect === true;
+			const lines: string[] = [""];
+			const chatPrefix = footerFocused ? theme.fg("accent", "→") : " ";
+			wrapWithPrefix(
+				`${chatPrefix} `,
+				theme.fg(footerFocused ? "accent" : "text", "Chat about this"),
+				renderWidth,
+				lines,
+			);
+			if (state.warning) {
+				lines.push("");
+				wrapWithPrefix(" ", theme.fg("warning", state.warning), renderWidth, lines);
+			}
+			lines.push("");
+			let hints: string;
+			if (inputMode === "notes") {
+				hints = joinHints(editorSubmitAction("save notes"), keyAction("tui.select.cancel", "back"));
+			} else if (inputMode === "custom") {
+				hints = joinHints(
+					editorSubmitAction(isMulti ? "save custom answer" : "continue"),
+					keyAction("tui.select.cancel", "back"),
+				);
+			} else if (footerFocused) {
+				hints = joinHints(
+					keyAction("tui.select.confirm", "discuss"),
+					keyAction("tui.select.up", "return to options"),
+					keyAction("tui.select.cancel", "cancel"),
+				);
+			} else if (isMulti) {
+				hints = joinHints(
+					`${digitRange} toggle`,
+					keyAction("app.list.toggle", "toggle focused"),
+					keyAction("tui.input.tab", "notes/custom"),
+					keyAction("tui.select.confirm", "continue"),
+					keyGroupAction(["tui.editor.cursorLeft", "tui.editor.cursorRight"], "questions"),
+					keyAction("tui.select.cancel", "cancel"),
+				);
+			} else {
+				hints = joinHints(
+					`${digitRange} select`,
+					keyAction("tui.input.tab", "notes/custom"),
+					keyAction("tui.select.confirm", "select"),
+					keyGroupAction(["tui.editor.cursorLeft", "tui.editor.cursorRight"], "questions"),
+					keyAction("tui.select.cancel", "cancel"),
+				);
+			}
+			wrapWithPrefix(" ", theme.fg("dim", hints), renderWidth, lines);
+			lines.push(ruleBorder(theme, renderWidth));
+			return lines;
+		}
+
+		/**
+		 * Show whole items from `optionLines` in `rows` rows around `focus`, with
+		 * "more options" hints on the sides that have hidden items. `focusRow` is the
+		 * row of the focused item's first line.
+		 */
+		function windowOptionLines(
+			optionLines: string[],
+			items: WindowItem[],
+			focus: number,
+			rows: number,
+			width: number,
+		): { rows: string[]; focusRow: number } {
+			const window = windowItems(items, focus, rows);
+			const rowsBefore = (count: number) => items.slice(0, count).reduce((sum, item) => sum + item.height, 0);
+			const from = rowsBefore(window.first);
+			const visible = optionLines.slice(from, rowsBefore(window.last + 1)).slice(0, window.contentRows);
+			if (!window.showAbove && !window.showBelow) return { rows: visible, focusRow: rowsBefore(focus) - from };
+			const hint = (direction: "up" | "down", count: number) =>
+				theme.fg("dim", ` ${truncateToWidth(moreOptionsHint(direction, count), Math.max(1, width - 1))}`);
+			const spare = Array.from({ length: Math.max(0, window.contentRows - visible.length) }, () => "");
+			return {
+				rows: [
+					...(window.showAbove ? [hint("up", window.hiddenAbove)] : []),
+					...visible,
+					...(window.showBelow ? [hint("down", window.hiddenBelow)] : []),
+					...spare,
+				],
+				focusRow: (window.showAbove ? 1 : 0) + rowsBefore(focus) - from,
+			};
+		}
+
 		function compute(width: number, terminalRows: number): string[] {
 			const lines: string[] = [];
 			const renderWidth = Math.max(1, width);
+			const maxRows = dialogRowBudget(terminalRows);
 			lines.push(ruleBorder(theme, renderWidth));
 			renderTabs(renderWidth, lines);
 
 			if (view === "review") {
 				renderReview(renderWidth, lines);
 				lines.push(ruleBorder(theme, renderWidth));
-				const viewport = applyVerticalViewport(lines, renderWidth, terminalRows, theme, {
+				const viewport = applyVerticalViewport(lines, renderWidth, maxRows, theme, {
 					preferredStart: reviewScrollOffset,
 				});
 				reviewMaxScrollOffset = viewport.maxStart;
@@ -589,7 +682,6 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 			const state = currentState();
 			const options = currentOptions();
 			const isMulti = question.multiSelect === true;
-			const digitRange = `1-${Math.min(9, options.length)}`;
 			wrapWithPrefix(
 				" ",
 				`${theme.fg("accent", question.header)}  ${theme.fg("text", question.question)}`,
@@ -598,15 +690,25 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 			);
 			lines.push("");
 
-			const optionLines: string[] = [];
-			let focusedOptionStart = 0;
-			let focusedOptionEnd = 0;
-			let inputAnchorOffset: number | undefined;
+			// The option area gets what the pinned head and footer leave. Options and the
+			// preview are laid out in it as independent regions.
+			const footerLines = renderQuestionFooter(renderWidth, `1-${Math.min(9, options.length)}`);
+			const areaRows = Math.max(1, maxRows - lines.length - footerLines.length);
+
 			const hasPreview =
 				inputMode === undefined && !isMulti && options.some((option) => option.kind === "option" && option.preview);
 			const showPreviewSideBySide = hasPreview && renderWidth >= 60;
+			const gap = 2;
 			const listWidth = showPreviewSideBySide ? Math.max(20, Math.floor(renderWidth * 0.4)) : renderWidth;
+			const previewWidth = showPreviewSideBySide ? renderWidth - listWidth - gap : renderWidth;
+			const previewOption = options[state.optionIndex];
+			const previewText =
+				hasPreview && previewOption?.kind === "option" && previewOption.preview ? previewOption.preview : undefined;
+			const preview = previewText ? previewLines(previewText, previewWidth) : undefined;
 
+			const optionLines: string[] = [];
+			const items: WindowItem[] = [];
+			let focusItem = footerFocused ? options.length - 1 : state.optionIndex;
 			for (let index = 0; index < options.length; index++) {
 				const option = options[index];
 				const focused = !footerFocused && index === state.optionIndex;
@@ -631,142 +733,67 @@ export function createQuestionDialog(questions: Question[], signal?: AbortSignal
 				const labelText = customText ? `${option.label}  ✎ ${customText}` : option.label;
 				const label = `${index + 1}. ${labelText}${selectedSingle ? " ✓" : ""}${note}`;
 				const color = focused ? "accent" : selectedSingle || checked ? "success" : "text";
-				if (focused) focusedOptionStart = optionLines.length;
+				const start = optionLines.length;
 				wrapWithPrefix(`${focusArrow} ${marker} `, theme.fg(color, label), listWidth, optionLines);
 				if (option.kind === "option" && option.description) {
 					wrapWithPrefix("       ", theme.fg("muted", option.description), listWidth, optionLines);
 				}
-				if (focused) focusedOptionEnd = optionLines.length;
+				items.push({ height: optionLines.length - start, countsAsOption: true });
 			}
 
 			if (inputMode) {
+				const start = optionLines.length;
 				optionLines.push("");
 				const label = inputMode === "notes" ? `Notes for ${noteTarget ?? "option"}:` : "Your answer:";
 				wrapWithPrefix(" ", theme.fg("muted", label), listWidth, optionLines);
 				for (const line of editor.render(Math.max(1, listWidth - 2))) optionLines.push(` ${line}`);
-				inputAnchorOffset = Math.max(0, optionLines.length - 1);
+				items.push({ height: optionLines.length - start, countsAsOption: false });
+				focusItem = items.length - 1;
 			}
 
-			const optionListStartLine = lines.length;
+			const regionStart = lines.length;
+			let focusRow: number;
 			if (showPreviewSideBySide) {
-				const gap = 2;
-				const rightWidth = renderWidth - listWidth - gap;
-				const focused = options[state.optionIndex];
-				const previewText = focused?.kind === "option" && focused.preview ? focused.preview : "";
-				const preview = previewText
-					? previewLines(previewText, rightWidth, terminalRows)
-					: [theme.fg("dim", "(no preview)")];
-				const rightLines = [...Array.from({ length: focusedOptionStart }, () => ""), ...preview];
-				const maxRows = Math.max(optionLines.length, rightLines.length);
+				const previewRows = preview ?? [theme.fg("dim", "(no preview)")];
+				const rows = Math.min(areaRows, Math.max(optionLines.length, previewRows.length));
+				const left = windowOptionLines(optionLines, items, focusItem, rows, listWidth);
+				const right = clipLines(previewRows, rows, previewWidth);
+				focusRow = left.focusRow;
 				const pad = " ".repeat(gap);
-				for (let row = 0; row < maxRows; row++) {
-					const left = row < optionLines.length ? optionLines[row] : "";
-					const leftPadded = left + " ".repeat(Math.max(0, listWidth - visibleWidth(left)));
-					const right = row < rightLines.length ? rightLines[row] : "";
-					lines.push(`${leftPadded}${pad}${right}`);
+				for (let row = 0; row < Math.max(left.rows.length, right.length); row++) {
+					const leftText = left.rows[row] ?? "";
+					const leftPadded = leftText + " ".repeat(Math.max(0, listWidth - visibleWidth(leftText)));
+					lines.push(`${leftPadded}${pad}${right[row] ?? ""}`);
 				}
 			} else {
-				if (hasPreview) {
-					const focused = options[state.optionIndex];
-					const previewText = focused?.kind === "option" && focused.preview ? focused.preview : "";
-					if (previewText) {
-						optionLines.splice(
-							focusedOptionEnd,
-							0,
-							"",
+				// Narrow: the options come first. They keep the focused option and both hints
+				// (or the whole list when it fits, and at least half of the area); the preview
+				// gets the rows left, or a one-line note when fewer than a few remain.
+				let previewBlock: string[] = [];
+				if (preview) {
+					const optionNeed = Math.min(
+						optionLines.length,
+						Math.max(items[focusItem].height + 2, Math.floor((areaRows - 1) / 2)),
+					);
+					const previewRows = areaRows - optionNeed - 1;
+					if (previewRows >= MIN_STACKED_PREVIEW_ROWS) {
+						previewBlock = [
 							ruleBorder(theme, renderWidth, "dim"),
-							...previewLines(previewText, renderWidth, terminalRows),
-						);
+							...clipLines(preview, Math.min(preview.length, previewRows), renderWidth),
+						];
+					} else if (previewRows >= 0) {
+						previewBlock = [theme.fg("dim", " preview hidden: not enough rows")];
 					}
 				}
-				lines.push(...optionLines);
+				const optionRows = Math.max(1, areaRows - previewBlock.length);
+				const windowed = windowOptionLines(optionLines, items, focusItem, optionRows, renderWidth);
+				focusRow = windowed.focusRow;
+				lines.push(...windowed.rows, ...previewBlock);
 			}
-
-			lines.push("");
-			const chatLine = lines.length;
-			const chatPrefix = footerFocused ? theme.fg("accent", "→") : " ";
-			wrapWithPrefix(
-				`${chatPrefix} `,
-				theme.fg(footerFocused ? "accent" : "text", "Chat about this"),
-				renderWidth,
-				lines,
-			);
-			let warningLine: number | undefined;
-			if (state.warning) {
-				lines.push("");
-				warningLine = lines.length;
-				wrapWithPrefix(" ", theme.fg("warning", state.warning), renderWidth, lines);
-			}
-			lines.push("");
-			if (inputMode === "notes") {
-				wrapWithPrefix(
-					" ",
-					theme.fg("dim", joinHints(editorSubmitAction("save notes"), keyAction("tui.select.cancel", "back"))),
-					renderWidth,
-					lines,
-				);
-			} else if (inputMode === "custom") {
-				const hint = isMulti ? "save custom answer" : "continue";
-				wrapWithPrefix(
-					" ",
-					theme.fg("dim", joinHints(editorSubmitAction(hint), keyAction("tui.select.cancel", "back"))),
-					renderWidth,
-					lines,
-				);
-			} else if (footerFocused) {
-				wrapWithPrefix(
-					" ",
-					theme.fg(
-						"dim",
-						joinHints(
-							keyAction("tui.select.confirm", "discuss"),
-							keyAction("tui.select.up", "return to options"),
-							keyAction("tui.select.cancel", "cancel"),
-						),
-					),
-					renderWidth,
-					lines,
-				);
-			} else if (isMulti) {
-				wrapWithPrefix(
-					" ",
-					theme.fg(
-						"dim",
-						joinHints(
-							`${digitRange} toggle`,
-							keyAction("app.list.toggle", "toggle focused"),
-							keyAction("tui.input.tab", "notes/custom"),
-							keyAction("tui.select.confirm", "continue"),
-							keyGroupAction(["tui.editor.cursorLeft", "tui.editor.cursorRight"], "questions"),
-							keyAction("tui.select.cancel", "cancel"),
-						),
-					),
-					renderWidth,
-					lines,
-				);
-			} else {
-				wrapWithPrefix(
-					" ",
-					theme.fg(
-						"dim",
-						joinHints(
-							`${digitRange} select`,
-							keyAction("tui.input.tab", "notes/custom"),
-							keyAction("tui.select.confirm", "select"),
-							keyGroupAction(["tui.editor.cursorLeft", "tui.editor.cursorRight"], "questions"),
-							keyAction("tui.select.cancel", "cancel"),
-						),
-					),
-					renderWidth,
-					lines,
-				);
-			}
-			lines.push(ruleBorder(theme, renderWidth));
-			let anchorLine = optionListStartLine + focusedOptionStart;
-			if (inputAnchorOffset !== undefined) anchorLine = optionListStartLine + inputAnchorOffset;
-			else if (warningLine !== undefined) anchorLine = warningLine;
-			else if (footerFocused) anchorLine = chatLine;
-			return applyVerticalViewport(lines, renderWidth, terminalRows, theme, { anchorLine }).lines;
+			const anchorLine = regionStart + focusRow;
+			lines.push(...footerLines);
+			// Only a terminal too short for the pinned rows has lines left to drop here.
+			return applyVerticalViewport(lines, renderWidth, maxRows, theme, { anchorLine }).lines;
 		}
 
 		return {
