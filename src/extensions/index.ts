@@ -1,7 +1,6 @@
 import type { InlineExtension } from "../core/extensions/types.ts";
 import btwExtension from "./btw/index.ts";
 import deepwikiExtension from "./deepwiki/index.ts";
-import exploreExtension from "./explore/index.ts";
 import llamaExtension from "./llama/index.ts";
 import providerExtension from "./provider/index.ts";
 import questionExtension from "./question/index.ts";
@@ -13,7 +12,6 @@ export const builtInExtensions: InlineExtension[] = [
 	{ name: "llama.cpp", factory: llamaExtension, hidden: true },
 	{ name: "btw", factory: btwExtension, hidden: true },
 	{ name: "deepwiki", factory: deepwikiExtension, hidden: true },
-	{ name: "explore", factory: exploreExtension, hidden: true },
 	{ name: "provider", factory: providerExtension, hidden: true },
 	{ name: "question", factory: questionExtension, hidden: true },
 	{ name: "statusline", factory: statuslineExtension, hidden: true },

@@ -6,7 +6,6 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Added
 
-- Added `explore` for one-shot read-only investigations with source evidence, foreground/background execution, and extension-owned Tasks information and report views. `/explore` selects its model in `settings.json`; investigations reuse session compaction and have no fixed response-count limit.
 - Extensions can read and replace their global configuration namespace through `ctx.getExtensionSettings()` and `ctx.setExtensionSettings()`, with shared locking and explicit save failures.
 
 ### Removed

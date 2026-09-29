@@ -69,10 +69,6 @@
           "path": "bundled/extensions/deepwiki.md"
         },
         {
-          "title": "Explore",
-          "path": "bundled/extensions/explore.md"
-        },
-        {
           "title": "Question",
           "path": "bundled/extensions/question.md"
         },

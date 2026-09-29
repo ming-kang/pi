@@ -98,11 +98,6 @@
 				"test/question-dialog.test.ts",
 				"test/question-details.test.ts",
 				"test/built-in-extensions.test.ts"
-				,"test/explore.test.ts",
-				"test/explore-scope.test.ts",
-				"test/explore-settings.test.ts",
-				"test/explore-view.test.ts",
-				"test/suite/explore.test.ts"
 			]
 		},
 		{
@@ -114,7 +109,7 @@
 				{ "path": "src/core/extensions/runner.ts" },
 				{ "path": "src/core/agent-session.ts" }
 			],
-			"tests": ["test/extension-settings.test.ts", "test/explore-settings.test.ts"]
+			"tests": ["test/extension-settings.test.ts"]
 		},
 		{
 			"id": "background-execution",
