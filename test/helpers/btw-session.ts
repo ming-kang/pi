@@ -17,7 +17,9 @@ export async function createBtwTestSession(options: {
 	settings?: Partial<Settings>;
 	tools?: ToolDefinition[];
 	persist?: boolean;
+	model?: typeof btwModel;
 }) {
+	const model = options.model ?? btwModel;
 	const directory = mkdtempSync(join(tmpdir(), "pi-btw-test-"));
 	const sessionsDirectory = join(directory, "sessions");
 	mkdirSync(sessionsDirectory);
@@ -26,11 +28,11 @@ export async function createBtwTestSession(options: {
 		modelsPath: null,
 		refreshOnCreate: false,
 	});
-	modelRuntime.registerProvider(btwModel.provider, {
-		api: btwModel.api,
-		baseUrl: btwModel.baseUrl,
+	modelRuntime.registerProvider(model.provider, {
+		api: model.api,
+		baseUrl: model.baseUrl,
 		apiKey: "btw-test-key",
-		models: [btwModel],
+		models: [model],
 		streamSimple: options.stream,
 	});
 	const extensionsResult = await createTestExtensionsResult(options.extensions ?? [], directory);
@@ -42,7 +44,7 @@ export async function createBtwTestSession(options: {
 		cwd: directory,
 		agentDir: directory,
 		modelRuntime,
-		model: btwModel,
+		model,
 		thinkingLevel: "high",
 		settingsManager,
 		sessionManager,

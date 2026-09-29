@@ -1,7 +1,7 @@
 import { join } from "node:path";
-import { Agent, setDefaultStreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { Agent, type AgentMessage, setDefaultStreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
-import { clampThinkingLevel, type Model, streamSimple } from "@earendil-works/pi-ai/compat";
+import { clampThinkingLevel, type Message, type Model, streamSimple } from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { AgentSession } from "./agent-session.ts";
@@ -10,9 +10,10 @@ import { CacheWarmer } from "./cache-warmer.ts";
 import { ContextSnapshotCapture } from "./context-snapshot.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
+import { convertToLlm } from "./messages.ts";
 import { findInitialModel } from "./model-resolver.ts";
 import { ModelRuntime } from "./model-runtime.ts";
-import { resolveModelStreamOptions } from "./model-stream-options.ts";
+import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
 import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
@@ -266,14 +267,78 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		options.tools ?? (options.noTools ? [] : (configuredDefaultToolNames ?? defaultActiveToolNames))
 	).filter((name) => !excludedToolNameSet?.has(name));
 
+	// Create convertToLlm wrapper that filters images if blockImages is enabled (defense-in-depth)
+	const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
+		const converted = convertToLlm(messages);
+		// Check setting dynamically so mid-session changes take effect
+		if (!settingsManager.getBlockImages()) {
+			return converted;
+		}
+		// Filter out ImageContent from all messages, replacing with text placeholder
+		return converted.map((msg) => {
+			if (msg.role === "user" || msg.role === "toolResult") {
+				const content = msg.content;
+				if (Array.isArray(content)) {
+					const hasImages = content.some((c) => c.type === "image");
+					if (hasImages) {
+						const filteredContent = content
+							.map((c) =>
+								c.type === "image" ? { type: "text" as const, text: "Image reading is disabled." } : c,
+							)
+							.filter(
+								(c, i, arr) =>
+									// Dedupe consecutive "Image reading is disabled." texts
+									!(
+										c.type === "text" &&
+										c.text === "Image reading is disabled." &&
+										i > 0 &&
+										arr[i - 1].type === "text" &&
+										(arr[i - 1] as { type: "text"; text: string }).text === "Image reading is disabled."
+									),
+							);
+						return { ...msg, content: filteredContent };
+					}
+				}
+			}
+			return msg;
+		});
+	};
+
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
-	const contextCapture = new ContextSnapshotCapture(settingsManager, extensionRunnerRef);
 	const cacheWarmer = new CacheWarmer(
 		modelRuntime,
 		sessionManager,
 		() => settingsManager.getCacheWarmingMode(),
 		async (event) => extensionRunnerRef.current?.emitCacheWarmingDecision(event) ?? event.action,
 	);
+	const buildRequestOptions = (
+		requestModel: Model<any>,
+		options: ModelsSimpleStreamOptions = {},
+	): ModelsSimpleStreamOptions => {
+		const providerRetrySettings = settingsManager.getProviderRetrySettings();
+		const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();
+		const effectiveTimeoutMs = httpIdleTimeoutMs === 0 ? 2147483647 : httpIdleTimeoutMs;
+		const headerRunner = extensionRunnerRef.current;
+		return {
+			...options,
+			timeoutMs: options.timeoutMs ?? providerRetrySettings.timeoutMs ?? effectiveTimeoutMs,
+			websocketConnectTimeoutMs: options.websocketConnectTimeoutMs ?? settingsManager.getWebSocketConnectTimeoutMs(),
+			maxRetries: options.maxRetries ?? providerRetrySettings.maxRetries,
+			maxRetryDelayMs: options.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
+			transformHeaders: async (requestHeaders) => {
+				const headers = mergeProviderAttributionHeaders(
+					requestModel,
+					settingsManager,
+					options.sessionId,
+					requestHeaders,
+				);
+				return headerRunner?.hasHandlers("before_provider_headers")
+					? headerRunner.emitBeforeProviderHeaders(headers ?? {})
+					: (headers ?? {});
+			},
+		};
+	};
+	const contextSource = new ContextSnapshotCapture(settingsManager, extensionRunnerRef, buildRequestOptions);
 	const cacheContextIsCurrent = (requestModel: Model<any>) => {
 		const messages = agent.state.messages;
 		return () => {
@@ -310,9 +375,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			tools: [],
 			messages: existingSession.messages,
 		},
-		convertToLlm: contextCapture.convertToLlm,
+		convertToLlm: convertToLlmWithBlockImages,
 		streamFn: async (model, context, options) => {
-			const requestOptions = resolveModelStreamOptions(model, settingsManager, extensionRunnerRef.current, options);
+			const requestOptions = buildRequestOptions(model, options);
 			// Compaction and summaries use their own routing ids; only session requests
 			// replace the cache entry, so warming restarts from them. Keep warming while
 			// the current transcript still extends the request's prefix. Agent state may
@@ -328,7 +393,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		sessionId: sessionManager.getSessionId(),
 		transformContext: async (messages) => {
 			const runner = extensionRunnerRef.current;
-			return runner ? runner.emitContext(messages) : messages;
+			if (!runner) return messages;
+			return runner.emitContext(messages);
 		},
 		steeringMode: settingsManager.getSteeringMode(),
 		followUpMode: settingsManager.getFollowUpMode(),
@@ -364,12 +430,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		allowedToolNames,
 		excludedToolNames,
 		extensionRunnerRef,
-		captureModelContext: contextCapture.capture,
+		contextSource,
 		sessionStartEvent: options.sessionStartEvent,
 		executionRole: options.executionRole,
 	});
 	// After the session's own request projections, so the recorded prefix is what providers receive.
-	contextCapture.install(agent);
+	contextSource.install(agent);
 
 	const extensionsResult = resourceLoader.getExtensions();
 

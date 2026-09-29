@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai/compat";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
 	type CreateAgentSessionRuntimeFactory,
 	createAgentSessionFromServices,
@@ -12,7 +12,6 @@ import {
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import { getBackgroundUsageRecord } from "../src/core/usage-totals.ts";
 import type {
 	ExtensionFactory,
 	SessionBeforeForkEvent,
@@ -98,7 +97,7 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 		const runtimeHost = await createAgentSessionRuntime(createRuntime, {
 			cwd: tempDir,
 			agentDir: tempDir,
-			sessionManager: SessionManager.create(tempDir, join(tempDir, "sessions")),
+			sessionManager: SessionManager.create(tempDir),
 		});
 		await runtimeHost.session.bindExtensions({});
 
@@ -112,162 +111,6 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 
 		return { runtimeHost, faux };
 	}
-
-	it("holds the outgoing session's completions while replacement hooks decide", async () => {
-		let reachedHook!: () => void;
-		let releaseHook!: () => void;
-		const reached = new Promise<void>((resolve) => {
-			reachedHook = resolve;
-		});
-		const released = new Promise<void>((resolve) => {
-			releaseHook = resolve;
-		});
-		const { runtimeHost } = await createRuntimeHost((pi) => {
-			pi.on("session_before_switch", async () => {
-				reachedHook();
-				await released;
-				return { cancel: true };
-			});
-		});
-		const session = runtimeHost.session;
-		await session.bindExtensions({ backgroundEnabled: true });
-		let finish!: () => void;
-		const done = new Promise<void>((resolve) => {
-			finish = resolve;
-		});
-		const outcome = await session.background.execute({
-			kind: "bash",
-			title: "worker",
-			toolCallId: "worker",
-			background: true,
-			run: async (control) => {
-				control.accept();
-				await done;
-				return { result: { content: [{ type: "text", text: "done" }], details: undefined } };
-			},
-		});
-		if (outcome.kind !== "background") throw new Error("expected handoff");
-		const delivered = () =>
-			session.sessionManager.getEntries().filter((entry) => entry.type === "custom_message").length;
-
-		const replacing = runtimeHost.newSession();
-		await reached;
-		finish();
-		await vi.waitFor(() => expect(session.background.get(outcome.task.id).status).toBe("completed"));
-		await new Promise((resolve) => setTimeout(resolve, 20));
-		expect(delivered()).toBe(0);
-		releaseHook();
-		expect((await replacing).cancelled).toBe(true);
-		await vi.waitFor(() => expect(delivered()).toBe(1));
-		await session.waitForIdle();
-	});
-
-	it("preserves background admission on veto and closes it before shutdown hooks on replacement", async () => {
-		let veto = true;
-		let enabledAtShutdown: boolean | undefined;
-		const { runtimeHost } = await createRuntimeHost((pi) => {
-			pi.on("session_before_switch", () => ({ cancel: veto }));
-			pi.on("session_shutdown", (_event, ctx) => {
-				enabledAtShutdown = ctx.background.enabled;
-			});
-		});
-		await runtimeHost.session.bindExtensions({ backgroundEnabled: true });
-		const old = runtimeHost.session.background;
-		expect((await runtimeHost.newSession()).cancelled).toBe(true);
-		expect(old.enabled).toBe(true);
-		veto = false;
-		await runtimeHost.newSession();
-		expect(enabledAtShutdown).toBe(false);
-		expect(old.enabled).toBe(false);
-		expect(runtimeHost.session.background).not.toBe(old);
-		expect(runtimeHost.session.background.enabled).toBe(false);
-	});
-
-	it("fork veto preserves workers and a current-leaf fork copies cooperative shutdown usage", async () => {
-		let veto = true;
-		const { runtimeHost } = await createRuntimeHost((pi) => {
-			pi.on("session_before_fork", () => ({ cancel: veto }));
-		});
-		const old = runtimeHost.session;
-		await old.bindExtensions({ backgroundEnabled: true });
-		await old.prompt("persist source");
-		const leaf = old.sessionManager.getLeafId()!;
-		let signal!: AbortSignal;
-		const outcome = await old.background.execute({
-			kind: "subagent",
-			title: "billable",
-			toolCallId: "billable",
-			background: true,
-			run: async (control) => {
-				signal = control.signal;
-				control.accept();
-				await new Promise<void>((resolve) =>
-					control.signal.addEventListener("abort", () => resolve(), { once: true }),
-				);
-				return {
-					status: "cancelled",
-					result: {
-						content: [],
-						details: undefined,
-						usage: { ...fauxAssistantMessage("").usage, input: 7, totalTokens: 7 },
-					},
-				};
-			},
-		});
-		if (outcome.kind !== "background") throw new Error("expected handoff");
-		expect((await runtimeHost.fork(leaf, { position: "at" })).cancelled).toBe(true);
-		expect(signal.aborted).toBe(false);
-		expect(old.background.enabled).toBe(true);
-		veto = false;
-		await runtimeHost.fork(leaf, { position: "at" });
-		expect(signal.aborted).toBe(true);
-		const ledger = runtimeHost.session.sessionManager.getEntries().map(getBackgroundUsageRecord).filter(Boolean);
-		expect(ledger).toHaveLength(1);
-		expect(ledger[0]).toMatchObject({ taskId: outcome.task.id, usage: { input: 7 } });
-		expect(runtimeHost.session.background.list()).toMatchObject([{ id: outcome.task.id, status: "cancelled" }]);
-		expect(runtimeHost.session.background.pendingNotifications()).toEqual([]);
-	});
-
-	it("persists late ignored-abort accounting beside the source, never into a replacement session", async () => {
-		const { runtimeHost } = await createRuntimeHost(() => {});
-		const old = runtimeHost.session;
-		await old.bindExtensions({ backgroundEnabled: true });
-		await old.prompt("persist source");
-		const source = old.sessionFile!;
-		let finish!: () => void;
-		const gate = new Promise<void>((resolve) => {
-			finish = resolve;
-		});
-		const outcome = await old.background.execute({
-			kind: "subagent",
-			title: "late",
-			toolCallId: "late",
-			background: true,
-			run: async (control) => {
-				control.accept();
-				await gate;
-				return {
-					result: {
-						content: [],
-						details: undefined,
-						usage: { ...fauxAssistantMessage("").usage, input: 9, totalTokens: 9 },
-					},
-				};
-			},
-		});
-		if (outcome.kind !== "background") throw new Error("expected handoff");
-		const shutdown = old.background.shutdown.bind(old.background);
-		vi.spyOn(old.background, "shutdown").mockImplementation(() => shutdown(0));
-		await runtimeHost.newSession();
-		const original = readFileSync(source, "utf8");
-		const replacementEntries = runtimeHost.session.sessionManager.getEntries();
-		finish();
-		await vi.waitFor(() => expect(old.quarantinedBackgroundSettlements).toHaveLength(1));
-		expect(readFileSync(source, "utf8")).toBe(original);
-		expect(runtimeHost.session.sessionManager.getEntries()).toEqual(replacementEntries);
-		const record = JSON.parse(readFileSync(`${source}.background-late.jsonl`, "utf8").trim());
-		expect(record).toMatchObject({ sessionId: old.sessionId, task: { id: outcome.task.id }, usage: { input: 9 } });
-	});
 
 	it("emits session_before_switch and session_start for new and resume flows", async () => {
 		const events: RecordedSessionEvent[] = [];

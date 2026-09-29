@@ -4,8 +4,8 @@
  * notifications, completion cards and subagent flows describe the same status
  * the same way. Pure data; consumers apply theme.fg(marker.color, glyph).
  *
- * Distinct from the tool-call chrome dot (warning/error/success ●), which
- * expresses call lifecycle, not task status.
+ * Distinct from the tool-call marker in tool-view/style.ts, which expresses a
+ * call's lifecycle (pending, success, error), not a task's status.
  */
 
 export type StatusMarkerColor = "success" | "error" | "warning" | "accent" | "muted";

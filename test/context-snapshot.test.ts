@@ -3,7 +3,7 @@ import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import { type TObject, Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BtwAgent } from "../src/extensions/btw/agent.ts";
-import { btwDone, btwPending, btwResponse } from "./helpers/btw.ts";
+import { btwDone, btwModel, btwPending, btwResponse } from "./helpers/btw.ts";
 import { createBtwTestSession } from "./helpers/btw-session.ts";
 
 // Prompt images are normalized before they enter history; keep the test payload as-is so the
@@ -148,6 +148,27 @@ describe("SDK context snapshots", () => {
 		expect(next.messages[0]).toMatchObject({ content: "new branch" });
 		expect(next.thinkingLevel).toBe("off");
 		expect(calls).toBe(2);
+	});
+
+	it("reads attribution settings when snapshot headers are transformed", async () => {
+		const telemetry = process.env.PI_TELEMETRY;
+		delete process.env.PI_TELEMETRY;
+		const fixture = await createBtwTestSession({
+			settings: { enableInstallTelemetry: true },
+			model: { ...btwModel, baseUrl: "https://openrouter.ai/api/v1" },
+			stream: () => btwDone(btwResponse("ok")),
+		});
+		cleanups.push(fixture.cleanup);
+		try {
+			// Options built while attribution is on must follow a later opt-out, as upstream's
+			// per-request header transform does.
+			const { streamOptions } = await fixture.session.getContextSnapshot();
+			expect(await streamOptions.transformHeaders?.({})).toMatchObject({ "X-OpenRouter-Title": "pi" });
+			fixture.settingsManager.setEnableInstallTelemetry(false);
+			expect(await streamOptions.transformHeaders?.({})).toEqual({});
+		} finally {
+			if (telemetry !== undefined) process.env.PI_TELEMETRY = telemetry;
+		}
 	});
 
 	it("excludes partial assistant frames and captures request settings without the main abort signal", async () => {

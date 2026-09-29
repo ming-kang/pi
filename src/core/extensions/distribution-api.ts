@@ -29,15 +29,14 @@ export interface EditorHost {
 }
 
 /**
- * Message thrown when a captured extension ctx/pi is used after the owning
- * session was replaced (newSession/fork/switchSession/reload). Single source of
- * truth so extensions can detect the condition with
- * isStaleExtensionContextError instead of matching message text.
+ * Upstream words the error it throws when a captured extension ctx/pi is used after the owning
+ * session was replaced (newSession/fork/switchSession/reload) in three places. Recognize it by
+ * its stable opening rather than copying the whole message, so extensions can detect the
+ * condition with isStaleExtensionContextError instead of matching text themselves.
  */
-export const STALE_EXTENSION_CONTEXT_MESSAGE =
-	"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().";
+const STALE_EXTENSION_CONTEXT_PREFIX = "This extension ctx is stale";
 
 /** True when an error came from using a stale extension ctx/pi after session replacement. */
 export function isStaleExtensionContextError(error: unknown): boolean {
-	return error instanceof Error && error.message === STALE_EXTENSION_CONTEXT_MESSAGE;
+	return error instanceof Error && error.message.startsWith(STALE_EXTENSION_CONTEXT_PREFIX);
 }

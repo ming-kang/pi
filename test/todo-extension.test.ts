@@ -1,11 +1,10 @@
 import { describe, expect, test, vi } from "vitest";
-import {
-	type ExtensionAPI,
-	type ExtensionCommandContext,
-	type ExtensionContext,
-	type ExtensionUIContext,
-	STALE_EXTENSION_CONTEXT_MESSAGE,
-	type ToolDefinition,
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+	ExtensionUIContext,
+	ToolDefinition,
 } from "../src/core/extensions/types.ts";
 import {
 	TODO_MAX_BATCH_ITEMS,
@@ -804,7 +803,7 @@ describe("todo extension wiring", () => {
 		const stale = {
 			hasUI: false,
 			get sessionManager(): never {
-				throw new Error(STALE_EXTENSION_CONTEXT_MESSAGE);
+				throw new Error("This extension ctx is stale after session replacement or reload.");
 			},
 		} as unknown as ExtensionContext;
 		await expect(start(event, stale)).resolves.toBeUndefined();

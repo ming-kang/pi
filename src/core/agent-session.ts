@@ -30,7 +30,6 @@ import type {
 	AssistantMessage,
 	AuthResult,
 	ImageContent,
-	Message,
 	Model,
 	ProviderHeaders,
 	SystemMessage,
@@ -74,7 +73,7 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "./compaction/index.ts";
-import type { ContextSnapshot } from "./context-snapshot.ts";
+import type { ContextSnapshot, ContextSnapshotSource } from "./context-snapshot.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
@@ -98,7 +97,6 @@ import {
 	type SessionCompactFailedEvent,
 	type SessionStartEvent,
 	type ShutdownHandler,
-	STALE_EXTENSION_CONTEXT_MESSAGE,
 	type ToolDefinition,
 	type ToolExecutionEndEvent,
 	type ToolExecutionStartEvent,
@@ -112,7 +110,6 @@ import { emitSessionShutdownEvent } from "./extensions/runner.ts";
 import { type BashExecutionMessage, type CustomMessage, convertToLlm } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
-import { resolveModelStreamOptions } from "./model-stream-options.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import { exportSessionToJsonl } from "./session-export.ts";
@@ -254,8 +251,8 @@ export interface AgentSessionConfig {
 	baseToolsOverride?: Record<string, AgentTool>;
 	/** Mutable ref used by Agent to access the current ExtensionRunner */
 	extensionRunnerRef?: { current?: ExtensionRunner };
-	/** Reuse model input already prepared by the SDK without replaying its context hooks. */
-	captureModelContext?: (messages: AgentMessage[]) => Promise<Message[]>;
+	/** Reuse the request the SDK already prepared, without replaying its context hooks. */
+	contextSource?: ContextSnapshotSource;
 	/** Session start event metadata emitted when extensions bind to this runtime. */
 	sessionStartEvent?: SessionStartEvent;
 }
@@ -409,7 +406,7 @@ export class AgentSession {
 	private _extensionErrorUnsubscriber?: () => void;
 
 	private _modelRuntime: ModelRuntime;
-	private readonly _captureModelContext?: (messages: AgentMessage[]) => Promise<Message[]>;
+	private readonly _contextSource?: ContextSnapshotSource;
 	private _cacheWarmer?: Pick<CacheWarmer, "cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed">;
 
 	// Tool registry for extension getTools/setTools
@@ -452,7 +449,7 @@ export class AgentSession {
 		this._customTools = config.customTools ?? [];
 		this._cwd = config.cwd;
 		this._modelRuntime = config.modelRuntime;
-		this._captureModelContext = config.captureModelContext;
+		this._contextSource = config.contextSource;
 		this._cacheWarmer = config.cacheWarmer;
 		if (this._cacheWarmer) {
 			this._cacheWarmer.onWarmed = (entry) => this._emit({ type: "entry_appended", entry });
@@ -519,6 +516,14 @@ export class AgentSession {
 	async getContextSnapshot(): Promise<ContextSnapshot> {
 		const model = this.model;
 		if (!model) throw new Error("No model selected");
+		const requestOptions = {
+			sessionId: this.agent.sessionId ?? this.sessionManager.getSessionId(),
+			transport: this.agent.transport,
+			thinkingBudgets: structuredClone(this.agent.thinkingBudgets),
+			maxRetryDelayMs: this.agent.maxRetryDelayMs,
+			onPayload: this.agent.onPayload,
+			onResponse: this.agent.onResponse,
+		};
 		const snapshot = {
 			capturedAt: Date.now(),
 			sessionId: this.sessionManager.getSessionId(),
@@ -531,22 +536,15 @@ export class AgentSession {
 				parameters: structuredClone(parameters),
 				...(constrainedSampling === undefined ? {} : { constrainedSampling: structuredClone(constrainedSampling) }),
 			})),
-			streamOptions: resolveModelStreamOptions(model, this.settingsManager, this._extensionRunner, {
-				sessionId: this.agent.sessionId ?? this.sessionManager.getSessionId(),
-				transport: this.agent.transport,
-				thinkingBudgets: structuredClone(this.agent.thinkingBudgets),
-				maxRetryDelayMs: this.agent.maxRetryDelayMs,
-				onPayload: this.agent.onPayload,
-				onResponse: this.agent.onResponse,
-			}),
+			streamOptions: this._contextSource?.resolveStreamOptions(model, requestOptions) ?? requestOptions,
 		};
 		const currentSystemPrompt = this.systemPrompt;
 		// The canonical projection is what the next request converts; the inspection cache may lag it.
 		const messages = structuredClone(this.sessionManager.buildSessionProjection().messages);
 		const convert = this.agent.convertToLlm;
 		const transform = this.agent.transformContext;
-		const prepared = this._captureModelContext
-			? await this._captureModelContext(messages)
+		const prepared = this._contextSource
+			? await this._contextSource.prepareMessages(messages)
 			: await convert(transform ? await transform(messages) : messages);
 		// The prepared transcript declares the prompt the provider received, including a forced
 		// prompt projected for the last request; before the first request there is none yet.
@@ -1008,34 +1006,15 @@ export class AgentSession {
 	}
 
 	/**
-	 * Persist model/custom messages and consume queued context only after the append succeeds.
-	 * Returns the persisted entry ID, which boundary events and recovery omissions resolve later.
+	 * Called after a message's session entry is appended. Queued `nextTurn` context is consumed
+	 * only here, so a failed append leaves it queued, and Background delivery is acknowledged.
 	 */
-	private _persistMessage(message: AgentMessage): string | undefined {
-		let entryId: string;
+	private _messagePersisted(message: AgentMessage): void {
 		if (message.role === "custom") {
-			entryId = this.sessionManager.appendCustomMessageEntry(
-				message.customType,
-				message.content,
-				message.display,
-				message.details,
-			);
 			const pendingIndex = this._pendingNextTurnMessages.indexOf(message);
 			if (pendingIndex !== -1) this._pendingNextTurnMessages.splice(pendingIndex, 1);
-		} else if (
-			message.role === "system" ||
-			message.role === "user" ||
-			message.role === "assistant" ||
-			message.role === "toolResult"
-		) {
-			entryId = this.sessionManager.appendMessage(message);
-		} else {
-			// Bash execution, compaction and branch summaries are persisted by their owners.
-			return undefined;
 		}
-		this._entryIdsByMessage.set(message, entryId);
 		this._backgroundHost.messagePersisted(message);
-		return entryId;
 	}
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
@@ -1069,7 +1048,28 @@ export class AgentSession {
 
 		// Handle session persistence
 		if (event.type === "message_end") {
-			this._persistMessage(event.message);
+			let entryId: string | undefined;
+			// Check if this is a custom message from extensions
+			if (event.message.role === "custom") {
+				// Persist as CustomMessageEntry
+				entryId = this.sessionManager.appendCustomMessageEntry(
+					event.message.customType,
+					event.message.content,
+					event.message.display,
+					event.message.details,
+				);
+			} else if (
+				event.message.role === "system" ||
+				event.message.role === "user" ||
+				event.message.role === "assistant" ||
+				event.message.role === "toolResult"
+			) {
+				// Regular LLM message - persist as SessionMessageEntry
+				entryId = this.sessionManager.appendMessage(event.message);
+			}
+			if (entryId) this._entryIdsByMessage.set(event.message, entryId);
+			if (entryId) this._messagePersisted(event.message);
+			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
 			if (event.message.role === "assistant") {
 				const assistantMsg = event.message as AssistantMessage;
@@ -1309,7 +1309,9 @@ export class AgentSession {
 			// Dispose must succeed even if an abort hook throws.
 		}
 
-		this._extensionRunner.invalidate(STALE_EXTENSION_CONTEXT_MESSAGE);
+		this._extensionRunner.invalidate(
+			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
+		);
 		this._disconnectFromAgent();
 		this._eventListeners = [];
 		if (this._cacheWarmer) {
@@ -1862,8 +1864,8 @@ export class AgentSession {
 				timestamp: Date.now(),
 			});
 
-			// Inject any pending "nextTurn" messages as context alongside the user message.
-			// They stay queued until _persistMessage() confirms the append.
+			// Inject any pending "nextTurn" messages as context alongside the user message
+			// They stay queued until _messagePersisted() confirms the append.
 			for (const msg of this._pendingNextTurnMessages) {
 				messages.push(msg);
 			}
@@ -2108,7 +2110,13 @@ export class AgentSession {
 	}
 
 	private _appendCustomMessage(appMessage: CustomMessage): void {
-		this._persistMessage(appMessage);
+		this.sessionManager.appendCustomMessageEntry(
+			appMessage.customType,
+			appMessage.content,
+			appMessage.display,
+			appMessage.details,
+		);
+		this._messagePersisted(appMessage);
 		this._refreshFinalizedContext();
 		this._emit({ type: "message_start", message: appMessage });
 		this._emit({ type: "message_end", message: appMessage });

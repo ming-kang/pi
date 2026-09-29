@@ -112,15 +112,6 @@ describe("credential print commands", () => {
 			noRefresh: false,
 			minExpiryMs: 30 * 60_000,
 		});
-		// Local deviation: uppercase duration units stay case-insensitive.
-		expect(parseAuthCommand(["auth", "print-bearer-token", "--min-expiry", "30M"])).toMatchObject({
-			kind: "bearer_token",
-			minExpiryMs: 30 * 60_000,
-		});
-		expect(parseAuthCommand(["auth", "print-bearer-token", "--min-expiry", "30S"])).toMatchObject({
-			kind: "bearer_token",
-			minExpiryMs: 30_000,
-		});
 		expect(() => parseAuthCommand(["auth", "print-api-key", "--min-expiry", "30m"])).toThrow(
 			"only supported by print-bearer-token",
 		);

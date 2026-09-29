@@ -56,6 +56,8 @@ An unregistered path can be a prompt wording change; it does not by itself imply
 
 A deviation earns its maintenance cost only while it does something upstream does not. Retire one as soon as upstream supplies a similar mechanism, even when the result is not identical: prefer upstream's option name, lifecycle, and defaults over an equivalent local variant, and express a policy that must stay as a conversion in front of upstream's mechanism rather than a replacement for it. `compaction/settings.ts` is the reference example — it converts `triggerPercent` into upstream's `reserveTokens` so compaction, its tests, and its SDK signature stay upstream's.
 
+Do not move upstream code into a distribution module so that both can share it. The move deletes upstream lines, which conflicts whenever upstream edits them, and the shared copy drifts from the original without any signal. Leave upstream's code where it is and pass a reference to it, or add a line that calls the distribution code. `sdk.ts` and `ContextSnapshotCapture` are the reference example. Likewise put a distribution test in a distribution-owned file rather than appending it to an upstream test file, unless it changes what an existing upstream test asserts.
+
 Wholly rewritten documentation pages are the exception. `docs/**` is distribution-owned, and a rewrite that documents real behavior stays even when upstream later edits the same page: keep this distribution's prose and port only upstream's factual changes, which is why `--apply` leaves `docs/` for porting by hand.
 
 ## Synchronization runbook

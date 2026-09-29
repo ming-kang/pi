@@ -227,6 +227,5 @@ export {
 	isStaleExtensionContextError,
 	isToolCallEventType,
 	isWriteToolResult,
-	STALE_EXTENSION_CONTEXT_MESSAGE,
 } from "./types.ts";
 export { wrapRegisteredTool, wrapRegisteredTools } from "./wrapper.ts";

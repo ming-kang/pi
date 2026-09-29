@@ -93,7 +93,7 @@ import type { BackgroundContext, ContextSnapshot, EditorHost, ModelRuntime } fro
 export type { ExecOptions, ExecResult } from "../exec.ts";
 export type { BuildSystemPromptOptions, NormalizedBuildSystemPromptOptions } from "../system-prompt.ts";
 export type { ContextSnapshot, EditorHost, EditorSubmitEvent, EditorSubmitHandler } from "./distribution-api.ts";
-export { isStaleExtensionContextError, STALE_EXTENSION_CONTEXT_MESSAGE } from "./distribution-api.ts";
+export { isStaleExtensionContextError } from "./distribution-api.ts";
 export type { AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode };
 export type { AppKeybinding, KeybindingsManager } from "../keybindings.ts";
 

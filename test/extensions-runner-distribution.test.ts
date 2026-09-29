@@ -8,13 +8,16 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
-import { discoverAndLoadExtensions } from "../src/core/extensions/loader.ts";
+import { createExtensionRuntime, discoverAndLoadExtensions } from "../src/core/extensions/loader.ts";
 import { ExtensionRunner } from "../src/core/extensions/runner.ts";
+import { isStaleExtensionContextError } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type { ModelRegistry } from "../src/core/model-registry.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 // The detach key reserved against extension shortcuts is registered by the background extension.
 import "../src/extensions/background/keybindings.ts";
+import { btwDone, btwResponse } from "./helpers/btw.ts";
+import { createBtwTestSession } from "./helpers/btw-session.ts";
 import { createInMemoryModelRegistry } from "./model-runtime-test-utils.ts";
 
 describe("ExtensionRunner distribution behavior", () => {
@@ -45,6 +48,40 @@ describe("ExtensionRunner distribution behavior", () => {
 		const runner = await createRunner();
 
 		expect(runner.createContext().modelRuntime).toBe(modelRegistry.getRuntime());
+	});
+
+	it("recognizes the stale-context error from each place that raises it", async () => {
+		const raised = (use: () => unknown): unknown => {
+			try {
+				use();
+			} catch (error) {
+				return error;
+			}
+			return undefined;
+		};
+
+		// The runner's default message, which upstream defines.
+		const runner = await createRunner();
+		const context = runner.createContext();
+		runner.invalidate();
+		expect(isStaleExtensionContextError(raised(() => context.cwd))).toBe(true);
+
+		// The runtime's default message, used when a runtime is invalidated without a runner.
+		const runtime = createExtensionRuntime();
+		runtime.invalidate();
+		expect(isStaleExtensionContextError(raised(() => runtime.assertActive()))).toBe(true);
+
+		// The message a disposed session passes when it invalidates its runner.
+		const fixture = await createBtwTestSession({ stream: () => btwDone(btwResponse("ok")) });
+		try {
+			const sessionContext = fixture.session.extensionRunner.createContext();
+			fixture.session.dispose();
+			expect(isStaleExtensionContextError(raised(() => sessionContext.cwd))).toBe(true);
+		} finally {
+			await fixture.cleanup();
+		}
+
+		expect(isStaleExtensionContextError(new Error("ordinary failure"))).toBe(false);
 	});
 
 	it("reserves detach defaults and rebindings, but permits explicitly freed keys", async () => {

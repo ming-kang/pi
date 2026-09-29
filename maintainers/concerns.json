@@ -64,7 +64,7 @@
 			"paths": [
 				{
 					"path": "src/core/agent-session.ts",
-					"rewrite": "Message lifecycle notifications, the nextTurn persistence contract, and the prompt preflight pause sit inside upstream method bodies; BackgroundSession owns delivery receipts and lifecycle pauses wrap upstream-shaped *Body methods."
+					"rewrite": "Usage stats count each task once through the shared ledger, which replaces the accounting loop in getSessionStats and the nextTurn queue clearing; every other hook is an added line, and BackgroundSession owns delivery receipts while lifecycle pauses wrap upstream-shaped *Body methods."
 				},
 				{ "path": "src/core/agent-session-runtime.ts" },
 				{ "path": "src/core/agent-session-services.ts" },
@@ -92,7 +92,7 @@
 			],
 			"tests": [
 				"test/agent-session-background.test.ts",
-				"test/agent-session-runtime-events.test.ts",
+				"test/agent-session-background-lifecycle.test.ts",
 				"test/agent-session-stats.test.ts",
 				"test/background-extension.test.ts",
 				"test/background-manager.test.ts",
@@ -113,10 +113,7 @@
 				{ "path": "src/core/extensions/index.ts" },
 				{ "path": "src/core/extensions/runner.ts" },
 				{ "path": "src/core/extensions/types.ts" },
-				{
-					"path": "src/core/sdk.ts",
-					"rewrite": "Request options and the recorded model-input prefix move into modules that other context consumers share, replacing upstream's inline builders."
-				},
+				{ "path": "src/core/sdk.ts" },
 				{ "path": "src/index.ts" }
 			],
 			"tests": [
@@ -182,7 +179,7 @@
 					"rewrite": "The bundled theme list replaces the two-theme loader and the inline background-key set in upstream's theme-loading functions."
 				}
 			],
-			"tests": ["test/theme-picker.test.ts"]
+			"tests": ["test/bundled-themes.test.ts"]
 		},
 		{
 			"id": "interactive-hints",
@@ -196,7 +193,7 @@
 				{ "path": "src/modes/interactive/components/keybinding-hints.ts" }
 			],
 			"tests": [
-				"test/custom-message.test.ts",
+				"test/custom-message-click.test.ts",
 				"test/extension-selector.test.ts",
 				"test/keybinding-hints.test.ts"
 			]
@@ -279,7 +276,7 @@
 			],
 			"tests": [
 				"test/resource-loader.test.ts",
-				"test/trust-manager.test.ts"
+				"test/trust-manager-windows.test.ts"
 			]
 		},
 		{
@@ -300,7 +297,7 @@
 			],
 			"tests": [
 				"test/suite/regressions/3302-find-path-glob.test.ts",
-				"test/suite/regressions/6104-find-root-relativization.test.ts"
+				"test/find-windows-glob.test.ts"
 			],
 			"watch": "A managed fd release matches slash-containing globs on Windows and the native slash and backslash regressions pass without the fallback."
 		},
@@ -321,7 +318,7 @@
 				{ "path": "src/cli/auth-command.ts" }
 			],
 			"tests": [
-				"test/credential-print.test.ts"
+				"test/auth-min-expiry.test.ts"
 			]
 		},
 		{
