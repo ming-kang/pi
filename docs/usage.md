@@ -306,7 +306,7 @@ pi --exclude-tools ask_question
 
 Pi keeps the core small and pushes workflow-specific behavior into extensions, skills, prompt templates, and packages.
 
-Upstream Pi provides the llama.cpp integration, codemode, MCP, and tool search. This distribution adds Tasks, BTW, Todo, other workflow extensions, and its native tool presentation. See the [feature catalog](bundled/README.md) for their origins and usage. You can build or install additional workflows as extensions or packages.
+Upstream Pi provides the llama.cpp integration, codemode, MCP, and tool search. This distribution adds Tasks, BTW, other workflow extensions, and its native tool presentation. See the [feature catalog](bundled/README.md) for their origins and usage. You can build or install additional workflows as extensions or packages.
 
 For the full rationale, read the [blog post](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/).
 

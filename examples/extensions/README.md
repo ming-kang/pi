@@ -30,7 +30,6 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 
 | Extension | Description |
 |-----------|-------------|
-| `todo.ts` | Todo list tool + `/todos` command with custom rendering and state persistence |
 | `hello.ts` | Minimal custom tool example |
 | `question.ts` | Demonstrates `ctx.ui.select()` for asking the user questions with custom UI |
 | `questionnaire.ts` | Multi-question input with tab bar navigation between questions |
@@ -199,7 +198,7 @@ action: Type.Union([Type.Literal("list"), Type.Literal("add")])
 // Store state in tool result details for proper forking support
 return {
   content: [{ type: "text", text: "Done" }],
-  details: { todos: [...todos], nextId },  // Persisted in session
+  details: { items: [...items], nextId },  // Persisted in session
 };
 
 // Reconstruct on session events

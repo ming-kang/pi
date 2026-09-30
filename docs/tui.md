@@ -828,7 +828,7 @@ PI_TUI_WRITE_LOG=/tmp/tui-ansi.log pi
 ## Additional examples
 
 - **Game loop and disposal:** [examples/extensions/snake.ts](../examples/extensions/snake.ts)
-- **Custom tool rendering:** [examples/extensions/todo.ts](../examples/extensions/todo.ts)
+- **Custom tool rendering:** [examples/extensions/built-in-tool-renderer.ts](../examples/extensions/built-in-tool-renderer.ts)
 
 ## Combined theme styles
 

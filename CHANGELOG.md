@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** Removed the bundled `todo` tool, `/todos` command, task-list widget, and Todo example extension; saved session history remains readable.
+
 ## [0.99.0] - 2026-09-30
 
 ### Fixed
@@ -691,7 +695,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 - Returned bash output decoding to the reviewed upstream UTF-8-only streaming `TextDecoder`, removing the distribution-specific OEM-code-page fallback and per-line buffering. Legacy Windows console programs that emit non-UTF-8 bytes now follow upstream behavior and may render replacement characters.
 
-- Collapsed `todo` groups now summarize completed operations — created IDs, status updates, list counts, deletion, and clearing — instead of hiding their results; failed rows include a sanitized 120-character reason, and `ctrl+o` still reveals full calls and results. See [todo](docs/bundled/extensions/todo.md).
+- Collapsed `todo` groups now summarize completed operations — created IDs, status updates, list counts, deletion, and clearing — instead of hiding their results; failed rows include a sanitized 120-character reason, and `ctrl+o` still reveals full calls and results.
 
 - Redesigned the `exit_plan` approval dialog and tool row. The three choices now separate the decision from its trade-off (`Start executing` / *keep full context*) instead of burying it in a parenthetical, the dialog subtitle reports current context usage — the fact the compact-or-not decision actually turns on — and the dismiss hint reads "keep planning" rather than "cancel", matching what `Esc` has always done. The tool row no longer echoes the plan: a collapsed call shows `exit_plan <title>` (plan body on `ctrl+o`) instead of the whole markdown document escaped onto one line, and the result shows where the plan landed plus what happens next, instead of the mode-precedence text written for the model.
 - The plan-mode footer marker now reads `Plan Mode` in the theme's accent color rather than a `plan` tag in warning yellow — plan mode is a working mode, not a warning state.
@@ -712,14 +716,14 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 ### Added
 
 - Added digit quick-select to the `question` tool dialog: pressing `1`–`9` jumps to the numbered option — selecting it in single-select, toggling it in multi-select — and the custom-answer row's number opens its input. See [question](docs/bundled/extensions/question.md).
-- Added reverse dependency edges to the `todo` tool: `addBlocks`/`removeBlocks` on `update` let one call mark the tasks that must wait for the current one, with the same existence, tombstone, and cycle validation as `addBlockedBy`. See [todo](docs/bundled/extensions/todo.md).
+- Added reverse dependency edges to the `todo` tool: `addBlocks`/`removeBlocks` on `update` let one call mark the tasks that must wait for the current one, with the same existence, tombstone, and cycle validation as `addBlockedBy`.
 
 ### Changed
 
 - Gave the built-in `explorer` subagent profile read-only shell access: `bash` joins its toolset for inspection commands (`git log`/`blame`/`diff`, `wc`, `head`), with the system prompt pinning it to read-only use — no redirect (`>`, `>>`) or heredoc writes, no temp files, no git commands that write (add, commit, checkout, restore, stash, clean), no installs, no network. Explorer also skips loading `AGENTS.md`/`CLAUDE.md` project instructions, which read-only exploration doesn't need — the parent interprets its results. The bundled subagent feature was subsequently removed.
 - Rewrote the subagent tool's model-facing guidance. The description now leads with why to delegate — keeping intermediate tool output (file dumps, search results) out of the parent's context — states explicitly that reports are not shown to the user and must be relayed, names the task and concurrency limits (8 per call, 5 concurrent), advises direct tools for directed lookups and delegation for investigations that would clearly take more than ~3 searches, distinguishes lookup briefings (hand over the exact command) from investigation briefings (hand over the question), suggests bounding answer length, and carries an example explorer briefing. The `general` profile description now states when to choose it over `explorer`, workers are told only their final message is returned and to quote code only when the exact text is load-bearing, and the briefing `prompt` limit rose from 20,000 to 50,000 characters to leave room for pasted context. The bundled subagent feature was subsequently removed.
 - Tightened `question` tool validation: option previews on multi-select questions are now rejected with an explicit `preview_multiselect` error instead of being silently dropped, reserved-label and duplicate checks compare case-insensitively and ignore surrounding whitespace, the unused `Next` label is no longer reserved, and length/count checks that duplicated the JSON schema (already enforced before the tool executes) were removed. Preview markdown rendering is also memoized, so editor keystrokes no longer re-parse previews.
-- Tightened `todo` tool validation and model-facing output: parameters that do not apply to the chosen action are rejected with guidance instead of being silently ignored (`blockedBy` on `update` now points at `addBlockedBy`/`removeBlockedBy`), `create` requires a `description` stating what done means, id parameters must be positive integers at the schema level, an empty string clears `description`/`activeForm`/`owner`, a deletion cannot be combined with other edits and reports which pending dependents became fully unblocked, `list` lines show only unresolved blockers plus the task's owner, and the truncation notice no longer suggests a status filter that is already applied. The tool description was restructured into sectioned guidance (when to use, status workflow, examples) with explicit blocked-task handling: create a task for the blocker and link it with `addBlockedBy` instead of faking completion. See [todo](docs/bundled/extensions/todo.md).
+- Tightened `todo` tool validation and model-facing output: parameters that do not apply to the chosen action are rejected with guidance instead of being silently ignored (`blockedBy` on `update` now points at `addBlockedBy`/`removeBlockedBy`), `create` requires a `description` stating what done means, id parameters must be positive integers at the schema level, an empty string clears `description`/`activeForm`/`owner`, a deletion cannot be combined with other edits and reports which pending dependents became fully unblocked, `list` lines show only unresolved blockers plus the task's owner, and the truncation notice no longer suggests a status filter that is already applied. The tool description was restructured into sectioned guidance (when to use, status workflow, examples) with explicit blocked-task handling: create a task for the blocker and link it with `addBlockedBy` instead of faking completion.
 
 ### Fixed
 

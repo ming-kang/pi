@@ -164,7 +164,7 @@ describe("statusline usage", () => {
 			usageEntries(),
 			new Map([
 				["background", "bg 2 running · 1 waiting for input · 4 done"],
-				["todo", "todo 3/8"],
+				["custom", "custom 3/8"],
 			]),
 		);
 		const lines = footer.render(width);

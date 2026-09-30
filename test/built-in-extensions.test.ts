@@ -12,12 +12,11 @@ const EXPECTED_BUILT_INS = [
 	"provider",
 	"question",
 	"statusline",
-	"todo",
 	"web_search",
 ];
 
 describe("built-in extensions", () => {
-	test("loads bundled tools without removed investigation and delegation tools", async () => {
+	test("loads bundled tools without removed tools and commands", async () => {
 		const loaded = await createTestExtensionsResult(
 			builtInExtensions.map((extension) => (typeof extension === "function" ? extension : extension.factory)),
 		);
@@ -27,8 +26,10 @@ describe("built-in extensions", () => {
 		expect(tools).toContain("deepwiki");
 		expect(tools).not.toContain("subagent");
 		expect(tools).not.toContain("explore");
+		expect(tools).not.toContain("todo");
 		expect(commands).not.toContain("agents");
 		expect(commands).not.toContain("explore");
+		expect(commands).not.toContain("todos");
 	});
 	test("marks the canonical bundled extension set as configurable built-ins", () => {
 		expect(builtInExtensions.map((extension) => extension.name)).toEqual(EXPECTED_BUILT_INS);

@@ -83,7 +83,7 @@ function createToolResult(toolCallId: string, chars: number): SessionMessageEntr
 describe("prepareCompaction for a single-turn session with a fat tail", () => {
 	it("summarizes the turn prefix on the first compaction", () => {
 		const entries: SessionEntry[] = [
-			createUserMessage("Review the redesigned todo extension."),
+			createUserMessage("Review the redesigned parser."),
 			createToolCall("t1", "searching"),
 			createToolResult("t1", 40_000),
 			createToolCall("t2", "searching more"),
@@ -100,7 +100,7 @@ describe("prepareCompaction for a single-turn session with a fat tail", () => {
 	});
 
 	it("summarizes the retained history on a second compaction", () => {
-		const u = createUserMessage("Review the redesigned todo extension.");
+		const u = createUserMessage("Review the redesigned parser.");
 		const a1 = createToolCall("t1", "a1");
 		const r1 = createToolResult("t1", 40_000);
 		const a2 = createToolCall("t2", "a2");
@@ -119,7 +119,7 @@ describe("prepareCompaction for a single-turn session with a fat tail", () => {
 
 	it("still keeps everything when the tail fits the budget", () => {
 		const entries: SessionEntry[] = [
-			createUserMessage("Review the redesigned todo extension."),
+			createUserMessage("Review the redesigned parser."),
 			createToolCall("t1", "searching"),
 			createToolResult("t1", 2_000),
 		];

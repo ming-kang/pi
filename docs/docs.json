@@ -81,10 +81,6 @@
           "path": "bundled/extensions/statusline.md"
         },
         {
-          "title": "Todo",
-          "path": "bundled/extensions/todo.md"
-        },
-        {
           "title": "Web Search",
           "path": "bundled/extensions/web-search.md"
         },

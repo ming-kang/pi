@@ -92,9 +92,6 @@
 				}
 			],
 			"tests": [
-				"test/todo-extension.test.ts",
-				"test/todo-patch-result.test.ts",
-				"test/todo-render.test.ts",
 				"test/question-dialog.test.ts",
 				"test/question-details.test.ts",
 				"test/built-in-extensions.test.ts"
@@ -299,7 +296,6 @@
 			"tests": [
 				"test/bash-tool-rendering.test.ts",
 				"test/edit-tool-no-full-redraw.test.ts",
-				"test/todo-render.test.ts",
 				"test/tool-execution-component.test.ts",
 				"test/tool-view.test.ts"
 			]

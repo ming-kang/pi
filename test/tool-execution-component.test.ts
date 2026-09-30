@@ -3,12 +3,11 @@ import { resetCapabilitiesCache, setCapabilities, Text, type TUI, type TuiMouseE
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { getReadmePath } from "../src/config.ts";
-import type { ExtensionAPI, ToolDefinition } from "../src/core/extensions/types.ts";
+import type { ToolDefinition } from "../src/core/extensions/types.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
 import { withBuiltInRenderers } from "../src/core/tools/renderers/index.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
-import todo from "../src/extensions/todo/index.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/tool-view/tool-execution.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -31,20 +30,6 @@ function createFakeTui(requestRender: () => void = () => {}): TUI {
 	return {
 		requestRender,
 	} as unknown as TUI;
-}
-
-function createTodoToolDefinition(): ToolDefinition {
-	let definition: ToolDefinition | undefined;
-	const api = {
-		registerTool: (tool: ToolDefinition) => {
-			definition = tool;
-		},
-		registerCommand: () => {},
-		on: () => {},
-	} as unknown as ExtensionAPI;
-	todo(api);
-	if (!definition) throw new Error("todo tool was not registered");
-	return definition;
 }
 
 describe("ToolExecutionComponent parity", () => {
@@ -880,66 +865,6 @@ describe("ToolExecutionComponent parity", () => {
 			expect(expanded).toContain(scenario.hidden);
 		});
 	}
-
-	test("shows a collapsed todo row as one result-aware line and the result text only when expanded", () => {
-		const todoDefinition = createTodoToolDefinition();
-		const created = new ToolExecutionComponent(
-			"todo",
-			"todo-created",
-			{
-				create: [
-					{ subject: "Wire parser", description: "Parser handles config" },
-					{ subject: "Test parser", description: "Parser tests pass" },
-				],
-			},
-			{},
-			todoDefinition,
-			createFakeTui(),
-			process.cwd(),
-		);
-		created.updateResult(
-			{
-				content: [{ type: "text", text: "Created 2 tasks" }],
-				details: {
-					schemaVersion: 3,
-					change: { created: [4, 5], updated: [], deleted: [], absent: [], evicted: [] },
-					state: {
-						items: [
-							{ id: 4, subject: "Wire parser", description: "Parser handles config", status: "pending" },
-							{ id: 5, subject: "Test parser", description: "Parser tests pass", status: "pending" },
-						],
-						nextId: 6,
-					},
-				},
-				isError: false,
-			},
-			false,
-		);
-		const collapsed = stripAnsi(created.render(500).join("\n"));
-		expect(collapsed).toContain("● todo created #4–#5 · Wire parser, Test parser");
-		expect(collapsed).not.toContain("Created 2 tasks");
-		created.setExpanded(true);
-		expect(stripAnsi(created.render(500).join("\n"))).toContain("│ Created 2 tasks");
-
-		const failed = new ToolExecutionComponent(
-			"todo",
-			"todo-failed",
-			{ update: [{ id: 7 }] },
-			{},
-			todoDefinition,
-			createFakeTui(),
-			process.cwd(),
-		);
-		failed.updateResult(
-			{ content: [{ type: "text", text: `bad request\n${"x".repeat(500)}` }], isError: true },
-			false,
-		);
-		const failedRows = stripAnsi(failed.render(500).join("\n"));
-		expect(failedRows).toContain("todo update #7 failed: bad request");
-		expect(failedRows).not.toContain("x".repeat(200));
-		expect(failedRows.split("\n").filter((line) => line.includes("todo update #7"))).toHaveLength(1);
-		expect(failed.render(500).join("\n")).toContain(theme.fg("error", "●"));
-	});
 
 	for (const scenario of [
 		{ title: "SKILL.md", path: join(process.cwd(), "attio", "SKILL.md"), compact: "[skill] attio:120-329" },

@@ -24,7 +24,6 @@ The following extensions are additions maintained by `@astralyn/pi`:
 | [Question](extensions/question.md) | `question` | Ask structured questions through native interactive UI |
 | [Provider](extensions/provider.md) | `/provider` | Edit models.json providers: connection, API type, and models |
 | [Statusline](extensions/statusline.md) | Footer status | Show concise extension-managed activity state |
-| [Todo](extensions/todo.md) | `todo`, `/todos` | Track ordered multi-step work in a compact one-line widget |
 | [Web Search](extensions/web-search.md) | `web_search` | Search the live web through MiniMax and DeepSeek with fused results |
 
 All bundled extensions use the public Extension API. Enable or disable them in `pi config` or through `builtin:<name>` entries in [settings](../settings.md#codemode-and-tool-selection). `--no-extensions` disables them; `-e builtin:<name>` loads one explicitly.

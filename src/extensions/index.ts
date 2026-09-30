@@ -7,7 +7,6 @@ import mcpExtension from "./mcp/index.ts";
 import providerExtension from "./provider/index.ts";
 import questionExtension from "./question/index.ts";
 import statuslineExtension from "./statusline/index.ts";
-import todoExtension from "./todo/index.ts";
 import toolSearchExtension from "./tool-search/index.ts";
 import webSearchExtension from "./web-search/index.ts";
 
@@ -21,6 +20,5 @@ export const builtInExtensions: InlineExtension[] = [
 	{ name: "provider", factory: providerExtension, builtin: true },
 	{ name: "question", factory: questionExtension, builtin: true },
 	{ name: "statusline", factory: statuslineExtension, builtin: true },
-	{ name: "todo", factory: todoExtension, builtin: true },
 	{ name: "web_search", factory: webSearchExtension, builtin: true },
 ];
