@@ -4,6 +4,12 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [0.99.0] - 2026-09-30
+
+### Fixed
+
+- Updated the `brace-expansion` override to 5.0.12 to address CPU and stack-exhaustion denial of service in brace patterns.
+
 ### Added
 
 - Adopted upstream v0.99.1: built-in MCP servers with OAuth and `/mcp`, codemode JavaScript tool orchestration, deferred tool search, virtual model routing, classifier and image-generation APIs, and GPT-6.1 Sol support.
