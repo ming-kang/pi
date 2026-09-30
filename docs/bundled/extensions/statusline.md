@@ -19,7 +19,7 @@ CTX 2.1%/1.0M                    ↑13k ↓13k R440k CH99.4% $0.074
 - **Model:** human-readable model name, falling back to the model id.
 - **Provider:** the model source in parentheses, such as `(deepseek)` or
   `(opencode-go)`.
-- **Effort:** the latest thinking level when the model supports reasoning and
+- **Effort:** the current runtime thinking level when the model supports reasoning and
   the level is not `off`.
 
 **Right**
@@ -66,19 +66,26 @@ Zero-value usage fields are omitted. Without any accounted usage, the right side
 
 When the terminal is too narrow for the full layout:
 
-**Line 1** (first drop → last):
+**Line 1** uses the first complete pair that fits:
 
-1. Drop the git branch.
-2. Keep the full path alone on the right.
-3. Shorten the path to `~/basename` (or bare basename).
-4. Drop the provider parentheses.
-5. Truncate the remaining left/right text.
+1. Model/provider/effort with the full path and git branch.
+2. Model/provider/effort with the full path alone.
+3. Model/provider/effort with the short path and git branch, then the short path alone.
+4. Model/effort with the short path and git branch, then the short path alone.
+5. Model/effort alone.
+
+The short path is `~/basename` (or bare basename). Shortening the path or dropping
+the provider can make room for the branch again. If none of these pairs fits,
+the model/effort and short path are truncated.
 
 **Line 2** (first drop → last):
 
-1. Drop extension status from the middle gap.
-2. Drop `W`, then `R`, from the usage cluster.
-3. Truncate CTX / remaining usage as a last resort.
+1. Keep the fullest usage cluster that fits beside CTX, trying full usage,
+   then without `W`, then without `W` and `R`.
+2. Include centered extension status only if the selected pair leaves enough room.
+3. If no usage variant fits, omit status and truncate CTX with the full usage cluster.
+
+Status therefore yields to usage; it never causes an extra usage field to be dropped.
 
 ## Layout and colors
 
@@ -106,9 +113,11 @@ may be removed manually.
 
 ## Implementation notes
 
-Footer paint is hot (every TUI render). The extension caches:
+Footer paint runs on every TUI render. Each footer instance keeps one cache for
+active-branch usage totals and the latest assistant cache-hit percentage, keyed
+by session manager, session id, and leaf id. It clears on footer `invalidate()`.
+Session entries are append-only: finalized messages and usage records advance
+the leaf, so accounting does not need to inspect streaming message mutations.
 
-- **Branch path** by current leaf id.
-- **Branch stats** (thinking level + cumulative usage) by branch length, leaf entry identity, and a leaf usage fingerprint.
-
-Both caches clear on footer `invalidate()`.
+Thinking level and context usage come from the live Extension API. Rendering
+receives plain display data and owns no session state or subscriptions.
