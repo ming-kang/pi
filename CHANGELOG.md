@@ -6,6 +6,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Added
 
+- Adopted upstream v0.99.1: built-in MCP servers with OAuth and `/mcp`, codemode JavaScript tool orchestration, deferred tool search, virtual model routing, classifier and image-generation APIs, and GPT-6.1 Sol support.
+- Added the terminal-derived `system` theme and combined theme styling with OKLCH/OKHSL colors. Existing ice-cream themes remain available.
 - Extensions can read and replace their global configuration namespace through `ctx.getExtensionSettings()` and `ctx.setExtensionSettings()`, with shared locking and explicit save failures.
 
 ### Removed
@@ -14,6 +16,9 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Changed
 
+- OpenAI supports ChatGPT sign-in; the legacy OpenAI Codex provider defaults to GPT-6.1 Sol. Built-in extensions can be configured with `builtin:<name>` entries and are disabled by `--no-extensions`.
+- Shell tools return structured output for codemode, including non-zero exit codes; background handoffs return a task ID and status. RPC input responses report whether the input was handled, queued, or started.
+- Virtual-model compaction uses physical model windows for the distribution's percentage budgets. Generic tool calls show complete arguments when expanded, preserving the native marker-and-rail presentation.
 - Replaced Background with built-in Tasks: use `/tasks`, the `tasks` tool, and `ctx.tasks`. Bash, PowerShell, and extension-owned work share task supervision; viewing output no longer delays completion notifications, and task history excludes private tool details. SDK background opt-in is now `tasksEnabled`; the `executionRole` option is replaced by the executor-independent `backgroundAllowed` capability ceiling.
 - `/tasks` lists ongoing foreground and background work only, with extension-owned information and output regions. A selected task's final result stays visible after settlement until another selection or panel close.
 

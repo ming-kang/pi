@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
 	ExtensionAPI,
-	ExtensionContext,
+	ExtensionToolContext,
 	ToolDefinition,
 	ToolResultEventResult,
 } from "../src/core/extensions/types.ts";
@@ -70,7 +70,7 @@ describe("question extension protocol", () => {
 		const result = await tool.execute("call-1", params, undefined, undefined, {
 			hasUI: false,
 			mode: "print",
-		} as unknown as ExtensionContext);
+		} as unknown as ExtensionToolContext);
 		expect(result.details).toMatchObject({ outcome: "error", error: "no_ui" });
 		expect(result).not.toHaveProperty("isError");
 	});
@@ -93,7 +93,7 @@ describe("question extension protocol", () => {
 			hasUI: true,
 			mode: "tui",
 			ui: { custom: async () => dialogResult },
-		} as unknown as ExtensionContext);
+		} as unknown as ExtensionToolContext);
 		expect(result.details).toMatchObject({ outcome: "answered", answers: dialogResult.answers });
 	});
 });

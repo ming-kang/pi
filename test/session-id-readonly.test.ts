@@ -20,6 +20,7 @@ import { SettingsManager } from "../src/core/settings-manager.ts";
 import { createSessionManager } from "../src/main.ts";
 
 const cliPath = resolve(__dirname, "../src/cli.ts");
+// --import takes a module specifier, not a filesystem path.
 const sourceResolverUrl = pathToFileURL(resolve(__dirname, "../src/experimental/source-resolver.ts")).href;
 const tempDirs: string[] = [];
 

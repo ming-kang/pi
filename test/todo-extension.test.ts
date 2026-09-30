@@ -2,7 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
-	ExtensionContext,
+	ExtensionToolContext,
 	ExtensionUIContext,
 	ToolDefinition,
 } from "../src/core/extensions/types.ts";
@@ -682,10 +682,10 @@ describe("todo extension wiring", () => {
 
 	function setup(): {
 		commands: Map<string, CommandOptions>;
-		handlers: Map<string, (event: unknown, ctx: ExtensionContext) => Promise<void>>;
+		handlers: Map<string, (event: unknown, ctx: ExtensionToolContext) => Promise<void>>;
 		tool: RegisteredTodoTool;
 	} {
-		const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => Promise<void>>();
+		const handlers = new Map<string, (event: unknown, ctx: ExtensionToolContext) => Promise<void>>();
 		const commands = new Map<string, CommandOptions>();
 		let tool: RegisteredTodoTool | undefined;
 		const api = {
@@ -695,7 +695,7 @@ describe("todo extension wiring", () => {
 			registerCommand: (name: string, options: CommandOptions) => {
 				commands.set(name, options);
 			},
-			on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => Promise<void>) => {
+			on: (event: string, handler: (event: unknown, ctx: ExtensionToolContext) => Promise<void>) => {
 				handlers.set(event, handler);
 			},
 		} as unknown as ExtensionAPI;
@@ -731,7 +731,7 @@ describe("todo extension wiring", () => {
 
 	test("execute returns v3 details and bounded content, and validation errors do not commit", async () => {
 		const { tool } = setup();
-		const ctx = {} as unknown as ExtensionContext;
+		const ctx = {} as unknown as ExtensionToolContext;
 		const created = await tool.execute(
 			"call-1",
 			{
@@ -779,7 +779,7 @@ describe("todo extension wiring", () => {
 			},
 			undefined,
 			undefined,
-			{} as unknown as ExtensionContext,
+			{} as unknown as ExtensionToolContext,
 		);
 
 		const notify = vi.fn();
@@ -805,7 +805,7 @@ describe("todo extension wiring", () => {
 			get sessionManager(): never {
 				throw new Error("This extension ctx is stale after session replacement or reload.");
 			},
-		} as unknown as ExtensionContext;
+		} as unknown as ExtensionToolContext;
 		await expect(start(event, stale)).resolves.toBeUndefined();
 
 		const broken = {
@@ -815,7 +815,7 @@ describe("todo extension wiring", () => {
 					throw new Error("boom");
 				},
 			},
-		} as unknown as ExtensionContext;
+		} as unknown as ExtensionToolContext;
 		await expect(start(event, broken)).rejects.toThrow("boom");
 	});
 
@@ -845,7 +845,7 @@ describe("todo extension wiring", () => {
 					},
 				],
 			},
-		} as unknown as ExtensionContext;
+		} as unknown as ExtensionToolContext;
 
 		const start = handlers.get("session_start");
 		const tree = handlers.get("session_tree");

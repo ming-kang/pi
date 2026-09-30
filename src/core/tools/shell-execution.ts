@@ -91,6 +91,7 @@ export async function runShellCommand(
 ): Promise<TaskCompletion<BashToolDetails | undefined>> {
 	const { operations, context, managed, signal, timeout } = options;
 	const output = new OutputAccumulator({ tempFilePrefix: options.tempFilePrefix, persistFromStart: !!managed });
+	const startedAt = performance.now();
 	let outputError: Error | undefined;
 	let acceptingOutput = true;
 	let unsubscribe: (() => void) | undefined;
@@ -229,11 +230,27 @@ export async function runShellCommand(
 		// after those callbacks, independently of the process's abort marker.
 		if (outputError) failure = { status: "failed", error: boundText(outputError.message, 4096) };
 		const { text, details } = formatOutput(output, final, !!managed, failure ? "" : "(no output)");
+		const fullOutput =
+			typeof exitCode === "number" && !outputError ? await output.readFullOutput(1024 * 1024) : undefined;
 		return {
 			status: failure?.status,
 			error: failure?.error,
 			...(exitCode !== undefined ? { exitCode } : {}),
 			result: {
+				...(fullOutput && typeof exitCode === "number"
+					? {
+							structuredContent: {
+								output: fullOutput.content,
+								truncated: fullOutput.truncated,
+								...(fullOutput.truncated && final.fullOutputPath
+									? { full_output_path: final.fullOutputPath }
+									: {}),
+								exit_code: exitCode,
+								wall_time_seconds: Math.round((performance.now() - startedAt) / 100) / 10,
+							},
+							...(failure ? { isError: true } : {}),
+						}
+					: {}),
 				content: [{ type: "text", text: failure ? `${text ? `${text}\n\n` : ""}${failure.error}` : text }],
 				details,
 			},

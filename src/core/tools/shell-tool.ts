@@ -51,6 +51,19 @@ export const bashToolSystemPromptContribution = {
 
 export type BashToolInput = Static<typeof bashSchema>;
 
+const bashOutputSchema = Type.Union([
+	Type.Object({
+		output: Type.String({
+			description: "Combined stdout and stderr, up to 1 MiB, keeping head and tail when truncated.",
+		}),
+		truncated: Type.Boolean(),
+		full_output_path: Type.Optional(Type.String()),
+		exit_code: Type.Number(),
+		wall_time_seconds: Type.Number(),
+	}),
+	Type.Object({ task_id: Type.String(), status: Type.String() }),
+]);
+
 export interface BashToolDetails {
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
@@ -242,6 +255,7 @@ export interface ShellToolConfig {
 /** Translate terminal shell failures to the native foreground tool contract once. */
 function shellToolResult(completion: TaskCompletion<BashToolDetails | undefined>, managed: boolean) {
 	const status = completion.status;
+	if (completion.result.structuredContent) return completion.result;
 	if (status === "failed" || status === "timeout" || status === "cancelled") {
 		const text = completion.result.content
 			.filter((part) => part.type === "text")
@@ -269,6 +283,7 @@ export function createShellToolDefinition(
 		promptSnippet: config.promptSnippet,
 		promptGuidelines: exposeSessionEnvironment && config.promptGuidelines ? [...config.promptGuidelines] : undefined,
 		parameters: bashSchema,
+		outputSchema: bashOutputSchema,
 		constrainedSampling: { type: "json_schema", strict: "prefer" },
 		async execute(
 			toolCallId,
@@ -332,6 +347,7 @@ export function createShellToolDefinition(
 			});
 			if (outcome.kind === "result") return shellToolResult(outcome, true);
 			return {
+				structuredContent: { task_id: outcome.task.id, status: outcome.task.status },
 				content: [
 					{
 						type: "text",

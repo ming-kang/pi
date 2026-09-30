@@ -8,6 +8,7 @@ import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
 	ExtensionContext,
+	ExtensionToolContext,
 	TerminalInputHandler,
 	ToolDefinition,
 	ToolRenderContext,
@@ -103,7 +104,7 @@ describe("public Background management", () => {
 		const h = running();
 		await h.outcome;
 		const id = h.service.list()[0]!.id;
-		const ctx = { tasks: h.service } as unknown as ExtensionContext;
+		const ctx = { tasks: h.service } as unknown as ExtensionToolContext;
 		const failure = tool!.execute("call", { action: "read", taskId: "nope" }, undefined, undefined, ctx);
 		await expect(failure).rejects.toThrow(
 			/No background task "nope" in this session\. IDs from other sessions are not valid here\./,
@@ -465,7 +466,7 @@ describe("public Background management", () => {
 			ui: {
 				onTerminalInput: () => () => {},
 				setStatus: vi.fn(),
-				custom: (factory: Parameters<ExtensionContext["ui"]["custom"]>[0]) =>
+				custom: (factory: Parameters<ExtensionToolContext["ui"]["custom"]>[0]) =>
 					new Promise<void>((resolve) => {
 						const component = factory(
 							{ requestRender: vi.fn(), terminal: { columns: 80, rows: 24 } } as unknown as TUI,
@@ -509,7 +510,7 @@ describe("public Background management", () => {
 		const ctx = {
 			tasks: h.service,
 			ui: { setStatus, onTerminalInput: () => () => {} },
-		} as unknown as ExtensionContext;
+		} as unknown as ExtensionToolContext;
 		handlers.get("session_start")?.({}, ctx);
 		expect(setStatus).toHaveBeenLastCalledWith("background", "tasks 1 active · 0 finished");
 		handlers.get("session_shutdown")?.({}, ctx);
@@ -546,7 +547,7 @@ describe("public Background management", () => {
 					return unsubscribeInput;
 				},
 			};
-			handlers.get("session_start")?.({}, { tasks: service, ui } as unknown as ExtensionContext);
+			handlers.get("session_start")?.({}, { tasks: service, ui } as unknown as ExtensionToolContext);
 			const detachKey = "";
 			expect(getKeybindings().matches(detachKey, "app.tasks.detach")).toBe(true);
 
@@ -575,7 +576,7 @@ describe("public Background management", () => {
 			expect((await outcome).kind).toBe("background");
 			finish();
 
-			handlers.get("session_shutdown")?.({}, { tasks: service, ui } as unknown as ExtensionContext);
+			handlers.get("session_shutdown")?.({}, { tasks: service, ui } as unknown as ExtensionToolContext);
 			expect(unsubscribeInput).toHaveBeenCalledOnce();
 		} finally {
 			setKeybindings(previousKeybindings);
@@ -608,7 +609,7 @@ describe("public Background management", () => {
 					return () => {};
 				},
 			};
-			const ctx = { tasks: service, ui } as unknown as ExtensionContext;
+			const ctx = { tasks: service, ui } as unknown as ExtensionToolContext;
 			handlers.get("session_start")?.({}, ctx);
 			expect(setStatus).toHaveBeenLastCalledWith("background", undefined);
 

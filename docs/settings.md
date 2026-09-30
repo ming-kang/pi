@@ -77,7 +77,7 @@ Selecting a model or thinking level with Enter changes only the current session.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `theme` | string | `"dark"` | Theme name (`"dark"`, `"light"`, or custom) |
+| `theme` | string | `"system"` | Theme name (`"system"`, `"dark"`, `"light"`, bundled ice-cream themes, or custom) |
 | `externalEditor` | string | `$VISUAL`, then `$EDITOR`, then Notepad on Windows or `nano` elsewhere | Command for Ctrl+G external editor; takes precedence over environment variables |
 | `quietStartup` | boolean | `false` | Hide startup header |
 | `defaultProjectTrust` | string | `"ask"` | Fallback project trust behavior: `"ask"`, `"always"`, or `"never"`. Global setting only |
@@ -285,7 +285,7 @@ Windows paths in JSON must use forward slashes or escaped backslashes:
 |---------|------|---------|-------------|
 | `defaultTools` | string[] | - | Built-in tools enabled initially. When omitted, Pi uses its standard defaults |
 
-`defaultTools` selects the built-in tools enabled at startup. Extension and SDK custom tools remain enabled. Available built-ins are `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, and `ls`:
+`defaultTools` selects tools enabled at startup; plain names replace the selection, while `+name` and `-name` modify it. It can also activate `codemode`, `tool_search`, and other inactive extension tools. Extension and SDK custom tools remain enabled. Available built-ins are `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, and `ls`:
 
 ```json
 {
@@ -427,3 +427,27 @@ Project settings (`.pi/settings.json`) override global settings. Nested objects 
   "compaction": { "enabled": true, "triggerPercent": 70 }
 }
 ```
+
+## Codemode and tool selection
+
+A list of only `+name` and `-name` entries changes the inherited selection instead of replacing it. For example, this enables `codemode` next to the default tools:
+
+```json
+{
+  "defaultTools": ["+codemode"]
+}
+```
+
+This replaces `bash` with `powershell` and enables `grep`: `["-bash", "+powershell", "+grep"]`. Project settings apply on top of user settings: a project list with only `+name` and `-name` entries changes the user's selection, and a project list with a plain name replaces it. In one list, plain names form the selection, and `+name` and `-name` then apply in order.
+
+CLI tool options override this setting for one invocation; `--tools` does not accept `+name` or `-name`. See [Command Line](usage.md#tools).
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `codemode.mode` | `"on"` | `on` keeps direct tool declarations; `only` hides callable tools from direct model access and lists them in codemode |
+| `codemode.inlineBudget` | `3000` | Estimated tokens for inline tool declarations; scripts discover the rest with `searchTools()` |
+| `fullscreenWheelScrollLines` | `"auto"` | 1–100 lines per wheel event, or automatic acceleration; Alt+wheel moves five times as far |
+
+Built-in extensions can be disabled in `pi config` or with `"extensions": ["-builtin:mcp"]`. Project `+builtin:<name>` and `-builtin:<name>` entries override user settings. `--no-extensions` disables built-ins too; `-e builtin:mcp` loads one explicitly.
+
+MCP servers live in `~/.pi/agent/mcp.json` or trusted project `.pi/mcp.json`; see [MCP Servers](mcp.md).

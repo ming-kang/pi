@@ -227,3 +227,7 @@ Packages can appear in both global and project settings. If the same package app
 - npm: package name
 - git: repository URL without ref
 - local: resolved absolute path
+
+## Built-in extensions and host dependencies
+
+`pi config` also manages built-in extensions. Managed npm and git packages suppress automatic installation of host-provided Pi peer dependencies. Declare these as peers, not production dependencies: physical copies can create duplicate classes and registries, and Pi warns about that manifest configuration. Local packages keep their own dependency trees.

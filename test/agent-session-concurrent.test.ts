@@ -159,7 +159,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		await vi.waitFor(() => expect(session.isStreaming).toBe(true), { timeout: 5000 });
 
 		// steer should work while streaming
-		await expect(session.steer("Steering message")).resolves.toBeUndefined();
+		await expect(session.steer("Steering message")).resolves.toBe("queued");
 		expect(session.pendingMessageCount).toBe(1);
 
 		// Cleanup
@@ -175,7 +175,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		await vi.waitFor(() => expect(session.isStreaming).toBe(true), { timeout: 5000 });
 
 		// followUp should work while streaming
-		await expect(session.followUp("Follow-up message")).resolves.toBeUndefined();
+		await expect(session.followUp("Follow-up message")).resolves.toBe("queued");
 		expect(session.pendingMessageCount).toBe(1);
 
 		// Cleanup

@@ -63,7 +63,7 @@ describe("defaultTools setting", () => {
 				.getAllTools()
 				.map((tool) => tool.name)
 				.sort(),
-		).toEqual(["bash", "edit", "find", "grep", "ls", "powershell", "read", "write"]);
+		).toEqual(["bash", "edit", "find", "grep", "ls", "powershell", "read", "tasks", "write"]);
 		expect(session.getActiveToolNames()).toEqual(["grep", "find"]);
 		expect(session.systemPrompt).toContain("- grep:");
 		expect(session.systemPrompt).not.toContain("- read:");
@@ -76,6 +76,24 @@ describe("defaultTools setting", () => {
 		expect(session.getActiveToolNames()).toEqual(["read", "powershell", "edit", "write"]);
 		expect(session.systemPrompt).toContain("- powershell: Execute PowerShell commands");
 		expect(session.systemPrompt).not.toContain("- bash:");
+		session.dispose();
+	});
+
+	it("activates an inactive extension tool with +name", async () => {
+		const session = await createSession(["+inactive_tool", "-write"], {}, [
+			(pi) => {
+				pi.registerTool({
+					name: "inactive_tool",
+					label: "Inactive Tool",
+					description: "Extension tool registered inactive",
+					parameters: Type.Object({}),
+					execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+					defaultActive: false,
+				});
+			},
+		]);
+
+		expect(session.getActiveToolNames().sort()).toEqual(["bash", "edit", "inactive_tool", "read"]);
 		session.dispose();
 	});
 
@@ -152,7 +170,7 @@ describe("defaultTools setting", () => {
 				.getAllTools()
 				.map((tool) => tool.name)
 				.sort(),
-		).toEqual(["bash", "edit", "find", "grep", "ls", "powershell", "read", "write"]);
+		).toEqual(["bash", "edit", "find", "grep", "ls", "powershell", "read", "tasks", "write"]);
 		expect(session.getActiveToolNames()).toEqual(["ls"]);
 		session.dispose();
 	});

@@ -1,6 +1,7 @@
 /** Generic call and result presentation for a tool that supplies no renderer. */
 
 import { type Component, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { formatToolCallWithArgs } from "../../../core/tools/render-utils.ts";
 import { keyHint } from "../components/keybinding-hints.ts";
 import { truncateToVisualLines } from "../components/visual-truncate.ts";
 import { theme } from "../theme/theme.ts";
@@ -24,7 +25,8 @@ export function formatFallbackArgs(args: unknown): string {
 	return truncateToWidth(summary, toolStyle.fallbackArgsWidth, "...");
 }
 
-export function createCallFallback(toolName: string, args: unknown): Component {
+export function createCallFallback(toolName: string, args: unknown, expanded = false): Component {
+	if (expanded) return new Text(formatToolCallWithArgs(toolName, args, theme, true), 0, 0);
 	const summary = formatFallbackArgs(args);
 	const suffix = summary ? theme.fg("dim", `(${summary})`) : "";
 	return new Text(`${theme.fg("toolTitle", theme.bold(toolName))}${suffix}`, 0, 0);

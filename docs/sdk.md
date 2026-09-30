@@ -1261,3 +1261,13 @@ type PromptTemplate
 ```
 
 For extension types, see [extensions.md](extensions.md) for the full API.
+
+## Codemode and MCP
+
+<a id="codemode-mcp"></a>
+
+The CLI loads `codemode`, `tool_search`, and MCP as built-in extensions. SDK sessions do not; add `createCodemodeExtension()`, `createToolSearchExtension()`, and `createMcpExtension()` to the `extensionFactories` of `DefaultResourceLoader`. `codemode` and `tool_search` are registered inactive: enable them through the `defaultTools` setting (`["+codemode", "+tool_search"]` keeps the other default tools), or let the MCP extension activate them: `codemode` for servers with `codemode` or `codemode-deferred` exposure, `tool_search` for servers with `deferred` exposure. The MCP extension connects its servers on `session_start`, so call `session.bindExtensions()`. See [Codemode and MCP](../examples/sdk/14-codemode-mcp.ts).
+
+Named inline extensions accept `builtin: true` to load as `builtin:<name>`, with user/project configuration and `noExtensions` support. `replaceable: true` lets another extension replace one when its tool, command, or flag names overlap.
+
+`steer()` and `followUp()` return `"queued"` when queued or `"handled"` when an extension consumes the input.

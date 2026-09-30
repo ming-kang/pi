@@ -2,7 +2,19 @@ import { describe, expect, test } from "vitest";
 import { builtInExtensions } from "../src/extensions/index.ts";
 import { createTestExtensionsResult } from "./utilities.ts";
 
-const EXPECTED_BUILT_INS = ["llama.cpp", "btw", "deepwiki", "provider", "question", "statusline", "todo", "web_search"];
+const EXPECTED_BUILT_INS = [
+	"codemode",
+	"mcp",
+	"tool-search",
+	"llama.cpp",
+	"btw",
+	"deepwiki",
+	"provider",
+	"question",
+	"statusline",
+	"todo",
+	"web_search",
+];
 
 describe("built-in extensions", () => {
 	test("loads bundled tools without removed investigation and delegation tools", async () => {
@@ -18,10 +30,10 @@ describe("built-in extensions", () => {
 		expect(commands).not.toContain("agents");
 		expect(commands).not.toContain("explore");
 	});
-	test("keeps the canonical bundled extension set hidden", () => {
+	test("marks the canonical bundled extension set as configurable built-ins", () => {
 		expect(builtInExtensions.map((extension) => extension.name)).toEqual(EXPECTED_BUILT_INS);
-		expect(builtInExtensions.every((extension) => typeof extension !== "function" && extension.hidden === true)).toBe(
-			true,
-		);
+		expect(
+			builtInExtensions.every((extension) => typeof extension !== "function" && extension.builtin === true),
+		).toBe(true);
 	});
 });

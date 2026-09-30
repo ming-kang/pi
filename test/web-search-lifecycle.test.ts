@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
 	ExtensionAPI,
-	ExtensionContext,
+	ExtensionToolContext,
 	ToolDefinition,
 	ToolResultEvent,
 	ToolResultEventResult,
@@ -18,7 +18,7 @@ vi.mock("../src/extensions/web-search/auth.ts", async (importOriginal) => {
 });
 
 type WebSearchTool = ToolDefinition<typeof WebSearchParamsSchema, WebSearchDetails>;
-type EventHandler = (event: unknown, ctx: ExtensionContext) => Promise<unknown> | unknown;
+type EventHandler = (event: unknown, ctx: ExtensionToolContext) => Promise<unknown> | unknown;
 
 function setup(initialActive: string[]) {
 	let active = [...initialActive];
@@ -40,8 +40,8 @@ function setup(initialActive: string[]) {
 	return { handlers, setActiveTools, tool, activeTools: () => [...active] };
 }
 
-function context(): ExtensionContext {
-	return { modelRuntime: {} } as unknown as ExtensionContext;
+function context(): ExtensionToolContext {
+	return { modelRuntime: {} } as unknown as ExtensionToolContext;
 }
 
 function resultEvent(status: WebSearchDetails["status"]): ToolResultEvent {
@@ -91,7 +91,7 @@ describe("web_search lifecycle", () => {
 	it("maps only terminal search failures to protocol-level tool errors", async () => {
 		const harness = setup([WEB_SEARCH_TOOL_NAME]);
 		const handler = harness.handlers.get("tool_result") as
-			| ((event: ToolResultEvent, ctx: ExtensionContext) => Promise<ToolResultEventResult | undefined>)
+			| ((event: ToolResultEvent, ctx: ExtensionToolContext) => Promise<ToolResultEventResult | undefined>)
 			| undefined;
 		if (!handler) throw new Error("tool_result handler was not registered");
 		await expect(handler(resultEvent("error"), context())).resolves.toEqual({ isError: true });

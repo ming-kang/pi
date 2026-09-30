@@ -362,7 +362,7 @@ export class ToolExecutionComponent extends Container {
 
 		const callRenderer = this.getCallRenderer();
 		if (!callRenderer) {
-			addCall(createCallFallback(this.toolName, this.args));
+			addCall(createCallFallback(this.toolName, this.args, this.expanded));
 		} else {
 			try {
 				const component = callRenderer(this.args, theme, this.getRenderContext(this.callRendererComponent));
@@ -370,7 +370,7 @@ export class ToolExecutionComponent extends Container {
 				addCall(component);
 			} catch {
 				this.callRendererComponent = undefined;
-				addCall(createCallFallback(this.toolName, this.args));
+				addCall(createCallFallback(this.toolName, this.args, this.expanded));
 			}
 		}
 

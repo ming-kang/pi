@@ -82,7 +82,7 @@
 		},
 		{
 			"id": "bundled-extensions",
-			"why": "The distribution's bundled extensions load as hidden built-ins.",
+			"why": "The distribution adds configurable bundled extensions alongside upstream built-ins.",
 			"paths": [
 				{
 					"path": "src/extensions/index.ts"
@@ -104,12 +104,22 @@
 			"id": "extension-settings",
 			"why": "Extensions replace their own global JSON namespace through the session's SettingsManager, with explicit save failures.",
 			"paths": [
-				{ "path": "src/core/settings-manager.ts" },
-				{ "path": "src/core/extensions/types.ts" },
-				{ "path": "src/core/extensions/runner.ts" },
-				{ "path": "src/core/agent-session.ts" }
+				{
+					"path": "src/core/settings-manager.ts"
+				},
+				{
+					"path": "src/core/extensions/types.ts"
+				},
+				{
+					"path": "src/core/extensions/runner.ts"
+				},
+				{
+					"path": "src/core/agent-session.ts"
+				}
 			],
-			"tests": ["test/extension-settings.test.ts"]
+			"tests": [
+				"test/extension-settings.test.ts"
+			]
 		},
 		{
 			"id": "background-execution",
@@ -503,6 +513,38 @@
 				{
 					"path": "test/"
 				}
+			]
+		},
+		{
+			"id": "extension-orchestration-boundaries",
+			"why": "Bundled extensions remain independent: MCP discovers compatible orchestrators through the public event bus, codemode owns its search helper, and runtime imports stay static.",
+			"paths": [
+				{
+					"path": "src/extensions/codemode/execute.lazy.ts"
+				},
+				{
+					"path": "src/extensions/codemode/execute.ts"
+				},
+				{
+					"path": "src/extensions/codemode/index.ts"
+				},
+				{
+					"path": "src/extensions/mcp/cli.lazy.ts"
+				},
+				{
+					"path": "src/extensions/mcp/index.ts"
+				},
+				{
+					"path": "src/extensions/mcp/runtime.lazy.ts"
+				},
+				{
+					"path": "src/extensions/tool-search/index.ts"
+				}
+			],
+			"tests": [
+				"test/suite/agent-session-mcp.test.ts",
+				"test/suite/agent-session-codemode.test.ts",
+				"test/mcp-command.test.ts"
 			]
 		}
 	]

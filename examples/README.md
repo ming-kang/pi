@@ -10,7 +10,7 @@ Runs one prompt through a Pi RPC child process with the typed `RpcClient`: it st
 Build the package before running it from a repository checkout:
 
 ```bash
-npx tsx examples/rpc-client.ts "Explain this repository"
+node examples/rpc-client.ts "Explain this repository"
 ```
 
 ### [rpc-extension-ui.ts](rpc-extension-ui.ts)

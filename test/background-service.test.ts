@@ -307,8 +307,8 @@ describe("delivery and accounting", () => {
 		item.completion.resolve({ result: { ...result(), usage } });
 		expect(await call).toEqual({ kind: "result", result: result(), status: "completed", error: undefined });
 		expect(onSettled).toHaveBeenCalledTimes(1);
-		expect(onSettled.mock.calls[0]).toEqual([
-			expect.objectContaining({ result: { ...result(), details: undefined } }),
+		expect(onSettled.mock.calls[0] as unknown).toEqual([
+			expect.objectContaining({ result: { ...result(), details: undefined } } as unknown),
 			usage,
 		]);
 		await bg.read(item.control.id);

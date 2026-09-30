@@ -13,7 +13,7 @@ export default async function packageBundleSmoke(pi: ExtensionAPI): Promise<void
 		refresh: "unused",
 		expires: Number.MAX_SAFE_INTEGER,
 	};
-	for (const id of ["anthropic", "openai-codex", "github-copilot", "openrouter", "kimi-coding", "radius", "xai"]) {
+	for (const id of ["anthropic", "openai", "openai-codex", "github-copilot", "openrouter", "kimi-coding", "meta", "radius", "xai"]) {
 		const oauth = providers.find((provider) => provider.id === id)?.auth?.oauth;
 		assert.ok(oauth, `Missing OAuth flow for ${id}`);
 		// toAuth only formats this fake credential; it never logs in or refreshes it.

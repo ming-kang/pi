@@ -323,3 +323,9 @@ When resolving credentials for a provider:
 2. `auth.json` entry (API key or OAuth token)
 3. Environment variable
 4. Custom provider keys from `models.json`
+
+## OpenAI subscriptions and classifiers
+
+`/login openai` offers Sign in with ChatGPT. The older OpenAI Codex provider remains available as OpenAI Codex (legacy), with `gpt-6.1-sol` as its default model. GPT-6.1 Sol is also available through OpenAI and Azure OpenAI.
+
+TypeSafe classifier models use `TYPESAFE_API_KEY`; see [Classifier models](models.md#use-classifier-models).

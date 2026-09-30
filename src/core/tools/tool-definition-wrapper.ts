@@ -1,8 +1,10 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { type JsonObject, validateToolArguments } from "@earendil-works/pi-ai";
 import type { Static, TSchema } from "typebox";
-import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
+import type { ExtensionToolContext, ToolDefinition } from "../extensions/types.ts";
 import { truncateHead } from "./truncate.ts";
+
+export type ToolContextFactory = (toolCallId: string, signal: AbortSignal | undefined) => ExtensionToolContext;
 
 const RECEIVED_ARGUMENTS_MARKER = "\n\nReceived arguments:\n";
 const HINT_MARKER = "\n\nHint: ";
@@ -129,25 +131,32 @@ function wrapPrepareArguments<TParams extends TSchema, TDetails>(
 /** Wrap a ToolDefinition into an AgentTool for the core runtime. */
 export function wrapToolDefinition<TParams extends TSchema, TDetails = unknown>(
 	definition: ToolDefinition<TParams, TDetails>,
-	ctxFactory?: () => ExtensionContext,
+	ctxFactory?: ToolContextFactory,
 ): AgentTool<TParams, TDetails> {
 	return {
 		name: definition.name,
 		label: definition.label,
 		description: definition.description,
 		parameters: definition.parameters,
+		outputSchema: definition.outputSchema,
 		constrainedSampling: definition.constrainedSampling,
 		prepareArguments: wrapPrepareArguments(definition),
 		executionMode: definition.executionMode,
-		execute: (toolCallId, params, signal, onUpdate, ctx?: ExtensionContext) =>
-			definition.execute(toolCallId, params, signal, onUpdate, ctx ?? (ctxFactory?.() as ExtensionContext)),
+		execute: (toolCallId, params, signal, onUpdate, ctx?: ExtensionToolContext) =>
+			definition.execute(
+				toolCallId,
+				params,
+				signal,
+				onUpdate,
+				ctx ?? (ctxFactory?.(toolCallId, signal) as ExtensionToolContext),
+			),
 	};
 }
 
 /** Wrap multiple ToolDefinitions into AgentTools for the core runtime. */
 export function wrapToolDefinitions(
 	definitions: ToolDefinition<any, any>[],
-	ctxFactory?: () => ExtensionContext,
+	ctxFactory?: ToolContextFactory,
 ): AgentTool<any>[] {
 	return definitions.map((definition) => wrapToolDefinition(definition, ctxFactory));
 }
@@ -166,6 +175,7 @@ export function createToolDefinitionFromAgentTool<TParams extends TSchema, TDeta
 		label: tool.label,
 		description: tool.description,
 		parameters: tool.parameters,
+		outputSchema: tool.outputSchema,
 		constrainedSampling: tool.constrainedSampling,
 		prepareArguments: tool.prepareArguments,
 		executionMode: tool.executionMode,

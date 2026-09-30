@@ -18,7 +18,7 @@ Themes are JSON files that define colors for the TUI.
 
 Pi loads themes from:
 
-- Built-in: `dark`, `light`, `ice-cream-dark`, `ice-cream-light`
+- Built-in: `system`, `dark`, `light`, `ice-cream-dark`, `ice-cream-light`
 - Global: `~/.pi/agent/themes/*.json`
 - Project: `.pi/themes/*.json` (only after the project is trusted)
 - Packages: `themes/` directories or `pi.themes` entries in `package.json`
@@ -37,7 +37,7 @@ Select a theme via `/settings` or in `settings.json`:
 }
 ```
 
-On first run, pi detects your terminal background and defaults to `dark` or `light`.
+Without a saved theme setting, Pi uses `system`, which follows the terminal palette and appearance.
 
 ### Initial Theme
 
@@ -158,7 +158,8 @@ vim ~/.pi/agent/themes/my-theme.json
 }
 ```
 
-- `name` is required, must be unique, and must not contain `/`.
+- `name` is required, must be unique, must not contain `/`, and cannot be `system`.
+- `appearance` is optional: `"dark"` or `"light"`. Pi detects it from the colors when omitted.
 - `vars` is optional. Define reusable colors here, then reference them in `colors`.
 - `colors` must define all 51 required tokens. `thinkingMax`, `scrollbarThumb`, and the two search highlight tokens are optional and use the fallbacks listed below.
 
@@ -276,11 +277,13 @@ The `export` section controls colors for `/export` HTML output. If omitted, colo
 
 ## Color Values
 
-Four formats are supported:
+Six formats are supported:
 
 | Format | Example | Description |
 |--------|---------|-------------|
-| Hex | `"#ff0000"` | 6-digit hex RGB |
+| Hex | `"#f00"` or `"#ff0000"` | 3- or 6-digit hex RGB |
+| OKLCH | `"oklch(62% 0.1 200)"` | Perceptual lightness, chroma, and hue |
+| OKHSL | `"okhsl(250 60% 55%)"` | Hue, saturation, and lightness within the sRGB gamut |
 | 256-color | `39` | xterm 256-color palette index (0-255) |
 | Variable | `"primary"` | Reference to a `vars` entry |
 | Default | `""` | Terminal's default color |
@@ -318,3 +321,22 @@ echo $COLORTERM  # Should output "truecolor" or "24bit"
 The built-in themes are selected by name: `dark`, `light`, `ice-cream-dark`, and `ice-cream-light`. When inspecting an installed package, their JSON assets are under `node_modules/@astralyn/pi/dist/modes/interactive/theme/` (the global-install equivalent is under Pi's npm package directory).
 
 The ice-cream palette and bundled design notes are documented in [Bundled themes](bundled/themes.md).
+
+## Use your terminal's colors
+
+The `system` theme is the default. It builds Pi's colors from your terminal's theme, so Pi matches the terminal instead of bringing its own palette:
+
+- Pi queries the terminal's default foreground and background colors and its 16 ANSI colors.
+- Each Pi color takes its hue from one ANSI color, for example errors from red and links from blue.
+- Pi sets each color's lightness so that it stands out from the background by a minimum contrast. Body text keeps at least a 4.5:1 WCAG contrast ratio on the background and every panel.
+- When the terminal switches between light and dark, Pi queries the colors again and rebuilds the theme.
+
+The theme adapts to what the terminal reports:
+
+| Terminal reports | Result |
+|---|---|
+| Background and ANSI colors | Colors from the terminal palette, placed for the actual background. |
+| Background only | Pi's own hues, placed for the actual background. |
+| Nothing | ANSI color indices and the terminal's default colors, which the terminal renders itself. Secondary text is faint, and panels have no background color. |
+
+Pi asks the terminal for its colors when it starts. Terminals usually answer within a few milliseconds, and Pi waits at most 100 ms before showing the startup header. If the terminal does not answer in time, Pi uses the ANSI color fallback, and it still applies the colors if they arrive later, for example over a slow SSH connection. `system` is a reserved name: a custom theme with that name is ignored.

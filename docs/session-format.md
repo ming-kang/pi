@@ -573,3 +573,9 @@ All of these return the appended entry ID:
 - `getSessionName(): string | undefined`
 - `getCwd(): string`, `getSessionDir(): string`, `getSessionId(): string`, and `getSessionFile(): string | undefined`
 - `usesDefaultSessionDir(): boolean` and `isPersisted(): boolean`
+
+## Virtual selections and nested calls
+
+The latest `model_change` records the selected model, including a [virtual model](virtual-models.md). Assistant messages record the physical model that answered and its `thinkingLevel`. Router state is stored in custom entries named `pi.virtual-model-state` with `{ provider, modelId, state }`.
+
+Tool results can include bounded `nestedCalls` metadata for calls made through `ctx.executeTool()`. It records arguments and execution status, never nested results; compaction and HTML exports use it.

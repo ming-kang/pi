@@ -1,6 +1,6 @@
 import { readFileSync, rmSync, statSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ExtensionContext } from "../src/core/extensions/types.ts";
+import type { ExtensionToolContext } from "../src/core/extensions/types.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import { TASK_BACKGROUND_REJECTION } from "../src/core/tasks/types.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
@@ -19,14 +19,14 @@ function host(options: ConstructorParameters<typeof TaskRuntime>[0] = { enabled:
 	});
 	return background;
 }
-function context(background: TaskRuntime): ExtensionContext {
+function context(background: TaskRuntime): ExtensionToolContext {
 	return {
 		tasks: background,
 		cwd: process.cwd(),
 		model: { provider: "provider", id: "model" },
 		thinkingLevel: "high",
 		sessionManager: { getSessionId: () => "session", getSessionFile: () => "session.jsonl" },
-	} as unknown as ExtensionContext;
+	} as unknown as ExtensionToolContext;
 }
 function execution() {
 	let options!: Parameters<BashOperations["exec"]>[2];
@@ -138,7 +138,9 @@ describe("native managed shell execution", () => {
 			undefined,
 			context(background),
 		);
-		if (diagnostic)
+		if (mode === "exit") {
+			await expect(call).resolves.toMatchObject({ isError: true, structuredContent: { exit_code: 42 } });
+		} else if (diagnostic)
 			await expect(call).rejects.toMatchObject({ name: "TaskExecutionError", status, message: diagnostic });
 		else {
 			const result = await call;
@@ -167,7 +169,11 @@ describe("native managed shell execution", () => {
 		});
 		await expect(
 			tool.execute("fast", { command: "fast", background: true }, undefined, undefined, context(background)),
-		).rejects.toMatchObject({ status: "failed", message: "partial output\n\nCommand exited with code 7" });
+		).resolves.toMatchObject({
+			isError: true,
+			content: [{ type: "text", text: "partial output\n\nCommand exited with code 7" }],
+			structuredContent: { output: "partial output", exit_code: 7 },
+		});
 		expect(background.list()[0]?.error).toBe("Command exited with code 7");
 		expect(background.pendingNotifications()).toEqual([]);
 	});

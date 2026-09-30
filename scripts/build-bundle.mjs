@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
-// Adapted from upstream v0.85.1: consume installed pi-ai artifacts and keep
+// Adapted from upstream v0.99.1: consume installed pi-ai artifacts and keep
 // the stable SDK modular while bundling Node executables and their lazy modules.
 
-import { chmodSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { isBuiltin } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -153,6 +153,7 @@ for (const entry of [
 	join(codingAgentDistDir, "index.js"),
 	join(codingAgentDistDir, "rpc-entry.js"),
 	join(codingAgentDistDir, "utils", "image-resize-worker.js"),
+	join(codingAgentDistDir, "extensions", "codemode", "worker.js"),
 	join(aiDistDir, "api", "bedrock-converse-stream.js"),
 	join(aiDistDir, "auth", "oauth", "anthropic.js"),
 ]) {
@@ -186,6 +187,7 @@ const imageResizeOutput = findContainingOutput(
 	mainResult.metafile,
 	join(codingAgentDistDir, "utils", "image-resize.js"),
 );
+const configOutput = findContainingOutput(mainResult.metafile, join(codingAgentDistDir, "config.js"));
 if (dirname(bedrockLoaderOutput) !== dirname(oauthLoaderOutput)) {
 	throw new Error("Bedrock and OAuth lazy loaders were emitted into different directories");
 }
@@ -193,20 +195,30 @@ if (dirname(bedrockLoaderOutput) !== dirname(oauthLoaderOutput)) {
 // These implementations are reached through variable-specifier imports or a
 // worker URL, so the main bundle cannot follow them. Emit one self-contained
 // file per implementation beside the code that resolves it.
+const lazyEntryPoints = {
+	anthropic: join(aiDistDir, "auth", "oauth", "anthropic.js"),
+	"bedrock-converse-stream": join(aiDistDir, "api", "bedrock-converse-stream.js"),
+	"codemode-worker": join(codingAgentDistDir, "extensions", "codemode", "worker.js"),
+	"github-copilot": join(aiDistDir, "auth", "oauth", "github-copilot.js"),
+	"image-resize-worker": join(codingAgentDistDir, "utils", "image-resize-worker.js"),
+	"kimi-coding": join(aiDistDir, "auth", "oauth", "kimi-coding.js"),
+	meta: join(aiDistDir, "auth", "oauth", "meta.js"),
+	"openai-chatgpt": join(aiDistDir, "auth", "oauth", "openai-chatgpt.js"),
+	"openai-codex": join(aiDistDir, "auth", "oauth", "openai-codex.js"),
+	openrouter: join(aiDistDir, "auth", "oauth", "openrouter.js"),
+	radius: join(aiDistDir, "auth", "oauth", "radius.js"),
+	xai: join(aiDistDir, "auth", "oauth", "xai.js"),
+};
+const oauthLoadSource = readFileSync(join(aiDistDir, "auth", "oauth", "load.js"), "utf8");
+for (const match of oauthLoadSource.matchAll(/importOAuthModule\("\.\/([^"]+)\.(?:ts|js)"\)/g)) {
+	if (!(match[1] in lazyEntryPoints)) {
+		throw new Error(`OAuth flow "${match[1]}" is lazily imported but has no lazy bundle entry`);
+	}
+}
 const lazyResult = await build({
 	...commonBuildOptions(),
 	entryNames: "[name]",
-	entryPoints: {
-		anthropic: join(aiDistDir, "auth", "oauth", "anthropic.js"),
-		"bedrock-converse-stream": join(aiDistDir, "api", "bedrock-converse-stream.js"),
-		"github-copilot": join(aiDistDir, "auth", "oauth", "github-copilot.js"),
-		"image-resize-worker": join(codingAgentDistDir, "utils", "image-resize-worker.js"),
-		"kimi-coding": join(aiDistDir, "auth", "oauth", "kimi-coding.js"),
-		"openai-codex": join(aiDistDir, "auth", "oauth", "openai-codex.js"),
-		openrouter: join(aiDistDir, "auth", "oauth", "openrouter.js"),
-		radius: join(aiDistDir, "auth", "oauth", "radius.js"),
-		xai: join(aiDistDir, "auth", "oauth", "xai.js"),
-	},
+	entryPoints: lazyEntryPoints,
 	outdir: dirname(bedrockLoaderOutput),
 	splitting: false,
 });
@@ -214,6 +226,9 @@ const lazyResult = await build({
 const imageResizeWorkerOutput = resolve(dirname(bedrockLoaderOutput), "image-resize-worker.js");
 if (dirname(imageResizeOutput) !== dirname(imageResizeWorkerOutput)) {
 	throw new Error("Image resize implementation and worker were emitted into different directories");
+}
+if (dirname(configOutput) !== dirname(bedrockLoaderOutput)) {
+	throw new Error("config.ts and the codemode worker were emitted into different directories");
 }
 
 validateExternalImports([mainResult.metafile, lazyResult.metafile]);

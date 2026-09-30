@@ -4,12 +4,13 @@ import { once } from "node:events";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
-import { DefaultResourceLoader, resizeImage } from "./node_modules/@astralyn/pi/dist/bundle/index.js";
+import { createCodemodeExtension, DefaultResourceLoader, resizeImage } from "./node_modules/@astralyn/pi/dist/bundle/index.js";
 
 const loader = new DefaultResourceLoader({
 	cwd: process.cwd(),
 	agentDir: process.env.PI_CODING_AGENT_DIR,
 	additionalExtensionPaths: [fileURLToPath(new URL("./package-bundle-extension.ts", import.meta.url))],
+	extensionFactories: [createCodemodeExtension({ models: false })],
 	noExtensions: true,
 	noSkills: true,
 	noPromptTemplates: true,
@@ -21,6 +22,13 @@ for (let reload = 0; reload < 2; reload++) {
 	assert.deepEqual(loaded.errors, []);
 	assert.ok(loaded.extensions.some((extension) => extension.commands.has("package-smoke")));
 }
+
+const codemode = loader.getExtensions().extensions.flatMap((extension) => [...extension.tools.values()])
+	.find((tool) => tool.definition.name === "codemode")?.definition;
+assert.ok(codemode);
+const scriptResult = await codemode.execute("package-codemode", { code: "text(await Promise.all([1, 2, 3].map(async n => n * n)))" });
+assert.notEqual(scriptResult.isError, true, JSON.stringify(scriptResult.content));
+assert.ok(scriptResult.content.some((part) => part.type === "text" && part.text === "[1,4,9]"));
 
 const inputBytes = readFileSync(
 	new URL("./node_modules/@astralyn/pi/dist/modes/interactive/assets/clankolas.png", import.meta.url),
@@ -48,4 +56,4 @@ try {
 	await worker.terminate();
 }
 
-console.log("Verified bundled extension reload, OAuth flows, Bedrock loading, and image worker.");
+console.log("Verified bundled extension reload, OAuth flows, Bedrock loading, codemode worker/WASM, and image worker.");

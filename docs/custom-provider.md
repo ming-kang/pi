@@ -614,3 +614,47 @@ interface ProviderModelConfig {
 `openrouter` sends `reasoning: { effort }`. `deepseek` sends `thinking: { type: "enabled" | "disabled" }` and `reasoning_effort` when enabled. `together` sends `reasoning: { enabled }` and also `reasoning_effort` when `supportsReasoningEffort` is enabled. `qwen` is for DashScope-style top-level `enable_thinking`. Use `qwen-chat-template` for local Qwen-compatible servers that read `chat_template_kwargs.enable_thinking` and need `preserve_thinking`. Use `chat-template` for configurable `chat_template_kwargs`, for example DeepSeek V3.x behind vLLM with `chatTemplateKwargs: { "thinking": { "$var": "thinking.enabled" } }`. Use `thinkingFormat: "baseten"` with `chatTemplateArgs` when the provider expects toggle values under `chat_template_args` and optionally supports top-level `reasoning_effort`.
 `thinkingTokenBudgetField` sends a clamped per-level thinking budget as a top-level request field (`thinking_token_budget` on vLLM, `thinking_budget` on Qwen/SGLang, `thinking_budget_tokens` on llama.cpp). `supportsThinkingTokenBudget: true` is an alias for the vLLM field name. Do not combine it with `reasoning_effort` on DashScope Qwen models.
 `cacheControlFormat: "anthropic"` applies Anthropic-style `cache_control` markers to the system prompt, last tool definition, and last user, assistant, or tool-result text content.
+
+## Image and classifier operations
+
+Registering only `baseUrl` or `headers` for an existing provider preserves its built-in models. Supplying `models` in the legacy form replaces that provider's models across chat, image, and classifier operations. An omitted `type` means `"chat"`; image and classifier models require explicit discriminants and implementations keyed by their `api` values through the `images` and `classifiers` fields.
+
+For example, a mixed-operation provider can register non-chat models and their implementations together:
+
+```typescript
+pi.registerProvider("media-tools", {
+  apiKey: "$MEDIA_TOOLS_API_KEY",
+  models: [
+    {
+      type: "image",
+      id: "image-v1",
+      name: "Image V1",
+      api: "media-images",
+      baseUrl: "https://media.example.com/v1",
+      input: ["text"],
+      output: ["image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    },
+    {
+      type: "classifier",
+      id: "classifier-v1",
+      name: "Classifier V1",
+      api: "media-classifier",
+      baseUrl: "https://media.example.com/v1",
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 64000,
+    },
+  ],
+  images: {
+    "media-images": { generateImages: async (model, context, options) => result },
+  },
+  classifiers: {
+    "media-classifier": { classify: async (model, context, options) => result },
+  },
+});
+```
+
+Model-level `baseUrl` values take precedence over the provider endpoint. If no `models` list is supplied, built-in models of every operation remain registered. Equal model IDs in different operations remain distinct, including their model-specific headers.
+
+Await `options.onProviderStreamEvent?.(providerEvent, model)` before normalizing each parsed stream event. Chat models need context and output limits; classifiers need a context window; image models declare output modalities. Legacy `refreshModels` returns a mixed-operation catalog.

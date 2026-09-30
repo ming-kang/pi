@@ -37,3 +37,5 @@ The `!` and `!!` editor commands still use Bash.
   "shellPath": "C:\\cygwin64\\bin\\bash.exe"
 }
 ```
+
+`"defaultTools": ["-bash", "+powershell"]` replaces Bash while preserving other configured default tools.
