@@ -11,6 +11,7 @@ import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybi
 import { type CompatField, compatFieldFor, compatFieldsForApi, validateJsonCompatValue } from "../compat-fields.ts";
 import { truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
+import { moveSelection } from "./controls.ts";
 import { DictPane } from "./dictionary.ts";
 import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
 import {
@@ -166,13 +167,9 @@ export class CompatPane implements EditorPane {
 			return;
 		}
 		// list mode
-		if (kb.matches(data, "tui.select.up")) {
-			this.index = this.index === 0 ? this.rowCount() - 1 : this.index - 1;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.down")) {
-			this.index = (this.index + 1) % this.rowCount();
+		const next = moveSelection(kb, data, this.index, this.rowCount());
+		if (next !== undefined) {
+			this.index = next;
 			this.host.refresh();
 			return;
 		}
@@ -184,7 +181,7 @@ export class CompatPane implements EditorPane {
 			const entry = this.entries()[this.index];
 			if (!entry) return;
 			const [key] = entry;
-			this.host.mutate(() => this.model.setField(["compat", key], DELETE));
+			this.model.setField(["compat", key], DELETE);
 			this.index = Math.min(this.index, this.rowCount() - 2 < 0 ? 0 : this.rowCount() - 2);
 			return;
 		}
@@ -326,7 +323,7 @@ export class CompatPane implements EditorPane {
 	}
 
 	private writeValue(key: string, value: unknown): void {
-		this.host.mutate(() => this.model.setField(["compat", key], value));
+		this.model.setField(["compat", key], value);
 	}
 
 	private fail(message: string): void {

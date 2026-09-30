@@ -13,7 +13,8 @@ import { plural, truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
 import { BuiltinCandidatesPane } from "./builtin-data.ts";
 import { CompatPane } from "./compat.ts";
-import { CostPane, InputTypesPane, ModelSpecificApiPane, ReasoningPane } from "./model-options.ts";
+import { moveSelection } from "./controls.ts";
+import { CostPane, createReasoningPane, InputTypesPane, ModelSpecificApiPane } from "./model-options.ts";
 import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
 import { ThinkingMapPane } from "./thinking-map.ts";
 import {
@@ -248,13 +249,9 @@ export class ModelFieldsPane implements EditorPane {
 			this.host.refresh();
 			return;
 		}
-		if (kb.matches(data, "tui.select.up")) {
-			this.index = this.index === 0 ? this.rows.length - 1 : this.index - 1;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.down")) {
-			this.index = (this.index + 1) % this.rows.length;
+		const next = moveSelection(kb, data, this.index, this.rows.length);
+		if (next !== undefined) {
+			this.index = next;
 			this.host.refresh();
 			return;
 		}
@@ -292,7 +289,7 @@ export class ModelFieldsPane implements EditorPane {
 		const row = this.rows[this.index]!;
 		if (row.kind !== "reasoning") return; // Space on other rows falls to overwrite handling below
 		const current = this.model.read().reasoning;
-		this.host.mutate(() => this.model.setField(["reasoning"], current !== true));
+		this.model.setField(["reasoning"], current !== true);
 	}
 
 	private enterRow(): void {
@@ -303,7 +300,7 @@ export class ModelFieldsPane implements EditorPane {
 				this.beginEdit("tweak");
 				return;
 			case "reasoning":
-				this.host.pushPane(new ReasoningPane(this.host, this.model));
+				this.host.pushPane(createReasoningPane(this.host, this.model));
 				return;
 			case "subpage":
 				this.pushSubpage(row.key);
@@ -328,7 +325,7 @@ export class ModelFieldsPane implements EditorPane {
 					return;
 				}
 				this.host.confirm(`Delete model "${id}" from ${this.host.providerId}?`, "Delete Model", () => {
-					this.host.mutate(() => this.host.store.removeModel(this.host.providerId, id));
+					this.host.edits.removeModel(id);
 					this.host.onModelRemoved(id);
 				});
 				return;
@@ -424,13 +421,13 @@ export class ModelFieldsPane implements EditorPane {
 			return;
 		}
 		if (row.key === "name") {
-			this.host.mutate(() => this.model.setField(["name"], value === "" ? DELETE : value));
+			this.model.setField(["name"], value === "" ? DELETE : value);
 			finish();
 			return;
 		}
 		// Numeric rows: empty clears the override; otherwise a finite positive integer.
 		if (value === "") {
-			this.host.mutate(() => this.model.setField([row.key], DELETE));
+			this.model.setField([row.key], DELETE);
 			finish();
 			return;
 		}
@@ -439,7 +436,7 @@ export class ModelFieldsPane implements EditorPane {
 			finish(`${row.key} must be a positive integer.`);
 			return;
 		}
-		this.host.mutate(() => this.model.setField([row.key], parsed));
+		this.model.setField([row.key], parsed);
 		finish();
 		return;
 	}

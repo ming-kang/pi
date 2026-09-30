@@ -5,6 +5,7 @@ import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybi
 import { THINKING_VARIABLES, validateChatTemplateKwarg } from "../compat-fields.ts";
 import { truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
+import { moveSelection } from "./controls.ts";
 import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
 import {
 	renderInfoLine,
@@ -253,13 +254,9 @@ export class DictPane implements EditorPane {
 	private handleList(data: string): void {
 		const kb = this.host.keybindings;
 		const rowCount = this.entries().length + 1;
-		if (kb.matches(data, "tui.select.up")) {
-			this.index = this.index === 0 ? rowCount - 1 : this.index - 1;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.down")) {
-			this.index = (this.index + 1) % rowCount;
+		const next = moveSelection(kb, data, this.index, rowCount);
+		if (next !== undefined) {
+			this.index = next;
 			this.host.refresh();
 			return;
 		}
@@ -270,7 +267,7 @@ export class DictPane implements EditorPane {
 		if (kb.matches(data, "app.provider.removeEntry")) {
 			const entry = this.entries()[this.index];
 			if (!entry) return;
-			this.host.mutate(() => this.model.setField(["compat", this.dictKey, entry[0]], DELETE));
+			this.model.setField(["compat", this.dictKey, entry[0]], DELETE);
 			this.index = Math.max(0, Math.min(this.index, this.entries().length - 1));
 			return;
 		}
@@ -406,7 +403,7 @@ export class DictPane implements EditorPane {
 			this.host.refresh();
 			return;
 		}
-		this.host.mutate(() => this.model.setField(["compat", this.dictKey, key], value));
+		this.model.setField(["compat", this.dictKey, key], value);
 	}
 
 	setFocused(focused: boolean): void {

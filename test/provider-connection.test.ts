@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { AuthResult } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fetchProviderModels, importProviderModels } from "../src/extensions/provider/connection.ts";
+import { ProviderEdits } from "../src/extensions/provider/editing.ts";
 import { RefreshCoordinator } from "../src/extensions/provider/refresh.ts";
 import { ModelsJsonStore } from "../src/extensions/provider/store.ts";
 
@@ -48,7 +49,17 @@ function fixture() {
 		getAuth: vi.fn(async (): Promise<AuthResult | undefined> => ({ auth: { apiKey: "fixture-key" } })),
 		getProviderAuthStatus: () => ({ configured: true }),
 	};
-	return { runtime, options: { store, runtime, providerId: "cpa", refresher: new RefreshCoordinator(runtime) } };
+	const refresher = new RefreshCoordinator(runtime);
+	return {
+		runtime,
+		options: {
+			store,
+			runtime,
+			providerId: "cpa",
+			refresher,
+			edits: new ProviderEdits(store, "cpa", refresher, vi.fn()),
+		},
+	};
 }
 
 describe("provider connection operations", () => {

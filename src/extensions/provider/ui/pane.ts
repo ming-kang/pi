@@ -4,9 +4,10 @@ import type { TUI } from "@earendil-works/pi-tui";
 import type { KeybindingsManager } from "../../../core/keybindings.ts";
 import type { ModelsJsonModel } from "../../../core/model-config.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
+import type { ProviderEdits, ProviderView } from "../editing.ts";
 import type { ProbeModel, ProbeResult } from "../probe.ts";
-import type { RefreshCoordinator } from "../refresh.ts";
-import type { ModelsJsonStore } from "../store.ts";
+
+export type { ModelHandle } from "../editing.ts";
 
 export interface EditorPane {
 	/** Drill-down label shown at the top of the right column while this sub-pane is open, e.g. "cost". */
@@ -31,28 +32,15 @@ export interface EditorPane {
 	dispose?(): void;
 }
 
-/** Read/write access to the model under edit, draft or persisted. */
-export interface ModelHandle {
-	readonly isDraft: boolean;
-	/** Current values; drafts carry the unsubmitted partial object. */
-	read(): Partial<ModelsJsonModel> & { id?: string };
-	/** Drafts mutate memory; persisted models queue a store op and schedule a save. */
-	setField(path: readonly string[], value: unknown): void;
-	/** Renaming an identity waits for storage before the UI starts using the new id. */
-	rename(newId: string): Promise<string | undefined>;
-}
-
 export interface EditorHost {
 	readonly tui: TUI;
 	readonly theme: Theme;
 	readonly keybindings: KeybindingsManager;
-	readonly store: ModelsJsonStore;
-	readonly refresher: RefreshCoordinator;
+	readonly store: ProviderView;
+	readonly edits: Pick<ProviderEdits, "setProviderField" | "removeModel" | "batch">;
 	readonly providerId: string;
 	pushPane(pane: EditorPane): void;
 	popPane(): void;
-	/** Queue a mutation op, mark the provider touched, and repaint. */
-	mutate(apply: () => void): void;
 	refresh(): void;
 	notify(message: string, type: "info" | "warning" | "error"): void;
 	/** Effective api/baseUrl after provider-level and builtin-overlay fallbacks. */

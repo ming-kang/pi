@@ -10,14 +10,21 @@ import "../keybindings.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { truncate } from "../constants.ts";
 import { modelCatalogUrl, type ProbeModel } from "../probe.ts";
+import { moveSelection } from "./controls.ts";
 import type { EditorHost, EditorPane } from "./pane.ts";
 import { renderInfoLine, renderPlainLine, type ScrollWindowInfo, truncateMiddle, ValueEditor } from "./value-row.ts";
 
+interface CatalogResults {
+	models: ProbeModel[];
+	truncated: boolean;
+}
+
 type FetchState =
 	| { type: "idle" }
-	| { type: "loading" }
+	| { type: "loading"; controller: AbortController }
 	| { type: "error"; message: string }
-	| { type: "results"; models: ProbeModel[]; truncated: boolean };
+	| { type: "results"; catalog: CatalogResults; error?: string }
+	| { type: "importing"; catalog: CatalogResults; controller: AbortController };
 
 /** Compact token count for the row note, e.g. `1.0M`; the thresholds match the footer's usage stats. */
 function formatTokens(count: number): string {
@@ -41,13 +48,10 @@ function metadataNote(model: ProbeModel): string | undefined {
 
 export class FetchModelsPane implements EditorPane {
 	private state: FetchState = { type: "idle" };
-	private controller: AbortController | undefined;
 	private search: ValueEditor;
 	private query = "";
 	private index = 0;
 	private checked = new Set<string>();
-	private importing = false;
-	private error: string | undefined;
 	private focused = false;
 	private disposed = false;
 
@@ -63,23 +67,27 @@ export class FetchModelsPane implements EditorPane {
 
 	/** Enter pressed on the left-column row (or on the idle pane): start the request. */
 	start(): void {
-		if (this.disposed || this.state.type === "loading" || this.importing) return;
+		if (this.disposed || this.state.type === "loading" || this.state.type === "importing") return;
 		if (!this.catalogUrl()) return; // the idle pane explains what to configure first
 		const controller = new AbortController();
-		this.controller = controller;
-		this.state = { type: "loading" };
-		this.error = undefined;
+		this.state = { type: "loading", controller };
 		this.host.refresh();
 		void this.host
 			.runFetch(controller.signal)
 			.then((result) => {
-				if (this.disposed || controller.signal.aborted || this.controller !== controller) return;
+				if (
+					this.disposed ||
+					controller.signal.aborted ||
+					this.state.type !== "loading" ||
+					this.state.controller !== controller
+				)
+					return;
 				if (!result.ok) {
 					if (result.error === "Cancelled.") return;
 					this.state = { type: "error", message: result.error };
 					this.host.setFetchStatus("· failed");
 				} else {
-					this.state = { type: "results", models: result.models, truncated: result.truncated };
+					this.state = { type: "results", catalog: result };
 					this.checked = new Set();
 					this.query = "";
 					this.search.reset("");
@@ -90,7 +98,13 @@ export class FetchModelsPane implements EditorPane {
 				this.host.refresh();
 			})
 			.catch((error: unknown) => {
-				if (controller.signal.aborted) return;
+				if (
+					this.disposed ||
+					controller.signal.aborted ||
+					this.state.type !== "loading" ||
+					this.state.controller !== controller
+				)
+					return;
 				this.state = { type: "error", message: error instanceof Error ? error.message : String(error) };
 				this.host.setFetchStatus("· failed");
 				this.host.refresh();
@@ -112,9 +126,9 @@ export class FetchModelsPane implements EditorPane {
 	}
 
 	private rows(): { model: ProbeModel; added: boolean }[] {
-		if (this.state.type !== "results") return [];
+		if (this.state.type !== "results" && this.state.type !== "importing") return [];
 		const existing = this.existingIds();
-		const rows = this.state.models.map((model) => ({ model, added: existing.has(model.id) }));
+		const rows = this.state.catalog.models.map((model) => ({ model, added: existing.has(model.id) }));
 		const query = this.query.trim().toLowerCase();
 		if (!query) return rows;
 		return rows.filter(
@@ -148,9 +162,10 @@ export class FetchModelsPane implements EditorPane {
 					theme.fg("error", truncate(this.state.message, Math.max(10, width - 2))),
 					renderInfoLine(theme, "Enter retries; Esc goes back.", width),
 				];
+			case "importing":
 			case "results": {
 				const lines: string[] = [];
-				if (this.state.truncated) {
+				if (this.state.catalog.truncated) {
 					lines.push(
 						renderInfoLine(theme, "The catalog was truncated; refine manually if a model is missing.", width),
 					);
@@ -190,19 +205,20 @@ export class FetchModelsPane implements EditorPane {
 						width,
 					),
 				);
-				if (this.importing) lines.push(renderInfoLine(theme, "Importing…", width));
-				if (this.error) lines.push(theme.fg("error", truncate(this.error, Math.max(10, width - 2))));
+				if (this.state.type === "importing") lines.push(renderInfoLine(theme, "Importing…", width));
+				if (this.state.type === "results" && this.state.error)
+					lines.push(theme.fg("error", truncate(this.state.error, Math.max(10, width - 2))));
 				return lines;
 			}
 		}
 	}
 
 	scrollWindow(): ScrollWindowInfo {
-		if (this.state.type !== "results") return {};
+		if (this.state.type !== "results" && this.state.type !== "importing") return {};
 		// The truncation notice and the filter input pin above the checklist;
 		// the selection summary (and import progress/error) pin below.
-		const top = (this.state.truncated ? 1 : 0) + 1;
-		const bottom = 1 + (this.importing ? 1 : 0) + (this.error ? 1 : 0);
+		const top = (this.state.catalog.truncated ? 1 : 0) + 1;
+		const bottom = 1 + (this.state.type === "importing" || this.state.error ? 1 : 0);
 		return { top, bottom, cursor: top + this.index };
 	}
 
@@ -221,7 +237,7 @@ export class FetchModelsPane implements EditorPane {
 				return;
 			case "loading":
 				if (kb.matches(data, "tui.select.cancel")) {
-					this.controller?.abort();
+					this.state.controller.abort();
 					this.state = { type: "idle" };
 					this.host.refresh();
 					return;
@@ -237,6 +253,7 @@ export class FetchModelsPane implements EditorPane {
 					return;
 				}
 				return;
+			case "importing":
 			case "results":
 				this.handleResultsInput(data);
 				return;
@@ -246,19 +263,15 @@ export class FetchModelsPane implements EditorPane {
 	private handleResultsInput(data: string): void {
 		const kb = this.host.keybindings;
 		const rows = this.rows();
-		if (kb.matches(data, "tui.select.up")) {
-			if (rows.length > 0) this.index = this.index === 0 ? rows.length - 1 : this.index - 1;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.down")) {
-			if (rows.length > 0) this.index = (this.index + 1) % rows.length;
+		const next = moveSelection(kb, data, this.index, rows.length);
+		if (next !== undefined) {
+			this.index = next;
 			this.host.refresh();
 			return;
 		}
 		if (kb.matches(data, "app.list.toggle")) {
 			const row = rows[this.index];
-			if (!row || row.added || this.importing) return;
+			if (!row || row.added || this.state.type === "importing") return;
 			if (this.checked.has(row.model.id)) this.checked.delete(row.model.id);
 			else this.checked.add(row.model.id);
 			this.host.refresh();
@@ -280,7 +293,7 @@ export class FetchModelsPane implements EditorPane {
 	}
 
 	private importChecked(): void {
-		if (this.state.type !== "results" || this.importing) return;
+		if (this.state.type !== "results") return;
 		// Nothing checked: import the highlighted row, like a fuzzy picker. Only Esc discards.
 		let chosen: ProbeModel[];
 		if (this.checked.size === 0) {
@@ -288,20 +301,24 @@ export class FetchModelsPane implements EditorPane {
 			if (!row || row.added) return;
 			chosen = [row.model];
 		} else {
-			chosen = this.state.models.filter((model) => this.checked.has(model.id));
+			chosen = this.state.catalog.models.filter((model) => this.checked.has(model.id));
 		}
 		const controller = new AbortController();
-		this.controller = controller;
-		this.importing = true;
-		this.error = undefined;
+		const catalog = this.state.catalog;
+		this.state = { type: "importing", catalog, controller };
 		this.host.refresh();
 		void this.host
 			.importModels(chosen, controller.signal)
 			.then((error) => {
-				if (this.disposed || controller.signal.aborted || this.controller !== controller) return;
-				this.importing = false;
+				if (
+					this.disposed ||
+					controller.signal.aborted ||
+					this.state.type !== "importing" ||
+					this.state.controller !== controller
+				)
+					return;
 				if (error) {
-					this.error = error;
+					this.state = { type: "results", catalog, error };
 					this.host.setFetchStatus("· import failed");
 					return this.host.refresh();
 				}
@@ -310,16 +327,20 @@ export class FetchModelsPane implements EditorPane {
 				this.host.popPane(); // back to the left column with the new models visible
 			})
 			.catch((error: unknown) => {
-				if (this.disposed || controller.signal.aborted || this.controller !== controller) return;
-				this.importing = false;
-				this.error = error instanceof Error ? error.message : String(error);
+				if (
+					this.disposed ||
+					controller.signal.aborted ||
+					this.state.type !== "importing" ||
+					this.state.controller !== controller
+				)
+					return;
+				this.state = { type: "results", catalog, error: error instanceof Error ? error.message : String(error) };
 				this.host.refresh();
 			});
 	}
 
 	private exitResults(): void {
-		this.controller?.abort();
-		this.importing = false;
+		if (this.state.type === "loading" || this.state.type === "importing") this.state.controller.abort();
 		this.state = { type: "idle" };
 		this.checked = new Set();
 		this.host.popPane();
@@ -327,22 +348,23 @@ export class FetchModelsPane implements EditorPane {
 
 	setFocused(focused: boolean): void {
 		this.focused = focused;
-		this.search.focused = focused && this.state.type === "results";
+		this.search.focused = focused && (this.state.type === "results" || this.state.type === "importing");
 	}
 
 	isEditing(): boolean {
-		return this.state.type === "results"; // the filter input owns ←/→
+		return this.state.type === "results" || this.state.type === "importing"; // the filter input owns ←/→
 	}
 
 	dispose(): void {
 		this.disposed = true;
-		this.controller?.abort();
+		if (this.state.type === "loading" || this.state.type === "importing") this.state.controller.abort();
 	}
 
 	hints(): string {
 		switch (this.state.type) {
 			case "loading":
 				return keyHint("tui.select.cancel", "cancel request");
+			case "importing":
 			case "results":
 				return [
 					rawKeyHint("type", "filter"),

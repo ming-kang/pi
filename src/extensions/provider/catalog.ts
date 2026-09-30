@@ -7,7 +7,7 @@
  */
 
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { getBuiltinModels, getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
+import { type BuiltinProvider, getBuiltinModels, getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
 import type { ModelsJsonModel } from "../../core/model-config.ts";
 import { MAX_CANDIDATES, plural } from "./constants.ts";
@@ -30,7 +30,7 @@ export function builtinCatalogIndex(): readonly CatalogEntry[] {
 }
 
 /** True when models.json with this provider id overlays a built-in catalog. */
-export function isBuiltinProviderId(providerId: string): boolean {
+export function isBuiltinProviderId(providerId: string): providerId is BuiltinProvider {
 	return (getBuiltinProviders() as readonly string[]).includes(providerId);
 }
 
@@ -45,7 +45,7 @@ export function builtinDefaults(
 	api?: string,
 ): { api?: string; baseUrl?: string } {
 	if (!isBuiltinProviderId(providerId)) return {};
-	const models = getBuiltinModels(providerId as never) as readonly Model<Api>[];
+	const models = getBuiltinModels(providerId);
 	if (models.length === 0) return {};
 	const found =
 		(modelId ? models.find((model) => model.id === modelId) : undefined) ??
@@ -122,7 +122,14 @@ export type ReferenceField =
 	| "compat"
 	| "cost";
 
+export interface FieldPatch {
+	path: readonly string[];
+	value: unknown;
+}
+
 export interface FieldChange {
+	/** Exact writes represented by this preview; empty for view-only fields. */
+	patches: readonly FieldPatch[];
 	field: ReferenceField;
 	/** Pre-selected per the completion rules (unset scalar fields are checked; map/compat/cost never are). */
 	checked: boolean;
@@ -160,6 +167,7 @@ export function computeFieldChanges(
 
 	changes.push({
 		field: "name",
+		patches: [{ path: ["name"], value: reference.name }],
 		checked: unset("name") && reference.name !== reference.id,
 		applicable: true,
 		currentText: current.name ?? `not set (falls back to id${current.id ? ` "${current.id}"` : ""})`,
@@ -167,6 +175,7 @@ export function computeFieldChanges(
 	});
 	changes.push({
 		field: "reasoning",
+		patches: [{ path: ["reasoning"], value: reference.reasoning }],
 		checked: unset("reasoning") && reference.reasoning === true,
 		applicable: true,
 		currentText: current.reasoning === undefined ? "false (default)" : String(current.reasoning),
@@ -174,6 +183,7 @@ export function computeFieldChanges(
 	});
 	changes.push({
 		field: "input",
+		patches: [{ path: ["input"], value: reference.input }],
 		checked: unset("input"),
 		applicable: true,
 		currentText: current.input ? current.input.join(", ") : "text (default)",
@@ -181,6 +191,7 @@ export function computeFieldChanges(
 	});
 	changes.push({
 		field: "contextWindow",
+		patches: [{ path: ["contextWindow"], value: reference.contextWindow }],
 		checked: unset("contextWindow"),
 		applicable: true,
 		currentText:
@@ -189,6 +200,7 @@ export function computeFieldChanges(
 	});
 	changes.push({
 		field: "maxTokens",
+		patches: [{ path: ["maxTokens"], value: reference.maxTokens }],
 		checked: unset("maxTokens"),
 		applicable: true,
 		currentText: current.maxTokens === undefined ? `${DEFAULT_MAX_TOKENS} (default)` : String(current.maxTokens),
@@ -202,6 +214,12 @@ export function computeFieldChanges(
 		);
 		changes.push({
 			field: "thinkingLevelMap",
+			patches: sameApi
+				? Object.entries(reference.thinkingLevelMap).map(([level, value]) => ({
+						path: ["thinkingLevelMap", level],
+						value,
+					}))
+				: [],
 			checked: false,
 			applicable: sameApi,
 			currentText: current.thinkingLevelMap
@@ -213,9 +231,24 @@ export function computeFieldChanges(
 		});
 	}
 	if (reference.compat && Object.keys(reference.compat).length > 0) {
+		const patches: FieldPatch[] = [];
+		if (sameApi) {
+			for (const [key, value] of Object.entries(reference.compat)) {
+				if (
+					["chatTemplateKwargs", "chatTemplateArgs", "openRouterRouting", "vercelGatewayRouting"].includes(key) &&
+					value !== null &&
+					typeof value === "object" &&
+					!Array.isArray(value)
+				) {
+					for (const [entry, item] of Object.entries(value))
+						patches.push({ path: ["compat", key, entry], value: item });
+				} else patches.push({ path: ["compat", key], value });
+			}
+		}
 		const details = Object.entries(reference.compat).map(([key, value]) => `${key}: ${JSON.stringify(value)}`);
 		changes.push({
 			field: "compat",
+			patches,
 			checked: false,
 			applicable: sameApi,
 			currentText: current.compat
@@ -226,8 +259,13 @@ export function computeFieldChanges(
 		});
 	}
 	if (reference.cost) {
+		const { input, output, cacheRead, cacheWrite } = reference.cost;
+		const rates = { input, output, cacheRead, cacheWrite };
 		changes.push({
 			field: "cost",
+			patches: current.cost
+				? Object.entries(rates).map(([rate, value]) => ({ path: ["cost", rate], value }))
+				: [{ path: ["cost"], value: rates }],
 			checked: false,
 			applicable: true,
 			currentText: current.cost ? formatCostRates(current.cost) : "all 0 (default)",

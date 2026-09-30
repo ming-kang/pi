@@ -6,6 +6,7 @@ import { setKeybindings, type TUI, TuiMainScreen } from "@earendil-works/pi-tui"
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { compatFieldsForApi } from "../src/extensions/provider/compat-fields.ts";
+import { ProviderEdits } from "../src/extensions/provider/editing.ts";
 import { RefreshCoordinator } from "../src/extensions/provider/refresh.ts";
 import { DELETE, ModelsJsonStore } from "../src/extensions/provider/store.ts";
 import { createProviderApp, createProviderErrorScreen } from "../src/extensions/provider/ui/app.ts";
@@ -13,9 +14,9 @@ import { BuiltinPreviewPane } from "../src/extensions/provider/ui/builtin-data.t
 import { CompatKeyPickerPane, CompatPane } from "../src/extensions/provider/ui/compat.ts";
 import { ProviderEditorScreen } from "../src/extensions/provider/ui/editor.ts";
 import { FetchModelsPane } from "../src/extensions/provider/ui/fetch-models.ts";
-import { CostPane, ModelApiTypePane, ModelSpecificApiPane } from "../src/extensions/provider/ui/model-options.ts";
+import { CostPane, createModelApiPane, ModelSpecificApiPane } from "../src/extensions/provider/ui/model-options.ts";
 import type { EditorHost, ModelHandle } from "../src/extensions/provider/ui/pane.ts";
-import { ApiTypePane } from "../src/extensions/provider/ui/provider-fields.ts";
+import { createProviderApiPane } from "../src/extensions/provider/ui/provider-fields.ts";
 import { ProviderListScreen } from "../src/extensions/provider/ui/provider-list.ts";
 import { windowLines } from "../src/extensions/provider/ui/value-row.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
@@ -93,10 +94,9 @@ function hostFixture(): { host: EditorHost; model: ModelHandle } {
 		keybindings: keys,
 		store,
 		providerId: "cpa",
-		refresher: new RefreshCoordinator(runtimeStub()),
+		edits: new ProviderEdits(store, "cpa", new RefreshCoordinator(runtimeStub()), vi.fn()),
 		pushPane: vi.fn(),
 		popPane: vi.fn(),
-		mutate: (apply) => apply(),
 		refresh: vi.fn(),
 		notify: vi.fn(),
 		effectiveApi: () => "openai-completions",
@@ -211,6 +211,93 @@ describe("provider modal lifecycle", () => {
 });
 
 describe("provider editor interactions", () => {
+	test("API selection uses remapped navigation and confirmation keys", async () => {
+		const { host } = hostFixture();
+		const remapped = new KeybindingsManager({ "tui.select.down": "ctrl+n", "tui.select.confirm": "ctrl+y" });
+		const pane = createProviderApiPane({ ...host, keybindings: remapped });
+		pane.handleInput("\x0e");
+		pane.handleInput("\x19");
+		await store.flush();
+		expect(store.getProvider("cpa")?.api).toBe("anthropic-messages");
+		expect(host.popPane).toHaveBeenCalledOnce();
+	});
+	test("an invalid cost edit can be cancelled without changing the value or leaving editing focus behind", async () => {
+		const { host, model } = hostFixture();
+		const pane = new CostPane(host, model);
+		pane.setFocused(true);
+		pane.handleInput("-1");
+		pane.handleInput("\r");
+		expect(render(pane)).toContain("non-negative");
+		expect(pane.isEditing()).toBe(true);
+		pane.handleInput("\x1b");
+		expect(pane.isEditing()).toBe(false);
+		expect(model.read().cost).toBeUndefined();
+		pane.handleInput("\x1b[B");
+		pane.handleInput("\x1b[200~2.5\x1b[201~");
+		pane.handleInput("\r");
+		await store.flush();
+		expect(model.read().cost).toEqual({ input: 0, output: 2.5, cacheRead: 0, cacheWrite: 0 });
+	});
+
+	test("built-in application merges nested entries and preserves existing cost tiers", async () => {
+		const tiers = [{ inputTokensAbove: 1000, input: 2, output: 3, cacheRead: 4, cacheWrite: 5 }];
+		store.setModelField("cpa", "k3", ["cost"], { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, tiers });
+		store.setModelField("cpa", "k3", ["compat"], {
+			chatTemplateKwargs: { keep: "yes", replace: "old" },
+			supportsStore: true,
+		});
+		await store.flush();
+		const { host, model } = hostFixture();
+		const reference: Model<"openai-completions"> = {
+			id: "reference",
+			name: "Reference",
+			provider: "reference",
+			api: "openai-completions",
+			baseUrl: "https://example.test",
+			reasoning: true,
+			input: ["text"],
+			contextWindow: 128000,
+			maxTokens: 1000,
+			compat: { chatTemplateKwargs: { replace: "new", added: true } },
+			cost: { input: 9, output: 8, cacheRead: 7, cacheWrite: 6, tiers: [] },
+		};
+		const pane = new BuiltinPreviewPane(host, model, { providerId: "reference", model: reference });
+		for (let i = 0; i < 5; i++) pane.handleInput("\x1b[B");
+		pane.handleInput(" "); // compat
+		pane.handleInput("\x1b[B");
+		pane.handleInput(" "); // cost
+		pane.handleInput("\x1b[B");
+		pane.handleInput("\r"); // apply
+		await store.flush();
+		expect(model.read().compat).toEqual({
+			chatTemplateKwargs: { keep: "yes", replace: "new", added: true },
+			supportsStore: true,
+		});
+		expect(model.read().cost).toEqual({ input: 9, output: 8, cacheRead: 7, cacheWrite: 6, tiers });
+		expect(model.read().id).toBe("k3");
+	});
+
+	test("a superseded discovery cannot replace the latest results", async () => {
+		const { host } = hostFixture();
+		let resolveFirst!: (result: Awaited<ReturnType<EditorHost["runFetch"]>>) => void;
+		let calls = 0;
+		host.runFetch = () =>
+			++calls === 1
+				? new Promise((resolve) => {
+						resolveFirst = resolve;
+					})
+				: Promise.resolve({ ok: true, models: [{ id: "latest" }], truncated: false });
+		const pane = new FetchModelsPane(host);
+		pane.start();
+		pane.handleInput("\x1b");
+		pane.start();
+		await vi.waitFor(() => expect(render(pane)).toContain("latest"));
+		resolveFirst({ ok: true, models: [{ id: "stale" }], truncated: false });
+		await Promise.resolve();
+		expect(render(pane)).not.toContain("stale");
+		pane.dispose();
+	});
+
 	test("cost edits preserve other rates, price tiers, and unknown fields", async () => {
 		const cost = {
 			input: 1,
@@ -320,7 +407,7 @@ describe("provider editor interactions", () => {
 		store.addModel("cpa", { id: "m2" }); // m2 still inherits
 		await store.flush();
 		const { host } = hostFixture();
-		const pane = new ApiTypePane(host);
+		const pane = createProviderApiPane(host);
 		pane.setFocused(true);
 		pane.handleInput("\x1b[A");
 		pane.handleInput("\x1b[A"); // not set
@@ -349,7 +436,7 @@ describe("provider editor interactions", () => {
 
 	test("the model API radio sets an override and refuses inheritance with no fallback", async () => {
 		const { host, model } = hostFixture();
-		const pane = new ModelApiTypePane(host, model);
+		const pane = createModelApiPane(host, model);
 		pane.setFocused(true);
 		expect(render(pane)).toContain("provider: openai-completions");
 		for (let index = 0; index < 3; index++) pane.handleInput("\x1b[B"); // anthropic-messages
@@ -361,7 +448,7 @@ describe("provider editor interactions", () => {
 		store.setProviderField("cpa", ["api"], DELETE);
 		store.setModelField("cpa", "k3", ["api"], DELETE);
 		await store.flush();
-		const bare = new ModelApiTypePane(host, model);
+		const bare = createModelApiPane(host, model);
 		bare.setFocused(true);
 		bare.handleInput("\r"); // first option: nothing to inherit
 		expect(render(bare)).toContain("Nothing to inherit");
@@ -466,6 +553,8 @@ describe("provider editor interactions", () => {
 		await vi.waitFor(() => expect(render(pane)).toContain("new-model"));
 		pane.handleInput("\r");
 		await vi.waitFor(() => expect(imported).toEqual([["new-model"]]));
+		await vi.waitFor(() => expect(host.popPane).toHaveBeenCalledOnce());
+		expect(render(pane)).not.toContain("Importing");
 		pane.dispose();
 	});
 

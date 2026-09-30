@@ -27,10 +27,9 @@ import { normalizePath } from "../../utils/paths.ts";
 import { stripBom } from "../../utils/text.ts";
 import { hasProviderSettings } from "./configuration.ts";
 import { formatError } from "./constants.ts";
+import { DELETE, setPath } from "./json-fields.ts";
 
-/** Sentinel op value removing the key at the op path. */
-export const DELETE: unique symbol = Symbol("provider-store-delete");
-export type DeleteMarker = typeof DELETE;
+export { DELETE, type DeleteMarker } from "./json-fields.ts";
 
 export interface ModelsJsonDocument {
 	providers: Record<string, ModelsJsonProvider>;
@@ -106,33 +105,6 @@ export function jsonEquals(a: unknown, b: unknown): boolean {
 		);
 	}
 	return false;
-}
-
-function setPath(root: Record<string, unknown>, path: readonly string[], value: unknown): void {
-	let current = root;
-	for (const segment of path.slice(0, -1)) {
-		const next = Object.hasOwn(current, segment) ? current[segment] : undefined;
-		if (isPlainObject(next)) current = next;
-		else {
-			const created: Record<string, unknown> = {};
-			Object.defineProperty(current, segment, {
-				value: created,
-				writable: true,
-				enumerable: true,
-				configurable: true,
-			});
-			current = created;
-		}
-	}
-	const leaf = path[path.length - 1]!;
-	if (value === DELETE) delete current[leaf];
-	else
-		Object.defineProperty(current, leaf, {
-			value: structuredClone(value),
-			writable: true,
-			enumerable: true,
-			configurable: true,
-		});
 }
 
 function cloneValue(value: unknown): unknown {

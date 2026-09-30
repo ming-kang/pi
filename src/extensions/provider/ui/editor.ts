@@ -24,8 +24,9 @@ import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import { isBuiltinProviderId } from "../catalog.ts";
 import { effectiveModelSettings, hasProviderSettings } from "../configuration.ts";
 import { fetchProviderModels, importProviderModels } from "../connection.ts";
+import { type DraftModelHandle, ProviderEdits } from "../editing.ts";
 import type { RefreshCoordinator } from "../refresh.ts";
-import { DELETE, type ModelsJsonStore } from "../store.ts";
+import type { ModelsJsonStore } from "../store.ts";
 import { ConfirmPane, InfoPane } from "./dialogs.ts";
 import { FetchModelsPane } from "./fetch-models.ts";
 import { ModelFieldsPane } from "./model-fields.ts";
@@ -61,10 +62,6 @@ const LEFT_WIDTH_MAX = 40;
 const BODY_ROWS = 14;
 const MIN_WIDTH = 56;
 
-interface ModelDraft {
-	fields: Partial<ModelsJsonModel>;
-}
-
 function padTo(line: string, width: number): string {
 	const missing = width - visibleWidth(line);
 	return missing > 0 ? line + " ".repeat(missing) : line;
@@ -93,10 +90,10 @@ export class ProviderEditorScreen implements Component, Focusable {
 	private leftIndex = 0;
 	private focusPane: "left" | "right" = "left";
 	private stack: EditorPane[] = [];
-	private draft: ModelDraft | undefined;
+	private draft: DraftModelHandle | undefined;
+	private readonly edits: ProviderEdits;
 	private fetchStatus: string | undefined;
 	private disposed = false;
-	private renaming = false;
 	private _focused = false;
 	private cache: { width: number; lines: string[] } | undefined;
 
@@ -112,6 +109,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 		this.keybindings = keybindings;
 		this.done = done;
 		this.options = options;
+		this.edits = new ProviderEdits(options.store, options.providerId, options.refresher, () => this.refresh());
 		this.host = this.createHost();
 		this.rebuildLeftItems();
 		this.resetRightStack();
@@ -186,7 +184,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 
 	/** Rebuild from the store view after a save merged external changes. */
 	syncFromStore(): void {
-		if (this.disposed || this.renaming) return;
+		if (this.disposed || this.edits.renaming) return;
 		const selected = this.leftItems[this.leftIndex];
 		const selectedKey = leftItemKey(selected);
 		this.rebuildLeftItems();
@@ -264,7 +262,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 					return;
 				}
 				if (!this.draft) {
-					this.draft = { fields: {} };
+					this.draft = this.edits.draft();
 					this.rebuildLeftItems();
 				}
 				const draftIndex = this.leftItems.findIndex((entry) => entry.kind === "draft");
@@ -273,7 +271,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 				this.focusPane = "right";
 				const pane = this.topPane();
 				pane?.setFocused(this._focused);
-				if (pane instanceof ModelFieldsPane && !this.draft.fields.id) pane.startEditingId();
+				if (pane instanceof ModelFieldsPane && !this.draft.read().id) pane.startEditingId();
 				this.refresh();
 				return;
 			}
@@ -298,8 +296,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 						" Stored credentials in auth.json are kept.",
 					"Delete Provider",
 					() => {
-						this.options.store.removeProvider(this.options.providerId);
-						this.options.refresher.touch(this.options.providerId);
+						this.edits.removeProvider();
 						this.done("deleted");
 					},
 				);
@@ -336,14 +333,8 @@ export class ProviderEditorScreen implements Component, Focusable {
 		return rows;
 	}
 
-	private renderLeftItem(item: LeftItem, active: boolean, focused: boolean, width: number): string {
-		const theme = this.theme;
+	private leftItemContent(item: LeftItem): { text: string; note?: string; dim: boolean } {
 		const store = this.options.store;
-		// Single-accent focus rule: the marker and accent exist only in the
-		// focused column; an unfocused column keeps its content plain.
-		const lit = active && focused;
-		const marker = lit ? theme.fg("accent", `${CURSOR} `) : "  ";
-		const style = (text: string, dim = false) => theme.fg(lit ? "accent" : dim ? "dim" : "text", text);
 		let text: string;
 		let note: string | undefined;
 		switch (item.kind) {
@@ -360,7 +351,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 				break;
 			}
 			case "draft": {
-				text = this.draft?.fields.name ?? this.draft?.fields.id ?? "New Model";
+				text = this.draft?.read().name ?? this.draft?.read().id ?? "New Model";
 				note = "· draft";
 				break;
 			}
@@ -373,7 +364,19 @@ export class ProviderEditorScreen implements Component, Focusable {
 			default:
 				text = "";
 		}
-		const dim = item.kind === "draft" && !this.draft?.fields.name && !this.draft?.fields.id;
+		const dim = item.kind === "draft" && !this.draft?.read().name && !this.draft?.read().id;
+		return { text, note, dim };
+	}
+
+	private renderLeftItem(item: LeftItem, active: boolean, focused: boolean, width: number): string {
+		const theme = this.theme;
+		// Single-accent focus rule: the marker and accent exist only in the
+		// focused column; an unfocused column keeps its content plain.
+		const lit = active && focused;
+		const marker = lit ? theme.fg("accent", `${CURSOR} `) : "  ";
+		const style = (text: string, dim = false) => theme.fg(lit ? "accent" : dim ? "dim" : "text", text);
+		const { text: label, note, dim } = this.leftItemContent(item);
+		let text = label;
 		// Long model names keep head and tail (the distinctive parts) instead of a hard cut.
 		if (item.kind === "model" || item.kind === "draft") {
 			const budget = Math.max(8, width - 2 - (note ? visibleWidth(note) + 1 : 0));
@@ -430,7 +433,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 			case "model":
 				return new ModelFieldsPane(this.host, this.persistedHandle(item.modelId));
 			case "draft":
-				return new ModelFieldsPane(this.host, this.draftHandle());
+				return new ModelFieldsPane(this.host, this.draft!);
 			case "addModel":
 				return new InfoPane(
 					this.host,
@@ -450,75 +453,11 @@ export class ProviderEditorScreen implements Component, Focusable {
 	}
 
 	private persistedHandle(modelId: string): ModelHandle {
-		const store = this.options.store;
-		const providerId = this.options.providerId;
-		const ref = { id: modelId };
-		let renamingSnapshot: ModelsJsonModel | undefined;
-		return {
-			isDraft: false,
-			read: () => renamingSnapshot ?? store.getModel(providerId, ref.id) ?? { id: ref.id },
-			setField: (path, value) => {
-				store.setModelField(providerId, ref.id, path, value);
-			},
-			rename: async (newId) => {
-				const oldId = ref.id;
-				renamingSnapshot = store.getModel(providerId, oldId);
-				this.renaming = true;
-				try {
-					const error = await store.renameModel(providerId, oldId, newId);
-					if (error) return error;
-					ref.id = newId;
-					const selected = this.leftItems[this.leftIndex];
-					if (selected?.kind === "model" && selected.modelId === oldId) selected.modelId = newId;
-					this.options.refresher.touch(providerId);
-					return undefined;
-				} finally {
-					renamingSnapshot = undefined;
-					this.renaming = false;
-					this.syncFromStore();
-				}
-			},
-		};
-	}
-
-	private draftHandle(): ModelHandle {
-		const draft = this.draft;
-		if (!draft) throw new Error("No model draft");
-		return {
-			isDraft: true,
-			rename: async () => "Commit the model draft before renaming it.",
-			read: () => draft.fields,
-			setField: (path, value) => {
-				if (path.length === 1) {
-					const key = path[0]! as keyof ModelsJsonModel;
-					if (value === DELETE) delete draft.fields[key];
-					else (draft.fields as Record<string, unknown>)[key] = value;
-				} else {
-					// Nested draft fields (thinkingLevelMap.medium, compat.x, cost.input…)
-					const [head, ...rest] = path as [keyof ModelsJsonModel, ...string[]];
-					const container: Record<string, unknown> = { ...((draft.fields[head] as object) ?? {}) } as Record<
-						string,
-						unknown
-					>;
-					let current = container;
-					for (const segment of rest.slice(0, -1)) {
-						const next = current[segment];
-						if (typeof next === "object" && next !== null && !Array.isArray(next)) {
-							current = next as Record<string, unknown>;
-						} else {
-							const created: Record<string, unknown> = {};
-							current[segment] = created;
-							current = created;
-						}
-					}
-					const leaf = rest[rest.length - 1]!;
-					if (value === DELETE) delete current[leaf];
-					else current[leaf] = value;
-					(draft.fields as Record<string, unknown>)[head] = container;
-				}
-				this.refresh();
-			},
-		};
+		return this.edits.model(modelId, (oldId, newId) => {
+			const selected = this.leftItems[this.leftIndex];
+			if (selected?.kind === "model" && selected.modelId === oldId) selected.modelId = newId;
+			this.syncFromStore();
+		});
 	}
 
 	// ------------------------------------------------------------------
@@ -533,21 +472,10 @@ export class ProviderEditorScreen implements Component, Focusable {
 			theme: this.theme,
 			keybindings: this.keybindings,
 			store,
-			refresher: this.options.refresher,
+			edits: this.edits,
 			providerId,
 			pushPane: (pane) => this.pushPane(pane),
 			popPane: () => this.popPane(),
-			mutate: (apply) => {
-				const before = store.pendingCount;
-				apply();
-				if (
-					store.pendingCount !== before &&
-					(!store.isDraftProvider(providerId) || hasProviderSettings(store.getProvider(providerId)))
-				) {
-					this.options.refresher.touch(providerId);
-				}
-				this.refresh();
-			},
 			refresh: () => this.refresh(),
 			notify: (message, type) => this.options.notify(message, type),
 			effectiveApi: (model) => {
@@ -567,7 +495,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 			},
 			runFetch: (signal) => fetchProviderModels(this.options, signal),
 			importModels: async (models, signal) => {
-				const error = await importProviderModels(this.options, models, signal);
+				const error = await importProviderModels({ ...this.options, edits: this.edits }, models, signal);
 				if (!this.disposed) this.syncFromStore();
 				return error;
 			},
@@ -601,19 +529,10 @@ export class ProviderEditorScreen implements Component, Focusable {
 	private commitModelDraft(): string | undefined {
 		const draft = this.draft;
 		if (!draft) return "No model draft.";
-		const id = (draft.fields.id ?? "").trim();
-		if (!id) return "Model id is required.";
-		if (this.options.store.getModel(this.options.providerId, id)) return `Model "${id}" already exists.`;
-		if (!this.host.effectiveApi(draft.fields)) {
-			return "Cannot resolve an api — set one under Model-Specific API or the provider's API Auth.";
-		}
-		if (!this.host.effectiveBaseUrl(draft.fields)) {
-			return "Cannot resolve a baseUrl — set one under Model-Specific API or the provider's API Auth.";
-		}
-		const fields = { ...draft.fields };
-		const model: ModelsJsonModel = { ...fields, id };
+		const error = this.edits.commitDraft(draft);
+		if (error) return error;
+		const id = draft.read().id!.trim();
 		this.draft = undefined;
-		this.host.mutate(() => this.options.store.addModel(this.options.providerId, model));
 		this.rebuildLeftItems();
 		const index = this.leftItems.findIndex((item) => item.kind === "model" && item.modelId === id);
 		if (index >= 0) this.leftIndex = index;
@@ -668,29 +587,8 @@ export class ProviderEditorScreen implements Component, Focusable {
 		let longest = 12;
 		for (const item of this.leftItems) {
 			if (item.kind === "separator") continue;
-			let label = "";
-			switch (item.kind) {
-				case "apiAuth":
-					label = "API Auth";
-					break;
-				case "fetch":
-					label = `Fetch Models${this.fetchStatus ? ` ${this.fetchStatus}` : ""}`;
-					break;
-				case "model": {
-					const model = this.options.store.getModel(this.options.providerId, item.modelId);
-					label = model ? modelDisplayName(model) : item.modelId;
-					break;
-				}
-				case "draft":
-					label = `${this.draft?.fields.name ?? this.draft?.fields.id ?? "New Model"} · draft`;
-					break;
-				case "addModel":
-					label = "+ Add Model";
-					break;
-				case "deleteProvider":
-					label = "Delete Provider";
-					break;
-			}
+			const { text, note } = this.leftItemContent(item);
+			const label = text + (note ? ` ${note}` : "");
 			longest = Math.max(longest, visibleWidth(label));
 		}
 		const fit = Math.max(LEFT_WIDTH_MIN, Math.min(LEFT_WIDTH_MAX, longest + 2));

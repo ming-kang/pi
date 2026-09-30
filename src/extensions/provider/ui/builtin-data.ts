@@ -13,6 +13,7 @@ import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybi
 import { type CatalogEntry, computeFieldChanges, type FieldChange, matchBuiltinModels } from "../catalog.ts";
 import { truncate } from "../constants.ts";
 import { jsonEquals } from "../store.ts";
+import { moveSelection } from "./controls.ts";
 import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
 import { renderInfoLine, renderPlainLine, type ScrollWindowInfo, ValueEditor } from "./value-row.ts";
 
@@ -42,18 +43,14 @@ export class BuiltinCandidatesPane implements EditorPane {
 		this.search.reset(this.query);
 	}
 
-	private candidates(): CatalogEntry[] {
-		return matchBuiltinModels(this.query, this.host.effectiveApi(this.model.read())).map((match) => match.entry);
-	}
-
-	private tiers(): ReturnType<typeof matchBuiltinModels> {
+	private candidates(): ReturnType<typeof matchBuiltinModels> {
 		return matchBuiltinModels(this.query, this.host.effectiveApi(this.model.read()));
 	}
 
 	render(width: number): string[] {
 		const theme = this.host.theme;
 		const lines: string[] = [this.search.renderLine(width)];
-		const matches = this.tiers();
+		const matches = this.candidates();
 		if (matches.length === 0) {
 			lines.push(renderInfoLine(theme, "No builtin candidates — keep configuring manually.", width));
 		}
@@ -84,7 +81,7 @@ export class BuiltinCandidatesPane implements EditorPane {
 	}
 
 	private pickCurrent(): void {
-		const entry = this.candidates()[this.index];
+		const entry = this.candidates()[this.index]?.entry;
 		if (!entry) return;
 		this.host.pushPane(new BuiltinPreviewPane(this.host, this.model, entry));
 	}
@@ -92,13 +89,9 @@ export class BuiltinCandidatesPane implements EditorPane {
 	handleInput(data: string): void {
 		const kb = this.host.keybindings;
 		const count = this.candidates().length;
-		if (kb.matches(data, "tui.select.up")) {
-			if (count > 0) this.index = this.index === 0 ? count - 1 : this.index - 1;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.down")) {
-			if (count > 0) this.index = (this.index + 1) % count;
+		const next = moveSelection(kb, data, this.index, count);
+		if (next !== undefined) {
+			this.index = next;
 			this.host.refresh();
 			return;
 		}
@@ -219,13 +212,9 @@ export class BuiltinPreviewPane implements EditorPane {
 
 	handleInput(data: string): void {
 		const kb = this.host.keybindings;
-		if (kb.matches(data, "tui.select.up")) {
-			this.index = this.index === 0 ? this.rowCount() - 1 : this.index - 1;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.down")) {
-			this.index = (this.index + 1) % this.rowCount();
+		const next = moveSelection(kb, data, this.index, this.rowCount());
+		if (next !== undefined) {
+			this.index = next;
 			this.host.refresh();
 			return;
 		}
@@ -279,70 +268,17 @@ export class BuiltinPreviewPane implements EditorPane {
 			this.host.popPane();
 			return;
 		}
-		this.host.store.batch(() => {
-			for (const change of chosen) this.applyChange(change.field);
+		this.host.edits.batch(() => {
+			for (const change of chosen) {
+				for (const patch of change.patches) this.model.setField(patch.path, patch.value);
+			}
 		});
-		this.host.refresher.touch(this.host.providerId);
 		this.host.notify(
 			`Applied ${chosen.length} field${chosen.length === 1 ? "" : "s"} from ${this.reference.providerId} / ${this.reference.model.id}.`,
 			"info",
 		);
 		this.host.popPane(); // preview
 		this.host.popPane(); // candidates → back to the model fields
-	}
-
-	private applyChange(field: FieldChange["field"]): void {
-		const reference = this.reference.model;
-		const current = this.model.read();
-		switch (field) {
-			case "name":
-				this.model.setField(["name"], reference.name);
-				return;
-			case "reasoning":
-				this.model.setField(["reasoning"], reference.reasoning);
-				return;
-			case "input":
-				this.model.setField(["input"], [...reference.input]);
-				return;
-			case "contextWindow":
-				this.model.setField(["contextWindow"], reference.contextWindow);
-				return;
-			case "maxTokens":
-				this.model.setField(["maxTokens"], reference.maxTokens);
-				return;
-			case "thinkingLevelMap":
-				for (const [level, target] of Object.entries(reference.thinkingLevelMap ?? {})) {
-					this.model.setField(["thinkingLevelMap", level], target);
-				}
-				return;
-			case "compat":
-				for (const [key, value] of Object.entries(reference.compat ?? {})) {
-					if (
-						["chatTemplateKwargs", "chatTemplateArgs", "openRouterRouting", "vercelGatewayRouting"].includes(
-							key,
-						) &&
-						value !== null &&
-						typeof value === "object" &&
-						!Array.isArray(value)
-					) {
-						for (const [entryKey, entryValue] of Object.entries(value))
-							this.model.setField(["compat", key, entryKey], structuredClone(entryValue));
-					} else this.model.setField(["compat", key], structuredClone(value));
-				}
-				return;
-			case "cost": {
-				const rates = {
-					input: reference.cost.input,
-					output: reference.cost.output,
-					cacheRead: reference.cost.cacheRead,
-					cacheWrite: reference.cost.cacheWrite,
-				};
-				if (current.cost) {
-					for (const [rate, value] of Object.entries(rates)) this.model.setField(["cost", rate], value);
-				} else this.model.setField(["cost"], rates);
-				return;
-			}
-		}
 	}
 
 	setFocused(focused: boolean): void {

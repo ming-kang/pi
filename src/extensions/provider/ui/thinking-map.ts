@@ -4,6 +4,7 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { THINKING_LEVELS, truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
+import { moveSelection } from "./controls.ts";
 import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
 import { renderInfoLine, renderKeyValueLine, renderPlainLine, ValueEditor } from "./value-row.ts";
 
@@ -126,7 +127,7 @@ export class ThinkingMapPane implements EditorPane {
 							this.error = undefined;
 							this.mode = { type: "levels" };
 							this.editor = undefined;
-							this.host.mutate(() => this.model.setField(["thinkingLevelMap", level], target));
+							this.model.setField(["thinkingLevelMap", level], target);
 						},
 						onCancel: () => {
 							this.editor = undefined;
@@ -143,19 +144,15 @@ export class ThinkingMapPane implements EditorPane {
 					return;
 				}
 				this.mode = { type: "levels" };
-				this.host.mutate(() => this.model.setField(["thinkingLevelMap", level], index === 1 ? null : DELETE));
+				this.model.setField(["thinkingLevelMap", level], index === 1 ? null : DELETE);
 				return;
 			}
 			return;
 		}
 		// levels
-		if (kb.matches(data, "tui.select.up")) {
-			this.index = this.index === 0 ? THINKING_LEVELS.length - 1 : this.index - 1;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.down")) {
-			this.index = (this.index + 1) % THINKING_LEVELS.length;
+		const next = moveSelection(kb, data, this.index, THINKING_LEVELS.length);
+		if (next !== undefined) {
+			this.index = next;
 			this.host.refresh();
 			return;
 		}

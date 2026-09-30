@@ -4,6 +4,7 @@ import type { ModelRuntime } from "../../core/model-runtime.ts";
 import { raceWithAbortSignal } from "../../utils/abort.ts";
 import { effectiveModelSettings } from "./configuration.ts";
 import { formatError, PROBE_LIMITS } from "./constants.ts";
+import type { ProviderEdits } from "./editing.ts";
 import { type ProbeModel, type ProbeResult, probeProviderModels } from "./probe.ts";
 import type { RefreshCoordinator } from "./refresh.ts";
 import type { ModelsJsonStore } from "./store.ts";
@@ -63,7 +64,7 @@ export async function fetchProviderModels(
 }
 
 export async function importProviderModels(
-	options: ProviderConnectionOptions,
+	options: ProviderConnectionOptions & { edits: Pick<ProviderEdits, "addModels"> },
 	models: readonly ProbeModel[],
 	signal: AbortSignal,
 ): Promise<string | undefined> {
@@ -81,10 +82,7 @@ export async function importProviderModels(
 	});
 	if (fresh.length === 0) return undefined;
 	signal.throwIfAborted();
-	store.batch(() => {
-		for (const model of fresh) store.addModel(providerId, model);
-	});
-	refresher.touch(providerId);
+	options.edits.addModels(fresh);
 	// These edits were confirmed. Finish the write even if the originating pane closes.
 	await store.flush();
 	const saveError = store.getPendingError(providerId);
