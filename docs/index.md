@@ -16,7 +16,8 @@ A task-oriented map for the installed package.
 
 ## Bundled package features
 
-- [Bundled features overview](bundled/README.md) — the complete shipped-feature and extension catalog.
+- [Bundled features overview](bundled/README.md) — upstream Pi features and distribution-maintained additions.
+- [llama.cpp](llama-cpp.md), [Codemode](usage.md#enable-codemode), [MCP](mcp.md), and [Tool search](usage.md#tool-search) — official upstream extensions included in this package.
 
 ## Customize and integrate
 

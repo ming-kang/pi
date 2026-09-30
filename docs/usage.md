@@ -38,6 +38,7 @@ Type `/` in the editor to open command completion. Extensions can register custo
 |---------|-------------|
 | `/login`, `/logout` | Manage OAuth or API-key credentials |
 | [`/llama`](llama-cpp.md) | Download, load, and unload llama.cpp router models |
+| [`/mcp`](mcp.md) | Manage MCP servers, authentication, tools, and resources |
 | [`/btw [question]`](bundled/extensions/btw.md) | Open a temporary side conversation using the current context |
 | `/model` | Switch models; Ctrl+S in the picker saves the startup default |
 | `/thinking` | Switch thinking level; Ctrl+S in the picker saves the startup default |
@@ -219,8 +220,8 @@ Built-in tools: `read`, `bash`, `powershell` (Windows), `edit`, `write`, `grep`,
 
 | Option | Description |
 |--------|-------------|
-| `-e`, `--extension <source>` | Load an extension from path, npm, or git; repeatable |
-| `--no-extensions` | Disable extension discovery |
+| `-e`, `--extension <source>` | Load an extension from path, npm, git, or `builtin:<name>`; repeatable |
+| `--no-extensions` | Disable discovered, configured, and built-in extensions; explicit `-e` entries still load |
 | `--skill <path>` | Load a skill; repeatable |
 | `--no-skills` | Disable skill discovery |
 | `--prompt-template <path>` | Load a prompt template; repeatable |
@@ -305,9 +306,13 @@ pi --exclude-tools ask_question
 
 Pi keeps the core small and pushes workflow-specific behavior into extensions, skills, prompt templates, and packages.
 
-This distribution ships selected workflows as hidden built-in extensions, including sub-agents, to-dos, and background bash tasks. It does not include built-in MCP or permission popups. You can build or install additional workflows as extensions or packages, or use external tools such as containers and tmux.
+Upstream Pi provides the llama.cpp integration, codemode, MCP, and tool search. This distribution adds Tasks, BTW, Todo, other workflow extensions, and its native tool presentation. See the [feature catalog](bundled/README.md) for their origins and usage. You can build or install additional workflows as extensions or packages.
 
 For the full rationale, read the [blog post](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/).
+
+## Codemode and tool search
+
+Codemode and tool search are built-in extensions from [upstream Pi](https://github.com/earendil-works/pi), included in `@astralyn/pi`. Both tools are inactive by default; enable them explicitly or let the MCP extension activate them when needed.
 
 ### Enable codemode
 

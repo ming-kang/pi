@@ -1,6 +1,6 @@
 # Pi
 
-`@astralyn/pi` is a standalone terminal coding agent for work in your projects. It runs locally and supports TypeScript extensions, skills, prompt templates, themes, and pi packages.
+`@astralyn/pi` is a standalone distribution of [upstream Pi](https://github.com/earendil-works/pi), a terminal coding agent for work in your projects. It runs locally and supports TypeScript extensions, skills, prompt templates, themes, and pi packages.
 
 ## Install
 
@@ -16,7 +16,7 @@ Run `pi` in a project directory. For authentication, uninstalling, and a first s
 
 Pi provides interactive and one-shot coding workflows, persistent sessions and context compaction, native tool presentation, and customization through its public extension API. Built-in execution uses Bash by default, with an optional native PowerShell tool on Windows. The installed package also includes bundled workflows, themes, and local-model support.
 
-See the [bundled features overview](docs/bundled/README.md) for the complete shipped-feature and extension catalog.
+The llama.cpp integration, codemode, MCP, and tool search come from upstream Pi. See the [bundled features overview](docs/bundled/README.md) for the shipped-feature catalog and the additions maintained by this distribution.
 
 ## Use and customize
 

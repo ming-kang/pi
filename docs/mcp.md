@@ -1,6 +1,6 @@
 # MCP Servers
 
-Pi connects to [Model Context Protocol](https://modelcontextprotocol.io) servers over stdio or streamable HTTP and makes their tools available to the model.
+The MCP integration is provided by [upstream Pi](https://github.com/earendil-works/pi) and included in `@astralyn/pi`. It connects to [Model Context Protocol](https://modelcontextprotocol.io) servers over stdio or streamable HTTP and makes their tools available to the model.
 
 ## Configure servers
 

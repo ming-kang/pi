@@ -1,6 +1,6 @@
 # llama.cpp
 
-Pi supports the [llama.cpp](https://github.com/ggml-org/llama.cpp) router server. The router discovers multiple GGUF models and loads or unloads them on demand.
+The llama.cpp integration is provided by [upstream Pi](https://github.com/earendil-works/pi) and included in `@astralyn/pi`. It supports the [llama.cpp](https://github.com/ggml-org/llama.cpp) router server, which discovers multiple GGUF models and loads or unloads them on demand.
 
 Use a current llama.cpp build with router support. Follow the [build instructions](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md) or install a [prebuilt release](https://github.com/ggml-org/llama.cpp/releases) for your platform.
 
