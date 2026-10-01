@@ -1,5 +1,4 @@
 import "./keybindings.ts";
-import type { Usage } from "@earendil-works/pi-ai";
 import {
 	type Component,
 	Markdown,
@@ -11,20 +10,18 @@ import {
 } from "@earendil-works/pi-tui";
 import { keyLabel } from "../../modes/interactive/components/keybinding-hints.ts";
 import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
-import type { BtwTurn } from "./agent.ts";
+import type { BtwConversationState, BtwTurn } from "./agent.ts";
 
-export interface BtwPanelState {
-	phase: "opening" | "ready" | "error";
-	error?: string;
-	capturedAt?: number;
-	model?: string;
-	busy: boolean;
-	turns: readonly BtwTurn[];
-	usage?: Usage;
-	latestCacheHitPercent?: number;
-	usesSubscription?: boolean;
-	blockedTools: number;
-}
+export type BtwPanelState<Conversation extends BtwConversationState = Readonly<BtwConversationState>> =
+	| { phase: "opening" }
+	| { phase: "error"; error: string }
+	| {
+			phase: "ready";
+			capturedAt: number;
+			model: string;
+			usesSubscription: boolean;
+			conversation: Conversation;
+	  };
 
 function tokens(value: number): string {
 	if (value < 1000) return String(value);
@@ -39,7 +36,7 @@ export class BtwPanel implements Component {
 	private readonly tui: Pick<TUI, "terminal" | "requestRender">;
 	private readonly getTheme: () => Theme;
 	private readonly getState: () => BtwPanelState;
-	private readonly answers = new Map<BtwTurn, Markdown>();
+	private readonly answers = new Map<BtwTurn, { text: string; markdown: Markdown }>();
 	private follow = true;
 	private offset = 0;
 	private maxOffset = 0;
@@ -60,13 +57,15 @@ export class BtwPanel implements Component {
 	changed(): void {
 		if (this.disposed) return;
 		this.tui.requestRender();
-		if (this.getState().busy && !this.timer) {
+		const state = this.getState();
+		const busy = state.phase === "ready" && state.conversation.busy;
+		if (busy && !this.timer) {
 			this.timer = setTimeout(() => {
 				this.timer = undefined;
 				this.changed();
 			}, 150);
 			this.timer.unref?.();
-		} else if (!this.getState().busy && this.timer) {
+		} else if (!busy && this.timer) {
 			clearTimeout(this.timer);
 			this.timer = undefined;
 		}
@@ -95,12 +94,13 @@ export class BtwPanel implements Component {
 	render(width: number): string[] {
 		if (this.disposed || width < 1) return [];
 		const state = this.getState();
+		const busy = state.phase === "ready" && state.conversation.busy;
 		const theme = this.getTheme();
 		const innerWidth = Math.max(1, width - 4);
 		const lines = this.body(state, innerWidth, theme);
 		const cap = Math.max(1, Math.floor(this.tui.terminal.rows / 3) - 2);
 		const needed = Math.min(cap, Math.max(1, lines.length));
-		this.heldHeight = state.busy ? Math.min(cap, Math.max(this.heldHeight, needed)) : needed;
+		this.heldHeight = busy ? Math.min(cap, Math.max(this.heldHeight, needed)) : needed;
 		this.maxOffset = Math.max(0, lines.length - this.heldHeight);
 		this.offset = this.follow ? this.maxOffset : Math.min(this.offset, this.maxOffset);
 		const body = lines.slice(this.offset, this.offset + this.heldHeight);
@@ -110,7 +110,7 @@ export class BtwPanel implements Component {
 		const title = [
 			theme.fg("accent", theme.bold("BTW")),
 			close && theme.fg("text", close) + theme.fg("muted", " close"),
-			state.busy && cancel && theme.fg("text", cancel) + theme.fg("muted", " stop"),
+			busy && cancel && theme.fg("text", cancel) + theme.fg("muted", " stop"),
 		]
 			.filter(Boolean)
 			.join(theme.fg("muted", " · "));
@@ -130,15 +130,14 @@ export class BtwPanel implements Component {
 
 	private body(state: BtwPanelState, width: number, theme: Theme): string[] {
 		if (state.phase === "opening") return [theme.fg("muted", "Capturing context…")];
-		if (state.phase === "error")
-			return new Text(theme.fg("error", state.error ?? "Could not open BTW."), 0, 0).render(width);
-		if (!state.turns.length) {
+		if (state.phase === "error") return new Text(theme.fg("error", state.error), 0, 0).render(width);
+		if (!state.conversation.turns.length) {
 			return [
 				...new Text(theme.fg("text", "Ask a side question in the editor below."), 0, 0).render(width),
 				...new Text(
 					theme.fg(
 						"muted",
-						`Context at ${new Date(state.capturedAt ?? Date.now()).toTimeString().slice(0, 8)} · ${state.model ?? ""}`,
+						`Context at ${new Date(state.capturedAt).toTimeString().slice(0, 8)} · ${state.model}`,
 					),
 					0,
 					0,
@@ -146,7 +145,7 @@ export class BtwPanel implements Component {
 			];
 		}
 		const lines: string[] = [];
-		for (const [index, turn] of state.turns.entries()) {
+		for (const [index, turn] of state.conversation.turns.entries()) {
 			if (index > 0) lines.push("");
 			lines.push(
 				...new Text(
@@ -156,14 +155,20 @@ export class BtwPanel implements Component {
 				).render(width),
 			);
 			if (turn.answer) {
-				let markdown = this.answers.get(turn);
-				if (!markdown) {
-					markdown = new Markdown(turn.answer, 0, 0, getMarkdownTheme(), {
-						color: (text) => theme.fg("text", text),
-					});
-					this.answers.set(turn, markdown);
-				} else markdown.setText(turn.answer);
-				lines.push(...markdown.render(width));
+				let answer = this.answers.get(turn);
+				if (!answer) {
+					answer = {
+						text: turn.answer,
+						markdown: new Markdown(turn.answer, 0, 0, getMarkdownTheme(), {
+							color: (text) => theme.fg("text", text),
+						}),
+					};
+					this.answers.set(turn, answer);
+				} else if (answer.text !== turn.answer) {
+					answer.text = turn.answer;
+					answer.markdown.setText(turn.answer);
+				}
+				lines.push(...answer.markdown.render(width));
 			} else if (turn.thinking && (turn.status === "streaming" || turn.status === "cancelling")) {
 				lines.push(...wrapTextWithAnsi(theme.fg("muted", turn.thinking.trimEnd()), width).slice(-2));
 			}
@@ -191,24 +196,26 @@ export class BtwPanel implements Component {
 					value(`${this.offset + 1}–${this.offset + this.heldHeight}/${this.maxOffset + this.heldHeight}`),
 			);
 		}
-		const usage = state.usage;
-		if (usage) {
+		if (state.phase === "ready") {
+			const { conversation } = state;
+			const { usage } = conversation;
 			const stats: string[] = [];
 			if (usage.input > 0) stats.push(`↑${tokens(usage.input)}`);
 			if (usage.output > 0) stats.push(`↓${tokens(usage.output)}`);
 			if (usage.cacheRead > 0) stats.push(`R${tokens(usage.cacheRead)}`);
 			if (usage.cacheWrite > 0) stats.push(`W${tokens(usage.cacheWrite)}`);
-			if (state.latestCacheHitPercent !== undefined) stats.push(`CH${state.latestCacheHitPercent.toFixed(1)}%`);
+			if (conversation.latestCacheHitPercent !== undefined)
+				stats.push(`CH${conversation.latestCacheHitPercent.toFixed(1)}%`);
 			if (usage.cost.total > 0)
 				stats.push(`$${usage.cost.total.toFixed(3)}${state.usesSubscription ? " (sub)" : ""}`);
 			if (stats.length) parts.push(value(stats.join(" ")));
-		}
-		if (state.blockedTools) parts.push(value(String(state.blockedTools)) + label(" tools blocked"));
-		const turn = state.turns.at(-1);
-		if (turn && !state.busy) {
-			parts.push(value(`${(turn.elapsedMs / 1000).toFixed(1)}s`));
-			if (turn.firstAnswerMs !== undefined)
-				parts.push(label("first ") + value(`${(turn.firstAnswerMs / 1000).toFixed(1)}s`));
+			if (conversation.blockedTools) parts.push(value(String(conversation.blockedTools)) + label(" tools blocked"));
+			const turn = conversation.turns.at(-1);
+			if (turn && !conversation.busy) {
+				parts.push(value(`${(turn.elapsedMs / 1000).toFixed(1)}s`));
+				if (turn.firstAnswerMs !== undefined)
+					parts.push(label("first ") + value(`${(turn.firstAnswerMs / 1000).toFixed(1)}s`));
+			}
 		}
 		return parts.join(label(" · "));
 	}

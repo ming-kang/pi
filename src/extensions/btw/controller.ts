@@ -7,9 +7,8 @@ import { BtwPanel, type BtwPanelState } from "./panel.ts";
 
 interface Conversation {
 	ctx: ExtensionContext;
-	state: BtwPanelState;
+	state: BtwPanelState<BtwAgent>;
 	panel?: BtwPanel;
-	agent?: BtwAgent;
 	unsubscribeKeys?: () => void;
 }
 
@@ -27,7 +26,7 @@ export class BtwController {
 		ctx.ui.setEditorText("");
 		const conversation: Conversation = {
 			ctx,
-			state: { phase: "opening", busy: false, turns: [], blockedTools: 0 },
+			state: { phase: "opening" },
 		};
 		this.current = conversation;
 		try {
@@ -49,26 +48,25 @@ export class BtwController {
 			conversation.unsubscribeKeys = editorHost.onInput((data) => this.handleKey(conversation, data));
 			const snapshot = await pendingSnapshot;
 			if (this.current !== conversation) return;
-			conversation.agent = new BtwAgent(snapshot, ctx.modelRuntime, () => this.refresh(conversation));
+			const usesSubscription = ctx.modelRegistry.isUsingOAuth(snapshot.model);
 			conversation.state = {
 				phase: "ready",
 				capturedAt: snapshot.capturedAt,
 				model: `${snapshot.model.provider}/${snapshot.model.id}`,
-				busy: false,
-				turns: conversation.agent.turns,
-				usage: conversation.agent.usage,
-				usesSubscription: ctx.modelRegistry.isUsingOAuth(snapshot.model),
-				blockedTools: 0,
+				usesSubscription,
+				conversation: new BtwAgent(snapshot, ctx.modelRuntime, () => {
+					if (this.current === conversation) conversation.panel?.changed();
+				}),
 			};
-			this.refresh(conversation);
+			conversation.panel?.changed();
 			if (question.trim()) {
-				const result = this.submit(question.trim());
-				if (result?.editorText && !ctx.ui.getEditorText()) ctx.ui.setEditorText(result.editorText);
+				const result = this.submit(conversation, question.trim());
+				if (result.editorText && !ctx.ui.getEditorText()) ctx.ui.setEditorText(result.editorText);
 			}
 		} catch (error) {
 			if (this.current !== conversation) return;
-			conversation.state.phase = "error";
-			conversation.state.error = error instanceof Error ? error.message : String(error);
+			if (conversation.state.phase === "ready") conversation.state.conversation.dispose();
+			conversation.state = { phase: "error", error: error instanceof Error ? error.message : String(error) };
 			conversation.panel?.changed();
 			if (question && !ctx.ui.getEditorText()) ctx.ui.setEditorText(question);
 		}
@@ -81,7 +79,7 @@ export class BtwController {
 			return { handled: true };
 		}
 		if (!this.current || event.kind !== "prompt") return undefined;
-		return this.submit(event.text);
+		return this.submit(this.current, event.text);
 	}
 
 	close(): void {
@@ -90,37 +88,29 @@ export class BtwController {
 		this.current = undefined;
 		conversation.unsubscribeKeys?.();
 		conversation.panel?.dispose();
-		conversation.agent?.dispose();
+		if (conversation.state.phase === "ready") conversation.state.conversation.dispose();
 		conversation.ctx.ui.setWidget(BTW_WIDGET, undefined);
 		// The open panel owns the editor draft; never hand it back to the main conversation.
 		conversation.ctx.ui.setEditorText("");
 	}
 
-	private submit(text: string): { handled: true; editorText?: string } | undefined {
-		const conversation = this.current;
-		if (!conversation) return undefined;
-		const error =
-			conversation.agent?.validate(text) ??
-			(conversation.agent ? undefined : "BTW is not ready. Reopen /btw if context preparation failed.");
-		if (error) {
-			conversation.ctx.ui.notify(error, "warning");
+	private submit(conversation: Conversation, text: string): { handled: true; editorText?: string } {
+		const { state } = conversation;
+		const result =
+			state.phase === "ready"
+				? state.conversation.startQuestion(text)
+				: { error: "BTW is not ready. Reopen /btw if context preparation failed." };
+		if ("error" in result) {
+			conversation.ctx.ui.notify(result.error, "warning");
 			return { handled: true, editorText: text };
 		}
 		conversation.panel?.followTail();
-		void conversation.agent!.ask(text).catch((error: unknown) => {
+		void result.completion.catch((error: unknown) => {
 			if (this.current !== conversation) return;
 			conversation.ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 			if (!conversation.ctx.ui.getEditorText()) conversation.ctx.ui.setEditorText(text);
 		});
 		return { handled: true };
-	}
-
-	private refresh(conversation: Conversation): void {
-		if (this.current !== conversation) return;
-		conversation.state.busy = conversation.agent?.busy ?? false;
-		conversation.state.blockedTools = conversation.agent?.blockedTools ?? 0;
-		conversation.state.latestCacheHitPercent = conversation.agent?.latestCacheHitPercent;
-		conversation.panel?.changed();
 	}
 
 	private handleKey(conversation: Conversation, data: string): { consume: true } | undefined {
@@ -131,7 +121,8 @@ export class BtwController {
 			return { consume: true };
 		}
 		if (keys.matches(data, "app.btw.cancel")) {
-			if (conversation.agent?.busy) conversation.agent.cancel();
+			if (conversation.state.phase === "ready" && conversation.state.conversation.busy)
+				conversation.state.conversation.cancel();
 			else this.close();
 			return { consume: true };
 		}

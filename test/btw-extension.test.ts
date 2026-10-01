@@ -313,4 +313,47 @@ describe("BTW extension lifecycle and persistence", () => {
 		expect(view.key("\x0b")).toBe(true);
 		expect(view.widget).toBeUndefined();
 	});
+
+	it("preserves drafts after snapshot failure and ignores an old failure after reopening", async () => {
+		const captures: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
+		const fixture = await createBtwTestSession({
+			extensions: [btwExtension],
+			stream: () => btwDone(btwResponse("recovered answer")),
+		});
+		const snapshot = await fixture.session.getContextSnapshot();
+		const captureSnapshot = vi.spyOn(fixture.session, "getContextSnapshot").mockImplementation(
+			() =>
+				new Promise((resolve, reject) => {
+					captures.push({ resolve: () => resolve(snapshot), reject });
+				}),
+		);
+		const view = await bindUi(fixture);
+		cleanups.push(async () => {
+			await fixture.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+			for (const capture of captures) capture.resolve();
+			captureSnapshot.mockRestore();
+			await fixture.cleanup();
+		});
+		view.submit("/btw first question", "command");
+		await vi.waitFor(() => expect(captures).toHaveLength(1));
+		captures[0].reject(new Error("snapshot unavailable"));
+		await vi.waitFor(() => expect(view.text).toContain("snapshot unavailable"));
+		expect(view.editorText).toBe("first question");
+		expect(view.submit("draft after failure")).toBe(true);
+		expect(view.editorText).toBe("draft after failure");
+
+		view.submit("/btw old question", "command");
+		await vi.waitFor(() => expect(captures).toHaveLength(2));
+		view.submit("/btw", "command");
+		await vi.waitFor(() => expect(captures).toHaveLength(3));
+		view.ui.setEditorText("new draft");
+		captures[1].reject(new Error("old snapshot failure"));
+		captures[2].resolve();
+		await vi.waitFor(() => expect(view.text).toContain("Ask a side question"));
+		expect(view.text).not.toContain("old snapshot failure");
+		expect(view.editorText).toBe("new draft");
+		expect(view.keyHandlers.size).toBe(1);
+		view.submit("recovered question");
+		await vi.waitFor(() => expect(view.text).toContain("recovered answer"));
+	});
 });

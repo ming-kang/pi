@@ -5,7 +5,7 @@ import { streamSimple as completions } from "@earendil-works/pi-ai/api/openai-co
 import { streamSimple as responses } from "@earendil-works/pi-ai/api/openai-responses";
 import { describe, expect, it, vi } from "vitest";
 import { BtwAgent } from "../src/extensions/btw/agent.ts";
-import { btwModel, btwSnapshot } from "./helpers/btw.ts";
+import { btwAsk, btwModel, btwSnapshot } from "./helpers/btw.ts";
 
 function withoutCacheMarkers(value: unknown): unknown {
 	if (Array.isArray(value)) return value.map(withoutCacheMarkers);
@@ -102,7 +102,7 @@ describe("BTW published provider payloads", () => {
 				{ ...snapshot.streamOptions, reasoning: "high" },
 			).result();
 			const side = new BtwAgent(snapshot, { streamSimple: capture }, () => {});
-			await side.ask("A side question");
+			await btwAsk(side, "A side question");
 			expect(payloads).toHaveLength(2);
 			const [mainPayload, sidePayload] = payloads;
 			expect(sidePayload.tools).toEqual(mainPayload.tools);

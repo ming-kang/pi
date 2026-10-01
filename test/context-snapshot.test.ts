@@ -3,7 +3,7 @@ import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import { type TObject, Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BtwAgent } from "../src/extensions/btw/agent.ts";
-import { btwDone, btwModel, btwPending, btwResponse } from "./helpers/btw.ts";
+import { btwAsk, btwDone, btwModel, btwPending, btwResponse } from "./helpers/btw.ts";
 import { createBtwTestSession } from "./helpers/btw-session.ts";
 
 // Prompt images are normalized before they enter history; keep the test payload as-is so the
@@ -90,7 +90,7 @@ describe("SDK context snapshots", () => {
 		expect(Object.keys((snapshot.tools[0].parameters as TObject).properties)).toEqual(["z", "a"]);
 		expect(snapshot.systemPrompt).toBe(requests[0].systemPrompt);
 		const side = new BtwAgent(snapshot, fixture.modelRuntime, () => {});
-		await side.ask("side question");
+		await btwAsk(side, "side question");
 		expect(requests[1].messages.slice(0, requests[0].messages.length)).toEqual(requests[0].messages);
 		expect(contexts).toBe(1);
 		expect(execute).not.toHaveBeenCalled();

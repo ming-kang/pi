@@ -31,6 +31,21 @@ export interface BtwTurn {
 	firstAnswerMs?: number;
 }
 
+export interface BtwConversationState {
+	busy: boolean;
+	turns: readonly BtwTurn[];
+	usage: Usage;
+	latestCacheHitPercent: number | undefined;
+	blockedTools: number;
+}
+
+interface ActiveQuestion {
+	turn: BtwTurn;
+	steps: number;
+	completedAnswer: string;
+	responseChars: number;
+}
+
 function emptyUsage(): Usage {
 	return {
 		input: 0,
@@ -47,7 +62,7 @@ function displayText(text: string): string {
 }
 
 /** An in-memory native Agent. No SessionManager, real tool executors, or main-agent signal. */
-export class BtwAgent {
+export class BtwAgent implements BtwConversationState {
 	readonly turns: BtwTurn[] = [];
 	readonly usage = emptyUsage();
 	latestCacheHitPercent: number | undefined;
@@ -56,11 +71,8 @@ export class BtwAgent {
 	private readonly unsubscribe: () => void;
 	private readonly onChange: () => void;
 	private readonly inputBudget: number;
-	private running = false;
+	private active?: ActiveQuestion;
 	private disposed = false;
-	private steps = 0;
-	private completedAnswer = "";
-	private responseChars = 0;
 
 	constructor(snapshot: ContextSnapshot, runtime: Pick<Models, "streamSimple">, onChange: () => void) {
 		this.onChange = onChange;
@@ -99,19 +111,18 @@ export class BtwAgent {
 				runtime.streamSimple(model, context, { ...snapshot.streamOptions, ...options }),
 			beforeToolCall: async () => ({ block: true, reason: TOOL_DENIAL }),
 			finishTurn: ({ message, toolResults, context }): AgentTurnDecision | undefined => {
+				const question = this.active;
 				// Error and aborted responses are hard exits; the step budget only counts answered turns.
-				if (message.stopReason === "error" || message.stopReason === "aborted") return undefined;
-				this.steps++;
+				if (!question || this.disposed || message.stopReason === "error" || message.stopReason === "aborted")
+					return undefined;
+				question.steps++;
 				if (!toolResults.length) return undefined;
-				if (this.steps >= MAX_MODEL_STEPS || !this.fits(context.messages)) {
-					const turn = this.turns.at(-1);
-					if (turn) {
-						turn.status = "error";
-						turn.notice =
-							this.steps >= MAX_MODEL_STEPS
-								? "Stopped after repeated tool requests. BTW can only answer from its snapshot."
-								: "Context limit reached. Reopen /btw for a new conversation.";
-					}
+				if (question.steps >= MAX_MODEL_STEPS || !this.fits(context.messages)) {
+					question.turn.status = "error";
+					question.turn.notice =
+						question.steps >= MAX_MODEL_STEPS
+							? "Stopped after repeated tool requests. BTW can only answer from its snapshot."
+							: "Context limit reached. Reopen /btw for a new conversation.";
 					return { action: "end" };
 				}
 				return undefined;
@@ -121,11 +132,10 @@ export class BtwAgent {
 	}
 
 	get busy(): boolean {
-		return this.running;
+		return this.active !== undefined;
 	}
 
-	/** A rejected submission stays in the editor and never enters either agent's queue. */
-	validate(text: string): string | undefined {
+	private validate(text: string): string | undefined {
 		if (this.disposed) return "This BTW conversation is closed.";
 		if (this.busy) return "BTW is still answering. Your question is kept in the editor.";
 		if (this.turns.length >= MAX_QUESTIONS) return "BTW conversation limit reached. Reopen /btw to start a new one.";
@@ -138,25 +148,32 @@ export class BtwAgent {
 		return undefined;
 	}
 
-	async ask(text: string): Promise<void> {
+	/** Accept synchronously so a rejected question stays in the editor, outside both agents' queues. */
+	startQuestion(text: string): { error: string } | { completion: Promise<void> } {
 		const error = this.validate(text);
-		if (error) throw new Error(error);
-		this.running = true;
-		this.steps = 0;
-		this.completedAnswer = "";
-		this.responseChars = 0;
-		const turn: BtwTurn = {
-			question: text,
-			answer: "",
-			thinking: "",
-			status: "streaming",
-			startedAt: Date.now(),
-			elapsedMs: 0,
+		if (error) return { error };
+		const question: ActiveQuestion = {
+			turn: {
+				question: text,
+				answer: "",
+				thinking: "",
+				status: "streaming",
+				startedAt: Date.now(),
+				elapsedMs: 0,
+			},
+			steps: 0,
+			completedAnswer: "",
+			responseChars: 0,
 		};
-		this.turns.push(turn);
-		this.onChange();
+		this.active = question;
+		this.turns.push(question.turn);
+		return { completion: this.runQuestion(question) };
+	}
+
+	private async runQuestion({ turn }: ActiveQuestion): Promise<void> {
 		try {
-			await this.agent.prompt(text);
+			this.onChange();
+			await this.agent.prompt(turn.question);
 			if (turn.status === "streaming") {
 				turn.status = "done";
 				if (!turn.answer) turn.notice = "The model returned no answer text.";
@@ -167,7 +184,8 @@ export class BtwAgent {
 			turn.status = "error";
 			turn.notice = displayText(error instanceof Error ? error.message : String(error));
 		} finally {
-			this.running = false;
+			// Cancellation remains busy until the native Agent has fully settled.
+			this.active = undefined;
 			turn.elapsedMs = Date.now() - turn.startedAt;
 			if (this.disposed) this.agent.reset();
 			else this.onChange();
@@ -175,9 +193,8 @@ export class BtwAgent {
 	}
 
 	cancel(): void {
-		if (!this.busy || this.disposed) return;
-		const turn = this.turns.at(-1);
-		if (turn) turn.status = "cancelling";
+		if (!this.active || this.disposed) return;
+		this.active.turn.status = "cancelling";
 		this.agent.abort();
 		this.onChange();
 	}
@@ -208,49 +225,53 @@ export class BtwAgent {
 	}
 
 	private handleEvent(event: AgentEvent): void {
-		if (this.disposed) return;
-		const turn = this.turns.at(-1);
-		if (!turn) return;
-		if ((event.type === "message_update" || event.type === "message_end") && event.message.role === "assistant") {
-			const message = event.message;
-			this.updateAnswer(turn, message);
-			if (event.type === "message_end") {
-				this.completedAnswer = turn.answer;
-				this.responseChars += message.content.reduce(
-					(sum, part) =>
-						sum +
-						(part.type === "text"
-							? part.text.length
-							: part.type === "thinking"
-								? part.thinking.length
-								: JSON.stringify(part.arguments).length),
-					0,
-				);
-				this.blockedTools += message.content.filter((part) => part.type === "toolCall").length;
-				const usage = message.usage;
-				const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
-				this.latestCacheHitPercent =
-					(usage.cacheRead > 0 || usage.cacheWrite > 0) && promptTokens > 0
-						? (usage.cacheRead / promptTokens) * 100
-						: undefined;
-				for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const)
-					this.usage[key] += usage[key];
-				for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const)
-					this.usage.cost[key] += usage.cost[key];
-				if (message.stopReason === "error" || message.stopReason === "aborted") {
-					turn.status = message.stopReason === "aborted" ? "cancelled" : "error";
-					turn.notice ??=
-						message.stopReason === "aborted"
-							? "Stopped. You can ask another question."
-							: displayText(message.errorMessage ?? "The request failed.");
-				}
+		const question = this.active;
+		if (
+			this.disposed ||
+			!question ||
+			(event.type !== "message_update" && event.type !== "message_end") ||
+			event.message.role !== "assistant"
+		)
+			return;
+		const { turn } = question;
+		const message = event.message;
+		this.updateAnswer(question, message);
+		if (event.type === "message_end") {
+			question.completedAnswer = turn.answer;
+			question.responseChars += message.content.reduce(
+				(sum, part) =>
+					sum +
+					(part.type === "text"
+						? part.text.length
+						: part.type === "thinking"
+							? part.thinking.length
+							: JSON.stringify(part.arguments).length),
+				0,
+			);
+			this.blockedTools += message.content.filter((part) => part.type === "toolCall").length;
+			const usage = message.usage;
+			const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+			this.latestCacheHitPercent =
+				(usage.cacheRead > 0 || usage.cacheWrite > 0) && promptTokens > 0
+					? (usage.cacheRead / promptTokens) * 100
+					: undefined;
+			for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const)
+				this.usage[key] += usage[key];
+			for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const)
+				this.usage.cost[key] += usage.cost[key];
+			if (message.stopReason === "error" || message.stopReason === "aborted") {
+				turn.status = message.stopReason === "aborted" ? "cancelled" : "error";
+				turn.notice ??=
+					message.stopReason === "aborted"
+						? "Stopped. You can ask another question."
+						: displayText(message.errorMessage ?? "The request failed.");
 			}
-			turn.elapsedMs = Date.now() - turn.startedAt;
-			this.onChange();
 		}
+		this.onChange();
 	}
 
-	private updateAnswer(turn: BtwTurn, message: AssistantMessage): void {
+	private updateAnswer(question: ActiveQuestion, message: AssistantMessage): void {
+		const { turn } = question;
 		const text = message.content
 			.filter((part) => part.type === "text")
 			.map((part) => part.text)
@@ -260,9 +281,9 @@ export class BtwAgent {
 			.map((part) => part.thinking)
 			.join("");
 		if (text && turn.firstAnswerMs === undefined) turn.firstAnswerMs = Date.now() - turn.startedAt;
-		turn.answer = displayText([this.completedAnswer, text].filter(Boolean).join("\n\n"));
+		turn.answer = displayText([question.completedAnswer, text].filter(Boolean).join("\n\n"));
 		turn.thinking = thinking.slice(-2000);
-		if (this.responseChars + JSON.stringify(message.content).length > MAX_RESPONSE_CHARS) {
+		if (question.responseChars + JSON.stringify(message.content).length > MAX_RESPONSE_CHARS) {
 			turn.notice = "Stopped at the BTW response size limit. You can ask a shorter follow-up.";
 			this.agent.abort();
 		}

@@ -8,6 +8,13 @@ import type {
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type { ContextSnapshot } from "../../src/core/extensions/index.ts";
+import type { BtwAgent } from "../../src/extensions/btw/agent.ts";
+
+export async function btwAsk(agent: BtwAgent, question: string): Promise<void> {
+	const result = agent.startQuestion(question);
+	if ("error" in result) throw new Error(result.error);
+	await result.completion;
+}
 
 export const btwModel: Model<"openai-completions"> = {
 	id: "btw-fixture",

@@ -15,11 +15,12 @@ import {
 	MAX_MODEL_STEPS,
 	MAX_QUESTION_CHARS,
 	MAX_QUESTIONS,
+	MAX_RESPONSE_CHARS,
 	TOOL_DENIAL,
 	UNKNOWN_TOOL_RESULT,
 } from "../src/extensions/btw/constants.ts";
 import { createBtwMessages } from "../src/extensions/btw/snapshot.ts";
-import { type BtwRequest, btwDone, btwPending, btwResponse, btwSnapshot } from "./helpers/btw.ts";
+import { type BtwRequest, btwAsk, btwDone, btwPending, btwResponse, btwSnapshot } from "./helpers/btw.ts";
 
 /** Split the transcript back into the prompt, conversation, and tools the provider resolves. */
 function copyRequest(context: Context, options?: ModelsSimpleStreamOptions): BtwRequest {
@@ -72,10 +73,10 @@ describe("BTW native Agent", () => {
 			},
 		};
 		const side = new BtwAgent(snapshot, runtime, () => {});
-		await side.ask("first side question");
+		await btwAsk(side, "first side question");
 		// Main activity after opening cannot enter this conversation.
 		snapshot.messages.push({ role: "user", content: "later main activity", timestamp: Date.now() });
-		await side.ask("follow-up");
+		await btwAsk(side, "follow-up");
 		for (const request of requests) {
 			expect(request.context.systemPrompt).toBe(snapshot.systemPrompt);
 			expect(request.context.messages.slice(0, 2)).toEqual(before);
@@ -126,7 +127,7 @@ describe("BTW native Agent", () => {
 		};
 		const snapshot = btwSnapshot();
 		const side = new BtwAgent(snapshot, runtime, () => {});
-		await side.ask("Explain this");
+		await btwAsk(side, "Explain this");
 		expect(requests).toHaveLength(2);
 		expect(requests[1].context.messages.at(-1)).toMatchObject({
 			role: "toolResult",
@@ -156,7 +157,7 @@ describe("BTW native Agent", () => {
 			},
 			() => {},
 		);
-		await side.ask("Try tools");
+		await btwAsk(side, "Try tools");
 		expect(requests).toBe(MAX_MODEL_STEPS);
 		expect(side.turns[0].notice).toContain("repeated tool requests");
 		expect(side.busy).toBe(false);
@@ -193,18 +194,18 @@ describe("BTW native Agent", () => {
 			() => {},
 		);
 		const mainRun = main.prompt("main running");
-		const sideRun = side.ask("side running");
+		const sideRun = btwAsk(side, "side running");
 		await vi.waitFor(() => expect(sideStream).toBeDefined());
 		sideStream!.text("Partial answer");
 		await vi.waitFor(() => expect(side.turns[0].answer).toBe("Partial answer"));
 		side.cancel();
-		expect(side.validate("too early")).toContain("still answering");
+		expect(side.startQuestion("too early")).toEqual({ error: expect.stringContaining("still answering") });
 		expect(sideSignal?.aborted).toBe(true);
 		expect(mainSignal?.aborted).toBe(false);
 		expect(main.state.isStreaming).toBe(true);
 		await sideRun;
 		expect(side.turns[0]).toMatchObject({ answer: "Partial answer", status: "cancelled" });
-		await side.ask("continue side");
+		await btwAsk(side, "continue side");
 		expect(side.turns[1].answer).toBe("next answer");
 		mainStream!.finish("Main completed independently");
 		await mainRun;
@@ -217,10 +218,12 @@ describe("BTW native Agent", () => {
 	it("rejects oversized questions, full context, and excessive follow-ups before a request", async () => {
 		const streamSimple = vi.fn(() => btwDone(btwResponse("ok")));
 		const side = new BtwAgent(btwSnapshot(), { streamSimple }, () => {});
-		await expect(side.ask("x".repeat(MAX_QUESTION_CHARS + 1))).rejects.toThrow("characters");
+		expect(side.startQuestion("x".repeat(MAX_QUESTION_CHARS + 1))).toEqual({
+			error: expect.stringContaining("characters"),
+		});
 		expect(streamSimple).not.toHaveBeenCalled();
-		for (let i = 0; i < MAX_QUESTIONS; i++) await side.ask(`question ${i}`);
-		await expect(side.ask("one more")).rejects.toThrow("conversation limit");
+		for (let i = 0; i < MAX_QUESTIONS; i++) await btwAsk(side, `question ${i}`);
+		expect(side.startQuestion("one more")).toEqual({ error: expect.stringContaining("conversation limit") });
 		expect(streamSimple).toHaveBeenCalledTimes(MAX_QUESTIONS);
 		side.dispose();
 		const snapshot = btwSnapshot();
@@ -228,9 +231,81 @@ describe("BTW native Agent", () => {
 			btwResponse("context", { usage: { ...btwResponse("").usage, totalTokens: snapshot.model.contextWindow } }),
 		);
 		const full = new BtwAgent(snapshot, { streamSimple }, () => {});
-		await expect(full.ask("does not fit")).rejects.toThrow("context space");
+		expect(full.startQuestion("does not fit")).toEqual({ error: expect.stringContaining("context space") });
 		expect(streamSimple).toHaveBeenCalledTimes(MAX_QUESTIONS);
 		full.dispose();
+	});
+
+	it("keeps a cancelled question busy until an uncooperative provider settles", async () => {
+		const pending = btwPending();
+		const streamSimple = vi.fn(() => btwDone(btwResponse("follow-up answer"))).mockReturnValueOnce(pending.stream);
+		const side = new BtwAgent(btwSnapshot(), { streamSimple }, () => {});
+		const first = btwAsk(side, "first question");
+		pending.text("partial answer");
+		await vi.waitFor(() => expect(side.turns[0].answer).toBe("partial answer"));
+		side.cancel();
+		expect(side.turns[0].status).toBe("cancelling");
+		expect(side.startQuestion("too soon")).toEqual({ error: expect.stringContaining("still answering") });
+		expect(streamSimple).toHaveBeenCalledTimes(1);
+		expect(side.turns).toHaveLength(1);
+		pending.finish("partial answer");
+		await first;
+		expect(side.busy).toBe(false);
+		expect(side.turns[0]).toMatchObject({ status: "cancelled", answer: "partial answer" });
+		await btwAsk(side, "next question");
+		expect(side.turns[1]).toMatchObject({ status: "done", answer: "follow-up answer" });
+		side.dispose();
+	});
+
+	it("accumulates text and usage across tool-denial steps exactly once", async () => {
+		const first = btwResponse("", {
+			stopReason: "toolUse",
+			content: [
+				{ type: "text", text: "What the snapshot shows." },
+				{ type: "toolCall", id: "read-call", name: "read", arguments: { path: "file" } },
+			],
+		});
+		const second = btwResponse("The answer from that context.");
+		const streamSimple = vi.fn(() => btwDone(second)).mockReturnValueOnce(btwDone(first));
+		const side = new BtwAgent(btwSnapshot(), { streamSimple }, () => {});
+		await btwAsk(side, "Explain this");
+		expect(side.turns).toHaveLength(1);
+		expect(side.turns[0]).toMatchObject({
+			status: "done",
+			answer: "What the snapshot shows.\n\nThe answer from that context.",
+		});
+		expect(side.blockedTools).toBe(1);
+		expect(side.usage.totalTokens).toBe(first.usage.totalTokens + second.usage.totalTokens);
+		expect(side.usage.cost.total).toBe(first.usage.cost.total + second.usage.cost.total);
+		expect(side.latestCacheHitPercent).toBeCloseTo(71.4286, 4);
+		side.dispose();
+	});
+
+	it("stops oversized streamed responses and accepts a shorter follow-up after settlement", async () => {
+		const snapshot = btwSnapshot();
+		// Isolate the response limit from the separate inherited-context limit.
+		snapshot.model.contextWindow = 1_000_000;
+		let pending: ReturnType<typeof btwPending> | undefined;
+		let signal: AbortSignal | undefined;
+		const streamSimple: Models["streamSimple"] = (_model, _context, options) => {
+			if (pending) return btwDone(btwResponse("short answer"));
+			signal = options?.signal;
+			pending = btwPending(signal);
+			return pending.stream;
+		};
+		const side = new BtwAgent(snapshot, { streamSimple }, () => {});
+		const first = btwAsk(side, "long answer");
+		await vi.waitFor(() => expect(pending).toBeDefined());
+		pending!.text("x".repeat(MAX_RESPONSE_CHARS + 1));
+		await first;
+		expect(signal?.aborted).toBe(true);
+		expect(side.busy).toBe(false);
+		expect(side.turns[0]).toMatchObject({ status: "cancelled" });
+		expect(side.turns[0].notice).toContain("response size limit");
+		expect(side.turns[0].answer).toContain("[Display truncated]");
+		await btwAsk(side, "shorter follow-up");
+		expect(side.turns[1]).toMatchObject({ status: "done", answer: "short answer" });
+		side.dispose();
 	});
 });
 
