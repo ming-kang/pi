@@ -512,7 +512,7 @@ describe("public Background management", () => {
 			ui: { setStatus, onTerminalInput: () => () => {} },
 		} as unknown as ExtensionToolContext;
 		handlers.get("session_start")?.({}, ctx);
-		expect(setStatus).toHaveBeenLastCalledWith("background", "tasks 1 active · 0 finished");
+		expect(setStatus).toHaveBeenLastCalledWith("background", "Tasks 1 active · /tasks");
 		handlers.get("session_shutdown")?.({}, ctx);
 		expect(setStatus).toHaveBeenLastCalledWith("background", undefined);
 		const calls = setStatus.mock.calls.length;
@@ -637,7 +637,7 @@ describe("public Background management", () => {
 			// A command that finishes before the delay never shows the hint, and leaves no timer behind.
 			const quick = start("quick");
 			await vi.advanceTimersByTimeAsync(9_999);
-			expect(setStatus).toHaveBeenLastCalledWith("background", undefined);
+			expect(setStatus).toHaveBeenLastCalledWith("background", "Tasks 1 active · /tasks");
 			quick.finish();
 			await quick.outcome;
 			expect(setStatus).toHaveBeenLastCalledWith("background", undefined);
@@ -648,12 +648,12 @@ describe("public Background management", () => {
 			// A command still running at ten seconds gets the hint, and moving it clears the hint.
 			const long = start("long");
 			await vi.advanceTimersByTimeAsync(9_999);
-			expect(setStatus).toHaveBeenLastCalledWith("background", undefined);
+			expect(setStatus).toHaveBeenLastCalledWith("background", "Tasks 1 active · /tasks");
 			await vi.advanceTimersByTimeAsync(1);
-			expect(setStatus).toHaveBeenLastCalledWith("background", hint);
+			expect(setStatus).toHaveBeenLastCalledWith("background", `Tasks 1 active · /tasks · ${hint}`);
 			expect(input?.("\x02")).toEqual({ consume: true });
 			// Moved work is counted as background work and no longer needs the hint.
-			expect(setStatus).toHaveBeenLastCalledWith("background", "tasks 1 active · 0 finished");
+			expect(setStatus).toHaveBeenLastCalledWith("background", "Tasks 1 active · /tasks");
 			long.finish();
 			await long.outcome;
 

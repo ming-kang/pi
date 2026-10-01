@@ -1,10 +1,11 @@
 import { getKeybindings } from "@earendil-works/pi-tui";
 import type { ExtensionUIContext } from "../../../core/extensions/types.ts";
-import { isTaskTerminal, type TasksContext } from "../../../core/tasks/types.ts";
+import { isInlineLogTask, isTaskTerminal, type TasksContext } from "../../../core/tasks/types.ts";
 import { shellTaskView } from "../../../core/tools/renderers/shell-task.ts";
 import { TASKS_DETACH_HINT_DELAY_MS } from "../../../core/tools/tasks/constants.ts";
 import { keyLabel } from "../components/keybinding-hints.ts";
 import { TasksMenu } from "./manager.ts";
+import type { TasksPanelState } from "./model.ts";
 
 export interface TasksUI {
 	open(): Promise<void>;
@@ -13,6 +14,7 @@ export interface TasksUI {
 
 /** Host-owned task UI; it is available without loading an extension. */
 export function bindTasksUI(ctx: { tasks: TasksContext; ui: ExtensionUIContext }): TasksUI {
+	const state: TasksPanelState = { filter: "overview", tab: "output", query: "" };
 	const releaseViews = ["bash", "powershell"].map((kind) => ctx.tasks.views.register(kind, shellTaskView));
 	let unsubscribe: (() => void) | undefined;
 	let unsubscribeDetachKey: (() => void) | undefined;
@@ -25,17 +27,16 @@ export function bindTasksUI(ctx: { tasks: TasksContext; ui: ExtensionUIContext }
 			clearTimeout(hintTimer);
 			hintTimer = undefined;
 			const all = ctx.tasks.list();
-			// The counts cover backgrounded work only; foreground executions are already
-			// visible as ordinary tool rows in the transcript.
-			const tasks = all.filter((task) => task.mode === "background");
-			const running = tasks.filter((task) => !isTaskTerminal(task.status)).length;
+			const running = all.filter((task) => !isTaskTerminal(task.status)).length;
+			const recent = all.filter((task) => isTaskTerminal(task.status) && !isInlineLogTask(task)).length;
 			const parts: string[] = [];
-			if (tasks.length) parts.push(`tasks ${running} active · ${tasks.length - running} finished`);
+			if (running) parts.push(`Tasks ${running} active · /tasks`);
+			else if (recent) parts.push(`Tasks ${recent} recent background/report results · /tasks`);
 			// Teach the detach key once something has run long enough to be worth moving, and
 			// only while it can move: a stopping execution is aborted, so the key does nothing.
 			const detachKey = keyLabel("app.tasks.detach");
 			const now = Date.now();
-			const movable = all.filter(
+			const movable = (ctx.tasks.enabled ? all : []).filter(
 				(task) => task.mode === "foreground" && (task.status === "running" || task.status === "queued"),
 			);
 			const waits = movable
@@ -89,6 +90,7 @@ export function bindTasksUI(ctx: { tasks: TasksContext; ui: ExtensionUIContext }
 					};
 					closeMenu = close;
 					return new TasksMenu({
+						state,
 						tui,
 						theme,
 						keybindings,

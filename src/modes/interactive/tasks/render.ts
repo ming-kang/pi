@@ -13,12 +13,13 @@ import type {
 	ToolRenderResultOptions,
 } from "../../../core/extensions/types.ts";
 import type { CustomMessage } from "../../../core/messages.ts";
+import { formatDuration } from "../../../core/tasks/format.ts";
 import { clampWaitMs, type TasksInput } from "../../../core/tools/tasks/schema.ts";
 import type { TasksDetails, TasksNotificationDetails } from "../../../core/tools/tasks/types.ts";
 import { formatSize } from "../../../core/tools/truncate.ts";
 import { highlightCode, type Theme } from "../theme/theme.ts";
-import { commandLabel, exitSuffix, statusColor, statusGlyph } from "./task-view.ts";
-import { fileNameOf, firstCommandLine, formatDuration } from "./text.ts";
+import { commandLabel, exitSuffix, statusColor, statusGlyph, statusName } from "./task-view.ts";
+import { fileNameOf, firstCommandLine } from "./text.ts";
 
 type TasksRenderInput = Omit<TasksInput, "action"> & {
 	action?: string;
@@ -224,17 +225,19 @@ function resultSummaryLine(details: TasksDetails, theme: Theme, expanded: boolea
 				details.sliceBytes !== details.totalBytes
 					? `${details.mode} ${formatSize(details.sliceBytes)} of ${formatSize(details.totalBytes)}`
 					: formatSize(details.totalBytes);
-			return `${theme.fg("muted", "→ ")}${theme.fg("accent", details.taskId)}${theme.fg("muted", ` ${size} · ${shownPath(details.outputPath)}`)}`;
+			return `${theme.fg("muted", "→ ")}${theme.fg("accent", details.taskId)}${theme.fg("muted", `${details.status ? ` ${statusName(details.status)} ·` : ""} ${size}${details.outputPath ? ` · ${shownPath(details.outputPath)}` : ""}`)}`;
 		}
 		case "wait": {
 			if (details.timedOut) {
-				return `${theme.fg(statusColor(details.status), statusGlyph(details.status))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", ` still running · waited ${formatDuration(details.waitedMs)} · ${formatSize(details.totalBytes)}`)}`;
+				return `${theme.fg(statusColor(details.status), statusGlyph(details.status))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", ` ${statusName(details.status)} · wait ended after ${formatDuration(details.waitedMs)} · ${formatSize(details.totalBytes)}`)}`;
 			}
 			const exit = exitSuffix(details.exitCode, ", ");
-			return `${theme.fg(statusColor(details.status), statusGlyph(details.status))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", ` ${details.status}${exit} · waited ${formatDuration(details.waitedMs)} · +${formatSize(details.deltaBytes)}`)}`;
+			return `${theme.fg(statusColor(details.status), statusGlyph(details.status))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", ` ${statusName(details.status)}${exit} · waited ${formatDuration(details.waitedMs)} · +${formatSize(details.deltaBytes)}`)}`;
 		}
-		case "kill":
-			return `${theme.fg(statusColor("killed"), statusGlyph("killed"))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", details.requested === undefined ? " stopped" : details.requested ? " cancellation requested" : ` ${details.status ?? "unchanged"}`)}`;
+		case "kill": {
+			const status = details.status ?? (details.requested ? "stopping" : "killed");
+			return `${theme.fg(statusColor(status), statusGlyph(status))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", details.requested === undefined ? " stopped" : ` ${statusName(status)}${details.requested ? " · cancellation requested" : ""}`)}`;
+		}
 		case "list": {
 			const hidden = details.hidden > 0 ? ` · ${details.hidden} more finished` : "";
 			const omitted = details.foregroundOmitted ? ` · ${details.foregroundOmitted} foreground omitted` : "";

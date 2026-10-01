@@ -53,6 +53,12 @@ export class TaskViewport {
 		this.anchor = entry ? { line: entry.line, column: entry.column } : undefined;
 		this.follow = tail && direction > 0 && this.scroll === this.max;
 	}
+	jump(bottom: boolean, tail: boolean): void {
+		this.scroll = bottom ? this.max : 0;
+		const entry = this.entries[this.scroll];
+		this.anchor = entry ? { line: entry.line, column: entry.column } : undefined;
+		this.follow = bottom && tail;
+	}
 	get range(): string {
 		return `${this.entries.length ? this.start + 1 : 0}–${Math.min(this.start + this.height, this.entries.length)}/${this.entries.length}`;
 	}

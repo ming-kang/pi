@@ -4,6 +4,15 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Redesigned `/tasks` with Overview, Active and History views, retained selection across completion and reopening, searchable task labels, an output-first inspector, and full-width detail navigation on narrow terminals.
+- Added configurable task follow/top/bottom controls, selected-task backgrounding, stop confirmation and keyboard help, plus mouse selection and scrolling. The statusline counts foreground and background work; completion cards show duration, report titles and recorded exit codes.
+
+### Fixed
+
+- `tasks wait` preserves recorded shell exit codes and distinguishes a wait ending from execution timing out. Task previews show empty and unavailable output explicitly, and progress updates do not increase log polling.
+
 ### Removed
 
 - **Breaking:** Removed the bundled `todo` tool, `/todos` command, task-list widget, and Todo example extension; saved session history remains readable.

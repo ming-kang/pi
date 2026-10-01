@@ -1,24 +1,12 @@
-/**
- * background — how a task is described, everywhere.
- *
- * Every output this extension produces (four tool actions, two notification
- * renderers, the /tasks list and detail header) is the same thing: a TasksTask
- * projected into a medium. The values those projections derive — runtime, exit
- * suffix, label, glyph — live here once, so the media can differ without the
- * vocabulary drifting. Pure functions; no TUI components, no theme.
- */
+/** Human-facing status and labels shared by task views and historical transcript renderers. */
 
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { TasksTaskStatus } from "../../../core/tools/tasks/types.ts";
 import { type StatusMarkerColor, statusMarker } from "../components/status-marker.ts";
-import { firstCommandLine, formatDuration } from "./text.ts";
-/** How long a task has run, or ran. A running task has no `endedAt`, so it measures to `now`. */
-export function runtimeMs(task: { startedAt: number; endedAt?: number }, now = Date.now()): number {
-	return (task.endedAt ?? now) - task.startedAt;
-}
+import { firstCommandLine } from "./text.ts";
 
-export function runtimeLabel(task: { startedAt: number; endedAt?: number }, now = Date.now()): string {
-	return formatDuration(runtimeMs(task, now));
+export function statusName(status: string): string {
+	return status === "timeout" ? "Timed out" : status ? status[0]!.toUpperCase() + status.slice(1) : "Unknown";
 }
 
 /**

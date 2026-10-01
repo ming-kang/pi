@@ -8,12 +8,14 @@ import {
 } from "@earendil-works/pi-tui";
 import type { MessageRenderOptions } from "../../../core/extensions/types.ts";
 import type { CustomMessage } from "../../../core/messages.ts";
+import { runtimeLabel } from "../../../core/tasks/format.ts";
 import { readTaskCompletion } from "../../../core/tasks/presentation.ts";
 import type { TaskTerminalStatus } from "../../../core/tasks/types.ts";
 import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
 import { type StatusMarkerColor, statusMarker } from "../components/status-marker.ts";
 import { getMarkdownTheme, type Theme } from "../theme/theme.ts";
 import { FramedComponent } from "../tool-view/style.ts";
+import { statusName } from "./task-view.ts";
 
 const SOURCE_LIMIT = 64 * 1024;
 const CARD_ROWS = 128;
@@ -30,6 +32,9 @@ interface ItemReport {
 	truncated: boolean;
 }
 interface CompletionView {
+	title?: string;
+	duration?: string;
+	exitCode?: number | null;
 	kind?: string;
 	format?: "log" | "report";
 	status?: TaskTerminalStatus;
@@ -85,6 +90,8 @@ function completionView(message: CustomMessage<unknown>): CompletionView {
 		return { body: text, truncated: clipped };
 	}
 	const view: CompletionView = {
+		title: clean(snapshot.title),
+		duration: runtimeLabel(snapshot),
 		kind: snapshot.kind,
 		format: snapshot.format,
 		status: snapshot.status,
@@ -94,6 +101,7 @@ function completionView(message: CustomMessage<unknown>): CompletionView {
 		truncated: false,
 	};
 	if (snapshot.format === "log") {
+		view.exitCode = snapshot.exitCode;
 		view.shell = snapshot.shell === undefined ? undefined : clean(snapshot.shell);
 		view.command = snapshot.command === undefined ? undefined : clean(snapshot.command.text);
 		view.cwd = snapshot.cwd === undefined ? undefined : clean(snapshot.cwd);
@@ -123,9 +131,6 @@ function failedWorker(worker: ItemReport): boolean {
 
 function color(status: string | undefined): StatusMarkerColor {
 	return status === undefined ? "muted" : statusMarker(status).color;
-}
-function statusName(status: string): string {
-	return status === "timeout" ? "Timed out" : status ? status[0]!.toUpperCase() + status.slice(1) : "Unknown";
 }
 function shortId(id: string): string {
 	return id.replace(/^(.+)-([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, "$1-$2");
@@ -174,8 +179,9 @@ class CompletionCard implements Component {
 						: view.shell || "Shell"
 					: "Notification";
 		lines.push(
-			`${theme.fg("toolTitle", theme.bold(kind))}${theme.fg("muted", ` · Background ${status.toLowerCase()}`)}${view.id ? theme.fg("dim", ` · ${shortId(view.id)}`) : ""}`,
+			`${theme.fg("toolTitle", theme.bold(kind))}${theme.fg("muted", ` · Background ${status.toLowerCase()}${view.duration ? ` · ${view.duration}` : ""}`)}${view.id ? theme.fg("dim", ` · ${shortId(view.id)}`) : ""}`,
 		);
+		if (view.format === "report" && view.title) lines.push(theme.fg("toolOutput", view.title));
 		if (!options.expanded) {
 			if (view.command) lines.push(theme.fg("toolOutput", `$ ${view.command.split("\n")[0]}`));
 			else if (view.items)
@@ -224,7 +230,7 @@ class CompletionCard implements Component {
 				if (view.cwd) section("Directory", view.cwd, 2);
 				section(
 					view.status === "failed" || view.status === "timeout" ? "Error" : "Result",
-					view.diagnostic ?? status,
+					`${view.diagnostic ?? status}${view.exitCode !== undefined ? ` · ${view.exitCode === null ? "terminated by signal" : `exit ${view.exitCode}`}` : ""}`,
 					4,
 					false,
 					false,

@@ -63,7 +63,7 @@ describe("Tasks panel runtime integration", () => {
 		execution.finish();
 		await runtime.wait(execution.control.id);
 		await vi.waitFor(() => expect(h.frame()).toContain("Build succeeded"));
-		expect(h.frame()).toContain("No ongoing tasks.");
+		expect(h.frame()).toContain("Recent results");
 		expect(runtime.pendingNotifications()).toMatchObject([{ id: execution.control.id }]);
 		runtime.markDelivered(execution.control.id);
 		expect(runtime.get(execution.control.id).status).toBe("completed");
@@ -82,7 +82,7 @@ describe("Tasks panel runtime integration", () => {
 		execution.finish();
 		await execution.outcome;
 		await vi.waitFor(() => expect(h.frame()).toContain("Build succeeded"));
-		expect(h.frame()).toContain("Exit");
+		expect(h.frame()).toContain("exit 0");
 	});
 	it("drops an out-of-branch selection without showing another branch's result", async () => {
 		const runtime = new TaskRuntime({ anchor: () => "old-branch" });
@@ -91,10 +91,10 @@ describe("Tasks panel runtime integration", () => {
 		const h = panel(runtime);
 		execution.finish();
 		await execution.outcome;
-		expect(h.frame()).toContain("Build succeeded");
+		await vi.waitFor(() => expect(h.frame()).toContain("Build succeeded"));
 		await runtime.cancelOutsideBranch(new Set());
 		expect(h.frame()).not.toContain("Build succeeded");
-		expect(h.frame()).toContain("No ongoing tasks.");
+		expect(h.frame()).toContain("No retained tasks in this view.");
 	});
 	it("falls back to saved text when a provider render throws and still allows closing", () => {
 		const runtime = new TaskRuntime();

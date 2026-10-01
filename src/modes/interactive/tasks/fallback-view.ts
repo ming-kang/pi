@@ -1,6 +1,7 @@
-import { stripTerminalSequences, Text } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
+import { isTaskTerminal } from "../../../core/tasks/types.ts";
 import type { TaskViewProvider } from "../../../core/tasks/view.ts";
-import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
+import { cleanTaskText } from "./text.ts";
 
 /** Saved text remains readable even when its renderer is unavailable. */
 export const fallbackTaskView: TaskViewProvider = {
@@ -11,8 +12,12 @@ export const fallbackTaskView: TaskViewProvider = {
 		return {
 			info,
 			output,
-			update(task) {
-				info.setText(sanitizeBinaryOutput(stripTerminalSequences(`${task.kind}\n${task.command ?? task.title}`)));
+			update(task, read) {
+				info.setText(
+					cleanTaskText(
+						`${task.kind}\n${task.command ?? task.title}${task.cwd ? `\nDirectory ${task.cwd}` : ""}${task.outputPath ? `\nLog ${task.outputPath}` : ""}`,
+					),
+				);
 				const text =
 					task.result?.content
 						.filter((block) => block.type === "text")
@@ -20,12 +25,14 @@ export const fallbackTaskView: TaskViewProvider = {
 						.join("\n") ||
 					task.projection?.text ||
 					task.error ||
-					"No output yet.";
+					(isTaskTerminal(task.status) ? "No saved output." : "No output yet.");
 				output.setText(
-					theme.fg("toolOutput", sanitizeBinaryOutput(stripTerminalSequences(text))) +
+					theme.fg("toolOutput", cleanTaskText(read?.text || text)) +
 						(task.resultTruncated ? "\n[Saved result truncated.]" : ""),
 				);
 			},
 		};
 	},
 };
+
+export const fallbackLogTaskView: TaskViewProvider = { ...fallbackTaskView, outputMode: "tail" };

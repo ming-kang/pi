@@ -1,8 +1,8 @@
 /** Management only: execution and delivery belong to the session Background service. */
 
-import { runtimeLabel } from "../../../modes/interactive/tasks/task-view.ts";
 import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
 import type { AgentToolResult } from "../../extensions/types.ts";
+import { runtimeLabel } from "../../tasks/format.ts";
 import { boundText } from "../../tasks/output.ts";
 import {
 	isTaskTerminal,
@@ -151,7 +151,7 @@ export async function runWait(
 				status: task.status,
 				kind: task.kind,
 				timedOut,
-				exitCode: undefined,
+				exitCode: task.exitCode,
 				waitedMs: Date.now() - start,
 				deltaBytes: Buffer.byteLength(slice.text),
 				totalBytes: slice.totalBytes,

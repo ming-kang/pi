@@ -70,6 +70,15 @@ function render(value: CustomMessage<unknown>, expanded = false, width = 120, ou
 beforeEach(() => initTheme("dark"));
 
 describe("structured background completion cards", () => {
+	it("shows saved duration, exit code and report title without looking up live tasks", () => {
+		const value = shell();
+		const details = value.details as Extract<TaskCompletionSnapshot, { format: "log" }>;
+		details.endedAt = details.startedAt + 72_000;
+		details.exitCode = 42;
+		expect(render(value)).toContain("1m12s");
+		expect(render(value, true)).toContain("exit 42");
+		expect(render(group([]))).toContain("Worker group");
+	});
 	it.each(["bash", "powershell", "custom-report"])("shortens %s UUIDs without assuming an executor", (kind) => {
 		const value = shell();
 		(value.details as TaskCompletionSnapshot).kind = kind;

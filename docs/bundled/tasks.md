@@ -55,29 +55,45 @@ All model-facing management responses, including listings and error messages, ar
 
 ## `/tasks` panel
 
-The fullscreen panel lists only **ongoing tasks**, including queued, running and stopping work in both foreground (`fg`) and background (`bg`) modes. Completed tasks leave the list immediately. If the selected task finishes, its final view stays on the right until another task is selected or the panel closes. Opening the panel again does not list finished work; results remain available in the transcript and through `tasks read` / `tasks wait`.
+The fullscreen panel has three views:
 
-At 100 columns or more, the left task list sits beside two independently scrollable regions: **Information** above **Output**. Narrow terminals stack the regions. The panel owns selection, focus, scrolling and cancellation; the execution module owns its information and output components:
+- **Overview** shows all ongoing foreground and background tasks, followed by up to five recent background/report results. A selected foreground completion stays visible until you select another task.
+- **Active** shows queued, running and stopping work. If the selected task settles, its row remains under **Just finished** until you select another task.
+- **History** shows all retained terminal results on the selected branch, including foreground shell history, newest first.
 
-- Bash and PowerShell show their command, directory, log path and exit code, with live plain-text output.
-- Other extensions can register their own structure. A missing or failing renderer falls back to the saved task information and result text.
+Selection follows the task when it finishes; new work does not steal focus. The view, search, selected ID and information/output tab are remembered while the session runtime remains available. Reopening restores a retained selection. Runtime replacement resets these preferences, and branch navigation removes results outside the visible branch. History is bounded by the retention limits below.
+
+At 100 columns or more, the task list sits beside an inspector. **Output** gets the main reading area; **Information** holds the full command, directory, task ID, log location and executor-specific details. Each tab keeps its own reading position. Narrow terminals show either the list or the inspector at full width: Enter opens the selected task, and Escape returns to the list. The minimum supported size is 60 columns by 14 rows.
+
+Bash and PowerShell show live plain-text output. Extensions can provide their own information and output components. Missing or failing log views fall back to bounded core reads; report views fall back to saved text. Task status, failure reasons and output-read errors remain distinct.
 
 | Default key | Action |
 |---|---|
+| `1` / `2` / `3` | Overview / Active / History |
+| `/` | Search the current view by title, command, kind or ID; Enter keeps the filter, Escape clears it |
 | Left | Focus the task list |
 | `i` | Focus information |
 | Right / Enter | Focus output |
+| Tab / Shift+Tab | Move between list, output and information |
 | Up / Down | Select a task or scroll the focused region |
 | Page Up / Page Down | Page the focused list or region |
-| `k`, then `y` | Request cancellation of the selected ongoing task; any other key cancels confirmation |
+| Home / End | Top / bottom of the list or bounded preview |
+| `f` | Follow the latest output, or load the final output after completion |
+| `b` | Move only the selected eligible foreground task to the background |
+| `k`, then `y` | Request cancellation of the selected whole task; another key cancels confirmation, which expires after five seconds |
+| `?` | Show configurable controls; Up/Down scroll the help |
 | Escape | Return to the list, then close |
-| Ctrl+B | Detach eligible foreground executions through the host |
+| Ctrl+B | Detach **all** eligible foreground executions through the host |
 
-Shell output initially follows the tail. Scrolling up enters **browsing** and keeps a bounded output snapshot while status continues updating. Explicit downward scrolling to the bottom resumes **following**. Scrolling and closing never pause, reattach or cancel execution. Information scrolls independently, so long commands and parameters remain accessible. Task selection and each task's reading positions survive unrelated updates.
+Click task rows and view/tab labels to select them. The mouse wheel scrolls the region under the pointer. Keyboard navigation remains available throughout.
 
-The panel polls only selected tail output once per second, up to 48 KiB per read; navigation can request an immediate refresh. A settled selected task gets a final read; browsing defers that read until following resumes. The output range describes the bounded preview, not the entire log. Selecting a task retains its result and log without delaying completion notifications. Closing releases the view, subscriptions, retention lease and timers.
+Shell output initially follows the tail. Scrolling up enters **Browsing**, which holds a bounded output snapshot while status continues updating. Press `f`, End, or scroll down to the bottom to resume **Following output**. If the task finishes while browsing, the panel offers to load its final output. Closing or scrolling never pauses, restarts or cancels execution.
 
-Controls use `app.tasks.focusList`, `app.tasks.focusInfo`, `app.tasks.focusPreview`, `app.tasks.kill` and `app.tasks.detach`. List paging uses `tui.select.pageUp` / `pageDown`; information and output paging use `tui.editor.pageUp` / `pageDown`. All are configurable.
+The panel polls only selected tail output once per second, up to 48 KiB per read; navigation and settlement can request an immediate refresh. Progress updates and animation do not add log reads. Preview line ranges describe the bounded slice, not the entire log. Byte counts and truncation labels explain its scope. Empty output and expired logs have explicit messages; an unavailable log falls back to the saved result when available. Selecting a task retains its result and log without delaying completion notifications. Closing releases the view, subscriptions, retention lease and timers.
+
+Controls use the `app.tasks.*` bindings: `overview`, `active`, `history`, `search`, `focusList`, `focusInfo`, `focusPreview`, `nextFocus`, `previousFocus`, `top`, `bottom`, `follow`, `kill`, `confirmStop`, `detachSelected`, `detach` and `help`. List paging uses `tui.select.pageUp` / `pageDown`; information and output paging use `tui.editor.pageUp` / `pageDown`. All are configurable.
+
+The statusline counts all active managed work and points to `/tasks`. When only retained background/report results remain, it labels that scope explicitly. The model-facing `tasks list` keeps its background-only scope and foreground omission count.
 
 ## Extension-owned task views
 
@@ -106,9 +122,9 @@ On settlement, `viewData` is saved in the session JSONL's `task-result` entry. R
 
 ## Completion notifications
 
-Interactive `task-completion` messages have a compact collapsed summary: outcome, execution kind, short ID, and a command or group brief. Failures retain a short reason; log paths, output and worker reports stay out of the collapsed view. In fullscreen mode, left-click the notification to expand or collapse that message independently. The blank spacer above it is not a click target. The configured tool-output expansion binding (default Ctrl+O) remains available for toggling output expansion across the transcript.
+Interactive `task-completion` messages have a compact collapsed summary: outcome, execution kind, duration, short ID, and a command or saved report title. Failures retain a short reason; log paths, output and worker reports stay out of the collapsed view. In fullscreen mode, left-click the notification to expand or collapse that message independently. The blank spacer above it is not a click target. The configured tool-output expansion binding (default Ctrl+O) remains available for toggling output expansion across the transcript.
 
-Expanded shell notifications separate **Command**, **Directory**, **Result** or **Error**, a bounded plain-text **Output** tail, **Log** and the full execution ID. Expanded report completions show executor-provided items and Markdown reports; failures keep their reason separate from any partial report. Each saved output/report carries an explicit truncation flag. Screen line limits are independent of source truncation, and every report item retains an allowance. These are previews of the saved bounded completion.
+Expanded shell notifications separate **Command**, **Directory**, **Result** or **Error** with the recorded exit code, a bounded plain-text **Output** tail, **Log** and the full execution ID. Expanded report completions show executor-provided items and Markdown reports; failures keep their reason separate from any partial report. Each saved output/report carries an explicit truncation flag. Screen line limits are independent of source truncation, and every report item retains an allowance. These are previews of the saved bounded completion.
 
 Rendering reads the self-contained `TaskCompletionSnapshot` in message `details`, so `/reload`, history eviction, expired logs and restart do not require a live task lookup. The session generates model-facing `content` from the same facts; `details` never enters model context or usage accounting. Commands containing `Output:`, worker reports containing headings or error-wrapper examples, and literal truncation notices remain ordinary data. See the [snapshot contract](../session-format.md#background-records).
 
@@ -126,7 +142,7 @@ Managed shell output is collected continuously from startup, including before de
 
 Managed logs are ephemeral: they are retained with the runtime record and cleaned up when that record is evicted or the runtime shuts down. Save needed output elsewhere before then. The core defaults to eight active managed executions and two independent terminal histories: 32 reports/background log tasks, plus 32 foreground log records. Report tasks count toward the first history in either mode. Foreground shell traffic can only evict older foreground shell records. Pending delivery, pins, active reads and cleanup use a separate allowance within the bounded total; pins temporarily defer history eviction, not runtime shutdown. These are service limits, not new user settings.
 
-Terminal snapshots persist as version-2 `task-result` custom entries, including the presentation projection and optional executor-owned `viewData`; usage remains in independent version-1 `task-usage` entries. The runtime restores version-2 terminal history from the selected branch for programmatic reads, selecting the newest records independently for each history. The panel lists ongoing work only. Older result records are left in the session file and are not migrated or restored. Live execution never resumes after restart, and restoration does not replay accounting or completion events. A saved log path is not a durable attachment. See [session format](../session-format.md#background-records).
+Terminal snapshots persist as version-2 `task-result` custom entries, including the presentation projection and optional executor-owned `viewData`; usage remains in independent version-1 `task-usage` entries. The runtime restores version-2 terminal history from the selected branch for programmatic reads and the panel's History view, selecting the newest records independently for each history. Older result records are left in the session file and are not migrated or restored. Live execution never resumes after restart, and restoration does not replay accounting or completion events. A saved log path is not a durable attachment. See [session format](../session-format.md#background-records).
 
 Delivered history outside the selected branch can be released and restored on return, so it does not fill the new branch's history budget. Undelivered completions stay protected while their branch is hidden. Pending delivery, pins and active reads use a separate allowance within the total runtime retention cap; restoration respects the same cap.
 
