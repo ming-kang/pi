@@ -3,13 +3,47 @@
  */
 
 import { type Component, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import type { AgentToolResult, ToolRenderResultOptions } from "../../core/extensions/types.ts";
+import type { AgentToolResult, ToolRenderContext, ToolRenderResultOptions } from "../../core/extensions/types.ts";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
 import { getEngineLabel, WEB_SEARCH_LABEL } from "./constants.ts";
-import { formatResultsMarkdown } from "./format.ts";
+import { formatResultsMarkdown, prepareResults } from "./format.ts";
 import { MAX_HISTORICAL_HIT_SCAN } from "./results.ts";
 import type { WebSearchDetails } from "./types.ts";
+
+export interface WebSearchRenderState {
+	startedAt?: number;
+	dispose?: () => void;
+	refreshTimer?: ReturnType<typeof setTimeout>;
+}
+
+function trackQueryElapsed(context: ToolRenderContext<WebSearchRenderState>, isPartial: boolean): number | undefined {
+	const state = context.state;
+	if (isPartial) {
+		if (state.startedAt === undefined) {
+			state.startedAt = Date.now();
+			const previousDispose = state.dispose;
+			state.dispose = () => {
+				clearTimeout(state.refreshTimer);
+				state.refreshTimer = undefined;
+				previousDispose?.();
+			};
+		}
+		if (state.refreshTimer === undefined) {
+			state.refreshTimer = setTimeout(() => {
+				state.refreshTimer = undefined;
+				context.invalidate();
+			}, 1000);
+			state.refreshTimer.unref?.();
+		}
+		return Date.now() - state.startedAt;
+	}
+	if (state.refreshTimer !== undefined) {
+		clearTimeout(state.refreshTimer);
+		state.refreshTimer = undefined;
+	}
+	return undefined;
+}
 
 /** Matches the bash/deepwiki progress display: sub-2s calls stay quiet. */
 const ELAPSED_DISPLAY_THRESHOLD_MS = 2000;
@@ -73,9 +107,9 @@ export function renderWebSearchResult(
 	result: AgentToolResult<WebSearchDetails>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
-	isError: boolean,
-	elapsedMs?: number,
+	context: ToolRenderContext<WebSearchRenderState>,
 ): Component {
+	const elapsedMs = trackQueryElapsed(context, options.isPartial);
 	const details = result.details;
 
 	if (options.isPartial) {
@@ -105,7 +139,7 @@ export function renderWebSearchResult(
 		);
 	}
 
-	if (isError || details?.status === "error") {
+	if (context.isError || details?.status === "error") {
 		const line = truncateText(errorMessage ?? (singleLine(text) || "Search request failed"), 160);
 		return new Text(theme.fg("error", `failed · ${line}`), 0, 0);
 	}
@@ -133,7 +167,7 @@ export function renderWebSearchResult(
 	// Expanded: structured sections from details, without the model-facing agent
 	// directives; fall back to the raw payload for legacy entries without details.
 	if (details) {
-		const body = formatResultsMarkdown(details);
+		const body = formatResultsMarkdown(prepareResults(details));
 		if (body.trim()) return markdownBlock(body);
 	}
 	return markdownBlock(text);

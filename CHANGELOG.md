@@ -12,6 +12,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Fixed
 
+- Web search releases its elapsed-time refresh timer when a pending tool row is disposed.
 - `tasks wait` preserves recorded shell exit codes and distinguishes a wait ending from execution timing out. Task previews show empty and unavailable output explicitly, and progress updates do not increase log polling.
 
 ### Removed

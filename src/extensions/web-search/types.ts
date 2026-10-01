@@ -5,11 +5,14 @@
 export type SearchEngineType = "minimax" | "deepseek" | "dual" | "none";
 export type SearchEngineSource = "MiniMax" | "DeepSeek";
 
-export interface WebSearchHit {
+export interface ProviderSearchHit {
 	title: string;
 	url: string;
 	snippet?: string;
 	date?: string;
+}
+
+export interface WebSearchHit extends ProviderSearchHit {
 	sources: SearchEngineSource[];
 }
 
@@ -46,7 +49,7 @@ export interface ResolvedSearchCredentials {
 
 export interface ProviderSearchResult {
 	source: SearchEngineSource;
-	hits: WebSearchHit[];
+	hits: ProviderSearchHit[];
 	relatedSearches?: string[];
 	synthesisText?: string;
 }

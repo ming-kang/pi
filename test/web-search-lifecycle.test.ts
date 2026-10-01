@@ -3,17 +3,21 @@ import type {
 	ExtensionAPI,
 	ExtensionToolContext,
 	ToolDefinition,
+	ToolRenderContext,
 	ToolResultEvent,
 	ToolResultEventResult,
 } from "../src/core/extensions/types.ts";
+import type * as searchAuth from "../src/extensions/web-search/auth.ts";
 import { WEB_SEARCH_TOOL_NAME } from "../src/extensions/web-search/constants.ts";
 import webSearch from "../src/extensions/web-search/index.ts";
+import type { WebSearchRenderState } from "../src/extensions/web-search/render.ts";
 import type { WebSearchParamsSchema } from "../src/extensions/web-search/schema.ts";
 import type { ResolvedSearchCredentials, WebSearchDetails } from "../src/extensions/web-search/types.ts";
+import { getThemeByName, initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 const resolveSearchCredentialsMock = vi.hoisted(() => vi.fn<() => Promise<ResolvedSearchCredentials>>());
 vi.mock("../src/extensions/web-search/auth.ts", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("../src/extensions/web-search/auth.ts")>();
+	const actual = await importOriginal<typeof searchAuth>();
 	return { ...actual, resolveSearchCredentials: resolveSearchCredentialsMock };
 });
 
@@ -64,6 +68,48 @@ function resultEvent(status: WebSearchDetails["status"]): ToolResultEvent {
 }
 
 describe("web_search lifecycle", () => {
+	it.each(["settle", "dispose"])("stops pending repaints on %s", (action) => {
+		vi.useFakeTimers();
+		try {
+			initTheme("dark");
+			const render = setup([WEB_SEARCH_TOOL_NAME]).tool.renderResult;
+			if (!render) throw new Error("Missing result renderer");
+			const previousDispose = vi.fn();
+			const state: WebSearchRenderState = { dispose: previousDispose };
+			const invalidate = vi.fn();
+			const context: ToolRenderContext<WebSearchRenderState, { query: string }, WebSearchDetails> = {
+				state,
+				invalidate,
+				isError: false,
+				args: { query: "release" },
+				toolCallId: "call-1",
+				lastComponent: undefined,
+				cwd: process.cwd(),
+				executionStarted: true,
+				argsComplete: true,
+				isPartial: true,
+				expanded: false,
+				showImages: false,
+			};
+			const result = { content: [], details: resultEvent("success").details as WebSearchDetails };
+			const theme = getThemeByName("dark");
+			if (!theme) throw new Error("Missing dark theme");
+			render(result, { expanded: false, isPartial: true }, theme, context);
+			render(result, { expanded: false, isPartial: true }, theme, context);
+			vi.advanceTimersByTime(1000);
+			expect(invalidate).toHaveBeenCalledTimes(1);
+			render(result, { expanded: false, isPartial: true }, theme, context);
+			if (action === "dispose") {
+				expect(state.dispose).toBeTypeOf("function");
+				state.dispose?.();
+				expect(previousDispose).toHaveBeenCalledTimes(1);
+			} else render(result, { expanded: false, isPartial: false }, theme, context);
+			vi.advanceTimersByTime(2000);
+			expect(invalidate).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 	beforeEach(() => resolveSearchCredentialsMock.mockReset());
 	afterEach(() => vi.restoreAllMocks());
 

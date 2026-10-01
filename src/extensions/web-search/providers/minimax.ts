@@ -3,7 +3,7 @@
  */
 
 import { MAX_PROVIDER_HIT_SCAN, MAX_PROVIDER_RELATED_SCAN, MAX_RELATED_SEARCHES } from "../results.ts";
-import type { ProviderSearchResult, WebSearchHit } from "../types.ts";
+import type { ProviderSearchHit, ProviderSearchResult } from "../types.ts";
 import { postJson } from "./http.ts";
 
 export interface MiniMaxSearchOptions {
@@ -24,7 +24,7 @@ function stringField(record: JsonRecord, key: string): string | undefined {
 	return typeof value === "string" ? value : undefined;
 }
 
-function parseSearchHit(value: unknown): WebSearchHit | undefined {
+function parseSearchHit(value: unknown): ProviderSearchHit | undefined {
 	if (!isRecord(value)) return undefined;
 	const url = stringField(value, "link")?.trim();
 	if (!url) return undefined;
@@ -33,13 +33,12 @@ function parseSearchHit(value: unknown): WebSearchHit | undefined {
 		url,
 		snippet: stringField(value, "snippet")?.trim() || undefined,
 		date: stringField(value, "date")?.trim() || undefined,
-		sources: ["MiniMax"],
 	};
 }
 
 export async function searchMiniMax(options: MiniMaxSearchOptions): Promise<ProviderSearchResult> {
 	const host = options.apiHost?.replace(/\/+$/, "") || "https://api.minimaxi.com";
-	const rawData = await postJson<unknown>(
+	const rawData = await postJson(
 		`${host}/v1/coding_plan/search`,
 		{
 			"Content-Type": "application/json",
@@ -59,7 +58,7 @@ export async function searchMiniMax(options: MiniMaxSearchOptions): Promise<Prov
 		);
 	}
 
-	const hits: WebSearchHit[] = [];
+	const hits: ProviderSearchHit[] = [];
 	const organic = Array.isArray(data.organic) ? data.organic : [];
 	const hitScanLimit = Math.min(organic.length, MAX_PROVIDER_HIT_SCAN);
 	for (let index = 0; index < hitScanLimit; index++) {

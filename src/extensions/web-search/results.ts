@@ -2,7 +2,7 @@
  * Result normalization, bounding, deduplication, and ranking for web_search providers.
  */
 
-import type { ProviderSearchResult, SearchEngineSource, WebSearchHit } from "./types.ts";
+import type { ProviderSearchHit, ProviderSearchResult, SearchEngineSource, WebSearchHit } from "./types.ts";
 
 export const MAX_OUTPUT_HITS = 12;
 export const MAX_QUERY_LENGTH = 500;
@@ -37,7 +37,7 @@ const TRACKING_PARAMS = new Set([
 ]);
 
 interface FusionCandidate {
-	hit: WebSearchHit;
+	hit: ProviderSearchHit;
 	ranks: Map<SearchEngineSource, number>;
 }
 
@@ -90,7 +90,7 @@ export function normalizeUrl(rawUrl: unknown): string | undefined {
 	}
 }
 
-function normalizeHit(hit: WebSearchHit, source: SearchEngineSource): WebSearchHit | undefined {
+function normalizeHit(hit: ProviderSearchHit): ProviderSearchHit | undefined {
 	const url = normalizeUrl(hit.url);
 	if (!url) return undefined;
 
@@ -99,7 +99,6 @@ function normalizeHit(hit: WebSearchHit, source: SearchEngineSource): WebSearchH
 		url,
 		snippet: boundSingleLineText(hit.snippet, MAX_SNIPPET_LENGTH),
 		date: boundSingleLineText(hit.date, MAX_DATE_LENGTH),
-		sources: [...new Set([...hit.sources, source])],
 	};
 }
 
@@ -139,7 +138,7 @@ export function fuseSearchHits(results: ProviderSearchResult[]): FusedSearchResu
 		for (let index = 0; index < hitScanLimit; index++) {
 			const rawHit = providerHits[index];
 			if (!rawHit) continue;
-			const hit = normalizeHit(rawHit, result.source);
+			const hit = normalizeHit(rawHit);
 			if (!hit) continue;
 			const rank = index + 1;
 			const existing = candidates.get(hit.url);
@@ -151,9 +150,6 @@ export function fuseSearchHits(results: ProviderSearchResult[]): FusedSearchResu
 
 			const previousRank = existing.ranks.get(result.source);
 			if (previousRank === undefined || rank < previousRank) existing.ranks.set(result.source, rank);
-			for (const source of hit.sources) {
-				if (!existing.hit.sources.includes(source)) existing.hit.sources.push(source);
-			}
 			if (isUrlFallbackTitle(existing.hit.title, existing.hit.url) && !isUrlFallbackTitle(hit.title, hit.url)) {
 				existing.hit.title = hit.title;
 			}
@@ -172,7 +168,7 @@ export function fuseSearchHits(results: ProviderSearchResult[]): FusedSearchResu
 			if (rankDifference !== 0) return rankDifference;
 			return leftUrl.localeCompare(rightUrl);
 		})
-		.map(([, candidate]) => candidate.hit)
+		.map(([, candidate]) => ({ ...candidate.hit, sources: [...candidate.ranks.keys()] }))
 		.slice(0, MAX_OUTPUT_HITS);
 
 	return {

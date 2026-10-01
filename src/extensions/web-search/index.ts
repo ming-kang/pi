@@ -2,7 +2,7 @@
  * web_search — Pi-native Web Search extension combining MiniMax and DeepSeek search engines.
  */
 
-import type { ExtensionAPI, ToolRenderContext } from "../../core/extensions/types.ts";
+import type { ExtensionAPI } from "../../core/extensions/types.ts";
 import { configuredEngine, resolveSearchCredentials } from "./auth.ts";
 import {
 	getWebSearchPromptGuidelines,
@@ -12,34 +12,10 @@ import {
 	WEB_SEARCH_TOOL_NAME,
 } from "./constants.ts";
 import { executeWebSearch } from "./execute.ts";
-import { renderWebSearchCall, renderWebSearchResult } from "./render.ts";
+import { formatSearchOutput } from "./format.ts";
+import { renderWebSearchCall, renderWebSearchResult, type WebSearchRenderState } from "./render.ts";
 import { normalizeWebSearchParams, WebSearchParamsSchema } from "./schema.ts";
 import type { WebSearchDetails } from "./types.ts";
-
-interface WebSearchRenderState {
-	startedAt?: number;
-	refreshTimer?: ReturnType<typeof setTimeout>;
-}
-
-function trackQueryElapsed(context: ToolRenderContext<WebSearchRenderState>, isPartial: boolean): number | undefined {
-	const state = context.state;
-	if (isPartial) {
-		state.startedAt ??= Date.now();
-		if (state.refreshTimer === undefined) {
-			state.refreshTimer = setTimeout(() => {
-				state.refreshTimer = undefined;
-				context.invalidate();
-			}, 1000);
-			state.refreshTimer.unref?.();
-		}
-		return Date.now() - state.startedAt;
-	}
-	if (state.refreshTimer !== undefined) {
-		clearTimeout(state.refreshTimer);
-		state.refreshTimer = undefined;
-	}
-	return undefined;
-}
 
 export default function webSearch(pi: ExtensionAPI): void {
 	pi.registerTool<typeof WebSearchParamsSchema, WebSearchDetails, WebSearchRenderState>({
@@ -53,22 +29,17 @@ export default function webSearch(pi: ExtensionAPI): void {
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const credentials = await resolveSearchCredentials(ctx.modelRuntime);
-			const execution = await executeWebSearch(params, credentials, signal, onUpdate);
+			const details = await executeWebSearch(params, credentials, signal, onUpdate);
 
 			return {
-				content: [{ type: "text", text: execution.formattedOutput }],
-				details: execution.details,
+				content: [{ type: "text", text: formatSearchOutput(details) }],
+				details,
 			};
 		},
 
-		renderCall(args, theme) {
-			return renderWebSearchCall(args, theme);
-		},
+		renderCall: renderWebSearchCall,
 
-		renderResult(result, options, theme, context) {
-			const elapsedMs = trackQueryElapsed(context, options.isPartial);
-			return renderWebSearchResult(result, options, theme, context.isError, elapsedMs);
-		},
+		renderResult: renderWebSearchResult,
 	});
 
 	// Keep the tool out of the model's tool set (and system prompt) when no search

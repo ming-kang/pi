@@ -5,17 +5,11 @@
 import type { AgentToolUpdateCallback } from "../../core/extensions/types.ts";
 import { configuredEngine } from "./auth.ts";
 import { getEngineLabel, WEB_SEARCH_DISABLED_MESSAGE } from "./constants.ts";
-import { formatSearchOutput } from "./format.ts";
 import { searchDeepSeek } from "./providers/deepseek.ts";
 import { searchMiniMax } from "./providers/minimax.ts";
 import { boundSingleLineText, fuseSearchHits, MAX_ERROR_MESSAGE_LENGTH, MAX_QUERY_LENGTH } from "./results.ts";
 import type { WebSearchParams } from "./schema.ts";
 import type { ProviderSearchResult, ResolvedSearchCredentials, SearchEngineType, WebSearchDetails } from "./types.ts";
-
-export interface WebSearchExecution {
-	formattedOutput: string;
-	details: WebSearchDetails;
-}
 
 /** Execute all configured search providers and combine their successful results. */
 export async function executeWebSearch(
@@ -23,13 +17,13 @@ export async function executeWebSearch(
 	credentials: ResolvedSearchCredentials,
 	signal?: AbortSignal,
 	onUpdate?: AgentToolUpdateCallback<WebSearchDetails>,
-): Promise<WebSearchExecution> {
+): Promise<WebSearchDetails> {
 	const startTime = Date.now();
 	const query = boundSingleLineText(params.query, MAX_QUERY_LENGTH) ?? "";
 	const engine = configuredEngine(credentials);
 
 	if (!query) {
-		const details: WebSearchDetails = {
+		return {
 			query: "",
 			durationMs: 0,
 			status: "error",
@@ -38,11 +32,10 @@ export async function executeWebSearch(
 			hits: [],
 			errorMessage: "Search query must not be empty.",
 		};
-		return { formattedOutput: formatSearchOutput(query, details), details };
 	}
 
 	if (engine === "none") {
-		const details: WebSearchDetails = {
+		return {
 			query,
 			durationMs: 0,
 			status: "disabled",
@@ -51,7 +44,6 @@ export async function executeWebSearch(
 			hits: [],
 			errorMessage: WEB_SEARCH_DISABLED_MESSAGE,
 		};
-		return { formattedOutput: formatSearchOutput(query, details), details };
 	}
 
 	signal?.throwIfAborted();
@@ -94,7 +86,7 @@ export async function executeWebSearch(
 	}
 
 	if (successfulResults.length === 0) {
-		const details: WebSearchDetails = {
+		return {
 			query,
 			durationMs,
 			status: "error",
@@ -103,14 +95,13 @@ export async function executeWebSearch(
 			hits: [],
 			errorMessage: boundSingleLineText(errors.join(" | "), MAX_ERROR_MESSAGE_LENGTH) ?? "All search engines failed",
 		};
-		return { formattedOutput: formatSearchOutput(query, details), details };
 	}
 
 	const { hits, relatedSearches, deepseekSynthesis } = fuseSearchHits(successfulResults);
 	const respondedSources = new Set(successfulResults.map((result) => result.source));
 	const contributingEngine: SearchEngineType =
 		respondedSources.size > 1 ? "dual" : respondedSources.has("MiniMax") ? "minimax" : "deepseek";
-	const details: WebSearchDetails = {
+	return {
 		query,
 		durationMs,
 		status: "success",
@@ -120,6 +111,4 @@ export async function executeWebSearch(
 		relatedSearches,
 		deepseekSynthesis,
 	};
-
-	return { formattedOutput: formatSearchOutput(query, details), details };
 }

@@ -9,14 +9,14 @@ const MAX_RESPONSE_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_ERROR_BODY_BYTES = 200;
 
 /** POST a JSON body and return the parsed response. */
-export async function postJson<T>(
+export async function postJson(
 	url: string,
 	headers: Record<string, string>,
 	body: unknown,
 	signal: AbortSignal | undefined,
 	timeoutMs: number,
 	errorLabel: string,
-): Promise<T> {
+): Promise<unknown> {
 	const timeoutSignal = AbortSignal.timeout(timeoutMs);
 	const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 	const response = await fetch(url, {
@@ -45,7 +45,7 @@ export async function postJson<T>(
 		signal: requestSignal,
 	});
 	try {
-		return JSON.parse(responseText) as T;
+		return JSON.parse(responseText);
 	} catch {
 		throw new Error(`${errorLabel} returned invalid JSON`);
 	}

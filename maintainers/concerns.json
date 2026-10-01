@@ -96,6 +96,14 @@
 				"test/question-details.test.ts",
 				"test/statusline-extension.test.ts",
 				"test/statusline-session.test.ts",
+				"test/web-search-results.test.ts",
+				"test/web-search-providers.test.ts",
+				"test/web-search-execute.test.ts",
+				"test/web-search-format.test.ts",
+				"test/web-search-render.test.ts",
+				"test/web-search-lifecycle.test.ts",
+				"test/web-search-auth.test.ts",
+				"test/web-search-extension.test.ts",
 				"test/built-in-extensions.test.ts"
 			]
 		},

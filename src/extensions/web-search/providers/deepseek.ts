@@ -3,7 +3,7 @@
  */
 
 import { MAX_PROVIDER_HIT_SCAN } from "../results.ts";
-import type { ProviderSearchResult, WebSearchHit } from "../types.ts";
+import type { ProviderSearchHit, ProviderSearchResult } from "../types.ts";
 import { postJson } from "./http.ts";
 
 export interface DeepSeekSearchOptions {
@@ -28,7 +28,7 @@ function stringField(record: JsonRecord, key: string): string | undefined {
 	return typeof value === "string" ? value : undefined;
 }
 
-function parseSearchHit(value: unknown): WebSearchHit | undefined {
+function parseSearchHit(value: unknown): ProviderSearchHit | undefined {
 	if (!isRecord(value) || value.type !== "web_search_result") return undefined;
 	const url = stringField(value, "url")?.trim();
 	if (!url) return undefined;
@@ -38,7 +38,6 @@ function parseSearchHit(value: unknown): WebSearchHit | undefined {
 		title: title || url,
 		url,
 		date: pageAge || undefined,
-		sources: ["DeepSeek"],
 	};
 }
 
@@ -56,9 +55,9 @@ function searchToolErrorMessage(value: JsonRecord): string {
 	);
 }
 
-function parseSearchToolContent(value: unknown): WebSearchHit[] {
+function parseSearchToolContent(value: unknown): ProviderSearchHit[] {
 	if (Array.isArray(value)) {
-		const hits: WebSearchHit[] = [];
+		const hits: ProviderSearchHit[] = [];
 		for (const item of value) {
 			const hit = parseSearchHit(item);
 			if (!hit) throw new Error("DeepSeek returned malformed web_search_tool_result content");
@@ -82,7 +81,7 @@ function parseSearchToolContent(value: unknown): WebSearchHit[] {
 export async function searchDeepSeek(options: DeepSeekSearchOptions): Promise<ProviderSearchResult> {
 	const endpoint = options.baseUrl || DEFAULT_DEEPSEEK_MESSAGES_ENDPOINT;
 	const model = options.model || DEFAULT_DEEPSEEK_SEARCH_MODEL;
-	const rawData = await postJson<unknown>(
+	const rawData = await postJson(
 		endpoint,
 		{
 			"Content-Type": "application/json",
@@ -104,7 +103,7 @@ export async function searchDeepSeek(options: DeepSeekSearchOptions): Promise<Pr
 	const upstreamError = errorMessage(data.error);
 	if (upstreamError) throw new Error(`DeepSeek search error: ${upstreamError}`);
 
-	const hits: WebSearchHit[] = [];
+	const hits: ProviderSearchHit[] = [];
 	const synthesisParts: string[] = [];
 	let sawStructuredResult = false;
 	const content = Array.isArray(data.content) ? data.content : [];
