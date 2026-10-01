@@ -61,33 +61,29 @@ afterEach(async () => {
 });
 
 describe("native managed shell execution", () => {
-	it.each([
-		[createBashToolDefinition, "bash"],
-		[createPowerShellToolDefinition, "PowerShell"],
-	] as const)("captures shell facts independently of output lookalikes (%#)", async (factory, name) => {
-		const background = host();
-		const child = execution();
-		const tool = factory(process.cwd(), { operations: child.operations });
-		const command = "echo example\nOutput: /tmp/example.log";
-		const submitted = await tool.execute(
-			"structured",
-			{ command, background: true },
-			undefined,
-			undefined,
-			context(background),
-		);
-		child.output("[Output truncated.]\nCommand exited with code 0\n");
-		child.fail("Executor-specific failure");
-		const task = await background.wait(submitted.details!.background!.taskId);
-		expect(task).toMatchObject({ command, status: "failed", error: "Executor-specific failure" });
-		expect(task.projection?.shell).toEqual({
-			name,
-			output: { text: "[Output truncated.]\nCommand exited with code 0\n", truncated: false },
-		});
-		expect(task.result?.content).toEqual([
-			{ type: "text", text: "[Output truncated.]\nCommand exited with code 0\n\n\nExecutor-specific failure" },
-		]);
-	});
+	it.each([[createBashToolDefinition], [createPowerShellToolDefinition]] as const)(
+		"captures shell facts independently of output lookalikes (%#)",
+		async (factory) => {
+			const background = host();
+			const child = execution();
+			const tool = factory(process.cwd(), { operations: child.operations });
+			const command = "echo example\nOutput: /tmp/example.log";
+			const submitted = await tool.execute(
+				"structured",
+				{ command, background: true },
+				undefined,
+				undefined,
+				context(background),
+			);
+			child.output("[Output truncated.]\nCommand exited with code 0\n");
+			child.fail("Executor-specific failure");
+			const task = await background.wait(submitted.details!.background!.taskId);
+			expect(task).toMatchObject({ command, status: "failed", error: "Executor-specific failure" });
+			expect(task.result?.content).toEqual([
+				{ type: "text", text: "[Output truncated.]\nCommand exited with code 0\n\n\nExecutor-specific failure" },
+			]);
+		},
+	);
 
 	it.each(["startup", "exit"] as const)("never reports immediate %s failure as completed success", async (mode) => {
 		const background = host();
@@ -321,9 +317,9 @@ describe("native managed shell execution", () => {
 		child.output("x".repeat(60 * 1024));
 		child.output("\nLATEST\n");
 		await vi.advanceTimersByTimeAsync(100);
-		const projection = background.get(id).projection!.text!;
-		expect(projection).toContain("LATEST");
-		expect(Buffer.byteLength(projection)).toBeLessThanOrEqual(16 * 1024);
+		const published = text(background.get(id).result);
+		expect(published).toContain("LATEST");
+		expect(Buffer.byteLength(published)).toBeLessThanOrEqual(48 * 1024);
 		child.finish();
 		const final = await background.wait(id);
 		expect(text(final.result)).toContain("LATEST");

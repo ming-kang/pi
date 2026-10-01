@@ -5,7 +5,7 @@ import type { TaskCompletion, TaskControl } from "../tasks/types.ts";
 import { OutputAccumulator, type OutputSnapshot } from "./output-accumulator.ts";
 import { BASH_UPDATE_THROTTLE_MS } from "./renderers/bash.ts";
 import type { BashOperations, BashSpawnContext, BashToolDetails } from "./shell-tool.ts";
-import { formatSize, truncateTail } from "./truncate.ts";
+import { formatSize } from "./truncate.ts";
 
 /**
  * Rewrite Windows CMD-style `nul` redirects to POSIX `/dev/null`.
@@ -38,7 +38,6 @@ export interface ManagedShellExecution {
 
 interface ShellExecutionOptions {
 	operations: BashOperations;
-	shellName: string;
 	context: BashSpawnContext;
 	tempFilePrefix: string;
 	timeout?: number;
@@ -128,15 +127,8 @@ export async function runShellCommand(
 					}
 				: undefined,
 		};
-		if (managed) {
-			managed.control.publish(result, {
-				text: truncateTail(snapshot?.content ?? "", { maxBytes: 16 * 1024 }).content,
-				shell: {
-					name: options.shellName,
-					output: { text: snapshot?.content ?? "", truncated: snapshot?.truncation.truncated ?? false },
-				},
-			});
-		} else options.onUpdate?.(result);
+		if (managed) managed.control.publish(result);
+		else options.onUpdate?.(result);
 	};
 	const emitOutputUpdate = () => {
 		if ((!managed && !options.onUpdate) || !updateDirty) return;

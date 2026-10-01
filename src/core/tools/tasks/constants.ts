@@ -1,16 +1,11 @@
 /**
- * background — shared limits and identity.
+ * Shared limits of the `tasks` tool.
  *
  * Numbers that more than one module needs live here so a change lands in one
  * place; execution and retention limits belong to the core service.
  */
 
-/** Historical extension-owned completion/stall messages. */
-export const TASKS_NOTIFICATION_TYPE = "background-task";
-/** Session-owned completions; model content and delivery are unchanged by rendering. */
-export const TASKS_COMPLETION_TYPE = "task-completion";
-
-/** Default and floor for a `read` slice; the ceiling is truncate.ts's DEFAULT_MAX_BYTES. */
+/** Default and floor for a `read` slice; the ceiling is the core's TASK_RESULT_BYTES. */
 export const TASKS_LOGS_DEFAULT_BYTES = 8 * 1024;
 export const TASKS_LOGS_MIN_BYTES = 256;
 

@@ -1,4 +1,5 @@
 import { bindTasksUI, type TasksUI } from "./tasks/index.ts";
+import { cleanTaskText, firstCommandLine } from "./tasks/text.ts";
 /**
  * Interactive mode for the coding agent.
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
@@ -5474,6 +5475,23 @@ export class InteractiveMode {
 
 					// Ask about summarization
 					done(); // Close selector first
+
+					// Results are saved on their launch branch, so leaving it stops its running tasks.
+					const stopped = this.session.tasksStoppedByTreeNavigation(entryId);
+					if (stopped.length > 0) {
+						const shown = stopped
+							.slice(0, 5)
+							.map((task) => `  ${cleanTaskText(firstCommandLine(task.command ?? task.title))}`);
+						if (stopped.length > shown.length) shown.push(`  …and ${stopped.length - shown.length} more`);
+						const confirmed = await this.showExtensionConfirm(
+							`Stop ${stopped.length} running task${stopped.length === 1 ? "" : "s"}?`,
+							`They were started on the branch you are leaving and will be cancelled:\n${shown.join("\n")}`,
+						);
+						if (!confirmed) {
+							this.showTreeSelector(entryId);
+							return;
+						}
+					}
 
 					// Loop until user makes a complete choice or cancels to tree
 					let wantsSummary = false;

@@ -33,10 +33,8 @@ export function statusSpinnerFrame(now: number): string {
 /**
  * Map an execution status to its marker. Pass `now` to animate a running
  * status as a spinner frame; without it running renders as the static `›`.
- * `stalled` (blocked on interactive input) wins over the underlying status.
  */
-export function statusMarker(status: string, opts?: { stalled?: boolean; now?: number }): StatusMarker {
-	if (opts?.stalled) return { glyph: "!", color: "warning" };
+export function statusMarker(status: string, opts?: { now?: number }): StatusMarker {
 	switch (status) {
 		case "running":
 			return { glyph: opts?.now !== undefined ? statusSpinnerFrame(opts.now) : "›", color: "accent" };
@@ -47,7 +45,6 @@ export function statusMarker(status: string, opts?: { stalled?: boolean; now?: n
 		case "timeout":
 			return { glyph: "×", color: "warning" };
 		case "cancelled":
-		case "killed":
 		case "stopping":
 		case "partial":
 		case "aborted":

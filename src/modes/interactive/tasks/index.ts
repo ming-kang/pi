@@ -1,7 +1,6 @@
 import { getKeybindings } from "@earendil-works/pi-tui";
 import type { ExtensionUIContext } from "../../../core/extensions/types.ts";
-import { isInlineLogTask, isTaskTerminal, type TasksContext } from "../../../core/tasks/types.ts";
-import { shellTaskView } from "../../../core/tools/renderers/shell-task.ts";
+import { isTaskTerminal, type TasksContext } from "../../../core/tasks/types.ts";
 import { TASKS_DETACH_HINT_DELAY_MS } from "../../../core/tools/tasks/constants.ts";
 import { keyLabel } from "../components/keybinding-hints.ts";
 import { TasksMenu } from "./manager.ts";
@@ -15,7 +14,6 @@ export interface TasksUI {
 /** Host-owned task UI; it is available without loading an extension. */
 export function bindTasksUI(ctx: { tasks: TasksContext; ui: ExtensionUIContext }): TasksUI {
 	const state: TasksPanelState = { tab: "output" };
-	const releaseViews = ["bash", "powershell"].map((kind) => ctx.tasks.views.register(kind, shellTaskView));
 	let unsubscribe: (() => void) | undefined;
 	let unsubscribeDetachKey: (() => void) | undefined;
 	let closeMenu: (() => void) | undefined;
@@ -28,10 +26,10 @@ export function bindTasksUI(ctx: { tasks: TasksContext; ui: ExtensionUIContext }
 			hintTimer = undefined;
 			const all = ctx.tasks.list();
 			const running = all.filter((task) => !isTaskTerminal(task.status)).length;
-			const recent = all.filter((task) => isTaskTerminal(task.status) && !isInlineLogTask(task)).length;
+			const recent = all.filter((task) => isTaskTerminal(task.status) && task.mode === "background").length;
 			const parts: string[] = [];
 			if (running) parts.push(`Tasks ${running} active · /tasks`);
-			else if (recent) parts.push(`Tasks ${recent} recent background/report results · /tasks`);
+			else if (recent) parts.push(`Tasks ${recent} recent background results · /tasks`);
 			// Teach the detach key once something has run long enough to be worth moving, and
 			// only while it can move: a stopping execution is aborted, so the key does nothing.
 			const detachKey = keyLabel("app.tasks.detach");
@@ -54,7 +52,14 @@ export function bindTasksUI(ctx: { tasks: TasksContext; ui: ExtensionUIContext }
 		unsubscribe = ctx.tasks.subscribe(update);
 		unsubscribeDetachKey = ctx.ui.onTerminalInput((data) => {
 			if (!getKeybindings().matches(data, "app.tasks.detach")) return undefined;
-			const count = ctx.tasks.detachForeground();
+			let count: number;
+			try {
+				count = ctx.tasks.detachForeground();
+			} catch (error) {
+				// Work could move, but every background slot is taken.
+				ctx.ui.notify(error instanceof Error ? error.message : String(error), "warning");
+				return { consume: true };
+			}
 			// Nothing can move: let the key fall through to editor bindings instead of
 			// spending it on a "nothing happened" status line.
 			if (count === 0) return undefined;
@@ -66,7 +71,6 @@ export function bindTasksUI(ctx: { tasks: TasksContext; ui: ExtensionUIContext }
 		update();
 	};
 	const dispose = () => {
-		for (const release of releaseViews) release();
 		unsubscribe?.();
 		unsubscribe = undefined;
 		unsubscribeDetachKey?.();
@@ -95,7 +99,6 @@ export function bindTasksUI(ctx: { tasks: TasksContext; ui: ExtensionUIContext }
 						theme,
 						keybindings,
 						host: ctx.tasks,
-						views: ctx.tasks.views,
 						onClose: close,
 					});
 				},

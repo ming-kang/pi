@@ -1,37 +1,18 @@
-/**
- * Transcript rendering for the native tasks tool: its
- * call/result rows (dispatched on action) and the completion-notification
- * message. Style follows the built-in bash presentation: a `$` input row
- * with an `&` marker for the background call.
- */
+/** Transcript rendering for the native tasks tool: its call/result rows, dispatched on action. */
 
 import { type Component, Container, Text, TruncatedText } from "@earendil-works/pi-tui";
-import type {
-	AgentToolResult,
-	MessageRenderOptions,
-	ToolRenderContext,
-	ToolRenderResultOptions,
-} from "../../../core/extensions/types.ts";
-import type { CustomMessage } from "../../../core/messages.ts";
+import type { AgentToolResult, ToolRenderContext, ToolRenderResultOptions } from "../../../core/extensions/types.ts";
 import { formatDuration } from "../../../core/tasks/format.ts";
 import { clampWaitMs, type TasksInput } from "../../../core/tools/tasks/schema.ts";
-import type { TasksDetails, TasksNotificationDetails } from "../../../core/tools/tasks/types.ts";
+import type { TasksDetails } from "../../../core/tools/tasks/types.ts";
 import { formatSize } from "../../../core/tools/truncate.ts";
-import { highlightCode, type Theme } from "../theme/theme.ts";
-import { commandLabel, exitSuffix, statusColor, statusGlyph, statusName } from "./task-view.ts";
-import { fileNameOf, firstCommandLine } from "./text.ts";
+import type { Theme } from "../theme/theme.ts";
+import { exitSuffix, statusColor, statusGlyph, statusName } from "./task-view.ts";
+import { fileNameOf } from "./text.ts";
 
-type TasksRenderInput = Omit<TasksInput, "action"> & {
-	action?: string;
-	command?: string;
-	description?: string;
-	timeout?: number;
-};
+/** Arguments arrive incrementally, so `action` may not be valid yet. */
+type TasksRenderInput = Omit<TasksInput, "action"> & { action?: string };
 
-const COMMAND_PREVIEW_LIMIT = 120;
-/** Command budget inside a notification label that also carries a description. */
-const LABELLED_COMMAND_LIMIT = 40;
-const NOTIFY_TAIL_LIMIT = 4000;
 /** Cap for expanded transcript views of tool-result text (already bounded at the source). */
 const RESULT_EXPAND_LIMIT = 4000;
 /** Live pending-wait line refresh cadence; the first settled render clears the timer. */
@@ -72,14 +53,6 @@ export function scheduleWaitRefresh(context: ToolRenderContext<TasksRenderState>
 	state.waitStartedAt = undefined;
 }
 
-function bgPrompt(theme: Theme): string {
-	return theme.fg("toolTitle", theme.bold("$ "));
-}
-
-function timeoutSuffix(timeout: number | undefined, theme: Theme): string {
-	return timeout ? theme.fg("muted", ` (timeout ${timeout}s)`) : "";
-}
-
 /** Keep the END of oversized text — that is where the outcome lives. */
 function capForTranscript(text: string, limit: number): string {
 	return text.length > limit ? `…${text.slice(-limit)}` : text;
@@ -93,13 +66,6 @@ export function renderTasksCall(
 	context: ToolRenderContext<TasksRenderState>,
 ): Component {
 	switch (args.action) {
-		case "create": {
-			// Arguments stream in, so `command` may not have arrived yet.
-			const command = args.command;
-			return typeof command === "string"
-				? renderCreateCall(command, args, theme, context)
-				: new Text(theme.fg("toolTitle", theme.bold("tasks create")), 0, 0);
-		}
 		case "read": {
 			const mode = args.mode ?? "tail";
 			const size = args.bytes !== undefined ? ` ${formatSize(args.bytes)}` : "";
@@ -120,8 +86,6 @@ export function renderTasksCall(
 		case "list":
 			return new Text(theme.fg("toolTitle", theme.bold("tasks list")), 0, 0);
 		default: {
-			// Tool arguments arrive incrementally while the context is still emitting
-			// JSON. Keep the call row renderable until `action` becomes valid.
 			const action = typeof args.action === "string" ? ` ${theme.fg("dim", args.action)}` : "";
 			return new Text(`${theme.fg("toolTitle", theme.bold("tasks"))}${action}`, 0, 0);
 		}
@@ -162,28 +126,6 @@ function renderWaitCall(args: TasksRenderInput, theme: Theme, context: ToolRende
 	);
 }
 
-function renderCreateCall(
-	command: string,
-	args: TasksRenderInput,
-	theme: Theme,
-	context: ToolRenderContext,
-): Component {
-	const lines = command.split(/\r?\n/).filter((line) => line.trim().length > 0);
-	const label = args.description ? theme.fg("muted", ` · ${args.description}`) : "";
-	const suffix = theme.fg("muted", " &") + timeoutSuffix(args.timeout, theme) + label;
-	if (context.expanded && lines.length > 1) {
-		const body = highlightCode(command, "bash").join("\n");
-		return new Text(`${bgPrompt(theme)}${body}${suffix}`, 0, 0);
-	}
-	const body = highlightCode(firstCommandLine(command), "bash").join("\n");
-	if (lines.length > 1) {
-		const hidden = lines.length - 1;
-		const more = theme.fg("muted", ` (+${hidden} line${hidden === 1 ? "" : "s"})`);
-		return new Text(`${bgPrompt(theme)}${body}${suffix}${more}`, 0, 0);
-	}
-	return new Text(`${bgPrompt(theme)}${body}${suffix}`, 0, 0);
-}
-
 // ── tool result ───────────────────────────────────────────────────────────
 
 export function renderTasksResult(
@@ -192,17 +134,19 @@ export function renderTasksResult(
 	theme: Theme,
 	context: ToolRenderContext<TasksRenderState>,
 ): Component {
-	// bg results are always settled today; clear defensively so no live-refresh
+	// Results are always settled today; clear defensively so no live-refresh
 	// timer can outlive its row if a host ever streams partial results.
 	if (context.args?.action === "wait" && !options.isPartial) scheduleWaitRefresh(context, false);
 	const details = result.details;
-	if (context.isError || !details) {
+	// Results from older tool versions, such as `bg create`, keep their saved text.
+	const summary = details && !context.isError ? resultSummaryLine(details, theme, options.expanded) : undefined;
+	if (summary === undefined) {
 		const text = result.content.find((part) => part.type === "text")?.text ?? "";
 		return new Text(theme.fg("toolOutput", text.trimEnd()), 0, 0);
 	}
 
 	const container = new Container();
-	container.addChild(new TruncatedText(resultSummaryLine(details, theme, options.expanded), 1, 0));
+	container.addChild(new TruncatedText(summary, 1, 0));
 	if (options.expanded) {
 		const text = result.content.find((part) => part.type === "text")?.text ?? "";
 		container.addChild(new Text("", 0, 0));
@@ -211,15 +155,11 @@ export function renderTasksResult(
 	return container;
 }
 
-function resultSummaryLine(details: TasksDetails, theme: Theme, expanded: boolean): string {
+function resultSummaryLine(details: TasksDetails, theme: Theme, expanded: boolean): string | undefined {
 	// Collapsed rows stay compact with the log's file name; the full path
 	// (context-relevant, human-rarely) shows when expanded.
 	const shownPath = (path: string) => (expanded ? path : fileNameOf(path));
 	switch (details.action) {
-		case "create": {
-			const label = details.description ? ` (${details.description})` : "";
-			return `${theme.fg("muted", "→ task ")}${theme.fg("accent", `${details.taskId}${label}`)}${theme.fg("muted", ` started · ${shownPath(details.outputPath)}`)}`;
-		}
 		case "read": {
 			const size =
 				details.sliceBytes !== details.totalBytes
@@ -235,80 +175,15 @@ function resultSummaryLine(details: TasksDetails, theme: Theme, expanded: boolea
 			return `${theme.fg(statusColor(details.status), statusGlyph(details.status))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", ` ${statusName(details.status)}${exit} · waited ${formatDuration(details.waitedMs)} · +${formatSize(details.deltaBytes)}`)}`;
 		}
 		case "kill": {
-			const status = details.status ?? (details.requested ? "stopping" : "killed");
-			return `${theme.fg(statusColor(status), statusGlyph(status))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", details.requested === undefined ? " stopped" : ` ${statusName(status)}${details.requested ? " · cancellation requested" : ""}`)}`;
+			const status = details.status ?? (details.requested ? "stopping" : "cancelled");
+			return `${theme.fg(statusColor(status), statusGlyph(status))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", ` ${statusName(status)}${details.requested ? " · cancellation requested" : ""}`)}`;
 		}
 		case "list": {
 			const hidden = details.hidden > 0 ? ` · ${details.hidden} more finished` : "";
 			const omitted = details.foregroundOmitted ? ` · ${details.foregroundOmitted} foreground omitted` : "";
 			return theme.fg("muted", `${details.running} running · ${details.finished} finished${hidden}${omitted}`);
 		}
+		default:
+			return undefined;
 	}
-}
-
-// ── completion notification ───────────────────────────────────────────────
-
-/** One-line summary of a finished task, shared by the notification renderer. */
-function taskSummaryLine(details: TasksNotificationDetails, theme: Theme): string {
-	const runtime = formatDuration(details.runtimeMs);
-	const label = details.description
-		? `${details.description} (${commandLabel(details.command, LABELLED_COMMAND_LIMIT)})`
-		: commandLabel(details.command, COMMAND_PREVIEW_LIMIT);
-	if (details.stalled) {
-		const glyph = theme.fg("warning", statusGlyph(details.status, true));
-		return `${glyph} ${theme.fg("accent", details.taskId)} ${label} ${theme.fg("muted", `— waiting for input (${runtime})`)}`;
-	}
-	const outcome = theme.fg(
-		statusColor(details.status),
-		`${details.status}${exitSuffix(details.exitCode, ", ")} in ${runtime}`,
-	);
-	const glyph = theme.fg(statusColor(details.status), statusGlyph(details.status));
-	return `${glyph} ${theme.fg("accent", details.taskId)} ${label} ${theme.fg("muted", `— ${outcome}`)}`;
-}
-
-/**
- * Collapsed: status glyph, task id, label, and outcome on one line, output
- * path below. Expanded adds the embedded output tail. Returns undefined for
- * malformed details so the default custom-message rendering takes over.
- */
-export function renderLegacyTaskNotification(
-	message: CustomMessage<TasksNotificationDetails>,
-	options: MessageRenderOptions,
-	theme: Theme,
-): Component | undefined {
-	const details = message.details;
-	if (!details || typeof details.taskId !== "string") return undefined;
-
-	const container = new Container();
-	container.addChild(new TruncatedText(taskSummaryLine(details, theme), 1, 0));
-	// Collapsed keeps the row compact with the file name; the full path
-	// (context-relevant, human-rarely) shows when expanded.
-	const shownPath = options.expanded ? details.outputPath : fileNameOf(details.outputPath);
-	container.addChild(new Text(theme.fg("muted", shownPath), 1, 0));
-
-	if (details.tailError) {
-		container.addChild(new Text(theme.fg("error", `Output unavailable: ${details.tailError}`), 1, 0));
-	} else if (options.expanded && details.tailText) {
-		container.addChild(new Text("", 0, 0));
-		const tail = capForTranscript(details.tailText, NOTIFY_TAIL_LIMIT);
-		const truncatedNote = details.tailTruncated
-			? `\n[showing tail of ${formatSize(details.totalBytes)} bytes; full output: ${details.outputPath}]`
-			: "";
-		container.addChild(
-			new Text(`${theme.fg("toolOutput", tail.trimEnd())}${theme.fg("muted", truncatedNote)}`, 1, 0),
-		);
-	}
-	if (details.stalled && options.expanded) {
-		container.addChild(
-			new Text(
-				theme.fg(
-					"warning",
-					"Blocked on interactive input — kill (bg action kill) and re-run with piped input or a non-interactive flag.",
-				),
-				1,
-				0,
-			),
-		);
-	}
-	return container;
 }

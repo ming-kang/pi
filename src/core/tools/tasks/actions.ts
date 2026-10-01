@@ -1,4 +1,4 @@
-/** Management only: execution and delivery belong to the session Background service. */
+/** Management only: execution and delivery belong to the session task runtime. */
 
 import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
 import type { AgentToolResult } from "../../extensions/types.ts";
@@ -66,20 +66,38 @@ function lookupFailure(background: TasksContext, id: string, error: unknown): Er
 	if (!(error instanceof TaskLookupError)) return error instanceof Error ? error : new Error(String(error));
 	if (error.kind === "ambiguous") {
 		const lines = error.matches.map((task) => describeTaskLine(task)).join("\n");
-		return new Error(`Ambiguous background task ID "${id}" matches ${error.matches.length} tasks:\n${lines}`);
+		return new Error(`Ambiguous task ID "${id}" matches ${error.matches.length} tasks:\n${lines}`);
 	}
 	const { tasks, foregroundOmitted } = listedTasks(background);
 	const active = tasks.filter((task) => !isTaskTerminal(task.status));
 	const finished = recentFinishedFirst(tasks.filter((task) => isTaskTerminal(task.status)));
 	const shown = [...active, ...finished].slice(0, LOOKUP_LIST_LIMIT);
 	if (shown.length === 0) {
-		return new Error(`No background task "${id}" in this session. No background tasks in this session.`);
+		return new Error(`No task "${id}" in this session. No background tasks in this session.`);
 	}
 	const lines = shown.map((task) => describeTaskLine(task)).join("\n");
 	return new Error(
-		`No background task "${id}" in this session. IDs from other sessions are not valid here.\nCurrent tasks:\n${lines}${foregroundOmissionNote(foregroundOmitted)}`,
+		`No task "${id}" in this session. IDs from other sessions are not valid here.\nCurrent background tasks:\n${lines}${foregroundOmissionNote(foregroundOmitted)}`,
 	);
 }
+
+/**
+ * Where this slice sits in the output, so the next wait can continue from it.
+ * A wait whose new output exceeds its budget returns the newest bytes and says what it skipped.
+ */
+function rangeText(slice: TaskRead, sinceBytes?: number): string {
+	const from = slice.fromByte ?? 0;
+	const to = from + Buffer.byteLength(slice.text);
+	const floor = sinceBytes === undefined || sinceBytes > slice.totalBytes ? 0 : sinceBytes;
+	return [
+		`bytes ${from}–${to} of ${slice.totalBytes}`,
+		sinceBytes !== undefined && from > floor ? `skipped ${from - floor} bytes after sinceBytes ${floor}` : "",
+		`next sinceBytes ${to}`,
+	]
+		.filter(Boolean)
+		.join(" · ");
+}
+
 /** Reserve space for each independent diagnostic before allowing raw output to fill the budget. */
 function readText(header: string, slice: TaskRead): string {
 	const boundedField = (text: string, maxBytes: number) =>
@@ -99,22 +117,16 @@ export async function runRead(background: TasksContext, input: TasksInput): Prom
 	try {
 		const mode = input.mode ?? "tail";
 		const slice = await background.read(id, { mode, bytes: clampReadBytes(input.bytes) });
-		return result(
-			readText(
-				`[${describeTaskLine(slice.task)} · ${slice.totalBytes} bytes${slice.truncated ? " · truncated" : ""}]`,
-				slice,
-			),
-			{
-				action: "read",
-				taskId: slice.task.id,
-				mode,
-				sliceBytes: Buffer.byteLength(slice.text),
-				totalBytes: slice.totalBytes,
-				outputPath: slice.task.outputPath ?? "",
-				kind: slice.task.kind,
-				status: slice.task.status,
-			},
-		);
+		return result(readText(`[${describeTaskLine(slice.task)} · ${rangeText(slice)}]`, slice), {
+			action: "read",
+			taskId: slice.task.id,
+			mode,
+			sliceBytes: Buffer.byteLength(slice.text),
+			totalBytes: slice.totalBytes,
+			outputPath: slice.task.outputPath ?? "",
+			kind: slice.task.kind,
+			status: slice.task.status,
+		});
 	} catch (error) {
 		throw lookupFailure(background, id, error);
 	}
@@ -139,13 +151,11 @@ export async function runWait(
 				: timedOut
 					? " · wait window expired; execution continues"
 					: "";
-			const slice = await background.read(id, {
-				bytes: TASKS_WAIT_DELTA_BYTES,
-				sinceBytes: clampSinceBytes(input.sinceBytes),
-			});
+			const sinceBytes = clampSinceBytes(input.sinceBytes);
+			const slice = await background.read(id, { bytes: TASKS_WAIT_DELTA_BYTES, sinceBytes });
 			signal?.throwIfAborted();
 			if (!timedOut) onReady?.(task.id);
-			return result(readText(`[${describeTaskLine(task)}${windowNote}]`, slice), {
+			return result(readText(`[${describeTaskLine(task)}${windowNote} · ${rangeText(slice, sinceBytes)}]`, slice), {
 				action: "wait",
 				taskId: task.id,
 				status: task.status,

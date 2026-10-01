@@ -5,7 +5,6 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../../src/core/keybindings.ts";
 import { isTaskTerminal } from "../../src/core/tasks/types.ts";
-import { shellTaskView } from "../../src/core/tools/renderers/shell-task.ts";
 import { TasksMenu } from "../../src/modes/interactive/tasks/manager.ts";
 import type { TasksPanelState } from "../../src/modes/interactive/tasks/model.ts";
 import { initTheme, theme } from "../../src/modes/interactive/theme/theme.ts";
@@ -25,10 +24,8 @@ it("inspects concurrent shell/report work through detach, stop, completion, relo
 	let menu: TasksMenu | undefined;
 	const frames: Record<string, string> = {};
 	const open = () => {
-		session.tasks.views.register("bash", shellTaskView);
 		menu = new TasksMenu({
 			host: session.tasks,
-			views: session.tasks.views,
 			tui,
 			theme,
 			keybindings: new KeybindingsManager(),

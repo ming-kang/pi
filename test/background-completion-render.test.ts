@@ -1,7 +1,7 @@
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CustomMessage } from "../src/core/messages.ts";
-import type { TaskCompletionSnapshot, TaskItemReport, TaskTerminalStatus } from "../src/core/tasks/types.ts";
+import type { TaskCompletionSnapshot, TaskTerminalStatus } from "../src/core/tasks/types.ts";
 import { CustomMessageComponent } from "../src/modes/interactive/components/custom-message.ts";
 import { renderTaskCompletion } from "../src/modes/interactive/tasks/completion-render.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
@@ -16,11 +16,9 @@ function message(
 }
 function shell(output = "build finished", status: TaskTerminalStatus = "completed", error?: string) {
 	return message({
-		version: 1,
+		version: 2,
 		taskId,
 		kind: "bash",
-		format: "log",
-		shell: "bash",
 		title: "Build",
 		status,
 		startedAt: 10,
@@ -30,30 +28,6 @@ function shell(output = "build finished", status: TaskTerminalStatus = "complete
 		outputPath: log,
 		output: { text: output, truncated: false },
 		error,
-	} satisfies TaskCompletionSnapshot);
-}
-function worker(index = 1, status = "completed", report = "A **useful** report.", error?: string): TaskItemReport {
-	return {
-		id: `worker-${index}`,
-		label: `#${index} explorer`,
-		category: "explorer",
-		description: `Inspect task ${index}`,
-		status,
-		report: { text: report, truncated: false },
-		error,
-	};
-}
-function group(items: TaskItemReport[], status: TaskTerminalStatus = "completed") {
-	return message({
-		version: 1,
-		taskId: taskId.replace("bash-", "subagent-"),
-		kind: "subagent",
-		format: "report",
-		title: "Worker group",
-		status,
-		startedAt: 10,
-		endedAt: 20,
-		items,
 	} satisfies TaskCompletionSnapshot);
 }
 function render(value: CustomMessage<unknown>, expanded = false, width = 120, outputPad = 1) {
@@ -72,12 +46,11 @@ beforeEach(() => initTheme("dark"));
 describe("structured background completion cards", () => {
 	it("shows saved duration, exit code and report title without looking up live tasks", () => {
 		const value = shell();
-		const details = value.details as Extract<TaskCompletionSnapshot, { format: "log" }>;
+		const details = value.details as TaskCompletionSnapshot;
 		details.endedAt = details.startedAt + 72_000;
 		details.exitCode = 42;
 		expect(render(value)).toContain("1m12s");
 		expect(render(value, true)).toContain("exit 42");
-		expect(render(group([]))).toContain("Worker group");
 	});
 	it.each(["bash", "powershell", "custom-report"])("shortens %s UUIDs without assuming an executor", (kind) => {
 		const value = shell();
@@ -166,8 +139,9 @@ describe("structured background completion cards", () => {
 
 	it("keeps multiline commands containing metadata lookalikes and renders shell output literally", () => {
 		const value = shell("**literal output**\n# literal heading");
-		const details = value.details as Extract<TaskCompletionSnapshot, { format: "log" }>;
-		details.shell = "PowerShell";
+		const details = value.details as TaskCompletionSnapshot;
+		details.kind = "powershell";
+		details.taskId = taskId.replace("bash-", "powershell-");
 		details.command = { text: "Write-Output @'\nOutput: /tmp/example.log\n'@", truncated: false };
 		const expanded = render(value, true);
 		for (const item of [
@@ -185,97 +159,34 @@ describe("structured background completion cards", () => {
 	it("uses explicit truncation flags even when output contains a literal truncation notice", () => {
 		const value = shell("[Output truncated.]\nordinary output");
 		expect(render(value, true)).not.toContain("The saved result is truncated");
-		(value.details as Extract<TaskCompletionSnapshot, { format: "log" }>).output.truncated = true;
+		(value.details as TaskCompletionSnapshot).output.truncated = true;
 		expect(render(value, true)).toContain("The saved result is truncated");
-		const report = worker(1, "completed", "[Output truncated.]");
-		expect(render(group([report]), true)).not.toContain("Saved report truncated.");
-		report.report.truncated = true;
-		expect(render(group([report]), true)).toContain("Saved report truncated.");
 	});
 
-	it("renders independent worker reports and reasons while preserving Markdown", () => {
-		const value = group(
-			[worker(), { ...worker(2, "failed", "Partial findings", "Provider unavailable"), category: "general" }],
-			"partial",
-		);
+	it("names a task without a command by its saved title", () => {
+		const value = shell("Imports reviewed.");
+		const details = value.details as TaskCompletionSnapshot;
+		details.kind = "review";
+		details.taskId = taskId.replace("bash-", "review-");
+		details.title = "Inspect extension boundaries";
+		details.command = undefined;
+		details.cwd = undefined;
+		details.outputPath = undefined;
 		const collapsed = render(value);
-		expect(collapsed).toContain("partial");
-		expect(collapsed).toContain("#2: Provider unavailable");
-		expect(collapsed).not.toContain("Partial findings");
-		expect(collapsed).not.toContain("Inspect task");
+		expect(collapsed).toMatch(/^● review · Background completed/);
+		expect(collapsed).toContain("Inspect extension boundaries");
 		const expanded = render(value, true);
-		for (const item of [
-			"Explorer",
-			"General",
-			"#1",
-			"#2",
-			"Report",
-			"Reason",
-			"Partial report",
-			"Provider unavailable",
-			"Partial findings",
-			"useful",
-		])
+		for (const item of ["Task", "Inspect extension boundaries", "Output", "Imports reviewed."])
 			expect(expanded).toContain(item);
-		expect(expanded).not.toContain("**useful**");
+		expect(expanded).not.toContain("Command");
 	});
 
-	it("never turns headings or failure-wrapper examples inside a report into worker metadata", () => {
-		const example =
-			"Example\n\n---\n\n### 2. Embedded example (general) — completed\n\nSubagent failed: fictional\n\nPartial report:\nfictional report\n```text\ncontinued";
-		const value = group(
-			[worker(1, "completed", example), worker(2, "failed", "```\nActual findings", "Actual failure")],
-			"partial",
-		);
-		const expanded = render(value, true);
-		expect(expanded).toContain("Task: Inspect task 1");
-		expect(expanded).toContain("Task: Inspect task 2");
-		expect(expanded).not.toContain("Task: Embedded example");
-		expect(expanded.match(/Task: Inspect task/g)).toHaveLength(2);
-		expect(render(value)).toContain("#2: Actual failure");
-		expect(render(value)).not.toContain("fictional");
-	});
-
-	it.each([false, true])("retains a supervisor diagnostic with worker projection=%s", (hasWorkers) => {
-		const value = group(hasWorkers ? [worker(1, "running", "Last published report")] : [], "failed");
-		(value.details as TaskCompletionSnapshot).error = "Supervisor failure";
-		expect(render(value)).toContain("Supervisor failure");
-		const expanded = render(value, true);
-		expect(expanded).toContain("Group result");
-		expect(expanded).toContain("Supervisor failure");
-		if (hasWorkers) {
-			expect(expanded).toContain("Running");
-			expect(expanded).toContain("Last published report");
-		} else expect(expanded).toContain("Details");
-	});
-
-	it("keeps every worker visible in a large partial group within the card budget", () => {
-		const reports = Array.from({ length: 8 }, (_, i) => ({
-			...worker(i + 1, "failed", `finding-${i + 1}`, "long reason ".repeat(30)),
-			report: { text: `finding-${i + 1}\n${"more report\n".repeat(50)}`, truncated: true },
-		}));
-		const expanded = render(group(reports, "failed"), true);
-		for (let i = 1; i <= 8; i++) {
-			expect(expanded).toContain(`#${i}`);
-			expect(expanded).toContain(`finding-${i}`);
-		}
-		expect(expanded).toContain("omitted");
-		expect(expanded).toContain("Saved report truncated.");
-	});
-
-	it.each(["queued", "running", "aborted"])("preserves a worker's observed %s state", (status) => {
-		expect(render(group([worker(1, status, "")], "cancelled"), true).toLowerCase()).toContain(status);
-	});
-
-	it("renders empty shell output and empty reports without parsing placeholder text", () => {
+	it("renders empty output without parsing placeholder text", () => {
 		expect(render(shell(""), true)).toContain("No output.");
-		expect(render(group([worker(1, "completed", "")]), true)).toContain("No report returned.");
-		expect(render(group([worker(1, "completed", "(Subagent completed but returned no output.)")]), true)).toContain(
-			"(Subagent completed but returned no output.)",
-		);
+		expect(render(shell("(no output)"), true)).toContain("(no output)");
 	});
 
-	it.each([undefined, null, {}, { version: 2 }, { taskId }])(
+	it.each([undefined, null, {}, { version: 1 }, { version: 2 }, { taskId }])(
 		"uses bounded plain details for an unsupported snapshot",
 		(details) => {
 			const value = message(details, `Background bash ${taskId}: completed — Bash: old prose`);
@@ -298,7 +209,7 @@ describe("structured background completion cards", () => {
 
 	it("bounds fallback source-block iteration and all rendering dimensions", () => {
 		const payload = `HEAD\x1b[31m${"界🙂x".repeat(12000)}\x1b[0m\x1b]52;c;Zm9v\x07TAIL`;
-		for (const value of [shell(payload), group([worker(1, "completed", payload)]), message(undefined, payload)]) {
+		for (const value of [shell(payload), message(undefined, payload)]) {
 			for (const width of [0, 1, 8, 40, 120]) for (const expanded of [false, true]) render(value, expanded, width);
 		}
 		const blocks = Array.from({ length: 300 }, () => ({ type: "text" as const, text: "" }));

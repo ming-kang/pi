@@ -1,5 +1,6 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
 import type { CustomMessage } from "../messages.ts";
 import type { SessionEntry, SessionManager } from "../session-manager.ts";
@@ -99,11 +100,14 @@ export class TaskSession {
 	}
 
 	restoreHistory(service = this.service): void {
-		service.restoreHistory(
-			this.options.manager
-				.getBranch()
-				.flatMap((entry) => (entry.type === "custom" && entry.customType === "task-result" ? [entry.data] : [])),
-		);
+		const records: unknown[] = [];
+		const toolResults = new Map<string, AgentToolResult<unknown>["content"]>();
+		for (const entry of this.options.manager.getBranch()) {
+			if (entry.type === "custom" && entry.customType === "task-result") records.push(entry.data);
+			else if (entry.type === "message" && entry.message.role === "toolResult")
+				toolResults.set(entry.message.toolCallId, entry.message.content);
+		}
+		service.restoreHistory(records, toolResults);
 	}
 
 	private quarantineSettlement(record: QuarantinedTaskSettlement, sessionFile: string | undefined): void {
@@ -139,7 +143,10 @@ export class TaskSession {
 			if (usage && !manager.getEntries().some((entry) => getTaskUsageRecord(entry)?.taskId === task.id)) {
 				append(TASK_USAGE_TYPE, { version: 1, taskId: task.id, usage });
 			}
-			append("task-result", JSON.parse(JSON.stringify({ version: TASK_HISTORY_VERSION, task })));
+			// A foreground result is the tool result the transcript already saves; restoration reads it from there.
+			const { result: _result, resultTruncated: _truncated, ...metadata } = task;
+			const saved = task.mode === "foreground" ? metadata : task;
+			append("task-result", JSON.parse(JSON.stringify({ version: TASK_HISTORY_VERSION, task: saved })));
 		} finally {
 			// Complete the writes before observers can replace the runtime or its manager.
 			// If a write fails, still report entries that were successfully appended.

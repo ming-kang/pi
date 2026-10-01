@@ -8,7 +8,6 @@ import {
 } from "@earendil-works/pi-tui";
 import type { AppKeybinding, KeybindingsManager } from "../../../core/keybindings.ts";
 import { isTaskTerminal, type TasksContext } from "../../../core/tasks/types.ts";
-import type { TaskViewRegistry } from "../../../core/tasks/view.ts";
 import { STATUS_SPINNER_INTERVAL_MS } from "../components/status-marker.ts";
 import type { Theme } from "../theme/theme.ts";
 import { TaskInspector } from "./inspector.ts";
@@ -25,7 +24,6 @@ export interface TasksMenuOptions {
 	theme: Theme;
 	keybindings: Pick<KeybindingsManager, "matches" | "getKeys">;
 	host: TasksManagerHost;
-	views?: Pick<TaskViewRegistry, "get" | "subscribe">;
 	state?: TasksPanelState;
 	onClose(): void;
 	pollIntervalMs?: number;
@@ -53,7 +51,6 @@ export class TasksMenu implements Component, Focusable {
 	private readonly list = new TaskList();
 	private readonly search: Input;
 	private readonly unsubscribe: () => void;
-	private readonly unsubscribeViews?: () => void;
 	private readonly pollTimer: ReturnType<typeof setInterval>;
 	private animationTimer?: ReturnType<typeof setInterval>;
 	private pendingKill?: string;
@@ -74,7 +71,6 @@ export class TasksMenu implements Component, Focusable {
 		this.selection = new TaskSelection(options.state ?? { tab: "output" });
 		this.inspector = new TaskInspector({
 			host: options.host,
-			views: options.views,
 			theme: options.theme,
 			requestRender: () => options.tui.requestRender(),
 		});
@@ -84,10 +80,6 @@ export class TasksMenu implements Component, Focusable {
 			this.dirty = true;
 			this.queueTick();
 			options.tui.requestRender();
-		});
-		this.unsubscribeViews = options.views?.subscribe(() => {
-			this.inspector.select(this.selection.selected);
-			this.queueTick(true);
 		});
 		this.pollTimer = setInterval(() => {
 			this.queueTick(true);
@@ -191,7 +183,7 @@ export class TasksMenu implements Component, Focusable {
 				this.focus = this.focus === "list" ? "inspector" : "list";
 				break;
 			case "app.tasks.follow":
-				if (this.focus === "inspector" && this.selection.state.tab === "output" && this.inspector.tail) {
+				if (this.focus === "inspector" && this.selection.state.tab === "output") {
 					this.inspector.position.output.jump(true, true);
 					this.queueTick(true);
 				}
@@ -206,7 +198,7 @@ export class TasksMenu implements Component, Focusable {
 				} else
 					this.inspector.position[this.selection.state.tab].jump(
 						key === "app.tasks.bottom",
-						this.selection.state.tab === "output" && this.inspector.tail,
+						this.selection.state.tab === "output",
 					);
 				break;
 			case "app.tasks.kill":
@@ -249,11 +241,7 @@ export class TasksMenu implements Component, Focusable {
 			this.selection.select(rows[next]?.id);
 			this.selectedChanged();
 		} else
-			this.inspector.position[this.selection.state.tab].move(
-				direction,
-				page,
-				this.selection.state.tab === "output" && this.inspector.tail,
-			);
+			this.inspector.position[this.selection.state.tab].move(direction, page, this.selection.state.tab === "output");
 	}
 	handleInput(data: string): void {
 		if (this.disposed) return;
@@ -299,12 +287,10 @@ export class TasksMenu implements Component, Focusable {
 				else {
 					const key = actions.find((key) => kb.matches(data, key));
 					if (key) this.action(key);
-					else if (this.focus === "inspector" && !this.help)
-						this.inspector.handleInput(this.selection.state.tab, data);
 				}
 			}
 		} catch (error) {
-			this.feedback = cleanTaskText(String(error));
+			this.feedback = cleanTaskText(error instanceof Error ? error.message : String(error));
 		}
 		this.queueTick(true);
 		this.options.tui.requestRender();
@@ -323,7 +309,7 @@ export class TasksMenu implements Component, Focusable {
 					this.inspector.position[this.selection.state.tab].move(
 						delta,
 						false,
-						this.selection.state.tab === "output" && this.inspector.tail,
+						this.selection.state.tab === "output",
 					);
 			}
 		} else if (event.type === "click" && event.button === "left") {
@@ -358,7 +344,7 @@ export class TasksMenu implements Component, Focusable {
 				)
 					this.focus = event.x < layout.listWidth ? "list" : "inspector";
 			} catch (error) {
-				this.feedback = cleanTaskText(String(error));
+				this.feedback = cleanTaskText(error instanceof Error ? error.message : String(error));
 			}
 		} else return;
 		this.queueTick(true);
@@ -392,7 +378,6 @@ export class TasksMenu implements Component, Focusable {
 		clearInterval(this.animationTimer);
 		this.clearKill();
 		this.unsubscribe();
-		this.unsubscribeViews?.();
 		this.inspector.dispose();
 	}
 }

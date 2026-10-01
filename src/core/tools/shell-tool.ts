@@ -293,7 +293,7 @@ export function createShellToolDefinition(
 			ctx?: ExtensionContext,
 		) {
 			const host = ctx?.tasks;
-			if (host?.closed) throw new Error("Background service is closed");
+			if (host?.closed) throw new Error("Task service is closed");
 			const run = async (managed?: ManagedShellExecution): Promise<TaskCompletion<BashToolDetails | undefined>> => {
 				const signal = managed?.control.signal ?? parentSignal;
 				try {
@@ -311,7 +311,6 @@ export function createShellToolDefinition(
 					);
 					return await runShellCommand({
 						operations: ops,
-						shellName: config.shellName,
 						context: spawnContext,
 						tempFilePrefix: config.tempFilePrefix,
 						timeout,
@@ -335,8 +334,7 @@ export function createShellToolDefinition(
 			}
 			const outcome = await host.execute<BashToolDetails | undefined>({
 				kind: config.name,
-				format: "log",
-				title: `${config.label}: ${command}`,
+				title: command,
 				toolCallId,
 				command,
 				cwd: ctx?.cwd || cwd,

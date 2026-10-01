@@ -33,7 +33,6 @@ function job(overrides: Partial<TaskExecution<{ ok: boolean }>> = {}) {
 	});
 	const execution: TaskExecution<{ ok: boolean }> = {
 		kind: "bash",
-		format: "log",
 		title: "test",
 		toolCallId: "call",
 		run,
@@ -65,7 +64,6 @@ function savedTask(id = "bash-restored", endedAt = 20, overrides: Partial<TaskSn
 		task: {
 			id,
 			kind: "bash",
-			format: "log",
 			title: "saved",
 			toolCallId: "call",
 			anchorId: null,
@@ -112,7 +110,9 @@ describe("terminal history restoration", () => {
 		const leaving = bg.cancelOutsideBranch(new Set(["B"]));
 		expect(bg.list().map((task) => task.id)).toEqual([rooted.control.id]);
 		expect(bg.get(ignored.control.id).status).toBe("stopping");
-		await expect(bg.execute(job().execution)).rejects.toThrow("limit reached (2)");
+		await expect(bg.execute(job({ background: true }).execution)).rejects.toThrow(
+			"Background task limit reached (2)",
+		);
 		expect(bg.pendingNotifications()).toEqual([]);
 		expect(rooted.control.signal.aborted).toBe(false);
 		await vi.advanceTimersByTimeAsync(2000);
@@ -183,7 +183,7 @@ describe("terminal history restoration", () => {
 		expect(bg.list()).toHaveLength(1);
 	});
 
-	it("restores newest terminal IDs without observers, accounting, notifications or deletion ownership", async () => {
+	it("restores newest terminal IDs without observers, accounting, notifications, logs or deletion ownership", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "pi-background-restore-"));
 		const path = join(dir, "saved.log");
 		try {
@@ -206,7 +206,10 @@ describe("terminal history restoration", () => {
 			expect(bg.detachForeground()).toBe(0);
 			expect(bg.pendingNotifications()).toEqual([]);
 			expect(bg.claimNotification("bash-new")).toBe(false);
-			expect((await bg.read("bash-new")).text).toBe("saved raw log");
+			expect(await bg.read("bash-new")).toMatchObject({
+				text: "saved report",
+				readError: expect.stringContaining("expired"),
+			});
 			expect((await bg.wait("bash-new")).status).toBe("cancelled");
 			expect(onSettled).not.toHaveBeenCalled();
 			expect(observer).not.toHaveBeenCalled();
@@ -245,7 +248,6 @@ describe("terminal history restoration", () => {
 			["title", {}],
 			["error", []],
 			["outputPath", "x".repeat(10000)],
-			["projection", { items: [null] }],
 			["result", { content: [null] }],
 		] as const)
 			malformed.push({ version: 2, task: { ...savedTask().task, [key]: value } });
@@ -255,30 +257,16 @@ describe("terminal history restoration", () => {
 		expect(getter).not.toHaveBeenCalled();
 	});
 
-	it("bounds huge snapshots, strips runtime data and isolates restored projections", async () => {
+	it("bounds huge snapshots and strips runtime data", async () => {
 		const bg = service();
 		const huge = "😀".repeat(100000);
 		const serialize = vi.fn();
-		const worker = {
-			id: huge,
-			label: huge,
-			status: huge,
-			input: huge,
-			activity: huge,
-			category: huge,
-			description: huge,
-			report: { text: huge, truncated: false },
-			context: huge,
-			usage: huge,
-		};
 		const record = savedTask("subagent-group", 20, {
 			kind: "subagent",
-			format: "report",
 			title: huge,
 			command: huge,
 			cwd: huge,
 			error: huge,
-			projection: { text: huge, items: Array(100).fill(worker) },
 			result: { content: [{ type: "text", text: huge }], details: { toJSON: serialize } },
 		});
 		bg.restoreHistory([record]);
@@ -287,16 +275,11 @@ describe("terminal history restoration", () => {
 		expect(Buffer.byteLength(task.command!)).toBeLessThanOrEqual(8192);
 		expect(Buffer.byteLength(task.cwd!)).toBeLessThanOrEqual(4096);
 		expect(Buffer.byteLength(task.error!)).toBeLessThanOrEqual(4096);
-		expect(task.projection?.items).toHaveLength(8);
-		expect(Buffer.byteLength(JSON.stringify(task.projection))).toBeLessThan(128 * 1024);
 		expect(task.result?.details).toBeUndefined();
 		expect(Buffer.byteLength((await bg.read(task.id, { bytes: 999999 })).text)).toBeLessThanOrEqual(
 			TASK_RESULT_BYTES,
 		);
 		expect(serialize).not.toHaveBeenCalled();
-		worker.label = "mutated";
-		expect(bg.get(task.id).projection?.items?.[0]?.label).not.toBe("mutated");
-		expect(() => bg.get(task.projection!.items![0]!.id)).toThrow("Unknown");
 		const cyclic: Record<string, unknown> = {};
 		cyclic.self = cyclic;
 		bg.restoreHistory([
@@ -320,7 +303,7 @@ describe("terminal history restoration", () => {
 			]);
 			const output = await bg.read("bash-expired", { bytes: 0 });
 			expect(output.text).toBe("");
-			expect(output.readError).toContain("Output could not be read");
+			expect(output.readError).toContain("Output has expired");
 			expect(output.task.error).toBe("command failed");
 			expect((await bg.read("bash-expired")).text).toBe("saved report");
 		} finally {

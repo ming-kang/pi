@@ -105,12 +105,10 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 				theme.fg("text", cleanTaskText(firstCommandLine(task.command ?? task.title))),
 				theme.fg("muted", `${statusName(task.status)} · ${runtimeLabel(task)}`),
 			);
-		const lines = inspector.lines(tab, rightWidth - 2);
+		const lines = inspector.lines(tab);
 		const position = inspector.position;
 		const read = position.read;
-		const diagnostics = [task.error, inspector.error, read?.readError]
-			.filter((text): text is string => !!text)
-			.map(cleanTaskText);
+		const diagnostics = [task.error, read?.readError].filter((text): text is string => !!text).map(cleanTaskText);
 		if (tab === "output" && diagnostics.length)
 			content.push(theme.fg("warning", diagnostics.join(" · ").replace(/\n/g, " ")));
 		const source =
@@ -123,7 +121,7 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 					]
 				: lines;
 		content.push(...position[tab].layout(source, rightWidth - 2, bodyHeight - content.length));
-		if (tab === "output" && inspector.tail) {
+		if (tab === "output") {
 			reading = position.output.follow
 				? isTaskTerminal(task.status)
 					? "Finished"

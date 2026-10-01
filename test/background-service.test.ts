@@ -47,7 +47,6 @@ function job(overrides: Partial<TaskExecution<{ ok: boolean }>> = {}) {
 	});
 	const execution: TaskExecution<{ ok: boolean }> = {
 		kind: "bash",
-		format: "log",
 		title: "test",
 		toolCallId: "call",
 		run,
@@ -88,10 +87,7 @@ describe("TaskRuntime execution ownership", () => {
 		const bg = service();
 		const parent = new AbortController();
 		const update = vi.fn();
-		const jobs = [
-			job({ signal: parent.signal, onUpdate: update }),
-			job({ kind: "subagent", format: "report", signal: parent.signal }),
-		];
+		const jobs = [job({ signal: parent.signal, onUpdate: update }), job({ kind: "subagent", signal: parent.signal })];
 		const calls = jobs.map((item) => bg.execute(item.execution));
 		jobs[0]!.control.publish(result("progress"));
 		const observed: string[][] = [];
@@ -419,13 +415,13 @@ describe("delivery and accounting", () => {
 });
 
 describe("bounded lifecycle and snapshots", () => {
-	it("reserves all eight active slots synchronously, including unaccepted preflight", async () => {
+	it("reserves all eight background slots synchronously, including unaccepted preflight", async () => {
 		const bg = service();
-		const jobs = Array.from({ length: 8 }, () => job({ run: () => new Promise(() => {}) }));
+		const jobs = Array.from({ length: 8 }, () => job({ background: true, run: () => new Promise(() => {}) }));
 		for (const item of jobs) void bg.execute(item.execution);
 		expect(bg.list()).toHaveLength(8);
-		const ninth = job();
-		await expect(bg.execute(ninth.execution)).rejects.toThrow("limit reached (8)");
+		const ninth = job({ background: true });
+		await expect(bg.execute(ninth.execution)).rejects.toThrow("Background task limit reached (8)");
 		expect(ninth.run).not.toHaveBeenCalled();
 	});
 
@@ -445,7 +441,7 @@ describe("bounded lifecycle and snapshots", () => {
 		expect(bg.list()).toHaveLength(104);
 		const pending = bg.pendingNotifications();
 		expect(pending).toHaveLength(40);
-		const rejected = job();
+		const rejected = job({ background: true });
 		await expect(bg.execute(rejected.execution)).rejects.toThrow("retention limit");
 		expect(rejected.run).not.toHaveBeenCalled();
 		for (const task of pending) {
@@ -474,7 +470,7 @@ describe("bounded lifecycle and snapshots", () => {
 		expect(() => bg.get(first.control.id)).toThrow("Unknown");
 	});
 
-	it("resolves unique suffix prefixes and returns isolated serializable snapshots", async () => {
+	it("resolves unique suffix prefixes and returns read-only snapshots", async () => {
 		const bg = service();
 		const first = job();
 		const second = job();
@@ -482,7 +478,9 @@ describe("bounded lifecycle and snapshots", () => {
 		expect(bg.get(first.control.id.slice(5, 17)).id).toBe(first.control.id);
 		expect(() => bg.get("bash-")).toThrow("Ambiguous");
 		const snapshot = bg.get(first.control.id);
-		snapshot.title = "mutated";
+		expect(() => {
+			snapshot.title = "mutated";
+		}).toThrow(TypeError);
 		expect(bg.get(first.control.id).title).toBe("test");
 		first.completion.resolve({ result: result() });
 		second.completion.resolve({ result: result() });
@@ -525,29 +523,15 @@ describe("bounded lifecycle and snapshots", () => {
 		expect(ambiguous.matches.map((task) => task.id).sort()).toEqual([first.control.id, second.control.id].sort());
 	});
 
-	it("bounds metadata, projections, stored content and intact-or-omitted details", async () => {
+	it("bounds metadata, stored content and intact-or-omitted details", async () => {
 		const bg = service();
 		const huge = "😀".repeat(100_000);
 		const item = job({ title: huge, command: huge, cwd: huge, toolCallId: huge });
 		const call = bg.execute(item.execution);
-		item.control.publish(result(huge), {
-			text: huge,
-			items: Array.from({ length: 99 }, () => ({
-				id: huge,
-				label: huge,
-				status: huge,
-				input: huge,
-				activity: huge,
-				category: huge,
-				description: huge,
-				report: { text: huge, truncated: false },
-			})),
-		});
+		item.control.publish(result(huge));
 		const snapshot = bg.get(item.control.id);
 		expect(Buffer.byteLength(snapshot.title)).toBeLessThanOrEqual(1024);
 		expect(Buffer.byteLength(snapshot.command!)).toBeLessThanOrEqual(8192);
-		expect(snapshot.projection?.items).toHaveLength(8);
-		expect(Buffer.byteLength(JSON.stringify(snapshot.projection))).toBeLessThan(120 * 1024);
 		expect(Buffer.byteLength((await bg.read(item.control.id, { bytes: Infinity })).text)).toBeLessThanOrEqual(8192);
 		const details = { large: huge };
 		const stored = boundedResult({ content: [{ type: "text", text: huge }], details });
@@ -722,7 +706,7 @@ describe("handoff and cleanup races", () => {
 			await tick();
 			expect(bg.claimNotification(item.control.id)).toBe(true);
 		}
-		await expect(bg.execute(job().execution)).rejects.toThrow("retention limit");
+		await expect(bg.execute(job({ background: true }).execution)).rejects.toThrow("retention limit");
 		expect(bg.list()).toHaveLength(4);
 		for (const task of bg.list()) bg.markDelivered(task.id);
 		expect(bg.list()).toHaveLength(1);
@@ -827,7 +811,7 @@ describe("owned output leases", () => {
 				}).execution,
 			);
 		}
-		await expect(stalled.execute(job().execution)).rejects.toThrow("retention limit");
+		await expect(stalled.execute(job({ background: true }).execution)).rejects.toThrow("retention limit");
 	});
 
 	it("parent cancellation during detached preflight prevents acceptance and restart", async () => {

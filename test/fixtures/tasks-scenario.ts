@@ -20,10 +20,10 @@ export async function startTasksScenario(tasks: TasksContext, cwd: string) {
 		let id = "";
 		const command = `bash ${name}.sh`;
 		const caller = tasks.execute<BashToolDetails | undefined>({
-			kind: "bash", format: "log", title: name, command, cwd: directory, toolCallId: `fixture-${name}`, background,
+			kind: "bash", title: name, command, cwd: directory, toolCallId: `fixture-${name}`, background,
 			run(control) {
 				id = control.id;
-				return runShellCommand({ operations: createLocalBashOperations(), shellName: "bash", context: { command, cwd: directory, env: { ...process.env, TASK_SCENARIO_PROJECT: cwd } }, tempFilePrefix: "pi-tasks-scenario", signal: control.signal, timeout: 600, managed: { control } });
+				return runShellCommand({ operations: createLocalBashOperations(), context: { command, cwd: directory, env: { ...process.env, TASK_SCENARIO_PROJECT: cwd } }, tempFilePrefix: "pi-tasks-scenario", signal: control.signal, timeout: 600, managed: { control } });
 			},
 		});
 		outcomes.push(caller.catch(error => errors.push(String(error))));
@@ -37,7 +37,7 @@ export async function startTasksScenario(tasks: TasksContext, cwd: string) {
 	let finishReport!: () => void;
 	const reportGate = new Promise<void>(resolve => { finishReport = resolve; });
 	const report = await tasks.execute({
-		kind: "fixture-report", format: "report", title: "Review extension boundaries", toolCallId: "fixture-report", background: true,
+		kind: "fixture-report", title: "Review extension boundaries", toolCallId: "fixture-report", background: true,
 		async run(control) {
 			control.accept();
 			control.publish({content:[{type:"text",text:"Reviewing imports and reload behavior."}],details:undefined});
@@ -46,12 +46,8 @@ export async function startTasksScenario(tasks: TasksContext, cwd: string) {
 				control.signal.addEventListener("abort", abort, {once:true});
 				void reportGate.then(() => { control.signal.removeEventListener("abort", abort); resolve(); });
 			});
-			const items = [
-				{id:"imports",label:"Imports",category:"review",description:"Inspect imports",status:"completed",input:"Imports",activity:"Finished",report:{text:"Public extension boundaries preserved.",truncated:false}},
-				{id:"reload",label:"Reload",category:"review",description:"Inspect reload",status:"failed",input:"Reload",activity:"Finished",report:{text:"Partial reload findings.",truncated:false},error:"Fixture reload diagnostic"},
-			];
-			const result = { content: [{type:"text" as const,text:"Imports passed. Reload check needs attention."}], details: undefined };
-			control.publish(result,{items});
+			const result = { content: [{type:"text" as const,text:"Imports: public extension boundaries preserved.\nReload: partial findings; Fixture reload diagnostic."}], details: undefined };
+			control.publish(result);
 			return {status:control.signal.aborted?"cancelled" as const:"partial" as const,result};
 		},
 	});

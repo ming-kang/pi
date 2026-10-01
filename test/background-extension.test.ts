@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-sampling";
-import { getKeybindings, setKeybindings, stripTerminalSequences, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { getKeybindings, setKeybindings, stripTerminalSequences, type TUI } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
 	AgentToolResult,
@@ -14,14 +16,12 @@ import type {
 	ToolRenderContext,
 } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
-import type { CustomMessage } from "../src/core/messages.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import type { TaskControl } from "../src/core/tasks/types.ts";
 import { runKill, runList, runRead, runWait } from "../src/core/tools/tasks/actions.ts";
 import type { tasksSchema } from "../src/core/tools/tasks/schema.ts";
-import type { TasksDetails, TasksNotificationDetails } from "../src/core/tools/tasks/types.ts";
+import type { TasksDetails } from "../src/core/tools/tasks/types.ts";
 import {
-	renderLegacyTaskNotification,
 	renderTasksCall,
 	renderTasksResult,
 	scheduleWaitRefresh,
@@ -107,9 +107,9 @@ describe("public Background management", () => {
 		const ctx = { tasks: h.service } as unknown as ExtensionToolContext;
 		const failure = tool!.execute("call", { action: "read", taskId: "nope" }, undefined, undefined, ctx);
 		await expect(failure).rejects.toThrow(
-			/No background task "nope" in this session\. IDs from other sessions are not valid here\./,
+			/No task "nope" in this session\. IDs from other sessions are not valid here\./,
 		);
-		await expect(failure).rejects.toThrow(new RegExp(`Current tasks:\\n${id} `));
+		await expect(failure).rejects.toThrow(new RegExp(`Current background tasks:\\n${id} `));
 		h.finish();
 	});
 	it("reads and lists both kinds using the same service", async () => {
@@ -175,20 +175,20 @@ describe("public Background management", () => {
 		const service = new TaskRuntime({ enabled: true });
 		services.push(service);
 		await expect(runRead(service, { action: "read", taskId: "nope" })).rejects.toThrow(
-			'No background task "nope" in this session. No background tasks in this session.',
+			'No task "nope" in this session. No background tasks in this session.',
 		);
 		expect(() => runKill(service, { action: "kill", taskId: "nope" })).toThrow(
-			'No background task "nope" in this session. No background tasks in this session.',
+			'No task "nope" in this session. No background tasks in this session.',
 		);
 	});
 	it("enriches unknown ids across read, wait, and kill with the same listing", async () => {
 		const h = running();
 		await h.outcome;
 		const id = h.service.list()[0]!.id;
-		await expect(runRead(h.service, { action: "read", taskId: "nope" })).rejects.toThrow(/Current tasks:/);
-		await expect(runWait(h.service, { action: "wait", taskId: "nope" })).rejects.toThrow(/Current tasks:/);
+		await expect(runRead(h.service, { action: "read", taskId: "nope" })).rejects.toThrow(/Current background tasks:/);
+		await expect(runWait(h.service, { action: "wait", taskId: "nope" })).rejects.toThrow(/Current background tasks:/);
 		expect(() => runKill(h.service, { action: "kill", taskId: "nope" })).toThrow(
-			new RegExp(`No background task "nope" in this session[\\s\\S]*${id}`),
+			new RegExp(`No task "nope" in this session[\\s\\S]*${id}`),
 		);
 		h.finish();
 	});
@@ -213,7 +213,7 @@ describe("public Background management", () => {
 		const bashIds = ids.filter((id) => id.startsWith("bash"));
 		expect(bashIds).toHaveLength(2);
 		const failure = runRead(service, { action: "read", taskId: "bash" });
-		await expect(failure).rejects.toThrow('Ambiguous background task ID "bash" matches 2 tasks:');
+		await expect(failure).rejects.toThrow('Ambiguous task ID "bash" matches 2 tasks:');
 		await expect(failure).rejects.toThrow(new RegExp(bashIds[0]!));
 		await expect(failure).rejects.toThrow(new RegExp(bashIds[1]!));
 		await expect(failure).rejects.not.toThrow(new RegExp(ids.find((id) => id.startsWith("subagent"))!));
@@ -234,7 +234,6 @@ describe("public Background management", () => {
 		for (let index = 0; index < 12; index++) {
 			await service.execute({
 				kind: "bash",
-				format: "log",
 				title: `task ${index + 1}`,
 				toolCallId: `call-${index + 1}`,
 				background: true,
@@ -254,7 +253,7 @@ describe("public Background management", () => {
 			},
 			(error: unknown) => (error as Error).message,
 		);
-		expect(message).toContain("Current tasks:");
+		expect(message).toContain("Current background tasks:");
 		// The ten-row window keeps the newest finishes; the two oldest fall out.
 		expect(message).not.toContain(ids[0]!);
 		expect(message).not.toContain(ids[1]!);
@@ -274,7 +273,6 @@ describe("public Background management", () => {
 		});
 		const foreground = service.execute({
 			kind: "bash",
-			format: "log",
 			title: "inline",
 			toolCallId: "inline",
 			async run(control) {
@@ -288,7 +286,6 @@ describe("public Background management", () => {
 		await running;
 		await service.execute({
 			kind: "bash",
-			format: "log",
 			title: "backgrounded",
 			toolCallId: "backgrounded",
 			background: true,
@@ -317,7 +314,6 @@ describe("public Background management", () => {
 		const start = (title: string) =>
 			service.execute({
 				kind: "bash",
-				format: "log",
 				title,
 				toolCallId: title,
 				background: true,
@@ -343,7 +339,7 @@ describe("public Background management", () => {
 			},
 			(error: unknown) => (error as Error).message,
 		);
-		expect(message).toContain('Ambiguous background task ID "bash" matches 2 tasks:');
+		expect(message).toContain('Ambiguous task ID "bash" matches 2 tasks:');
 		for (const id of ids) expect(message).toContain(id);
 	});
 	it("shows the most recent finishes in tasks list, folding older ones into the count", async () => {
@@ -354,7 +350,6 @@ describe("public Background management", () => {
 		for (let index = 0; index < 7; index++) {
 			await service.execute({
 				kind: "bash",
-				format: "log",
 				title: `task ${index + 1}`,
 				toolCallId: `call-${index + 1}`,
 				background: true,
@@ -380,7 +375,6 @@ describe("public Background management", () => {
 		services.push(service);
 		await service.execute({
 			kind: "bash",
-			format: "log",
 			title: "missing log",
 			toolCallId: "missing",
 			background: true,
@@ -413,6 +407,66 @@ describe("public Background management", () => {
 		}
 	});
 
+	it("tells the model which byte range it received and where to continue", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-tasks-offsets-"));
+		const path = join(directory, "output.log");
+		const line = "build output line\n";
+		await writeFile(path, line.repeat(6000));
+		const service = new TaskRuntime({ enabled: true });
+		services.push(service);
+		let finish!: () => void;
+		const done = new Promise<void>((resolve) => {
+			finish = resolve;
+		});
+		await service.execute({
+			kind: "bash",
+			title: "build",
+			toolCallId: "offsets",
+			background: true,
+			async run(control) {
+				control.setOutputPath(path);
+				control.accept();
+				await done;
+				return { result: { content: [{ type: "text", text: "done" }], details: undefined } };
+			},
+		});
+		const id = service.list()[0]!.id;
+		const total = Buffer.byteLength(line) * 6000;
+		try {
+			const read = textOf(await runRead(service, { action: "read", taskId: id }));
+			expect(read).toContain(`bytes ${total - 8192}–${total} of ${total}`);
+			expect(read).toContain(`next sinceBytes ${total}`);
+
+			const fromStart = textOf(await runWait(service, { action: "wait", taskId: id, waitMs: 1, sinceBytes: 0 }));
+			expect(fromStart).toContain(`bytes ${total - 32 * 1024}–${total} of ${total}`);
+			expect(fromStart).toContain(`skipped ${total - 32 * 1024} bytes after sinceBytes 0`);
+			expect(fromStart).toContain(`next sinceBytes ${total}`);
+
+			const delta = textOf(
+				await runWait(service, {
+					action: "wait",
+					taskId: id,
+					waitMs: 1,
+					sinceBytes: total - Buffer.byteLength(line),
+				}),
+			);
+			expect(delta).toContain(`bytes ${total - Buffer.byteLength(line)}–${total} of ${total}`);
+			expect(delta).not.toContain("skipped");
+		} finally {
+			finish();
+			await service.wait(id);
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+	it("clamps read size to the retained slice limit", async () => {
+		const h = running();
+		await h.outcome;
+		const id = h.service.list()[0]!.id;
+		const read = vi.spyOn(h.service, "read");
+		await runRead(h.service, { action: "read", taskId: id, bytes: 50 * 1024 });
+		expect(read).toHaveBeenCalledWith(id, expect.objectContaining({ bytes: 48 * 1024 }));
+		h.finish();
+	});
 	it("bounds list output including oversized titles", async () => {
 		const h = running();
 		await h.outcome;
@@ -559,7 +613,6 @@ describe("public Background management", () => {
 			});
 			const outcome = service.execute({
 				kind: "bash",
-				format: "log",
 				title: "build",
 				toolCallId: "foreground",
 				background: false,
@@ -620,7 +673,6 @@ describe("public Background management", () => {
 				});
 				const outcome = service.execute({
 					kind: "bash",
-					format: "log",
 					title: toolCallId,
 					toolCallId,
 					background: false,
@@ -681,114 +733,6 @@ describe("public Background management", () => {
 	});
 });
 
-describe("renderLegacyTaskNotification", () => {
-	const plainTheme = {
-		fg: (_color: string, text: string) => text,
-		bold: (text: string) => text,
-	} as unknown as Theme;
-
-	const details: TasksNotificationDetails = {
-		taskId: "bg-abc123",
-		command: "npm run build",
-		status: "completed",
-		exitCode: 0,
-		runtimeMs: 12_000,
-		outputPath: "/tmp/pi-bg-abc123.log",
-		totalBytes: 200,
-		tailText: "build finished\n",
-		tailTruncated: false,
-	};
-
-	function message(overrides?: Partial<TasksNotificationDetails>): CustomMessage<TasksNotificationDetails> {
-		return {
-			role: "custom",
-			customType: "background-task",
-			content: "",
-			display: true,
-			details: { ...details, ...overrides },
-			timestamp: Date.now(),
-		};
-	}
-
-	it("renders a collapsed summary and expands with the output tail", () => {
-		const collapsed = renderLegacyTaskNotification(message(), { expanded: false, outputPad: 1 }, plainTheme);
-		expect(collapsed).toBeDefined();
-		const collapsedLines = (collapsed?.render(120) ?? []).map(stripTerminalSequences);
-		expect(collapsedLines.join("\n")).toContain("bg-abc123");
-		expect(collapsedLines.join("\n")).toContain("completed, exit 0");
-		expect(collapsedLines.join("\n")).not.toContain("build finished");
-		// Collapsed keeps the row compact: file name only, not the full path.
-		expect(collapsedLines.join("\n")).toContain("pi-bg-abc123.log");
-		expect(collapsedLines.join("\n")).not.toContain("/tmp/pi-bg-abc123.log");
-
-		const expanded = renderLegacyTaskNotification(message(), { expanded: true, outputPad: 1 }, plainTheme);
-		const expandedLines = (expanded?.render(120) ?? []).map(stripTerminalSequences);
-		expect(expandedLines.join("\n")).toContain("build finished");
-		expect(expandedLines.join("\n")).toContain("/tmp/pi-bg-abc123.log");
-	});
-
-	it("bounds a wide-character command by display width, not code-point count", () => {
-		// Each CJK code point occupies two terminal columns, so a count-based
-		// truncation emits roughly twice the intended width and overflows the row.
-		const command = "编译前端资源包".repeat(40);
-		const collapsed = renderLegacyTaskNotification(
-			message({ command }),
-			{ expanded: false, outputPad: 1 },
-			plainTheme,
-		);
-		const summary = ((collapsed?.render(400) ?? []).map(stripTerminalSequences)[0] ?? "").trimEnd();
-		// 120 columns for the command, plus the glyph, id, and outcome.
-		expect(visibleWidth(summary)).toBeLessThanOrEqual(200);
-
-		// With a description the command gets the tighter 40-column budget, so the
-		// row is shorter still, and the description survives.
-		const labelled = renderLegacyTaskNotification(
-			message({ command, description: "构建" }),
-			{ expanded: false, outputPad: 1 },
-			plainTheme,
-		);
-		const labelledSummary = ((labelled?.render(400) ?? []).map(stripTerminalSequences)[0] ?? "").trimEnd();
-		expect(labelledSummary).toContain("构建");
-		expect(visibleWidth(labelledSummary)).toBeLessThan(visibleWidth(summary));
-	});
-
-	it("keeps the end of an oversized tail when expanded", () => {
-		const tailText = `HEAD${"x".repeat(4500)}TAIL`;
-		const expanded = renderLegacyTaskNotification(
-			message({ tailText }),
-			{ expanded: true, outputPad: 1 },
-			plainTheme,
-		);
-		const text = (expanded?.render(200) ?? []).map(stripTerminalSequences).join("\n");
-		expect(text).toContain("TAIL");
-		expect(text).not.toContain("HEAD");
-	});
-
-	it("falls back to the default renderer for malformed details", () => {
-		expect(
-			renderLegacyTaskNotification(
-				message({ taskId: undefined as unknown as string }),
-				{ expanded: false, outputPad: 1 },
-				plainTheme,
-			),
-		).toBeUndefined();
-	});
-
-	it("renders a stalled notification as waiting-for-input with advice on expand", () => {
-		const stalled = message({ stalled: true, status: "running", tailText: "Proceed? (y/n)\n" });
-
-		const collapsed = renderLegacyTaskNotification(stalled, { expanded: false, outputPad: 1 }, plainTheme);
-		const collapsedText = (collapsed?.render(120) ?? []).map(stripTerminalSequences).join("\n");
-		expect(collapsedText).toContain("waiting for input");
-		expect(collapsedText).not.toContain("(y/n)");
-
-		const expanded = renderLegacyTaskNotification(stalled, { expanded: true, outputPad: 1 }, plainTheme);
-		const expandedText = (expanded?.render(120) ?? []).map(stripTerminalSequences).join("\n");
-		expect(expandedText).toContain("Proceed? (y/n)");
-		expect(expandedText).toContain("kill");
-	});
-});
-
 describe("renderTasksCall", () => {
 	const plainTheme = {
 		fg: (_color: string, text: string) => text,
@@ -807,27 +751,6 @@ describe("renderTasksCall", () => {
 			isPartial: true,
 		} as ToolRenderContext);
 		expect(partialAction.render(200).map(stripTerminalSequences).join("\n").trimEnd()).toBe("tasks cre");
-
-		const createWithoutCommand = renderTasksCall({ action: "create" } as never, plainTheme, {
-			expanded: false,
-			isPartial: true,
-		} as ToolRenderContext);
-		expect(createWithoutCommand.render(200).map(stripTerminalSequences).join("\n").trimEnd()).toBe("tasks create");
-	});
-
-	it("shows the full multi-line create command only when expanded", () => {
-		const args = { action: "create" as const, command: "echo one\necho two\necho three" };
-
-		const collapsed = renderTasksCall(args, plainTheme, { expanded: false } as ToolRenderContext);
-		const collapsedText = collapsed.render(200).map(stripTerminalSequences).join("\n");
-		expect(collapsedText).toContain("+2 lines");
-		expect(collapsedText).not.toContain("echo three");
-
-		const expanded = renderTasksCall(args, plainTheme, { expanded: true } as ToolRenderContext);
-		const expandedText = expanded.render(200).map(stripTerminalSequences).join("\n");
-		expect(expandedText).toContain("echo two");
-		expect(expandedText).toContain("echo three");
-		expect(expandedText).not.toContain("+2 lines");
 	});
 
 	it("renders one line per action with the task id and parameters", () => {
@@ -851,16 +774,6 @@ describe("renderTasksCall", () => {
 			const text = component.render(200).map(stripTerminalSequences).join("\n");
 			expect(text).toMatch(pattern);
 		}
-	});
-
-	it("appends the description label to a create call", () => {
-		const component = renderTasksCall(
-			{ action: "create", command: "npm run dev", description: "dev server" },
-			plainTheme,
-			{ expanded: false } as ToolRenderContext,
-		);
-		const text = component.render(200).map(stripTerminalSequences).join("\n");
-		expect(text).toContain("npm run dev & · dev server");
 	});
 });
 
@@ -936,29 +849,22 @@ describe("renderTasksCall wait pending line", () => {
 	});
 });
 
-describe("renderTasksResult summaries", () => {
+describe("renderTasksResult", () => {
 	const plainTheme = {
 		fg: (_color: string, text: string) => text,
 		bold: (text: string) => text,
 	} as unknown as Theme;
 
-	it("carries the description label on a create summary", () => {
+	it("shows the saved text of a result from an older tool version", () => {
 		const component = renderTasksResult(
 			{
 				content: [{ type: "text", text: "Started background task bg-3f." }],
-				details: {
-					action: "create",
-					taskId: "bg-3f",
-					outputPath: "/tmp/pi-bg-3f.log",
-					command: "npm run dev",
-					description: "dev server",
-				},
+				details: { action: "create", taskId: "bg-3f" } as never,
 			},
 			{ expanded: false, isPartial: false },
 			plainTheme,
 			{ args: { action: "create" }, state: {} } as ToolRenderContext,
 		);
-		const text = component.render(200).map(stripTerminalSequences).join("\n");
-		expect(text).toContain("bg-3f (dev server) started");
+		expect(component.render(200).map(stripTerminalSequences).join("\n")).toContain("Started background task bg-3f.");
 	});
 });

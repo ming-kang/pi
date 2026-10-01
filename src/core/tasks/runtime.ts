@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
-import { boundedResult, boundText, finiteLimit, readOutputSlice, sliceText, TASK_TITLE_BYTES } from "./output.ts";
-import { readTaskProjection } from "./presentation.ts";
-import { type TaskRecord, TaskStore } from "./store.ts";
+import { boundText, finiteLimit, readOutputSlice, retainResult, sliceText, TASK_TITLE_BYTES } from "./output.ts";
+import { changed, snapshotOf, type TaskRecord, TaskStore } from "./store.ts";
 import {
 	TASK_BACKGROUND_REJECTION,
 	type TaskCompletion,
@@ -18,8 +17,6 @@ import {
 	type TasksContext,
 	type TaskToolOutcome,
 } from "./types.ts";
-import { TaskViewRegistry } from "./view.ts";
-import { readTaskViewData } from "./view-data.ts";
 
 interface ActiveTask {
 	controller: AbortController;
@@ -37,25 +34,12 @@ function errorText(error: unknown): string {
 	try {
 		return boundText(error instanceof Error ? error.message : String(error), 4096);
 	} catch {
-		return "Background execution failed (unprintable error)";
+		return "Task execution failed (unprintable error)";
 	}
-}
-
-function storeResult(task: TaskSnapshot, result: AgentToolResult<unknown>, truncated = false): void {
-	const bounded = boundedResult({ content: result.content, details: undefined });
-	task.result = bounded;
-	task.resultTruncated =
-		truncated ||
-		bounded.content.length !== result.content.length ||
-		bounded.content.some((block, index) => {
-			const original = result.content[index];
-			return original?.type !== "text" || block.type !== "text" || block.text !== original.text;
-		});
 }
 
 /** Session-local supervision. Executors own their processes, items and output files. */
 export class TaskRuntime implements TasksContext {
-	readonly views = new TaskViewRegistry();
 	private readonly store: TaskStore;
 	private readonly executions = new Map<string, ActiveTask>();
 	private readonly listeners = new Set<() => void>();
@@ -77,7 +61,7 @@ export class TaskRuntime implements TasksContext {
 		this.configuredEnabled = options.enabled ?? false;
 		this.maxActive = Math.max(1, finiteLimit(options.maxActive, 8, 128));
 		this.maxHistory = finiteLimit(options.maxHistory, 32, 1024);
-		// Separate foreground shell history, plus the existing history/protected-record allowance.
+		// Separate foreground and background histories, plus the protected-record allowance.
 		this.maxRetained = this.maxActive + 2 * Math.max(1, this.maxHistory) + this.maxHistory;
 		this.store = new TaskStore(this.maxHistory, this.maxRetained, () => this.closed, options.onCleanupError);
 	}
@@ -85,11 +69,15 @@ export class TaskRuntime implements TasksContext {
 	/**
 	 * Rehydrate terminal version-2 custom data only, newest endedAt in each history
 	 * (later input wins ties). Existing runtime records win ID collisions. No execution, accounting,
-	 * notification, or deletion ownership is restored, including for worker projections.
-	 * The host supplies the current branch; closed services ignore restoration.
+	 * notification, or deletion ownership is restored. Foreground records take their output
+	 * from the branch's tool results. The host supplies the current branch; closed services
+	 * ignore restoration.
 	 */
-	restoreHistory(records: readonly unknown[]): void {
-		this.store.restoreHistory(records);
+	restoreHistory(
+		records: readonly unknown[],
+		toolResults?: ReadonlyMap<string, AgentToolResult<unknown>["content"]>,
+	): void {
+		this.store.restoreHistory(records, toolResults);
 	}
 
 	get enabled(): boolean {
@@ -101,28 +89,40 @@ export class TaskRuntime implements TasksContext {
 		this.emit();
 	}
 
+	/** Foreground work is bounded by its caller; only background work holds a slot. */
+	private backgroundActive(): number {
+		let count = 0;
+		for (const record of this.store.records.values())
+			if (!record.settled && record.task.mode === "background") count++;
+		return count;
+	}
+
+	private limitError(): Error {
+		return new Error(
+			`Background task limit reached (${this.maxActive}); stop or wait for a background task, or run in the foreground.`,
+		);
+	}
+
 	async execute<T>(execution: TaskExecution<T>): Promise<TaskToolOutcome<T>> {
 		// Admission and registration happen synchronously, before invoking user code or awaiting anything.
 		if (execution.background && this.options.backgroundAllowed === false) throw new Error(TASK_BACKGROUND_REJECTION);
-		if (this.closed) throw new Error("Background service is closed");
-		if (execution.background && !this.enabled) throw new Error("Background execution is not available in this host");
+		if (this.closed) throw new Error("Task service is closed");
+		if (execution.background) {
+			if (!this.enabled) throw new Error("Background execution is not available in this host");
+			if (this.backgroundActive() >= this.maxActive) throw this.limitError();
+			if (this.store.records.size + this.store.cleanups.size >= this.maxRetained) {
+				throw new Error(
+					"Task history retention limit reached; deliver pending notifications or release pinned or claimed records",
+				);
+			}
+		}
 		if (execution.signal?.aborted) throw execution.signal.reason ?? new Error("Execution aborted");
-		if ([...this.store.records.values()].filter((record) => !record.settled).length >= this.maxActive) {
-			throw new Error(`Background execution limit reached (${this.maxActive})`);
-		}
-		if (this.store.records.size + this.store.cleanups.size >= this.maxRetained) {
-			throw new Error(
-				"Background history retention limit reached; deliver pending notifications or release pinned or claimed records",
-			);
-		}
 		if (!/^[a-z][a-z0-9-]{0,63}$/.test(execution.kind)) throw new Error("Invalid task source");
 		const anchorId = this.options.anchor?.() ?? null;
-		if (anchorId !== null && Buffer.byteLength(anchorId) > 8192)
-			throw new Error("Background branch anchor is too large");
+		if (anchorId !== null && Buffer.byteLength(anchorId) > 8192) throw new Error("Task branch anchor is too large");
 		const task: TaskSnapshot = {
 			id: `${execution.kind}-${randomUUID()}`,
 			kind: execution.kind,
-			format: execution.format ?? "report",
 			title: boundText(execution.title, TASK_TITLE_BYTES),
 			toolCallId: boundText(execution.toolCallId, 512),
 			anchorId,
@@ -144,10 +144,8 @@ export class TaskRuntime implements TasksContext {
 		const record: TaskRecord = {
 			task,
 			settled: false,
-			accounted: false,
 			visible: true,
-			suppressed: false,
-			delivery: "pending",
+			delivery: "none",
 			pins: 0,
 			deliveryHolds: 0,
 			waiters: new Set(),
@@ -166,15 +164,15 @@ export class TaskRuntime implements TasksContext {
 					record.settled ||
 					active.handedOff ||
 					this.closed ||
-					record.suppressed ||
+					!record.visible ||
 					active.controller.signal.aborted
 				)
 					return;
 				active.handedOff = true;
-				record.handedOff = true;
 				task.mode = "background";
+				changed(record);
 				active.removeParent();
-				resolveCaller({ kind: "background", task: this.snapshot(record) });
+				resolveCaller({ kind: "background", task: snapshotOf(record) });
 				this.emit();
 			},
 			done: new Promise<void>((resolve) => {
@@ -211,16 +209,17 @@ export class TaskRuntime implements TasksContext {
 				if (record.settled || active.accepted || this.closed || active.controller.signal.aborted) return;
 				active.accepted = true;
 				if (task.status === "queued") task.status = "running";
+				changed(record);
 				if (active.detachRequested) active.removeParent();
 				// Let an already available final result win over a handoff.
 				queueMicrotask(() => queueMicrotask(active.handoff));
 				this.emit();
 			},
-			publish: (result, projection) => {
+			publish: (result) => {
 				if (record.settled || this.closed) return;
-				storeResult(task, result);
+				retainResult(task, result);
+				changed(record);
 				if (result.usage !== undefined) active.publishedUsage = structuredClone(result.usage);
-				if (projection) task.projection = readTaskProjection(projection);
 				if (!active.detachRequested && !active.handedOff) {
 					try {
 						onUpdate?.(result);
@@ -232,19 +231,15 @@ export class TaskRuntime implements TasksContext {
 			},
 			setOutputPath: (path, cleanup) => {
 				if (record.settled) {
-					if (cleanup) throw new Error("Background execution has settled");
+					if (cleanup) throw new Error("Task execution has settled");
 					return;
 				}
 				if (record.cleanup) throw new Error("Managed output is already registered");
 				// Never truncate a real filesystem path into a different path.
-				if (Buffer.byteLength(path) > 8192) throw new Error("Background output path is too large");
+				if (Buffer.byteLength(path) > 8192) throw new Error("Task output path is too large");
 				record.cleanup = cleanup;
 				task.outputPath = path;
-				this.emit();
-			},
-			publishView: (data) => {
-				if (record.settled || this.closed) return;
-				task.viewData = readTaskViewData(data);
+				changed(record);
 				this.emit();
 			},
 		};
@@ -265,44 +260,40 @@ export class TaskRuntime implements TasksContext {
 							? "failed"
 							: "completed");
 			if (completion) {
-				storeResult(task, completion.result);
+				retainResult(task, completion.result);
 				if (completion.error !== undefined) task.error = boundText(completion.error, 4096);
 				if (completion.exitCode !== undefined) task.exitCode = completion.exitCode;
 			}
 			if (failed) {
 				task.error = errorText(error);
-				storeResult(
+				retainResult(
 					task,
-					{
-						content: [{ type: "text", text: task.error }, ...(task.result?.content ?? [])],
-						details: task.result?.details,
-					},
+					{ content: [{ type: "text", text: task.error }, ...(task.result?.content ?? [])], details: undefined },
 					task.resultTruncated,
 				);
 			}
+			changed(record);
 			let settlementWarning: string | undefined;
 			try {
 				this.options.onSettled?.(
-					this.snapshot(record),
+					snapshotOf(record),
 					completion?.usage ?? completion?.result.usage ?? active.publishedUsage,
 				);
 			} catch (accountingError) {
 				const warning = `Usage settlement failed: ${errorText(accountingError)}`;
 				settlementWarning = warning;
 				task.error = boundText([task.error, warning].filter(Boolean).join("\n"), 8192);
-				storeResult(
+				retainResult(
 					task,
-					{
-						content: [{ type: "text", text: warning }, ...(task.result?.content ?? [])],
-						details: task.result?.details,
-					},
+					{ content: [{ type: "text", text: warning }, ...(task.result?.content ?? [])], details: undefined },
 					task.resultTruncated,
 				);
+				changed(record);
 			}
 			active.publishedUsage = undefined;
-			record.accounted = true;
+			// Delivery becomes eligible only after settlement is persisted.
+			record.delivery = active.handedOff ? "pending" : "delivered";
 			if (!active.handedOff) {
-				record.delivery = "delivered";
 				if (failed) rejectCaller(error);
 				else {
 					const { usage: _usage, ...result } = completion.result;
@@ -330,23 +321,30 @@ export class TaskRuntime implements TasksContext {
 		return caller;
 	}
 
+	private detachable(record: TaskRecord): boolean {
+		const active = this.executions.get(record.task.id);
+		return !!active && !record.settled && !active.detachRequested && !active.controller.signal.aborted;
+	}
+
 	detachForeground(): number {
 		if (!this.enabled) return 0;
-		const records = [...this.store.records.values()].filter((record) => {
-			const active = this.executions.get(record.task.id);
-			return active && !record.settled && !active.detachRequested && !active.controller.signal.aborted;
-		});
+		const eligible = [...this.store.records.values()]
+			.filter((record) => this.detachable(record))
+			.sort((left, right) => left.task.startedAt - right.task.startedAt);
+		if (!eligible.length) return 0;
+		const free = this.maxActive - this.backgroundActive();
+		if (free <= 0) throw this.limitError();
+		const records = eligible.slice(0, free);
 		for (const record of records) this.prepareDetach(record);
 		for (const record of records) this.finishDetach(record);
-		if (records.length) this.emit();
+		this.emit();
 		return records.length;
 	}
 
 	detach(id: string): boolean {
 		const record = this.lookup(id);
-		const active = this.executions.get(record.task.id);
-		if (!this.enabled || !active || record.settled || active.detachRequested || active.controller.signal.aborted)
-			return false;
+		if (!this.enabled || !this.detachable(record)) return false;
+		if (this.backgroundActive() >= this.maxActive) throw this.limitError();
 		this.prepareDetach(record);
 		this.finishDetach(record);
 		this.emit();
@@ -357,6 +355,7 @@ export class TaskRuntime implements TasksContext {
 		const active = this.executions.get(record.task.id)!;
 		active.detachRequested = true;
 		record.task.mode = "background";
+		changed(record);
 		if (active.accepted) active.removeParent();
 	}
 
@@ -373,7 +372,7 @@ export class TaskRuntime implements TasksContext {
 	}
 
 	list(): TaskSnapshot[] {
-		return [...this.store.records.values()].filter((record) => record.visible).map((record) => this.snapshot(record));
+		return [...this.store.records.values()].filter((record) => record.visible).map(snapshotOf);
 	}
 
 	private lookup(id: string): TaskRecord {
@@ -383,16 +382,13 @@ export class TaskRuntime implements TasksContext {
 			({ task }) => task.id.startsWith(id) || task.id.slice(task.kind.length + 1).startsWith(id),
 		);
 		if (!id || matches.length !== 1) {
-			throw new TaskLookupError(
-				matches.length > 1 ? "ambiguous" : "unknown",
-				matches.map((record) => this.snapshot(record)),
-			);
+			throw new TaskLookupError(matches.length > 1 ? "ambiguous" : "unknown", matches.map(snapshotOf));
 		}
 		return matches[0]!;
 	}
 
 	get(id: string): TaskSnapshot {
-		return this.snapshot(this.lookup(id));
+		return snapshotOf(this.lookup(id));
 	}
 
 	async read(
@@ -402,7 +398,7 @@ export class TaskRuntime implements TasksContext {
 		const record = this.lookup(id);
 		const release = this.retain(record.task.id);
 		try {
-			const task = this.snapshot(record);
+			const task = snapshotOf(record);
 			if (task.outputPath) {
 				try {
 					return { task, ...(await readOutputSlice(task.outputPath, options)) };
@@ -426,7 +422,6 @@ export class TaskRuntime implements TasksContext {
 				.filter((block) => block.type === "text")
 				.map((block) => block.text)
 				.join("\n") ||
-				task.projection?.text ||
 				task.error ||
 				"No output yet.",
 		);
@@ -436,7 +431,7 @@ export class TaskRuntime implements TasksContext {
 	async wait(id: string, timeoutMs = 20_000, signal?: AbortSignal): Promise<TaskSnapshot> {
 		if (signal?.aborted) throw signal.reason ?? new Error("Wait aborted");
 		const record = this.lookup(id);
-		if (record.settled) return this.snapshot(record);
+		if (record.settled) return snapshotOf(record);
 		return new Promise<TaskSnapshot>((resolve, reject) => {
 			let finished = false;
 			let timer: ReturnType<typeof setTimeout> | undefined;
@@ -447,7 +442,7 @@ export class TaskRuntime implements TasksContext {
 				signal?.removeEventListener("abort", abort);
 				record.waiters.delete(wake);
 				if (aborted) reject(signal?.reason ?? new Error("Wait aborted"));
-				else resolve(this.snapshot(record));
+				else resolve(snapshotOf(record));
 				this.store.trim();
 				this.emit();
 			};
@@ -468,6 +463,7 @@ export class TaskRuntime implements TasksContext {
 		const active = this.executions.get(record.task.id);
 		if (!active || record.settled || active.controller.signal.aborted) return false;
 		record.task.status = "stopping";
+		changed(record);
 		active.controller.abort();
 		this.emit();
 		return true;
@@ -523,25 +519,12 @@ export class TaskRuntime implements TasksContext {
 
 	pendingNotifications(): TaskSnapshot[] {
 		if (this.closed || this.pauses > 0) return [];
-		return [...this.store.records.values()]
-			.filter((record) => this.candidate(record))
-			.map((record) => this.snapshot(record));
+		return [...this.store.records.values()].filter((record) => this.candidate(record)).map(snapshotOf);
 	}
 
-	/**
-	 * Only explicit result-delivery holds delay an automatic completion.
-	 */
+	/** Only explicit result-delivery holds delay an automatic completion. */
 	private candidate(record: TaskRecord): boolean {
-		return (
-			record.visible &&
-			record.settled &&
-			record.accounted &&
-			record.handedOff === true &&
-			!record.suppressed &&
-			record.delivery === "pending" &&
-			record.waiters.size === 0 &&
-			record.deliveryHolds === 0
-		);
+		return record.visible && record.delivery === "pending" && record.waiters.size === 0 && record.deliveryHolds === 0;
 	}
 
 	claimNotification(id: string): boolean {
@@ -570,10 +553,8 @@ export class TaskRuntime implements TasksContext {
 	close(): void {
 		if (this.closed) return;
 		this._closed = true;
-		this.views.close();
 		this.listeners.clear();
 		for (const record of this.store.records.values()) {
-			record.suppressed = true;
 			this.executions.get(record.task.id)?.removeParent();
 			this.cancel(record);
 			for (const waiter of [...record.waiters]) waiter();
@@ -586,15 +567,21 @@ export class TaskRuntime implements TasksContext {
 		await this.drain([...this.store.records.values()], graceMs);
 	}
 
+	/** Running tasks whose launch anchor is outside the branch made of `ancestors`. */
+	activeOutsideBranch(ancestors: ReadonlySet<string>): TaskSnapshot[] {
+		return [...this.store.records.values()]
+			.filter((record) => !record.settled && record.task.anchorId !== null && !ancestors.has(record.task.anchorId))
+			.map(snapshotOf);
+	}
+
+	/**
+	 * Hidden results stay pending: returning to their branch delivers them again.
+	 * Restored history is already delivered.
+	 */
 	async cancelOutsideBranch(ancestors: ReadonlySet<string>): Promise<void> {
-		for (const record of this.store.records.values()) {
+		for (const record of this.store.records.values())
 			record.visible = record.task.anchorId === null || ancestors.has(record.task.anchorId);
-			// Returning to a branch revives its undelivered completions; restored history
-			// stays delivered and suppressed.
-			if (record.visible && record.delivery === "pending") record.suppressed = false;
-		}
 		const outside = [...this.store.records.values()].filter((record) => !record.visible);
-		for (const record of outside) record.suppressed = true;
 		for (const record of outside) this.cancel(record);
 		this.store.trim();
 		this.emit();
@@ -615,10 +602,6 @@ export class TaskRuntime implements TasksContext {
 		} finally {
 			if (timer !== undefined) clearTimeout(timer);
 		}
-	}
-
-	private snapshot(record: TaskRecord): TaskSnapshot {
-		return structuredClone(record.task);
 	}
 
 	private emit(): void {

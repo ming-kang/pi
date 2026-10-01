@@ -1,9 +1,7 @@
-import { stripTerminalSequences, Text, visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type { TaskSnapshot } from "../src/core/tasks/types.ts";
-import { type TaskViewProvider, TaskViewRegistry } from "../src/core/tasks/view.ts";
-import { shellTaskView } from "../src/core/tools/renderers/shell-task.ts";
 import { TasksMenu } from "../src/modes/interactive/tasks/manager.ts";
 import type { TasksPanelState } from "../src/modes/interactive/tasks/model.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
@@ -13,7 +11,6 @@ function task(id: string, overrides: Partial<TaskSnapshot> = {}): TaskSnapshot {
 	return {
 		id,
 		kind: "bash",
-		format: "log",
 		title: id,
 		command: `echo ${id}`,
 		mode: "foreground",
@@ -25,8 +22,6 @@ function task(id: string, overrides: Partial<TaskSnapshot> = {}): TaskSnapshot {
 	};
 }
 function harness(tasks = [task("first"), task("second", { mode: "background" })], width = 140) {
-	const views = new TaskViewRegistry();
-	views.register("bash", shellTaskView);
 	let listener = () => {};
 	let output = Array.from({ length: 80 }, (_, i) => `line-${String(i).padStart(3, "0")}`).join("\n");
 	const release = vi.fn();
@@ -49,14 +44,13 @@ function harness(tasks = [task("first"), task("second", { mode: "background" })]
 	const close = vi.fn();
 	const keybindings = new KeybindingsManager();
 	const state: TasksPanelState = { tab: "output" };
-	const menu = new TasksMenu({ host, views, tui, theme, keybindings, state, onClose: close });
+	const menu = new TasksMenu({ host, tui, theme, keybindings, state, onClose: close });
 	menus.push(menu);
 	return {
 		menu,
 		state,
 		tasks,
 		host,
-		views,
 		tui,
 		close,
 		keybindings,
@@ -144,45 +138,6 @@ describe("task panel views", () => {
 		h.menu.handleInput("\x1b[B");
 		expect(h.state.selectedId).toBe("second");
 	});
-	it("lets a provider own both regions and disposes its view when replaced", async () => {
-		const h = harness([task("custom", { kind: "custom", format: "report" })]);
-		const dispose = vi.fn();
-		const provider: TaskViewProvider = {
-			outputMode: "snapshot",
-			create: () => ({
-				info: new Text("Custom parameters", 0, 0),
-				output: new Text("A custom report structure", 0, 0),
-				update: vi.fn(),
-				dispose,
-			}),
-		};
-		const unregister = h.views.register("custom", provider);
-		expect(h.frame()).toContain("A custom report structure");
-		h.menu.handleInput("\t");
-		h.menu.handleInput("\x1b[C");
-		expect(h.frame()).toContain("Custom parameters");
-		h.menu.handleInput("\x1b[D");
-		expect(h.host.read).not.toHaveBeenCalled();
-		h.tasks[0]!.result = { content: [{ type: "text", text: "Saved fallback" }], details: undefined };
-		h.change();
-		unregister();
-		expect(h.frame()).toContain("Saved fallback");
-		expect(dispose).toHaveBeenCalledOnce();
-	});
-	it("contains provider failures and keeps task controls usable", () => {
-		const h = harness([task("broken", { kind: "broken" })]);
-		h.views.register("broken", {
-			outputMode: "snapshot",
-			create: () => {
-				throw new Error("broken renderer");
-			},
-		});
-		expect(() => h.frame()).not.toThrow();
-		expect(h.frame()).toContain("broken renderer");
-		h.menu.handleInput("k");
-		h.menu.handleInput("\r");
-		expect(h.host.kill).toHaveBeenCalledWith("broken");
-	});
 	it("renders CRLF shell output as one row per line", async () => {
 		const h = harness();
 		h.setOutput("first line\r\nsecond line\r\n");
@@ -225,24 +180,33 @@ describe("task panel views", () => {
 		expect(h.tui.requestRender).toHaveBeenCalledTimes(renders);
 		expect(vi.getTimerCount()).toBe(0);
 	});
-	it("scrolls long information independently and honors rebound controls", () => {
-		const h = harness([task("custom", { kind: "custom" })]);
-		h.views.register("custom", {
-			outputMode: "snapshot",
-			create: () => ({
-				info: new Text(Array.from({ length: 50 }, (_, i) => `parameter-${i}`).join("\n"), 0, 0),
-				output: new Text("Report", 0, 0),
-				update: vi.fn(),
-			}),
-		});
+	it("colors every output line, not only the first", async () => {
+		const h = harness([task("one")]);
+		await vi.advanceTimersByTimeAsync(0);
+		const frame = h.menu.render(140).join("\n");
+		for (const line of ["line-070", "line-079"]) expect(frame).toContain(theme.fg("toolOutput", line));
+	});
+	it("shows a task without a command by its title and kind", async () => {
+		const h = harness([task("review", { kind: "review", command: undefined, title: "Inspect boundaries" })]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.left()).toContain("Inspect boundaries");
+		h.menu.handleInput("\t");
+		h.menu.handleInput("\x1b[C");
+		expect(h.frame()).toContain("review");
+		expect(h.frame()).toContain("Title     Inspect boundaries");
+	});
+	it("scrolls long information independently and honors rebound controls", async () => {
+		const command = Array.from({ length: 50 }, (_, i) => `echo parameter-${i}`).join("\n");
+		const h = harness([task("custom", { kind: "custom", command })]);
+		await vi.advanceTimersByTimeAsync(0);
 		h.keybindings.setUserBindings({ "app.tasks.nextTab": "i", "app.tasks.kill": "x" });
 		h.menu.handleInput("\t");
 		h.menu.handleInput("i");
 		expect(h.frame()).toContain("parameter-0");
 		h.menu.handleInput("\x1b[6~");
-		expect(h.frame()).not.toContain("parameter-0 ");
+		expect(h.frame()).not.toContain("echo parameter-1 ");
 		h.menu.handleInput("\x1b[D");
-		expect(h.frame()).toContain("Report");
+		expect(h.frame()).toContain("line-079");
 		h.menu.handleInput("k");
 		expect(h.frame()).not.toContain("confirm");
 		h.menu.handleInput("x");

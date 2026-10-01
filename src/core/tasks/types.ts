@@ -1,7 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
-import type { TaskViewRegistry } from "./view.ts";
-import type { TaskViewData } from "./view-data.ts";
 
 /** An executor-owned source label, never a dispatch key for the runtime. */
 export type TaskKind = string;
@@ -15,68 +13,29 @@ export interface TaskText {
 	truncated: boolean;
 }
 
-export interface TaskItemReport {
-	id: string;
-	label: string;
-	category: string;
-	description: string;
-	status: string;
-	report: TaskText;
-	error?: string;
-}
-
-/** A serializable, domain-owned projection. No extension-private renderer imports. */
-export interface TaskItem extends TaskItemReport {
-	input: string;
-	activity: string;
-	context?: string;
-	usage?: string;
-}
-
-export interface TaskProjection {
-	nextStep?: string;
-	text?: string;
-	shell?: { name: string; output: TaskText };
-	items?: TaskItem[];
-}
-
-interface TaskCompletionBase {
+/** Self-contained completion-message details. No live handles, tool-private details or accounting. */
+export interface TaskCompletionSnapshot {
+	version: 2;
 	kind: string;
-	version: 1;
 	taskId: string;
 	title: string;
 	status: TaskTerminalStatus;
 	startedAt: number;
 	endedAt: number;
 	error?: string;
-	nextStep?: string;
+	command?: TaskText;
+	cwd?: string;
+	outputPath?: string;
+	/** Process exit code: a number, or null when signal-reaped. */
+	exitCode?: number | null;
+	/** The tail of the final result text. */
+	output: TaskText;
 }
 
-/** Self-contained completion-message details. No live handles, tool-private details or accounting. */
-export type TaskCompletionSnapshot = TaskCompletionBase &
-	(
-		| {
-				format: "log";
-				shell?: string;
-				command?: TaskText;
-				cwd?: string;
-				outputPath?: string;
-				/** Process exit code: a number, or null when signal-reaped. */
-				exitCode?: number | null;
-				output: TaskText;
-		  }
-		| {
-				format: "report";
-				items: TaskItemReport[];
-				/** Plain fallback when an executor has no worker projection. */
-				output?: TaskText;
-		  }
-	);
-
+/** A read-only view of one task; the runtime returns frozen snapshots. */
 export interface TaskSnapshot {
 	id: string;
 	kind: TaskKind;
-	format?: "log" | "report";
 	title: string;
 	toolCallId: string;
 	anchorId: string | null;
@@ -90,8 +49,6 @@ export interface TaskSnapshot {
 	/** Process exit code (bash): a number, or null when signal-reaped. Absent while running or unreported. */
 	exitCode?: number | null;
 	outputPath?: string;
-	projection?: TaskProjection;
-	viewData?: TaskViewData;
 	result?: AgentToolResult<unknown>;
 	resultTruncated?: boolean;
 	error?: string;
@@ -121,16 +78,13 @@ export interface TaskControl<T> {
 	 * published usage is settled once on rejection (never inferred from details).
 	 * Final completion.usage, then completion.result.usage, override that snapshot.
 	 */
-	publish(result: AgentToolResult<T>, projection?: TaskProjection): void;
-	/** Publish bounded, versioned display data without changing tool results or completion delivery. */
-	publishView(data: TaskViewData): void;
+	publish(result: AgentToolResult<T>): void;
 	/** Register once; cleanup must own only this exclusively-created file and close its writer first. */
 	setOutputPath(path: string, cleanup?: () => void | Promise<void>): void;
 }
 
 export interface TaskExecution<T> {
 	kind: TaskKind;
-	format?: "log" | "report";
 	title: string;
 	toolCallId: string;
 	command?: string;
@@ -157,7 +111,6 @@ export interface TaskRead {
 
 /** Session-bound public capability. Captured instances close on runtime replacement. */
 export interface TasksContext {
-	readonly views: TaskViewRegistry;
 	readonly enabled: boolean;
 	readonly closed?: boolean;
 	execute<T>(execution: TaskExecution<T>): Promise<TaskToolOutcome<T>>;
@@ -167,8 +120,12 @@ export interface TasksContext {
 	/** Observation only: terminal delivery is acknowledged by the host via markDelivered after result persistence. */
 	wait(id: string, timeoutMs?: number, signal?: AbortSignal): Promise<TaskSnapshot>;
 	kill(id: string): boolean;
-	/** Move every running foreground execution to the background; returns how many moved. */
+	/**
+	 * Move running foreground executions to the background while background slots remain;
+	 * returns how many moved. Throws when eligible work exists but every slot is taken.
+	 */
 	detachForeground(): number;
+	/** Returns false when the task cannot move; throws when every background slot is taken. */
 	detach(id: string): boolean;
 	subscribe(listener: () => void): () => void;
 	/** Keep retained output available without delaying completion delivery. */
@@ -181,8 +138,9 @@ export interface TaskRuntimeOptions {
 	enabled?: boolean;
 	backgroundAllowed?: boolean;
 	anchor?: () => string | null;
+	/** Concurrent background executions. Foreground work is bounded by its caller instead. */
 	maxActive?: number;
-	/** Per-history limit: foreground logs and other managed tasks each get this allowance. */
+	/** Per-history limit: foreground and background tasks each get this allowance. */
 	maxHistory?: number;
 	/** Best-effort cleanup errors, bounded to 4096 bytes; no retries or execution failure. */
 	onCleanupError?: (message: string) => void;
@@ -195,11 +153,6 @@ export const TASK_BACKGROUND_REJECTION =
 
 export function isTaskTerminal(status: TaskStatus): boolean {
 	return status !== "queued" && status !== "running" && status !== "stopping";
-}
-
-/** Foreground logs have their own history; reports remain inspectable in either mode. */
-export function isInlineLogTask(task: Pick<TaskSnapshot, "format" | "mode">): boolean {
-	return task.format === "log" && task.mode === "foreground";
 }
 
 /** Preserve the foreground throwing contract without guessing status from output text. */
@@ -222,7 +175,7 @@ export class TaskLookupError extends Error {
 	readonly kind: "unknown" | "ambiguous";
 	readonly matches: TaskSnapshot[];
 	constructor(kind: "unknown" | "ambiguous", matches: TaskSnapshot[]) {
-		super(kind === "ambiguous" ? "Ambiguous background task ID" : "Unknown background task ID");
+		super(kind === "ambiguous" ? "Ambiguous task ID" : "Unknown task ID");
 		this.name = "TaskLookupError";
 		this.kind = kind;
 		this.matches = matches;

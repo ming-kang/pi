@@ -8,9 +8,16 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 - Redesigned `/tasks` around one Active/Finished list including retained foreground results. Tab switches between two panes, Left/Right change Output/Details only within the inspector, and Escape closes from either pane. Focus uses the pane border; task selection and tab selection keep their own background and underline. Foreground/background labels stay in Details, leaving task summaries with status and elapsed time.
 - Task search now locates a result and returns to the complete list. Stop confirmation waits for Enter or Escape and closes when its target finishes. Mouse scrolling preserves keyboard focus; completion and new work preserve task selection and browsed output. Narrow terminals use the same navigation rules.
-- Added configurable task follow/top/bottom controls, selected-task backgrounding, stop confirmation and keyboard help, plus mouse selection and scrolling. The statusline counts foreground and background work; completion cards show duration, report titles and recorded exit codes.
+- Added configurable task follow/top/bottom controls, selected-task backgrounding, stop confirmation and keyboard help, plus mouse selection and scrolling. The statusline counts foreground and background work; completion cards show duration, task titles and recorded exit codes.
+- Interactive `/tree` lists the running tasks that leaving the current branch would stop and asks before cancelling them.
+- Completion notifications keep the end of long output, where the outcome is, in both the saved card and the model-facing message.
+- Foreground task results are saved once, in their tool result, instead of up to three more times in the `task-result` entry; restored history reads the output back from the tool result. Restored records drop log paths, which never outlive their runtime.
 
 ### Fixed
+
+- Background tasks no longer block foreground commands: only background work counts toward the eight-task limit. Ctrl+B and the panel's background action move only as many tasks as there are free slots and say when the background is full.
+- `tasks read` and `tasks wait` report the byte range they returned and the next `sinceBytes`, and a wait that skips output says how much. `bytes` now clamps to the 48KB the core actually returns.
+- `/tasks` colors every output line, and no longer re-clones retained tasks on each output update or re-wraps output on each animation frame.
 
 - Web search releases its elapsed-time refresh timer when a pending tool row is disposed.
 - `tasks wait` preserves recorded shell exit codes and distinguishes a wait ending from execution timing out. Task previews show empty and unavailable output explicitly, and progress updates do not increase log polling.
@@ -18,6 +25,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 ### Removed
 
 - **Breaking:** Removed the bundled `todo` tool, `/todos` command, task-list widget, and Todo example extension; saved session history remains readable.
+- **Breaking:** Removed task report machinery left without a producer after the subagent and explore removals: `TaskExecution.format`, `TaskProjection`, `TaskItem`, `TaskItemReport`, `TaskControl.publishView`, `TaskViewData`, and the `ctx.tasks.views` registry (`TaskViewProvider`, `TaskViewRegistry`). Executors publish a plain text result. Completion details are now version 2 with one format; older completions show their saved text.
+- Removed the dedicated renderers for legacy `bg create` results and `background-task` stall notifications; they show their saved text.
 
 ## [0.99.0] - 2026-09-30
 

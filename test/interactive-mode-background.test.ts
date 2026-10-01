@@ -2,7 +2,6 @@ import { getKeybindings, setKeybindings } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext, TerminalInputHandler } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
-import { TaskViewRegistry } from "../src/core/tasks/view.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { createTasksHarness } from "./test-tasks-ui.ts";
 
@@ -23,7 +22,6 @@ function harness(bindings = new KeybindingsManager()) {
 	const listeners = new Set<TerminalInputHandler>();
 	const ctx = {
 		tasks: {
-			views: new TaskViewRegistry(),
 			detachForeground: vi.fn(() => 2),
 			list: () => [],
 			subscribe: () => () => {},

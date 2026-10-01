@@ -1,11 +1,9 @@
-import { stripTerminalSequences, Text, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolRenderContext } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import type { TaskSnapshot } from "../src/core/tasks/types.ts";
-import { TaskViewRegistry } from "../src/core/tasks/view.ts";
-import { shellTaskView } from "../src/core/tools/renderers/shell-task.ts";
 import { runWait } from "../src/core/tools/tasks/actions.ts";
 import { TasksMenu } from "../src/modes/interactive/tasks/manager.ts";
 import type { TasksPanelState } from "../src/modes/interactive/tasks/model.ts";
@@ -16,7 +14,6 @@ const menus: TasksMenu[] = [];
 const snapshot = (id: string, changes: Partial<TaskSnapshot> = {}): TaskSnapshot => ({
 	id,
 	kind: "bash",
-	format: "log",
 	title: id,
 	command: `echo ${id}`,
 	mode: "background",
@@ -47,11 +44,9 @@ function panel(tasks: TaskSnapshot[], state: TasksPanelState = { tab: "output" }
 			return vi.fn();
 		},
 	};
-	const views = new TaskViewRegistry();
-	views.register("bash", shellTaskView);
 	const tui = { terminal: { rows: height, columns: width }, requestRender: vi.fn() };
 	const keybindings = new KeybindingsManager();
-	const menu = new TasksMenu({ host, views, state, tui, theme, keybindings, onClose: vi.fn() });
+	const menu = new TasksMenu({ host, state, tui, theme, keybindings, onClose: vi.fn() });
 	menus.push(menu);
 	return {
 		menu,
@@ -59,7 +54,6 @@ function panel(tasks: TaskSnapshot[], state: TasksPanelState = { tab: "output" }
 		host,
 		released,
 		state,
-		views,
 		tui,
 		keybindings,
 		notify: () => notify(),
@@ -371,26 +365,6 @@ describe("Tasks redesign behavior", () => {
 		expect(h.host.read).toHaveBeenCalledTimes(reads);
 		expect(h.host.list).toHaveBeenCalledTimes(lists);
 	});
-	it("falls back to live bounded reads if a custom log provider fails", async () => {
-		const h = panel([snapshot("custom", { kind: "custom" })]);
-		h.views.register("custom", {
-			outputMode: "tail",
-			create: () => ({
-				info: new Text("", 0, 0),
-				output: {
-					render() {
-						throw new Error("view broke");
-					},
-					invalidate() {},
-				},
-				update() {},
-			}),
-		});
-		h.output("live fallback");
-		await vi.advanceTimersByTimeAsync(0);
-		expect(h.frame()).toContain("live fallback");
-		expect(h.frame()).toContain("view broke");
-	});
 	it("shows explicit empty output and bounded preview size", async () => {
 		const h = panel([snapshot("build")]);
 		h.output("");
@@ -419,7 +393,6 @@ describe("management outcome facts", () => {
 		try {
 			await runtime.execute({
 				kind: "bash",
-				format: "log",
 				title: "build",
 				toolCallId: "call",
 				run: async () => ({

@@ -1,5 +1,5 @@
 /**
- * background — the `bg` tool's wire contract: one flat schema whose `action`
+ * The `tasks` tool's wire contract: one flat schema whose `action`
  * selects which of the remaining fields apply, plus the model-facing copy.
  *
  * The schema stays flat deliberately: a single tool keeps the model's tool list
@@ -9,7 +9,8 @@
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
-import { DEFAULT_MAX_BYTES, formatSize } from "../truncate.ts";
+import { TASK_RESULT_BYTES } from "../../tasks/output.ts";
+import { formatSize } from "../truncate.ts";
 import {
 	TASKS_LOGS_DEFAULT_BYTES,
 	TASKS_LOGS_MIN_BYTES,
@@ -20,7 +21,7 @@ import {
 
 export const tasksSchema = Type.Object({
 	action: StringEnum(["read", "wait", "kill", "list"] as const, {
-		description: "Which background-task operation to perform",
+		description: "Which task operation to perform",
 	}),
 	// — read / wait / kill —
 	taskId: Type.Optional(Type.String({ description: "Task execution id (read/wait/kill)" })),
@@ -32,7 +33,7 @@ export const tasksSchema = Type.Object({
 	),
 	bytes: Type.Optional(
 		Type.Number({
-			description: `Max bytes to return (read, default ${formatSize(TASKS_LOGS_DEFAULT_BYTES)}, max ${formatSize(DEFAULT_MAX_BYTES)})`,
+			description: `Max bytes to return (read, default ${formatSize(TASKS_LOGS_DEFAULT_BYTES)}, max ${formatSize(TASK_RESULT_BYTES)})`,
 		}),
 	),
 	// — wait —
@@ -44,7 +45,7 @@ export const tasksSchema = Type.Object({
 	sinceBytes: Type.Optional(
 		Type.Number({
 			description:
-				"Only return output written after this byte offset — take it from a previous read/wait result (wait)",
+				"Only return output written after this byte offset — use the 'next sinceBytes' value from a previous read or wait (wait)",
 		}),
 	),
 });
@@ -67,7 +68,7 @@ export function requireTaskId(input: TasksInput): string {
 
 export function clampReadBytes(bytes: number | undefined): number {
 	const value = bytes !== undefined && Number.isFinite(bytes) ? bytes : TASKS_LOGS_DEFAULT_BYTES;
-	return Math.min(DEFAULT_MAX_BYTES, Math.max(TASKS_LOGS_MIN_BYTES, Math.floor(value)));
+	return Math.min(TASK_RESULT_BYTES, Math.max(TASKS_LOGS_MIN_BYTES, Math.floor(value)));
 }
 
 /** Shared with the pending-call renderer so the window it shows is the one that runs. */
@@ -87,7 +88,7 @@ export const TASKS_TOOL_DESCRIPTION =
 	"read: bounded output or report slice (head/tail). " +
 	"wait: block up to waitMs for a task to settle; cancelling the wait ends only the wait, never the task. " +
 	"kill: request cancellation of a whole task. " +
-	"tasks cannot start work; submit background work through its owning tool. Output is capped at 50KB per response.";
+	"tasks cannot start work; submit background work through its owning tool. Each read or wait reports its byte range and the next sinceBytes. Output is capped at 50KB per response.";
 export const TASKS_PROMPT_SNIPPET = "Manage background tasks (list, read, wait, kill)";
 export const TASKS_PROMPT_GUIDELINES = [
 	"Start background work through its owning tool with background: true; continue independent work while it runs.",

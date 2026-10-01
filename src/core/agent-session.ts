@@ -143,6 +143,7 @@ import {
 } from "./system-prompt.ts";
 import type { TaskRuntime } from "./tasks/runtime.ts";
 import { type QuarantinedTaskSettlement, TaskSession } from "./tasks/session.ts";
+import type { TaskSnapshot } from "./tasks/types.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
@@ -4053,6 +4054,22 @@ export class AgentSession {
 	 * @param options.label Label to attach to the branch summary entry
 	 * @returns Result with editorText (if user message) and cancelled status
 	 */
+	/**
+	 * Running tasks that navigating to `targetId` would cancel, so a host can confirm first.
+	 * Mirrors navigateTree's destination: selecting a user or custom message moves the leaf to its parent.
+	 */
+	tasksStoppedByTreeNavigation(targetId: string): TaskSnapshot[] {
+		const target = this.sessionManager.getEntry(targetId);
+		if (!target) return [];
+		const leafId =
+			(target.type === "message" && target.message.role === "user") || target.type === "custom_message"
+				? target.parentId
+				: targetId;
+		return this.tasks.activeOutsideBranch(
+			new Set(leafId === null ? [] : this.sessionManager.getBranch(leafId).map((entry) => entry.id)),
+		);
+	}
+
 	async navigateTree(
 		targetId: string,
 		options: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string } = {},

@@ -1,5 +1,6 @@
 import { open } from "node:fs/promises";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { TaskSnapshot } from "./types.ts";
 
 export const TASK_RESULT_BYTES = 48 * 1024;
 export const TASK_DETAILS_BYTES = 120 * 1024;
@@ -36,6 +37,13 @@ export function boundText(text: string, bytes = TASK_RESULT_BYTES): string {
 	return alignedSlice(buffer, 0, Math.min(limit, buffer.length)).toString("utf8");
 }
 
+/** The end of a bounded text, codepoint aligned: a command's outcome is at its end. */
+export function boundTail(text: string, bytes: number): { text: string; truncated: boolean } {
+	const buffer = Buffer.from(text);
+	if (buffer.length <= bytes) return { text, truncated: false };
+	return { text: alignedSlice(buffer, buffer.length - bytes, buffer.length).toString("utf8"), truncated: true };
+}
+
 /** Keep valid structured details intact or omit them, never truncate serialized JSON. */
 export function boundedResult(result: AgentToolResult<unknown>): AgentToolResult<unknown> {
 	let remaining = TASK_RESULT_BYTES;
@@ -61,6 +69,19 @@ export function boundedResult(result: AgentToolResult<unknown>): AgentToolResult
 		// Runtime handles and cyclic details cannot enter a serializable snapshot.
 	}
 	return { content, details };
+}
+
+/** Store the bounded public part of a result; private details never enter task history. */
+export function retainResult(task: TaskSnapshot, result: AgentToolResult<unknown>, truncated = false): void {
+	const bounded = boundedResult({ content: result.content, details: undefined });
+	task.result = bounded;
+	task.resultTruncated =
+		truncated ||
+		bounded.content.length !== result.content.length ||
+		bounded.content.some((block, index) => {
+			const original = result.content[index];
+			return original?.type !== "text" || block.type !== "text" || block.text !== original.text;
+		});
 }
 
 export interface OutputSlice {

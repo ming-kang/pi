@@ -1,10 +1,8 @@
-import { stripTerminalSequences, Text } from "@earendil-works/pi-tui";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import type { TaskControl } from "../src/core/tasks/types.ts";
-import { type TaskViewProvider, TaskViewRegistry } from "../src/core/tasks/view.ts";
-import { shellTaskView } from "../src/core/tools/renderers/shell-task.ts";
 import { TasksMenu } from "../src/modes/interactive/tasks/manager.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -22,7 +20,6 @@ function start(runtime: TaskRuntime, kind = "bash") {
 	});
 	const outcome = runtime.execute({
 		kind,
-		format: "log",
 		title: "Build",
 		command: "npm run build",
 		toolCallId: "call",
@@ -40,7 +37,6 @@ function panel(runtime: TaskRuntime) {
 	initTheme("dark");
 	const menu = new TasksMenu({
 		host: runtime,
-		views: runtime.views,
 		theme,
 		keybindings: new KeybindingsManager(),
 		tui: { requestRender: vi.fn(), terminal: { rows: 30, columns: 140 } },
@@ -54,7 +50,6 @@ describe("Tasks panel runtime integration", () => {
 	it("keeps a watched final result through eviction pressure without delaying delivery", async () => {
 		const runtime = new TaskRuntime({ enabled: true, maxHistory: 0 });
 		runtimes.push(runtime);
-		runtime.views.register("bash", shellTaskView);
 		const execution = start(runtime);
 		const h = panel(runtime);
 		await vi.waitFor(() => expect(h.frame()).toContain("building"));
@@ -63,7 +58,7 @@ describe("Tasks panel runtime integration", () => {
 		execution.finish();
 		await runtime.wait(execution.control.id);
 		await vi.waitFor(() => expect(h.frame()).toContain("Build succeeded"));
-		expect(h.frame()).toContain("Recent results");
+		expect(h.frame()).toContain("Finished");
 		expect(runtime.pendingNotifications()).toMatchObject([{ id: execution.control.id }]);
 		runtime.markDelivered(execution.control.id);
 		expect(runtime.get(execution.control.id).status).toBe("completed");
@@ -73,7 +68,6 @@ describe("Tasks panel runtime integration", () => {
 	it("reads a missing log's saved fallback and keeps its diagnostic accessible", async () => {
 		const runtime = new TaskRuntime();
 		runtimes.push(runtime);
-		runtime.views.register("bash", shellTaskView);
 		const execution = start(runtime);
 		execution.control.setOutputPath("nonexistent-task-output.log");
 		const h = panel(runtime);
@@ -82,7 +76,9 @@ describe("Tasks panel runtime integration", () => {
 		execution.finish();
 		await execution.outcome;
 		await vi.waitFor(() => expect(h.frame()).toContain("Build succeeded"));
-		expect(h.frame()).toContain("exit 0");
+		h.menu.handleInput("\t");
+		h.menu.handleInput("\x1b[C");
+		expect(h.frame()).toContain("Exit      0");
 	});
 	it("drops an out-of-branch selection without showing another branch's result", async () => {
 		const runtime = new TaskRuntime({ anchor: () => "old-branch" });
@@ -94,59 +90,6 @@ describe("Tasks panel runtime integration", () => {
 		await vi.waitFor(() => expect(h.frame()).toContain("Build succeeded"));
 		await runtime.cancelOutsideBranch(new Set());
 		expect(h.frame()).not.toContain("Build succeeded");
-		expect(h.frame()).toContain("No retained tasks in this view.");
-	});
-	it("falls back to saved text when a provider render throws and still allows closing", () => {
-		const runtime = new TaskRuntime();
-		runtimes.push(runtime);
-		const execution = start(runtime, "custom");
-		runtime.views.register("custom", {
-			outputMode: "snapshot",
-			create: () => ({
-				info: new Text("Info", 0, 0),
-				output: {
-					render: () => {
-						throw new Error("render failed");
-					},
-					invalidate() {},
-				},
-				update() {},
-			}),
-		});
-		const h = panel(runtime);
-		expect(h.frame()).toContain("render failed");
-		expect(h.frame()).toContain("building");
-		h.menu.handleInput("\x1b");
-		execution.finish();
-	});
-});
-describe("task view registration lifetime", () => {
-	const provider: TaskViewProvider = {
-		outputMode: "snapshot",
-		create: () => ({ info: new Text("info", 0, 0), output: new Text("output", 0, 0), update() {} }),
-	};
-	it("rejects conflicts and old unregister handles cannot remove a replacement", () => {
-		const views = new TaskViewRegistry();
-		const remove = views.register("custom", provider);
-		expect(() => views.register("custom", provider)).toThrow("already registered");
-		remove();
-		views.register("custom", { ...provider });
-		remove();
-		expect(views.get("custom")).toBeDefined();
-		views.close();
-		expect(views.get("custom")).toBeUndefined();
-		expect(() => views.register("custom", provider)).toThrow("closed");
-	});
-	it("closes registrations with the runtime and isolates them between sessions", async () => {
-		const first = new TaskRuntime();
-		const second = new TaskRuntime();
-		first.views.register("custom", provider);
-		const changed = vi.fn();
-		first.views.subscribe(changed);
-		expect(second.views.get("custom")).toBeUndefined();
-		await first.shutdown();
-		expect(changed).toHaveBeenCalledOnce();
-		expect(first.views.get("custom")).toBeUndefined();
-		await second.shutdown();
+		expect(h.frame()).toContain("No retained tasks.");
 	});
 });

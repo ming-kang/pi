@@ -95,7 +95,6 @@ describe("session-owned background host", () => {
 		});
 		const outcome = await session.tasks.execute({
 			kind: "custom",
-			format: "report",
 			title: "group",
 			toolCallId: "call",
 			background: true,
@@ -129,7 +128,7 @@ describe("session-owned background host", () => {
 		expect(worker.tasks.enabled).toBe(false);
 		const run = vi.fn();
 		await expect(
-			worker.tasks.execute({ kind: "bash", format: "log", title: "no", toolCallId: "no", background: true, run }),
+			worker.tasks.execute({ kind: "bash", title: "no", toolCallId: "no", background: true, run }),
 		).rejects.toThrow("not permitted in this host");
 		expect(run).not.toHaveBeenCalled();
 		await worker.reload();
@@ -179,10 +178,9 @@ describe("session-owned background host", () => {
 		if (notification.type !== "custom_message") throw new Error("expected notification");
 		expect(notification.customType).toBe("task-completion");
 		expect(notification.details).toMatchObject({
-			version: 1,
+			version: 2,
 			taskId: execution.id,
 			kind: "custom",
-			format: "report",
 			status: "completed",
 			startedAt: expect.any(Number),
 			endedAt: expect.any(Number),
@@ -229,7 +227,6 @@ describe("session-owned background host", () => {
 			if (mode === "foreground") {
 				await session.tasks.execute({
 					kind: "bash",
-					format: "log",
 					title: "foreground",
 					toolCallId: "foreground",
 					run: async () => ({ result: { content: [], details: undefined } }),
@@ -362,6 +359,60 @@ describe("session-owned background host", () => {
 		expect(session.tasks.list()).toHaveLength(1);
 		expect(session.tasks.pendingNotifications()).toEqual([]);
 		expect(session.getSessionStats().tokens.total).toBe(30);
+	});
+
+	it("saves foreground output once, in its tool result, and restores it from there", async () => {
+		const session = await host();
+		await session.bindExtensions({ tasksEnabled: true });
+		const output = [{ type: "text" as const, text: "foreground output" }];
+		const outcome = await session.tasks.execute({
+			kind: "bash",
+			title: "echo",
+			command: "echo foreground output",
+			toolCallId: "call-foreground",
+			run: async (control) => {
+				control.accept();
+				return { result: { content: output, details: undefined }, exitCode: 0 };
+			},
+		});
+		expect(outcome.kind).toBe("result");
+		session.sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: "call-foreground",
+			toolName: "bash",
+			content: output,
+			isError: false,
+			timestamp: Date.now(),
+		});
+		const saved = session.sessionManager
+			.getEntries()
+			.flatMap((entry) => (entry.type === "custom" && entry.customType === "task-result" ? [entry.data] : []));
+		expect(saved).toHaveLength(1);
+		expect(saved[0]).toMatchObject({ task: { command: "echo foreground output", exitCode: 0 } });
+		expect(saved[0]).not.toHaveProperty("task.result");
+
+		await session.reload();
+		const [restored] = session.tasks.list();
+		expect(restored).toMatchObject({ mode: "foreground", status: "completed", command: "echo foreground output" });
+		expect(restored?.result?.content).toEqual(output);
+		expect((await session.tasks.read(restored!.id)).text).toBe("foreground output");
+	});
+
+	it("lists the running tasks that a tree navigation would stop", async () => {
+		const session = await host();
+		await session.bindExtensions({ tasksEnabled: true });
+		session.pauseTaskNotifications();
+		const root = session.sessionManager.appendMessage(userMsg("root"));
+		const launch = session.sessionManager.appendMessage(userMsg("launch"));
+		const execution = await task(session);
+		const later = session.sessionManager.appendMessage(userMsg("later"));
+		// Selecting a user message moves the leaf to its parent.
+		expect(session.tasksStoppedByTreeNavigation(later)).toEqual([]);
+		expect(session.tasksStoppedByTreeNavigation(launch).map((task) => task.id)).toEqual([execution.id]);
+		expect(session.tasksStoppedByTreeNavigation(root).map((task) => task.id)).toEqual([execution.id]);
+		execution.finish();
+		await vi.waitFor(() => expect(session.tasks.get(execution.id).status).toBe("completed"));
+		expect(session.tasksStoppedByTreeNavigation(root)).toEqual([]);
 	});
 
 	it("caps restored history at the runtime terminal-history limit", async () => {
@@ -522,7 +573,6 @@ describe("session-owned background host", () => {
 		pending.mockRestore();
 		await session.tasks.execute({
 			kind: "bash",
-			format: "log",
 			title: "cleanup",
 			toolCallId: "cleanup",
 			run: async (control) => {
@@ -926,7 +976,6 @@ describe("session-owned background host", () => {
 		await session.bindExtensions({ tasksEnabled: true });
 		await session.tasks.execute({
 			kind: "custom",
-			format: "report",
 			title: "worker",
 			toolCallId: "worker",
 			background: true,

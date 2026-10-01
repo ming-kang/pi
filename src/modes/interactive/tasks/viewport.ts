@@ -12,6 +12,7 @@ export class TaskViewport {
 	private scroll = 0;
 	private anchor?: { line: number; column: number };
 	private entries: Entry[] = [];
+	private wrapped?: { lines: string[]; width: number };
 	private height = 1;
 	private start = 0;
 	constructor(follow = false) {
@@ -19,14 +20,18 @@ export class TaskViewport {
 	}
 	layout(lines: string[], width: number, height: number): string[] {
 		this.height = Math.max(1, height);
-		this.entries = lines.flatMap((line, index) => {
-			let column = 0;
-			return wrapTextWithAnsi(line, Math.max(1, width)).map((text) => {
-				const entry = { text, line: index, column };
-				column += visibleWidth(text);
-				return entry;
+		// Output can be 48 KiB; rewrap only when its lines or the width change, not per animation frame.
+		if (lines !== this.wrapped?.lines || width !== this.wrapped.width) {
+			this.wrapped = { lines, width };
+			this.entries = lines.flatMap((line, index) => {
+				let column = 0;
+				return wrapTextWithAnsi(line, Math.max(1, width)).map((text) => {
+					const entry = { text, line: index, column };
+					column += visibleWidth(text);
+					return entry;
+				});
 			});
-		});
+		}
 		let offset = this.scroll;
 		if (this.anchor) {
 			const anchor = this.anchor;

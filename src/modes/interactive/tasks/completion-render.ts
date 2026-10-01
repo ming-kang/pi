@@ -1,11 +1,5 @@
 /** Human-facing completion cards. The persisted context message remains untouched. */
-import {
-	type Component,
-	Markdown,
-	stripTerminalSequences,
-	truncateToWidth,
-	wrapTextWithAnsi,
-} from "@earendil-works/pi-tui";
+import { type Component, stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { MessageRenderOptions } from "../../../core/extensions/types.ts";
 import type { CustomMessage } from "../../../core/messages.ts";
 import { runtimeLabel } from "../../../core/tasks/format.ts";
@@ -13,39 +7,29 @@ import { readTaskCompletion } from "../../../core/tasks/presentation.ts";
 import type { TaskTerminalStatus } from "../../../core/tasks/types.ts";
 import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
 import { type StatusMarkerColor, statusMarker } from "../components/status-marker.ts";
-import { getMarkdownTheme, type Theme } from "../theme/theme.ts";
+import type { Theme } from "../theme/theme.ts";
 import { FramedComponent } from "../tool-view/style.ts";
 import { statusName } from "./task-view.ts";
 
 const SOURCE_LIMIT = 64 * 1024;
 const CARD_ROWS = 128;
 const OUTPUT_ROWS = 20;
-const REPORT_ROWS = 24;
+const SHELL_NAMES: Record<string, string> = { bash: "Bash", powershell: "PowerShell" };
 
-interface ItemReport {
-	index: number;
-	description: string;
-	category: string;
-	status: string;
-	report: string;
-	error?: string;
-	truncated: boolean;
-}
 interface CompletionView {
 	title?: string;
 	duration?: string;
 	exitCode?: number | null;
 	kind?: string;
-	format?: "log" | "report";
 	status?: TaskTerminalStatus;
 	id?: string;
-	shell?: string;
 	command?: string;
 	cwd?: string;
 	path?: string;
 	diagnostic?: string;
+	/** Undefined for an unreadable message, whose saved content is shown instead. */
+	output?: string;
 	body: string;
-	items?: ItemReport[];
 	truncated: boolean;
 }
 
@@ -89,44 +73,21 @@ function completionView(message: CustomMessage<unknown>): CompletionView {
 		const { text, clipped } = savedText(message);
 		return { body: text, truncated: clipped };
 	}
-	const view: CompletionView = {
+	return {
 		title: clean(snapshot.title),
 		duration: runtimeLabel(snapshot),
 		kind: snapshot.kind,
-		format: snapshot.format,
 		status: snapshot.status,
 		id: clean(snapshot.taskId),
-		body: "",
+		exitCode: snapshot.exitCode,
+		command: snapshot.command === undefined ? undefined : clean(snapshot.command.text),
+		cwd: snapshot.cwd === undefined ? undefined : clean(snapshot.cwd),
+		path: snapshot.outputPath === undefined ? undefined : clean(snapshot.outputPath),
 		diagnostic: snapshot.error === undefined ? undefined : clean(snapshot.error),
-		truncated: false,
+		output: clean(snapshot.output.text),
+		body: "",
+		truncated: snapshot.output.truncated || snapshot.command?.truncated === true,
 	};
-	if (snapshot.format === "log") {
-		view.exitCode = snapshot.exitCode;
-		view.shell = snapshot.shell === undefined ? undefined : clean(snapshot.shell);
-		view.command = snapshot.command === undefined ? undefined : clean(snapshot.command.text);
-		view.cwd = snapshot.cwd === undefined ? undefined : clean(snapshot.cwd);
-		view.path = snapshot.outputPath === undefined ? undefined : clean(snapshot.outputPath);
-		view.body = clean(snapshot.output.text);
-		view.truncated = snapshot.output.truncated || snapshot.command?.truncated === true;
-	} else if (snapshot.items.length) {
-		view.items = snapshot.items.map((worker, index) => ({
-			index: index + 1,
-			description: clean(worker.description),
-			category: clean(worker.category),
-			status: clean(worker.status),
-			report: clean(worker.report.text),
-			error: worker.error === undefined ? undefined : clean(worker.error),
-			truncated: worker.report.truncated,
-		}));
-	} else {
-		view.body = clean(snapshot.output?.text ?? "");
-		view.truncated = snapshot.output?.truncated ?? false;
-	}
-	return view;
-}
-
-function failedWorker(worker: ItemReport): boolean {
-	return !!worker.error || worker.status === "failed" || worker.status === "aborted" || worker.status === "cancelled";
 }
 
 function color(status: string | undefined): StatusMarkerColor {
@@ -170,103 +131,47 @@ class CompletionCard implements Component {
 		const bodyWidth = Math.max(1, inner - indent.length);
 		const lines: string[] = [];
 		const status = view.status ? statusName(view.status) : "Result received";
-		const kind =
-			view.format === "report"
-				? view.kind || "Task"
-				: view.format === "log"
-					? view.shell === "bash"
-						? "Bash"
-						: view.shell || "Shell"
-					: "Notification";
+		const kind = view.kind === undefined ? "Notification" : (SHELL_NAMES[view.kind] ?? view.kind);
 		lines.push(
 			`${theme.fg("toolTitle", theme.bold(kind))}${theme.fg("muted", ` · Background ${status.toLowerCase()}${view.duration ? ` · ${view.duration}` : ""}`)}${view.id ? theme.fg("dim", ` · ${shortId(view.id)}`) : ""}`,
 		);
-		if (view.format === "report" && view.title) lines.push(theme.fg("toolOutput", view.title));
+		const summary = view.command ? `$ ${view.command.split("\n")[0]}` : view.title;
 		if (!options.expanded) {
-			if (view.command) lines.push(theme.fg("toolOutput", `$ ${view.command.split("\n")[0]}`));
-			else if (view.items)
-				lines.push(
-					theme.fg(
-						"muted",
-						`${view.items.length} worker${view.items.length === 1 ? "" : "s"} · reports available`,
-					),
-				);
+			if (summary) lines.push(theme.fg("toolOutput", summary));
 			if (view.diagnostic) lines.push(theme.fg(color(view.status), view.diagnostic));
-			const problem = view.items?.find(failedWorker);
-			if (problem) {
-				lines.push(
-					theme.fg(
-						color(problem.status),
-						`#${problem.index}: ${(problem.error || statusName(problem.status)).split("\n")[0]}`,
-					),
-				);
-			}
 		} else {
 			if (view.truncated) {
 				lines.push(theme.fg("warning", "The saved result is truncated; this is not the complete original output."));
 			}
-			const section = (
-				title: string,
-				text: string,
-				limit: number,
-				markdown = false,
-				tail = false,
-				error = false,
-			) => {
+			const section = (title: string, text: string, limit: number, tail = false, error = false) => {
 				lines.push("", theme.fg("muted", theme.bold(title)));
-				const rendered = markdown
-					? new Markdown(text, 0, 0, getMarkdownTheme()).render(bodyWidth)
-					: wrapTextWithAnsi(text, bodyWidth).map((line) => theme.fg(error ? "error" : "toolOutput", line));
+				const rendered = wrapTextWithAnsi(text, bodyWidth).map((line) =>
+					theme.fg(error ? "error" : "toolOutput", line),
+				);
 				const omitted = Math.max(0, rendered.length - limit);
 				const selected = tail ? rendered.slice(-limit) : rendered.slice(0, limit);
 				if (tail && omitted) lines.push(theme.fg("dim", `${indent}… ${omitted} earlier display lines omitted`));
 				for (const line of selected) lines.push(indent + line);
 				if (!tail && omitted) lines.push(theme.fg("dim", `${indent}… ${omitted} more display lines omitted`));
 			};
-			if (view.format === "report" && view.diagnostic)
-				section("Group result", view.diagnostic, 4, false, false, view.status === "failed");
-			if (view.format === "log") {
+			if (view.output === undefined) section("Details", view.body || "No text result.", 36);
+			else {
 				if (view.command) section("Command", view.command, 8);
+				else if (view.title) section("Task", view.title, 4);
 				if (view.cwd) section("Directory", view.cwd, 2);
 				section(
 					view.status === "failed" || view.status === "timeout" ? "Error" : "Result",
 					`${view.diagnostic ?? status}${view.exitCode !== undefined ? ` · ${view.exitCode === null ? "terminated by signal" : `exit ${view.exitCode}`}` : ""}`,
 					4,
 					false,
-					false,
 					view.status === "failed",
 				);
-				section("Output", !view.body.trim() ? "No output." : view.body, OUTPUT_ROWS, false, true);
+				section("Output", !view.output.trim() ? "No output." : view.output, OUTPUT_ROWS, true);
 				if (view.path) section("Log", view.path, 4);
-			} else if (view.items) {
-				const reportBudget = Math.min(REPORT_ROWS, Math.max(6, Math.floor(72 / view.items.length)));
-				for (const worker of view.items) {
-					const marker = statusMarker(worker.status);
-					lines.push(
-						"",
-						`${theme.fg(marker.color, `${marker.glyph} #${worker.index} ${statusName(worker.category)}`)}${theme.fg("muted", ` · ${statusName(worker.status)}`)}`,
-					);
-					lines.push(theme.fg("muted", `Task: ${worker.description}`));
-					if (failedWorker(worker)) {
-						section(
-							"Reason",
-							worker.error || statusName(worker.status),
-							2,
-							false,
-							false,
-							worker.status === "failed",
-						);
-						if (worker.report) section("Partial report", worker.report, Math.max(3, reportBudget - 6), true);
-					} else section("Report", worker.report || "No report returned.", reportBudget, true);
-					if (worker.truncated) lines.push(theme.fg("warning", "  Saved report truncated."));
-				}
-			} else {
-				section("Details", view.body || "No text result.", 36, true);
 			}
 			if (view.id) {
 				lines.push("", ...wrapTextWithAnsi(`Task ID: ${view.id}`, inner).map((line) => theme.fg("dim", line)));
 			}
-
 			lines.push(theme.fg("dim", "Preview of the saved result."));
 		}
 		const bounded =

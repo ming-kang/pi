@@ -1159,22 +1159,20 @@ Session-bound `TasksContext` supervises native and extension-owned execution. Fo
 | Method | Contract |
 |---|---|
 | `execute<T>(execution)` | Returns `{ kind: "result", result, status?, error? }` or `{ kind: "background", task }` |
-| `list()` / `get(id)` | Bounded retained snapshots; IDs support unique prefixes |
+| `list()` / `get(id)` | Bounded, read-only (frozen) retained snapshots; IDs support unique prefixes |
 | `read(id, options?)` | Bounded head, tail, or byte-offset output |
 | `wait(id, timeoutMs?, signal?)` | Observation only; timeout or cancellation ends the wait, not execution |
 | `kill(id)` | Requests cancellation; `stopping` is not a terminal status |
-| `detach(id)` / `detachForeground()` | Hands off one task or all eligible foreground tasks without restarting them |
+| `detach(id)` / `detachForeground()` | Hands off one task, or eligible foreground tasks oldest first while background slots remain, without restarting them; throws when every background slot is taken |
 | `subscribe(listener)` | Observes task state and progress |
 | `retain(id)` | Returns an idempotent release function protecting retained data, without delaying notifications |
 | `holdDelivery(id)` | Explicitly retains data and delays automatic delivery until released |
 
-`TaskExecution<T>` supplies `kind`, `title`, `toolCallId`, `run(control)`, optional `format`, `command`, `cwd`, `background`, `signal`, and `onUpdate`. `kind` is an executor-owned source label matching `[a-z][a-z0-9-]{0,63}`; the runtime never dispatches on it. `format` is `"report"` (default) or `"log"`. Foreground log records have a separate history quota and are hidden from the finished panel unless selected.
+`TaskExecution<T>` supplies `kind`, `title`, `toolCallId`, `run(control)`, optional `command`, `cwd`, `background`, `signal`, and `onUpdate`. `kind` is an executor-owned source label matching `[a-z][a-z0-9-]{0,63}`; the runtime never dispatches on it. At most eight background executions run at once; foreground executions are not limited by them. Foreground and background results have separate history quotas.
 
 `run` returns `TaskCompletion<T>`: `{ result, status?, error?, exitCode?, usage? }`. The original tool result is returned to a foreground caller; private `result.details` is not copied into task history. Explicit terminal statuses are `completed`, `partial`, `failed`, `cancelled`, and `timeout`. Usage is settled by the host once; managed foreground results omit usage to avoid billing it twice.
 
-`TaskControl<T>` exposes `id`, `signal`, `mode`, `accept()`, `publish(result, projection?)`, `setOutputPath(path, cleanup?)`, `onModeChange(listener)`, and `requestCancel()`. Call `accept()` after whole-invocation preflight, before allowing a background handoff. Use the control's signal throughout execution. Parent-call cancellation is disconnected after handoff, while runtime shutdown still cancels the task. Mode subscriptions concern only this task; executors do not need the global registry to observe their own handoff or cancel themselves.
-
-`TaskProjection` contains optional bounded `text`, executor-provided `nextStep` guidance, `shell: { name, output }`, and generic report `items`. Each item has `id`, `label`, `category`, `description`, `status`, `report`, optional `error`, live `input`/`activity`, and optional `context`/`usage` display strings. `TaskText` is `{ text, truncated }`. Report groups retain at most eight items, with 4 KiB per report; log output retains at most 40 KiB in the projection. Extensions may translate their reports into these public items; the core does not import executor internals.
+`TaskControl<T>` exposes `id`, `signal`, `mode`, `accept()`, `publish(result)`, `setOutputPath(path, cleanup?)`, `onModeChange(listener)`, and `requestCancel()`. `publish` replaces the task's bounded text result, which the `/tasks` panel, `tasks read`, and the completion notification show; a task with an output path is read from that log instead. Call `accept()` after whole-invocation preflight, before allowing a background handoff. Use the control's signal throughout execution. Parent-call cancellation is disconnected after handoff, while runtime shutdown still cancels the task. Mode subscriptions concern only this task; executors do not need the global registry to observe their own handoff or cancel themselves.
 
 Completion messages store a self-contained `TaskCompletionSnapshot`; only their bounded `content` enters model context. Built-in `tasks wait` binds delivery to the actual tool call, and the host confirms it after successful persistence. Ordinary extension reads/waits do not acknowledge delivery, and arbitrary tool-result detail fields cannot acknowledge a task.
 
