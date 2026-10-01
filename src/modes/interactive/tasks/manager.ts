@@ -13,6 +13,7 @@ import { STATUS_SPINNER_INTERVAL_MS } from "../components/status-marker.ts";
 import type { Theme } from "../theme/theme.ts";
 import { TaskInspector } from "./inspector.ts";
 import { renderTasksLayout, type TasksLayout } from "./layout.ts";
+import { TaskList } from "./list.ts";
 import { TaskSelection, type TasksPanelState } from "./model.ts";
 import { cleanTaskText } from "./text.ts";
 import { TaskViewport } from "./viewport.ts";
@@ -31,15 +32,11 @@ export interface TasksMenuOptions {
 }
 
 const actions: AppKeybinding[] = [
-	"app.tasks.overview",
-	"app.tasks.active",
-	"app.tasks.history",
 	"app.tasks.search",
 	"app.tasks.kill",
 	"app.tasks.detachSelected",
-	"app.tasks.focusList",
-	"app.tasks.focusInfo",
-	"app.tasks.focusPreview",
+	"app.tasks.previousTab",
+	"app.tasks.nextTab",
 	"app.tasks.follow",
 	"app.tasks.top",
 	"app.tasks.bottom",
@@ -53,16 +50,17 @@ export class TasksMenu implements Component, Focusable {
 	private readonly options: TasksMenuOptions;
 	private readonly selection: TaskSelection;
 	private readonly inspector: TaskInspector;
+	private readonly list = new TaskList();
 	private readonly search: Input;
 	private readonly unsubscribe: () => void;
 	private readonly unsubscribeViews?: () => void;
 	private readonly pollTimer: ReturnType<typeof setInterval>;
 	private animationTimer?: ReturnType<typeof setInterval>;
-	private killTimer?: ReturnType<typeof setTimeout>;
 	private pendingKill?: string;
 	private feedback?: string;
 	private focus: "list" | "inspector" = "list";
 	private searching = false;
+	private beforeSearch?: { id?: string; focus: "list" | "inspector" };
 	private help?: TaskViewport;
 	private dirty = true;
 	private tickQueued = false;
@@ -73,7 +71,7 @@ export class TasksMenu implements Component, Focusable {
 	constructor(options: TasksMenuOptions) {
 		this.options = options;
 		this.width = options.tui.terminal.columns;
-		this.selection = new TaskSelection(options.state ?? { filter: "overview", tab: "output", query: "" });
+		this.selection = new TaskSelection(options.state ?? { tab: "output" });
 		this.inspector = new TaskInspector({
 			host: options.host,
 			views: options.views,
@@ -81,7 +79,6 @@ export class TasksMenu implements Component, Focusable {
 			requestRender: () => options.tui.requestRender(),
 		});
 		this.search = new Input({ prompt: "Find task: ", placeholder: "title, command, kind or ID" });
-		this.search.setValue(this.selection.state.query);
 		this.sync();
 		this.unsubscribe = options.host.subscribe(() => {
 			this.dirty = true;
@@ -143,12 +140,11 @@ export class TasksMenu implements Component, Focusable {
 		this.inspector.invalidate();
 	}
 	private clearKill(): void {
-		clearTimeout(this.killTimer);
-		this.killTimer = undefined;
 		this.pendingKill = undefined;
 	}
 	private selectedChanged(): void {
 		this.clearKill();
+		this.list.showSelection();
 		this.inspector.select(this.selection.selected);
 		this.queueTick(true);
 	}
@@ -163,55 +159,41 @@ export class TasksMenu implements Component, Focusable {
 				: "No new cancellation requested.";
 		} else if (task && !isTaskTerminal(task.status) && task.status !== "stopping") {
 			this.pendingKill = task.id;
-			this.killTimer = setTimeout(() => {
-				this.clearKill();
-				this.feedback = "Stop confirmation expired.";
-				this.options.tui.requestRender();
-			}, 5000);
-			this.killTimer.unref?.();
 		}
+	}
+	private finishSearch(cancel: boolean): void {
+		const id = cancel ? this.beforeSearch?.id : this.selection.state.selectedId;
+		if (!cancel && !id) return;
+		this.focus = cancel ? (this.beforeSearch?.focus ?? "list") : "list";
+		this.searching = false;
+		this.search.focused = false;
+		this.selection.query = "";
+		this.selection.select(id);
+		this.beforeSearch = undefined;
+		this.selectedChanged();
 	}
 	private action(key: AppKeybinding): void {
 		switch (key) {
-			case "app.tasks.overview":
-			case "app.tasks.active":
-			case "app.tasks.history":
-				this.selection.filter(
-					key === "app.tasks.overview" ? "overview" : key === "app.tasks.active" ? "active" : "history",
-				);
-				this.focus = "list";
-				this.selectedChanged();
-				break;
 			case "app.tasks.search":
+				this.beforeSearch = { id: this.selection.state.selectedId, focus: this.focus };
+				this.focus = "list";
 				this.searching = true;
 				this.search.focused = true;
-				this.search.setValue(this.selection.state.query);
+				this.search.setValue("");
 				break;
-			case "app.tasks.focusList":
-				this.focus = "list";
-				break;
-			case "app.tasks.focusInfo":
-				this.focus = "inspector";
-				this.selection.state.tab = "info";
-				break;
-			case "app.tasks.focusPreview":
-				this.focus = "inspector";
-				this.selection.state.tab = "output";
+			case "app.tasks.previousTab":
+			case "app.tasks.nextTab":
+				if (this.focus === "inspector")
+					this.selection.state.tab = key === "app.tasks.previousTab" ? "output" : "info";
 				break;
 			case "app.tasks.nextFocus":
-			case "app.tasks.previousFocus": {
-				const current = this.focus === "list" ? 0 : this.selection.state.tab === "output" ? 1 : 2;
-				const next = (current + (key === "app.tasks.nextFocus" ? 1 : 2)) % 3;
-				this.focus = next === 0 ? "list" : "inspector";
-				if (next) this.selection.state.tab = next === 1 ? "output" : "info";
+			case "app.tasks.previousFocus":
+				this.focus = this.focus === "list" ? "inspector" : "list";
 				break;
-			}
 			case "app.tasks.follow":
-				if (this.inspector.tail) {
+				if (this.focus === "inspector" && this.selection.state.tab === "output" && this.inspector.tail) {
 					this.inspector.position.output.jump(true, true);
-					this.focus = "inspector";
-					this.selection.state.tab = "output";
-					this.queueTick();
+					this.queueTick(true);
 				}
 				break;
 			case "app.tasks.top":
@@ -280,35 +262,40 @@ export class TasksMenu implements Component, Focusable {
 		const kb = this.options.keybindings;
 		this.feedback = undefined;
 		try {
-			if (this.searching) {
-				if (kb.matches(data, "tui.select.cancel")) {
-					this.selection.state.query = "";
-					this.search.setValue("");
-					this.searching = false;
-				} else if (kb.matches(data, "tui.select.confirm")) this.searching = false;
+			if (this.help) {
+				if (kb.matches(data, "tui.select.cancel") || kb.matches(data, "app.tasks.help")) this.help = undefined;
+				else if (kb.matches(data, "app.tasks.top") || kb.matches(data, "app.tasks.bottom"))
+					this.help.jump(kb.matches(data, "app.tasks.bottom"), false);
+				else if (kb.matches(data, "tui.select.up") || kb.matches(data, "tui.editor.pageUp"))
+					this.help.move(-1, kb.matches(data, "tui.editor.pageUp"), false);
+				else if (kb.matches(data, "tui.select.down") || kb.matches(data, "tui.editor.pageDown"))
+					this.help.move(1, kb.matches(data, "tui.editor.pageDown"), false);
+			} else if (this.searching) {
+				if (kb.matches(data, "tui.select.cancel")) this.finishSearch(true);
+				else if (kb.matches(data, "tui.select.confirm")) this.finishSearch(false);
+				else if (kb.matches(data, "tui.select.up") || kb.matches(data, "tui.select.pageUp"))
+					this.move(-1, kb.matches(data, "tui.select.pageUp"));
+				else if (kb.matches(data, "tui.select.down") || kb.matches(data, "tui.select.pageDown"))
+					this.move(1, kb.matches(data, "tui.select.pageDown"));
 				else {
 					this.search.handleInput(data);
-					this.selection.state.query = this.search.getValue().slice(0, 512);
+					this.selection.query = this.search.getValue().slice(0, 512);
+					this.selection.refresh();
+					this.selectedChanged();
 				}
-				this.search.focused = this.searching;
-				this.selection.refresh();
-				this.selectedChanged();
 			} else if (this.pendingKill) {
 				if (kb.matches(data, "app.tasks.confirmStop")) this.stop(true);
-				else this.clearKill();
+				else if (kb.matches(data, "tui.select.cancel")) this.clearKill();
 			} else if (kb.matches(data, "tui.select.cancel")) {
-				if (this.help) this.help = undefined;
-				else if (this.width < 60 || this.options.tui.terminal.rows < 14 || this.focus === "list") {
-					this.dispose();
-					this.options.onClose();
-					return;
-				} else this.focus = "list";
+				this.dispose();
+				this.options.onClose();
+				return;
 			} else {
 				const pageUp = kb.matches(data, this.focus === "list" ? "tui.select.pageUp" : "tui.editor.pageUp");
 				const pageDown = kb.matches(data, this.focus === "list" ? "tui.select.pageDown" : "tui.editor.pageDown");
 				if (pageUp || kb.matches(data, "tui.select.up")) this.move(-1, pageUp);
 				else if (pageDown || kb.matches(data, "tui.select.down")) this.move(1, pageDown);
-				else if (kb.matches(data, "tui.select.confirm")) this.action("app.tasks.focusPreview");
+				else if (kb.matches(data, "tui.select.confirm")) return;
 				else {
 					const key = actions.find((key) => kb.matches(data, key));
 					if (key) this.action(key);
@@ -327,32 +314,56 @@ export class TasksMenu implements Component, Focusable {
 		this.render(event.width);
 		const layout = this.layout!;
 		if (event.type === "wheel" && event.wheelDelta) {
-			if (!this.pendingKill && !this.searching) {
-				if (this.width >= 100) this.focus = event.x < layout.listWidth ? "list" : "inspector";
-				for (let i = 0; i < Math.min(20, Math.abs(event.wheelDelta)); i++) this.move(Math.sign(event.wheelDelta));
+			if (!this.pendingKill && event.y >= 2 && event.y < this.options.tui.terminal.rows - 3) {
+				const delta = Math.sign(event.wheelDelta) * Math.min(20, Math.abs(event.wheelDelta));
+				const region = this.width >= 100 ? (event.x < layout.listWidth ? "list" : "inspector") : this.focus;
+				if (this.help) this.help.move(delta, false, false);
+				else if (region === "list") this.list.scroll(delta);
+				else if (!this.searching)
+					this.inspector.position[this.selection.state.tab].move(
+						delta,
+						false,
+						this.selection.state.tab === "output" && this.inspector.tail,
+					);
 			}
 		} else if (event.type === "click" && event.button === "left") {
 			const hit = layout.hits.find((hit) => hit.y === event.y && event.x >= hit.x && event.x < hit.x + hit.width);
 			try {
-				if (hit?.taskId) {
+				if (hit?.cancel) {
+					if (this.searching) this.finishSearch(true);
+					else if (this.help) this.help = undefined;
+					else if (this.pendingKill) this.clearKill();
+					else {
+						this.dispose();
+						this.options.onClose();
+					}
+				} else if (hit?.taskId) {
 					this.selection.select(hit.taskId);
 					this.selectedChanged();
-					this.focus = this.width < 100 ? "inspector" : "list";
-				} else if (hit?.key) this.action(hit.key);
-				else if (
+					this.focus = "list";
+					if (this.searching) this.finishSearch(false);
+				} else if (hit?.tab) {
+					this.focus = "inspector";
+					this.selection.state.tab = hit.tab;
+				} else if (hit?.key) {
+					if (hit.key === "app.tasks.follow") this.focus = "inspector";
+					this.action(hit.key);
+				} else if (
 					!this.pendingKill &&
 					!this.searching &&
-					event.y >= layout.contentY &&
-					(this.width < 100 || event.x > layout.listWidth)
+					!this.help &&
+					event.y >= 1 &&
+					event.y < this.options.tui.terminal.rows - 2 &&
+					this.width >= 100
 				)
-					this.focus = "inspector";
+					this.focus = event.x < layout.listWidth ? "list" : "inspector";
 			} catch (error) {
 				this.feedback = cleanTaskText(String(error));
 			}
 		} else return;
 		this.queueTick(true);
 		this.options.tui.requestRender();
-		return { handled: true, focus: true };
+		return { handled: true, focus: event.type === "click" };
 	}
 	render(width: number): string[] {
 		this.width = width;
@@ -364,8 +375,9 @@ export class TasksMenu implements Component, Focusable {
 			keybindings: this.options.keybindings,
 			selection: this.selection,
 			inspector: this.inspector,
+			list: this.list,
 			focus: this.focus,
-			searchLine: this.searching ? this.search.render(width).join("") : undefined,
+			searchLine: this.searching ? (width) => this.search.render(width).join("") : undefined,
 			pendingKill: this.pendingKill,
 			feedback: this.feedback,
 			help: this.help,

@@ -6,7 +6,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Changed
 
-- Redesigned `/tasks` with Overview, Active and History views, retained selection across completion and reopening, searchable task labels, an output-first inspector, and full-width detail navigation on narrow terminals.
+- Redesigned `/tasks` around one Active/Finished list including retained foreground results. Tab switches between two panes, Left/Right change Output/Details only within the inspector, and Escape closes from either pane. Focus uses the pane border; task selection and tab selection keep their own background and underline. Foreground/background labels stay in Details, leaving task summaries with status and elapsed time.
+- Task search now locates a result and returns to the complete list. Stop confirmation waits for Enter or Escape and closes when its target finishes. Mouse scrolling preserves keyboard focus; completion and new work preserve task selection and browsed output. Narrow terminals use the same navigation rules.
 - Added configurable task follow/top/bottom controls, selected-task backgrounding, stop confirmation and keyboard help, plus mouse selection and scrolling. The statusline counts foreground and background work; completion cards show duration, report titles and recorded exit codes.
 
 ### Fixed

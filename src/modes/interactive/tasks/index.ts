@@ -14,7 +14,7 @@ export interface TasksUI {
 
 /** Host-owned task UI; it is available without loading an extension. */
 export function bindTasksUI(ctx: { tasks: TasksContext; ui: ExtensionUIContext }): TasksUI {
-	const state: TasksPanelState = { filter: "overview", tab: "output", query: "" };
+	const state: TasksPanelState = { tab: "output" };
 	const releaseViews = ["bash", "powershell"].map((kind) => ctx.tasks.views.register(kind, shellTaskView));
 	let unsubscribe: (() => void) | undefined;
 	let unsubscribeDetachKey: (() => void) | undefined;

@@ -14,15 +14,11 @@ import { getRegisteredKeybindings } from "./keybinding-registry.ts";
 
 export interface AppKeybindings {
 	"app.tasks.detach": true;
-	"app.tasks.focusList": true;
-	"app.tasks.focusPreview": true;
-	"app.tasks.focusInfo": true;
+	"app.tasks.previousTab": true;
+	"app.tasks.nextTab": true;
 	"app.tasks.kill": true;
 	"app.tasks.confirmStop": true;
 	"app.tasks.detachSelected": true;
-	"app.tasks.overview": true;
-	"app.tasks.active": true;
-	"app.tasks.history": true;
 	"app.tasks.search": true;
 	"app.tasks.follow": true;
 	"app.tasks.top": true;
@@ -97,21 +93,17 @@ export const KEYBINDINGS = {
 	...TUI_KEYBINDINGS,
 	"tui.editor.cursorLeft": { ...TUI_KEYBINDINGS["tui.editor.cursorLeft"], defaultKeys: "left" },
 	"app.tasks.detach": { defaultKeys: "ctrl+b", description: "Move foreground tasks to the background" },
-	"app.tasks.focusList": { defaultKeys: "left", description: "Focus the task list" },
-	"app.tasks.focusPreview": { defaultKeys: "right", description: "Focus the task preview" },
-	"app.tasks.focusInfo": { defaultKeys: "i", description: "Focus task information" },
+	"app.tasks.previousTab": { defaultKeys: "left", description: "Show Output in the focused task inspector" },
+	"app.tasks.nextTab": { defaultKeys: "right", description: "Show Details in the focused task inspector" },
 	"app.tasks.kill": { defaultKeys: "k", description: "Stop the selected task" },
-	"app.tasks.confirmStop": { defaultKeys: ["y", "shift+y"], description: "Confirm stopping the selected task" },
+	"app.tasks.confirmStop": { defaultKeys: "enter", description: "Confirm stopping the selected task" },
 	"app.tasks.detachSelected": { defaultKeys: "b", description: "Move the selected task to the background" },
-	"app.tasks.overview": { defaultKeys: "1", description: "Show task overview" },
-	"app.tasks.active": { defaultKeys: "2", description: "Show active tasks" },
-	"app.tasks.history": { defaultKeys: "3", description: "Show retained task history" },
 	"app.tasks.search": { defaultKeys: "/", description: "Search retained task identities and labels" },
 	"app.tasks.follow": { defaultKeys: "f", description: "Follow the selected task's output" },
 	"app.tasks.top": { defaultKeys: "home", description: "Go to the top of the task list or preview" },
 	"app.tasks.bottom": { defaultKeys: "end", description: "Go to the bottom of the task list or preview" },
-	"app.tasks.nextFocus": { defaultKeys: "tab", description: "Focus the next task region" },
-	"app.tasks.previousFocus": { defaultKeys: "shift+tab", description: "Focus the previous task region" },
+	"app.tasks.nextFocus": { defaultKeys: "tab", description: "Switch between task list and inspector" },
+	"app.tasks.previousFocus": { defaultKeys: "shift+tab", description: "Switch between task inspector and list" },
 	"app.tasks.help": { defaultKeys: "?", description: "Show task controls" },
 
 	"tui.editor.undo": {

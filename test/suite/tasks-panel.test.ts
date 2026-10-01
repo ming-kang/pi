@@ -20,7 +20,7 @@ it("inspects concurrent shell/report work through detach, stop, completion, relo
 	await session.bindExtensions({ tasksEnabled: true });
 	const root = sessionManager.appendMessage({ role: "user", content: "Task scenario root", timestamp: Date.now() });
 	const scenario = await startTasksScenario(session.tasks, harness.tempDir);
-	const state: TasksPanelState = { filter: "overview", tab: "output", query: "", selectedId: scenario.foregroundId };
+	const state: TasksPanelState = { tab: "output", selectedId: scenario.foregroundId };
 	const tui = { terminal: { rows: 30, columns: 120 }, requestRender: () => {} };
 	let menu: TasksMenu | undefined;
 	const frames: Record<string, string> = {};
@@ -46,7 +46,7 @@ it("inspects concurrent shell/report work through detach, stop, completion, relo
 		menu!.handleInput(scenario.cancelId);
 		menu!.handleInput("\r");
 		menu!.handleInput("k");
-		menu!.handleInput("y");
+		menu!.handleInput("\r");
 		await vi.waitFor(() => expect(session.tasks.get(scenario.cancelId).status).toBe("cancelled"));
 		menu!.handleInput("/");
 		menu!.handleInput("\x1b");
@@ -55,7 +55,7 @@ it("inspects concurrent shell/report work through detach, stop, completion, relo
 		menu!.handleInput("\r");
 		menu!.handleInput("b");
 		expect(session.tasks.get(scenario.foregroundId).mode).toBe("background");
-		menu!.handleInput("\x1b[C");
+		menu!.handleInput("\t");
 		menu!.handleInput("\x1b[H");
 		expect(frame()).toContain("foreground-build output 1");
 		tui.terminal.columns = 72;
@@ -85,7 +85,7 @@ it("inspects concurrent shell/report work through detach, stop, completion, relo
 		menu!.dispose();
 		await session.reload();
 		open();
-		menu!.handleInput("\r");
+		menu!.handleInput("\t");
 		await vi.waitFor(() => expect(frame()).toContain("foreground-build final output"));
 		frames.reloaded = frame();
 		expect(
@@ -100,7 +100,7 @@ it("inspects concurrent shell/report work through detach, stop, completion, relo
 		expect(session.tasks.list()).toEqual([]);
 		await session.navigateTree(leaf);
 		open();
-		menu!.handleInput("\r");
+		menu!.handleInput("\t");
 		await vi.waitFor(() => expect(frame()).toContain("foreground-build final output"));
 		frames.returned = frame();
 		expect(scenario.errors).toEqual([]);

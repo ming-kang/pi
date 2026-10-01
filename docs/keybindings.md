@@ -129,12 +129,19 @@ This routing remains configurable through the ordinary action bindings. For exam
 | `app.editor.external` | `ctrl+g` | Open in external editor (`externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere) |
 | `app.clipboard.pasteImage` | `ctrl+v` (`alt+v` on Windows and WSL) | Paste image or text from clipboard |
 | `app.tasks.detach` | `ctrl+b` | Move all eligible current foreground managed tasks to the background |
-| `app.tasks.focusList` | `left` | Focus the task list in `/tasks` |
-| `app.tasks.focusPreview` | `right` | Focus the selected preview in `/tasks` |
-| `app.tasks.focusInfo` | `i` | Focus the selected task's information in `/tasks` |
-| `app.tasks.kill` | `k` | Ask to stop the selected ongoing task in `/tasks` (confirmed with `y`) |
+| `app.tasks.nextFocus` | `tab` | Switch between task list and inspector |
+| `app.tasks.previousFocus` | `shift+tab` | Switch between task inspector and list |
+| `app.tasks.previousTab` | `left` | Show Output while the inspector has focus |
+| `app.tasks.nextTab` | `right` | Show Details while the inspector has focus |
+| `app.tasks.search` | `/` | Locate a retained task; Enter chooses, Escape restores selection |
+| `app.tasks.follow` | `f` | Follow latest or final output while Output has focus |
+| `app.tasks.top` / `app.tasks.bottom` | `home` / `end` | Beginning / end of the focused list or content |
+| `app.tasks.kill` | `k` | Ask to stop the selected ongoing task |
+| `app.tasks.confirmStop` | `enter` | Confirm stopping the task named in the confirmation |
+| `app.tasks.detachSelected` | `b` | Move only the selected foreground task to the background |
+| `app.tasks.help` | `?` | Show task controls |
 
-In `/tasks`, Up/Down and Page Up/Page Down target the focused pane: row selection/list paging or preview scrolling/paging. Enter focuses the preview; Escape returns to the list before closing. Left/Right focus controls can be rebound independently of editor cursor actions. List paging uses `tui.select.pageUp`/`pageDown`; preview paging uses `tui.editor.pageUp`/`pageDown` (including their default Ctrl+Page Up/Down aliases).
+In `/tasks`, Tab switches between two panes and preserves the inspector's Output/Details tab. Left/Right only change that tab while the inspector has focus. Up/Down and Page Up/Page Down select tasks or scroll the focused content. Escape closes the current search, help or confirmation first, and otherwise closes the panel from either pane. Narrow terminals use the same rules. List paging uses `tui.select.pageUp`/`pageDown`; inspector paging uses `tui.editor.pageUp`/`pageDown` (including their default Ctrl+Page Up/Down aliases).
 
 Ctrl+B also works while `/tasks` owns focus. It does not restart execution, reset shell timeouts, or affect user `!` commands. With no eligible work the key falls through to other bindings. See [Background tasks](bundled/tasks.md).
 

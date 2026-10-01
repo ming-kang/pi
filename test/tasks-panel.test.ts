@@ -48,7 +48,7 @@ function harness(tasks = [task("first"), task("second", { mode: "background" })]
 	const tui = { requestRender: vi.fn(), terminal: { rows: 30, columns: width } };
 	const close = vi.fn();
 	const keybindings = new KeybindingsManager();
-	const state: TasksPanelState = { filter: "overview", tab: "output", query: "" };
+	const state: TasksPanelState = { tab: "output" };
 	const menu = new TasksMenu({ host, views, tui, theme, keybindings, state, onClose: close });
 	menus.push(menu);
 	return {
@@ -69,7 +69,7 @@ function harness(tasks = [task("first"), task("second", { mode: "background" })]
 		left: () =>
 			menu
 				.render(width)
-				.map((line) => stripTerminalSequences(line).split("│")[0])
+				.map((line) => stripTerminalSequences(line).split("│")[1])
 				.join("\n"),
 	};
 }
@@ -83,7 +83,7 @@ describe("task panel views", () => {
 		for (const menu of menus.splice(0)) menu.dispose();
 		vi.useRealTimers();
 	});
-	it("lists only ongoing foreground and background tasks, including queued and stopping", async () => {
+	it("lists ongoing and retained foreground tasks together", async () => {
 		const h = harness([
 			task("fg"),
 			task("bg", { mode: "background" }),
@@ -93,10 +93,10 @@ describe("task panel views", () => {
 		]);
 		await vi.advanceTimersByTimeAsync(0);
 		for (const label of ["fg", "bg", "queue", "stop"]) expect(h.left()).toContain(label);
-		expect(h.left()).not.toContain("old");
-		expect(h.frame()).not.toContain("Finished");
+		expect(h.left()).toContain("old");
+		expect(h.frame()).toContain("Finished");
 	});
-	it("keeps a selected foreground completion in Overview until another selection", async () => {
+	it("keeps foreground completions in the list after another selection", async () => {
 		const h = harness();
 		await vi.advanceTimersByTimeAsync(0);
 		h.tasks[0]!.status = "completed";
@@ -115,7 +115,7 @@ describe("task panel views", () => {
 		h.menu.handleInput("\x1b[B");
 		await vi.advanceTimersByTimeAsync(0);
 		expect(h.frame()).toContain("echo second");
-		expect(h.frame()).not.toContain("echo first");
+		expect(h.frame()).toContain("echo first");
 		expect(h.release).toHaveBeenCalledOnce();
 	});
 	it("keeps a watched result when new work arrives and exposes foreground history on reopen", async () => {
@@ -125,14 +125,13 @@ describe("task panel views", () => {
 		h.tasks[0]!.endedAt = 1000;
 		h.change();
 		await vi.advanceTimersByTimeAsync(1000);
-		expect(h.frame()).toContain("Recent results");
+		expect(h.frame()).toContain("Finished");
 		h.tasks.push(task("new"));
 		h.change();
 		expect(h.frame()).toContain("echo first");
 		expect(h.left()).toContain("echo new");
 		const reopened = harness(h.tasks);
-		expect(reopened.frame()).not.toContain("echo first");
-		reopened.menu.handleInput("3");
+		expect(reopened.frame()).toContain("echo new");
 		expect(reopened.frame()).toContain("echo first");
 	});
 	it("keeps a stable selection while tasks arrive and reorder", () => {
@@ -159,9 +158,10 @@ describe("task panel views", () => {
 		};
 		const unregister = h.views.register("custom", provider);
 		expect(h.frame()).toContain("A custom report structure");
-		h.menu.handleInput("i");
-		expect(h.frame()).toContain("Custom parameters");
+		h.menu.handleInput("\t");
 		h.menu.handleInput("\x1b[C");
+		expect(h.frame()).toContain("Custom parameters");
+		h.menu.handleInput("\x1b[D");
 		expect(h.host.read).not.toHaveBeenCalled();
 		h.tasks[0]!.result = { content: [{ type: "text", text: "Saved fallback" }], details: undefined };
 		h.change();
@@ -180,19 +180,19 @@ describe("task panel views", () => {
 		expect(() => h.frame()).not.toThrow();
 		expect(h.frame()).toContain("broken renderer");
 		h.menu.handleInput("k");
-		h.menu.handleInput("y");
+		h.menu.handleInput("\r");
 		expect(h.host.kill).toHaveBeenCalledWith("broken");
 	});
 	it("renders CRLF shell output as one row per line", async () => {
 		const h = harness();
 		h.setOutput("first line\r\nsecond line\r\n");
 		await vi.advanceTimersByTimeAsync(1000);
-		expect(h.frame()).toContain("Preview 1–3/3");
+		expect(h.frame().match(/first line|second line/g)).toEqual(["first line", "second line"]);
 	});
 	it("pauses tail following while browsing and resumes only on explicit downward navigation", async () => {
 		const h = harness();
 		await vi.advanceTimersByTimeAsync(0);
-		h.menu.handleInput("\x1b[C");
+		h.menu.handleInput("\t");
 		h.menu.handleInput("\x1b[5~");
 		const before = h.frame().match(/line-\d+/g);
 		h.setOutput("new tail");
@@ -202,7 +202,7 @@ describe("task panel views", () => {
 		for (let i = 0; i < 10; i++) h.menu.handleInput("\x1b[6~");
 		await vi.advanceTimersByTimeAsync(0);
 		expect(h.frame()).toContain("new tail");
-		expect(h.frame()).toContain("Following");
+		expect(h.frame()).toContain("Live");
 	});
 	it("ignores a pending read after selection changes or the panel closes", async () => {
 		const h = harness();
@@ -235,17 +235,18 @@ describe("task panel views", () => {
 				update: vi.fn(),
 			}),
 		});
-		h.keybindings.setUserBindings({ "app.tasks.focusInfo": "i", "app.tasks.kill": "x" });
+		h.keybindings.setUserBindings({ "app.tasks.nextTab": "i", "app.tasks.kill": "x" });
+		h.menu.handleInput("\t");
 		h.menu.handleInput("i");
 		expect(h.frame()).toContain("parameter-0");
 		h.menu.handleInput("\x1b[6~");
 		expect(h.frame()).not.toContain("parameter-0 ");
-		h.menu.handleInput("\x1b[C");
+		h.menu.handleInput("\x1b[D");
 		expect(h.frame()).toContain("Report");
 		h.menu.handleInput("k");
 		expect(h.frame()).not.toContain("confirm");
 		h.menu.handleInput("x");
-		h.menu.handleInput("y");
+		h.menu.handleInput("\r");
 		expect(h.host.kill).toHaveBeenCalledWith("custom");
 	});
 	it.each([2, 50, 60, 100, 140])("fits the terminal at width %i with wide unicode output", async (width) => {
@@ -259,7 +260,7 @@ describe("task panel views", () => {
 		const h = harness();
 		h.setOutput(Array.from({ length: 80 }, (_, i) => `entry-${i}: ${"界".repeat(60)}`).join("\n"));
 		await vi.advanceTimersByTimeAsync(1000);
-		h.menu.handleInput("\x1b[C");
+		h.menu.handleInput("\t");
 		h.menu.handleInput("\x1b[5~");
 		const first = h.frame().match(/entry-\d+/)?.[0];
 		expect(first).toBeDefined();
@@ -287,7 +288,7 @@ describe("task panel views", () => {
 				}),
 		);
 		await vi.advanceTimersByTimeAsync(1000);
-		h.menu.handleInput("\x1b[C");
+		h.menu.handleInput("\t");
 		h.menu.handleInput("\x1b[5~");
 		const before = h.frame().match(/line-\d+/g);
 		resolve({ task: h.tasks[0]!, text: "late tail", totalBytes: 9, truncated: false });
@@ -310,18 +311,17 @@ describe("task panel views", () => {
 		await vi.advanceTimersByTimeAsync(600);
 		expect(h.tui.requestRender).not.toHaveBeenCalled();
 	});
-	it("expires kill confirmation and closes from output without cancelling execution", async () => {
+	it("keeps stop confirmation until cancelled and closes directly from output", async () => {
 		const h = harness();
 		h.menu.handleInput("k");
 		expect(h.frame()).toContain("confirm");
 		await vi.advanceTimersByTimeAsync(5000);
-		expect(h.frame()).toContain("Stop confirmation expired");
-		h.menu.handleInput("y");
+		expect(h.frame()).toContain("confirm");
+		h.menu.handleInput("\x1b");
 		expect(h.host.kill).not.toHaveBeenCalled();
-		h.menu.handleInput("\x1b[C");
+		h.menu.handleInput("\t");
 		h.menu.handleInput("\x1b");
-		expect(h.close).not.toHaveBeenCalled();
-		h.menu.handleInput("\x1b");
+
 		expect(h.close).toHaveBeenCalledOnce();
 		expect(h.host.kill).not.toHaveBeenCalled();
 	});
@@ -341,9 +341,9 @@ describe("task panel views", () => {
 		expect(h.state.selectedId).toBe("task-39");
 		h.menu.handleInput("\x1b[B");
 		h.menu.handleInput("n");
-		expect(h.state.selectedId).toBe("task-11");
+		expect(h.state.selectedId).toBe("task-12");
 		await vi.advanceTimersByTimeAsync(0);
-		h.menu.handleInput("\x1b[C");
+		h.menu.handleInput("\t");
 		h.menu.handleInput("p");
 		expect(h.frame()).toContain("Browsing");
 	});

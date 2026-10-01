@@ -55,43 +55,38 @@ All model-facing management responses, including listings and error messages, ar
 
 ## `/tasks` panel
 
-The fullscreen panel has three views:
+The fullscreen panel has one scrollable list. **Active** groups queued, running and stopping work; **Finished** groups all retained results on the selected branch, including foreground shell results, newest first. Empty groups are hidden. Task summaries show status and elapsed time; foreground/background mode is available in Details. The background action is offered only when the selected task can move.
 
-- **Overview** shows all ongoing foreground and background tasks, followed by up to five recent background/report results. A selected foreground completion stays visible until you select another task.
-- **Active** shows queued, running and stopping work. If the selected task settles, its row remains under **Just finished** until you select another task.
-- **History** shows all retained terminal results on the selected branch, including foreground shell history, newest first.
+Selection follows the task when it finishes; new work does not steal focus or replace browsed output. The list preserves the selected row's screen position where space permits. Reopening remembers the selected ID and right-hand tab while the runtime remains available. Runtime replacement resets these preferences, and branch navigation removes results outside the visible branch. History remains bounded by the retention limits below.
 
-Selection follows the task when it finishes; new work does not steal focus. The view, search, selected ID and information/output tab are remembered while the session runtime remains available. Reopening restores a retained selection. Runtime replacement resets these preferences, and branch navigation removes results outside the visible branch. History is bounded by the retention limits below.
+At 100 columns or more, the task list sits beside an inspector. **Output** shows the result directly; **Details** holds the full command, directory, task ID, log location and executor-specific details. Each task and tab keeps its reading position for the lifetime of the panel. Tab switches between the two panes, preserving the right-hand tab. Left/Right switch Output/Details only when the inspector has focus.
 
-At 100 columns or more, the task list sits beside an inspector. **Output** gets the main reading area; **Information** holds the full command, directory, task ID, log location and executor-specific details. Each tab keeps its own reading position. Narrow terminals show either the list or the inspector at full width: Enter opens the selected task, and Escape returns to the list. The minimum supported size is 60 columns by 14 rows.
+The focused pane has a highlighted border. Task selection uses a persistent row background, and the selected right-hand tab uses an underline; neither changes when focus moves. When the system theme has no background colors, the selected row uses inverse text. There are no focus arrows or extra title colors. Narrow terminals show one pane at full width with the same Tab navigation and no focus highlight. The inspector includes task context when the list is hidden. Escape closes the panel from either pane. The minimum supported size is 60 columns by 14 rows.
 
 Bash and PowerShell show live plain-text output. Extensions can provide their own information and output components. Missing or failing log views fall back to bounded core reads; report views fall back to saved text. Task status, failure reasons and output-read errors remain distinct.
 
 | Default key | Action |
 |---|---|
-| `1` / `2` / `3` | Overview / Active / History |
-| `/` | Search the current view by title, command, kind or ID; Enter keeps the filter, Escape clears it |
-| Left | Focus the task list |
-| `i` | Focus information |
-| Right / Enter | Focus output |
-| Tab / Shift+Tab | Move between list, output and information |
+| `/` | Locate any retained task by title, command, kind or ID; Up/Down choose a candidate, Enter or clicking locates it and restores the full list, Escape restores the prior selection and focus |
+| Left / Right | Output / Details, only while the inspector has focus |
+| Tab / Shift+Tab | Switch between list and inspector, preserving the current tab |
 | Up / Down | Select a task or scroll the focused region |
 | Page Up / Page Down | Page the focused list or region |
 | Home / End | Top / bottom of the list or bounded preview |
-| `f` | Follow the latest output, or load the final output after completion |
+| `f` | Follow the latest output, or load the final output after completion, while Output has focus |
 | `b` | Move only the selected eligible foreground task to the background |
-| `k`, then `y` | Request cancellation of the selected whole task; another key cancels confirmation, which expires after five seconds |
+| `k`, then Enter | Request cancellation of the selected whole task; Escape cancels confirmation. Confirmation has no time limit and closes if its target finishes |
 | `?` | Show configurable controls; Up/Down scroll the help |
-| Escape | Return to the list, then close |
+| Escape | Close the current search, help or confirmation first; otherwise close the panel |
 | Ctrl+B | Detach **all** eligible foreground executions through the host |
 
-Click task rows and view/tab labels to select them. The mouse wheel scrolls the region under the pointer. Keyboard navigation remains available throughout.
+Click a pane to focus it, a task row to select it, or a tab label to display it. The mouse wheel scrolls the pane under the pointer without changing keyboard focus or task selection. Search, help and confirmation consume their own input without activating the panel behind them.
 
-Shell output initially follows the tail. Scrolling up enters **Browsing**, which holds a bounded output snapshot while status continues updating. Press `f`, End, or scroll down to the bottom to resume **Following output**. If the task finishes while browsing, the panel offers to load its final output. Closing or scrolling never pauses, restarts or cancels execution.
+Shell output initially follows the tail, marked **Live** next to the output. Scrolling up enters **Browsing**, which holds a bounded output snapshot while status continues updating. In Output, press `f`, End, or scroll down to the bottom to resume following. If the task finishes while browsing, the panel offers to load its final output. Closing or scrolling never pauses, restarts or cancels execution.
 
-The panel polls only selected tail output once per second, up to 48 KiB per read; navigation and settlement can request an immediate refresh. Progress updates and animation do not add log reads. Preview line ranges describe the bounded slice, not the entire log. Byte counts and truncation labels explain its scope. Empty output and expired logs have explicit messages; an unavailable log falls back to the saved result when available. Selecting a task retains its result and log without delaying completion notifications. Closing releases the view, subscriptions, retention lease and timers.
+The panel polls only selected tail output once per second, up to 48 KiB per read; navigation and settlement can request an immediate refresh. Progress updates and animation do not add log reads. A truncated tail shows its preview and total byte counts; ordinary complete output omits these statistics. Empty output and expired logs have explicit messages; an unavailable log falls back to the saved result when available. Selecting a task retains its result and log without delaying completion notifications. Closing releases the view, subscriptions, retention lease and timers.
 
-Controls use the `app.tasks.*` bindings: `overview`, `active`, `history`, `search`, `focusList`, `focusInfo`, `focusPreview`, `nextFocus`, `previousFocus`, `top`, `bottom`, `follow`, `kill`, `confirmStop`, `detachSelected`, `detach` and `help`. List paging uses `tui.select.pageUp` / `pageDown`; information and output paging use `tui.editor.pageUp` / `pageDown`. All are configurable.
+Controls use the `app.tasks.*` bindings: `search`, `previousTab`, `nextTab`, `nextFocus`, `previousFocus`, `top`, `bottom`, `follow`, `kill`, `confirmStop`, `detachSelected`, `detach` and `help`. List paging uses `tui.select.pageUp` / `pageDown`; Details and Output paging use `tui.editor.pageUp` / `pageDown`. All are configurable. The former view and direct-focus bindings have been removed.
 
 The statusline counts all active managed work and points to `/tasks`. When only retained background/report results remain, it labels that scope explicitly. The model-facing `tasks list` keeps its background-only scope and foreground omission count.
 
@@ -142,7 +137,7 @@ Managed shell output is collected continuously from startup, including before de
 
 Managed logs are ephemeral: they are retained with the runtime record and cleaned up when that record is evicted or the runtime shuts down. Save needed output elsewhere before then. The core defaults to eight active managed executions and two independent terminal histories: 32 reports/background log tasks, plus 32 foreground log records. Report tasks count toward the first history in either mode. Foreground shell traffic can only evict older foreground shell records. Pending delivery, pins, active reads and cleanup use a separate allowance within the bounded total; pins temporarily defer history eviction, not runtime shutdown. These are service limits, not new user settings.
 
-Terminal snapshots persist as version-2 `task-result` custom entries, including the presentation projection and optional executor-owned `viewData`; usage remains in independent version-1 `task-usage` entries. The runtime restores version-2 terminal history from the selected branch for programmatic reads and the panel's History view, selecting the newest records independently for each history. Older result records are left in the session file and are not migrated or restored. Live execution never resumes after restart, and restoration does not replay accounting or completion events. A saved log path is not a durable attachment. See [session format](../session-format.md#background-records).
+Terminal snapshots persist as version-2 `task-result` custom entries, including the presentation projection and optional executor-owned `viewData`; usage remains in independent version-1 `task-usage` entries. The runtime restores version-2 terminal history from the selected branch for programmatic reads and the panel's Finished group, selecting the newest records independently for each history. Older result records are left in the session file and are not migrated or restored. Live execution never resumes after restart, and restoration does not replay accounting or completion events. A saved log path is not a durable attachment. See [session format](../session-format.md#background-records).
 
 Delivered history outside the selected branch can be released and restored on return, so it does not fill the new branch's history budget. Undelivered completions stay protected while their branch is hidden. Pending delivery, pins and active reads use a separate allowance within the total runtime retention cap; restoration respects the same cap.
 
