@@ -19,14 +19,26 @@ This page was verified on Windows; other platforms use the matching asset from t
 Run from the repository root in PowerShell:
 
 ```powershell
+New-Item -ItemType Directory -Force .artifacts\tty\agent | Out-Null
+'{ "app.editor.external": [] }' | Set-Content -Encoding utf8NoBOM .artifacts\tty\agent\keybindings.json
 tui-test run --backend xtermjs --cols 100 --rows 40 --cwd "$PWD" `
   --env "PI_CODING_AGENT_DIR=$PWD\.artifacts\tty\agent" --env PI_OFFLINE=1 `
   node scripts/run-source.mjs --no-env --no-session --no-skills --no-prompt-templates `
   --extension test/fixtures/offline-provider.ts --provider offline --model fixture
 tui-test expect text "Offline fixture" --timeout 30000
+tui-test expect text "8080/8080/8080" --timeout 10000
+tui-test key press Ctrl+U
 ```
 
-This runs the source checkout like `npm run dev`, offline, without saving a session, and without provider credentials or your own settings, skills, and prompt templates. Startup takes about 15 seconds. The agent directory and screenshots stay in the ignored `.artifacts/tty/`; delete it for a clean start. Always pass `--backend xtermjs` (see [Limits](#limits)).
+This runs the source checkout like `npm run dev`, offline, without saving a session, and without provider credentials or your own settings, skills, and prompt templates. Startup takes about 15 seconds. The agent directory and screenshots stay in the ignored `.artifacts/tty/`; delete it for a clean start, then recreate `keybindings.json`. Always pass `--backend xtermjs` (see [Limits](#limits)).
+
+The `keybindings.json` lines and the last two commands handle a Windows console problem (see [Limits](#limits)): Pi's terminal color query leaves `b:8080/8080/8080` in the editor. The `keybindings.json` unbinds the external editor so that text cannot suspend Pi, and `Ctrl+U` clears it. Pi queries again on `/reload` or a theme change, so clear the editor the same way after those:
+
+```powershell
+tui-test submit "/reload"
+tui-test expect text "8080/8080/8080" --timeout 10000
+tui-test key press Ctrl+U
+```
 
 The fixture provider in `test/fixtures/offline-provider.ts` answers without network access:
 
@@ -78,3 +90,4 @@ A collapsed tool result shows its last 10 lines. The fixture result has 14 lines
 - The default backend accepts Pi's request to enable the Kitty keyboard protocol and then encodes keys such as `Escape` as `\x1b[27u`. The Windows console layer between them drops those sequences, so `Escape`, `Ctrl+C`, and `Ctrl+O` silently do nothing. The xterm.js backend sends plain bytes (`\x1b`, `\x03`, `\x0f`) that arrive intact.
 - Plain bytes cannot express `Shift+Enter`, `Ctrl+Enter` (both arrive as Enter), or `Ctrl+Shift+<letter>`. Use `Ctrl+J` for a newline. Write Alt keys in lowercase (`Alt+v`); `Alt+V` adds Shift. This setup therefore checks Pi's non-Kitty input path; `VirtualTerminal` tests cover Kitty mode.
 - `wait idle` never settles while a spinner animates; wait for text instead.
+- The Windows console layer mangles terminal color replies, with every backend. At startup and on `/reload`, Pi asks the terminal for its colors (OSC 10, 11 and 4) and then sends a DA1 request whose reply marks the end of the answers. The console layer answers DA1 itself, immediately, so Pi stops waiting. Then it delivers only the tail of one color reply, `b:8080/8080/8080` followed by BEL (`\x07`), as ordinary keyboard input. The text lands in the editor, and BEL arrives as `Ctrl+G`, which by default opens the external editor and suspends Pi until it exits. Unbinding `app.editor.external` and clearing the line with `Ctrl+U`, as in [Start Pi](#start-pi), avoids both. In a test, a submitted prompt that starts with `b:8080` means the editor was not cleared, and so does a command such as `/tasks` that seems to do nothing. Because the real colors never arrive, this setup cannot check terminal-derived theme colors.
