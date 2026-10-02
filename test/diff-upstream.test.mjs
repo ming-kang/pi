@@ -506,34 +506,34 @@ describe("diff-upstream worktree collection and CLI execution", () => {
 	});
 });
 
+// Replace the upstream subtree with exactly these files and tag it v1.2.4.
+function tagUpstream(repo, files) {
+	const sourceDir = join(repo.root, "packages", "coding-agent");
+	rmSync(sourceDir, { recursive: true, force: true });
+	const all = {
+		"package.json": `${JSON.stringify({ name: "test-agent", version: "1.2.4", dependencies: runtimeDependencies }, null, 2)}\n`,
+		".gitignore": "maintainers/\nignored.txt\n",
+		...files,
+	};
+	for (const [name, contents] of Object.entries(all)) {
+		if (contents === undefined) continue;
+		mkdirSync(join(sourceDir, name, ".."), { recursive: true });
+		writeFileSync(join(sourceDir, name), contents);
+	}
+	git(repo.root, "add", "-A", "packages");
+	git(repo.root, "commit", "-m", "upstream v1.2.4");
+	git(repo.root, "tag", "v1.2.4");
+}
+
+function commitLocal(repo, message) {
+	git(repo.root, "add", "-A", "--", ".", ":!packages");
+	git(repo.root, "commit", "-m", message);
+}
+
+const unchanged = { "mod.txt": "mod.txt\n", "drop.txt": "drop.txt\n", "sub/a.txt": "a.txt\n", "sub/b.txt": "b.txt\n" };
+const read = (repo, path) => readFileSync(join(repo.root, path), "utf8");
+
 describe("diff-upstream --apply", () => {
-	// Replace the upstream subtree with exactly these files and tag it v1.2.4.
-	function tagUpstream(repo, files) {
-		const sourceDir = join(repo.root, "packages", "coding-agent");
-		rmSync(sourceDir, { recursive: true, force: true });
-		const all = {
-			"package.json": `${JSON.stringify({ name: "test-agent", version: "1.2.4", dependencies: runtimeDependencies }, null, 2)}\n`,
-			".gitignore": "maintainers/\nignored.txt\n",
-			...files,
-		};
-		for (const [name, contents] of Object.entries(all)) {
-			if (contents === undefined) continue;
-			mkdirSync(join(sourceDir, name, ".."), { recursive: true });
-			writeFileSync(join(sourceDir, name), contents);
-		}
-		git(repo.root, "add", "-A", "packages");
-		git(repo.root, "commit", "-m", "upstream v1.2.4");
-		git(repo.root, "tag", "v1.2.4");
-	}
-
-	function commitLocal(repo, message) {
-		git(repo.root, "add", "-A", "--", ".", ":!packages");
-		git(repo.root, "commit", "-m", message);
-	}
-
-	const unchanged = { "mod.txt": "mod.txt\n", "drop.txt": "drop.txt\n", "sub/a.txt": "a.txt\n", "sub/b.txt": "b.txt\n" };
-	const read = (repo, path) => readFileSync(join(repo.root, path), "utf8");
-
 	test("merges non-overlapping local and upstream edits and advances the baseline", () => {
 		const repo = createTestRepo();
 		writeFileSync(join(repo.root, "src", "app.ts"), appSource.replace("console.log(0)", "local()"));
@@ -742,6 +742,94 @@ describe("diff-upstream --apply", () => {
 		writeFileSync(join(repo.root, "notes.md"), "Resolve every `<<<<<<< distribution` block by hand.\n");
 		const check = invoke(repo.root, ["--check"]);
 		expect(check.code, check.stderr).toBe(0);
+	});
+});
+
+describe("diff-upstream --register", () => {
+	// --apply leaves an added docs page for porting by hand; the hand-ported file
+	// is untracked at an upstream path until registered. package.json deviates
+	// from the new baseline, so the ledger claims it.
+	function repoWithPendingPage() {
+		const repo = createTestRepo({ files: { "docs/old.md": "old\n" } });
+		tagUpstream(repo, { ...unchanged, "src/app.ts": appSource, "docs/old.md": "old\n", "docs/new.md": "new\n" });
+		expect(invoke(repo.root, ["--apply", "v1.2.4"]).code).toBe(0);
+		writeLedger(repo.root, [concern("manifest", ["package.json"])]);
+		return repo;
+	}
+
+	test("registers a hand-ported upstream file, clearing the ambiguity failure", () => {
+		const repo = repoWithPendingPage();
+		writeFileSync(join(repo.root, "docs", "new.md"), "new\n");
+
+		const blocked = invoke(repo.root, ["--check"]);
+		expect(blocked.code).toBe(1);
+		expect(blocked.stderr).toContain("untracked file at upstream path docs/new.md");
+		expect(blocked.stderr).toContain("npm run diff:upstream -- --register");
+
+		const registered = invoke(repo.root, ["--register"]);
+		expect(registered.code).toBe(0);
+		expect(registered.stdout).toContain("registered docs/new.md");
+		expect(git(repo.root, "ls-files", "--", "docs/new.md")).toBe("docs/new.md");
+
+		// Identical to upstream, so the file is no longer a deviation at all.
+		const check = invoke(repo.root, ["--check"]);
+		expect(check.code, check.stderr).toBe(0);
+
+		const again = invoke(repo.root, ["--register"]);
+		expect(again.code).toBe(0);
+		expect(again.stdout).toContain("No untracked files at upstream paths");
+	});
+
+	test("leaves untracked distribution-local files untracked", () => {
+		const repo = repoWithPendingPage();
+		writeFileSync(join(repo.root, "docs", "new.md"), "new\n");
+		writeFileSync(join(repo.root, "scratch.txt"), "scratch\n");
+
+		const registered = invoke(repo.root, ["--register"]);
+		expect(registered.code).toBe(0);
+		expect(registered.stdout).toContain("registered docs/new.md");
+		expect(registered.stdout).not.toContain("scratch.txt");
+		expect(git(repo.root, "ls-files", "--", "scratch.txt")).toBe("");
+
+		// A distribution-local addition needs no claim, so the check passes.
+		const check = invoke(repo.root, ["--check"]);
+		expect(check.code, check.stderr).toBe(0);
+	});
+
+	test("a registered file with distribution content measures as a modified upstream path", () => {
+		const repo = repoWithPendingPage();
+		writeFileSync(join(repo.root, "docs", "new.md"), "distribution guide\n");
+		expect(invoke(repo.root, ["--register"]).code).toBe(0);
+
+		const blocked = invoke(repo.root, ["--check"]);
+		expect(blocked.code).toBe(1);
+		expect(blocked.stderr).toContain("unregistered upstream deviation: M docs/new.md");
+
+		writeLedger(repo.root, [concern("manifest", ["package.json"]), concern("docs", ["docs/"])]);
+		const check = invoke(repo.root, ["--check"]);
+		expect(check.code, check.stderr).toBe(0);
+	});
+
+	test("reports when there is nothing to register", () => {
+		const repo = createTestRepo();
+		const result = invoke(repo.root, ["--register"]);
+		expect(result.code).toBe(0);
+		expect(result.stdout).toContain("No untracked files at upstream paths");
+		// The root manifest stays untracked: it is not a path in the baseline tree.
+		expect(git(repo.root, "ls-files", "--", "npm-shrinkwrap.json")).toBe("");
+	});
+
+	test("rejects combinations with other modes", () => {
+		const repo = createTestRepo();
+		for (const args of [
+			["--register", "--check"],
+			["--register", "--staged"],
+			["--register", "--risk"],
+		]) {
+			const result = invoke(repo.root, args);
+			expect(result.code).toBe(2);
+			expect(result.stderr).toContain("--register");
+		}
 	});
 });
 

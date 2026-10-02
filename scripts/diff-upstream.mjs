@@ -42,7 +42,7 @@ export const REVIEW_PATHS = ["CHANGELOG.md", "README.md", "docs/", "npm-shrinkwr
 const MERGE_LABELS = { ours: "distribution", base: "baseline", theirs: "upstream" };
 const CONFLICT_MARKER_PATTERN = `^(<<<<<<< ${MERGE_LABELS.ours}|>>>>>>> ${MERGE_LABELS.theirs})`;
 
-const usage = `Usage: node scripts/diff-upstream.mjs [--check [--staged] | --risk [--window <days>] | --target <tag> | --apply <tag>]
+const usage = `Usage: node scripts/diff-upstream.mjs [--check [--staged] | --risk [--window <days>] | --target <tag> | --apply <tag> | --register]
 
 Compares the current worktree against the recorded upstream baseline
 in maintainers/upstream.json, annotated with the concern ledger in
@@ -54,7 +54,8 @@ maintainers/concerns.json.
   --risk           rank modified source paths by conflict surface times upstream touches
   --window <days>  with --risk, count upstream touches over this many days before the baseline (default ${DEFAULT_RISK_WINDOW_DAYS})
   --target <tag>   classify upstream changes from the baseline to a release tag against the ledger and review paths
-  --apply <tag>    three-way merge those upstream changes into a clean worktree, leave review paths for porting by hand, and advance the baseline`;
+  --apply <tag>    three-way merge those upstream changes into a clean worktree, leave review paths for porting by hand, and advance the baseline
+  --register       intent-to-add untracked files at upstream paths, declaring hand-ported adoptions`;
 
 function isPlainObject(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -457,7 +458,7 @@ export function collectWorktreeEntries(sourceTree, failures, git) {
 		if (!path) continue;
 		if (entries.has(path)) {
 			failures.push(
-				`path appears in both the baseline-worktree diff and git ls-files --others: ${path}; reconcile tracked and untracked status`,
+				`untracked file at upstream path ${path}; register a deliberate adoption with npm run diff:upstream -- --register, otherwise remove the file`,
 			);
 		} else {
 			entries.set(path, { status: "A", path });
@@ -877,6 +878,37 @@ export function applyUpstreamChanges(root, baseTree, targetTree, git) {
 	return results;
 }
 
+/**
+ * Declare hand-ported adoptions. --apply leaves review paths untouched, so a
+ * file ported by hand is untracked until registered; intent-to-add records no
+ * content and is reversible with git rm --cached. Untracked paths the baseline
+ * tree does not have are distribution-local, not adoptions, and stay untracked.
+ */
+export function registerUpstreamAdoptions(manifest, git, stdout) {
+	const upstreamPaths = new Set(
+		git("ls-tree", "-r", "--name-only", "-z", manifest.sourceTree).split("\0").filter(Boolean),
+	);
+	const untracked = git("ls-files", "--others", "--exclude-standard", "-z").split("\0").filter(Boolean);
+	const registered = [];
+	for (const path of untracked.sort()) {
+		if (!upstreamPaths.has(path)) continue;
+		// Force, as in --apply: the upstream path must be tracked even when a local ignore rule matches it.
+		git("add", "--intent-to-add", "--force", "--", path);
+		registered.push(path);
+	}
+	for (const path of registered) writeLine(stdout, `  registered ${path}`);
+	if (registered.length === 0) {
+		writeLine(stdout, "No untracked files at upstream paths to register.");
+		return 0;
+	}
+	writeLine(stdout, "");
+	writeLine(
+		stdout,
+		`Registered ${registered.length} ${registered.length === 1 ? "file" : "files"}; review the list before continuing.`,
+	);
+	return 0;
+}
+
 function parseArgs(args) {
 	const options = {
 		check: false,
@@ -885,6 +917,7 @@ function parseArgs(args) {
 		windowDays: undefined,
 		targetTag: undefined,
 		applyTag: undefined,
+		register: false,
 	};
 	for (let i = 0; i < args.length; i += 1) {
 		const arg = args[i];
@@ -903,13 +936,19 @@ function parseArgs(args) {
 		} else if (arg === "--apply" && options.applyTag === undefined && typeof args[i + 1] === "string") {
 			options.applyTag = args[i + 1];
 			i += 1;
+		} else if (arg === "--register" && !options.register) {
+			options.register = true;
 		} else {
 			return undefined;
 		}
 	}
-	const modes = [options.check, options.risk, options.targetTag !== undefined, options.applyTag !== undefined].filter(
-		Boolean,
-	).length;
+	const modes = [
+		options.check,
+		options.risk,
+		options.targetTag !== undefined,
+		options.applyTag !== undefined,
+		options.register,
+	].filter(Boolean).length;
 	if (modes > 1 || (options.staged && !options.check) || (options.windowDays !== undefined && !options.risk)) {
 		return undefined;
 	}
@@ -927,7 +966,7 @@ export function runDiffUpstream({
 		writeLine(stderr, usage);
 		return 2;
 	}
-	const { check: isCheck, staged, risk: isRisk, targetTag, applyTag } = options;
+	const { check: isCheck, staged, risk: isRisk, targetTag, applyTag, register: isRegister } = options;
 	const releaseTag = targetTag ?? applyTag;
 	if (releaseTag !== undefined && (!releaseTag.startsWith("v") || !isStableSemver(releaseTag.slice(1)))) {
 		writeLine(stderr, `${targetTag ? "--target" : "--apply"} requires an exact stable release tag (v<semver>)`);
@@ -960,7 +999,7 @@ export function runDiffUpstream({
 
 	// Leftover --apply conflict markers need neither the baseline nor the ledger,
 	// so the check reports them together with baseline and dependency failures.
-	const unresolved = releaseTag === undefined && !isRisk ? findUnresolvedConflicts(staged, git) : [];
+	const unresolved = releaseTag === undefined && !isRisk && !isRegister ? findUnresolvedConflicts(staged, git) : [];
 	if (isCheck) {
 		for (const path of unresolved) {
 			failures.push(`unresolved --apply conflict markers in ${path}; resolve them before committing`);
@@ -968,13 +1007,20 @@ export function runDiffUpstream({
 	}
 
 	const upstreamPackage = verifyBaseline(manifest, failures, warnings, tryGit);
-	if (releaseTag === undefined) {
+	// Registration happens mid-sync, when package metadata may legitimately lag
+	// the moved baseline, so it skips the dependency verification.
+	if (releaseTag === undefined && !isRegister) {
 		verifyUpstreamDependencies(upstreamPackage, manifest, failures, readJson);
 	}
 	if (failures.length > 0) {
 		for (const w of warnings) writeLine(stderr, `warning: ${w}`);
 		printFailures(failures, stderr);
 		return 1;
+	}
+
+	if (isRegister) {
+		for (const w of warnings) writeLine(stderr, `warning: ${w}`);
+		return registerUpstreamAdoptions(manifest, git, stdout);
 	}
 
 	// Target mode classifies the upstream release diff against both the ledger
