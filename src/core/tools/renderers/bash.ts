@@ -6,9 +6,9 @@
  * tool definition, so the tool's public shape is unchanged.
  */
 
-import { type Component, Container, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, Container, Spacer, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
-import { truncateToVisualLines } from "../../../modes/interactive/components/visual-truncate.ts";
+import { VisualLinePreview } from "../../../modes/interactive/components/visual-truncate.ts";
 import { highlightCode, theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderContext, ToolRenderResultOptions } from "../../extensions/types.ts";
 import { getTextOutput, invalidArgText, str } from "../render-utils.ts";
@@ -17,10 +17,6 @@ import { DEFAULT_MAX_BYTES, formatSize } from "../truncate.ts";
 
 const BASH_PREVIEW_LINES = 5;
 export const BASH_UPDATE_THROTTLE_MS = 100;
-type BashCachedRenderState = {
-	cachedWidth: number | undefined;
-	cachedLines: string[] | undefined;
-};
 class BashCallRenderComponent implements Component {
 	private command: string | null = "";
 	private timeout: number | undefined;
@@ -66,13 +62,6 @@ class BashCallRenderComponent implements Component {
 		return [formatTruncatedShellCall(this.command, this.timeout, width, this.config)];
 	}
 }
-class BashResultRenderComponent extends Container {
-	state: BashCachedRenderState = {
-		cachedWidth: undefined,
-		cachedLines: undefined,
-	};
-}
-
 const shellTiming = Symbol("shellTiming");
 interface ShellTiming {
 	startedAt: number;
@@ -169,7 +158,7 @@ function formatTruncatedShellCall(
 	return fitCollapsedShellCall(styleShellCommand(firstNonEmptyLine, config), timeout, width, suffix, config);
 }
 function rebuildBashResultRenderComponent(
-	component: BashResultRenderComponent,
+	component: Container,
 	result: {
 		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 		details?: BashToolDetails;
@@ -179,7 +168,6 @@ function rebuildBashResultRenderComponent(
 	startedAt: number | undefined,
 	endedAt: number | undefined,
 ): void {
-	const state = component.state;
 	component.clear();
 
 	const background = result.details?.background;
@@ -205,28 +193,17 @@ function rebuildBashResultRenderComponent(
 		if (options.expanded) {
 			component.addChild(new Text(`\n${styledOutput}`, 0, 0));
 		} else {
-			component.addChild({
-				render: (width: number) => {
-					// Cache the complete output: this renders on every frame for every bash result in the transcript.
-					if (state.cachedLines === undefined || state.cachedWidth !== width) {
-						const preview = truncateToVisualLines(styledOutput, BASH_PREVIEW_LINES, width);
-						const hintLines: string[] = [];
-						if (preview.skippedCount > 0) {
-							const hint =
-								theme.fg("muted", `... (${preview.skippedCount} earlier lines,`) +
-								` ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
-							hintLines.push(truncateToWidth(hint, width, "..."));
-						}
-						state.cachedLines = ["", ...hintLines, ...preview.visualLines];
-						state.cachedWidth = width;
-					}
-					return state.cachedLines;
-				},
-				invalidate: () => {
-					state.cachedWidth = undefined;
-					state.cachedLines = undefined;
-				},
-			});
+			component.addChild(new Spacer(1));
+			component.addChild(
+				new VisualLinePreview({
+					text: styledOutput,
+					maxVisualLines: BASH_PREVIEW_LINES,
+					keep: "end",
+					formatHint: (hidden) =>
+						theme.fg("muted", `... (${hidden} earlier lines,`) +
+						` ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`,
+				}),
+			);
 		}
 	}
 
@@ -278,8 +255,7 @@ export function createShellRenderers(
 					timing.interval.unref?.();
 				}
 			}
-			const component =
-				(context.lastComponent as BashResultRenderComponent | undefined) ?? new BashResultRenderComponent();
+			const component = (context.lastComponent as Container | undefined) ?? new Container();
 			rebuildBashResultRenderComponent(
 				component,
 				result as any,

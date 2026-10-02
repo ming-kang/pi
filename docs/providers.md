@@ -35,6 +35,8 @@ Use `/logout` to clear credentials. Tokens are stored in `~/.pi/agent/auth.json`
 
 Anthropic subscription auth is active for Claude Pro/Max accounts. Third-party harness usage draws from [extra usage](https://claude.ai/settings/usage) and is billed per token, not against Claude plan limits.
 
+When the browser runs on another machine, select the copy code login method in `/login anthropic` and paste the code the browser shows.
+
 ### GitHub Copilot
 
 - Press Enter for github.com, or enter your GitHub Enterprise Server domain
@@ -59,6 +61,10 @@ Anthropic subscription auth is active for Claude Pro/Max accounts. Third-party h
 - `OPENROUTER_API_KEY` remains available through **Use an API key**
 
 ### Radius
+
+Radius is a service by Earendil Works, the builders of upstream Pi. It provides an AI gateway with organization-level controls and analytics, and artifacts for sharing what you create with Pi. It is in early alpha; see [radius.earendil.com](https://radius.earendil.com).
+
+`/login` lists "Sign in with Radius" as its last top-level option. After a Radius sign-in, `/login` offers to configure the Radius MCP server in the global `mcp.json` with `"auth": { "provider": "radius" }` and reloads, so Pi can manage Radius for you.
 
 Radius is a `pi-messages` gateway. Pi ships the public Radius model catalog for immediate and offline model lookup, then overlays it with the effective gateway catalog after authentication. `/login radius` stores OAuth tokens in `auth.json`; refreshed catalogs are cached in `models-store.json`. Custom Radius gateways can be declared in `models.json` with `"oauth": "radius"` and a gateway `baseUrl`; they do not inherit the public `radius.pi.dev` catalog.
 
@@ -111,6 +117,8 @@ pi
 | Xiaomi MiMo Token Plan (China) | `XIAOMI_TOKEN_PLAN_CN_API_KEY` | `xiaomi-token-plan-cn` |
 | Xiaomi MiMo Token Plan (Amsterdam) | `XIAOMI_TOKEN_PLAN_AMS_API_KEY` | `xiaomi-token-plan-ams` |
 | Xiaomi MiMo Token Plan (Singapore) | `XIAOMI_TOKEN_PLAN_SGP_API_KEY` | `xiaomi-token-plan-sgp` |
+
+Anthropic also recognizes `ANTHROPIC_OAUTH_TOKEN` as an API credential and `ANTHROPIC_AUTH_TOKEN` as bearer authentication. With no key or token set, Anthropic uses workload identity federation when `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID`, and `ANTHROPIC_IDENTITY_TOKEN_FILE` are set: the Anthropic SDK exchanges the identity token for a short-lived access token and refreshes it itself, re-reading the identity token file, so keep that file fresh for long sessions. `ANTHROPIC_SERVICE_ACCOUNT_ID` and `ANTHROPIC_WORKSPACE_ID` are passed through when set.
 
 See [Environment variables](environment-variables.md) for process configuration and [Auth File](#auth-file) for credential storage.
 

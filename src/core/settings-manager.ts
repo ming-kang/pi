@@ -96,8 +96,8 @@ export interface WarningSettings {
 
 /**
  * How the codemode tool presents tools while it is active.
- * - `on`: declared tools that scripts can call get their codemode declaration appended to their
- *   description; the codemode description lists only the tools without `direct` exposure.
+ * - `on`: declared tools that scripts can call get a note on calling them from scripts appended to
+ *   their description; the codemode description lists only the tools without `direct` exposure.
  * - `only`: the codemode description lists every tool scripts can call, and active `direct` tools are
  *   not declared to the model.
  */
@@ -111,6 +111,8 @@ export interface CodemodeSettings {
 }
 
 export type DefaultProjectTrust = "ask" | "always" | "never";
+/** true hides all startup output, "header" keeps only the startup header. */
+export type QuietStartup = boolean | "header";
 
 export type TransportSetting = Transport;
 
@@ -149,7 +151,7 @@ export interface Settings {
 	showCacheMissNotices?: boolean; // default: false - show cache cost and provider recovery notices
 	externalEditor?: string; // Command for Ctrl+G external editor; takes precedence over VISUAL/EDITOR
 	shellPath?: string; // Custom shell path (e.g., for Cygwin users on Windows); supports leading ~ expansion
-	quietStartup?: boolean;
+	quietStartup?: QuietStartup; // default: false
 	defaultProjectTrust?: DefaultProjectTrust; // default: "ask"; global setting only
 	shellCommandPrefix?: string; // Prefix prepended to every bash command (e.g., "shopt -s expand_aliases" for alias support)
 	npmCommand?: string[]; // Command used for npm package lookup/install operations, argv-style (e.g., ["mise", "exec", "node@20", "--", "npm"])
@@ -1147,11 +1149,12 @@ export class SettingsManager {
 		this.save();
 	}
 
-	getQuietStartup(): boolean {
-		return this.settings.quietStartup ?? false;
+	getQuietStartup(): QuietStartup {
+		const value = this.settings.quietStartup;
+		return value === true || value === "header" ? value : false;
 	}
 
-	setQuietStartup(quiet: boolean): void {
+	setQuietStartup(quiet: QuietStartup): void {
 		this.globalSettings.quietStartup = quiet;
 		this.markModified("quietStartup");
 		this.save();

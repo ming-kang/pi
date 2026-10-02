@@ -30,6 +30,9 @@
 					"path": "scripts/migrate-sessions.sh"
 				},
 				{
+					"path": "src/cli/args.ts"
+				},
+				{
 					"path": "src/cli/startup-ui.ts",
 					"rewrite": "The first-run gate compares against this distribution's package metadata, replacing upstream's official-distribution constants."
 				},
@@ -54,6 +57,9 @@
 				},
 				{
 					"path": "src/modes/interactive/components/settings-selector.ts"
+				},
+				{
+					"path": "src/modes/interactive/components/pi-logo-animation.lazy.ts"
 				},
 				{
 					"path": "src/utils/syntax-highlight.ts",
@@ -258,21 +264,6 @@
 			]
 		},
 		{
-			"id": "tui-fullscreen-default",
-			"why": "The interactive TUI defaults to fullscreen mode.",
-			"paths": [
-				{
-					"path": "src/cli/args.ts"
-				},
-				{
-					"path": "src/core/settings-manager.ts"
-				},
-				{
-					"path": "src/modes/interactive/components/settings-selector.ts"
-				}
-			]
-		},
-		{
 			"id": "tool-presentation",
 			"why": "Tool rows are compact dot/rail blocks owned by src/modes/interactive/tool-view/; upstream's Box shell is dropped.",
 			"watch": "Upstream fixes to the dropped tool-execution.ts (image conversion, click to expand, lifecycle) and to the renderers are ported by hand; --target lists them. Retire the fork if upstream ships a shell whose look is configurable.",
@@ -291,10 +282,10 @@
 					"path": "src/experimental/client-tui-chat.ts"
 				},
 				{
-					"path": "src/experimental/micro/tui.ts"
+					"path": "src/experimental/durable/tui.ts"
 				},
 				{
-					"path": "src/experimental/mini/tui/view.ts"
+					"path": "src/experimental/vacation/tui.ts"
 				},
 				{
 					"path": "src/modes/interactive/components/index.ts"

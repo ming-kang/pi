@@ -126,6 +126,10 @@
           "path": "custom-provider.md"
         },
         {
+          "title": "Codemode",
+          "path": "codemode.md"
+        },
+        {
           "title": "MCP Servers",
           "path": "mcp.md"
         },

@@ -79,7 +79,7 @@ Selecting a model or thinking level with Enter changes only the current session.
 |---------|------|---------|-------------|
 | `theme` | string | `"system"` | Theme name (`"system"`, `"dark"`, `"light"`, bundled ice-cream themes, or custom) |
 | `externalEditor` | string | `$VISUAL`, then `$EDITOR`, then Notepad on Windows or `nano` elsewhere | Command for Ctrl+G external editor; takes precedence over environment variables |
-| `quietStartup` | boolean | `false` | Hide startup header |
+| `quietStartup` | boolean | `"header"` | `false` | `true` hides the startup header and loaded-resource listing. `"header"` keeps the header (version and key hints) but hides the model scope line and loaded-resource listing |
 | `defaultProjectTrust` | string | `"ask"` | Fallback project trust behavior: `"ask"`, `"always"`, or `"never"`. Global setting only |
 | `collapseChangelog` | boolean | `false` | Show condensed changelog after updates |
 | `enableInstallTelemetry` | boolean | `true` | Legacy setting name for optional provider attribution headers. This does not control update checks |
@@ -440,11 +440,13 @@ A list of only `+name` and `-name` entries changes the inherited selection inste
 
 This replaces `bash` with `powershell` and enables `grep`: `["-bash", "+powershell", "+grep"]`. Project settings apply on top of user settings: a project list with only `+name` and `-name` entries changes the user's selection, and a project list with a plain name replaces it. In one list, plain names form the selection, and `+name` and `-name` then apply in order.
 
+`/reload` enables tools newly added to `defaultTools`. It does not disable tools removed from it or re-enable unchanged tools you turned off. `--tools`, `--no-tools`, and `--no-builtin-tools` override `defaultTools`, also on reload.
+
 CLI tool options override this setting for one invocation; `--tools` does not accept `+name` or `-name`. See [Command Line](usage.md#tools).
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `codemode.mode` | `"on"` | `on` keeps direct tool declarations; `only` hides callable tools from direct model access and lists them in codemode |
+| `codemode.mode` | `"on"` | `on` keeps direct tool declarations and appends a note on calling them from scripts; `only` hides callable tools from direct model access and lists them in codemode. See [Codemode](codemode.md) |
 | `codemode.inlineBudget` | `3000` | Estimated tokens for inline tool declarations; scripts discover the rest with `searchTools()` |
 | `fullscreenWheelScrollLines` | `"auto"` | 1–100 lines per wheel event, or automatic acceleration; Alt+wheel moves five times as far |
 

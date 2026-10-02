@@ -4,8 +4,16 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Adopted upstream v1.0.0, including v0.99.2: leaner codemode prompts with recovery hints and `models.generateImages()` (see [Codemode](docs/codemode.md)), Radius in `/login`, Anthropic copy code login and workload identity federation, `quietStartup: "header"`, and `/reload` enabling tools newly added to `defaultTools`.
+- MCP: server `description` and the `describeNamespace()` codemode helper, `oauth.clientName`, `oauth.authServerMetadataUrl`, and `"auth": { "provider": "<provider>" }` to authenticate HTTP servers with a `/login` token. OAuth checks the RFC 9207 `iss` parameter, stores credentials per server, and keeps granted scopes on step-up sign-in.
+
 ### Changed
 
+- **Breaking:** MCP tool and namespace names replace `-` with `_` (`mcp__my-server__x` is now `mcp__my_server__x`), and server names that differ only in `-` and `_` are rejected. `codemode-deferred` is now an alias for `codemode`.
+- **Breaking:** `--provider` without `--model` now fails instead of being ignored. Codemode scripts that probed for a tool with `typeof tools.name` must use `"name" in tools`.
+- MCP servers with the default `codemode` exposure no longer block the first prompt and are no longer listed in the `codemode` description; they appear in an `mcp_servers` system prompt section, and scripts find their tools with `searchTools()`.
 - Redesigned `/tasks` around one Active/Finished list including retained foreground results. Tab switches between two panes, Left/Right change Output/Details only within the inspector, and Escape closes from either pane. Focus uses the pane border; task selection and tab selection keep their own background and underline. Foreground/background labels stay in Details, leaving task summaries with status and elapsed time.
 - Task search now locates a result and returns to the complete list. Stop confirmation waits for Enter or Escape and closes when its target finishes. Mouse scrolling preserves keyboard focus; completion and new work preserve task selection and browsed output. Narrow terminals use the same navigation rules.
 - Added configurable task follow/top/bottom controls, selected-task backgrounding, stop confirmation and keyboard help, plus mouse selection and scrolling. The statusline counts foreground and background work; completion cards show duration, task titles and recorded exit codes.
@@ -18,7 +26,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - Background tasks no longer block foreground commands: only background work counts toward the eight-task limit. Ctrl+B and the panel's background action move only as many tasks as there are free slots and say when the background is full.
 - `tasks read` and `tasks wait` report the byte range they returned and the next `sinceBytes`, and a wait that skips output says how much. `bytes` now clamps to the 48KB the core actually returns.
 - `/tasks` colors every output line, and no longer re-clones retained tasks on each output update or re-wraps output on each animation frame.
-
+- Upstream fixes: deferred MCP tools survive resume and `/reload`, MCP sign-in no longer fails on empty optional OAuth fields, the system theme keeps pastel palette chroma, slash autocompletion works after leading whitespace, prompt submission no longer slows with session length, and the transcript retains much less memory per message.
 - The `question` dialog keeps an over-long custom answer or note in the editor for shortening instead of clearing it, and clears its warning once a save succeeds. Cancelling the run while editing a note no longer reports the option that the note tentatively selected.
 - An over-long `question` result no longer loses later decisions or its closing instruction: instead of cutting the whole result at 12,000 characters, it shortens long answers and notes evenly, keeping each one's start and end around a marker.
 - Web search releases its elapsed-time refresh timer when a pending tool row is disposed.
