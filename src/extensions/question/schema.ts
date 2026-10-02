@@ -1,8 +1,6 @@
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 import { QUESTION_LIMITS } from "./limits.ts";
-import type { Question, QuestionOption, QuestionToolError } from "./types.ts";
-
-type QuestionArgs = { questions: Question[] };
+import type { QuestionToolError } from "./types.ts";
 
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 4;
@@ -67,6 +65,10 @@ export const QuestionParams = Type.Object({
 	}),
 });
 
+export type QuestionOption = Static<typeof OptionSchema>;
+export type Question = Static<typeof QuestionSchema>;
+type QuestionArgs = Static<typeof QuestionParams>;
+
 /**
  * Unambiguous argument normalizations applied before schema validation; the
  * schema itself stays a single object shape because strict constrained
@@ -126,7 +128,7 @@ export function normalizeQuestionArguments(raw: unknown): QuestionArgs {
  * express. Length and count limits remain enforced by `QuestionParams` first.
  */
 export function validateQuestions(
-	questions: Question[],
+	questions: readonly Question[],
 ): { ok: true } | { ok: false; error: QuestionToolError; message: string } {
 	const requireNonBlank = (
 		value: unknown,
@@ -152,7 +154,7 @@ export function validateQuestions(
 
 		const seenLabels = new Set<string>();
 		for (let optionIndex = 0; optionIndex < q.options.length; optionIndex++) {
-			const option = q.options[optionIndex] as QuestionOption;
+			const option = q.options[optionIndex];
 			const optionPath = `questions[${questionIndex}].options[${optionIndex}]`;
 			const labelError = requireNonBlank(option.label, `${optionPath}.label`);
 			if (labelError) return labelError;

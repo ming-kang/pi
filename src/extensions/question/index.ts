@@ -16,7 +16,7 @@ import { createQuestionDialog } from "./dialog.ts";
 import { renderQuestionCall, renderQuestionResult } from "./render.ts";
 import { cancelResult, clarificationResult, errorResult, successResult } from "./results.ts";
 import { normalizeQuestionArguments, QuestionParams, validateQuestions } from "./schema.ts";
-import type { DialogResult, Question, QuestionToolDetails } from "./types.ts";
+import type { DialogResult, QuestionToolDetails } from "./types.ts";
 
 export default function question(pi: ExtensionAPI): void {
 	pi.registerTool<typeof QuestionParams, QuestionToolDetails>({
@@ -37,13 +37,12 @@ export default function question(pi: ExtensionAPI): void {
 		},
 
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-			const questions = params.questions as Question[];
 			if (!ctx.hasUI || ctx.mode !== "tui") return errorResult("no_ui", "question tool requires an interactive TUI");
 
-			const validation = validateQuestions(questions);
+			const validation = validateQuestions(params.questions);
 			if (!validation.ok) return errorResult(validation.error, validation.message);
 
-			const result = await ctx.ui.custom<DialogResult>(createQuestionDialog(questions, signal));
+			const result = await ctx.ui.custom<DialogResult>(createQuestionDialog(params.questions, signal));
 			if (result.outcome === "cancelled") return cancelResult(result.answers);
 			if (result.outcome === "needs_clarification") return clarificationResult(result.answers);
 			return successResult(result.answers);

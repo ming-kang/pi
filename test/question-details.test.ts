@@ -165,6 +165,28 @@ describe("question choices and details", () => {
 		expect(dialog.view()).not.toContain("Preview");
 	});
 
+	it("pages the newly focused choice when a page key arrives before the redraw", () => {
+		const dialog = open();
+		dialog.view();
+		dialog.component.handleInput(DOWN);
+		dialog.component.handleInput(PAGE_DOWN);
+		const output = dialog.view();
+		expect(output).toMatch(/→\s+2\. Option 2/);
+		expect(output).toMatch(/ [2-9]\d*–\d+\/\d+/);
+		expect(output).not.toContain("Description 2");
+	});
+
+	it("starts a newly focused choice at the top when it was paged before moving", () => {
+		const dialog = open();
+		dialog.view();
+		dialog.component.handleInput(PAGE_DOWN);
+		dialog.component.handleInput(DOWN);
+		const output = dialog.view();
+		expect(output).toMatch(/→\s+2\. Option 2/);
+		expect(output).toMatch(/ 1–\d+\/\d+/);
+		expect(output).toContain("Description 2");
+	});
+
 	it("reflows on resize alone and clamps a scrolled preview when more rows become available", () => {
 		const dimensions = { rows: 30, columns: 100 };
 		const dialog = open(dimensions);

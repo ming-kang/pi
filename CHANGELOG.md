@@ -19,6 +19,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - `tasks read` and `tasks wait` report the byte range they returned and the next `sinceBytes`, and a wait that skips output says how much. `bytes` now clamps to the 48KB the core actually returns.
 - `/tasks` colors every output line, and no longer re-clones retained tasks on each output update or re-wraps output on each animation frame.
 
+- The `question` dialog keeps an over-long custom answer or note in the editor for shortening instead of clearing it, and clears its warning once a save succeeds. Cancelling the run while editing a note no longer reports the option that the note tentatively selected.
 - Web search releases its elapsed-time refresh timer when a pending tool row is disposed.
 - `tasks wait` preserves recorded shell exit codes and distinguishes a wait ending from execution timing out. Task previews show empty and unavailable output explicitly, and progress updates do not increase log polling.
 

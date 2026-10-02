@@ -2,8 +2,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { keyLabel } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { QUESTION_LIMITS } from "./limits.ts";
-import { answerScalar } from "./results.ts";
-import type { QuestionAnswer, QuestionOutcome } from "./types.ts";
+import type { AnswerNote, QuestionOutcome } from "./types.ts";
 
 type RenderOptions = { expanded: boolean };
 
@@ -18,8 +17,15 @@ interface RenderQuestion {
 	multiSelect: boolean;
 }
 
+/** The parts of a stored answer the transcript shows. */
+interface AnswerLine {
+	header: string;
+	text: string;
+	notes: AnswerNote[];
+}
+
 interface RenderDetails {
-	answers: QuestionAnswer[];
+	answers: AnswerLine[];
 	outcome: QuestionOutcome;
 	message?: string;
 }
@@ -116,30 +122,30 @@ function renderFallbackResult(result: ResultLike, expanded: boolean, theme: Them
 	return new Text(`${theme.fg("error", validation.summary)}${theme.fg("muted", moreErrors)}${hint}`, 0, 0);
 }
 
-function normalizeAnswer(value: unknown, index: number): QuestionAnswer | undefined {
+function normalizeAnswer(value: unknown, index: number): AnswerLine | undefined {
 	const raw = safeRecord(value);
 	if (!raw) return undefined;
 	const rawHeader = safeValue(raw, "header");
 	if (typeof rawHeader !== "string") return undefined;
 	const header = oneLine(rawHeader, QUESTION_LIMITS.headerChars) || `Decision ${index + 1}`;
-	const kindValue = safeValue(raw, "kind");
-	const kind = kindValue === "multi" || kindValue === "custom" ? kindValue : "option";
-	const rawIndex = safeValue(raw, "questionIndex");
-	const questionIndex =
-		typeof rawIndex === "number" && Number.isSafeInteger(rawIndex) && rawIndex >= 0 ? rawIndex : index;
-	const question = oneLine(safeValue(raw, "question"), QUESTION_LIMITS.questionChars);
-	const answer = oneLine(safeValue(raw, "answer"), MAX_RENDERED_ANSWER_CHARS);
 
-	const rawSelected = safeValue(raw, "selected");
-	const selected = Array.isArray(rawSelected)
-		? rawSelected
-				.slice(0, MAX_RENDERED_SELECTIONS)
-				.map((entry, selectedIndex) => {
-					if (typeof entry !== "string") return "";
-					return oneLine(entry, MAX_RENDERED_ANSWER_CHARS) || `Option ${selectedIndex + 1}`;
-				})
-				.filter(Boolean)
-		: undefined;
+	let text: string;
+	if (safeValue(raw, "kind") === "multi") {
+		const rawSelected = safeValue(raw, "selected");
+		text = Array.isArray(rawSelected)
+			? rawSelected
+					.slice(0, MAX_RENDERED_SELECTIONS)
+					.map((entry, selectedIndex) => {
+						if (typeof entry !== "string") return "";
+						return oneLine(entry, MAX_RENDERED_ANSWER_CHARS) || `Option ${selectedIndex + 1}`;
+					})
+					.filter(Boolean)
+					.join(", ")
+			: "";
+	} else {
+		text = oneLine(safeValue(raw, "answer"), MAX_RENDERED_ANSWER_CHARS);
+	}
+
 	const rawNotes = safeValue(raw, "notes");
 	const notes = Array.isArray(rawNotes)
 		? rawNotes
@@ -151,18 +157,10 @@ function normalizeAnswer(value: unknown, index: number): QuestionAnswer | undefi
 					const text = oneLine(safeValue(note, "text"), MAX_RENDERED_NOTE_CHARS);
 					return option && text ? { option, text } : undefined;
 				})
-				.filter((note): note is { option: string; text: string } => note !== undefined)
-		: undefined;
+				.filter((note): note is AnswerNote => note !== undefined)
+		: [];
 
-	return {
-		questionIndex,
-		question,
-		header,
-		kind,
-		answer: answer || null,
-		...(kind === "multi" && selected?.length ? { selected } : {}),
-		...(notes?.length ? { notes } : {}),
-	};
+	return { header, text: text || "(no input)", notes };
 }
 
 function normalizeDetails(value: unknown): RenderDetails | undefined {
@@ -177,7 +175,7 @@ function normalizeDetails(value: unknown): RenderDetails | undefined {
 		? rawAnswers
 				.slice(0, MAX_RENDERED_ANSWERS)
 				.map((answer, index) => normalizeAnswer(answer, index))
-				.filter((answer): answer is QuestionAnswer => answer !== undefined)
+				.filter((answer): answer is AnswerLine => answer !== undefined)
 		: [];
 	const message = oneLine(safeValue(raw, "message"), MAX_RENDERED_ERROR_CHARS);
 	return { answers, outcome, ...(message ? { message } : {}) };
@@ -190,12 +188,10 @@ function errorMessage(result: ResultLike, details: RenderDetails): string {
 	return truncate(match?.[1]?.trim() || "The question tool could not continue", MAX_RENDERED_ERROR_CHARS);
 }
 
-function answerLines(answers: QuestionAnswer[], theme: Theme): string[] {
+function answerLines(answers: AnswerLine[], theme: Theme): string[] {
 	return answers.map((answer) => {
-		const notes = answer.notes?.length
-			? `\n${answer.notes.map((note) => theme.fg("muted", `    Note for ${note.option}: ${note.text}`)).join("\n")}`
-			: "";
-		return `${theme.fg("accent", answer.header)}: ${theme.fg("text", answerScalar(answer))}${notes}`;
+		const notes = answer.notes.map((note) => `\n${theme.fg("muted", `    Note for ${note.option}: ${note.text}`)}`);
+		return `${theme.fg("accent", answer.header)}: ${theme.fg("text", answer.text)}${notes.join("")}`;
 	});
 }
 

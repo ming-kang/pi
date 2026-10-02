@@ -1,17 +1,6 @@
-export interface QuestionOption {
-	label: string;
-	description: string;
-	preview?: string;
-}
+import type { QuestionOption } from "./schema.ts";
 
-export interface Question {
-	question: string;
-	header: string;
-	options: QuestionOption[];
-	multiSelect?: boolean;
-}
-
-export type InputMode = "custom" | "notes" | undefined;
+export type { Question, QuestionOption } from "./schema.ts";
 
 export type QuestionToolError =
 	| "no_ui"
@@ -47,23 +36,41 @@ export interface QuestionToolDetails {
 	message?: string;
 }
 
+/** A single-select choice: an authored option by index, or the user's own text. */
+export type SingleChoice = { kind: "option"; index: number } | { kind: "custom"; text: string };
+
 export interface CustomAnswer {
 	text: string;
 	selected: boolean;
 }
 
+export type AnswerDraft =
+	| { kind: "single"; choice?: SingleChoice }
+	| { kind: "multi"; selected: Set<number>; custom?: CustomAnswer };
+
 export interface QuestionState {
-	optionIndex: number;
-	singleAnswer?: QuestionAnswer;
-	multiSelected: Set<number>;
-	customAnswer?: CustomAnswer;
-	notesByOption: Map<string, string>;
+	/** Index of the focused row in `displayOptions()`. */
+	focus: number;
+	draft: AnswerDraft;
+	/** Notes keyed by authored option index. */
+	notes: Map<number, string>;
 	warning?: string;
 }
 
+/**
+ * What the dialog is doing. A single-select notes session tentatively selects
+ * its option, so it remembers the choice to restore when left without saving.
+ */
+export type DialogMode =
+	| { kind: "choose" }
+	| { kind: "chat" }
+	| { kind: "custom" }
+	| { kind: "notes"; option: number; previous: SingleChoice | undefined }
+	| { kind: "review" };
+
 export interface DialogResult {
 	answers: QuestionAnswer[];
-	outcome: QuestionOutcome;
+	outcome: Exclude<QuestionOutcome, "error">;
 }
 
 export type DisplayOption =

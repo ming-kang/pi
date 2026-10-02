@@ -2,6 +2,7 @@ import { setKeybindings, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { createQuestionDialog } from "../src/extensions/question/dialog.ts";
+import { QUESTION_LIMITS } from "../src/extensions/question/limits.ts";
 import type { DialogResult, Question } from "../src/extensions/question/types.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -12,6 +13,7 @@ const UP = "\x1b[A";
 const DOWN = "\x1b[B";
 const LEFT = "\x1b[D";
 const TAB = "\t";
+const BACKSPACE = "\x7f";
 const pageHint = process.platform === "darwin" ? "Option+↑/Option+↓ scroll" : "Alt+↑/Alt+↓ scroll";
 
 function question(overrides?: Partial<Question>): Question {
@@ -179,6 +181,113 @@ describe("question dialog", () => {
 		const output = view();
 		expect(output).toContain("Beta ✓");
 		expect(output).toContain("+note");
+	});
+
+	describe("editing transitions", () => {
+		const twoQuestions = () => [question(), question({ question: "Second?", header: "Second" })];
+
+		it("moves to the next unanswered question without a warning after an answer", () => {
+			const { component, view } = createDialog(twoQuestions());
+			component.handleInput(ENTER);
+			expect(view()).toContain("Second?");
+			expect(view()).not.toContain("Answer this question");
+		});
+
+		it("leaves the question unanswered when notes are cancelled without a previous answer", () => {
+			const { component, view, results } = createDialog(twoQuestions());
+			component.handleInput(TAB);
+			expect(view()).toContain("Alpha ✓");
+			component.handleInput(ESC);
+			expect(view()).not.toContain("Alpha ✓");
+			expect(view()).toContain("□ Approach");
+			component.handleInput(ESC);
+			expect(results).toEqual([{ outcome: "cancelled", answers: [] }]);
+		});
+
+		it("reports only committed answers when aborted while editing notes", () => {
+			const controller = new AbortController();
+			const { component, results } = createDialog(twoQuestions(), controller.signal);
+			component.handleInput(ENTER); // answer Alpha, advance to Second
+			component.handleInput(LEFT);
+			component.handleInput(DOWN);
+			component.handleInput(TAB); // notes tentatively select Beta
+			for (const char of "unsaved") component.handleInput(char);
+			controller.abort();
+			expect(results).toHaveLength(1);
+			expect(results[0].outcome).toBe("cancelled");
+			expect(results[0].answers).toHaveLength(1);
+			expect(results[0].answers[0]).toMatchObject({ answer: "Alpha" });
+			expect(results[0].answers[0].notes).toBeUndefined();
+		});
+
+		it("deselects a saved multi-select custom answer and restores it by editing again", () => {
+			const { component, view, results } = createDialog([question({ multiSelect: true })]);
+			component.handleInput(DOWN);
+			component.handleInput(DOWN);
+			component.handleInput(ENTER);
+			for (const char of "mine") component.handleInput(char);
+			component.handleInput(ENTER);
+			expect(view()).toMatch(/→ \[x\] 3\. Type/);
+			expect(view()).toContain("Details · Type something");
+			expect(view()).toContain("mine");
+
+			component.handleInput(" ");
+			expect(view()).not.toContain("[x]");
+			component.handleInput(ENTER);
+			expect(view()).toContain("Select at least one option");
+			expect(results).toHaveLength(0);
+
+			component.handleInput(TAB);
+			expect(view()).toContain("Your answer:");
+			component.handleInput(ENTER); // the editor reopens with the saved text
+			expect(view()).toContain("[x]");
+			expect(view()).not.toContain("Select at least one option");
+			component.handleInput(ENTER);
+			expect(view()).toContain("Review answers");
+			component.handleInput(ENTER);
+			expect(results[0].answers[0].selected).toEqual(["mine"]);
+		});
+
+		it("ignores an empty custom answer and removes a note saved empty", () => {
+			const { component, view, results } = createDialog(twoQuestions());
+			component.handleInput("3");
+			component.handleInput(ENTER);
+			expect(view()).not.toContain("Your answer:");
+			expect(view()).toContain("□ Approach");
+
+			component.handleInput(UP);
+			component.handleInput(UP);
+			component.handleInput(TAB);
+			component.handleInput("n");
+			component.handleInput(ENTER);
+			expect(view()).toContain("+note");
+			component.handleInput(TAB);
+			component.handleInput(BACKSPACE);
+			component.handleInput(ENTER);
+			expect(view()).not.toContain("+note");
+
+			component.handleInput(ESC);
+			expect(results[0].answers).toHaveLength(1);
+			expect(results[0].answers[0]).toMatchObject({ kind: "option", answer: "Alpha" });
+			expect(results[0].answers[0].notes).toBeUndefined();
+		});
+
+		it("keeps oversized text in the editor until it fits", () => {
+			const { component, view, results } = createDialog([question()]);
+			component.handleInput("3");
+			for (let index = 0; index <= QUESTION_LIMITS.userTextChars; index++) component.handleInput("x");
+			component.handleInput(ENTER);
+			expect(view()).toContain(`Keep notes and custom answers under ${QUESTION_LIMITS.userTextChars} characters.`);
+			expect(view()).toContain("Your answer:");
+			expect(results).toHaveLength(0);
+
+			component.handleInput(BACKSPACE);
+			component.handleInput(ENTER);
+			expect(results[0].answers[0]).toMatchObject({
+				kind: "custom",
+				answer: "x".repeat(QUESTION_LIMITS.userTextChars),
+			});
+		});
 	});
 
 	it("keeps the focused option and footer visible inside a 24-row narrow viewport", () => {

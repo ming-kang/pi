@@ -1,24 +1,12 @@
-import type { AnswerNote, CustomAnswer, DisplayOption, Question, QuestionAnswer, QuestionState } from "./types.ts";
+import type { AnswerNote, DisplayOption, Question, QuestionAnswer, QuestionState } from "./types.ts";
 import { OTHER_OPTION } from "./types.ts";
 
-export function newQuestionState(): QuestionState {
+export function newQuestionState(question: Question): QuestionState {
 	return {
-		optionIndex: 0,
-		multiSelected: new Set(),
-		notesByOption: new Map(),
+		focus: 0,
+		draft: question.multiSelect ? { kind: "multi", selected: new Set() } : { kind: "single" },
+		notes: new Map(),
 	};
-}
-
-export function selectedCustomAnswer(state: QuestionState): CustomAnswer | undefined {
-	return state.customAnswer?.selected ? state.customAnswer : undefined;
-}
-
-export function hasMultiAnswer(state: QuestionState): boolean {
-	return state.multiSelected.size > 0 || selectedCustomAnswer(state) !== undefined;
-}
-
-export function hasAnswer(state: QuestionState): boolean {
-	return Boolean(state.singleAnswer) || hasMultiAnswer(state);
 }
 
 export function displayOptions(question: Question): DisplayOption[] {
@@ -28,56 +16,73 @@ export function displayOptions(question: Question): DisplayOption[] {
 	];
 }
 
-function noteEntries(state: QuestionState, allowedOptions: readonly string[]): AnswerNote[] | undefined {
-	const allowed = new Set(allowedOptions);
-	const entries = [...state.notesByOption.entries()]
-		.filter(([option]) => allowed.has(option))
-		.filter(([, text]) => text.trim().length > 0)
-		.map(([option, text]) => ({ option, text: text.trim() }));
-	return entries.length ? entries : undefined;
+export function hasAnswer(state: QuestionState): boolean {
+	const draft = state.draft;
+	if (draft.kind === "single") return draft.choice !== undefined;
+	return draft.selected.size > 0 || draft.custom?.selected === true;
 }
 
-export function firstUnanswered(states: QuestionState[]): number | undefined {
-	for (let i = 0; i < states.length; i++) {
-		const state = states[i];
-		if (!hasAnswer(state)) return i;
+/** The saved custom text, whether or not it is currently selected. */
+export function customText(state: QuestionState): string | undefined {
+	const draft = state.draft;
+	if (draft.kind === "multi") return draft.custom?.text;
+	return draft.choice?.kind === "custom" ? draft.choice.text : undefined;
+}
+
+export function isSelected(state: QuestionState, option: DisplayOption): boolean {
+	const draft = state.draft;
+	if (draft.kind === "multi") {
+		return option.kind === "other" ? draft.custom?.selected === true : draft.selected.has(option.optionIndex);
 	}
-	return undefined;
+	if (option.kind === "other") return draft.choice?.kind === "custom";
+	return draft.choice?.kind === "option" && draft.choice.index === option.optionIndex;
 }
 
-export function orderedAnswers(questions: Question[], states: QuestionState[]): QuestionAnswer[] {
+export function firstUnanswered(states: readonly QuestionState[]): number | undefined {
+	const index = states.findIndex((state) => !hasAnswer(state));
+	return index === -1 ? undefined : index;
+}
+
+function selectedNotes(question: Question, state: QuestionState, indices: readonly number[]): AnswerNote[] | undefined {
+	const notes: AnswerNote[] = [];
+	for (const index of indices) {
+		const text = state.notes.get(index)?.trim();
+		if (text) notes.push({ option: question.options[index].label, text });
+	}
+	return notes.length ? notes : undefined;
+}
+
+/** Build the tool-facing answers for every answered question, in question order. */
+export function orderedAnswers(questions: readonly Question[], states: readonly QuestionState[]): QuestionAnswer[] {
 	const answers: QuestionAnswer[] = [];
-	for (let i = 0; i < questions.length; i++) {
-		const question = questions[i];
-		const state = states[i];
-		if (state.singleAnswer) {
-			const notes =
-				state.singleAnswer.kind === "option" && state.singleAnswer.answer
-					? noteEntries(state, [state.singleAnswer.answer])
-					: undefined;
-			answers.push(notes ? { ...state.singleAnswer, notes } : state.singleAnswer);
+	for (let questionIndex = 0; questionIndex < questions.length; questionIndex++) {
+		const question = questions[questionIndex];
+		const draft = states[questionIndex].draft;
+		const base = { questionIndex, question: question.question, header: question.header };
+
+		if (draft.kind === "single") {
+			const choice = draft.choice;
+			if (choice?.kind === "custom") answers.push({ ...base, kind: "custom", answer: choice.text });
+			if (choice?.kind === "option") {
+				const option = question.options[choice.index];
+				const notes = selectedNotes(question, states[questionIndex], [choice.index]);
+				answers.push({
+					...base,
+					kind: "option",
+					answer: option.label,
+					...(option.preview ? { preview: option.preview } : {}),
+					...(notes ? { notes } : {}),
+				});
+			}
 			continue;
 		}
 
-		if (question.multiSelect && hasMultiAnswer(state)) {
-			const selected: string[] = [];
-			for (const idx of [...state.multiSelected].sort((a, b) => a - b)) {
-				const option = question.options[idx];
-				if (option) selected.push(option.label);
-			}
-			const custom = selectedCustomAnswer(state);
-			if (custom) selected.push(custom.text);
-			const notes = noteEntries(state, selected);
-			answers.push({
-				questionIndex: i,
-				question: question.question,
-				header: question.header,
-				kind: "multi",
-				answer: null,
-				selected,
-				...(notes ? { notes } : {}),
-			});
-		}
+		if (!hasAnswer(states[questionIndex])) continue;
+		const indices = [...draft.selected].sort((a, b) => a - b);
+		const selected = indices.map((index) => question.options[index].label);
+		if (draft.custom?.selected) selected.push(draft.custom.text);
+		const notes = selectedNotes(question, states[questionIndex], indices);
+		answers.push({ ...base, kind: "multi", answer: null, selected, ...(notes ? { notes } : {}) });
 	}
 	return answers;
 }
