@@ -20,6 +20,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - `/tasks` colors every output line, and no longer re-clones retained tasks on each output update or re-wraps output on each animation frame.
 
 - The `question` dialog keeps an over-long custom answer or note in the editor for shortening instead of clearing it, and clears its warning once a save succeeds. Cancelling the run while editing a note no longer reports the option that the note tentatively selected.
+- An over-long `question` result no longer loses later decisions or its closing instruction: instead of cutting the whole result at 12,000 characters, it shortens long answers and notes evenly, keeping each one's start and end around a marker.
 - Web search releases its elapsed-time refresh timer when a pending tool row is disposed.
 - `tasks wait` preserves recorded shell exit codes and distinguishes a wait ending from execution timing out. Task previews show empty and unavailable output explicitly, and progress updates do not increase log polling.
 

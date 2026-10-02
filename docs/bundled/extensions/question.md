@@ -34,7 +34,7 @@ Adds a `question` tool for asking one to four multiple-choice questions when the
 }
 ```
 
-Only `content` reaches the model. Successful results are numbered, clearly identify single/custom/multi answers, retain notes, and state when a preview was selected without echoing its full source. Cancelling — via `Esc` or a turn abort — lists any answers already given as partial answers alongside the decline message. Model-facing output is capped at 12,000 characters; if it is truncated, the result instructs the model to ask a focused follow-up question. Notes and custom answers are capped at 4,000 characters in the dialog. Only `outcome: "error"` is mapped to Pi's protocol-level tool error flag; answered, cancelled, and clarification outcomes remain normal results.
+Only `content` reaches the model. Successful results are numbered, clearly identify single/custom/multi answers, retain notes, and state when a preview was selected without echoing its full source. Cancelling — via `Esc` or a turn abort — lists any answers already given as partial answers alongside the decline message. Model-facing output is capped at 12,000 characters. To fit, only user-written text — answers, selections, and notes — is shortened: short texts stay whole, long ones are cut evenly, keeping their start and end around a `…N chars truncated…` marker, and the result asks the model to follow up on the omitted part. Every question, header, and closing instruction is always kept. Notes and custom answers are capped at 4,000 characters in the dialog. Only `outcome: "error"` is mapped to Pi's protocol-level tool error flag; answered, cancelled, and clarification outcomes remain normal results.
 
 The transcript uses a private `renderCall` / `renderResult` only to replace raw question JSON and model-oriented result text with concise user summaries. The collapsed call keeps a bounded header; expanding lists every question in full and marks multi-select prompts. Cancelled and clarification outcomes report `answered N of M`, and the expanded result preserves partial decisions and notes. Human-readable validation errors are shown instead of machine codes, while older or malformed session details fall back defensively to bounded content. Schema-level argument failures show only the first bounded error (plus any remaining count) when collapsed and reveal the bounded validator report with received arguments only when expanded. Pi retains its native tool shell and pending/error state.
 
@@ -44,7 +44,7 @@ Dialog footers use configured keybindings where Pi exposes them, format compact 
 
 - Questions, labels, descriptions, and previews have input-length limits so the dialog stays usable.
 - Notes and custom answers are capped at 4,000 characters.
-- Model-facing output is capped at 12,000 characters; if truncated, the result instructs the model to ask a focused follow-up question.
+- Model-facing output is capped at 12,000 characters by shortening long answers and notes evenly; every decision stays in the result.
 - Only available in TUI mode. RPC, JSON, and print calls return a structured `no_ui` error.
 
 ## Implementation notes
