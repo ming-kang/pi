@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-02
+
 ### Added
 
 - Adopted upstream v1.0.0, including v0.99.2: leaner codemode prompts with recovery hints and `models.generateImages()` (see [Codemode](docs/codemode.md)), Radius in `/login`, Anthropic copy code login and workload identity federation, `quietStartup: "header"`, and `/reload` enabling tools newly added to `defaultTools`.
