@@ -261,6 +261,48 @@ describe("native managed shell execution", () => {
 		expect(update).toHaveBeenCalledTimes(count);
 	});
 
+	it("tells the model how a handoff happened: submitted as background vs detached mid-run", async () => {
+		const background = host();
+		const submitted = execution();
+		const tool = createBashToolDefinition(process.cwd(), { operations: submitted.operations });
+		const submittedResult = await tool.execute(
+			"call",
+			{ command: "watch", background: true },
+			undefined,
+			undefined,
+			context(background),
+		);
+		expect(text(submittedResult)).toContain("Command handed to background. Task ID:");
+		submitted.finish();
+		await background.wait(submittedResult.details!.background!.taskId);
+
+		const child = execution();
+		const detachTool = createBashToolDefinition(process.cwd(), { operations: child.operations });
+		const pending = detachTool.execute(
+			"call",
+			{ command: "build", timeout: 12 },
+			undefined,
+			undefined,
+			context(background),
+		);
+		child.output("already built\n");
+		expect(background.detachForeground()).toBe(1);
+		const handoff = await pending;
+		// A detached execution is not a fresh one: the model must not assume the log starts empty
+		// or that a supplied timeout restarts when the user moves the work.
+		expect(text(handoff)).toContain(
+			"Command moved to the background while it was running, by the user. The execution continues unchanged",
+		);
+		expect(text(handoff)).toContain("tasks read now returns partial output, not a fresh start");
+		expect(text(handoff)).toContain("still measured from command startup");
+		expect(text(handoff)).not.toContain("Command handed to background");
+		expect(handoff.details?.background?.kind).toBe("background");
+		expect((await background.read(handoff.details!.background!.taskId)).text).toBe("already built\n");
+		expect(child.options.timeout).toBe(12);
+		child.finish();
+		await background.wait(handoff.details!.background!.taskId);
+	});
+
 	it.each([createBashToolDefinition, createPowerShellToolDefinition])(
 		"explicitly manages both shell factories and preserves hook environment (%#)",
 		async (factory) => {

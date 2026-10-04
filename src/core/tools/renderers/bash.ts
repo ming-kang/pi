@@ -167,13 +167,14 @@ function rebuildBashResultRenderComponent(
 	showImages: boolean,
 	startedAt: number | undefined,
 	endedAt: number | undefined,
+	submittedAsBackground: boolean,
 ): void {
 	component.clear();
 
 	const background = result.details?.background;
 	let output =
 		background?.kind === "background"
-			? `Moved to background · ${background.taskId}`
+			? `${submittedAsBackground ? "Running in the background" : "Moved to background"} · ${background.taskId}`
 			: getTextOutput(result as any, showImages).trim();
 	const truncation = result.details?.truncation;
 	const fullOutputPath = result.details?.fullOutputPath;
@@ -256,6 +257,7 @@ export function createShellRenderers(
 				}
 			}
 			const component = (context.lastComponent as Container | undefined) ?? new Container();
+			const submitted = (context.args as { background?: boolean } | undefined)?.background === true;
 			rebuildBashResultRenderComponent(
 				component,
 				result as any,
@@ -263,6 +265,7 @@ export function createShellRenderers(
 				context.showImages,
 				timing?.startedAt,
 				timing?.endedAt,
+				submitted,
 			);
 			component.invalidate();
 			return component;

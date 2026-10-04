@@ -12,7 +12,7 @@ Start Bash through the native `bash` tool (the optional native Windows `powershe
 
 Omitting `background` keeps the normal foreground wait. A background submission returns an execution reference, not a successful final outcome. Up to eight background executions run at once; a ninth background submission is rejected without starting. Foreground commands are never limited by background work. `bg create` has been removed; its old stored results and background notifications show their saved text in transcripts.
 
-In interactive mode, **Ctrl+B** moves eligible foreground managed tasks to the background, oldest first, while background slots remain; when every slot is taken it says so instead. Once a foreground execution has run for ten seconds and can still move, the statusline shows `Ctrl+B to background`. It works even when `/tasks` owns focus. The same execution continues: no cancellation, restart or timeout reset. It does not detach ordinary file tools, or user `!` shell commands.
+In interactive mode, **Ctrl+B** moves eligible foreground managed tasks to the background, oldest first, while background slots remain; when every slot is taken it says so instead. Once a foreground execution has run for ten seconds and can still move, the statusline shows `Ctrl+B to background`. It works even when `/tasks` owns focus. The same execution continues: no cancellation, restart or timeout reset. The handoff result names the path the work took, because the model cannot see it: a command submitted with `background: true` reports a handoff from an empty log, while one moved mid-run reports that its execution continued unchanged, that the log already holds output, and that a supplied timeout is still measured from command startup. It does not detach ordinary file tools, or user `!` shell commands.
 
 When nothing is eligible, the key is not consumed: it falls through to other bindings instead of reporting a no-op.
 
@@ -80,7 +80,7 @@ Bash and PowerShell show live plain-text output. Other executors show their publ
 | Escape | Close the current search, help or confirmation first; otherwise close the panel |
 | Ctrl+B | Detach **all** eligible foreground executions through the host |
 
-Click a pane to focus it, a task row to select it, or a tab label to display it. The mouse wheel scrolls the pane under the pointer without changing keyboard focus or task selection. Search, help and confirmation consume their own input without activating the panel behind them.
+Click a pane to focus it, a task row to select it, or a tab label to display it. The mouse wheel scrolls the pane under the pointer without changing keyboard focus or task selection. Footer hints are clickable as well, including while a transient confirmation owns that row: the click dismisses it and performs the hint's action. Search, help and confirmation consume their own input without activating the panel behind them.
 
 Shell output initially follows the tail, marked **Live** next to the output. Scrolling up enters **Browsing**, which holds a bounded output snapshot while status continues updating. In Output, press `f`, End, or scroll down to the bottom to resume following. If the task finishes while browsing, the panel offers to load its final output. Closing or scrolling never pauses, restarts or cancels execution.
 
@@ -88,7 +88,9 @@ The panel polls only selected tail output once per second, up to 48 KiB per read
 
 Controls use the `app.tasks.*` bindings: `search`, `previousTab`, `nextTab`, `nextFocus`, `previousFocus`, `top`, `bottom`, `follow`, `kill`, `confirmStop`, `detachSelected`, `detach` and `help`. List paging uses `tui.select.pageUp` / `pageDown`; Details and Output paging use `tui.editor.pageUp` / `pageDown`. All are configurable. The former view and direct-focus bindings have been removed.
 
-The statusline counts all active managed work and points to `/tasks`. When only retained background results remain, it labels that scope explicitly. The model-facing `tasks list` keeps its background-only scope and foreground omission count.
+The `/hotkeys` table lists the task bindings next to the editor ones, and the panel's `?` help lists every control, so both detach scopes are discoverable without reading these docs.
+
+The statusline names the foreground share of active managed work — all foreground, or an `N foreground` breakdown once background work is active too — and points to `/tasks`. When only retained background results remain, it labels that scope explicitly; foreground results arrive inline in the transcript instead of staying in the statusline. The model-facing `tasks list` keeps its background-only scope and foreground omission count.
 
 ## Completion notifications
 

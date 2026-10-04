@@ -25,10 +25,18 @@ export function bindTasksUI(ctx: { tasks: TasksContext; ui: ExtensionUIContext }
 			clearTimeout(hintTimer);
 			hintTimer = undefined;
 			const all = ctx.tasks.list();
-			const running = all.filter((task) => !isTaskTerminal(task.status)).length;
+			const active = all.filter((task) => !isTaskTerminal(task.status));
 			const recent = all.filter((task) => isTaskTerminal(task.status) && task.mode === "background").length;
+			// Name the foreground count: it is the work the conversation is waiting on, and the only
+			// work the detach key can still move.
+			const foreground = active.filter((task) => task.mode === "foreground").length;
+			const activeLabel = foreground
+				? foreground === active.length
+					? `Tasks ${foreground} foreground`
+					: `Tasks ${active.length} active · ${foreground} foreground`
+				: `Tasks ${active.length} active`;
 			const parts: string[] = [];
-			if (running) parts.push(`Tasks ${running} active · /tasks`);
+			if (active.length) parts.push(`${activeLabel} · /tasks`);
 			else if (recent) parts.push(`Tasks ${recent} recent background results · /tasks`);
 			// Teach the detach key once something has run long enough to be worth moving, and
 			// only while it can move: a stopping execution is aborted, so the key does nothing.

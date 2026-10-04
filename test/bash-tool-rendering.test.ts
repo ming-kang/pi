@@ -256,45 +256,50 @@ describe("bash tool call rendering", () => {
 		expect(vi.getTimerCount()).toBe(0);
 	});
 
-	test.each([createBashToolDefinition, createPowerShellToolDefinition])(
-		"renders handoff as settled native output without a stale timer (%#)",
-		(factory) => {
-			vi.useFakeTimers();
-			const tool = factory(process.cwd(), { operations: { exec: async () => ({ exitCode: 0 }) } });
-			const component = new ToolExecutionComponent(
-				tool.name,
-				"handoff",
-				{ command: "work", background: true },
-				{},
-				tool,
-				{ requestRender: () => {} } as never,
-				process.cwd(),
-			);
-			component.setArgsComplete();
-			component.markExecutionStarted();
-			component.updateResult({ content: [], isError: false }, true);
-			vi.advanceTimersByTime(3000);
-			expect(renderCall(component, 120)).toContain("Elapsed 3.0s");
-			component.updateResult(
-				{
-					content: [{ type: "text", text: "Command running in background" }],
-					details: { background: { kind: "background", taskId: "bash-task" }, fullOutputPath: "output.log" },
-					isError: false,
-				},
-				false,
-			);
-			vi.advanceTimersByTime(5000);
-			for (const expanded of [false, true]) {
-				component.setExpanded(expanded);
-				const rendered = renderCall(component, 120);
-				expect(rendered).toContain("Moved to background · bash-task");
-				expect(rendered).toContain("Full output: output.log");
-				expect(rendered).toContain("Took 3.0s");
-				expect(rendered).not.toContain("Elapsed");
-				expect(rendered).not.toContain("exit code");
-			}
-		},
-	);
+	test.each([
+		[createBashToolDefinition, true],
+		[createPowerShellToolDefinition, true],
+		[createBashToolDefinition, false],
+		[createPowerShellToolDefinition, false],
+	] as const)("renders handoff as settled native output without a stale timer (%#)", (factory, submitted) => {
+		vi.useFakeTimers();
+		const tool = factory(process.cwd(), { operations: { exec: async () => ({ exitCode: 0 }) } });
+		const component = new ToolExecutionComponent(
+			tool.name,
+			"handoff",
+			{ command: "work", ...(submitted ? { background: true } : {}) },
+			{},
+			tool,
+			{ requestRender: () => {} } as never,
+			process.cwd(),
+		);
+		component.setArgsComplete();
+		component.markExecutionStarted();
+		component.updateResult({ content: [], isError: false }, true);
+		vi.advanceTimersByTime(3000);
+		expect(renderCall(component, 120)).toContain("Elapsed 3.0s");
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "Command running in background" }],
+				details: { background: { kind: "background", taskId: "bash-task" }, fullOutputPath: "output.log" },
+				isError: false,
+			},
+			false,
+		);
+		vi.advanceTimersByTime(5000);
+		// Work submitted as background is running from the start; work the user moved mid-run
+		// was already running, and the row has to say which one it was.
+		const label = submitted ? "Running in the background · bash-task" : "Moved to background · bash-task";
+		for (const expanded of [false, true]) {
+			component.setExpanded(expanded);
+			const rendered = renderCall(component, 120);
+			expect(rendered).toContain(label);
+			expect(rendered).toContain("Full output: output.log");
+			expect(rendered).toContain("Took 3.0s");
+			expect(rendered).not.toContain("Elapsed");
+			expect(rendered).not.toContain("exit code");
+		}
+	});
 
 	test("preserves empty and invalid argument fallbacks", () => {
 		const empty = createRenderer("");

@@ -297,6 +297,8 @@ export class TasksMenu implements Component, Focusable {
 	}
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
 		if (this.disposed || event.ctrl || event.alt || event.shift) return;
+		// Feedback is transient: a click retracts it and acts, exactly like a keypress does.
+		this.feedback = undefined;
 		this.render(event.width);
 		const layout = this.layout!;
 		if (event.type === "wheel" && event.wheelDelta) {

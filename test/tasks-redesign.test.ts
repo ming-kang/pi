@@ -157,6 +157,24 @@ describe("Tasks redesign behavior", () => {
 		h.menu.handleInput("\r");
 		expect(h.host.kill).toHaveBeenCalledExactlyOnceWith("build");
 	});
+	it("lists both detach scopes in the panel help", () => {
+		const h = panel([snapshot("build", { mode: "foreground" })]);
+		h.menu.handleInput("?");
+		const help = h.frame();
+		expect(help).toContain("Ctrl+B");
+		expect(help).toContain("Move every eligible foreground execution to the background");
+		expect(help).toContain("Move selected foreground task to background");
+	});
+	it("keeps footer hint hits while transient feedback replaces the hint row", () => {
+		const h = panel([snapshot("build", { mode: "foreground" })]);
+		const hints = h.frame().split("\n").at(-1)!;
+		// The stop hint keeps its click target even while feedback owns the row.
+		const stop = hints.indexOf("stop");
+		h.menu.handleInput("b");
+		expect(h.frame().split("\n").at(-1)).toContain("Selected task moved to background");
+		h.menu.handleMouse(mouse(stop, 29));
+		expect(h.frame()).toContain("Stop task?");
+	});
 	it("dismisses stop when its target finishes without stopping the next selection", () => {
 		const h = panel([snapshot("build"), snapshot("check")]);
 		h.menu.handleInput("k");

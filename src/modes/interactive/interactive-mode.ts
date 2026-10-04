@@ -96,7 +96,7 @@ import type {
 } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
-import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
+import { type AppKeybinding, KEYBINDINGS, KeybindingsManager } from "../../core/keybindings.ts";
 import type { McpHttpServerConfig } from "../../core/mcp-servers.ts";
 import { createCompactionSummaryMessage, createCustomMessage } from "../../core/messages.ts";
 import {
@@ -290,6 +290,23 @@ function isCompactionCostNotice(item: RenderSessionItem): item is CompactionCost
 
 function isUsageSessionEntry(item: RenderSessionItem): item is Extract<SessionEntry, { type: "usage" }> {
 	return "type" in item && item.type === "usage";
+}
+
+/**
+ * Task rows for `/hotkeys`. Task keybindings act outside the editor, so they never showed up in
+ * the editor-driven sections; labels come from KEYBINDINGS so the table cannot drift from the
+ * binding registry.
+ */
+export function hotkeysTaskSection(display: (action: AppKeybinding) => string): string {
+	const detach = KEYBINDINGS["app.tasks.detach"];
+	const detachSelected = KEYBINDINGS["app.tasks.detachSelected"];
+	return `
+**Tasks**
+| Key | Action |
+|-----|--------|
+| \`${display("app.tasks.detach")}\` | ${detach.description} |
+| \`${display("app.tasks.detachSelected")}\` | ${detachSelected.description} (while /tasks is open) |
+`;
 }
 
 const DEAD_TERMINAL_ERROR_CODES = new Set(["EIO", "EPIPE", "ENOTCONN"]);
@@ -6858,6 +6875,9 @@ export class InteractiveMode {
 | \`!\` | Run bash command |
 | \`!!\` | Run bash command (excluded from context) |
 `;
+
+		// Task keybindings act outside the editor contexts this table was built from.
+		hotkeys += hotkeysTaskSection((action) => this.getAppKeyDisplay(action));
 
 		// Add extension-registered shortcuts
 		const extensionRunner = this.session.extensionRunner;

@@ -39,7 +39,7 @@ const bashSchema = Type.Object({
 	background: Type.Optional(
 		Type.Boolean({
 			description:
-				"true returns a managed task ID immediately and runs the command in the background; omit or false to block until exit",
+				"true returns a managed task ID immediately and runs the command in the background, and you are notified when it completes — do not poll for its result; omit or false to block until exit",
 		}),
 	),
 });
@@ -344,12 +344,20 @@ export function createShellToolDefinition(
 				run: (control) => run({ control }),
 			});
 			if (outcome.kind === "result") return shellToolResult(outcome, true);
+			const tail = `Task ID: ${outcome.task.id}. Status: ${outcome.task.status}. Completion arrives automatically as a notification — do not poll or immediately wait on it; continue with other work or hand back to the user. Use tasks read to inspect output, tasks wait only when your next step is blocked on the result (prefer foreground next time in that case), or tasks kill to stop it.`;
+			// Shell execution can become background work in two ways, and the model has to know which
+			// one it got: a submitted background command starts from an empty log, while a detached
+			// one already holds output and keeps its original timeout.
+			const handoff =
+				background === true
+					? `Command handed to background. ${tail}`
+					: `Command moved to the background while it was running, by the user. The execution continues unchanged — no restart, and a supplied timeout is still measured from command startup. Output produced so far is already in the log, so tasks read now returns partial output, not a fresh start. ${tail}`;
 			return {
 				structuredContent: { task_id: outcome.task.id, status: outcome.task.status },
 				content: [
 					{
 						type: "text",
-						text: `Command handed to background. Task ID: ${outcome.task.id}. Status: ${outcome.task.status}. Completion arrives automatically as a notification — do not poll or immediately wait on it; continue with other work or hand back to the user. Use tasks read to inspect output, tasks wait only when your next step is blocked on the result (prefer foreground next time in that case), or tasks kill to stop it.${outcome.task.outputPath ? `\nFull output: ${outcome.task.outputPath}` : ""}`,
+						text: `${handoff}${outcome.task.outputPath ? `\nFull output: ${outcome.task.outputPath}` : ""}`,
 					},
 				],
 				details: {

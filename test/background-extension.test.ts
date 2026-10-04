@@ -593,8 +593,9 @@ describe("public Background management", () => {
 			let input: TerminalInputHandler | undefined;
 			const unsubscribeInput = vi.fn();
 			const notify = vi.fn();
+			const setStatus = vi.fn();
 			const ui = {
-				setStatus: vi.fn(),
+				setStatus,
 				notify,
 				onTerminalInput: (handler: TerminalInputHandler) => {
 					input = handler;
@@ -624,9 +625,13 @@ describe("public Background management", () => {
 			});
 			await vi.waitFor(() => expect(service.list()).toHaveLength(1));
 			expect(input?.("x")).toBeUndefined();
+			// Foreground work is named as such, so the segment says what can still move.
+			expect(setStatus).toHaveBeenLastCalledWith("background", "Tasks 1 foreground · /tasks");
 			expect(input?.(detachKey)).toEqual({ consume: true });
 			expect(notify).toHaveBeenCalledWith("Moved 1 execution to the background. Use /tasks to manage tasks.");
 			expect((await outcome).kind).toBe("background");
+			// Moved work is no longer foreground, so the plain active count is right again.
+			expect(setStatus).toHaveBeenLastCalledWith("background", "Tasks 1 active · /tasks");
 			finish();
 
 			handlers.get("session_shutdown")?.({}, { tasks: service, ui } as unknown as ExtensionToolContext);
@@ -689,7 +694,7 @@ describe("public Background management", () => {
 			// A command that finishes before the delay never shows the hint, and leaves no timer behind.
 			const quick = start("quick");
 			await vi.advanceTimersByTimeAsync(9_999);
-			expect(setStatus).toHaveBeenLastCalledWith("background", "Tasks 1 active · /tasks");
+			expect(setStatus).toHaveBeenLastCalledWith("background", "Tasks 1 foreground · /tasks");
 			quick.finish();
 			await quick.outcome;
 			expect(setStatus).toHaveBeenLastCalledWith("background", undefined);
@@ -700,9 +705,9 @@ describe("public Background management", () => {
 			// A command still running at ten seconds gets the hint, and moving it clears the hint.
 			const long = start("long");
 			await vi.advanceTimersByTimeAsync(9_999);
-			expect(setStatus).toHaveBeenLastCalledWith("background", "Tasks 1 active · /tasks");
+			expect(setStatus).toHaveBeenLastCalledWith("background", "Tasks 1 foreground · /tasks");
 			await vi.advanceTimersByTimeAsync(1);
-			expect(setStatus).toHaveBeenLastCalledWith("background", `Tasks 1 active · /tasks · ${hint}`);
+			expect(setStatus).toHaveBeenLastCalledWith("background", `Tasks 1 foreground · /tasks · ${hint}`);
 			expect(input?.("\x02")).toEqual({ consume: true });
 			// Moved work is counted as background work and no longer needs the hint.
 			expect(setStatus).toHaveBeenLastCalledWith("background", "Tasks 1 active · /tasks");
@@ -728,6 +733,61 @@ describe("public Background management", () => {
 			await last.outcome;
 		} finally {
 			vi.useRealTimers();
+			setKeybindings(previousKeybindings);
+		}
+	});
+
+	it("counts retained background results without mixing in foreground ones", async () => {
+		const previousKeybindings = getKeybindings();
+		setKeybindings(KeybindingsManager.create());
+		try {
+			const handlers = new Map<string, (event: unknown, ctx: ExtensionToolContext) => void>();
+			const pi = {
+				on: (event: string, handler: (event: unknown, ctx: ExtensionToolContext) => void) =>
+					handlers.set(event, handler),
+				registerTool: vi.fn(),
+				registerMessageRenderer: vi.fn(),
+				registerCommand: vi.fn(),
+			} as unknown as ExtensionAPI;
+			createTasksHarness()(pi);
+			const service = new TaskRuntime({ enabled: true });
+			services.push(service);
+			const setStatus = vi.fn();
+			const ui = {
+				setStatus,
+				notify: vi.fn(),
+				onTerminalInput: () => () => {},
+			};
+			const ctx = { tasks: service, ui } as unknown as ExtensionToolContext;
+			handlers.get("session_start")?.({}, ctx);
+			let settle!: () => void;
+			const open = new Promise<void>((resolve) => {
+				settle = resolve;
+			});
+			const execute = (toolCallId: string, background: boolean) =>
+				service.execute({
+					kind: "bash",
+					title: toolCallId,
+					toolCallId,
+					background,
+					async run(control) {
+						control.accept();
+						await open;
+						return { result: { content: [{ type: "text", text: "ok" }], details: undefined } };
+					},
+				});
+			const backgroundOutcome = execute("background", true);
+			await vi.waitFor(() => expect(setStatus.mock.lastCall?.[1]).toBe("Tasks 1 active · /tasks"));
+			const foregroundOutcome = execute("foreground", false);
+			await vi.waitFor(() => expect(setStatus.mock.lastCall?.[1]).toBe("Tasks 2 active · 1 foreground · /tasks"));
+			// Foreground results arrive inline in the transcript, so only background ones stay here.
+			settle();
+			await Promise.all([backgroundOutcome, foregroundOutcome]);
+			await vi.waitFor(() =>
+				expect(setStatus).toHaveBeenLastCalledWith("background", "Tasks 1 recent background results · /tasks"),
+			);
+			handlers.get("session_shutdown")?.({}, ctx);
+		} finally {
 			setKeybindings(previousKeybindings);
 		}
 	});

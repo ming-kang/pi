@@ -4,6 +4,17 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Background shell handoffs now tell the model how the work became background work: a command submitted with `background: true` still reports a handoff from an empty log, while a command moved mid-run reports that its execution continued unchanged, that the log already holds output, and that a supplied timeout is still measured from command startup. The transcript row reads `Running in the background` for submitted work and keeps `Moved to background` for detached work.
+- The bash and PowerShell `background` parameter description now says that completion arrives as an automatic notification and that the result must not be polled.
+- The tasks statusline names the foreground share of active work (`Tasks 2 foreground`, or `Tasks 3 active · 1 foreground` while background work runs) instead of folding every mode into one count.
+- `/hotkeys` lists the task bindings in a Tasks section, and the `/tasks` panel help lists `Ctrl+B` (detach all eligible foreground work) next to `b` (detach only the selected task).
+
+### Fixed
+
+- Clicking a footer hint while a transient confirmation owns that row now dismisses the confirmation and performs the action, instead of doing nothing until the next keypress.
+
 ## [1.0.1] - 2026-10-04
 
 ### Added

@@ -173,6 +173,7 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 				["app.tasks.bottom", "Bottom of list / content"],
 				["app.tasks.search", "Locate a retained task; Enter chooses, Escape restores selection"],
 				["app.tasks.follow", "Follow latest / final output (Output only)"],
+				["app.tasks.detach", "Move every eligible foreground execution to the background"],
 				["app.tasks.detachSelected", "Move selected foreground task to background"],
 				["app.tasks.kill", "Request stop of selected whole task"],
 				["app.tasks.confirmStop", "Confirm stop"],
@@ -232,10 +233,9 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 				addHint("app.tasks.detachSelected", "background", { key: "app.tasks.detachSelected" });
 		}
 		addHint("app.tasks.help", "keys", { key: "app.tasks.help" });
-		if (options.feedback) {
-			footer = options.feedback;
-			for (let i = hits.length - 1; i >= 0; i--) if (hits[i]!.y === height - 1) hits.splice(i, 1);
-		}
+		// Feedback borrows the hint row, so the hint hit targets stay live and the click that
+		// dismisses it can act in the same gesture.
+		if (options.feedback) footer = options.feedback;
 	}
 	result.lines = [...panels, theme.fg(options.pendingKill ? "warning" : "dim", pad(footer, width))];
 	return result;
