@@ -3235,6 +3235,10 @@ pi.on("tool_call", async (event, ctx) => {
 
 A tool that orchestrates other tools can adjust what the model sees while it is active with `prepareLoadout(loadout)`. It runs whenever the active tools change and receives the declared tools, the callable tools, and every registered tool with its exposure and namespace. It returns replacement `descriptions` for declared tools (including its own) and `hiddenDeclarations`: active tools whose declarations requests leave out while they stay active and callable. `codemode` uses only this hook, `exposure`, and `ctx.executeTool()`, so another tool can implement the same behavior under a different name.
 
+### Tool renderer resolution
+
+`pi.registerToolRenderer((toolName, next) => renderers)` chooses `renderCall`, `renderResult`, and `renderShell` for calls to any tool, including tools that are not registered yet, such as MCP tools in a resumed session. Resolvers run in extension load order. `next()` returns the remaining resolvers' result or the registered tool's renderers, so `next() ?? mine` supplies a fallback. Interactive transcripts and HTML exports both use these resolvers.
+
 ### MCP servers
 
 `pi.registerMcpServer(name, config)` adds an MCP server for the current session. `config` has the shape of an `mcpServers` entry in [`mcp.json`](mcp.md): `command`, `args`, `env`, and `cwd` for stdio servers, `url`, `headers`, and `oauth` for HTTP servers, plus `exposure`, `toolExposure`, `description`, `enabled`, and `timeout`.

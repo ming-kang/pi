@@ -247,6 +247,7 @@ A `models` entry supplies a complete custom model definition with useful default
 | `inputLimits` | No | omitted | Request limits and image preprocessing for this model; see [Image Input Limits](#image-input-limits). |
 | `contextWindow` | No | `128000` | Context window in tokens. |
 | `maxTokens` | No | `16384` | Maximum generated tokens. |
+| `samplingParamsByThinkingLevel` | No | omitted | Per-level sampling overrides; see [Configure sampling by thinking level](#configure-sampling-by-thinking-level). |
 | `samplingParams` | No | omitted | Free-form sampling parameters merged verbatim into every request body; see [Sampling Parameters](#sampling-parameters). |
 | `cost` | No | all rates `0` | Per-million-token rates and optional request-wide price tiers. |
 | `promptCache` | No | omitted | Best-effort prompt cache lifetime in seconds per retention tier; see [Prompt Cache Lifetimes](#prompt-cache-lifetimes). |
@@ -336,6 +337,32 @@ The built-in catalog fills this in for direct Anthropic (5 min / 1 h). Other pro
 Only OpenAI-compatible APIs apply it (`openai-completions`, `openai-responses`, `azure-openai-responses`); other APIs ignore it. Keys override pi's named request fields (for example a `temperature` key here beats the request-level temperature), so prefer it as the single source of sampling truth for a model. In `modelOverrides`, `samplingParams` merges per key with the base model's value.
 
 A constant thinking-token cap can go here too, but it will not follow `thinkingBudgets` or leave room for the answer. Prefer `compat.thinkingTokenBudgetField` (or the `supportsThinkingTokenBudget` alias) for that.
+
+### Configure sampling by thinking level
+
+OpenAI-compatible APIs support free-form `samplingParams` model defaults and `samplingParamsByThinkingLevel` overrides. The latter uses Pi thinking-level keys (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`), not provider values from `thinkingLevelMap`:
+
+```json
+{
+  "id": "qwen-thinking-model",
+  "reasoning": true,
+  "samplingParams": {
+    "temperature": 1.0,
+    "top_p": 0.95
+  },
+  "samplingParamsByThinkingLevel": {
+    "off": {
+      "temperature": 0.7,
+      "top_p": 0.8
+    },
+    "high": {
+      "top_k": 20
+    }
+  }
+}
+```
+
+Pi first clamps unsupported thinking levels, then merges model `samplingParams`, the effective level's override, and request-level `samplingParams` in that order. Later values win per key. Missing levels inherit the model defaults. `modelOverrides` merges per-level entries per key with the base model. These fields apply only to `openai-completions`, `openai-responses`, and `azure-openai-responses`; other APIs ignore them.
 
 ### Thinking Level Map
 
@@ -434,7 +461,7 @@ The built-in models remain. A new custom `id` is added, while a matching ID is r
 }
 ```
 
-An override supports `name`, `reasoning`, `thinkingLevelMap`, `input`, `inputLimits`, `cost`, `promptCache` (merged per tier), `contextWindow`, `maxTokens`, `samplingParams` (merged per key), `headers`, and `compat`. Its `cost` base rates are individually optional and retain omitted values; a supplied `tiers` array replaces the existing array. Thinking maps merge by level. `inputLimits` deep-merges down to the `images.resize` profile. `compat` merges by field, and its `openRouterRouting`, `vercelGatewayRouting`, and `chatTemplateKwargs` objects merge by key.
+An override supports `name`, `reasoning`, `thinkingLevelMap`, `input`, `inputLimits`, `cost`, `promptCache` (merged per tier), `contextWindow`, `maxTokens`, `samplingParams` (merged per key), `samplingParamsByThinkingLevel` (merged per level and key), `headers`, and `compat`. Its `cost` base rates are individually optional and retain omitted values; a supplied `tiers` array replaces the existing array. Thinking maps merge by level. `inputLimits` deep-merges down to the `images.resize` profile. `compat` merges by field, and its `openRouterRouting`, `vercelGatewayRouting`, and `chatTemplateKwargs` objects merge by key.
 
 Use a `promptCache` override to enable cache warming through a proxy whose backing cache you know, for example OpenRouter routed to Anthropic:
 
@@ -676,13 +703,13 @@ For `bedrock-converse-stream`, `compat.supportsStrictMode` controls Bedrock stri
 
 ## Use classifier models
 
-Classifier models do not chat. They answer typed questions about JSON state: pick one of several choices, answer yes or no, or give a score, each with probabilities. Pi includes TypeSafe's Jev model from these providers:
+Classifier models do not chat. They answer typed questions about JSON state: pick one of several choices, answer yes or no, or give a score, each with probabilities. Pi includes TypeSafe's Jev model from these providers, and Cloudflare's Clef and Clef Flash models from Workers AI:
 
 | Provider | Model IDs | Authentication |
 |---|---|---|
 | `typesafe` | `jev-latest` | `TYPESAFE_API_KEY` |
 | `openrouter` | `typesafe/jev-1.13`, `~typesafe/jev-latest` | `OPENROUTER_API_KEY` or `/login` |
-| `cloudflare-workers-ai` | `typesafe/jev` | `CLOUDFLARE_API_KEY` and `CLOUDFLARE_ACCOUNT_ID` |
+| `cloudflare-workers-ai` | `typesafe/jev`, `@cf/cloudflare/clef`, `@cf/cloudflare/clef-flash` | `CLOUDFLARE_API_KEY` and `CLOUDFLARE_ACCOUNT_ID` |
 | `vercel-ai-gateway` | `typesafe-ai/jev` | `AI_GATEWAY_API_KEY` |
 | `opencode` | `jev-1.13`, `jev-1.13-free` | `OPENCODE_API_KEY` |
 

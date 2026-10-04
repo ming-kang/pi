@@ -21,9 +21,6 @@
 					"path": "install-lock/"
 				},
 				{
-					"path": "npm-shrinkwrap.json"
-				},
-				{
 					"path": "package.json"
 				},
 				{
@@ -59,7 +56,7 @@
 					"path": "src/modes/interactive/components/settings-selector.ts"
 				},
 				{
-					"path": "src/modes/interactive/components/pi-logo-animation.lazy.ts"
+					"path": "src/modes/interactive/components/easter-egg-3d.lazy.ts"
 				},
 				{
 					"path": "src/utils/syntax-highlight.ts",
@@ -77,6 +74,10 @@
 				},
 				{
 					"path": "vitest.config.ts"
+				},
+				{
+					"path": "src/package-manager-cli.ts",
+					"rewrite": "The distribution ships a shrinkwrap, so the upstream npm-to-pi.dev migration notice is inapplicable and would replace the installed distribution."
 				}
 			],
 			"tests": [

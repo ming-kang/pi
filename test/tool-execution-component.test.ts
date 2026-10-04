@@ -26,6 +26,10 @@ function createBaseToolDefinition(name = "custom_tool"): ToolDefinition {
 	};
 }
 
+// Small 2x2 blue JPEG image
+const TINY_JPEG =
+	"/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAACAAIDAREAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAVAQEBAAAAAAAAAAAAAAAAAAAGCf/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AD3VTB3/2Q==";
+
 function createFakeTui(requestRender: () => void = () => {}): TUI {
 	return {
 		requestRender,
@@ -42,91 +46,45 @@ describe("ToolExecutionComponent parity", () => {
 		resetCapabilitiesCache();
 	});
 
-	// Issue #8577: ignore conversions that finish after the image was replaced.
-	test("keeps the final tool image when a partial image conversion finishes late", async () => {
+	// Issue #10292: the component loads the PNG transcoder itself, so this works in any TUI host.
+	// Issue #8577: a replaced partial image must not resurface.
+	test("converts non-PNG tool images once the transcoder loads", async () => {
 		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
-		let finishConversion!: (result: { data: string; mimeType: string }) => void;
-		const conversion = new Promise<{ data: string; mimeType: string }>((resolve) => {
-			finishConversion = resolve;
-		});
-		vi.spyOn(imageConvert, "convertToPng").mockReturnValue(conversion);
+		const component = new ToolExecutionComponent("tool", "id", {}, {}, undefined, createFakeTui(), process.cwd());
+		component.updateResult(
+			{ content: [{ type: "image", data: "cGFydGlhbA==", mimeType: "image/jpeg" }], isError: false },
+			true,
+		);
+		component.updateResult({ content: [{ type: "image", data: TINY_JPEG, mimeType: "image/jpeg" }], isError: false });
+
+		await vi.waitFor(() => expect(component.render(120).join("\n")).toContain(";iVBORw0KGgo"));
+		const rendered = component.render(120).join("\n");
+		expect(rendered).not.toContain("cGFydGlhbA==");
+
+		// Invalidation reuses the converted Image, so the Kitty image ID stays the same.
+		component.invalidate();
+		expect(component.render(120).join("\n")).toBe(rendered);
+	});
+
+	test("does not redraw disposed tool rows when the image transcoder loads", () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		const callbacks: Array<() => void> = [];
+		vi.spyOn(imageConvert, "ensurePngTranscoder").mockImplementation((callback) => callbacks.push(callback));
+		const requestRender = vi.fn();
 		const component = new ToolExecutionComponent(
-			"custom_tool",
-			"tool-image-race",
+			"tool",
+			"image-lifecycle",
 			{},
 			{},
 			undefined,
-			createFakeTui(),
-			process.cwd(),
-		);
-
-		component.updateResult(
-			{ content: [{ type: "image", data: "partial-jpeg", mimeType: "image/jpeg" }], isError: false },
-			true,
-		);
-		component.updateResult({
-			content: [{ type: "image", data: "final-png", mimeType: "image/png" }],
-			isError: false,
-		});
-		expect(component.render(120).join("\n")).toContain("final-png");
-
-		finishConversion({ data: "converted-partial", mimeType: "image/png" });
-		await conversion;
-
-		const rendered = component.render(120).join("\n");
-		expect(rendered).toContain("final-png");
-		expect(rendered).not.toContain("converted-partial");
-	});
-
-	test("ignores stale and post-disposal image conversions", async () => {
-		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
-		const conversions: Array<{
-			resolve: (value: { data: string; mimeType: string } | null) => void;
-		}> = [];
-		vi.spyOn(imageConvert, "convertToPng").mockImplementation(
-			() =>
-				new Promise((resolveConversion) => {
-					conversions.push({ resolve: resolveConversion });
-				}),
-		);
-		const requestRender = vi.fn();
-		const component = new ToolExecutionComponent(
-			"custom_tool",
-			"tool-image-lifecycle",
-			{},
-			{},
-			createBaseToolDefinition(),
 			createFakeTui(requestRender),
 			process.cwd(),
 		);
-
-		component.updateResult(
-			{ content: [{ type: "image", data: "old-image", mimeType: "image/jpeg" }], isError: false },
-			true,
-		);
-		component.updateResult(
-			{ content: [{ type: "image", data: "new-image", mimeType: "image/jpeg" }], isError: false },
-			true,
-		);
-		expect(conversions).toHaveLength(2);
-
-		conversions[0]!.resolve({ data: "old-png", mimeType: "image/png" });
-		await Promise.resolve();
-		expect(requestRender).not.toHaveBeenCalled();
-
-		conversions[1]!.resolve({ data: "new-png", mimeType: "image/png" });
-		await Promise.resolve();
-		expect(requestRender).toHaveBeenCalledTimes(1);
-
-		component.updateResult(
-			{ content: [{ type: "image", data: "final-image", mimeType: "image/jpeg" }], isError: false },
-			true,
-		);
-		expect(conversions).toHaveLength(3);
+		component.updateResult({ content: [{ type: "image", data: TINY_JPEG, mimeType: "image/jpeg" }], isError: false });
+		expect(callbacks.length).toBeGreaterThan(0);
 		component.dispose();
-		conversions[2]!.resolve({ data: "final-png", mimeType: "image/png" });
-		await Promise.resolve();
-		expect(requestRender).toHaveBeenCalledTimes(1);
+		for (const callback of callbacks) callback();
+		expect(requestRender).not.toHaveBeenCalled();
 	});
 
 	test("refreshes self-scheduled renderers without adding generic progress", () => {

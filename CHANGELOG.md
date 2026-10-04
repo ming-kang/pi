@@ -4,6 +4,23 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Adopted upstream v1.0.2, including v1.0.1: `samplingParamsByThinkingLevel` in `models.json`, MCP project overrides for user-level servers, and `oauth.clientRegistration: "cimd"` for servers that accept Pi's Client ID Metadata Document.
+- Added `pi.registerToolRenderer()` for calls to tools that are not registered, including MCP tools in resumed sessions, with the same renderer resolution in HTML exports.
+- OAuth sign-in screens now copy their authorization URL with the configured `app.message.copy` key, and codemode can use Cloudflare's Clef and Clef Flash classifiers.
+
+### Changed
+
+- Anthropic tool additions and redefinitions are sent inline during a conversation, preserving the cached prefix when a tool changes under the same name.
+- Fullscreen Pi logo and Armin easter eggs use the new 3D animation; the opencode/Kimi K2.5 Daxnuts easter egg has been removed.
+
+### Fixed
+
+- Fixed JPEG, GIF, and WebP images in Kitty-protocol terminals, kept tool image IDs stable across refreshes, and adopted the WezTerm fix for images collapsing after scrolling.
+- Fixed empty entries in `--models`, excessive codemode output crashing the process, and provider capacity errors ending a turn without retrying.
+- Adopted provider fixes for Cloudflare Claude model IDs, ChatGPT login callback port conflicts, Bedrock long-context pricing and thinking signatures, Together DeepSeek thinking controls, and NVIDIA's retired default model.
+
 ## [1.0.0] - 2026-10-02
 
 ### Added

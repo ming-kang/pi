@@ -7,7 +7,7 @@ import { renderTasksCall, renderTasksResult } from "../../../modes/interactive/t
  * graph out of a process that only renders.
  */
 
-import type { ToolDefinition } from "../../extensions/types.ts";
+import type { ToolRenderers } from "../../extensions/types.ts";
 import type { ToolName } from "../index.ts";
 import { createShellRenderers } from "./bash.ts";
 import { editRenderers } from "./edit.ts";
@@ -17,7 +17,7 @@ import { lsRenderers } from "./ls.ts";
 import { readRenderers } from "./read.ts";
 import { writeRenderers } from "./write.ts";
 
-export type ToolRenderers = Pick<ToolDefinition<any, any>, "renderCall" | "renderResult">;
+export type { ToolRenderers };
 
 export {
 	createShellRenderers,
