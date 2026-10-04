@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-04
+
 ### Added
 
 - Adopted upstream v1.0.2, including v1.0.1: `samplingParamsByThinkingLevel` in `models.json`, MCP project overrides for user-level servers, and `oauth.clientRegistration: "cimd"` for servers that accept Pi's Client ID Metadata Document.
