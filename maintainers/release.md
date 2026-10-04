@@ -34,7 +34,7 @@ Select the run ID for this dispatch and confirm `headSha` equals the recorded SH
 
 ## Verify and tag the published commit
 
-Confirm the registry installation check passed. Perform global-install/self-update checks from a separate shell or after restarting Pi; do not replace the package running the release session.
+Confirm the registry installation check passed. Post-publication, the workflow warns instead of failing when npm registry propagation outlasts its observation windows (metadata visibility, registry installation): the package is published either way, so a green run carrying those warnings is a propagation delay, not a publication failure. Read the failing step's summary, confirm every listed item manually (version visible, provenance commit, registry installation smoke test), and only then tag. Perform global-install/self-update checks from a separate shell or after restarting Pi; do not replace the package running the release session.
 
 Tag the recorded published SHA explicitly, even if local HEAD has moved:
 

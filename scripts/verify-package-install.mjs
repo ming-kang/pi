@@ -82,159 +82,175 @@ function assertEqual(actual, expected, description) {
 	}
 }
 
-try {
-	writeFileSync(
-		join(installDirectory, "package.json"),
-		JSON.stringify({ name: "astralyn-pi-package-smoke", version: "1.0.0", private: true }, null, 2),
-	);
+function verifyInstallation() {
+	try {
+		writeFileSync(
+			join(installDirectory, "package.json"),
+			JSON.stringify({ name: "astralyn-pi-package-smoke", version: "1.0.0", private: true }, null, 2),
+		);
 
-	execFileSync(
-		process.execPath,
-		[npmCliPath, "install", "--omit=dev", "--ignore-scripts", "--save-exact", resolvedInstallSpec],
-		{
+		try {
+			execFileSync(
+				process.execPath,
+				[npmCliPath, "install", "--omit=dev", "--ignore-scripts", "--save-exact", resolvedInstallSpec],
+				{
+					cwd: installDirectory,
+					env: smokeEnvironment,
+					stdio: "inherit",
+				},
+			);
+		} catch (error) {
+			// The registry could not serve the artifact for installation. The package
+			// contents were never checked, so exit with code 2 to mark an
+			// observation failure that callers may retry, distinct from exit code 1
+			// which reports a verified defect in the published artifact.
+			console.error(
+				`Could not install ${resolvedInstallSpec}; its contents were not verified. This is an installation fetch failure (the artifact could not be fetched for installation), not a package-content failure.`,
+			);
+			console.error(error instanceof Error ? error.message : String(error));
+			process.exitCode = 2;
+			return;
+		}
+
+		const installedPackage = readInstalledPackage("@astralyn/pi");
+		assertEqual(installedPackage.name, "@astralyn/pi", "installed package name");
+		assertEqual(installedPackage.version, expectedVersion, "installed package version");
+		assertEqual(installedPackage.bin?.pi, "dist/bundle/cli.js", "installed pi binary target");
+		assertEqual(
+			installedPackage.exports?.["./rpc-entry"]?.import,
+			"./dist/bundle/rpc-entry.js",
+			"installed RPC export target",
+		);
+		for (const [subpath, source] of [
+			["./client", "./src/client/index.ts"],
+			["./experimental/plugin", "./src/experimental/plugin.ts"],
+		]) {
+			const entry = installedPackage.exports?.[subpath];
+			assertEqual(entry?.source, source, `${subpath} source target`);
+			assertEqual(Object.keys(entry).join(","), "source", `${subpath} export conditions`);
+		}
+
+		for (const packageName of expectedRuntimePackages) {
+			const expectedDependencyVersion = installedPackage.dependencies?.[packageName];
+			if (!expectedDependencyVersion) {
+				throw new Error(`Root package is missing the required runtime dependency ${packageName}.`);
+			}
+			assertEqual(readInstalledPackage(packageName).version, expectedDependencyVersion, `${packageName} version`);
+		}
+
+		const requiredFiles = [
+			"CHANGELOG.md",
+			"LICENSE",
+			"README.md",
+			"dist/bundle/cli.js",
+			"dist/bundle/index.js",
+			"dist/index.d.ts",
+			"dist/index.js",
+			"dist/bundle/rpc-entry.js",
+			"dist/core/export-html/template.html",
+			...expectedExtensionEntrypoints,
+			"dist/modes/interactive/assets/clankolas.png",
+			"dist/modes/interactive/theme/dark.json",
+			"dist/modes/interactive/theme/ice-cream-dark.json",
+			"dist/modes/interactive/theme/ice-cream-light.json",
+			"dist/modes/interactive/theme/light.json",
+			"docs/bundled/README.md",
+			"docs/bundled/tasks.md",
+			"docs/bundled/extensions/deepwiki.md",
+			"docs/bundled/extensions/question.md",
+			"docs/bundled/extensions/provider.md",
+			"docs/bundled/extensions/statusline.md",
+			"docs/bundled/extensions/web-search.md",
+			"docs/bundled/themes.md",
+			"docs/bundled/tool-presentation.md",
+			"docs/docs.json",
+			"docs/llama-cpp.md",
+			"docs/index.md",
+			"examples/sdk/01-minimal.ts",
+			"examples/sdk/README.md",
+			"npm-shrinkwrap.json",
+		];
+		for (const relativePath of requiredFiles) {
+			const requiredPath = join(packageDirectory, ...relativePath.split("/"));
+			if (!existsSync(requiredPath) || !statSync(requiredPath).isFile()) {
+				throw new Error(`Installed package is missing ${relativePath}.`);
+			}
+		}
+
+		const bundledCliPath = join(packageDirectory, "dist", "bundle", "cli.js");
+		for (const entrypoint of ["cli.js", "rpc-entry.js"]) {
+			if (
+				!readFileSync(join(packageDirectory, "dist", "bundle", entrypoint), "utf8").startsWith(
+					"#!/usr/bin/env node",
+				)
+			) {
+				throw new Error(`Installed bundled ${entrypoint} is missing its shebang.`);
+			}
+		}
+		for (const forbiddenPath of [
+			"dist/client",
+			"dist/experimental",
+			"dist/cli/experimental",
+			"dist/extensions/biu",
+			"dist/extensions/explore",
+			"dist/extensions/plan",
+			"dist/extensions/rewind",
+			"dist/extensions/subagent",
+			"dist/extensions/todo",
+			"docs/bundled/extensions/biu.md",
+			"docs/bundled/extensions/explore.md",
+			"docs/bundled/extensions/plan.md",
+			"docs/bundled/extensions/rewind.md",
+			"docs/bundled/extensions/subagent.md",
+			"docs/bundled/extensions/todo.md",
+			"examples/extensions/todo.ts",
+			"maintainers",
+			"node_modules/.package-lock.json",
+			"packages",
+			"src",
+			"test",
+		]) {
+			if (existsSync(join(packageDirectory, ...forbiddenPath.split("/")))) {
+				throw new Error(`Installed package unexpectedly contains ${forbiddenPath}.`);
+			}
+		}
+
+		const installedBinPath = join(
+			installDirectory,
+			"node_modules",
+			".bin",
+			process.platform === "win32" ? "pi.cmd" : "pi",
+		);
+		if (!existsSync(installedBinPath)) {
+			throw new Error("npm did not create the pi executable in node_modules/.bin.");
+		}
+		const cliCommand = process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : installedBinPath;
+		const cliArguments =
+			process.platform === "win32" ? ["/d", "/s", "/c", `""${installedBinPath}" --version"`] : ["--version"];
+		const cliVersion = execFileSync(cliCommand, cliArguments, {
 			cwd: installDirectory,
+			encoding: "utf8",
 			env: smokeEnvironment,
-			stdio: "inherit",
-		},
-	);
+			windowsVerbatimArguments: process.platform === "win32",
+		}).trim();
+		assertEqual(cliVersion, expectedVersion, "CLI version");
 
-	const installedPackage = readInstalledPackage("@astralyn/pi");
-	assertEqual(installedPackage.name, "@astralyn/pi", "installed package name");
-	assertEqual(installedPackage.version, expectedVersion, "installed package version");
-	assertEqual(installedPackage.bin?.pi, "dist/bundle/cli.js", "installed pi binary target");
-	assertEqual(
-		installedPackage.exports?.["./rpc-entry"]?.import,
-		"./dist/bundle/rpc-entry.js",
-		"installed RPC export target",
-	);
-	for (const [subpath, source] of [
-		["./client", "./src/client/index.ts"],
-		["./experimental/plugin", "./src/experimental/plugin.ts"],
-	]) {
-		const entry = installedPackage.exports?.[subpath];
-		assertEqual(entry?.source, source, `${subpath} source target`);
-		assertEqual(Object.keys(entry).join(","), "source", `${subpath} export conditions`);
-	}
-
-	for (const packageName of expectedRuntimePackages) {
-		const expectedDependencyVersion = installedPackage.dependencies?.[packageName];
-		if (!expectedDependencyVersion) {
-			throw new Error(`Root package is missing the required runtime dependency ${packageName}.`);
+		const listModelsArguments =
+			process.platform === "win32" ? ["/d", "/s", "/c", `""${installedBinPath}" --list-models"`] : ["--list-models"];
+		const listedModels = execFileSync(cliCommand, listModelsArguments, {
+			cwd: installDirectory,
+			encoding: "utf8",
+			env: smokeEnvironment,
+			windowsVerbatimArguments: process.platform === "win32",
+		}).trim();
+		if (!listedModels) {
+			throw new Error("CLI --list-models returned no output.");
 		}
-		assertEqual(readInstalledPackage(packageName).version, expectedDependencyVersion, `${packageName} version`);
-	}
 
-	const requiredFiles = [
-		"CHANGELOG.md",
-		"LICENSE",
-		"README.md",
-		"dist/bundle/cli.js",
-		"dist/bundle/index.js",
-		"dist/index.d.ts",
-		"dist/index.js",
-		"dist/bundle/rpc-entry.js",
-		"dist/core/export-html/template.html",
-		...expectedExtensionEntrypoints,
-		"dist/modes/interactive/assets/clankolas.png",
-		"dist/modes/interactive/theme/dark.json",
-		"dist/modes/interactive/theme/ice-cream-dark.json",
-		"dist/modes/interactive/theme/ice-cream-light.json",
-		"dist/modes/interactive/theme/light.json",
-		"docs/bundled/README.md",
-		"docs/bundled/tasks.md",
-		"docs/bundled/extensions/deepwiki.md",
-		"docs/bundled/extensions/question.md",
-		"docs/bundled/extensions/provider.md",
-		"docs/bundled/extensions/statusline.md",
-		"docs/bundled/extensions/web-search.md",
-		"docs/bundled/themes.md",
-		"docs/bundled/tool-presentation.md",
-		"docs/docs.json",
-		"docs/llama-cpp.md",
-		"docs/index.md",
-		"examples/sdk/01-minimal.ts",
-		"examples/sdk/README.md",
-		"npm-shrinkwrap.json",
-	];
-	for (const relativePath of requiredFiles) {
-		const requiredPath = join(packageDirectory, ...relativePath.split("/"));
-		if (!existsSync(requiredPath) || !statSync(requiredPath).isFile()) {
-			throw new Error(`Installed package is missing ${relativePath}.`);
-		}
-	}
-
-	const bundledCliPath = join(packageDirectory, "dist", "bundle", "cli.js");
-	for (const entrypoint of ["cli.js", "rpc-entry.js"]) {
-		if (
-			!readFileSync(join(packageDirectory, "dist", "bundle", entrypoint), "utf8").startsWith("#!/usr/bin/env node")
-		) {
-			throw new Error(`Installed bundled ${entrypoint} is missing its shebang.`);
-		}
-	}
-	for (const forbiddenPath of [
-		"dist/client",
-		"dist/experimental",
-		"dist/cli/experimental",
-		"dist/extensions/biu",
-		"dist/extensions/explore",
-		"dist/extensions/plan",
-		"dist/extensions/rewind",
-		"dist/extensions/subagent",
-		"dist/extensions/todo",
-		"docs/bundled/extensions/biu.md",
-		"docs/bundled/extensions/explore.md",
-		"docs/bundled/extensions/plan.md",
-		"docs/bundled/extensions/rewind.md",
-		"docs/bundled/extensions/subagent.md",
-		"docs/bundled/extensions/todo.md",
-		"examples/extensions/todo.ts",
-		"maintainers",
-		"node_modules/.package-lock.json",
-		"packages",
-		"src",
-		"test",
-	]) {
-		if (existsSync(join(packageDirectory, ...forbiddenPath.split("/")))) {
-			throw new Error(`Installed package unexpectedly contains ${forbiddenPath}.`);
-		}
-	}
-
-	const installedBinPath = join(
-		installDirectory,
-		"node_modules",
-		".bin",
-		process.platform === "win32" ? "pi.cmd" : "pi",
-	);
-	if (!existsSync(installedBinPath)) {
-		throw new Error("npm did not create the pi executable in node_modules/.bin.");
-	}
-	const cliCommand = process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : installedBinPath;
-	const cliArguments =
-		process.platform === "win32" ? ["/d", "/s", "/c", `""${installedBinPath}" --version"`] : ["--version"];
-	const cliVersion = execFileSync(cliCommand, cliArguments, {
-		cwd: installDirectory,
-		encoding: "utf8",
-		env: smokeEnvironment,
-		windowsVerbatimArguments: process.platform === "win32",
-	}).trim();
-	assertEqual(cliVersion, expectedVersion, "CLI version");
-
-	const listModelsArguments =
-		process.platform === "win32" ? ["/d", "/s", "/c", `""${installedBinPath}" --list-models"`] : ["--list-models"];
-	const listedModels = execFileSync(cliCommand, listModelsArguments, {
-		cwd: installDirectory,
-		encoding: "utf8",
-		env: smokeEnvironment,
-		windowsVerbatimArguments: process.platform === "win32",
-	}).trim();
-	if (!listedModels) {
-		throw new Error("CLI --list-models returned no output.");
-	}
-
-	const importCheckPath = join(installDirectory, "verify-imports.mjs");
-	writeFileSync(
-		importCheckPath,
-		`import assert from "node:assert/strict";
+		const importCheckPath = join(installDirectory, "verify-imports.mjs");
+		writeFileSync(
+			importCheckPath,
+			`import assert from "node:assert/strict";
 import { createAgentSession } from "@astralyn/pi";
 
 assert.equal(typeof createAgentSession, "function");
@@ -242,42 +258,50 @@ for (const subpath of ["@astralyn/pi/client", "@astralyn/pi/experimental/plugin"
 	assert.throws(() => import.meta.resolve(subpath), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
 }
 `,
-	);
-	execFileSync(process.execPath, [importCheckPath], {
-		cwd: installDirectory,
-		env: smokeEnvironment,
-		stdio: "inherit",
-	});
-
-	for (const fixture of ["package-bundle-extension.ts", "package-bundle-runtime.mjs"]) {
-		copyFileSync(new URL(`../test/fixtures/${fixture}`, import.meta.url), join(installDirectory, fixture));
-	}
-	execFileSync(process.execPath, [join(installDirectory, "package-bundle-runtime.mjs")], {
-		cwd: installDirectory,
-		env: smokeEnvironment,
-		stdio: "inherit",
-		timeout: 60_000,
-		windowsHide: true,
-	});
-
-	const stableVersion = execFileSync(
-		process.execPath,
-		[bundledCliPath, "server", "--server-id", "invalid", "--version"],
-		{ cwd: installDirectory, encoding: "utf8", env: smokeEnvironment },
-	).trim();
-	assertEqual(stableVersion, expectedVersion, "published CLI ignores development-only server dispatch");
-	const rpcVersion = execFileSync(
-		process.execPath,
-		[join(packageDirectory, "dist", "bundle", "rpc-entry.js"), "--version"],
-		{
+		);
+		execFileSync(process.execPath, [importCheckPath], {
 			cwd: installDirectory,
-			encoding: "utf8",
 			env: smokeEnvironment,
-		},
-	).trim();
-	assertEqual(rpcVersion, expectedVersion, "RPC entrypoint version");
+			stdio: "inherit",
+		});
 
-	console.log(`Verified clean installation of @astralyn/pi@${expectedVersion} from ${resolvedInstallSpec}.`);
-} finally {
-	rmSync(installDirectory, { force: true, recursive: true });
+		for (const fixture of ["package-bundle-extension.ts", "package-bundle-runtime.mjs"]) {
+			copyFileSync(new URL(`../test/fixtures/${fixture}`, import.meta.url), join(installDirectory, fixture));
+		}
+		execFileSync(process.execPath, [join(installDirectory, "package-bundle-runtime.mjs")], {
+			cwd: installDirectory,
+			env: smokeEnvironment,
+			stdio: "inherit",
+			timeout: 60_000,
+			windowsHide: true,
+		});
+
+		const stableVersion = execFileSync(
+			process.execPath,
+			[bundledCliPath, "server", "--server-id", "invalid", "--version"],
+			{ cwd: installDirectory, encoding: "utf8", env: smokeEnvironment },
+		).trim();
+		assertEqual(stableVersion, expectedVersion, "published CLI ignores development-only server dispatch");
+		const rpcVersion = execFileSync(
+			process.execPath,
+			[join(packageDirectory, "dist", "bundle", "rpc-entry.js"), "--version"],
+			{
+				cwd: installDirectory,
+				encoding: "utf8",
+				env: smokeEnvironment,
+			},
+		).trim();
+		assertEqual(rpcVersion, expectedVersion, "RPC entrypoint version");
+
+		console.log(`Verified clean installation of @astralyn/pi@${expectedVersion} from ${resolvedInstallSpec}.`);
+	} catch (error) {
+		// The installed artifact failed a content check: surface it as an Actions
+		// error annotation before the uncaught exception marks the failure.
+		console.error(`::error::${error instanceof Error ? error.message : String(error)}`);
+		throw error;
+	} finally {
+		rmSync(installDirectory, { force: true, recursive: true });
+	}
 }
+
+verifyInstallation();

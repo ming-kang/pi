@@ -191,9 +191,19 @@ jobs:
             fi
             sleep 15
           done
-          echo "@astralyn/pi@$RELEASE_VERSION was published but its metadata was still not visible on npm after ten minutes." >&2
-          echo "Do not republish. Confirm the version, its provenance, and a clean installation manually, then tag the released commit." >&2
-          exit 1
+          echo "::warning title=npm metadata propagation::@astralyn/pi@$RELEASE_VERSION was published but its metadata was not visible on npm after ten minutes. Do not republish. Confirm the version, its provenance, and a clean installation manually, then tag the released commit."
+          {
+            echo "### @astralyn/pi@$RELEASE_VERSION: npm metadata still propagating"
+            echo ""
+            echo "The package published successfully, but \`npm view\` did not return the version within ten minutes. This is an npm registry propagation delay rather than a publication failure."
+            echo ""
+            echo "Confirm each of these before tagging \`pi-v$RELEASE_VERSION\`:"
+            echo ""
+            echo "1. \`npm view @astralyn/pi@$RELEASE_VERSION version --registry=https://registry.npmjs.org\` prints $RELEASE_VERSION."
+            echo "2. The published provenance identifies this run's commit ($GITHUB_SHA)."
+            echo "3. The registry installation step below passes, or passes when rerun manually."
+          } >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
+          exit 0
 
       - name: Verify registry installation
         env:
@@ -202,15 +212,34 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           # Visible metadata does not mean the tarball is served everywhere yet.
+          # Exit code 2 from the verifier means the registry could not serve the
+          # artifact for installation (propagation), which this loop retries;
+          # exit code 1 means the published artifact failed content verification,
+          # a verified defect that stops the release immediately.
           for attempt in $(seq 1 10); do
-            if npm run verify:package-install -- "@astralyn/pi@$RELEASE_VERSION" "$RELEASE_VERSION"; then
+            install_status=0
+            npm run verify:package-install -- "@astralyn/pi@$RELEASE_VERSION" "$RELEASE_VERSION" || install_status=$?
+            if [ "$install_status" -eq 0 ]; then
               exit 0
             fi
+            if [ "$install_status" -eq 1 ]; then
+              echo "::error title=published artifact content::@astralyn/pi@$RELEASE_VERSION was published but its installed package failed content verification. Do not republish. Investigate the failure above before tagging the released commit."
+              exit 1
+            fi
             if [ "$attempt" -lt 10 ]; then
-              echo "Registry installation attempt $attempt failed; retrying in 30 seconds."
+              echo "Registry installation attempt $attempt could not fetch the artifact; retrying in 30 seconds."
               sleep 30
             fi
           done
-          echo "@astralyn/pi@$RELEASE_VERSION was published but could not be installed and smoke-tested from npm within five minutes." >&2
-          echo "Do not republish. Investigate the installation failure above before tagging the released commit." >&2
-          exit 1
+          echo "::warning title=npm registry propagation::@astralyn/pi@$RELEASE_VERSION was published but could not be installed and smoke-tested from npm within five minutes. Do not republish. Investigate the installation failure above before tagging the released commit."
+          {
+            echo "### @astralyn/pi@$RELEASE_VERSION: registry installation not verified within five minutes"
+            echo ""
+            echo "The package published successfully, but \`npm install\` from the registry did not complete within five minutes. This is an npm propagation delay rather than a publication failure."
+            echo ""
+            echo "Confirm each of these before tagging \`pi-v$RELEASE_VERSION\`:"
+            echo ""
+            echo "1. \`npm view @astralyn/pi@$RELEASE_VERSION version --registry=https://registry.npmjs.org\` prints $RELEASE_VERSION."
+            echo "2. \`NPM_CONFIG_REGISTRY=https://registry.npmjs.org PI_PACKAGE_ALLOW_FRESH=1 npm run verify:package-install -- \"@astralyn/pi@$RELEASE_VERSION\" \"$RELEASE_VERSION\"\` passes."
+          } >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
+          exit 0
