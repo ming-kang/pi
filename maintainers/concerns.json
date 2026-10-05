@@ -171,6 +171,9 @@
 					"path": "src/core/tools/output-accumulator.ts"
 				},
 				{
+					"path": "src/utils/output-files.ts"
+				},
+				{
 					"path": "src/core/tools/powershell.ts"
 				},
 				{

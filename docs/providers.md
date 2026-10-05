@@ -83,7 +83,7 @@ pi
 |----------|----------------------|------------------|
 | Anthropic | `ANTHROPIC_API_KEY` | `anthropic` |
 | Ant Ling | `ANT_LING_API_KEY` | `ant-ling` |
-| Azure OpenAI Responses | `AZURE_OPENAI_API_KEY` | `azure-openai-responses` |
+| Azure OpenAI | `AZURE_OPENAI_API_KEY` | `azure` |
 | OpenAI | `OPENAI_API_KEY` | `openai` |
 | DeepSeek | `DEEPSEEK_API_KEY` | `deepseek` |
 | NVIDIA NIM | `NVIDIA_API_KEY` | `nvidia` |
@@ -217,6 +217,10 @@ export AZURE_OPENAI_RESOURCE_NAME=your-resource
 export AZURE_OPENAI_API_VERSION=2024-02-01
 export AZURE_OPENAI_DEPLOYMENT_NAME_MAP=gpt-4=my-gpt4,gpt-4o=my-gpt4o
 ```
+
+The `auth.json` key for this provider is `azure`, renamed from `azure-openai-responses`; rename it in `models.json` and `settings.json` as well. The `AZURE_OPENAI_*` environment variables are unchanged.
+
+The `azure` provider serves both Azure OpenAI Responses deployments and Azure AI Foundry Chat Completions deployments (for example `azure/deepseek-v4-pro`).
 
 ### Amazon Bedrock
 

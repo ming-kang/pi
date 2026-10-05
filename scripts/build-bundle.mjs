@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Adapted from upstream v0.99.1: consume installed pi-ai artifacts and keep
+// Adapted from upstream v1.0.3: consume installed pi-ai artifacts and keep
 // the stable SDK modular while bundling Node executables and their lazy modules.
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
@@ -198,7 +198,6 @@ if (dirname(bedrockLoaderOutput) !== dirname(oauthLoaderOutput)) {
 const lazyEntryPoints = {
 	anthropic: join(aiDistDir, "auth", "oauth", "anthropic.js"),
 	"bedrock-converse-stream": join(aiDistDir, "api", "bedrock-converse-stream.js"),
-	"codemode-worker": join(codingAgentDistDir, "extensions", "codemode", "worker.js"),
 	"github-copilot": join(aiDistDir, "auth", "oauth", "github-copilot.js"),
 	"image-resize-worker": join(codingAgentDistDir, "utils", "image-resize-worker.js"),
 	"kimi-coding": join(aiDistDir, "auth", "oauth", "kimi-coding.js"),
@@ -228,13 +227,47 @@ if (dirname(imageResizeOutput) !== dirname(imageResizeWorkerOutput)) {
 	throw new Error("Image resize implementation and worker were emitted into different directories");
 }
 if (dirname(configOutput) !== dirname(bedrockLoaderOutput)) {
-	throw new Error("config.ts and the codemode worker were emitted into different directories");
+	throw new Error("Lazy modules and the codemode worker were emitted into a different directory than config.ts");
 }
 
-validateExternalImports([mainResult.metafile, lazyResult.metafile]);
+// getCodemodeWorkerSpecifier() in config.ts spawns the codemode worker from an in-memory data: URL
+// so codemode survives an update that replaces or deletes the install (#10439). A data: URL module
+// has no file location, so the worker must not use the createRequire(import.meta.url) banner,
+// require(), or imports other than Node builtins.
+const codemodeWorkerResult = await build({
+	...commonBuildOptions(),
+	banner: undefined,
+	entryNames: "[name]",
+	entryPoints: { "codemode-worker": join(codingAgentDistDir, "extensions", "codemode", "worker.js") },
+	outdir: dirname(bedrockLoaderOutput),
+	splitting: false,
+});
+for (const [outputPath, output] of Object.entries(codemodeWorkerResult.metafile.outputs)) {
+	const invalid = output.imports.filter(
+		(imported) => imported.kind !== "import-statement" || !isBuiltin(imported.path),
+	);
+	if (invalid.length > 0) {
+		throw new Error(
+			`Codemode worker ${relative(repoRoot, outputPath)} cannot run from a data: URL: ${invalid.map((i) => i.path).join(", ")}`,
+		);
+	}
+	// The banner defines a require() that a data: URL module cannot construct, and it stays in the
+	// output even when nothing calls require(), so the import check above cannot catch it.
+	if (readFileSync(resolve(repoRoot, outputPath), "utf8").includes("__piCreateRequire")) {
+		throw new Error(
+			`Codemode worker ${relative(repoRoot, outputPath)} carries the createRequire banner and cannot run from a data: URL`,
+		);
+	}
+}
+
+validateExternalImports([mainResult.metafile, lazyResult.metafile, codemodeWorkerResult.metafile]);
 chmodSync(join(bundleDir, "cli.js"), 0o755);
 chmodSync(join(bundleDir, "rpc-entry.js"), 0o755);
 
-const files = new Set([...Object.keys(mainResult.metafile.outputs), ...Object.keys(lazyResult.metafile.outputs)]).size;
-const mib = outputBytes([mainResult.metafile, lazyResult.metafile]) / (1024 * 1024);
+const files = new Set([
+	...Object.keys(mainResult.metafile.outputs),
+	...Object.keys(lazyResult.metafile.outputs),
+	...Object.keys(codemodeWorkerResult.metafile.outputs),
+]).size;
+const mib = outputBytes([mainResult.metafile, lazyResult.metafile, codemodeWorkerResult.metafile]) / (1024 * 1024);
 console.log(`Built ${relative(repoRoot, bundleDir)} (${files} files, ${mib.toFixed(1)} MiB)`);

@@ -36,8 +36,8 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `super+
 | `tui.editor.cursorRight` | `right`, `ctrl+f` | Move cursor right |
 | `tui.editor.cursorWordLeft` | `alt+left`, `ctrl+left`, `alt+b` | Move cursor word left |
 | `tui.editor.cursorWordRight` | `alt+right`, `ctrl+right`, `alt+f` | Move cursor word right |
-| `tui.editor.cursorLineStart` | `home`, `ctrl+home`, `ctrl+a` | Move to line start |
-| `tui.editor.cursorLineEnd` | `end`, `ctrl+end`, `ctrl+e` | Move to line end |
+| `tui.editor.cursorLineStart` | `home`, `ctrl+a` | Move to line start |
+| `tui.editor.cursorLineEnd` | `end`, `ctrl+e` | Move to line end |
 | `tui.editor.jumpForward` | `ctrl+]` | Jump forward to character |
 | `tui.editor.jumpBackward` | `ctrl+alt+]` | Jump backward to character |
 | `tui.editor.pageUp` | `pageUp`, `ctrl+pageUp` | Scroll up by page |
@@ -90,12 +90,12 @@ These actions apply when interactive mode uses `--tui-mode fullscreen` and targe
 
 Hold Alt while scrolling the mouse wheel for five-times-faster scrolling. Hovering over autocomplete or settings lists keeps their selection and scroll position unchanged; click an item to select it.
 
-Fullscreen transcript bindings take precedence over editor bindings. The default unmodified navigation keys therefore control the transcript in fullscreen mode, while their `ctrl` variants continue to control the editor. Outside fullscreen mode, both variants control the editor.
+Fullscreen transcript bindings take precedence over editor bindings using the same key. `pageUp` and `pageDown` therefore control the transcript in fullscreen mode while their `ctrl` variants keep controlling the editor; `home` and `end` always control the editor, while `ctrl+home` and `ctrl+end` control the transcript in fullscreen mode. Outside fullscreen mode, all of these keys control the editor.
 
 | Key | Default mode | Fullscreen mode |
 |-----|--------------|-----------------|
-| `home`, `end` | Editor | Transcript |
-| `ctrl+home`, `ctrl+end` | Editor | Editor |
+| `home`, `end` | Editor | Editor |
+| `ctrl+home`, `ctrl+end` | Editor | Transcript |
 | `pageUp`, `pageDown` | Editor | Transcript |
 | `ctrl+pageUp`, `ctrl+pageDown` | Editor | Editor |
 
@@ -115,8 +115,8 @@ This routing remains configurable through the ordinary action bindings. For exam
 | `tui.altScreen.searchNext` | `enter`, `ctrl+g` | Select the next search match while searching |
 | `tui.altScreen.searchPrevious` | `shift+enter`, `ctrl+shift+g` | Select the previous search match while searching |
 | `tui.altScreen.searchClose` | `escape` | Close transcript search |
-| `tui.altScreen.top` | `home` | Scroll to the beginning of the transcript |
-| `tui.altScreen.bottom` | `end` | Scroll to the transcript end and follow new output |
+| `tui.altScreen.top` | `ctrl+home` | Scroll to the beginning of the transcript |
+| `tui.altScreen.bottom` | `ctrl+end` | Scroll to the transcript end and follow new output |
 
 ### Application
 
