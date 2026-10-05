@@ -1,4 +1,5 @@
 import { type Component, Container } from "@earendil-works/pi-tui";
+import { stripAnsi } from "../../../utils/ansi.ts";
 import { toolStyle } from "./style.ts";
 import { ToolExecutionComponent } from "./tool-execution.ts";
 
@@ -12,20 +13,33 @@ function disposeAll(components: Iterable<unknown>): void {
 /**
  * Chat container that keeps tool blocks compact and disposes them with the chat.
  *
- * A tool row leaves no blank line above it when another tool row precedes it, so a run of tool
- * calls reads as one list. Clearing the chat disposes its tool rows, so renderer timers never
- * outlive them.
+ * Single-line tools read as one compact list; a multiline tool leaves a blank line before the
+ * next tool. Clearing the chat disposes its tool rows, so renderer timers never outlive them.
  */
 export class ToolChatContainer extends Container {
 	override render(width: number): string[] {
 		let previous: Component | undefined;
+		let previousHeight = 0;
 		for (const child of this.children) {
 			if (child instanceof ToolExecutionComponent) {
-				const { afterTool, afterOther } = toolStyle.gap;
-				child.setLeadingGap(previous instanceof ToolExecutionComponent ? afterTool : afterOther);
+				// Measure at this width without external spacing, including wrapped titles and images.
+				child.setLeadingGap(0);
+				const lines = child.render(width);
+				const start = lines.findIndex((line) => stripAnsi(line).trim().length > 0);
+				if (start === -1) continue;
+				const { afterTool, afterMultilineTool, afterOther } = toolStyle.gap;
+				child.setLeadingGap(
+					previous instanceof ToolExecutionComponent
+						? previousHeight > 1
+							? afterMultilineTool
+							: afterTool
+						: afterOther,
+				);
+				previousHeight = lines.length - start;
 			}
 			previous = child;
 		}
+		// Keep Container's mouse layout in sync with the final spacing.
 		return super.render(width);
 	}
 

@@ -6,7 +6,7 @@
  *   ● grep /useState/ in src      marker: the tool's state
  *   │ src/a.tsx:12: useState()    rail: everything that belongs to the same tool
  *
- * Consecutive tool blocks sit directly under each other; text keeps a blank line. Change the look
+ * Single-line tool blocks sit directly under each other; multiline blocks and text keep a blank line. Change the look
  * by editing `toolStyle` or `FramedComponent`; nothing else in the transcript hard-codes it.
  */
 
@@ -20,7 +20,7 @@ export interface ToolStyle {
 	marker: { glyph: string; color: Record<ToolStatus, ThemeColor> };
 	rail: { glyph: string; color: ThemeColor };
 	/** Blank lines above a tool block, by what precedes it. */
-	gap: { afterTool: number; afterOther: number };
+	gap: { afterTool: number; afterMultilineTool: number; afterOther: number };
 	collapsed: {
 		/**
 		 * Tools whose successful result stays hidden until expanded. A failure always shows. The shell
@@ -38,7 +38,7 @@ export interface ToolStyle {
 export const toolStyle: ToolStyle = {
 	marker: { glyph: "●", color: { pending: "warning", success: "success", error: "error" } },
 	rail: { glyph: "│", color: "dim" },
-	gap: { afterTool: 0, afterOther: 1 },
+	gap: { afterTool: 0, afterMultilineTool: 1, afterOther: 1 },
 	collapsed: { headerOnly: new Set(["read", "grep", "find", "ls"]), fallbackLines: 10 },
 	fallbackArgsWidth: 120,
 };

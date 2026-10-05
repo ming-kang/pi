@@ -13,6 +13,7 @@ I'll look at the code.
 │  1 const a = 0
 │ -2 const b = 1
 │ +2 const b = 2
+
 ● $ npm test
 │ ... (14 earlier lines, ctrl+o to expand)
 │ FAIL a.test.ts
@@ -26,7 +27,7 @@ The tests failed.
 
 - The dot is the tool's state: the warning color while the call is pending or running, green after success, and red after failure.
 - The rail continues through every visual line that belongs to the same tool. A blank output line renders as a bare `│`.
-- Tool blocks sit directly under each other with no blank line. Text before or after a run of tools keeps one blank line.
+- Consecutive single-line tool blocks sit directly under each other. A multiline tool block keeps one blank line before the next tool; wrapped titles count as multiline too. Spacing follows the current width and updates when tools expand, collapse, or receive output. Hidden tool rows add no spacing. Text before or after a run of tools keeps one blank line.
 - `read`, `grep`, `find`, and `ls` show only their header until expanded. A failed call always shows its error.
 - Consecutive calls never merge into a group. Every call keeps its own row, and the configured expand-tools key (`Ctrl+O` by default) or a click on the row shows its complete result.
 
@@ -38,7 +39,7 @@ The `Ctrl+B` background hint is not part of a tool row. Once a foreground manage
 
 The look is defined in one place, `src/modes/interactive/tool-view/style.ts`: the marker and rail glyphs, their colors, the spacing between blocks, and which tools fold their result. `FramedComponent` in the same file hangs a component's lines off the marker or the rail and derives the gutter width from the glyphs.
 
-`tool-view/tool-execution.ts` owns one call's lifecycle: pending, success and error states, expansion, image placement and Kitty conversion, and renderer disposal. `tool-view/chat.ts` owns the chat container that removes the blank line between consecutive tool rows and disposes rows when the chat clears. Extension tools and built-in tools use the same shell, so a third-party tool gets the same dot and rail without any change.
+`tool-view/tool-execution.ts` owns one call's lifecycle: pending, success and error states, expansion, image placement and Kitty conversion, and renderer disposal. `tool-view/chat.ts` owns the chat container that measures tool blocks for spacing and disposes rows when the chat clears. Extension tools and built-in tools use the same shell, so a third-party tool gets the same dot and rail without any change.
 
 Built-in renderers remain responsible for semantic content such as file paths, syntax highlighting, search results, Diff previews, and command output. They return plain components; the shell frames them.
 

@@ -266,7 +266,7 @@
 		},
 		{
 			"id": "tool-presentation",
-			"why": "Tool rows are compact dot/rail blocks owned by src/modes/interactive/tool-view/; upstream's Box shell is dropped.",
+			"why": "Tool rows are compact dot/rail blocks owned by src/modes/interactive/tool-view/; multiline blocks leave a blank line before the next tool, while single-line blocks stay tight. Upstream's Box shell is dropped.",
 			"watch": "Upstream fixes to the dropped tool-execution.ts (image conversion, click to expand, lifecycle) and to the renderers are ported by hand; --target lists them. Retire the fork if upstream ships a shell whose look is configurable.",
 			"paths": [
 				{

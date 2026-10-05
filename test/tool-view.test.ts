@@ -137,6 +137,82 @@ describe("compact transcript", () => {
 		expect(lines.find((line) => stripAnsi(line).includes("npm test"))).toContain(theme.fg("error", "●"));
 	});
 
+	test("updates the gap after an expanded tool without spacing subsequent single-line tools", () => {
+		const { chat, rows } = transcript();
+		rows[0]!.setExpanded(true);
+		expect(plain(chat.render(80))).toEqual([
+			"Let me look.",
+			"",
+			"● read src/app.ts:1-80",
+			"│ file body",
+			"",
+			"● grep /useState/ in src",
+			"● $ npm test",
+			"│ FAIL a.test.ts",
+			"",
+			"Tests failed.",
+		]);
+		const lines = plain(chat.render(80));
+		const y = lines.indexOf("● grep /useState/ in src");
+		expect(
+			chat.handleMouse({
+				type: "click",
+				button: "left",
+				x: 2,
+				y,
+				screenX: 2,
+				screenY: y,
+				width: 80,
+				height: lines.length,
+				shift: false,
+				alt: false,
+				ctrl: false,
+				clickCount: 1,
+			})?.handled,
+		).toBe(true);
+		expect(plain(chat.render(80))).toContain("│ src/a.tsx:12: useState()");
+		rows[0]!.setExpanded(false);
+		rows[1]!.setExpanded(false);
+		expect(plain(chat.render(80)).slice(2, 5)).toEqual([
+			"● read src/app.ts:1-80",
+			"● grep /useState/ in src",
+			"● $ npm test",
+		]);
+	});
+
+	test("updates spacing when a title wraps or streamed output arrives", () => {
+		const chat = new ToolChatContainer();
+		const first = row("first", "first", {}, undefined);
+		const second = row("second", "second", {}, undefined);
+		chat.addChild(first);
+		chat.addChild(second);
+		expect(plain(chat.render(80))).toEqual(["", "● first", "● second"]);
+		const narrow = plain(chat.render(6));
+		expect(narrow[narrow.findIndex((line) => line.startsWith("● seco")) - 1]).toBe("");
+		expect(plain(chat.render(80))).toEqual(["", "● first", "● second"]);
+		first.updateResult(textResult("one\n\ntwo"), true);
+		expect(plain(chat.render(80))).toEqual(["", "● first", "│ one", "│", "│ two", "", "● second"]);
+	});
+
+	test("ignores hidden tool rows when choosing the next gap", () => {
+		const chat = new ToolChatContainer();
+		const first = row("first", "first", {}, undefined);
+		const hidden = row(
+			"hidden",
+			"hidden",
+			{},
+			{
+				renderShell: "self",
+				renderCall: () => new Text("", 0, 0),
+			},
+		);
+		chat.addChild(first);
+		chat.addChild(hidden);
+		chat.addChild(row("last", "last", {}, undefined));
+		first.updateResult(textResult("body"));
+		expect(plain(chat.render(80))).toEqual(["", "● first", "│ body", "", "● last"]);
+	});
+
 	test("restores the blank line when a tool no longer follows a tool", () => {
 		const { chat, rows } = transcript();
 		chat.removeChild(rows[0]!);

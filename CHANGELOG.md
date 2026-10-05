@@ -6,6 +6,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Changed
 
+- Multiline tool blocks now leave one blank line before the next tool in the interactive transcript. Single-line tools remain tightly stacked, and spacing follows expansion, streaming output, and terminal width.
 - Background shell handoffs now tell the model how the work became background work: a command submitted with `background: true` still reports a handoff from an empty log, while a command moved mid-run reports that its execution continued unchanged, that the log already holds output, and that a supplied timeout is still measured from command startup. The transcript row reads `Running in the background` for submitted work and keeps `Moved to background` for detached work.
 - The bash and PowerShell `background` parameter description now says that completion arrives as an automatic notification and that the result must not be polled.
 - The tasks statusline names the foreground share of active work (`Tasks 2 foreground`, or `Tasks 3 active · 1 foreground` while background work runs) instead of folding every mode into one count.
