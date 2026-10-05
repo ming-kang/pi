@@ -23,7 +23,7 @@ Use plain, concise language; explain non-trivial problems as problem → concret
 
 - Add a test only when it would catch a plausible future bug that types, lint, and existing tests would miss; docs, renames, refactors, and type-only changes need none. In the final message, name the bug each new test catches.
 - Test observable behavior, not constants, mocks, or implementation details. Prefer extending an existing test; for a bug fix, start from a failing reproduction.
-- Run focused tests while iterating: `npm run test:isolated -- test/<file>.test.ts [-t "<name>"]`. Run the complete suite only when asked or for a release. Setup: [Development](docs/development.md).
+- Run focused tests while iterating: `npm run test:isolated -- test/<file>.test.ts [-t "<name>"]`. Run the complete suite only when asked or for a release, as `npm run test:isolated` with no arguments; plain `npm test` reads your real home and can fail on host resources. Setup: [Development](docs/development.md).
 - Tests run offline with the faux provider (`test/suite/harness.ts`); opt in to network per test with `allowNetwork()` from `test/test-network-env.ts`. Never use real credentials.
 
 ## Build and verification
