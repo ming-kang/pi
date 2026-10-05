@@ -1,8 +1,8 @@
 # Repository contract
 
-This repo is a standalone distribution of Pi coding agent, `@astralyn/pi`, built on the upstream `@earendil-works/*` packages. 
+ `@astralyn/pi` is a standalone distribution of Pi coding agent, built on `@earendil-works/*` packages. 
 
-Most code is ported from upstream, and every local difference must be carried through each upstream sync. Prefer adding behavior in a distribution extension; when an upstream-derived file must change, keep the difference in one small place and write it in upstream's style. [Maintainer guide](maintainers/README.md) maps each topic to the document that owns it.
+[Maintainer guide](maintainers/README.md) maps each topic to the document that owns it.
 
 ## Boundaries
 
@@ -10,7 +10,7 @@ Most code is ported from upstream, and every local difference must be carried th
 - Extensions live in `src/extensions/`, use the Extension API, and never import each other's internals.
 - Keep tool schemas, execution protocols, and model-facing results stable; presentation is defined in [Native tool presentation](docs/bundled/tool-presentation.md).
 - Follow upstream conventions: keys go through `KEYBINDINGS` in `src/core/keybindings.ts`, unbounded model-facing output goes through `truncateHead`/`truncateTail`, colors come from semantic theme helpers, and imports are top-level only.
-- Adopt upstream only from release tags via [Upstream synchronization](maintainers/upstream.md); never from a branch tip, and never merge an upstream tag into this branch. Fix type errors from outdated dependencies by adopting the upstream release that fixes them, not by removing code.
+- Adopt upstream only from release tags via [Upstream synchronization](maintainers/upstream.md) and never merge an upstream tag into this branch. Fix type errors from outdated dependencies by adopting the upstream release that fixes them, not by removing code.
 - Backward compatibility is not required unless asked, but ask before removing functionality that looks intentional.
 
 ## Communication
