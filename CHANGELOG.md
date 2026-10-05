@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-10-05
+
 ### Added
 
 - Adopted upstream v1.0.3: the `azure` provider now also serves Azure AI Foundry Chat Completions deployments (starting with `azure/deepseek-v4-pro`), and codemode `image()` saves each image to a temp file and names its path in the result, so a later turn can copy or move the file.
