@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-05
+
 ### Changed
 
 - Multiline tool blocks now leave one blank line before the next tool in the interactive transcript. Single-line tools remain tightly stacked, and spacing follows expansion, streaming output, and terminal width.
