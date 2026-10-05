@@ -297,7 +297,7 @@ function isUsageSessionEntry(item: RenderSessionItem): item is Extract<SessionEn
  * the editor-driven sections; labels come from KEYBINDINGS so the table cannot drift from the
  * binding registry.
  */
-export function hotkeysTaskSection(display: (action: AppKeybinding) => string): string {
+function hotkeysTaskSection(display: (action: AppKeybinding) => string): string {
 	const detach = KEYBINDINGS["app.tasks.detach"];
 	const detachSelected = KEYBINDINGS["app.tasks.detachSelected"];
 	return `

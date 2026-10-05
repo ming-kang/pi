@@ -1,5 +1,3 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/compat";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { expect, it, vi } from "vitest";
@@ -22,7 +20,6 @@ it("inspects concurrent shell/report work through detach, stop, completion, relo
 	const state: TasksPanelState = { tab: "output", selectedId: scenario.foregroundId };
 	const tui = { terminal: { rows: 30, columns: 120 }, requestRender: () => {} };
 	let menu: TasksMenu | undefined;
-	const frames: Record<string, string> = {};
 	const open = () => {
 		menu = new TasksMenu({
 			host: session.tasks,
@@ -38,7 +35,6 @@ it("inspects concurrent shell/report work through detach, stop, completion, relo
 	try {
 		open();
 		await vi.waitFor(() => expect(frame()).toContain("foreground-build output 90"));
-		frames.running = frame();
 		menu!.handleInput("/");
 		menu!.handleInput(scenario.cancelId);
 		menu!.handleInput("\r");
@@ -57,14 +53,12 @@ it("inspects concurrent shell/report work through detach, stop, completion, relo
 		expect(frame()).toContain("foreground-build output 1");
 		tui.terminal.columns = 72;
 		tui.terminal.rows = 22;
-		frames.browsing = frame();
 		await scenario.finish();
 		await vi.waitFor(() => expect(isTaskTerminal(session.tasks.get(scenario.foregroundId).status)).toBe(true));
 		expect(frame()).not.toContain("foreground-build final output");
 		menu!.handleInput("f");
 		await vi.waitFor(() => expect(frame()).toContain("foreground-build final output"));
 		expect(state.selectedId).toBe(scenario.foregroundId);
-		frames.finished = frame();
 		await vi.waitFor(() => expect(session.tasks.list().every((task) => isTaskTerminal(task.status))).toBe(true));
 		await vi.waitFor(() =>
 			expect(
@@ -84,7 +78,6 @@ it("inspects concurrent shell/report work through detach, stop, completion, relo
 		open();
 		menu!.handleInput("\t");
 		await vi.waitFor(() => expect(frame()).toContain("foreground-build final output"));
-		frames.reloaded = frame();
 		expect(
 			sessionManager
 				.getEntries()
@@ -99,19 +92,7 @@ it("inspects concurrent shell/report work through detach, stop, completion, relo
 		open();
 		menu!.handleInput("\t");
 		await vi.waitFor(() => expect(frame()).toContain("foreground-build final output"));
-		frames.returned = frame();
 		expect(scenario.errors).toEqual([]);
-		const artifacts = join(process.cwd(), ".artifacts", "tasks-redesign", "e2e");
-		mkdirSync(artifacts, { recursive: true });
-		writeFileSync(join(artifacts, "frames.json"), JSON.stringify(frames, null, 2));
-		writeFileSync(
-			join(artifacts, "results.json"),
-			JSON.stringify(
-				session.tasks.list().map((task) => ({ kind: task.kind, status: task.status, exitCode: task.exitCode })),
-				null,
-				2,
-			),
-		);
 	} finally {
 		menu?.dispose();
 		await scenario.cleanup();

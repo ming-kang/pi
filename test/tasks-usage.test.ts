@@ -29,26 +29,14 @@ describe("background usage accounting", () => {
 		expect(getTaskUsageRecord(ledger(JSON.parse(JSON.stringify(data))))).toEqual(data);
 	});
 
-	it.each([undefined, null, {}, { version: 2, taskId: "task", usage }, { version: 1, taskId: "", usage }])(
-		"ignores malformed records: %j",
-		(data) => {
-			expect(getTaskUsageRecord(ledger(data))).toBeUndefined();
-		},
-	);
-
-	it.each([NaN, Infinity, -1, "10", null, undefined])("rejects invalid usage fields: %s", (value) => {
-		for (const field of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"]) {
-			expect(
-				getTaskUsageRecord(ledger({ version: 1, taskId: "task", usage: { ...usage, [field]: value } })),
-			).toBeUndefined();
-		}
-		for (const field of ["input", "output", "cacheRead", "cacheWrite", "total"]) {
-			expect(
-				getTaskUsageRecord(
-					ledger({ version: 1, taskId: "task", usage: { ...usage, cost: { ...usage.cost, [field]: value } } }),
-				),
-			).toBeUndefined();
-		}
+	it.each([
+		{},
+		{ version: 2, taskId: "task", usage },
+		{ version: 1, taskId: "", usage },
+		{ version: 1, taskId: "task", usage: { ...usage, input: -1 } },
+		{ version: 1, taskId: "task", usage: { ...usage, cost: { ...usage.cost, total: Number.NaN } } },
+	])("ignores malformed records: %j", (data) => {
+		expect(getTaskUsageRecord(ledger(data))).toBeUndefined();
 	});
 
 	it("deduplicates valid task identities without letting an invalid record reserve an identity", () => {

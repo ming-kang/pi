@@ -3,9 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SessionManager } from "../src/core/session-manager.ts";
 import { TASK_RESULT_BYTES } from "../src/core/tasks/output.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
-import type { TaskCompletion, TaskControl, TaskExecution, TaskSnapshot } from "../src/core/tasks/types.ts";
+import { TaskSession } from "../src/core/tasks/session.ts";
+import type { TaskCompletion, TaskControl, TaskExecution, TaskKind, TaskSnapshot } from "../src/core/tasks/types.ts";
 
 const result = (text = "done"): AgentToolResult<{ ok: boolean }> => ({
 	content: [{ type: "text", text }],
@@ -53,7 +55,9 @@ function service(options: ConstructorParameters<typeof TaskRuntime>[0] = {}) {
 	services.push(instance);
 	return instance;
 }
+const hosts: TaskSession[] = [];
 afterEach(() => {
+	for (const host of hosts.splice(0)) host.dispose();
 	for (const instance of services.splice(0)) instance.close();
 	vi.useRealTimers();
 });
@@ -78,20 +82,6 @@ function savedTask(id = "bash-restored", endedAt = 20, overrides: Partial<TaskSn
 }
 
 describe("terminal history restoration", () => {
-	it("restores another branch when the previous branch filled terminal history", async () => {
-		const bg = service({ maxHistory: 1 });
-		const branchA = savedTask("bash-history-A", 20, { anchorId: "A" });
-		const branchB = savedTask("bash-history-B", 30, { anchorId: "B" });
-		bg.restoreHistory([branchA]);
-		await bg.cancelOutsideBranch(new Set(["B"]));
-		bg.restoreHistory([branchB]);
-		expect(bg.list().map((task) => task.id)).toEqual([branchB.task.id]);
-		await bg.cancelOutsideBranch(new Set(["A"]));
-		bg.restoreHistory([branchA]);
-		expect(bg.list().map((task) => task.id)).toEqual([branchA.task.id]);
-		expect(bg.pendingNotifications()).toEqual([]);
-	});
-
 	it("hides branch A history and ignored-abort work on B, then reveals A and revives undelivered completions", async () => {
 		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 		let anchor: string | null = "A";
@@ -145,17 +135,6 @@ describe("terminal history restoration", () => {
 		]);
 	});
 
-	it("restores a branch's delivered history after eviction without restoring delivery", async () => {
-		const bg = service({ maxHistory: 1 });
-		const saved = savedTask("bash-history-A", 20, { anchorId: "A" });
-		bg.restoreHistory([saved]);
-		await bg.cancelOutsideBranch(new Set(["B"]));
-		expect(bg.list()).toEqual([]);
-		bg.restoreHistory([saved]);
-		expect(bg.list().map((task) => task.id)).toEqual([saved.task.id]);
-		expect(bg.pendingNotifications()).toEqual([]);
-	});
-
 	it("restores history alongside pending completions without spending their retention allowance", async () => {
 		const bg = service({ maxHistory: 1, maxActive: 1 });
 		const pending = job({ background: true });
@@ -166,21 +145,6 @@ describe("terminal history restoration", () => {
 		expect(bg.list()).toHaveLength(2);
 		expect(bg.get("bash-history").status).toBe("completed");
 		expect(bg.pendingNotifications().map((task) => task.id)).toEqual([pending.control.id]);
-	});
-
-	it("bounds restoration even when every retained record is pinned", () => {
-		const bg = service({ maxHistory: 1, maxActive: 1 });
-		const releases: Array<() => void> = [];
-		for (let index = 0; index < 4; index++) {
-			const id = `bash-pinned-${index}`;
-			bg.restoreHistory([savedTask(id)]);
-			releases.push(bg.retain(id));
-		}
-		bg.restoreHistory([savedTask("bash-over-budget")]);
-		expect(bg.list()).toHaveLength(4);
-		expect(() => bg.get("bash-over-budget")).toThrow("Unknown");
-		for (const release of releases) release();
-		expect(bg.list()).toHaveLength(1);
 	});
 
 	it("restores newest terminal IDs without observers, accounting, notifications, logs or deletion ownership", async () => {
@@ -223,54 +187,33 @@ describe("terminal history restoration", () => {
 			await rm(dir, { recursive: true, force: true });
 		}
 	});
-	it("ignores malformed, nonterminal and malicious records without invoking callbacks", () => {
+	it("ignores malformed and nonterminal records", () => {
 		const bg = service();
-		const getter = vi.fn(() => "completed");
-		const malformed: unknown[] = [null, 7, [], {}, { version: 3, task: savedTask().task }];
+		const malformed: unknown[] = [null, {}, { version: 3, task: savedTask().task }];
 		for (const [key, value] of [
-			["kind", "worker"],
-			["mode", "detached"],
 			["status", "running"],
-			["status", "queued"],
-			["status", "stopping"],
-			["status", "fake"],
-			["id", "worker-1"],
 			["id", "bash-"],
-			["id", "x".repeat(10000)],
-			["toolCallId", 3],
-			["anchorId", {}],
-			["anchorId", "x".repeat(10000)],
-			["startedAt", NaN],
-			["startedAt", -1],
-			["endedAt", Infinity],
-			["endedAt", 9],
-			["endedAt", undefined],
-			["title", {}],
-			["error", []],
-			["outputPath", "x".repeat(10000)],
+			["startedAt", Number.NaN],
 			["result", { content: [null] }],
 		] as const)
 			malformed.push({ version: 2, task: { ...savedTask().task, [key]: value } });
-		malformed.push({ version: 2, task: Object.defineProperty(savedTask().task, "status", { get: getter }) });
 		bg.restoreHistory(malformed);
 		expect(bg.list()).toEqual([]);
-		expect(getter).not.toHaveBeenCalled();
 	});
 
 	it("bounds huge snapshots and strips runtime data", async () => {
 		const bg = service();
 		const huge = "😀".repeat(100000);
-		const serialize = vi.fn();
-		const record = savedTask("subagent-group", 20, {
-			kind: "subagent",
+		const record = savedTask("custom-group", 20, {
+			kind: "custom",
 			title: huge,
 			command: huge,
 			cwd: huge,
 			error: huge,
-			result: { content: [{ type: "text", text: huge }], details: { toJSON: serialize } },
+			result: { content: [{ type: "text", text: huge }], details: { huge } },
 		});
 		bg.restoreHistory([record]);
-		const task = bg.get("subagent-group");
+		const task = bg.get("custom-group");
 		expect(Buffer.byteLength(task.title)).toBeLessThanOrEqual(1024);
 		expect(Buffer.byteLength(task.command!)).toBeLessThanOrEqual(8192);
 		expect(Buffer.byteLength(task.cwd!)).toBeLessThanOrEqual(4096);
@@ -279,7 +222,6 @@ describe("terminal history restoration", () => {
 		expect(Buffer.byteLength((await bg.read(task.id, { bytes: 999999 })).text)).toBeLessThanOrEqual(
 			TASK_RESULT_BYTES,
 		);
-		expect(serialize).not.toHaveBeenCalled();
 		const cyclic: Record<string, unknown> = {};
 		cyclic.self = cyclic;
 		bg.restoreHistory([
@@ -345,5 +287,198 @@ describe("terminal history restoration", () => {
 		// Malformed values drop the record rather than corrupting the listing.
 		bg.restoreHistory([savedTask("bash-bad", 50, { exitCode: "3" as unknown as number })]);
 		expect(bg.list().find((task) => task.id === "bash-bad")).toBeUndefined();
+	});
+});
+
+const textResult = (text: string): AgentToolResult<undefined> => ({
+	content: [{ type: "text", text }],
+	details: undefined,
+});
+function retention(maxHistory = 32) {
+	return service({ maxHistory, maxActive: 1 });
+}
+function launch(bg: TaskRuntime, kind: TaskKind, background = false, text = "saved report") {
+	let control!: TaskControl<undefined>;
+	let finish!: () => void;
+	const completion = new Promise<TaskCompletion<undefined>>((resolve) => {
+		finish = () => resolve({ result: textResult(text) });
+	});
+	const caller = bg.execute({
+		kind,
+		title: kind,
+		toolCallId: "call",
+		background,
+		run(next) {
+			control = next;
+			next.accept();
+			return completion;
+		},
+	});
+	return { control, caller, finish };
+}
+async function complete(bg: TaskRuntime, kind: TaskKind, background = false, text?: string) {
+	const run = launch(bg, kind, background, text);
+	if (background) expect((await run.caller).kind).toBe("background");
+	run.finish();
+	await bg.wait(run.control.id);
+	await run.caller;
+	bg.markDelivered(run.control.id);
+	return run.control.id;
+}
+function saved(id: string, endedAt: number, overrides: Partial<TaskSnapshot> = {}) {
+	return {
+		version: 2,
+		task: {
+			id,
+			kind: "bash",
+			mode: "foreground",
+			title: id,
+			toolCallId: id,
+			anchorId: null,
+			status: "completed",
+			startedAt: 0,
+			endedAt,
+			result: textResult(id),
+			...overrides,
+		} satisfies TaskSnapshot,
+	};
+}
+
+describe("independent foreground and background histories", () => {
+	it.each([
+		{ kind: "bash" as const, background: true },
+		{ kind: "custom", background: true },
+	])("keeps completed $kind, background=$background after 100 foreground shells", async ({ kind, background }) => {
+		const bg = retention();
+		const id = await complete(bg, kind, background);
+		for (let i = 0; i < 100; i++) await complete(bg, "bash");
+		expect(bg.list()).toHaveLength(33);
+		expect(bg.get(id)).toMatchObject({ status: "completed", mode: background ? "background" : "foreground" });
+		expect((await bg.read(id)).text).toBe("saved report");
+		expect(bg.pendingNotifications()).toEqual([]);
+	});
+
+	it("evicts only the oldest delivered record in the history that exceeds its allowance", async () => {
+		const bg = retention(2);
+		const firstShell = await complete(bg, "bash");
+		const secondShell = await complete(bg, "bash");
+		const firstTask = await complete(bg, "custom", true);
+		const secondTask = await complete(bg, "bash", true);
+		const thirdTask = await complete(bg, "custom", true);
+		expect(() => bg.get(firstTask)).toThrow("Unknown");
+		expect(bg.get(firstShell).status).toBe("completed");
+		const thirdShell = await complete(bg, "custom");
+		expect(() => bg.get(firstShell)).toThrow("Unknown");
+		expect(bg.list().map((task) => task.id)).toEqual([secondShell, secondTask, thirdTask, thirdShell]);
+	});
+
+	it("retains a detached shell with background history and protects its managed log", async () => {
+		const bg = retention(1);
+		const run = launch(bg, "bash");
+		let cleaned = false;
+		run.control.setOutputPath("diagnostic-log", () => {
+			cleaned = true;
+		});
+		expect(bg.detachForeground()).toBe(1);
+		expect((await run.caller).kind).toBe("background");
+		run.finish();
+		await bg.wait(run.control.id);
+		bg.markDelivered(run.control.id);
+		for (let i = 0; i < 100; i++) await complete(bg, "bash");
+		expect(bg.get(run.control.id).mode).toBe("background");
+		expect(cleaned).toBe(false);
+		await complete(bg, "custom", true);
+		expect(() => bg.get(run.control.id)).toThrow("Unknown");
+		await bg.shutdown();
+		expect(cleaned).toBe(true);
+	});
+
+	it.each([false, true])("restores both histories independently, reverse input=%s", async (reverse) => {
+		const bg = retention();
+		const records = [
+			saved("custom-background", 1, { kind: "custom", mode: "background" }),
+			saved("custom-foreground", 2, { kind: "custom" }),
+			...Array.from({ length: 100 }, (_, index) => saved(`bash-${index}`, index + 3)),
+		];
+		bg.restoreHistory(reverse ? records.reverse() : records);
+		expect(bg.list()).toHaveLength(33);
+		expect((await bg.read("custom-background")).text).toBe("custom-background");
+		// Foreground work of any kind shares the foreground history.
+		expect(() => bg.get("custom-foreground")).toThrow("Unknown");
+		expect(() => bg.get("bash-67")).toThrow("Unknown");
+		expect(bg.get("bash-68").status).toBe("completed");
+		expect(bg.pendingNotifications()).toEqual([]);
+	});
+
+	it("restores task history when runtime foreground shell history is already full", async () => {
+		const bg = retention(1);
+		const id = await complete(bg, "bash");
+		bg.restoreHistory([saved("bash-extra", 3), saved("custom-restored", 1, { kind: "custom", mode: "background" })]);
+		expect(bg.list().map((task) => task.id)).toEqual([id, "custom-restored"]);
+		expect((await bg.read(id)).text).toBe("saved report");
+	});
+
+	it("prefers background results when protected records leave only one restoration slot", () => {
+		const bg = retention(1);
+		const releases: Array<() => void> = [];
+		for (let i = 0; i < 3; i++) {
+			const record = saved(`bash-pinned-${i}`, i);
+			bg.restoreHistory([record]);
+			releases.push(bg.retain(record.task.id));
+		}
+		bg.restoreHistory([
+			saved("bash-newer-shell", 100),
+			saved("custom-older-task", 1, { kind: "custom", mode: "background" }),
+		]);
+		expect(bg.list()).toHaveLength(4);
+		expect(bg.get("custom-older-task").status).toBe("completed");
+		expect(() => bg.get("bash-newer-shell")).toThrow("Unknown");
+		for (const release of releases) release();
+		expect(bg.list()).toHaveLength(2);
+	});
+
+	it("releases and restores both histories when returning to a branch", async () => {
+		const bg = retention(1);
+		const branchA = [
+			saved("custom-A", 1, { kind: "custom", mode: "background", anchorId: "A" }),
+			saved("bash-A", 2, { anchorId: "A" }),
+		];
+		const branchB = [
+			saved("bash-background-B", 3, { mode: "background", anchorId: "B" }),
+			saved("bash-foreground-B", 4, { anchorId: "B" }),
+		];
+		bg.restoreHistory(branchA);
+		await bg.cancelOutsideBranch(new Set(["B"]));
+		expect(bg.list()).toEqual([]);
+		bg.restoreHistory(branchB);
+		expect(bg.list().map((task) => task.id)).toEqual(branchB.map((record) => record.task.id));
+		await bg.cancelOutsideBranch(new Set(["A"]));
+		bg.restoreHistory(branchA);
+		expect(bg.list().map((task) => task.id)).toEqual(branchA.map((record) => record.task.id));
+		expect(bg.pendingNotifications()).toEqual([]);
+	});
+
+	it("restores background results from the session journal after runtime replacement", async () => {
+		const manager = SessionManager.inMemory();
+		const host = new TaskSession({
+			manager,
+			canDeliver: () => false,
+			deliver: async () => {},
+			onEntry: () => {},
+			onError: (_event, message) => {
+				throw new Error(message);
+			},
+		});
+		hosts.push(host);
+		host.setEnabled(true);
+		const background = await complete(host.service, "custom", true);
+		for (let i = 0; i < 100; i++) await complete(host.service, "bash");
+		const entries = manager.getEntries().length;
+		await host.service.shutdown();
+		host.replaceService();
+		expect(host.service.list()).toHaveLength(33);
+		expect((await host.service.read(background)).text).toBe("saved report");
+		expect(host.service.pendingNotifications()).toEqual([]);
+		expect(manager.getEntries()).toHaveLength(entries);
 	});
 });

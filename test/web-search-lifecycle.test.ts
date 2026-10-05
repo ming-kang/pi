@@ -145,12 +145,4 @@ describe("web_search lifecycle", () => {
 		await expect(handler(resultEvent("success"), context())).resolves.toBeUndefined();
 		await expect(handler({ ...resultEvent("error"), toolName: "other" }, context())).resolves.toBeUndefined();
 	});
-
-	it("keeps execute results free of the non-contract isError field", async () => {
-		resolveSearchCredentialsMock.mockResolvedValue({});
-		const harness = setup([WEB_SEARCH_TOOL_NAME]);
-		const result = await harness.tool.execute("call-1", { query: "" }, undefined, undefined, context());
-		expect(result.details.status).toBe("error");
-		expect(result).not.toHaveProperty("isError");
-	});
 });

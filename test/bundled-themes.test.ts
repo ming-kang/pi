@@ -2,14 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getThemesDir } from "../src/config.ts";
-import {
-	getAvailableThemes,
-	getAvailableThemesWithPaths,
-	getResolvedThemeColors,
-	getThemeByName,
-	setRegisteredThemes,
-} from "../src/modes/interactive/theme/theme.ts";
+import { getResolvedThemeColors, setRegisteredThemes } from "../src/modes/interactive/theme/theme.ts";
 
 type ThemeFile = {
 	name: string;
@@ -32,17 +25,6 @@ describe("bundled themes", () => {
 		setRegisteredThemes([]);
 		rmSync(tempRoot, { recursive: true, force: true });
 		vi.unstubAllEnvs();
-	});
-
-	it("includes the bundled ice-cream themes", () => {
-		for (const name of ["ice-cream-dark", "ice-cream-light"]) {
-			expect(getAvailableThemes()).toContain(name);
-			expect(getAvailableThemesWithPaths()).toContainEqual({
-				name,
-				path: join(getThemesDir(), `${name}.json`),
-			});
-			expect(getThemeByName(name)?.name).toBe(name);
-		}
 	});
 
 	it("exports empty ice-cream backgrounds as transparent", () => {

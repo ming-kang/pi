@@ -110,7 +110,6 @@
 				"test/web-search-render.test.ts",
 				"test/web-search-lifecycle.test.ts",
 				"test/web-search-auth.test.ts",
-				"test/web-search-extension.test.ts",
 				"test/built-in-extensions.test.ts"
 			]
 		},
@@ -205,21 +204,18 @@
 				"test/agent-session-background.test.ts",
 				"test/agent-session-background-lifecycle.test.ts",
 				"test/agent-session-stats.test.ts",
-				"test/background-extension.test.ts",
-				"test/background-manager.test.ts",
-				"test/background-retention.test.ts",
-				"test/background-usage.test.ts",
 				"test/bash-background.test.ts",
 				"test/footer-width.test.ts",
 				"test/suite/agent-session-compaction.test.ts",
 				"test/suite/background-delivery.test.ts",
 				"test/suite/compaction-budget.test.ts",
 				"test/tasks-runtime.test.ts",
+				"test/tasks-history.test.ts",
+				"test/tasks-presentation.test.ts",
+				"test/tasks-usage.test.ts",
+				"test/tasks-extension.test.ts",
 				"test/tasks-panel.test.ts",
-				"test/tasks-redesign.test.ts",
-				"test/background-completion-render.test.ts",
-				"test/suite/tasks-panel.test.ts",
-				"test/tasks-delivery.test.ts"
+				"test/suite/tasks-panel.test.ts"
 			]
 		},
 		{

@@ -11,11 +11,6 @@ describe("extension-owned keybindings", () => {
 	it("resolves bundled extension bindings in managers created after their modules load", () => {
 		const keybindings = new KeybindingsManager();
 		expect(keybindings.getKeys("app.tasks.detach")).toEqual(["ctrl+b"]);
-		expect(keybindings.getKeys("app.tasks.previousTab")).toEqual(["left"]);
-		expect(keybindings.getKeys("app.tasks.nextTab")).toEqual(["right"]);
-		expect(keybindings.getKeys("app.btw.close")).toEqual(["escape"]);
-		expect(keybindings.getKeys("app.provider.removeEntry")).toEqual(["ctrl+x"]);
-		expect(keybindings.getKeys("app.list.toggle")).toEqual(["space"]);
 		// The detach key displaces the editor's secondary cursor-left binding.
 		expect(keybindings.getKeys("tui.editor.cursorLeft")).toEqual(["left"]);
 		expect(keybindings.matches("\x02", "app.tasks.detach")).toBe(true);

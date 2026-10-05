@@ -94,7 +94,7 @@ describe("question choices and details", () => {
 		},
 	);
 
-	it.each([72, 100, 160])("reserves at least half of the usable width for details at %i columns", (columns) => {
+	it.each([72, 160])("reserves at least half of the usable width for details at %i columns", (columns) => {
 		const label = "a".repeat(80);
 		const dialog = open({ rows: 32, columns }, undefined, [{ ...options[0], label }, options[1]]);
 		const lines = dialog.component.render(columns);

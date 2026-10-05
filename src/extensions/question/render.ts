@@ -181,11 +181,8 @@ function normalizeDetails(value: unknown): RenderDetails | undefined {
 	return { answers, outcome, ...(message ? { message } : {}) };
 }
 
-function errorMessage(result: ResultLike, details: RenderDetails): string {
-	if (details.message) return details.message;
-	const fallback = resultFallback(result).trim();
-	const match = /^Question tool error \([^)]*\):\s*([\s\S]+)$/u.exec(fallback);
-	return truncate(match?.[1]?.trim() || "The question tool could not continue", MAX_RENDERED_ERROR_CHARS);
+function errorMessage(details: RenderDetails): string {
+	return details.message ?? "The question tool could not continue";
 }
 
 function answerLines(answers: AnswerLine[], theme: Theme): string[] {
@@ -225,7 +222,7 @@ export function renderQuestionResult(result: ResultLike, options: RenderOptions,
 	if (!details) return renderFallbackResult(result, options.expanded, theme);
 
 	if (details.outcome === "error") {
-		return new Text(theme.fg("error", `Question error: ${errorMessage(result, details)}`), 0, 0);
+		return new Text(theme.fg("error", `Question error: ${errorMessage(details)}`), 0, 0);
 	}
 	if (details.outcome === "cancelled") {
 		const title = theme.fg("warning", `Cancelled · ${answerProgress(details, args)}`);

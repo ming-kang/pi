@@ -11,6 +11,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - The bash and PowerShell `background` parameter description now says that completion arrives as an automatic notification and that the result must not be polled.
 - The tasks statusline names the foreground share of active work (`Tasks 2 foreground`, or `Tasks 3 active · 1 foreground` while background work runs) instead of folding every mode into one count.
 - `/hotkeys` lists the task bindings in a Tasks section, and the `/tasks` panel help lists `Ctrl+B` (detach all eligible foreground work) next to `b` (detach only the selected task).
+- DeepWiki and question results saved by older releases no longer get legacy rendering: DeepWiki `sectionTitles` and question errors without a structured message fall back to the generic summary.
 
 ### Fixed
 

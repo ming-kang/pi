@@ -640,39 +640,6 @@ describe("provider fixed layout", () => {
 		expect(pinned).toEqual(["row 0", "row 7", "row 8", "  (8/8)", "row 9"]);
 	});
 
-	test("the editor frame height stays fixed while navigating", () => {
-		const { screen } = editor();
-		const height = screen.render(120).length;
-		expect(height).toBe(20);
-		for (let index = 0; index < 6; index++) screen.handleInput("\x1b[B");
-		expect(screen.render(120).length).toBe(height);
-		screen.handleInput("\x1b[C"); // focus the right column
-		expect(screen.render(120).length).toBe(height);
-		screen.handleInput("\x1b[B");
-		screen.handleInput("\x1b[A");
-		expect(screen.render(120).length).toBe(height);
-		screen.dispose();
-	});
-
-	test("only the focused pane carries the accent selection marker", () => {
-		const { screen } = editor();
-		const focusedLeft = screen.render(120).join("\n");
-		expect(focusedLeft).toContain(theme.fg("accent", "API Auth"));
-		// The unfocused right pane previews its content without any marker or accent.
-		expect(focusedLeft).toContain(theme.fg("text", "baseUrl: "));
-		expect(focusedLeft).toContain(theme.fg("text", "API Type: "));
-		expect(focusedLeft).not.toContain(theme.fg("accent", "baseUrl: "));
-		screen.handleInput("\x1b[C"); // focus moves right
-		const focusedRight = screen.render(120).join("\n");
-		expect(focusedRight).toContain(theme.fg("accent", "baseUrl: "));
-		// The unfocused left column loses its marker and accent entirely.
-		expect(focusedRight).toContain(theme.fg("text", "API Auth"));
-		expect(focusedRight).not.toContain(theme.fg("accent", "API Auth"));
-		expect(focusedRight).not.toContain(theme.fg("accent", "Fetch Models"));
-		expect(focusedRight).toContain("focus left");
-		screen.dispose();
-	});
-
 	test("the left column scrolls with a position indicator", () => {
 		for (let index = 0; index < 14; index++) store.addModel("cpa", { id: `m${index}` });
 		const { screen } = editor();

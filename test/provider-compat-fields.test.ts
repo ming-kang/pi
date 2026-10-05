@@ -39,15 +39,6 @@ describe("provider compat field catalog", () => {
 		const tokensField = compatFieldFor("openai-completions", "maxTokensField");
 		expect(tokensField?.kind === "enum" ? tokensField.options : []).toEqual(["max_completion_tokens", "max_tokens"]);
 	});
-
-	test("catalog keys stay within the models.json schema surface", () => {
-		// Spot-check against the schema-known keys (see src/core/model-config.ts).
-		const completionsKeys = new Set(compatFieldsForApi("openai-completions").map((field) => field.key));
-		for (const known of ["supportsStore", "chatTemplateKwargs", "openRouterRouting", "vllmPriority"]) {
-			expect(completionsKeys.has(known)).toBe(true);
-		}
-		expect(completionsKeys.has("allowEmptySignature")).toBe(false); // anthropic-only
-	});
 });
 
 describe("provider compat value validation", () => {

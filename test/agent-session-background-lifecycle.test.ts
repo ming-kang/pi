@@ -182,7 +182,7 @@ describe("AgentSessionRuntime background lifecycle", () => {
 		const leaf = old.sessionManager.getLeafId()!;
 		let signal!: AbortSignal;
 		const outcome = await old.tasks.execute({
-			kind: "subagent",
+			kind: "custom",
 			title: "billable",
 			toolCallId: "billable",
 			background: true,
@@ -227,7 +227,7 @@ describe("AgentSessionRuntime background lifecycle", () => {
 			finish = resolve;
 		});
 		const outcome = await old.tasks.execute({
-			kind: "subagent",
+			kind: "custom",
 			title: "late",
 			toolCallId: "late",
 			background: true,

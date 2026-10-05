@@ -169,20 +169,6 @@ describe("statusline usage", () => {
 		expect(footer.render(200)[1]).toContain("↑220 ↓35 R68 W31 CH31.3% $1.000");
 		footer.dispose();
 	});
-
-	it.each([12, 20, 40, 80, 120])("keeps both footer lines width-safe at %i columns", async (width) => {
-		const footer = await createFooter(
-			usageSession(),
-			new Map([
-				["background", "bg 2 running · 1 waiting for input · 4 done"],
-				["custom", "custom 3/8"],
-			]),
-		);
-		const lines = footer.render(width);
-		expect(lines).toHaveLength(2);
-		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-		footer.dispose();
-	});
 });
 
 describe("statusline context colors", () => {

@@ -23,9 +23,6 @@ export interface DeepWikiDetails {
 	/** Set when model-facing text was truncated to the character budget. */
 	shownPages?: number;
 	truncatedChars?: number;
-	/** Legacy fields kept so older session entries still render. */
-	sectionCount?: number;
-	sectionTitles?: string[];
 	errorMessage?: string;
 }
 

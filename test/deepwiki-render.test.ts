@@ -80,7 +80,7 @@ describe("renderDeepWikiResult", () => {
 		expect(lines.every((line) => visibleWidth(line) <= 30)).toBe(true);
 	});
 
-	test("bounds and normalizes historical page-title summaries", () => {
+	test("bounds and normalizes page-title summaries", () => {
 		const component = renderDeepWikiResult(
 			result("wiki", {
 				action: "structure",
@@ -97,31 +97,6 @@ describe("renderDeepWikiResult", () => {
 		expect(lines[0]).toContain("First Page");
 		expect(lines[0]).toContain("...");
 		expect(lines[0]).not.toContain("x".repeat(200));
-	});
-
-	test("falls back safely for malformed historical details", () => {
-		const malformed = {
-			action: "contents",
-			repoName: "owner/repo",
-			requestedPage: { bad: true },
-			pageTitles: { bad: true },
-			errorMessage: { bad: true },
-		} as unknown as DeepWikiDetails;
-		const collapsed = renderDeepWikiResult(
-			result("No structured wiki", malformed),
-			{ expanded: false, isPartial: false },
-			theme,
-			false,
-		);
-		expect(stripAnsi(collapsed.render(120).join("\n"))).toContain("Wiki loaded");
-
-		const failed = renderDeepWikiResult(
-			result("Service failed", malformed),
-			{ expanded: false, isPartial: false },
-			theme,
-			true,
-		);
-		expect(stripAnsi(failed.render(120).join("\n"))).toContain("failed · Service failed");
 	});
 
 	test("keeps expanded Markdown free of the collapsed hint", () => {

@@ -61,19 +61,11 @@ describe("validateQuestions", () => {
 		expect(validateQuestions([question({ question: "Choose the deployment target" })])).toEqual({ ok: true });
 	});
 
-	it("accepts a well-formed question", () => {
-		expect(validateQuestions([question()])).toEqual({ ok: true });
-	});
-
 	it("rejects reserved labels case-insensitively and ignoring padding", () => {
 		for (const label of ["Other", "OTHER", " other ", "type something", "Type something.", "Chat About This"]) {
 			const result = validateQuestions([question({ options: [option(label), option("Beta")] })]);
 			expect(result, label).toMatchObject({ ok: false, error: "reserved_label" });
 		}
-	});
-
-	it("allows 'Next' as a label (no longer reserved)", () => {
-		expect(validateQuestions([question({ options: [option("Next"), option("Beta")] })])).toEqual({ ok: true });
 	});
 
 	it("rejects duplicate option labels case-insensitively and ignoring padding", () => {

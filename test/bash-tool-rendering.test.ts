@@ -38,18 +38,7 @@ describe("bash tool call rendering", () => {
 		expect(renderCall(component, 120)).toContain("● $ git status --short");
 	});
 
-	test("keeps long multi-command calls as a faithful raw preview", () => {
-		const command =
-			"cd ../Pi && git add -- README.md docs/README.md docs/architecture.md && git diff --cached --check && git commit -m 'docs: release process' && git push origin main";
-		const component = createRenderer(command);
-		component.setArgsComplete();
-
-		const rendered = renderCall(component, 80);
-		expect(rendered).toContain("● $ cd ../Pi && git add -- README.md");
-		expect(rendered).not.toContain("cd, git …");
-	});
-
-	test("preserves raw command chains and timeout metadata", () => {
+	test("keeps long commands as a raw preview with timeout metadata", () => {
 		const component = createRenderer(
 			"pwd && git branch --show-current && git status --short && git log -1 --oneline && git tag --points-at HEAD && git remote -v && npm --version && node --version",
 			120,
@@ -59,25 +48,6 @@ describe("bash tool call rendering", () => {
 		const rendered = renderCall(component, 100);
 		expect(rendered).toContain("● $ pwd && git branch --show-current");
 		expect(rendered).toContain("(timeout 120s)");
-		expect(rendered).not.toContain("pwd, git");
-	});
-
-	test("keeps complex long commands as a truncated raw preview", () => {
-		const component = createRenderer(
-			"node scripts/release.js --channel nightly --repository ming-kang/pi --version 0.81.1-2 && git status --short && echo $(git rev-parse HEAD)",
-		);
-		component.setArgsComplete();
-
-		const rendered = renderCall(component, 80);
-		expect(rendered).toContain("● $ node scripts/release.js");
-		expect(rendered).not.toContain("node, git");
-	});
-
-	test("does not summarize while arguments are still streaming", () => {
-		const component = createRenderer("find . -name '*.ts' && gh run list && git status");
-
-		const rendered = renderCall(component, 50);
-		expect(rendered).not.toContain("find, gh, git");
 	});
 
 	test("shows the complete raw command when expanded", () => {
@@ -87,21 +57,7 @@ describe("bash tool call rendering", () => {
 		component.setArgsComplete();
 		component.setExpanded(true);
 
-		const rendered = renderCall(component, 300);
-		expect(rendered).toContain(command);
-		expect(rendered).not.toContain("cd, git …");
-	});
-
-	test("keeps timeout metadata visible in raw previews", () => {
-		const component = createRenderer(
-			"find packages/coding-agent/src -type f -name '*.ts' && gh run list --workflow publish-npm.yml --limit 20 && git status --short",
-			180,
-		);
-		component.setArgsComplete();
-
-		const rendered = renderCall(component, 100);
-		expect(rendered).toContain("$ find packages/coding-agent/src");
-		expect(rendered).toContain("(timeout 180s)");
+		expect(renderCall(component, 300)).toContain(command);
 	});
 
 	test("recomputes the raw call layout when the terminal width changes", () => {

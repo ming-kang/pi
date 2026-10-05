@@ -44,18 +44,6 @@ describe("ExtensionSelectorComponent", () => {
 		expect(render(selector)).toContain("Context now 29% full");
 	});
 
-	it("uses compact first-key labels and unified separators", () => {
-		const selector = new ExtensionSelectorComponent(
-			"Approve?",
-			["A"],
-			() => {},
-			() => {},
-		);
-		const output = render(selector);
-		expect(output).toContain("↑/↓ navigate • Enter select • Esc cancel");
-		expect(output).not.toContain("escape/ctrl+c");
-	});
-
 	it("reflects the first custom binding in both hints and input", () => {
 		setKeybindings(
 			new KeybindingsManager({

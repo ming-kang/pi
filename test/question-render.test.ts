@@ -141,23 +141,6 @@ describe("question rendering", () => {
 		expect(expanded).not.toContain("to expand");
 	});
 
-	it("defensively bounds malformed historical details", () => {
-		const malformed = {
-			content: [{ type: "text", text: "Question tool error (no_ui): interactive UI required" }],
-			details: { outcome: "error", answers: "not-an-array", message: { bad: true } },
-		};
-		const malformedOutput = rendered(renderQuestionResult(malformed, { expanded: true }, theme, args));
-		expect(malformedOutput).toContain("Question error: interactive UI required");
-
-		const oversized = {
-			content: [{ type: "text", text: "error" }],
-			details: { outcome: "error", answers: [], message: "x".repeat(2_000) },
-		};
-		const oversizedOutput = rendered(renderQuestionResult(oversized, { expanded: false }, theme, args));
-		expect(oversizedOutput).toContain("…");
-		expect(oversizedOutput).not.toContain("x".repeat(500));
-	});
-
 	it("renders human-readable errors without exposing machine codes", () => {
 		const details: QuestionToolDetails = {
 			answers: [],
@@ -169,19 +152,5 @@ describe("question rendering", () => {
 		const output = rendered(renderQuestionResult(result(details), { expanded: false }, theme, args));
 		expect(output).toContain("Question error: Option previews are unavailable for multi-select questions");
 		expect(output).not.toContain("preview_multiselect");
-
-		const historical = rendered(
-			renderQuestionResult(
-				result(
-					{ answers: [], outcome: "error", cancelled: false, error: "reserved_label" },
-					"Question tool error (reserved_label): Option label is reserved",
-				),
-				{ expanded: false },
-				theme,
-				args,
-			),
-		);
-		expect(historical).toContain("Question error: Option label is reserved");
-		expect(historical).not.toContain("reserved_label");
 	});
 });

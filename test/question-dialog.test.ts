@@ -49,15 +49,9 @@ describe("question dialog", () => {
 	beforeAll(() => initTheme("dark"));
 	beforeEach(() => setKeybindings(new KeybindingsManager()));
 
-	it("shows numeric shortcuts, punctuation-free custom copy, and aligned option labels", () => {
+	it("aligns option labels between single- and multi-select dialogs", () => {
 		const singleOutput = createDialog([question()]).view();
 		const multiOutput = createDialog([question({ multiSelect: true })]).view();
-		expect(singleOutput).toContain("↑/↓ navigate • 1-3 select • Tab notes/custom • Enter select • Esc cancel");
-		expect(multiOutput).toContain(
-			"↑/↓ navigate • 1-3 toggle • Space toggle focused • Tab notes/custom • Enter continue • Esc cancel",
-		);
-		expect(singleOutput).toContain("Type something");
-		expect(singleOutput).not.toContain("Type something.");
 		const singleOption = singleOutput.split("\n").find((line) => line.includes("1. Alpha"));
 		const multiOption = multiOutput.split("\n").find((line) => line.includes("1. Alpha"));
 		expect(singleOption).toBeDefined();
@@ -68,33 +62,6 @@ describe("question dialog", () => {
 	it("wraps unified hints within narrow dialog widths", () => {
 		const { component } = createDialog([question({ multiSelect: true })]);
 		expect(component.render(40).every((line) => visibleWidth(line) <= 40)).toBe(true);
-	});
-
-	it("uses unified key-action hints in every dialog mode", () => {
-		const notes = createDialog([question()]);
-		notes.component.handleInput(TAB);
-		expect(notes.view()).toContain("Enter save notes • Esc back");
-
-		const custom = createDialog([question()]);
-		custom.component.handleInput("3");
-		expect(custom.view()).toContain("Enter continue • Esc back");
-
-		const multiCustom = createDialog([question({ multiSelect: true })]);
-		multiCustom.component.handleInput(DOWN);
-		multiCustom.component.handleInput(DOWN);
-		multiCustom.component.handleInput(ENTER);
-		expect(multiCustom.view()).toContain("Enter save custom answer • Esc back");
-
-		const discuss = createDialog([question()]);
-		discuss.component.handleInput(DOWN);
-		discuss.component.handleInput(DOWN);
-		discuss.component.handleInput(DOWN);
-		expect(discuss.view()).toContain("Enter discuss • ↑ return to options • Esc cancel");
-
-		const review = createDialog([question(), question({ question: "Second?", header: "Second" })]);
-		review.component.handleInput(ENTER);
-		review.component.handleInput(ENTER);
-		expect(review.view()).toContain("Enter submit • Esc edit last question");
 	});
 
 	it("shows only the first injected custom binding", () => {

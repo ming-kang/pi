@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-sampling";
 import { getKeybindings, setKeybindings, stripTerminalSequences, type TUI } from "@earendil-works/pi-tui";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
 	AgentToolResult,
 	ExtensionAPI,
@@ -27,7 +27,7 @@ import {
 	scheduleWaitRefresh,
 	type TasksRenderState,
 } from "../src/modes/interactive/tasks/render.ts";
-import type { Theme } from "../src/modes/interactive/theme/theme.ts";
+import { initTheme, type Theme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { createTasksHarness } from "./test-tasks-ui.ts";
 
 function textOf(result: AgentToolResult<unknown>): string {
@@ -41,7 +41,7 @@ afterEach(async () => {
 	for (const service of services.splice(0)) await service.shutdown();
 	vi.useRealTimers();
 });
-function running(kind: "bash" | "subagent" = "bash") {
+function running(kind: "bash" | "custom" = "bash") {
 	const service = new TaskRuntime({ enabled: true });
 	services.push(service);
 	let finish!: () => void;
@@ -113,7 +113,7 @@ describe("public Background management", () => {
 		h.finish();
 	});
 	it("reads and lists both kinds using the same service", async () => {
-		for (const kind of ["bash", "subagent"] as const) {
+		for (const kind of ["bash", "custom"] as const) {
 			const h = running(kind);
 			const outcome = await h.outcome;
 			expect(outcome.kind).toBe("background");
@@ -139,7 +139,7 @@ describe("public Background management", () => {
 		expect((await runRead(h.service, { action: "read", taskId: id })).details).not.toHaveProperty("backgroundTaskId");
 	});
 	it("wait cancellation only cancels the waiter, then final output remains readable", async () => {
-		const h = running("subagent");
+		const h = running("custom");
 		await h.outcome;
 		const id = h.service.list()[0]!.id;
 		const abort = new AbortController();
@@ -162,7 +162,7 @@ describe("public Background management", () => {
 		h.finish();
 	});
 	it("reports cancellation requested, never falsely stopped, and targets the whole group", async () => {
-		const h = running("subagent");
+		const h = running("custom");
 		await h.outcome;
 		const id = h.service.list()[0]!.id;
 		const result = runKill(h.service, { action: "kill", taskId: id });
@@ -196,7 +196,7 @@ describe("public Background management", () => {
 		const service = new TaskRuntime({ enabled: true });
 		services.push(service);
 		const gate = new Promise<void>(() => {});
-		const start = (kind: "bash" | "subagent", title: string) =>
+		const start = (kind: "bash" | "custom", title: string) =>
 			service.execute({
 				kind,
 				title,
@@ -208,7 +208,7 @@ describe("public Background management", () => {
 					return { result: { content: [{ type: "text", text: "done" }], details: undefined } };
 				},
 			});
-		await Promise.all([start("bash", "first"), start("bash", "second"), start("subagent", "third")]);
+		await Promise.all([start("bash", "first"), start("bash", "second"), start("custom", "third")]);
 		const ids = service.list().map((task) => task.id);
 		const bashIds = ids.filter((id) => id.startsWith("bash"));
 		expect(bashIds).toHaveLength(2);
@@ -216,7 +216,7 @@ describe("public Background management", () => {
 		await expect(failure).rejects.toThrow('Ambiguous task ID "bash" matches 2 tasks:');
 		await expect(failure).rejects.toThrow(new RegExp(bashIds[0]!));
 		await expect(failure).rejects.toThrow(new RegExp(bashIds[1]!));
-		await expect(failure).rejects.not.toThrow(new RegExp(ids.find((id) => id.startsWith("subagent"))!));
+		await expect(failure).rejects.not.toThrow(new RegExp(ids.find((id) => id.startsWith("custom"))!));
 	});
 	it("resolves a unique kind-stripped prefix without listing tasks", async () => {
 		const h = running("bash");
@@ -926,5 +926,54 @@ describe("renderTasksResult", () => {
 			{ args: { action: "create" }, state: {} } as ToolRenderContext,
 		);
 		expect(component.render(200).map(stripTerminalSequences).join("\n")).toContain("Started background task bg-3f.");
+	});
+});
+
+describe("management outcome facts", () => {
+	beforeEach(() => initTheme("dark"));
+	it.each([0, 42, null])("preserves terminal exit code %s in wait results", async (exitCode) => {
+		const runtime = new TaskRuntime();
+		try {
+			await runtime.execute({
+				kind: "bash",
+				title: "build",
+				toolCallId: "call",
+				run: async () => ({
+					status: exitCode === 0 ? "completed" : "failed",
+					exitCode,
+					result: { content: [{ type: "text", text: "saved output" }], details: undefined },
+				}),
+			});
+			const task = runtime.list()[0]!;
+			const result = await runWait(runtime, { action: "wait", taskId: task.id });
+			expect(result.details.exitCode).toBe(exitCode);
+		} finally {
+			await runtime.shutdown();
+		}
+	});
+	it("does not call stopping work running when a wait ends", () => {
+		const result = renderTasksResult(
+			{
+				content: [],
+				details: {
+					action: "wait",
+					taskId: "build",
+					timedOut: true,
+					status: "stopping",
+					exitCode: undefined,
+					waitedMs: 1000,
+					deltaBytes: 0,
+					totalBytes: 0,
+					deltaTruncated: false,
+					outputPath: "",
+				},
+			},
+			{ expanded: false, isPartial: false },
+			theme,
+			{ state: {} } as ToolRenderContext,
+		);
+		const text = result.render(120).map(stripTerminalSequences).join("\n");
+		expect(text).toContain("Stopping");
+		expect(text).not.toContain("still running");
 	});
 });

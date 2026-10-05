@@ -65,14 +65,13 @@ describe("question extension protocol", () => {
 		await expect(handler({ toolName: "other", details: details("error") })).resolves.toBeUndefined();
 	});
 
-	it("returns a structured error without the obsolete execute-level isError field when no TUI exists", async () => {
+	it("returns a structured error when no TUI exists", async () => {
 		const { tool } = setup();
 		const result = await tool.execute("call-1", params, undefined, undefined, {
 			hasUI: false,
 			mode: "print",
 		} as unknown as ExtensionToolContext);
 		expect(result.details).toMatchObject({ outcome: "error", error: "no_ui" });
-		expect(result).not.toHaveProperty("isError");
 	});
 
 	it("preserves answered dialog results through the sequential custom UI", async () => {

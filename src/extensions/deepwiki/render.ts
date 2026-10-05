@@ -54,10 +54,6 @@ function pageTitlesFromResult(text: string, details: DeepWikiDetails | undefined
 		const titles = details.pageTitles.filter((title) => typeof title === "string");
 		if (titles.length) return titles;
 	}
-	if (Array.isArray(details?.sectionTitles)) {
-		const titles = details.sectionTitles.filter((title) => typeof title === "string");
-		if (titles.length) return titles;
-	}
 	const fromContent = extractContentPages(text);
 	if (fromContent.length) return fromContent;
 	return extractStructureSections(text);

@@ -4,7 +4,6 @@ import type { ToolRenderContext } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type { WebSearchRenderState } from "../src/extensions/web-search/render.ts";
 import { renderWebSearchCall, renderWebSearchResult } from "../src/extensions/web-search/render.ts";
-import { MAX_HISTORICAL_HIT_SCAN } from "../src/extensions/web-search/results.ts";
 import { initTheme, type Theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
@@ -69,7 +68,7 @@ describe("renderWebSearchCall & renderWebSearchResult", () => {
 		expect(lines[0]).toContain("ctrl+o to expand");
 	});
 
-	test("renderWebSearchResult renders disabled status nicely even with a legacy error flag", () => {
+	test("renderWebSearchResult renders disabled status as a warning", () => {
 		const comp = renderWebSearchResult(
 			{
 				content: [{ type: "text", text: "Disabled" }],
@@ -84,7 +83,7 @@ describe("renderWebSearchCall & renderWebSearchResult", () => {
 			},
 			{ expanded: false, isPartial: false },
 			theme,
-			renderContext(true),
+			renderContext(false),
 		);
 
 		const lines = comp.render(120).map((l) => stripAnsi(l).trimEnd());
@@ -165,33 +164,6 @@ describe("renderWebSearchCall & renderWebSearchResult", () => {
 		expect(lines[0]).toContain("3 results via MiniMax & DeepSeek · 0.8s · example.com, foo.org, +1");
 	});
 
-	test("bounds historical domain scans in the collapsed renderer", () => {
-		const hits = Array.from({ length: MAX_HISTORICAL_HIT_SCAN }, () => null) as unknown[];
-		hits[0] = { title: "A", url: "https://example.com/a", sources: ["MiniMax"] };
-		Object.defineProperty(hits, MAX_HISTORICAL_HIT_SCAN, {
-			get: () => {
-				throw new Error("domain scan exceeded");
-			},
-		});
-		const comp = renderWebSearchResult(
-			{
-				content: [{ type: "text", text: "payload" }],
-				details: {
-					query: "q",
-					durationMs: 10,
-					status: "success",
-					engine: "minimax",
-					totalHits: 1,
-					hits: hits as never,
-				},
-			},
-			{ expanded: false, isPartial: false },
-			theme,
-			renderContext(false),
-		);
-		expect(stripAnsi(comp.render(120).join("\n"))).toContain("example.com");
-	});
-
 	test("renderWebSearchResult expanded renders structured sections without agent directives", () => {
 		const comp = renderWebSearchResult(
 			{
@@ -228,19 +200,5 @@ describe("renderWebSearchCall & renderWebSearchResult", () => {
 		expect(rendered).toContain("DeepSeek Search Synthesis");
 		expect(rendered).toContain("Related Searches");
 		expect(rendered).not.toContain("cite the relevant source URLs");
-	});
-
-	test("renderWebSearchResult falls back to payload text when details are missing", () => {
-		const comp = renderWebSearchResult(
-			// Legacy sessions on disk may lack details even though the type requires it.
-			{ content: [{ type: "text", text: "Some legacy payload line" }], details: undefined as never },
-			{ expanded: false, isPartial: false },
-			theme,
-			renderContext(false),
-		);
-
-		const lines = comp.render(120).map((l) => stripAnsi(l).trimEnd());
-		expect(lines[0]).toContain("Some legacy payload line");
-		expect(lines[0]).toContain("ctrl+o to expand");
 	});
 });

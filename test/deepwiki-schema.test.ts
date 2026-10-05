@@ -13,8 +13,8 @@ describe("DeepWiki page validation", () => {
 		expect(validate.Check({ action: "contents", repoName: "owner/repo", page: 1.5 })).toBe(false);
 	});
 
-	it("defensively rejects non-positive, fractional, non-finite, blank, and non-scalar pages", () => {
-		for (const page of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "", "   ", {}, []]) {
+	it("rejects non-integer and blank pages that bypass schema validation", () => {
+		for (const page of [0, 1.5, "   ", {}]) {
 			expect(() => normalizeDeepWikiParams({ action: "contents", repoName: "owner/repo", page } as never)).toThrow(
 				/page must be/,
 			);

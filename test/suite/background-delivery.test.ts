@@ -19,7 +19,7 @@ async function startTask(session: AgentSession, title: string) {
 		finish = resolve;
 	});
 	const outcome = await session.tasks.execute({
-		kind: "subagent",
+		kind: "custom",
 		title,
 		toolCallId: title,
 		background: true,
