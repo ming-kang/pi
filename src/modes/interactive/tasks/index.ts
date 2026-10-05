@@ -3,6 +3,7 @@ import type { ExtensionUIContext } from "../../../core/extensions/types.ts";
 import { isTaskTerminal, type TasksContext } from "../../../core/tasks/types.ts";
 import { TASKS_DETACH_HINT_DELAY_MS } from "../../../core/tools/tasks/constants.ts";
 import { keyLabel } from "../components/keybinding-hints.ts";
+import { theme } from "../theme/theme.ts";
 import { TasksMenu } from "./manager.ts";
 import type { TasksPanelState } from "./model.ts";
 
@@ -25,37 +26,29 @@ export function bindTasksUI(ctx: { tasks: TasksContext; ui: ExtensionUIContext }
 			clearTimeout(hintTimer);
 			hintTimer = undefined;
 			const all = ctx.tasks.list();
-			const active = all.filter((task) => !isTaskTerminal(task.status));
-			const recent = all.filter((task) => isTaskTerminal(task.status) && task.mode === "background").length;
-			// Name the foreground count: it is the work the conversation is waiting on, and the only
-			// work the detach key can still move.
-			const foreground = active.filter((task) => task.mode === "foreground").length;
-			const activeLabel = foreground
-				? foreground === active.length
-					? `Tasks ${foreground} foreground`
-					: `Tasks ${active.length} active · ${foreground} foreground`
-				: `Tasks ${active.length} active`;
+			const background = all.filter((task) => task.mode === "background" && !isTaskTerminal(task.status)).length;
 			const parts: string[] = [];
-			if (active.length) parts.push(`${activeLabel} · /tasks`);
-			else if (recent) parts.push(`Tasks ${recent} recent background results · /tasks`);
+			if (background) {
+				parts.push(theme.fg("text", `${background} background task${background === 1 ? "" : "s"}`));
+				parts.push(theme.fg("accent", "/tasks") + theme.fg("muted", " to view"));
+			}
 			// Teach the detach key once something has run long enough to be worth moving, and
-			// only while it can move: a stopping execution is aborted, so the key does nothing.
+			// only while it can move, independently of the background task summary.
 			const detachKey = keyLabel("app.tasks.detach");
 			const now = Date.now();
-			const movable = (ctx.tasks.enabled ? all : []).filter(
-				(task) => task.mode === "foreground" && (task.status === "running" || task.status === "queued"),
-			);
+			const movable = all.filter((task) => ctx.tasks.canDetach(task.id));
 			const waits = movable
 				.map((task) => task.startedAt + TASKS_DETACH_HINT_DELAY_MS - now)
 				.filter((wait) => wait > 0);
-			if (detachKey && movable.length > waits.length) parts.push(`${detachKey} to background`);
+			if (detachKey && movable.length > waits.length)
+				parts.push(theme.fg("accent", detachKey) + theme.fg("muted", " to run in background"));
 			if (detachKey && waits.length > 0) {
 				// The service notifies on state changes, not on time, so wake up when the next
 				// execution crosses the threshold.
 				hintTimer = setTimeout(update, Math.min(...waits));
 				hintTimer.unref?.();
 			}
-			ctx.ui.setStatus("background", parts.length ? parts.join(" · ") : undefined);
+			ctx.ui.setStatus("background", parts.length ? parts.join(theme.fg("dim", " · ")) : undefined);
 		};
 		unsubscribe = ctx.tasks.subscribe(update);
 		unsubscribeDetachKey = ctx.ui.onTerminalInput((data) => {

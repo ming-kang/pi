@@ -1164,6 +1164,7 @@ Session-bound `TasksContext` supervises native and extension-owned execution. Fo
 | `wait(id, timeoutMs?, signal?)` | Observation only; timeout or cancellation ends the wait, not execution |
 | `kill(id)` | Requests cancellation; `stopping` is not a terminal status |
 | `detach(id)` / `detachForeground()` | Hands off one task, or eligible foreground tasks oldest first while background slots remain, without restarting them; throws when every background slot is taken |
+| `canDetach(id)` | Reports whether an execution can move now, including host policy and available background slots; does not change the execution |
 | `subscribe(listener)` | Observes task state and progress |
 | `retain(id)` | Returns an idempotent release function protecting retained data, without delaying notifications |
 | `holdDelivery(id)` | Explicitly retains data and delays automatic delivery until released |

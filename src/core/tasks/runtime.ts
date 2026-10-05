@@ -341,6 +341,11 @@ export class TaskRuntime implements TasksContext {
 		return records.length;
 	}
 
+	canDetach(id: string): boolean {
+		const record = this.lookup(id);
+		return this.enabled && this.backgroundActive() < this.maxActive && this.detachable(record);
+	}
+
 	detach(id: string): boolean {
 		const record = this.lookup(id);
 		if (!this.enabled || !this.detachable(record)) return false;

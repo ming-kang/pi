@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- The task statusline now shows only active background work as `1 background task · /tasks to view` (pluralized for multiple tasks), with highlighted commands and muted descriptions. Foreground-only work and finished results no longer keep the task summary visible. The independent `Ctrl+B to run in background` hint appears after ten seconds only while a foreground task can move, including when no background tasks exist, and stays hidden while background slots are full.
+
 ## [1.0.2] - 2026-10-05
 
 ### Changed

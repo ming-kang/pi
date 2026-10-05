@@ -136,7 +136,7 @@
 		},
 		{
 			"id": "background-execution",
-			"why": "Native Tasks supervision, retained output, persistence receipts, and extension-owned execution; the task panel preserves selection across completion and exposes bounded history without acknowledging delivery.",
+			"why": "Native Tasks supervision, retained output, persistence receipts, and extension-owned execution; the panel preserves selection and bounded history, while the statusline counts active background work and advertises eligible foreground handoff.",
 			"paths": [
 				{
 					"path": "src/core/agent-session.ts",

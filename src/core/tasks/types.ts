@@ -125,6 +125,8 @@ export interface TasksContext {
 	 * returns how many moved. Throws when eligible work exists but every slot is taken.
 	 */
 	detachForeground(): number;
+	/** Whether this execution can move now, including host policy and available background slots. */
+	canDetach(id: string): boolean;
 	/** Returns false when the task cannot move; throws when every background slot is taken. */
 	detach(id: string): boolean;
 	subscribe(listener: () => void): () => void;
