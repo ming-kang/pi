@@ -40,15 +40,24 @@ function npm(...args) {
 	return spawnSync(process.execPath, [npmCli, ...args], { cwd: root, stdio: "inherit" }).status === 0;
 }
 
-function changedUpstreamPaths(fromTree, toTree) {
+function changedPaths(fromTree, toTree) {
 	return parseNameStatus(git("diff", "--name-status", "-z", "--no-renames", fromTree, toTree)).map(
 		(entry) => entry.path,
 	);
 }
 
+/**
+ * Concerns with a path that upstream changed and that the committed
+ * distribution deviates on. A directory claim also covers files identical to
+ * upstream, whose changes merge cleanly and need no re-review.
+ */
 function touchedConcerns(fromTree, toTree) {
 	const ledger = readJson(join(root, "maintainers", "concerns.json"));
-	return concernsTouching(ledger, changedUpstreamPaths(fromTree, toTree));
+	const deviating = new Set(changedPaths(fromTree, "HEAD"));
+	return concernsTouching(
+		ledger,
+		changedPaths(fromTree, toTree).filter((path) => deviating.has(path)),
+	);
 }
 
 function start(tag) {
