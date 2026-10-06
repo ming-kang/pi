@@ -8,39 +8,25 @@ Follow upstream's `major.minor` line; this distribution owns its patch sequence.
 
 Move prepared changelog entries from `[Unreleased]` to one `## [<version>] - YYYY-MM-DD` heading, leaving a new empty `[Unreleased]`. Update the root package version and regenerate the shrinkwrap. Stage explicit files and create the owner-requested release commit.
 
-Verify a clean build, installed dependencies, repository checks, upstream ledger, and a packed installation. The release workflow repeats these checks, runs the complete Ubuntu suite, publishes that exact verified tarball, and verifies its registry installation. Resolve required manual validation before publication.
+Verify a clean build, repository checks, and a packed installation locally, and resolve required manual validation before publication. `verify:package-install` installs a tarball through a loopback registry, so it sees the same nested, shrinkwrap-locked layout that users get from npm.
 
-## Pin the publication to a commit
+## Publish by tag
 
-Record the release SHA after creating the release commit. Push that commit to `main` when publication is authorized, then select its CI run explicitly:
+When publication is authorized, push the release commit to `main`, then tag that commit:
 
 ```bash
 VERSION="$(node -p "require('./package.json').version")"
-RELEASE_SHA="$(git rev-parse HEAD)"
-gh run list --repo ming-kang/pi --workflow ci.yml --branch main --commit "$RELEASE_SHA" --json databaseId,headSha,status,conclusion,url
-gh run watch <ci-run-id> --repo ming-kang/pi --exit-status
-```
-
-Dispatch publication only after CI for this SHA succeeds:
-
-```bash
-gh workflow run publish-npm.yml --repo ming-kang/pi --ref main -f version="$VERSION" -f expected_sha="$RELEASE_SHA"
-gh run list --repo ming-kang/pi --workflow publish-npm.yml --event workflow_dispatch --commit "$RELEASE_SHA" --json databaseId,headSha,displayTitle,createdAt,status,conclusion,url
-gh run watch <publish-run-id> --repo ming-kang/pi --exit-status
-gh run view <publish-run-id> --repo ming-kang/pi --json headSha,conclusion,url
-```
-
-Select the run ID for this dispatch and confirm `headSha` equals the recorded SHA. The workflow rejects a moved `main`, a version mismatch, or a conflicting existing npm provenance record. Do not identify publication by an unfiltered "latest run". When resuming a failed publication, use the same version and SHA and inspect that run's failed step first.
-
-## Verify and tag the published commit
-
-Confirm the registry installation check passed. Post-publication, the workflow warns instead of failing when npm registry propagation outlasts its observation windows (metadata visibility, registry installation): the package is published either way, so a green run carrying those warnings is a propagation delay, not a publication failure. Read the failing step's summary, confirm every listed item manually (version visible, provenance commit, registry installation smoke test), and only then tag. Perform global-install/self-update checks from a separate shell or after restarting Pi; do not replace the package running the release session.
-
-Tag the recorded published SHA explicitly, even if local HEAD has moved:
-
-```bash
-git tag "pi-v$VERSION" "$RELEASE_SHA"
+git push origin main
+git tag "pi-v$VERSION" HEAD
 git push origin "refs/tags/pi-v$VERSION"
+gh run list --repo ming-kang/pi --workflow publish-npm.yml --event push --branch "pi-v$VERSION" --json databaseId,headSha,status,conclusion,url
+gh run watch <run-id> --repo ming-kang/pi --exit-status
 ```
 
-If the tag already exists, verify its target equals `RELEASE_SHA`; never move an existing release tag. Report the package version, published SHA, workflow run URL, and tag.
+The tag push runs `publish-npm.yml`. It rejects a tag that does not match `package.json`, the shrinkwrap, and one `CHANGELOG.md` heading, or whose commit is not on `main`. It then runs the full CI job on the tagged commit (build, checks, upstream ledger, complete Ubuntu suite, packed installation) and publishes that exact verified tarball with provenance. Rerunning the workflow for a version already on npm skips publication.
+
+## Recover a failed release
+
+If the run fails before publication, the version was never published: fix the problem in a new commit, delete the tag (`git push origin --delete "refs/tags/pi-v$VERSION"` and `git tag -d "pi-v$VERSION"`), and tag the new commit. Never move or delete the tag of a version that npm has published; publish a new patch instead.
+
+Perform global-install/self-update checks from a separate shell or after restarting Pi; do not replace the package running the release session. Report the package version, tagged SHA, and workflow run URL.

@@ -1,9 +1,9 @@
 // Copied to the temporary installation root by verify-package-install.mjs.
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { existsSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import { createRequire, findPackageJSON } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { createCodemodeExtension, DefaultResourceLoader, resizeImage } from "./node_modules/@astralyn/pi/dist/bundle/index.js";
 
@@ -32,16 +32,11 @@ for (let reload = 0; reload < 2; reload++) {
 const codemode = loader.getExtensions().extensions.flatMap((extension) => [...extension.tools.values()])
 	.find((tool) => tool.definition.name === "codemode")?.definition;
 assert.ok(codemode);
-// npm installs this package's dependencies beside it when installing from a tarball, but nests them
-// below it when installing from the registry, and `import.meta.resolve` cannot be pointed at another
-// package's tree. Locate the codemode package for both layouts and take its declared ESM entry.
-const codemodeManifestUrl = [
-	new URL("./node_modules/@astralyn/pi/node_modules/@earendil-works/pi-codemode/package.json", import.meta.url),
-	new URL("./node_modules/@earendil-works/pi-codemode/package.json", import.meta.url),
-].find((candidate) => existsSync(candidate));
-if (!codemodeManifestUrl) {
-	throw new Error("No @earendil-works/pi-codemode copy beside or below the installed @astralyn/pi.");
-}
+// The codemode package is @astralyn/pi's dependency, not this root's, so resolve it from the installed
+// package the way its own imports resolve, whichever layout npm chose.
+const codemodeManifestUrl = pathToFileURL(
+	findPackageJSON("@earendil-works/pi-codemode", new URL("./node_modules/@astralyn/pi/package.json", import.meta.url)),
+);
 const codemodeManifest = JSON.parse(readFileSync(codemodeManifestUrl, "utf8"));
 const { CodemodeSandbox, loadQuickJSWasm } = await import(
 	new URL(codemodeManifest.exports["."].import ?? codemodeManifest.main, codemodeManifestUrl).href

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { once } from "node:events";
 import {
 	copyFileSync,
 	existsSync,
@@ -11,9 +13,11 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
+import { gunzipSync } from "node:zlib";
 import { createSourceEnvironment } from "./run-source.mjs";
 
 const [installSpec, expectedVersionArgument] = process.argv.slice(2);
@@ -35,7 +39,6 @@ const expectedExtensionEntrypoints = readdirSync(sourceExtensionsDirectory, { wi
 	.map((entry) => `dist/extensions/${entry.name}/index.js`)
 	.sort();
 const installPath = resolve(process.cwd(), installSpec);
-const resolvedInstallSpec = existsSync(installPath) ? installPath : installSpec;
 const installDirectory = mkdtempSync(join(tmpdir(), "astralyn-pi-package-smoke-"));
 const packageDirectory = join(installDirectory, "node_modules", "@astralyn", "pi");
 const npmCliPath = process.env.npm_execpath;
@@ -82,35 +85,99 @@ function assertEqual(actual, expected, description) {
 	}
 }
 
-function verifyInstallation() {
+function readTarballManifest(tarball) {
+	const archive = gunzipSync(tarball);
+	const readField = (header, start, end) => header.toString("utf8", start, end).replace(/\0.*$/s, "").trim();
+	for (let offset = 0; offset + 512 <= archive.length; ) {
+		const header = archive.subarray(offset, offset + 512);
+		const entryName = readField(header, 0, 100);
+		if (!entryName) {
+			break;
+		}
+		const size = Number.parseInt(readField(header, 124, 136), 8);
+		if (entryName === "package/package.json") {
+			return JSON.parse(archive.toString("utf8", offset + 512, offset + 512 + size));
+		}
+		offset += 512 + Math.ceil(size / 512) * 512;
+	}
+	throw new Error(`${installSpec} has no package/package.json.`);
+}
+
+// npm applies a package's npm-shrinkwrap.json only when it installs that package
+// from a registry, which nests the locked dependencies below the package; a
+// tarball path installs them flat instead. Serve a tarball from a loopback
+// registry for its scope so it installs exactly as users install the release.
+async function serveTarball(tarball) {
+	const bytes = readFileSync(tarball);
+	const manifest = readTarballManifest(bytes);
+	const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+	const server = createServer((request, response) => {
+		const origin = `http://127.0.0.1:${server.address().port}`;
+		if (decodeURIComponent(request.url ?? "") === `/${manifest.name}`) {
+			response.setHeader("content-type", "application/json");
+			response.end(
+				JSON.stringify({
+					name: manifest.name,
+					"dist-tags": { latest: manifest.version },
+					versions: {
+						[manifest.version]: {
+							...manifest,
+							_hasShrinkwrap: true,
+							dist: { tarball: `${origin}/package.tgz`, integrity },
+						},
+					},
+				}),
+			);
+		} else if (request.url === "/package.tgz") {
+			response.end(bytes);
+		} else {
+			response.statusCode = 404;
+			response.end();
+		}
+	});
+	await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+	const scope = manifest.name.split("/")[0];
+	return {
+		installArguments: [
+			`--${scope}:registry=http://127.0.0.1:${server.address().port}/`,
+			`${manifest.name}@${manifest.version}`,
+		],
+		close: () => server.close(),
+	};
+}
+
+async function installPackage() {
+	const registry = existsSync(installPath) ? await serveTarball(installPath) : undefined;
+	try {
+		const npm = spawn(
+			process.execPath,
+			[
+				npmCliPath,
+				"install",
+				"--omit=dev",
+				"--ignore-scripts",
+				"--save-exact",
+				...(registry?.installArguments ?? [installSpec]),
+			],
+			{ cwd: installDirectory, env: smokeEnvironment, stdio: "inherit" },
+		);
+		const [exitCode] = await once(npm, "close");
+		if (exitCode !== 0) {
+			throw new Error(`npm install ${installSpec} exited with code ${exitCode}.`);
+		}
+	} finally {
+		registry?.close();
+	}
+}
+
+async function verifyInstallation() {
 	try {
 		writeFileSync(
 			join(installDirectory, "package.json"),
 			JSON.stringify({ name: "astralyn-pi-package-smoke", version: "1.0.0", private: true }, null, 2),
 		);
 
-		try {
-			execFileSync(
-				process.execPath,
-				[npmCliPath, "install", "--omit=dev", "--ignore-scripts", "--save-exact", resolvedInstallSpec],
-				{
-					cwd: installDirectory,
-					env: smokeEnvironment,
-					stdio: "inherit",
-				},
-			);
-		} catch (error) {
-			// The registry could not serve the artifact for installation. The package
-			// contents were never checked, so exit with code 2 to mark an
-			// observation failure that callers may retry, distinct from exit code 1
-			// which reports a verified defect in the published artifact.
-			console.error(
-				`Could not install ${resolvedInstallSpec}; its contents were not verified. This is an installation fetch failure (the artifact could not be fetched for installation), not a package-content failure.`,
-			);
-			console.error(error instanceof Error ? error.message : String(error));
-			process.exitCode = 2;
-			return;
-		}
+		await installPackage();
 
 		const installedPackage = readInstalledPackage("@astralyn/pi");
 		assertEqual(installedPackage.name, "@astralyn/pi", "installed package name");
@@ -293,7 +360,7 @@ for (const subpath of ["@astralyn/pi/client", "@astralyn/pi/experimental/plugin"
 		).trim();
 		assertEqual(rpcVersion, expectedVersion, "RPC entrypoint version");
 
-		console.log(`Verified clean installation of @astralyn/pi@${expectedVersion} from ${resolvedInstallSpec}.`);
+		console.log(`Verified clean installation of @astralyn/pi@${expectedVersion} from ${installSpec}.`);
 	} catch (error) {
 		// The installed artifact failed a content check: surface it as an Actions
 		// error annotation before the uncaught exception marks the failure.
@@ -304,4 +371,4 @@ for (const subpath of ["@astralyn/pi/client", "@astralyn/pi/experimental/plugin"
 	}
 }
 
-verifyInstallation();
+await verifyInstallation();

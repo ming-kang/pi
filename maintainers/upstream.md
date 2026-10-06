@@ -85,17 +85,16 @@ Wholly rewritten documentation pages are the exception. `docs/**` is distributio
 4. When adoption is final, reconcile `concerns.json`. `--apply` registers the files it adds; after porting an upstream path by hand, such as a new documentation page (which also needs a `docs/docs.json` entry), run `npm run diff:upstream -- --register` before relying on the worktree comparison. It intent-to-adds every untracked file that exists in the recorded baseline tree and prints them for review. Git otherwise treats an untracked replacement as a deletion plus a separate file.
 5. Verify the installed dependency tree, focused behavior tests, and interactive changes as required by AGENTS.md. Use a clean build for deleted sources or changed build/package exclusions. Run `npm run check`, the full diff report, and `npm run diff:upstream -- --check`. For entrypoint, dependency-scope, or packaging changes, pack and run `npm run verify:package-install -- <tarball>`. Include validation results and any explicitly assigned follow-up work in the synchronization record.
 6. At an owner-requested checkpoint, inspect status, stage explicit paths, inspect the staged diff, and commit. Follow the lockfile acknowledgement procedure when needed. Existing authorization persists; complete the authorized steps without asking again.
-7. If pushing/CI verification is authorized, push the synchronization branch and run the existing CI workflow on that exact commit:
+7. If pushing/CI verification is authorized, push the synchronization branch; CI runs on every `sync/**` push. Watch the run for that exact commit:
 
    ```bash
-   SYNC_BRANCH="$(git branch --show-current)"
    SYNC_SHA="$(git rev-parse HEAD)"
-   gh workflow run ci.yml --repo ming-kang/pi --ref "$SYNC_BRANCH" -f expected_sha="$SYNC_SHA"
-   gh run list --repo ming-kang/pi --workflow ci.yml --event workflow_dispatch --commit "$SYNC_SHA" --json databaseId,headSha,status,conclusion,url
+   git push -u origin "$(git branch --show-current)"
+   gh run list --repo ming-kang/pi --workflow ci.yml --commit "$SYNC_SHA" --json databaseId,headSha,status,conclusion,url
    gh run watch <run-id> --repo ming-kang/pi --exit-status
    ```
 
-   The manual trigger must already exist on GitHub's default branch. Ubuntu CI owns POSIX-sensitive complete-suite coverage.
+   Ubuntu CI owns POSIX-sensitive complete-suite coverage.
 8. When merging is authorized, merge the **standalone synchronization branch** and remove the merged local branch:
 
    ```bash
