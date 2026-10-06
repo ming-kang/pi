@@ -1,11 +1,10 @@
 // Copied to the temporary installation root by verify-package-install.mjs.
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
-import { CodemodeSandbox, loadQuickJSWasm } from "@earendil-works/pi-codemode";
 import { createCodemodeExtension, DefaultResourceLoader, resizeImage } from "./node_modules/@astralyn/pi/dist/bundle/index.js";
 
 const loader = new DefaultResourceLoader({
@@ -33,7 +32,21 @@ for (let reload = 0; reload < 2; reload++) {
 const codemode = loader.getExtensions().extensions.flatMap((extension) => [...extension.tools.values()])
 	.find((tool) => tool.definition.name === "codemode")?.definition;
 assert.ok(codemode);
-const resolveFromInstall = createRequire(new URL("./node_modules/@astralyn/pi/package.json", import.meta.url));
+// npm installs this package's dependencies beside it when installing from a tarball, but nests them
+// below it when installing from the registry, and `import.meta.resolve` cannot be pointed at another
+// package's tree. Locate the codemode package for both layouts and take its declared ESM entry.
+const codemodeManifestUrl = [
+	new URL("./node_modules/@astralyn/pi/node_modules/@earendil-works/pi-codemode/package.json", import.meta.url),
+	new URL("./node_modules/@earendil-works/pi-codemode/package.json", import.meta.url),
+].find((candidate) => existsSync(candidate));
+if (!codemodeManifestUrl) {
+	throw new Error("No @earendil-works/pi-codemode copy beside or below the installed @astralyn/pi.");
+}
+const codemodeManifest = JSON.parse(readFileSync(codemodeManifestUrl, "utf8"));
+const { CodemodeSandbox, loadQuickJSWasm } = await import(
+	new URL(codemodeManifest.exports["."].import ?? codemodeManifest.main, codemodeManifestUrl).href
+);
+const resolveFromInstall = createRequire(codemodeManifestUrl);
 const wasm = loadQuickJSWasm(resolveFromInstall.resolve("quickjs-wasi/quickjs.wasm"));
 const code = "text(await Promise.all([1, 2, 3].map(async n => n * n)))";
 const runScript = async (sandbox) => {
