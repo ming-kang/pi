@@ -8,6 +8,7 @@
 
 - Consume the installed `@earendil-works/*` dependencies; never vendor or recreate them. See [Architecture](maintainers/architecture.md#dependency-boundary).
 - Extensions live in `src/extensions/`, use the Extension API, and never import each other's internals.
+- Build new capabilities as extensions. When the Extension API cannot reach what one needs, add a small general-purpose hook to core and build the feature on it, rather than putting the feature in core. See [Placing new capabilities](maintainers/architecture.md#placing-new-capabilities).
 - Keep tool schemas, execution protocols, and model-facing results stable; presentation is defined in [Native tool presentation](docs/bundled/tool-presentation.md).
 - Follow upstream conventions: keys go through `KEYBINDINGS` in `src/core/keybindings.ts`, unbounded model-facing output goes through `truncateHead`/`truncateTail`, colors come from semantic theme helpers, and imports are top-level only.
 - Adopt upstream only from release tags via [Upstream synchronization](maintainers/upstream.md) and never merge an upstream tag into this branch. Fix type errors from outdated dependencies by adopting the upstream release that fixes them, not by removing code.
