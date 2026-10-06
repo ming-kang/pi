@@ -9,13 +9,12 @@ These repository-only notes are excluded from npm. Start with [AGENTS.md](../AGE
 | [AGENTS.md](../AGENTS.md) | Non-negotiable repository boundaries and implementation/verification requirements. |
 | [Architecture](architecture.md) | Dependency scope, subsystem ownership, and durable reasons for local behavior. |
 | [Dependency maintenance](dependencies.md) | Installation, consistency checks, npm age exceptions, and lockfile acknowledgement. |
-| [Upstream synchronization](upstream.md) | Baseline/ledger use and the complete synchronization workflow. |
-| [Release](release.md) | Distribution versioning, publication, verification, and release tags. |
+| [Upstream synchronization](upstream.md) | Baseline/ledger use and `npm run sync`. |
+| [Release](release.md) | Distribution versioning, `npm run release`, publication, and release tags. |
 | [Interactive testing](interactive-testing.md) | Driving the real interactive CLI with tui-test to verify terminal UI changes. |
 | [Development](../docs/development.md) | Running, building, and testing a checkout. |
-| `syncs/v<version>.md` | Decisions and validation for one adopted release, written during its [synchronization](upstream.md#synchronization-runbook). |
 
-Link to the owner of a rule rather than maintaining another copy. Keep release-specific path counts and decisions in synchronization records. Update `concerns.json` with the owning concern and covering tests when local behavior changes.
+Link to the owner of a rule rather than maintaining another copy. Release-specific adoption decisions belong in the `feat: sync upstream` commit body. Update `concerns.json` with the owning concern and covering tests when local behavior changes.
 
 ## Daily work
 

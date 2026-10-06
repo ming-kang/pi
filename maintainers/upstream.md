@@ -1,10 +1,10 @@
 # Upstream synchronization
 
-Follow [AGENTS.md](../AGENTS.md) and the ownership rules in [Architecture](architecture.md). Synchronization adopts an exact upstream release; [publication](release.md) is a separate operation.
+Follow [AGENTS.md](../AGENTS.md) and the ownership rules in [Architecture](architecture.md). A synchronization adopts one exact upstream release; [Release](release.md) publishes it.
 
 ## Baseline and concern ledger
 
-`upstream.json` records the repository, exact release tag/commit, source subtree, and root-mapped source tree. Compare against that tree, never a branch tip.
+`upstream.json` records the upstream repository, release tag and commit, source subtree, and root-mapped source tree. Every comparison is against that tree, never a branch tip.
 
 `concerns.json` groups every modified or dropped upstream path under the concerns that need it. Upstream does not generally accept contributor PRs, so treat every deviation as permanent unless it names an observable retirement signal.
 
@@ -13,44 +13,18 @@ Follow [AGENTS.md](../AGENTS.md) and the ownership rules in [Architecture](archi
 | `id` | Stable kebab-case name. |
 | `why` | One sentence; durable explanations belong in [Architecture](architecture.md). |
 | `paths[].path` | A deviating path; directory claims end in `/`. Several concerns may claim one path. |
-| `paths[].rewrite` | Required when the path measures as `rewrite`: why the patch cannot be thinner. |
-| `tests` | Optional covering tests. |
+| `paths[].rewrite` | Why the patch cannot be thinner, for a `src/` path that deletes more than 8 upstream lines or re-indents more than 10. |
+| `tests` | Covering tests; `npm run sync -- --verify` runs them when upstream touches the concern. |
 | `watch` | Optional observable retirement signal. |
 
-`--check` fails when:
+`npm run diff:upstream -- --check`, which the commit hook runs against the index, fails when:
 
-1. a modified or dropped upstream path has no claim, or a claim matches no deviation;
-2. a listed test path does not exist;
-3. an `id` is not unique kebab-case;
-4. a path measures as `rewrite` without a `rewrite` reason, or a reason remains on a path that no longer measures as `rewrite`;
-5. a file still carries a conflict marker that `--apply` wrote, a line beginning with `<<<<<<< distribution` or `>>>>>>> upstream`.
+- a modified or dropped upstream path has no claim, or a claim matches no deviation;
+- the ledger schema is invalid or a listed test does not exist;
+- the baseline, the `@earendil-works/*` pins, and the shrinkwrap disagree;
+- a file still carries a `<<<<<<< distribution` or `>>>>>>> upstream` conflict marker.
 
-An upstream rename of a symbol this distribution hooks into surfaces as a merge conflict, a type error, or a failing covering test; the ledger does not track symbols.
-
-## Conflict surface and risk
-
-Forms and metrics cover modified `src/` paths; wholesale replacements such as `CHANGELOG.md` would otherwise dominate the ranking. A path is a `rewrite` when it deletes more than 8 upstream lines or re-indents more than 10 (`MAX_PATCH_DELETIONS`, `MAX_PATCH_REINDENT` in the script), otherwise a `patch`. A path upstream does not have is distribution-owned and has no conflict surface.
-
-| Metric | Definition |
-| --- | --- |
-| `surface` | Added plus deleted lines against the baseline. |
-| `reindent` | `surface` minus the same count with whitespace ignored. |
-| `hunks` | Hunks in the baseline diff. |
-| `touches` | Non-merge upstream commits changing the path in the window before the baseline commit. |
-| `risk` | `surface × touches`. |
-
-`npm run diff:upstream` prints the complete worktree report, including each modified source path's form, surface, re-indentation, and hunks. `--check` validates baseline integrity, upstream dependency pins/ranges across installation scopes, and the rules above. The commit hook uses `--check --staged` to check the index that will be committed, including its baseline manifest, package metadata, ledger, referenced test paths, and conflict markers. An unstaged ledger repair cannot make that gate pass.
-
-`npm run diff:upstream -- --risk [--window <days>]` ranks modified source paths by risk over a 120-day default window. It needs the baseline commit's history and reports `n/a` without it; it never fails and is not part of the hook. Use it to decide where thinning a patch pays off: prefer moving logic into distribution-owned files and leaving one-line hooks in upstream files, and spend that effort on the highest-risk paths. A large patch in a file upstream never touches costs nothing. Recording its totals in a synchronization record is optional.
-
-For an unexpected deviation, inspect the actual diff and introducing commit before describing its impact:
-
-```bash
-git diff <sourceTree> -- <path>
-git log -p -1 -- <path>
-```
-
-An unregistered path can be a prompt wording change; it does not by itself imply an execution or protocol change.
+A `rewrite` reason that is missing or no longer needed prints a note, not a failure; fix it with the next ledger edit. `npm run diff:upstream` with no flag prints the complete report, including each modified source path's conflict surface.
 
 ## Keeping deviations small
 
@@ -58,50 +32,35 @@ A deviation earns its maintenance cost only while it does something upstream doe
 
 Do not move upstream code into a distribution module so that both can share it. The move deletes upstream lines, which conflicts whenever upstream edits them, and the shared copy drifts from the original without any signal. Leave upstream's code where it is and pass a reference to it, or add a line that calls the distribution code. `sdk.ts` and `ContextSnapshotCapture` are the reference example. Likewise put a distribution test in a distribution-owned file rather than appending it to an upstream test file, unless it changes what an existing upstream test asserts.
 
-Wholly rewritten documentation pages are the exception. `docs/**` is distribution-owned, and a rewrite that documents real behavior stays even when upstream later edits the same page: keep this distribution's prose and port only upstream's factual changes, which is why `--apply` leaves `docs/` for porting by hand.
+Wholly rewritten documentation pages are the exception. `docs/**` is distribution-owned, and a rewrite that documents real behavior stays even when upstream later edits the same page: keep this distribution's prose and port only upstream's factual changes, which is why synchronization leaves `docs/` for porting by hand.
 
-## Synchronization runbook
+## Runbook
 
-1. Inspect status and existing work. Start a clean synchronization branch from the intended `main` commit; preserve unrelated work. Fetch only the selected release tag and inspect it with `gh`:
-
-   ```bash
-   git switch main
-   git switch -c sync/upstream-v<version>
-   git fetch upstream tag v<version>
-   gh release view v<version> --repo earendil-works/pi
-   npm run diff:upstream -- --check
-   npm run diff:upstream -- --target v<version>
-   ```
-
-   If a fresh clone lacks the recorded baseline tree, fetch its exact tag first. Target classification uses the committed HEAD tree; finish or isolate local edits before relying on its collision report.
-2. Read the changed source, tests, APIs, documentation, and examples. Classify changes as adopt, adapt, defer, or not applicable. Review each collision with a registered deviation or distribution-owned addition, and decide each path the report leaves for porting by hand. Record this release's decisions under `maintainers/syncs/v<version>.md`; keep durable architecture explanations in [Architecture](architecture.md) and per-concern intent in the ledger.
-3. Commit or set aside local edits, then merge the release into the worktree:
+1. **Start** from a clean `main`:
 
    ```bash
-   npm run diff:upstream -- --apply v<version>
+   npm run sync -- v<version>
    ```
 
-   Each upstream change is three-way merged with `git merge-file` against the recorded baseline, and `upstream.json` advances to the release. The review paths (`REVIEW_PATHS` in the script: `README.md`, `CHANGELOG.md`, `docs/`, `package.json`, and `npm-shrinkwrap.json`) are left untouched, because this distribution keeps its own prose there and npm regenerates the manifests. The report lists every other path as `merged`, `added` (already registered with `git add --intent-to-add`), `deleted`, `skipped` (dropped by this distribution), or `conflict`, then lists the review paths with a `git diff` command that shows upstream's change; the command exits nonzero when it leaves conflicts. Resolve conflict markers (`--check` fails while any remain), remove added paths classified as not applicable with `git rm -f`, and decide each binary file the report kept at this distribution's version. Port upstream's factual changes into the review paths by hand. Review dependency **scope** as well as version using [Dependency maintenance](dependencies.md), and regenerate `package.json` and `npm-shrinkwrap.json` through npm. Update distribution documentation and `CHANGELOG.md` under `[Unreleased]`. The root package's release version stays unchanged during synchronization.
-4. When adoption is final, reconcile `concerns.json`. `--apply` registers the files it adds; after porting an upstream path by hand, such as a new documentation page (which also needs a `docs/docs.json` entry), run `npm run diff:upstream -- --register` before relying on the worktree comparison. It intent-to-adds every untracked file that exists in the recorded baseline tree and prints them for review. Git otherwise treats an untracked replacement as a deletion plus a separate file.
-5. Verify the installed dependency tree, focused behavior tests, and interactive changes as required by AGENTS.md. Use a clean build for deleted sources or changed build/package exclusions. Run `npm run check`, the full diff report, and `npm run diff:upstream -- --check`. For entrypoint, dependency-scope, or packaging changes, pack and run `npm run verify:package-install -- <tarball>`. Include validation results and any explicitly assigned follow-up work in the synchronization record.
-6. At an owner-requested checkpoint, inspect status, stage explicit paths, inspect the staged diff, and commit. Follow the lockfile acknowledgement procedure when needed. Existing authorization persists; complete the authorized steps without asking again.
-7. If pushing/CI verification is authorized, push the synchronization branch; CI runs on every `sync/**` push. Watch the run for that exact commit:
+   This fetches the release, creates `sync/upstream-v<version>`, three-way merges every upstream change against the recorded baseline, advances `upstream.json`, and moves all `@earendil-works/*` pins to `<version>` through npm (with a release-age exception scoped to that install). It prints merged, added, deleted, skipped (dropped here), and conflicting paths; the review paths it leaves for porting by hand (`README.md`, `CHANGELOG.md`, `docs/`, and the root manifests) with the command that shows each upstream change; the concerns whose paths upstream changed; and the upstream release notes link.
+
+2. **Adopt.** Read the release notes and the changes. Resolve conflict markers, remove added paths that do not apply with `git rm -f`, and decide each binary file kept at this distribution's version. Port upstream's factual changes into the review paths, registering new docs pages in `docs/docs.json`. Re-review each listed concern, update `concerns.json`, add user-visible changes to `CHANGELOG.md` under `[Unreleased]`, and review any new dependency's scope per [Dependency maintenance](dependencies.md). Verify interactive changes in a real terminal per [Interactive testing](interactive-testing.md).
+
+3. **Verify and commit:**
 
    ```bash
-   SYNC_SHA="$(git rev-parse HEAD)"
-   git push -u origin "$(git branch --show-current)"
-   gh run list --repo ming-kang/pi --workflow ci.yml --commit "$SYNC_SHA" --json databaseId,headSha,status,conclusion,url
-   gh run watch <run-id> --repo ming-kang/pi --exit-status
+   npm run sync -- --verify
    ```
 
-   Ubuntu CI owns POSIX-sensitive complete-suite coverage.
-8. When merging is authorized, merge the **standalone synchronization branch** and remove the merged local branch:
+   This registers hand-ported upstream files with `git add --intent-to-add` (git otherwise treats an untracked replacement as a deletion plus a separate file), then runs format, `npm run check`, the ledger check, and the tests of every concern upstream touched. Stage the synchronization's paths, review the staged diff, and commit as `feat: sync upstream v<version>`. The commit body is the synchronization record: adoption decisions (adopt, adapt, defer, not applicable) and how each conflict was resolved. A lockfile change limited to `@earendil-works/*` packages needs no acknowledgement.
+
+4. **Land and release:**
 
    ```bash
    git switch main
    git merge --ff-only sync/upstream-v<version>
    git branch -d sync/upstream-v<version>
-   git status --short --branch
+   npm run release
    ```
 
-   If `main` diverged, reconcile and revalidate the result before merging; do not force the fast-forward or branch deletion. Delete a published remote synchronization branch only when that cleanup is also in scope. Report the resulting commit, worktree state, and any outstanding validation. Publication/versioning remains governed by the release runbook.
+   The release tag runs the complete Ubuntu CI before anything is published, so the synchronization branch is not pushed. If `main` diverged, rebase the branch and rerun `--verify` rather than forcing the merge.

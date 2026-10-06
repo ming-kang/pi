@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import {
+	applyUpstreamRelease,
+	createGit,
 	normalizeRepository,
+	registerUpstreamAdoptions,
 	runDiffUpstream,
 	validateConcerns,
 	validateManifest,
@@ -149,29 +152,6 @@ function createTestRepo({ sourceDependencies = runtimeDependencies, sourceDevDep
 	return { root, manifest, commit, sourceTree };
 }
 
-function createTargetTag(repo, additions = {}) {
-	const sourceDir = join(repo.root, "packages", "coding-agent");
-	mkdirSync(join(sourceDir, "sub"), { recursive: true });
-	writeJson(join(sourceDir, "package.json"), {
-		name: "test-agent",
-		version: "1.2.4",
-		dependencies: runtimeDependencies,
-	});
-	for (const name of ["mod.txt", "drop.txt"]) {
-		writeFileSync(join(sourceDir, name), `${name}\n`);
-	}
-	for (const name of ["a.txt", "b.txt"]) {
-		writeFileSync(join(sourceDir, "sub", name), `${name}\n`);
-	}
-	mkdirSync(join(sourceDir, "src"), { recursive: true });
-	writeFileSync(join(sourceDir, "src", "app.ts"), appSource);
-	writeFiles(sourceDir, additions);
-	writeFileSync(join(sourceDir, ".gitignore"), "maintainers/\nignored.txt\n");
-	git(repo.root, "add", "packages");
-	git(repo.root, "commit", "-m", "upstream v1.2.4");
-	git(repo.root, "tag", "v1.2.4");
-}
-
 function invoke(root, args = []) {
 	let stdout = "";
 	let stderr = "";
@@ -182,6 +162,22 @@ function invoke(root, args = []) {
 		stderr: { write: (t) => (stderr += t) },
 	});
 	return { code, stdout, stderr };
+}
+
+function apply(root, tag) {
+	let stdout = "";
+	let stderr = "";
+	const { code } = applyUpstreamRelease({
+		root,
+		tag,
+		stdout: { write: (t) => (stdout += t) },
+		stderr: { write: (t) => (stderr += t) },
+	});
+	return { code, stdout, stderr };
+}
+
+function register(root) {
+	return registerUpstreamAdoptions(readJson(join(root, "maintainers", "upstream.json")), createGit(root).git);
 }
 
 function ledgerValidationFailures(concerns, root = ".") {
@@ -411,99 +407,11 @@ describe("diff-upstream worktree collection and CLI execution", () => {
 		expect(result.code).toBe(2);
 		expect(result.stderr).toContain("Usage:");
 
-		const missingValue = invoke(fakeRoot, ["--target"]);
-		expect(missingValue.code).toBe(2);
-
-		const combined = invoke(fakeRoot, ["--check", "--target", "v1.2.4"]);
-		expect(combined.code).toBe(2);
-
-		const badTag = invoke(fakeRoot, ["--target", "nope"]);
-		expect(badTag.code).toBe(2);
-		expect(badTag.stderr).toContain("exact stable release tag");
-	});
-
-	test("--target classifies upstream changes against the ledger", () => {
-		const repo = createTestRepo();
-		// Recreate the upstream subtree at v1.2.4: mod.txt and sub/a.txt change (registered),
-		// new.txt appears (clear), drop.txt disappears, and package.json's version moves (review).
-		const sourceDir = join(repo.root, "packages", "coding-agent");
-		mkdirSync(join(sourceDir, "sub"), { recursive: true });
-		writeJson(join(sourceDir, "package.json"), {
-			name: "test-agent",
-			version: "1.2.4",
-			dependencies: runtimeDependencies,
-		});
-		writeFileSync(join(sourceDir, "mod.txt"), "upstream changed\n");
-		writeFileSync(join(sourceDir, "sub", "a.txt"), "upstream changed\n");
-		writeFileSync(join(sourceDir, "sub", "b.txt"), "b.txt\n");
-		writeFileSync(join(sourceDir, "new.txt"), "new upstream file\n");
-		mkdirSync(join(sourceDir, "src"), { recursive: true });
-		writeFileSync(join(sourceDir, "src", "app.ts"), appSource);
-		writeFileSync(join(sourceDir, ".gitignore"), "maintainers/\nignored.txt\n");
-		git(repo.root, "add", "packages");
-		git(repo.root, "commit", "-m", "upstream v1.2.4");
-		git(repo.root, "tag", "v1.2.4");
-		writeLedger(repo.root, [concern("local-fix", ["mod.txt"]), concern("local-subtree", ["sub/"])]);
-
-		const result = invoke(repo.root, ["--target", "v1.2.4"]);
-		expect(result.code).toBe(0);
-		expect(result.stdout).toContain("Target: v1.2.4 packages/coding-agent");
-		expect(result.stdout).toContain("2 touching registered deviations");
-		expect(result.stdout).toContain("0 colliding with fork-owned additions");
-		expect(result.stdout).toContain("1 clear of fork deviations");
-		expect(result.stdout).toContain("1 removed upstream");
-		expect(result.stdout).toContain("1 left for porting by hand");
-		expect(result.stdout).toContain("M mod.txt  [local-fix]");
-		expect(result.stdout).toContain("M sub/ (1 file)  [local-subtree]");
-		expect(result.stdout).toContain("A new.txt");
-		expect(result.stdout).toContain("D drop.txt");
-
-		const missingTag = invoke(repo.root, ["--target", "v9.9.9"]);
-		expect(missingTag.code).toBe(1);
-		expect(missingTag.stderr).toContain("not available locally");
-	});
-
-	test("--target keeps fork-owned additions out of adoption candidates", () => {
-		const repo = createTestRepo();
-		writeFileSync(join(repo.root, "collision.txt"), "local implementation\n");
-		git(repo.root, "add", "collision.txt");
-		git(repo.root, "commit", "-m", "local addition");
-		createTargetTag(repo, { "collision.txt": "upstream implementation\n" });
-
-		const result = invoke(repo.root, ["--target", "v1.2.4"]);
-		expect(result.code).toBe(0);
-		expect(result.stdout).toContain("1 colliding with fork-owned additions");
-		expect(result.stdout).toContain("Changes colliding with fork-owned additions:");
-		expect(result.stdout).toContain("A collision.txt");
-		const adoptionSection = result.stdout.split("Changes clear of fork deviations:")[1] ?? "";
-		expect(adoptionSection).not.toContain("collision.txt");
-	});
-
-	test("--target lists review paths one by one, apart from the ledger groups", () => {
-		const repo = createTestRepo({ files: { "docs/guide.md": "guide\n", "docs/usage.md": "usage\n" } });
-		createTargetTag(repo, { "docs/guide.md": "upstream guide\n", "docs/usage.md": "upstream usage\n" });
-		writeLedger(repo.root, [concern("distribution-docs", ["docs/"])]);
-
-		const result = invoke(repo.root, ["--target", "v1.2.4"]);
-		expect(result.code, result.stderr).toBe(0);
-		expect(result.stdout).toContain("0 touching registered deviations");
-		expect(result.stdout).toContain("3 left for porting by hand");
-		const review = result.stdout.split("Left for porting by hand:")[1] ?? "";
-		for (const line of ["M docs/guide.md", "M docs/usage.md", "M package.json"]) {
-			expect(review).toContain(`  ${line}\n`);
+		for (const args of [["--staged"], ["--check", "--check"], ["--apply", "v1.2.4"], ["--target", "v1.2.4"]]) {
+			expect(invoke(fakeRoot, args).code, args.join(" ")).toBe(2);
 		}
 	});
 
-	test("--target fails closed when the deviation ledger is invalid", () => {
-		const repo = createTestRepo();
-		createTargetTag(repo);
-		writeLedger(repo.root, [concern("Invalid_Id", ["mod.txt"])]);
-
-		const result = invoke(repo.root, ["--target", "v1.2.4"]);
-		expect(result.code).toBe(1);
-		expect(result.stderr).toContain("id must be kebab-case");
-		expect(result.stdout).not.toContain("adoption candidates");
-	});
 });
 
 // Replace the upstream subtree with exactly these files and tag it v1.2.4.
@@ -533,14 +441,14 @@ function commitLocal(repo, message) {
 const unchanged = { "mod.txt": "mod.txt\n", "drop.txt": "drop.txt\n", "sub/a.txt": "a.txt\n", "sub/b.txt": "b.txt\n" };
 const read = (repo, path) => readFileSync(join(repo.root, path), "utf8");
 
-describe("diff-upstream --apply", () => {
+describe("diff-upstream applyUpstreamRelease", () => {
 	test("merges non-overlapping local and upstream edits and advances the baseline", () => {
 		const repo = createTestRepo();
 		writeFileSync(join(repo.root, "src", "app.ts"), appSource.replace("console.log(0)", "local()"));
 		commitLocal(repo, "local edit");
 		tagUpstream(repo, { ...unchanged, "src/app.ts": appSource.replace("console.log(11)", "upstream()") });
 
-		const result = invoke(repo.root, ["--apply", "v1.2.4"]);
+		const result = apply(repo.root, "v1.2.4");
 		expect(result.stderr).toBe("");
 		expect(result.code).toBe(0);
 		const app = read(repo, "src/app.ts");
@@ -559,7 +467,7 @@ describe("diff-upstream --apply", () => {
 		commitLocal(repo, "local edit");
 		tagUpstream(repo, { ...unchanged, "src/app.ts": appSource.replace("console.log(11)", "upstream()") });
 
-		const result = invoke(relative(process.cwd(), repo.root), ["--apply", "v1.2.4"]);
+		const result = apply(relative(process.cwd(), repo.root), "v1.2.4");
 		expect(result.code, result.stdout).toBe(0);
 		expect(read(repo, "src/app.ts")).toContain("upstream()");
 	});
@@ -570,7 +478,7 @@ describe("diff-upstream --apply", () => {
 		commitLocal(repo, "local edit");
 		tagUpstream(repo, { ...unchanged, "src/app.ts": appSource.replace("console.log(5)", "upstream()") });
 
-		const result = invoke(repo.root, ["--apply", "v1.2.4"]);
+		const result = apply(repo.root, "v1.2.4");
 		expect(result.code).toBe(1);
 		expect(result.stdout).toContain("conflict src/app.ts");
 		const app = read(repo, "src/app.ts");
@@ -592,7 +500,7 @@ describe("diff-upstream --apply", () => {
 			// drop.txt and mod.txt are deleted upstream
 		});
 
-		const result = invoke(repo.root, ["--apply", "v1.2.4"]);
+		const result = apply(repo.root, "v1.2.4");
 		expect(result.code).toBe(1);
 		expect(read(repo, "new.txt")).toBe("new upstream file\n");
 		expect(existsSync(join(repo.root, "drop.txt"))).toBe(false);
@@ -611,7 +519,7 @@ describe("diff-upstream --apply", () => {
 		commitLocal(repo, "local addition");
 		tagUpstream(repo, { ...unchanged, "src/app.ts": appSource, "collision.txt": "upstream implementation\n" });
 
-		const result = invoke(repo.root, ["--apply", "v1.2.4"]);
+		const result = apply(repo.root, "v1.2.4");
 		expect(result.code).toBe(1);
 		expect(result.stdout).toContain("conflict collision.txt");
 		expect(read(repo, "collision.txt")).toContain("upstream implementation");
@@ -624,7 +532,7 @@ describe("diff-upstream --apply", () => {
 		commitLocal(repo, "local image");
 		tagUpstream(repo, { ...unchanged, "src/app.ts": appSource, "image.png": image(3) });
 
-		const result = invoke(repo.root, ["--apply", "v1.2.4"]);
+		const result = apply(repo.root, "v1.2.4");
 		expect(result.code).toBe(1);
 		expect(result.stdout).toContain("conflict image.png (binary");
 		expect(readFileSync(join(repo.root, "image.png")).equals(image(2))).toBe(true);
@@ -635,7 +543,7 @@ describe("diff-upstream --apply", () => {
 		tagUpstream(repo, { ...unchanged, "src/app.ts": appSource, "new.txt": "new\n" });
 		writeFileSync(join(repo.root, "mod.txt"), "uncommitted\n");
 
-		const result = invoke(repo.root, ["--apply", "v1.2.4"]);
+		const result = apply(repo.root, "v1.2.4");
 		expect(result.code).toBe(1);
 		expect(result.stderr).toContain("uncommitted");
 		expect(existsSync(join(repo.root, "new.txt"))).toBe(false);
@@ -657,7 +565,7 @@ describe("diff-upstream --apply", () => {
 			// docs/old.md is deleted upstream
 		});
 
-		const result = invoke(repo.root, ["--apply", "v1.2.4"]);
+		const result = apply(repo.root, "v1.2.4");
 		expect(result.code, result.stdout).toBe(0);
 		expect(read(repo, "README.md")).toBe("readme\n");
 		expect(read(repo, "CHANGELOG.md")).toBe("changelog\n");
@@ -690,7 +598,7 @@ describe("diff-upstream --apply", () => {
 			"src/lib/README.md": "upstream lib\n",
 		});
 
-		const result = invoke(repo.root, ["--apply", "v1.2.4"]);
+		const result = apply(repo.root, "v1.2.4");
 		expect(result.code, result.stdout).toBe(0);
 		expect(read(repo, "examples/README.md")).toBe("upstream examples\n");
 		expect(read(repo, "src/lib/README.md")).toBe("upstream lib\n");
@@ -700,7 +608,7 @@ describe("diff-upstream --apply", () => {
 		const repo = createTestRepo();
 		tagUpstream(repo, { ...unchanged, "src/app.ts": appSource, "src/new.ts": "export const added = true;\n" });
 
-		expect(invoke(repo.root, ["--apply", "v1.2.4"]).code).toBe(0);
+		expect(apply(repo.root, "v1.2.4").code).toBe(0);
 		expect(git(repo.root, "ls-files", "--", "src/new.ts")).toBe("src/new.ts");
 		// package.json is a review path, so it keeps the distribution's version.
 		writeLedger(repo.root, [concern("manifest", ["package.json"])]);
@@ -713,11 +621,11 @@ describe("diff-upstream --apply", () => {
 		writeFileSync(join(repo.root, "src", "app.ts"), appSource.replace("console.log(5)", "local()"));
 		commitLocal(repo, "local edit");
 		tagUpstream(repo, { ...unchanged, "src/app.ts": appSource.replace("console.log(5)", "upstream()") });
-		expect(invoke(repo.root, ["--apply", "v1.2.4"]).code).toBe(1);
+		expect(apply(repo.root, "v1.2.4").code).toBe(1);
 
 		const blocked = invoke(repo.root, ["--check"]);
 		expect(blocked.code).toBe(1);
-		expect(blocked.stderr).toContain("unresolved --apply conflict markers in src/app.ts");
+		expect(blocked.stderr).toContain("unresolved upstream conflict markers in src/app.ts");
 
 		writeFileSync(join(repo.root, "src", "app.ts"), appSource.replace("console.log(5)", "local();\n\tupstream()"));
 		expect(invoke(repo.root, ["--check"]).stderr).not.toContain("conflict markers");
@@ -734,7 +642,7 @@ describe("diff-upstream --apply", () => {
 		git(repo.root, "add", "--", "src/app.ts");
 		const staged = invoke(repo.root, ["--check", "--staged"]);
 		expect(staged.code).toBe(1);
-		expect(staged.stderr).toContain("unresolved --apply conflict markers in src/app.ts");
+		expect(staged.stderr).toContain("unresolved upstream conflict markers in src/app.ts");
 	});
 
 	test("a sentence that mentions a conflict marker is not a conflict", () => {
@@ -745,14 +653,14 @@ describe("diff-upstream --apply", () => {
 	});
 });
 
-describe("diff-upstream --register", () => {
-	// --apply leaves an added docs page for porting by hand; the hand-ported file
+describe("diff-upstream registerUpstreamAdoptions", () => {
+	// Applying leaves an added docs page for porting by hand; the hand-ported file
 	// is untracked at an upstream path until registered. package.json deviates
 	// from the new baseline, so the ledger claims it.
 	function repoWithPendingPage() {
 		const repo = createTestRepo({ files: { "docs/old.md": "old\n" } });
 		tagUpstream(repo, { ...unchanged, "src/app.ts": appSource, "docs/old.md": "old\n", "docs/new.md": "new\n" });
-		expect(invoke(repo.root, ["--apply", "v1.2.4"]).code).toBe(0);
+		expect(apply(repo.root, "v1.2.4").code).toBe(0);
 		writeLedger(repo.root, [concern("manifest", ["package.json"])]);
 		return repo;
 	}
@@ -764,20 +672,16 @@ describe("diff-upstream --register", () => {
 		const blocked = invoke(repo.root, ["--check"]);
 		expect(blocked.code).toBe(1);
 		expect(blocked.stderr).toContain("untracked file at upstream path docs/new.md");
-		expect(blocked.stderr).toContain("npm run diff:upstream -- --register");
+		expect(blocked.stderr).toContain("npm run sync -- --verify");
 
-		const registered = invoke(repo.root, ["--register"]);
-		expect(registered.code).toBe(0);
-		expect(registered.stdout).toContain("registered docs/new.md");
+		expect(register(repo.root)).toEqual(["docs/new.md"]);
 		expect(git(repo.root, "ls-files", "--", "docs/new.md")).toBe("docs/new.md");
 
 		// Identical to upstream, so the file is no longer a deviation at all.
 		const check = invoke(repo.root, ["--check"]);
 		expect(check.code, check.stderr).toBe(0);
 
-		const again = invoke(repo.root, ["--register"]);
-		expect(again.code).toBe(0);
-		expect(again.stdout).toContain("No untracked files at upstream paths");
+		expect(register(repo.root)).toEqual([]);
 	});
 
 	test("leaves untracked distribution-local files untracked", () => {
@@ -785,10 +689,7 @@ describe("diff-upstream --register", () => {
 		writeFileSync(join(repo.root, "docs", "new.md"), "new\n");
 		writeFileSync(join(repo.root, "scratch.txt"), "scratch\n");
 
-		const registered = invoke(repo.root, ["--register"]);
-		expect(registered.code).toBe(0);
-		expect(registered.stdout).toContain("registered docs/new.md");
-		expect(registered.stdout).not.toContain("scratch.txt");
+		expect(register(repo.root)).toEqual(["docs/new.md"]);
 		expect(git(repo.root, "ls-files", "--", "scratch.txt")).toBe("");
 
 		// A distribution-local addition needs no claim, so the check passes.
@@ -799,7 +700,7 @@ describe("diff-upstream --register", () => {
 	test("a registered file with distribution content measures as a modified upstream path", () => {
 		const repo = repoWithPendingPage();
 		writeFileSync(join(repo.root, "docs", "new.md"), "distribution guide\n");
-		expect(invoke(repo.root, ["--register"]).code).toBe(0);
+		expect(register(repo.root)).toEqual(["docs/new.md"]);
 
 		const blocked = invoke(repo.root, ["--check"]);
 		expect(blocked.code).toBe(1);
@@ -810,29 +711,12 @@ describe("diff-upstream --register", () => {
 		expect(check.code, check.stderr).toBe(0);
 	});
 
-	test("reports when there is nothing to register", () => {
+	test("leaves the root manifests untracked: they are not paths in the baseline tree", () => {
 		const repo = createTestRepo();
-		const result = invoke(repo.root, ["--register"]);
-		expect(result.code).toBe(0);
-		expect(result.stdout).toContain("No untracked files at upstream paths");
-		// The root manifest stays untracked: it is not a path in the baseline tree.
+		expect(register(repo.root)).toEqual([]);
 		expect(git(repo.root, "ls-files", "--", "npm-shrinkwrap.json")).toBe("");
 	});
-
-	test("rejects combinations with other modes", () => {
-		const repo = createTestRepo();
-		for (const args of [
-			["--register", "--check"],
-			["--register", "--staged"],
-			["--register", "--risk"],
-		]) {
-			const result = invoke(repo.root, args);
-			expect(result.code).toBe(2);
-			expect(result.stderr).toContain("--register");
-		}
-	});
 });
-
 
 describe("diff-upstream concern ledger", () => {
 	test("directory claims cover whole directories and stale claims fail the check", () => {
@@ -921,14 +805,14 @@ describe("diff-upstream conflict surface", () => {
 		expect(report.stdout).toMatch(/patch\s+1\s+0\s+1\s+src\/app\.ts/);
 	});
 
-	test("re-indenting upstream lines is a rewrite that needs a written reason", () => {
+	test("re-indenting upstream lines is a rewrite noted until it has a written reason", () => {
 		const repo = createTestRepo();
 		writeFileSync(join(repo.root, "src", "app.ts"), wrapped.join("\n"));
 		writeLedger(repo.root, [concern("wrapped-run", ["src/app.ts"])]);
 
 		const unexplained = invoke(repo.root, ["--check"]);
-		expect(unexplained.code).toBe(1);
-		expect(unexplained.stderr).toContain("src/app.ts measures as rewrite (12 deletions, 24 re-indented lines)");
+		expect(unexplained.code, unexplained.stderr).toBe(0);
+		expect(unexplained.stderr).toContain("note: src/app.ts measures as rewrite (12 deletions, 24 re-indented lines)");
 
 		writeLedger(repo.root, [
 			concern("wrapped-run", [{ path: "src/app.ts", rewrite: "The body must run inside the fork's try block." }]),
@@ -940,7 +824,7 @@ describe("diff-upstream conflict surface", () => {
 		// Thinning the patch back to a single addition leaves the reason stale.
 		writeFileSync(join(repo.root, "src", "app.ts"), thin);
 		const staleReason = invoke(repo.root, ["--check"]);
-		expect(staleReason.code).toBe(1);
+		expect(staleReason.code).toBe(0);
 		expect(staleReason.stderr).toContain(
 			'concern "wrapped-run" gives a rewrite reason for src/app.ts, which no longer measures as rewrite',
 		);
@@ -963,50 +847,7 @@ describe("diff-upstream conflict surface", () => {
 		expect(invoke(repo.root, ["--check"]).stderr).toContain("measures as rewrite");
 		const staged = invoke(repo.root, ["--check", "--staged"]);
 		expect(staged.code, staged.stderr).toBe(0);
+		expect(staged.stderr).not.toContain("measures as rewrite");
 	});
 });
 
-describe("diff-upstream --risk", () => {
-	const thin = appSource.replace("{\n", "{\n\tconsole.log('fork');\n");
-
-	test("ranks modified source paths by surface times upstream touches in the window", () => {
-		const repo = createTestRepo();
-		writeFileSync(join(repo.root, "src", "app.ts"), thin);
-
-		const result = invoke(repo.root, ["--risk", "--window", "30"]);
-		expect(result.code, result.stderr).toBe(0);
-		expect(result.stdout).toMatch(/Touch window: 30 days \(\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}\)/);
-		// One upstream commit added src/app.ts inside the window: risk = 1 line x 1 touch.
-		expect(result.stdout).toMatch(/1\s+1\s+1\s+0\s+1\s+patch\s+src\/app\.ts/);
-		expect(result.stdout).toContain("rewriteSurface: 0");
-		expect(result.stdout).toContain("risk: 1");
-	});
-
-	test("reports n/a and still succeeds without upstream history", () => {
-		const repo = createTestRepo();
-		writeFileSync(join(repo.root, "src", "app.ts"), thin);
-		git(repo.root, "tag", "-d", "v1.2.3");
-		repo.manifest.commit = "c".repeat(40);
-		writeJson(join(repo.root, "maintainers", "upstream.json"), repo.manifest);
-
-		const result = invoke(repo.root, ["--risk"]);
-		expect(result.code).toBe(0);
-		expect(result.stderr).toContain("touches and risk are n/a");
-		expect(result.stdout).toMatch(/n\/a\s+n\/a\s+1\s+0\s+1\s+patch\s+src\/app\.ts/);
-		expect(result.stdout).toContain("risk: n/a");
-	});
-
-	test("rejects --window without --risk and combined modes", () => {
-		const fakeRoot = join(tmpdir(), "pi-diff-cli-argument-parsing-only");
-		for (const args of [
-			["--window", "30"],
-			["--risk", "--check"],
-			["--risk", "--window", "0"],
-			["--risk", "--target", "v1.2.4"],
-		]) {
-			const result = invoke(fakeRoot, args);
-			expect(result.code, args.join(" ")).toBe(2);
-			expect(result.stderr).toContain("Usage:");
-		}
-	});
-});

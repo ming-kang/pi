@@ -29,38 +29,23 @@ Review every changed package, dependency scope, resolution, integrity change, an
 
 ## Release age and explicit exceptions
 
-The repository's `.npmrc` sets `min-release-age=2` (days). Keep that default for ordinary resolution. An explicitly requested, identified release may be adopted before that age; record the target tag/version and the reviewed lockfile changes in the synchronization record. Existing owner authorization for that version remains sufficient; do not ask for it again.
+The repository's `.npmrc` sets `min-release-age=2` (days). Keep that default for ordinary resolution. `npm run sync` installs the selected upstream release with `--min-release-age=0` for that one command, because the owner chose that exact release; inspect every resulting lockfile change.
 
-The controls have separate purposes:
+The commit hook accepts a staged `npm-shrinkwrap.json` without acknowledgement when the only changes are the root version and `@earendil-works/*` packages moving to the version in `maintainers/upstream.json`, as in a release commit or a plain synchronization. Any other change (a new or updated third-party package, even one pulled in by an upstream package) prints a bounded summary and needs a reviewed acknowledgement for that commit:
 
 | Control | Scope and meaning |
 | --- | --- |
 | `--min-release-age=0` | An exception for one npm resolution/install command. It applies to that command's dependency resolution, so inspect all resulting changes. |
-| `PI_PACKAGE_ALLOW_FRESH=1` | Allows fresh packages in the verifier's child npm installation. Used for a reviewed fresh upstream release or verification immediately after publishing this package. |
+| `PI_PACKAGE_ALLOW_FRESH=1` | Allows fresh packages in the verifier's child npm installation, for a reviewed fresh upstream release. |
 | `PI_ALLOW_LOCKFILE_CHANGE=1` | Acknowledges review of the staged lockfile for one commit. It does not change npm resolution or replace the other checks. |
 
-For an authorized fresh release, append `--min-release-age=0` to the two install commands above. Do not change global npm configuration.
-
-Bash examples after review:
-
-```bash
-PI_PACKAGE_ALLOW_FRESH=1 npm run verify:package-install -- /path/to/package.tgz
-PI_ALLOW_LOCKFILE_CHANGE=1 git commit -m "feat: sync upstream v<version>"
-```
-
-PowerShell 7 equivalents, with flags scoped to the operation:
+Do not change global npm configuration. Scope each flag to its operation; in PowerShell 7:
 
 ```powershell
-$env:PI_PACKAGE_ALLOW_FRESH = "1"
-try { npm run verify:package-install -- C:/path/to/package.tgz }
-finally { Remove-Item Env:PI_PACKAGE_ALLOW_FRESH }
-
 $env:PI_ALLOW_LOCKFILE_CHANGE = "1"
 try { git commit -m "feat: sync upstream v<version>" }
 finally { Remove-Item Env:PI_ALLOW_LOCKFILE_CHANGE }
 ```
-
-The commit guard prints a bounded summary even when its acknowledgement flag is set.
 
 ## Recover an inconsistent installation
 

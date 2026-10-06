@@ -32,30 +32,24 @@ export const MEASURED_SCOPE = "src/";
 // lines than a thin patch needs. These thresholds are a policy choice.
 export const MAX_PATCH_DELETIONS = 8;
 export const MAX_PATCH_REINDENT = 10;
-export const DEFAULT_RISK_WINDOW_DAYS = 120;
-// --apply leaves these paths for porting by hand: distribution-owned prose,
-// where this distribution keeps its text and ports upstream facts, and the root
-// manifests, which npm regenerates. Entries match like ledger claims.
+// Applying a release leaves these paths for porting by hand: distribution-owned
+// prose, where this distribution keeps its text and ports upstream facts, and the
+// root manifests, which npm regenerates. Entries match like ledger claims.
 export const REVIEW_PATHS = ["CHANGELOG.md", "README.md", "docs/", "npm-shrinkwrap.json", "package.json"];
-// --apply labels conflict sides with these names, and --check refuses any file
-// that still carries the resulting markers.
+// Applying a release labels conflict sides with these names, and --check refuses
+// any file that still carries the resulting markers.
 const MERGE_LABELS = { ours: "distribution", base: "baseline", theirs: "upstream" };
 const CONFLICT_MARKER_PATTERN = `^(<<<<<<< ${MERGE_LABELS.ours}|>>>>>>> ${MERGE_LABELS.theirs})`;
 
-const usage = `Usage: node scripts/diff-upstream.mjs [--check [--staged] | --risk [--window <days>] | --target <tag> | --apply <tag> | --register]
+const usage = `Usage: node scripts/diff-upstream.mjs [--check [--staged]]
 
 Compares the current worktree against the recorded upstream baseline
 in maintainers/upstream.json, annotated with the concern ledger in
-maintainers/concerns.json.
+maintainers/concerns.json. npm run sync applies a new upstream release.
 
-  (no flag)        print the deterministic full classification report with conflict-surface metrics
-  --check          verify baseline, dependencies, ledger rules, and leftover --apply conflict markers and print a concise count summary
-  --staged         with --check, verify the index that will be committed
-  --risk           rank modified source paths by conflict surface times upstream touches
-  --window <days>  with --risk, count upstream touches over this many days before the baseline (default ${DEFAULT_RISK_WINDOW_DAYS})
-  --target <tag>   classify upstream changes from the baseline to a release tag against the ledger and review paths
-  --apply <tag>    three-way merge those upstream changes into a clean worktree, leave review paths for porting by hand, and advance the baseline
-  --register       intent-to-add untracked files at upstream paths, declaring hand-ported adoptions`;
+  (no flag)  print the deterministic full classification report with conflict-surface metrics
+  --check    verify baseline, dependencies, ledger rules, and leftover conflict markers and print a concise count summary
+  --staged   with --check, verify the index that will be committed`;
 
 function isPlainObject(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -238,7 +232,17 @@ export function findClaims(claims, path) {
 	return claims.filter((claim) => pathMatches(claim.path, path));
 }
 
-function isReviewPath(path) {
+/** Concerns from a valid ledger that claim any of the paths, with the paths each one claims. */
+export function concernsTouching(ledger, paths) {
+	return ledger.concerns
+		.map((concern) => ({
+			concern,
+			paths: paths.filter((path) => concern.paths.some((claim) => pathMatches(claim.path, path))),
+		}))
+		.filter((entry) => entry.paths.length > 0);
+}
+
+export function isReviewPath(path) {
 	return REVIEW_PATHS.some((review) => pathMatches(review, path));
 }
 
@@ -458,7 +462,7 @@ export function collectWorktreeEntries(sourceTree, failures, git) {
 		if (!path) continue;
 		if (entries.has(path)) {
 			failures.push(
-				`untracked file at upstream path ${path}; register a deliberate adoption with npm run diff:upstream -- --register, otherwise remove the file`,
+				`untracked file at upstream path ${path}; register a deliberate adoption with npm run sync -- --verify, otherwise remove the file`,
 			);
 		} else {
 			entries.set(path, { status: "A", path });
@@ -545,40 +549,6 @@ export function measureModified(sourceTree, staged, git) {
 	return measured;
 }
 
-/**
- * Count upstream commits touching each measured source path over the window
- * ending at the baseline commit. Returns undefined when that history is not
- * available locally; the commit hook never fetches it.
- */
-export function countUpstreamTouches(manifest, windowDays, tryGit) {
-	if (tryGit("cat-file", "-t", manifest.commit) !== "commit") return undefined;
-	const committedAt = Number(tryGit("show", "-s", "--format=%ct", manifest.commit));
-	if (!Number.isFinite(committedAt)) return undefined;
-	const end = new Date(committedAt * 1000);
-	const start = new Date(end.getTime() - windowDays * 24 * 60 * 60 * 1000);
-	const prefix = `${manifest.sourceSubtree}/`;
-	const log = tryGit(
-		"-c",
-		"core.quotePath=false",
-		"log",
-		"--no-renames",
-		"--format=",
-		"--name-only",
-		`--since=${start.toISOString()}`,
-		manifest.commit,
-		"--",
-		`${prefix}${MEASURED_SCOPE}`,
-	);
-	if (log === undefined) return undefined;
-	const counts = new Map();
-	for (const line of log.split("\n")) {
-		if (!line.startsWith(prefix)) continue;
-		const path = line.slice(prefix.length);
-		counts.set(path, (counts.get(path) ?? 0) + 1);
-	}
-	return { start, end, counts };
-}
-
 function summarizeSurface(measured) {
 	const summary = { rewrite: { files: 0, surface: 0 }, patch: { files: 0, surface: 0 } };
 	for (const metrics of measured.values()) {
@@ -590,15 +560,16 @@ function summarizeSurface(measured) {
 }
 
 /**
- * Apply the rewrite-reason rule. It only depends on the baseline diff, so it
- * runs inside the commit hook without network access.
+ * Compare rewrite reasons with the measured forms. Upstream edits move paths
+ * across the thresholds, so mismatches are notes for the next ledger edit, not
+ * failures.
  */
-export function checkClaimRules(claims, measured) {
-	const failures = [];
+export function rewriteNotes(claims, measured) {
+	const notes = [];
 	for (const metrics of measured.values()) {
 		if (metrics.form !== "rewrite") continue;
 		if (!findClaims(claims, metrics.path).some((claim) => claim.rewrite !== undefined)) {
-			failures.push(
+			notes.push(
 				`${metrics.path} measures as rewrite (${metrics.deletions} deletions, ${metrics.reindent} re-indented lines); add a rewrite reason to a claiming concern or thin the patch`,
 			);
 		}
@@ -609,16 +580,16 @@ export function checkClaimRules(claims, measured) {
 			(metrics) => metrics.form === "rewrite" && pathMatches(claim.path, metrics.path),
 		);
 		if (!rewrites) {
-			failures.push(
+			notes.push(
 				`concern "${claim.concern}" gives a rewrite reason for ${claim.path}, which no longer measures as rewrite; remove it`,
 			);
 		}
 	}
-	return failures;
+	return notes;
 }
 
 /**
- * List files that still carry conflict markers written by --apply. The staged
+ * List files that still carry conflict markers written by applying a release. The staged
  * check reads the index; otherwise the worktree, including untracked files.
  */
 function findUnresolvedConflicts(staged, git) {
@@ -731,53 +702,6 @@ function printSurface(measured, stdout) {
 	}
 }
 
-function printRisk(manifest, measured, touches, windowDays, stdout, stderr) {
-	const scoped = [...measured.values()].filter((metrics) => metrics.form !== undefined);
-	const rows = scoped.map((metrics) => {
-		const count = touches?.counts.get(metrics.path) ?? 0;
-		return { metrics, touches: touches ? count : undefined, risk: touches ? count * metrics.surface : undefined };
-	});
-	rows.sort(
-		(a, b) =>
-			(b.risk ?? 0) - (a.risk ?? 0) ||
-			b.metrics.surface - a.metrics.surface ||
-			(a.metrics.path < b.metrics.path ? -1 : 1),
-	);
-	const summary = summarizeSurface(measured);
-	writeLine(
-		stdout,
-		`Upstream baseline: ${manifest.tag} ${manifest.sourceSubtree} (tree ${manifest.sourceTree.slice(0, 12)})`,
-	);
-	if (touches) {
-		const day = (date) => date.toISOString().slice(0, 10);
-		writeLine(stdout, `Touch window: ${windowDays} days (${day(touches.start)}..${day(touches.end)})`);
-	} else {
-		writeLine(
-			stderr,
-			`warning: upstream history for ${manifest.commit.slice(0, 12)} is unavailable locally; touches and risk are n/a (fetch ${manifest.tag} to measure them)`,
-		);
-	}
-	writeLine(stdout, "");
-	for (const line of formatTable(
-		["risk", "touches", "surface", "reindent", "hunks", "form", "path"],
-		rows.map(({ metrics, touches: count, risk }) => [
-			risk ?? "n/a",
-			count ?? "n/a",
-			metrics.surface,
-			metrics.reindent,
-			metrics.hunks,
-			metrics.form,
-			metrics.path,
-		]),
-	)) {
-		writeLine(stdout, line);
-	}
-	const totalRisk = touches ? rows.reduce((sum, row) => sum + row.risk, 0) : "n/a";
-	writeLine(stdout, "");
-	writeLine(stdout, `rewriteSurface: ${summary.rewrite.surface}`);
-	writeLine(stdout, `risk: ${totalRisk}`);
-}
-
 function readBlob(root, spec) {
 	return execFileSync("git", ["cat-file", "blob", spec], {
 		cwd: root,
@@ -879,12 +803,13 @@ export function applyUpstreamChanges(root, baseTree, targetTree, git) {
 }
 
 /**
- * Declare hand-ported adoptions. --apply leaves review paths untouched, so a
- * file ported by hand is untracked until registered; intent-to-add records no
- * content and is reversible with git rm --cached. Untracked paths the baseline
- * tree does not have are distribution-local, not adoptions, and stay untracked.
+ * Declare hand-ported adoptions. Applying a release leaves review paths
+ * untouched, so a file ported by hand is untracked until registered;
+ * intent-to-add records no content and is reversible with git rm --cached.
+ * Untracked paths the baseline tree does not have are distribution-local, not
+ * adoptions, and stay untracked. Returns the registered paths.
  */
-export function registerUpstreamAdoptions(manifest, git, stdout) {
+export function registerUpstreamAdoptions(manifest, git) {
 	const upstreamPaths = new Set(
 		git("ls-tree", "-r", "--name-only", "-z", manifest.sourceTree).split("\0").filter(Boolean),
 	);
@@ -892,67 +817,86 @@ export function registerUpstreamAdoptions(manifest, git, stdout) {
 	const registered = [];
 	for (const path of untracked.sort()) {
 		if (!upstreamPaths.has(path)) continue;
-		// Force, as in --apply: the upstream path must be tracked even when a local ignore rule matches it.
+		// Force, as when applying: the upstream path must be tracked even when a local ignore rule matches it.
 		git("add", "--intent-to-add", "--force", "--", path);
 		registered.push(path);
 	}
-	for (const path of registered) writeLine(stdout, `  registered ${path}`);
-	if (registered.length === 0) {
-		writeLine(stdout, "No untracked files at upstream paths to register.");
-		return 0;
+	return registered;
+}
+
+export function isStableReleaseTag(tag) {
+	return typeof tag === "string" && tag.startsWith("v") && isStableSemver(tag.slice(1));
+}
+
+/**
+ * Merge an upstream release into a clean worktree and advance the recorded
+ * baseline. Returns { code, from, to, results }: code is 1 when conflicts
+ * remain or a precondition fails, and from/to are the baseline manifests.
+ */
+export function applyUpstreamRelease({ root, tag, stdout, stderr }) {
+	const { git, tryGit } = createGit(root);
+	const failures = [];
+	const warnings = [];
+	const manifest = readJsonFile(join(root, "maintainers", "upstream.json"), "maintainers/upstream.json", failures);
+	if (manifest !== undefined) failures.push(...validateManifest(manifest));
+	if (failures.length === 0) verifyBaseline(manifest, failures, warnings, tryGit);
+	let targetCommit;
+	let targetTree;
+	if (failures.length === 0) {
+		targetCommit = tryGit("rev-parse", "--verify", "--quiet", `refs/tags/${tag}^{commit}`);
+		if (!targetCommit) {
+			failures.push(`target tag ${tag} is not available locally; run git fetch upstream tag ${tag} --no-tags`);
+		} else {
+			targetTree = tryGit("rev-parse", "--verify", "--quiet", `${targetCommit}:${manifest.sourceSubtree}`);
+			if (!targetTree) failures.push(`target tag ${tag} does not contain source subtree ${manifest.sourceSubtree}`);
+		}
+		if (tryGit("status", "--porcelain", "--untracked-files=no")) {
+			failures.push("the worktree has uncommitted tracked changes; commit or set them aside before applying");
+		}
 	}
+	for (const w of warnings) writeLine(stderr, `warning: ${w}`);
+	if (failures.length > 0) {
+		printFailures(failures, stderr);
+		return { code: 1 };
+	}
+
+	const results = applyUpstreamChanges(root, manifest.sourceTree, targetTree, git);
+	const next = { ...manifest, tag, commit: targetCommit, sourceTree: targetTree };
+	writeFileSync(join(root, "maintainers", "upstream.json"), `${JSON.stringify(next, null, "\t")}\n`);
+	const counts = {};
+	const describeResult = ({ path, detail }) => `${path}${detail ? ` (${detail})` : ""}`;
+	for (const result of results) {
+		counts[result.action] = (counts[result.action] ?? 0) + 1;
+		if (result.action !== "review") writeLine(stdout, `  ${result.action} ${describeResult(result)}`);
+	}
+	const review = results.filter((result) => result.action === "review");
+	if (review.length > 0) {
+		writeLine(stdout, "");
+		writeLine(stdout, `Left for porting by hand (${review.length}):`);
+		for (const result of review) writeLine(stdout, `  ${describeResult(result)}`);
+		// The recorded baseline has already moved, so name both trees.
+		writeLine(stdout, `  Inspect each with: git diff ${manifest.sourceTree} ${targetTree} -- <path>`);
+	}
+	const summary = ["merged", "added", "deleted", "skipped", "conflict", "review"]
+		.map((action) => `${counts[action] ?? 0} ${action}`)
+		.join(", ");
 	writeLine(stdout, "");
-	writeLine(
-		stdout,
-		`Registered ${registered.length} ${registered.length === 1 ? "file" : "files"}; review the list before continuing.`,
-	);
-	return 0;
+	writeLine(stdout, `Applied ${manifest.tag} -> ${tag}: ${summary}. maintainers/upstream.json now records ${tag}.`);
+	return { code: counts.conflict ? 1 : 0, from: manifest, to: next, results };
 }
 
 function parseArgs(args) {
-	const options = {
-		check: false,
-		staged: false,
-		risk: false,
-		windowDays: undefined,
-		targetTag: undefined,
-		applyTag: undefined,
-		register: false,
-	};
-	for (let i = 0; i < args.length; i += 1) {
-		const arg = args[i];
+	const options = { check: false, staged: false };
+	for (const arg of args) {
 		if (arg === "--check" && !options.check) {
 			options.check = true;
 		} else if (arg === "--staged" && !options.staged) {
 			options.staged = true;
-		} else if (arg === "--risk" && !options.risk) {
-			options.risk = true;
-		} else if (arg === "--window" && options.windowDays === undefined && /^[1-9]\d*$/.test(args[i + 1] ?? "")) {
-			options.windowDays = Number(args[i + 1]);
-			i += 1;
-		} else if (arg === "--target" && options.targetTag === undefined && typeof args[i + 1] === "string") {
-			options.targetTag = args[i + 1];
-			i += 1;
-		} else if (arg === "--apply" && options.applyTag === undefined && typeof args[i + 1] === "string") {
-			options.applyTag = args[i + 1];
-			i += 1;
-		} else if (arg === "--register" && !options.register) {
-			options.register = true;
 		} else {
 			return undefined;
 		}
 	}
-	const modes = [
-		options.check,
-		options.risk,
-		options.targetTag !== undefined,
-		options.applyTag !== undefined,
-		options.register,
-	].filter(Boolean).length;
-	if (modes > 1 || (options.staged && !options.check) || (options.windowDays !== undefined && !options.risk)) {
-		return undefined;
-	}
-	return options;
+	return options.staged && !options.check ? undefined : options;
 }
 
 export function runDiffUpstream({
@@ -966,12 +910,7 @@ export function runDiffUpstream({
 		writeLine(stderr, usage);
 		return 2;
 	}
-	const { check: isCheck, staged, risk: isRisk, targetTag, applyTag, register: isRegister } = options;
-	const releaseTag = targetTag ?? applyTag;
-	if (releaseTag !== undefined && (!releaseTag.startsWith("v") || !isStableSemver(releaseTag.slice(1)))) {
-		writeLine(stderr, `${targetTag ? "--target" : "--apply"} requires an exact stable release tag (v<semver>)`);
-		return 2;
-	}
+	const { check: isCheck, staged } = options;
 
 	const { git, tryGit } = createGit(root);
 	const stagedPaths = staged ? new Set(git("ls-files", "-z").split("\0")) : undefined;
@@ -997,149 +936,21 @@ export function runDiffUpstream({
 		return 1;
 	}
 
-	// Leftover --apply conflict markers need neither the baseline nor the ledger,
-	// so the check reports them together with baseline and dependency failures.
-	const unresolved = releaseTag === undefined && !isRisk && !isRegister ? findUnresolvedConflicts(staged, git) : [];
+	// Leftover conflict markers need neither the baseline nor the ledger, so the
+	// check reports them together with baseline and dependency failures.
+	const unresolved = findUnresolvedConflicts(staged, git);
 	if (isCheck) {
 		for (const path of unresolved) {
-			failures.push(`unresolved --apply conflict markers in ${path}; resolve them before committing`);
+			failures.push(`unresolved upstream conflict markers in ${path}; resolve them before committing`);
 		}
 	}
 
 	const upstreamPackage = verifyBaseline(manifest, failures, warnings, tryGit);
-	// Registration happens mid-sync, when package metadata may legitimately lag
-	// the moved baseline, so it skips the dependency verification.
-	if (releaseTag === undefined && !isRegister) {
-		verifyUpstreamDependencies(upstreamPackage, manifest, failures, readJson);
-	}
+	verifyUpstreamDependencies(upstreamPackage, manifest, failures, readJson);
 	if (failures.length > 0) {
 		for (const w of warnings) writeLine(stderr, `warning: ${w}`);
 		printFailures(failures, stderr);
 		return 1;
-	}
-
-	if (isRegister) {
-		for (const w of warnings) writeLine(stderr, `warning: ${w}`);
-		return registerUpstreamAdoptions(manifest, git, stdout);
-	}
-
-	// Target mode classifies the upstream release diff against both the ledger
-	// and additions already owned by the clean HEAD tree. It never inspects
-	// staged, unstaged, or untracked worktree state.
-	if (releaseTag !== undefined) {
-		const targetCommit = tryGit("rev-parse", "--verify", "--quiet", `refs/tags/${releaseTag}^{commit}`);
-		if (!targetCommit) {
-			failures.push(`target tag ${releaseTag} is not available locally; run git fetch upstream --tags`);
-		}
-		const targetTree = targetCommit
-			? tryGit("rev-parse", "--verify", "--quiet", `${targetCommit}:${manifest.sourceSubtree}`)
-			: undefined;
-		if (targetCommit && !targetTree) {
-			failures.push(`target tag ${releaseTag} does not contain source subtree ${manifest.sourceSubtree}`);
-		}
-		const headTree = tryGit("rev-parse", "--verify", "--quiet", "HEAD^{tree}");
-		if (!headTree) {
-			failures.push("HEAD does not resolve to a tree; commit the distribution before target triage");
-		}
-		if (applyTag !== undefined && tryGit("status", "--porcelain", "--untracked-files=no")) {
-			failures.push("the worktree has uncommitted tracked changes; commit or set them aside before --apply");
-		}
-		if (failures.length > 0) {
-			for (const w of warnings) writeLine(stderr, `warning: ${w}`);
-			printFailures(failures, stderr);
-			return 1;
-		}
-
-		// Apply mode merges the release into the worktree and advances the
-		// baseline, so the ordinary check then measures against the new release.
-		if (applyTag !== undefined) {
-			for (const w of warnings) writeLine(stderr, `warning: ${w}`);
-			const results = applyUpstreamChanges(root, manifest.sourceTree, targetTree, git);
-			const next = { ...manifest, tag: applyTag, commit: targetCommit, sourceTree: targetTree };
-			writeFileSync(join(root, "maintainers", "upstream.json"), `${JSON.stringify(next, null, "\t")}\n`);
-			const counts = {};
-			const describeResult = ({ path, detail }) => `${path}${detail ? ` (${detail})` : ""}`;
-			for (const result of results) {
-				counts[result.action] = (counts[result.action] ?? 0) + 1;
-				if (result.action !== "review") writeLine(stdout, `  ${result.action} ${describeResult(result)}`);
-			}
-			const review = results.filter((result) => result.action === "review");
-			if (review.length > 0) {
-				writeLine(stdout, "");
-				writeLine(stdout, `Left for porting by hand (${review.length}):`);
-				for (const result of review) writeLine(stdout, `  ${describeResult(result)}`);
-				// The recorded baseline has already moved, so name both trees.
-				writeLine(stdout, `  Inspect each with: git diff ${manifest.sourceTree} ${targetTree} -- <path>`);
-			}
-			const summary = ["merged", "added", "deleted", "skipped", "conflict", "review"]
-				.map((action) => `${counts[action] ?? 0} ${action}`)
-				.join(", ");
-			writeLine(stdout, "");
-			writeLine(
-				stdout,
-				`Applied ${manifest.tag} -> ${applyTag}: ${summary}. maintainers/upstream.json now records ${applyTag}.`,
-			);
-			return counts.conflict ? 1 : 0;
-		}
-
-		const ledgerFailures = [];
-		const claims = loadClaims(root, ledgerFailures, readJson, stagedPaths);
-		for (const w of warnings) writeLine(stderr, `warning: ${w}`);
-		if (ledgerFailures.length > 0) {
-			printFailures(ledgerFailures, stderr);
-			return 1;
-		}
-
-		const localAdditionPaths = new Set(
-			parseNameStatus(git("diff", "--name-status", "-z", "--no-renames", manifest.sourceTree, headTree))
-				.filter((entry) => entry.status === "A")
-				.map((entry) => entry.path),
-		);
-		const changes = parseNameStatus(
-			git("diff", "--name-status", "-z", "--no-renames", manifest.sourceTree, targetTree),
-		);
-		// --apply leaves review paths untouched, so they form their own group.
-		const review = changes.filter((entry) => isReviewPath(entry.path));
-		const applied = changes.filter((entry) => !isReviewPath(entry.path));
-		const removed = applied.filter((entry) => entry.status === "D");
-		const surviving = applied.filter((entry) => entry.status !== "D");
-		const isClaimed = (entry) => findClaims(claims, entry.path).length > 0;
-		const registeredCollisions = surviving.filter(isClaimed);
-		const additionCollisions = surviving.filter((entry) => !isClaimed(entry) && localAdditionPaths.has(entry.path));
-		const clean = surviving.filter((entry) => !isClaimed(entry) && !localAdditionPaths.has(entry.path));
-
-		writeLine(
-			stdout,
-			`Upstream baseline: ${manifest.tag} ${manifest.sourceSubtree} (tree ${manifest.sourceTree.slice(0, 12)})`,
-		);
-		writeLine(stdout, `Target: ${targetTag} ${manifest.sourceSubtree} (tree ${targetTree.slice(0, 12)})`);
-		writeLine(stdout, "");
-		writeLine(stdout, `Upstream changes from ${manifest.tag} to ${targetTag} (${changes.length} total):`);
-		writeLine(
-			stdout,
-			`  ${String(registeredCollisions.length).padStart(4)} touching registered deviations (re-review each)`,
-		);
-		writeLine(
-			stdout,
-			`  ${String(additionCollisions.length).padStart(4)} colliding with fork-owned additions (re-review each)`,
-		);
-		writeLine(stdout, `  ${String(clean.length).padStart(4)} clear of fork deviations (adoption candidates)`);
-		writeLine(stdout, `  ${String(removed.length).padStart(4)} removed upstream`);
-		writeLine(stdout, `  ${String(review.length).padStart(4)} left for porting by hand (review paths)`);
-
-		printGroups(
-			[
-				["Changes touching registered deviations", registeredCollisions],
-				["Changes colliding with fork-owned additions", additionCollisions],
-				["Changes clear of fork deviations", clean],
-				["Removed upstream", removed],
-			],
-			claims,
-			stdout,
-		);
-		// Each review path needs its own decision, so no directory claim folds them.
-		printGroups([["Left for porting by hand", review]], [], stdout);
-		return 0;
 	}
 
 	const entries = staged
@@ -1151,14 +962,6 @@ export function runDiffUpstream({
 		return 1;
 	}
 	const measured = measureModified(manifest.sourceTree, staged, git);
-
-	if (isRisk) {
-		for (const w of warnings) writeLine(stderr, `warning: ${w}`);
-		const windowDays = options.windowDays ?? DEFAULT_RISK_WINDOW_DAYS;
-		const touches = countUpstreamTouches(manifest, windowDays, tryGit);
-		printRisk(manifest, measured, touches, windowDays, stdout, stderr);
-		return 0;
-	}
 
 	const modified = entries.filter((e) => e.status === "M" || e.status === "T");
 	const additions = entries.filter((e) => e.status === "A");
@@ -1172,7 +975,7 @@ export function runDiffUpstream({
 	const ledgerScope = [...modified, ...dropped];
 	const unregistered = ledgerScope.filter((entry) => findClaims(claims, entry.path).length === 0);
 	const stale = claims.filter((claim) => !ledgerScope.some((entry) => pathMatches(claim.path, entry.path)));
-	const ruleFailures = ledgerFailures.length === 0 ? checkClaimRules(claims, measured) : [];
+	const notes = ledgerFailures.length === 0 ? rewriteNotes(claims, measured) : [];
 	const concernCount = new Set(claims.map((claim) => claim.concern)).size;
 
 	for (const w of warnings) writeLine(stderr, `warning: ${w}`);
@@ -1188,15 +991,13 @@ export function runDiffUpstream({
 				`  - stale claim (no matching worktree deviation): ${claim.path} in concern "${claim.concern}"`,
 			);
 		}
-		for (const f of ruleFailures) writeLine(stderr, `  - ${f}`);
+		for (const note of notes) writeLine(stderr, `note: ${note}`);
 		const summary = summarizeSurface(measured);
 		writeLine(
 			stdout,
 			`Verified ${entries.length} ${staged ? "staged" : "worktree"} differences against ${manifest.tag}: ${modified.length} modified upstream (M/T), ${additions.length} distribution-local additions (A), ${dropped.length} dropped upstream (D), ${concernCount} registered concerns, rewrite surface ${summary.rewrite.surface} lines.`,
 		);
-		return ledgerFailures.length > 0 || unregistered.length > 0 || stale.length > 0 || ruleFailures.length > 0
-			? 1
-			: 0;
+		return ledgerFailures.length > 0 || unregistered.length > 0 || stale.length > 0 ? 1 : 0;
 	}
 
 	for (const f of ledgerFailures) writeLine(stderr, `warning: ${f}`);
@@ -1244,15 +1045,15 @@ export function runDiffUpstream({
 		}
 	}
 
-	if (ruleFailures.length > 0) {
+	if (notes.length > 0) {
 		writeLine(stdout, "");
-		writeLine(stdout, "Ledger rule violations:");
-		for (const f of ruleFailures) writeLine(stdout, `  ${f}`);
+		writeLine(stdout, "Ledger notes:");
+		for (const note of notes) writeLine(stdout, `  ${note}`);
 	}
 
 	if (unresolved.length > 0) {
 		writeLine(stdout, "");
-		writeLine(stdout, "Unresolved --apply conflicts (resolve the markers before committing):");
+		writeLine(stdout, "Unresolved upstream conflicts (resolve the markers before committing):");
 		for (const path of unresolved) writeLine(stdout, `  ${path}`);
 	}
 

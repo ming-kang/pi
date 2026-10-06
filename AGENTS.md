@@ -29,7 +29,7 @@ Use plain, concise language; explain non-trivial problems as problem → concret
 ## Build and verification
 
 - Run `npm run format` then `npm run check` after any change, including docs; fix every diagnostic.
-- Dependencies are exactly pinned. Changing one means regenerating `npm-shrinkwrap.json` and committing with `PI_ALLOW_LOCKFILE_CHANGE=1`; see [Dependency maintenance](maintainers/dependencies.md).
+- Dependencies are exactly pinned. Changing one means regenerating `npm-shrinkwrap.json`; a change beyond the release version and upstream packages is committed with `PI_ALLOW_LOCKFILE_CHANGE=1`; see [Dependency maintenance](maintainers/dependencies.md).
 - `PI_BUNDLED_NODE` and the upstream bundling strategy are invariants owned by [Architecture](maintainers/architecture.md). Run `npm run clean` before rebuilding after deleting sources.
 - For entrypoint or packaging changes, pack and run `npm run verify:package-install -- <tarball>`.
 - Verify interactive changes in a real terminal per [Interactive testing](maintainers/interactive-testing.md).

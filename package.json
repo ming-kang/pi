@@ -54,6 +54,8 @@
 		"pretest": "npm run check:installed-deps",
 		"test:isolated": "node scripts/test-isolated.mjs",
 		"diff:upstream": "node scripts/diff-upstream.mjs",
+		"sync": "node scripts/sync-upstream.mjs",
+		"release": "node scripts/release.mjs",
 		"verify:package-install": "node scripts/verify-package-install.mjs",
 		"profile:tui": "node scripts/profile-node.mjs --mode tui",
 		"profile:rpc": "node scripts/profile-node.mjs --mode rpc",
