@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-10-06
+
 ### Added
 
 - `--tools` and `--exclude-tools` accept `*` patterns (for example `--tools read,bash,codemode,'mcp__radius__*'` keeps only one MCP server's tools), `--tools` keeps MCP tools unless an entry starts with `mcp__`, and `--no-mcp` disables the built-in MCP support for one run.
