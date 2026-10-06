@@ -1,5 +1,5 @@
+import { confirmStopBranchTasks, hotkeysTaskSection } from "./tasks/host-hooks.ts";
 import { bindTasksUI, type TasksUI } from "./tasks/index.ts";
-import { cleanTaskText, firstCommandLine } from "./tasks/text.ts";
 /**
  * Interactive mode for the coding agent.
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
@@ -97,7 +97,7 @@ import type {
 } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
-import { type AppKeybinding, KEYBINDINGS, KeybindingsManager } from "../../core/keybindings.ts";
+import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import type { McpHttpServerConfig } from "../../core/mcp-servers.ts";
 import { createCompactionSummaryMessage, createCustomMessage } from "../../core/messages.ts";
 import {
@@ -291,23 +291,6 @@ function isCompactionCostNotice(item: RenderSessionItem): item is CompactionCost
 
 function isUsageSessionEntry(item: RenderSessionItem): item is Extract<SessionEntry, { type: "usage" }> {
 	return "type" in item && item.type === "usage";
-}
-
-/**
- * Task rows for `/hotkeys`. Task keybindings act outside the editor, so they never showed up in
- * the editor-driven sections; labels come from KEYBINDINGS so the table cannot drift from the
- * binding registry.
- */
-function hotkeysTaskSection(display: (action: AppKeybinding) => string): string {
-	const detach = KEYBINDINGS["app.tasks.detach"];
-	const detachSelected = KEYBINDINGS["app.tasks.detachSelected"];
-	return `
-**Tasks**
-| Key | Action |
-|-----|--------|
-| \`${display("app.tasks.detach")}\` | ${detach.description} |
-| \`${display("app.tasks.detachSelected")}\` | ${detachSelected.description} (while /tasks is open) |
-`;
 }
 
 // EIO: tty reads/ioctls from an orphaned background process group, or writes after hangup.
@@ -5582,21 +5565,14 @@ export class InteractiveMode {
 					// Ask about summarization
 					done(); // Close selector first
 
-					// Results are saved on their launch branch, so leaving it stops its running tasks.
 					const stopped = this.session.tasksStoppedByTreeNavigation(entryId);
-					if (stopped.length > 0) {
-						const shown = stopped
-							.slice(0, 5)
-							.map((task) => `  ${cleanTaskText(firstCommandLine(task.command ?? task.title))}`);
-						if (stopped.length > shown.length) shown.push(`  …and ${stopped.length - shown.length} more`);
-						const confirmed = await this.showExtensionConfirm(
-							`Stop ${stopped.length} running task${stopped.length === 1 ? "" : "s"}?`,
-							`They were started on the branch you are leaving and will be cancelled:\n${shown.join("\n")}`,
-						);
-						if (!confirmed) {
-							this.showTreeSelector(entryId);
-							return;
-						}
+					if (
+						!(await confirmStopBranchTasks(stopped, (title, message) =>
+							this.showExtensionConfirm(title, message),
+						))
+					) {
+						this.showTreeSelector(entryId);
+						return;
 					}
 
 					// Loop until user makes a complete choice or cancels to tree

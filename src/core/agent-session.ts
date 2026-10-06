@@ -32,7 +32,7 @@ import {
 	runToolCall,
 	type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
-import { contentText, getCurrentSystemMessage, getSystemMessageText, retryDelayMs } from "@earendil-works/pi-ai";
+import { contentText, getCurrentSystemMessage, retryDelayMs } from "@earendil-works/pi-ai";
 import type {
 	AssistantMessage,
 	AuthResult,
@@ -78,7 +78,7 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "./compaction/index.ts";
-import type { ContextSnapshot, ContextSnapshotSource } from "./context-snapshot.ts";
+import { type ContextSnapshot, type ContextSnapshotSource, captureContextSnapshot } from "./context-snapshot.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
@@ -556,6 +556,11 @@ export class AgentSession {
 		return this._tasksHost.quarantinedSettlements;
 	}
 
+	/** Running tasks that navigating to `targetId` would cancel, so a host can confirm first. */
+	tasksStoppedByTreeNavigation(targetId: string): TaskSnapshot[] {
+		return this._tasksHost.stoppedByTreeNavigation(targetId);
+	}
+
 	/** Pause delivery across asynchronous lifecycle/preflight gaps. Nestable. */
 	pauseTaskNotifications(): () => void {
 		return this._tasksHost.delivery.pause();
@@ -584,47 +589,8 @@ export class AgentSession {
 	}
 
 	/** Capture stable state before any asynchronous context preparation. Never includes a partial stream. */
-	async getContextSnapshot(): Promise<ContextSnapshot> {
-		const model = this.model;
-		if (!model) throw new Error("No model selected");
-		const requestOptions = {
-			sessionId: this.agent.sessionId ?? this.sessionManager.getSessionId(),
-			transport: this.agent.transport,
-			thinkingBudgets: structuredClone(this.agent.thinkingBudgets),
-			maxRetryDelayMs: this.agent.maxRetryDelayMs,
-			onPayload: this.agent.onPayload,
-			onResponse: this.agent.onResponse,
-		};
-		const snapshot = {
-			capturedAt: Date.now(),
-			sessionId: this.sessionManager.getSessionId(),
-			leafId: this.sessionManager.getLeafId(),
-			model: structuredClone(model),
-			thinkingLevel: this.thinkingLevel,
-			tools: this.agent.state.tools.map(({ name, description, parameters, constrainedSampling }) => ({
-				name,
-				description,
-				parameters: structuredClone(parameters),
-				...(constrainedSampling === undefined ? {} : { constrainedSampling: structuredClone(constrainedSampling) }),
-			})),
-			streamOptions: this._contextSource?.resolveStreamOptions(model, requestOptions) ?? requestOptions,
-		};
-		const currentSystemPrompt = this.systemPrompt;
-		// The canonical projection is what the next request converts; the inspection cache may lag it.
-		const messages = structuredClone(this.sessionManager.buildSessionProjection().messages);
-		const convert = this.agent.convertToLlm;
-		const transform = this.agent.transformContext;
-		const prepared = this._contextSource
-			? await this._contextSource.prepareMessages(messages)
-			: await convert(transform ? await transform(messages) : messages);
-		// The prepared transcript declares the prompt the provider received, including a forced
-		// prompt projected for the last request; before the first request there is none yet.
-		const declared = getCurrentSystemMessage(prepared);
-		return {
-			...snapshot,
-			systemPrompt: declared ? getSystemMessageText(declared) : currentSystemPrompt,
-			messages: structuredClone(prepared),
-		};
+	getContextSnapshot(): Promise<ContextSnapshot> {
+		return captureContextSnapshot(this, this._contextSource);
 	}
 
 	private async _getRequiredRequestAuth(
@@ -2086,158 +2052,175 @@ export class AgentSession {
 	 * @throws Error if no model selected or no API key available (when not streaming)
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
+		// A deferred prompt re-enters here after the settled handlers finish.
+		if (this._isEmittingAgentSettled) return this._promptBody(text, options);
+		// A user-initiated prompt is the recovery point for failed completion deliveries.
+		this.retryTaskNotifications();
+		// Extension commands may stay open indefinitely; only model input holds the preflight pause,
+		// released once the prompt is handled, queued, or started.
+		if (this._isExtensionCommandPrompt(text, options)) return this._promptBody(text, options);
+		const resumeBackground = this.pauseTaskNotifications();
+		try {
+			await this._promptBody(text, {
+				...options,
+				preflightResult: (result) => {
+					resumeBackground();
+					options?.preflightResult?.(result);
+				},
+			});
+		} finally {
+			resumeBackground();
+		}
+	}
+
+	private _isExtensionCommandPrompt(text: string, options?: PromptOptions): boolean {
+		if (!(options?.expandPromptTemplates ?? true) || !text.startsWith("/")) return false;
+		const spaceIndex = text.indexOf(" ");
+		return (
+			this._extensionRunner.getCommand(spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex)) !== undefined
+		);
+	}
+
+	private async _promptBody(text: string, options?: PromptOptions): Promise<void> {
 		if (this._isEmittingAgentSettled) {
 			this._deferredSettledActions.push(async () => await this.prompt(text, options));
 			return;
 		}
-		// A user-initiated prompt is the recovery point for failed completion deliveries.
-		this.retryTaskNotifications();
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		const preflightResult = options?.preflightResult;
-		let messages: AgentMessage[] | undefined;
-		let resumeBackground: (() => void) | undefined;
-
-		try {
-			// Handle extension commands first (execute immediately, even during streaming)
-			// Extension commands manage their own LLM interaction via pi.sendMessage()
-			if (expandPromptTemplates && text.startsWith("/")) {
-				const handled = await this._tryExecuteExtensionCommand(text);
-				if (handled) {
-					// Extension command executed, no prompt to send
-					preflightResult?.("handled");
-					return;
-				}
-			}
-			// Observer commands above may stay open indefinitely; only real model input owns
-			// the preflight pause, released once the user message is established.
-			resumeBackground = this.pauseTaskNotifications();
-			if (this._compactionAbortController !== undefined) {
-				throw new Error(
-					"Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.",
-				);
-			}
-
-			// Emit input event for extension interception (before skill/template expansion)
-			const processedInput = await this._runInputHandlers(
-				text,
-				options?.images,
-				options?.source ?? "interactive",
-				this.isStreaming ? options?.streamingBehavior : undefined,
-			);
-			if (!processedInput) {
+		// Handle extension commands first (execute immediately, even during streaming)
+		// Extension commands manage their own LLM interaction via pi.sendMessage()
+		if (expandPromptTemplates && text.startsWith("/")) {
+			const handled = await this._tryExecuteExtensionCommand(text);
+			if (handled) {
+				// Extension command executed, no prompt to send
 				preflightResult?.("handled");
 				return;
 			}
-			const { text: currentText, images: currentImages } = processedInput;
-
-			// Expand skill commands (/skill:name args) and prompt templates (/template args)
-			let expandedText = currentText;
-			if (expandPromptTemplates) {
-				expandedText = this._expandSkillCommand(expandedText);
-				expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
-			}
-
-			// If streaming, queue via steer() or followUp() based on option
-			if (this.isStreaming) {
-				if (!options?.streamingBehavior) {
-					throw new Error(
-						"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
-					);
-				}
-				if (options.streamingBehavior === "followUp") {
-					await this._queueFollowUp(expandedText, currentImages);
-				} else {
-					await this._queueSteer(expandedText, currentImages);
-				}
-				preflightResult?.("queued");
-				return;
-			}
-
-			// Flush any pending bash and custom messages before the new prompt
-			this._flushPendingBashMessages();
-			this._flushPendingCustomMessages();
-
-			// Validate model
-			if (!this.model) {
-				throw new Error(formatNoModelSelectedMessage());
-			}
-
-			const hasConfiguredAuth =
-				this._modelRuntime.hasConfiguredAuth(this.model.provider) ||
-				(await this._modelRuntime.checkAuth(this.model.provider)) !== undefined;
-			if (!hasConfiguredAuth) {
-				const isOAuth = this._modelRuntime.isUsingOAuth(this.model.provider);
-				if (isOAuth) {
-					throw new Error(
-						`Authentication failed for "${this.model.provider}". ` +
-							`Credentials may have expired or network is unavailable. ` +
-							`Run '/login ${this.model.provider}' to re-authenticate.`,
-					);
-				}
-				throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
-			}
-
-			// Check if we need to compact before sending (catches aborted responses).
-			// The user's new prompt is sent below, so do not call agent.continue() here.
-			const lastAssistant = this._findLastAssistantMessage();
-			if (lastAssistant) {
-				await this._checkCompaction(lastAssistant, false);
-			}
-
-			// Emit before_agent_start before normalizing images so extension-driven model
-			// selection determines the resize profile used for the request and history.
-			const selectedToolsBefore = this._baseSystemPromptOptions.selectedTools;
-			const result = await this._extensionRunner.emitBeforeAgentStart(
-				expandedText,
-				currentImages,
-				this._baseSystemPromptOptions,
-			);
-			// Handlers may edit event.systemPromptOptions.selectedTools or call setActiveTools(),
-			// which updates the live loadout instead. An explicit edit wins; otherwise the live
-			// loadout is authoritative, so a setActiveTools() call is not undone here.
-			const handlerEditedTools =
-				result.systemPromptOptions.selectedTools.length !== selectedToolsBefore.length ||
-				result.systemPromptOptions.selectedTools.some((name, index) => name !== selectedToolsBefore[index]);
-			if (!handlerEditedTools) result.systemPromptOptions.selectedTools = this.getActiveToolNames();
-
-			const normalized = await this._normalizePromptImages(currentImages);
-			const userText =
-				normalized.hints.length > 0 ? `${expandedText}\n\n${normalized.hints.join("\n")}` : expandedText;
-
-			// Build messages only after hooks and image normalization have completed.
-			messages = [];
-			const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: userText }];
-			userContent.push(...normalized.images);
-			messages.push({
-				role: "user",
-				content: userContent,
-				timestamp: Date.now(),
-			});
-
-			// Inject any pending "nextTurn" messages as context alongside the user message
-			for (const msg of this._pendingNextTurnMessages) {
-				messages.push(msg);
-			}
-
-			for (const msg of result.messages) {
-				messages.push({
-					role: "custom",
-					customType: msg.customType,
-					// Untyped extensions can pass null/missing content; normalize at ingestion.
-					content: msg.content ?? [],
-					display: msg.display,
-					details: msg.details,
-					timestamp: Date.now(),
-				});
-			}
-			const updateMessage = this._preparePromptAndToolLoadout(result.systemPromptOptions);
-			this._runSystemPromptOptions = result.systemPromptOptions;
-			if (updateMessage) messages.unshift(updateMessage);
-		} finally {
-			resumeBackground?.();
 		}
 
-		if (!messages) return;
+		if (this._compactionAbortController !== undefined) {
+			throw new Error(
+				"Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.",
+			);
+		}
+
+		// Emit input event for extension interception (before skill/template expansion)
+		const processedInput = await this._runInputHandlers(
+			text,
+			options?.images,
+			options?.source ?? "interactive",
+			this.isStreaming ? options?.streamingBehavior : undefined,
+		);
+		if (!processedInput) {
+			preflightResult?.("handled");
+			return;
+		}
+		const { text: currentText, images: currentImages } = processedInput;
+
+		// Expand skill commands (/skill:name args) and prompt templates (/template args)
+		let expandedText = currentText;
+		if (expandPromptTemplates) {
+			expandedText = this._expandSkillCommand(expandedText);
+			expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+		}
+
+		// If streaming, queue via steer() or followUp() based on option
+		if (this.isStreaming) {
+			if (!options?.streamingBehavior) {
+				throw new Error(
+					"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+				);
+			}
+			if (options.streamingBehavior === "followUp") {
+				await this._queueFollowUp(expandedText, currentImages);
+			} else {
+				await this._queueSteer(expandedText, currentImages);
+			}
+			preflightResult?.("queued");
+			return;
+		}
+
+		// Flush any pending bash and custom messages before the new prompt
+		this._flushPendingBashMessages();
+		this._flushPendingCustomMessages();
+
+		// Validate model
+		if (!this.model) {
+			throw new Error(formatNoModelSelectedMessage());
+		}
+
+		const hasConfiguredAuth =
+			this._modelRuntime.hasConfiguredAuth(this.model.provider) ||
+			(await this._modelRuntime.checkAuth(this.model.provider)) !== undefined;
+		if (!hasConfiguredAuth) {
+			const isOAuth = this._modelRuntime.isUsingOAuth(this.model.provider);
+			if (isOAuth) {
+				throw new Error(
+					`Authentication failed for "${this.model.provider}". ` +
+						`Credentials may have expired or network is unavailable. ` +
+						`Run '/login ${this.model.provider}' to re-authenticate.`,
+				);
+			}
+			throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
+		}
+
+		// Check if we need to compact before sending (catches aborted responses).
+		// The user's new prompt is sent below, so do not call agent.continue() here.
+		const lastAssistant = this._findLastAssistantMessage();
+		if (lastAssistant) {
+			await this._checkCompaction(lastAssistant, false);
+		}
+
+		// Emit before_agent_start before normalizing images so extension-driven model
+		// selection determines the resize profile used for the request and history.
+		const selectedToolsBefore = this._baseSystemPromptOptions.selectedTools;
+		const result = await this._extensionRunner.emitBeforeAgentStart(
+			expandedText,
+			currentImages,
+			this._baseSystemPromptOptions,
+		);
+		// Handlers may edit event.systemPromptOptions.selectedTools or call setActiveTools(),
+		// which updates the live loadout instead. An explicit edit wins; otherwise the live
+		// loadout is authoritative, so a setActiveTools() call is not undone here.
+		const handlerEditedTools =
+			result.systemPromptOptions.selectedTools.length !== selectedToolsBefore.length ||
+			result.systemPromptOptions.selectedTools.some((name, index) => name !== selectedToolsBefore[index]);
+		if (!handlerEditedTools) result.systemPromptOptions.selectedTools = this.getActiveToolNames();
+
+		const normalized = await this._normalizePromptImages(currentImages);
+		const userText = normalized.hints.length > 0 ? `${expandedText}\n\n${normalized.hints.join("\n")}` : expandedText;
+
+		// Build messages only after hooks and image normalization have completed.
+		const messages: AgentMessage[] = [];
+		const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: userText }];
+		userContent.push(...normalized.images);
+		messages.push({
+			role: "user",
+			content: userContent,
+			timestamp: Date.now(),
+		});
+
+		// Inject any pending "nextTurn" messages as context alongside the user message
+		for (const msg of this._pendingNextTurnMessages) {
+			messages.push(msg);
+		}
+
+		for (const msg of result.messages) {
+			messages.push({
+				role: "custom",
+				customType: msg.customType,
+				// Untyped extensions can pass null/missing content; normalize at ingestion.
+				content: msg.content ?? [],
+				display: msg.display,
+				details: msg.details,
+				timestamp: Date.now(),
+			});
+		}
+		const updateMessage = this._preparePromptAndToolLoadout(result.systemPromptOptions);
+		this._runSystemPromptOptions = result.systemPromptOptions;
+		if (updateMessage) messages.unshift(updateMessage);
+
 		preflightResult?.("started");
 		await this._runAgentPrompt(messages);
 	}
@@ -4137,22 +4120,6 @@ export class AgentSession {
 	 * @param options.label Label to attach to the branch summary entry
 	 * @returns Result with editorText (if user message) and cancelled status
 	 */
-	/**
-	 * Running tasks that navigating to `targetId` would cancel, so a host can confirm first.
-	 * Mirrors navigateTree's destination: selecting a user or custom message moves the leaf to its parent.
-	 */
-	tasksStoppedByTreeNavigation(targetId: string): TaskSnapshot[] {
-		const target = this.sessionManager.getEntry(targetId);
-		if (!target) return [];
-		const leafId =
-			(target.type === "message" && target.message.role === "user") || target.type === "custom_message"
-				? target.parentId
-				: targetId;
-		return this.tasks.activeOutsideBranch(
-			new Set(leafId === null ? [] : this.sessionManager.getBranch(leafId).map((entry) => entry.id)),
-		);
-	}
-
 	async navigateTree(
 		targetId: string,
 		options: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string } = {},
@@ -4296,9 +4263,7 @@ export class AgentSession {
 				newLeafId = targetId;
 			}
 
-			await this.tasks.cancelOutsideBranch(
-				new Set(newLeafId === null ? [] : this.sessionManager.getBranch(newLeafId).map((entry) => entry.id)),
-			);
+			await this._tasksHost.cancelOutsideBranch(newLeafId);
 
 			// Switch leaf (with or without summary)
 			// Summary is attached at the navigation target position (newLeafId), not the old branch

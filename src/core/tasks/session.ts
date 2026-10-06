@@ -66,6 +66,30 @@ export class TaskSession {
 		this.service.setEnabled(this.enabled);
 	}
 
+	/**
+	 * Running tasks that navigating to `targetId` would cancel, since results are saved on their
+	 * launch branch. Mirrors navigateTree's destination: selecting a user or custom message moves
+	 * the leaf to its parent.
+	 */
+	stoppedByTreeNavigation(targetId: string): TaskSnapshot[] {
+		const target = this.options.manager.getEntry(targetId);
+		if (!target) return [];
+		const leafId =
+			(target.type === "message" && target.message.role === "user") || target.type === "custom_message"
+				? target.parentId
+				: targetId;
+		return this.service.activeOutsideBranch(this.branchIds(leafId));
+	}
+
+	/** Cancel running tasks launched outside the branch ending at `leafId`. */
+	cancelOutsideBranch(leafId: string | null): Promise<void> {
+		return this.service.cancelOutsideBranch(this.branchIds(leafId));
+	}
+
+	private branchIds(leafId: string | null): Set<string> {
+		return new Set(leafId === null ? [] : this.options.manager.getBranch(leafId).map((entry) => entry.id));
+	}
+
 	/** Called after the old service's bounded shutdown, while lifecycle delivery is paused. */
 	replaceService(): void {
 		this.service.close();

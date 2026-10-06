@@ -1,6 +1,15 @@
 import { isDeepStrictEqual } from "node:util";
 import type { Agent, AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Api, Message, Model, ModelsSimpleStreamOptions, Tool } from "@earendil-works/pi-ai";
+import {
+	type Api,
+	getCurrentSystemMessage,
+	getSystemMessageText,
+	type Message,
+	type Model,
+	type ModelsSimpleStreamOptions,
+	type Tool,
+} from "@earendil-works/pi-ai";
+import type { AgentSession } from "./agent-session.ts";
 import type { ExtensionRunner } from "./extensions/runner.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 
@@ -21,6 +30,53 @@ export interface ContextSnapshot {
 	tools: Tool[];
 	/** Includes provider hooks and header transforms, but never the main run's abort signal. */
 	streamOptions: ModelsSimpleStreamOptions;
+}
+
+/** Capture a session's stable state before any asynchronous context preparation. Never includes a partial stream. */
+export async function captureContextSnapshot(
+	session: Pick<AgentSession, "agent" | "model" | "sessionManager" | "systemPrompt" | "thinkingLevel">,
+	source: ContextSnapshotSource | undefined,
+): Promise<ContextSnapshot> {
+	const model = session.model;
+	if (!model) throw new Error("No model selected");
+	const requestOptions = {
+		sessionId: session.agent.sessionId ?? session.sessionManager.getSessionId(),
+		transport: session.agent.transport,
+		thinkingBudgets: structuredClone(session.agent.thinkingBudgets),
+		maxRetryDelayMs: session.agent.maxRetryDelayMs,
+		onPayload: session.agent.onPayload,
+		onResponse: session.agent.onResponse,
+	};
+	const snapshot = {
+		capturedAt: Date.now(),
+		sessionId: session.sessionManager.getSessionId(),
+		leafId: session.sessionManager.getLeafId(),
+		model: structuredClone(model),
+		thinkingLevel: session.thinkingLevel,
+		tools: session.agent.state.tools.map(({ name, description, parameters, constrainedSampling }) => ({
+			name,
+			description,
+			parameters: structuredClone(parameters),
+			...(constrainedSampling === undefined ? {} : { constrainedSampling: structuredClone(constrainedSampling) }),
+		})),
+		streamOptions: source?.resolveStreamOptions(model, requestOptions) ?? requestOptions,
+	};
+	const currentSystemPrompt = session.systemPrompt;
+	// The canonical projection is what the next request converts; the inspection cache may lag it.
+	const messages = structuredClone(session.sessionManager.buildSessionProjection().messages);
+	const convert = session.agent.convertToLlm;
+	const transform = session.agent.transformContext;
+	const prepared = source
+		? await source.prepareMessages(messages)
+		: await convert(transform ? await transform(messages) : messages);
+	// The prepared transcript declares the prompt the provider received, including a forced
+	// prompt projected for the last request; before the first request there is none yet.
+	const declared = getCurrentSystemMessage(prepared);
+	return {
+		...snapshot,
+		systemPrompt: declared ? getSystemMessageText(declared) : currentSystemPrompt,
+		messages: structuredClone(prepared),
+	};
 }
 
 /** What a session needs from the SDK to describe the request it would send next. */
