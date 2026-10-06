@@ -112,10 +112,14 @@ async function confirm(question, yes) {
 	}
 }
 
+// gh resolves its default repository from the remotes, which here include
+// upstream, so name this distribution's repository explicitly.
 function printWatch(tag) {
+	const { repository } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+	const repo = new URL(repository.url).pathname.replace(/^\//, "").replace(/\.git$/, "");
 	console.log(`\nThe tag runs the Publish npm workflow: full CI, then publication of the verified tarball.`);
-	console.log(`  gh run list --workflow publish-npm.yml --branch ${tag} --limit 1`);
-	console.log("  gh run watch <run-id> --exit-status");
+	console.log(`  gh run list --repo ${repo} --workflow publish-npm.yml --branch ${tag} --limit 1`);
+	console.log(`  gh run watch <run-id> --repo ${repo} --exit-status`);
 }
 
 async function release(requested, { dryRun, yes }) {
