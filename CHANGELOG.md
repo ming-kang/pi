@@ -4,6 +4,20 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- `--tools` and `--exclude-tools` accept `*` patterns (for example `--tools read,bash,codemode,'mcp__radius__*'` keeps only one MCP server's tools), `--tools` keeps MCP tools unless an entry starts with `mcp__`, and `--no-mcp` disables the built-in MCP support for one run.
+- Codemode `tools.read()` on an image file resolves to an image block that `image()` shows; the data is the base64 image the model would see and `note` the text that goes with it.
+
+### Fixed
+
+- Fixed syntax highlighting losing colors after the first line of multiline strings and comments in fenced code blocks.
+- Fixed codemode scripts not receiving images from `read`.
+- Fixed MCP OAuth sign-in failing with `invalid_redirect_uri` on servers with OpenID Connect client registration, such as `mcp.modem.dev`, by registering as a native client.
+- Fixed MCP session shutdown returning while a server was still connecting, which left its transport open until the server answered or timed out.
+- Fixed the system prompt rules and the skills hint naming tools hidden by `prepareLoadout`: hidden tools are left out of the tool list and rules, the skills hint names no tool when the file reader is hidden, and codemode shows each tool's prompt guidelines with its declaration.
+- Fixed Bedrock requests that fail with `The pending stream has been canceled` after a stalled HTTP/2 connection not being retried automatically.
+- Fixed codemode scripts that patch built-ins (for example `Array.prototype.toJSON = ...`) crashing pi and leaving the tool call unsettled; built-ins are now frozen before the script runs.
 ## [1.0.4] - 2026-10-05
 
 ### Added

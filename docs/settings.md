@@ -301,7 +301,7 @@ On Windows, select `powershell` instead of `bash`, or include both:
 }
 ```
 
-An empty array starts with no built-in tools while preserving extension and SDK custom tools. `--tools` replaces this behavior with a strict allowlist for all tools, `--no-tools` disables all tools, and `--no-builtin-tools` disables the built-in defaults. `--exclude-tools` filters the resulting list. A project `defaultTools` array replaces the global array.
+An empty array starts with no built-in tools while preserving extension and SDK custom tools. `--tools` replaces this behavior with an allowlist of names or `*` patterns that keeps MCP tools unless an entry starts with `mcp__`, `--no-tools` disables all tools including MCP tools, and `--no-builtin-tools` disables the built-in defaults. `--exclude-tools` filters the resulting list and accepts the same patterns. A project `defaultTools` array replaces the global array.
 
 ### Sessions
 

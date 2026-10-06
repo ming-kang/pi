@@ -209,12 +209,20 @@ cat README.md | pi -p "Summarize this text"
 
 | Option | Description |
 |--------|-------------|
-| `--tools <list>`, `-t <list>` | Allowlist specific built-in, extension, and custom tools |
-| `--exclude-tools <list>`, `-xt <list>` | Disable specific built-in, extension, and custom tools |
+| `--tools <list>`, `-t <list>` | Allowlist specific built-in, extension, and custom tools; entries are names or `*` patterns, and MCP tools are kept unless an entry starts with `mcp__` |
+| `--exclude-tools <list>`, `-xt <list>` | Disable tools by name or `*` pattern, MCP tools included |
 | `--no-builtin-tools`, `-nbt` | Disable built-in tools but keep extension/custom tools enabled |
-| `--no-tools`, `-nt` | Disable all tools |
+| `--no-tools`, `-nt` | Disable all tools, MCP tools included |
 
 Built-in tools: `read`, `bash`, `powershell` (Windows), `edit`, `write`, `grep`, `find`, `ls`.
+
+`--tools` selects the tools declared to the model. It does not remove MCP tools, whose reach is set by their [exposure](mcp.md#control-tool-exposure): `pi --tools read,codemode` keeps every MCP tool callable from codemode scripts. An MCP tool that no entry names or matches is never declared directly, whatever its exposure; only `tool_search`, if listed, can load it. Once an entry starts with `mcp__`, `--tools` filters MCP tools too, so this keeps only the tools of the `radius` server:
+
+```bash
+pi --tools read,bash,codemode,'mcp__radius__*'
+```
+
+The MCP resource tools (`list_mcp_resources`, `list_mcp_resource_templates`, `read_mcp_resource`) count as MCP tools. To remove MCP tools, use `--exclude-tools 'mcp__*'` or `--no-mcp`.
 
 ### Resource Options
 
@@ -222,6 +230,7 @@ Built-in tools: `read`, `bash`, `powershell` (Windows), `edit`, `write`, `grep`,
 |--------|-------------|
 | `-e`, `--extension <source>` | Load an extension from path, npm, git, or `builtin:<name>`; repeatable |
 | `--no-extensions` | Disable discovered, configured, and built-in extensions; explicit `-e` entries still load |
+| `--no-mcp` | Disable built-in MCP support for this run: no servers connect, and there are no MCP tools or `/mcp`; does not affect an extension that replaces the built-in MCP support |
 | `--skill <path>` | Load a skill; repeatable |
 | `--no-skills` | Disable skill discovery |
 | `--prompt-template <path>` | Load a prompt template; repeatable |
@@ -297,6 +306,9 @@ pi --models "claude-*,gpt-4o"
 
 # Read-only mode
 pi --tools read,grep,find,ls -p "Review the code"
+
+# Codemode with only the tools of one MCP server
+pi --tools read,bash,codemode,'mcp__radius__*'
 
 # Disable one extension or built-in tool while keeping the rest available
 pi --exclude-tools ask_question

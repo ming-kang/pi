@@ -50,6 +50,8 @@ The fixture provider in `test/fixtures/offline-provider.ts` answers without netw
 | `long` | Streams a 45-line answer. |
 | Anything else | A short answer with a thinking block. |
 
+A prompt containing `highlight` streams a fenced Python block with a multiline docstring and comment, for checking syntax highlighting. The pty cannot read the terminal's colors (see [Limits](#limits)), so the session runs on the system theme: `syntaxString` is `#008000` and keywords are `#000080`. Assert per-line colors with `tui-test highlight text "docstring line two" --fg "#008000"`; a line that lost its color matches nothing. Keep a `def clamp --fg "#008000"` control, which must not match, so a broken `--fg` cannot pass the check.
+
 For a state the fixture cannot create, write a fixture extension under `.artifacts/<topic>/` and add `--extension <file>`.
 
 ## Drive and inspect

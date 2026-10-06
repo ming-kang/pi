@@ -2,8 +2,10 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
+import { CodemodeSandbox, loadQuickJSWasm } from "@earendil-works/pi-codemode";
 import { createCodemodeExtension, DefaultResourceLoader, resizeImage } from "./node_modules/@astralyn/pi/dist/bundle/index.js";
 
 const loader = new DefaultResourceLoader({
@@ -23,12 +25,31 @@ for (let reload = 0; reload < 2; reload++) {
 	assert.ok(loaded.extensions.some((extension) => extension.commands.has("package-smoke")));
 }
 
+// The bundled codemode extension registers the tool, and the packaged QuickJS wasm and worker run
+// scripts. Executing the tool itself needs a session-bound extension runtime, so the script path is
+// exercised through the sandbox host the tool uses. The release runtime spawns workers from an
+// in-memory data: URL, so the bundled worker must also load from one: it may carry no `import.meta`
+// and no `createRequire` banner, which the bundler would otherwise inline.
 const codemode = loader.getExtensions().extensions.flatMap((extension) => [...extension.tools.values()])
 	.find((tool) => tool.definition.name === "codemode")?.definition;
 assert.ok(codemode);
-const scriptResult = await codemode.execute("package-codemode", { code: "text(await Promise.all([1, 2, 3].map(async n => n * n)))" });
-assert.notEqual(scriptResult.isError, true, JSON.stringify(scriptResult.content));
-assert.ok(scriptResult.content.some((part) => part.type === "text" && part.text === "[1,4,9]"));
+const resolveFromInstall = createRequire(new URL("./node_modules/@astralyn/pi/package.json", import.meta.url));
+const wasm = loadQuickJSWasm(resolveFromInstall.resolve("quickjs-wasi/quickjs.wasm"));
+const code = "text(await Promise.all([1, 2, 3].map(async n => n * n)))";
+const runScript = async (sandbox) => {
+	try {
+		const result = await sandbox.execute(code);
+		assert.equal(result.ok, true, JSON.stringify(result.error ?? result));
+		assert.ok(result.output.some((item) => item.type === "text" && item.text.includes("[1,4,9]")), JSON.stringify(result.output));
+	} finally {
+		await sandbox.close();
+	}
+};
+await runScript(new CodemodeSandbox({ wasm }));
+const bundledWorker = readFileSync(
+	new URL("./node_modules/@astralyn/pi/dist/bundle/chunks/codemode-worker.js", import.meta.url),
+);
+await runScript(new CodemodeSandbox({ wasm, workerUrl: new URL(`data:text/javascript;base64,${bundledWorker.toString("base64")}`) }));
 
 const inputBytes = readFileSync(
 	new URL("./node_modules/@astralyn/pi/dist/modes/interactive/assets/clankolas.png", import.meta.url),

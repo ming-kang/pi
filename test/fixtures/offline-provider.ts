@@ -11,6 +11,36 @@ function userText(context: Context): string {
 	return typeof message.content === "string" ? message.content : message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
 }
 
+/**
+ * Streams a fenced Python block with a multiline docstring and comment. Highlighting must color every
+ * line of both, not only the first (#10143).
+ */
+function streamHighlightAnswer(
+	side: boolean,
+	text: { text: string },
+	result: AssistantMessage,
+	stream: ReturnType<typeof createAssistantMessageEventStream>,
+): void {
+	const block = [
+		"```python",
+		"def clamp(value, limit):",
+		'    """',
+		"    docstring line one",
+		"    docstring line two",
+		'    """',
+		"    # comment line one",
+		"    # comment line two",
+		"    return value",
+		"```",
+		"",
+	].join("\n");
+	const delta = `**${side ? "BTW" : "MAIN"} answer highlight**\n\n${block}`;
+	text.text += delta;
+	stream.push({ type: "text_delta", contentIndex: 1, delta, partial: result });
+	stream.push({ type: "text_end", contentIndex: 1, content: text.text, partial: result });
+	stream.push({ type: "done", reason: "stop", message: result });
+}
+
 /** The tool call a `tools` or `bg` prompt requests; `bg` hands a real Bash command to the background. */
 function requestedToolCall(question: string): Pick<ToolCall, "name" | "arguments"> | undefined {
 	if (question.startsWith("tools")) return { name: "fixture_wait", arguments: { ms: question.includes("slow") ? 15000 : 2000 } };
@@ -75,6 +105,10 @@ export default function fixture(pi: ExtensionAPI): void {
 						const text = { type: "text" as const, text: "" };
 						result.content.push(text);
 						stream.push({ type: "text_start", contentIndex: 1, partial: result });
+						if (question.includes("highlight")) {
+							streamHighlightAnswer(side, text, result, stream);
+							return;
+						}
 						const length = question.includes("long") || question.includes("slow") ? 45 : 4;
 						for (let line = 1; line <= length; line++) {
 							await delay(question.includes("slow") ? 400 : 100, undefined, { signal: options?.signal });
