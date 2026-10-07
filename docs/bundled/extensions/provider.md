@@ -1,4 +1,4 @@
-# provider — visual models.json editor
+# Provider
 
 Minimalist visual editor for the `providers` record of `models.json` (`~/.pi/agent/models.json`; respects `PI_CODING_AGENT_DIR`). The extension never registers runtime providers and stores no parallel configuration; Pi's native [models.json](../../models.md) mechanism remains the source of truth. See [Providers](../../providers.md) for credential setup and runtime resolution.
 

@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Fixed
+
+- Corrected the [search](docs/bundled/extensions/search.md) page to match the code: the work bounds are the `FC_RESULT_MAX_LINES` and `FC_LINE_MAX_CHARS` caps rather than a per-file byte limit or a 400-line read window, `rg` patterns are regular expressions rather than literals, and file contents do reach Devin as `readfile` results.
+
 ## [1.0.5] - 2026-10-06
 
 ### Added

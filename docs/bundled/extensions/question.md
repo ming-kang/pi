@@ -1,4 +1,4 @@
-# question — structured user questions
+# Question
 
 Adds a `question` tool for asking one to four multiple-choice questions when the agent needs a user decision. A Pi-native take on AskUserQuestion: a lightweight custom dialog with concise transcript summaries and a bounded model-facing result.
 
