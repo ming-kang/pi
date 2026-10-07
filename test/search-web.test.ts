@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { fetchWebSearch } from "../src/extensions/search/client.ts";
 import { runWebSearch } from "../src/extensions/search/web.ts";
+import { fetchWebSearch } from "../src/extensions/search/web-client.ts";
 
 const KEY = "devin-session-token$eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.c2ln";
 

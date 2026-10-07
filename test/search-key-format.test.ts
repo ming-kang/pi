@@ -1,29 +1,39 @@
-import { strict as assert } from "node:assert";
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { isAcceptableApiKey, looksTruncated } from "../src/extensions/search/key-format.ts";
 
 const JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.c2lnbmF0dXJl";
+const DEVIN_KEY = `devin-session-token$${JWT}`;
 
-assert.ok(isAcceptableApiKey(`devin-session-token$${JWT}`), "full devin key accepted");
-assert.ok(isAcceptableApiKey("sk-ws-01-abcdef"), "legacy sk-ws key accepted");
-assert.ok(!isAcceptableApiKey(""), "empty rejected");
-assert.ok(!isAcceptableApiKey("   "), "whitespace-only rejected");
-assert.ok(!isAcceptableApiKey(undefined), "undefined rejected");
-assert.ok(!isAcceptableApiKey(123 as unknown), "non-string rejected");
+describe("isAcceptableApiKey", () => {
+	it("accepts a full Devin token and a legacy sk-ws key", () => {
+		expect(isAcceptableApiKey(DEVIN_KEY)).toBe(true);
+		expect(isAcceptableApiKey("sk-ws-01-abcdef")).toBe(true);
+	});
 
-assert.ok(!looksTruncated(`devin-session-token$${JWT}`), "full devin key not flagged");
-assert.ok(looksTruncated("devin-session-token"), "bare prefix flagged (whole $JWT eaten)");
-assert.ok(looksTruncated("devin-session-token$"), "lone trailing $ flagged");
-assert.ok(looksTruncated("devin-session-token$garbage"), "$ kept but non-JWT body flagged");
-assert.ok(!looksTruncated(`  devin-session-token$${JWT}  `), "surrounding whitespace tolerated");
+	it("rejects blank and non-string values", () => {
+		expect(isAcceptableApiKey("")).toBe(false);
+		expect(isAcceptableApiKey("   ")).toBe(false);
+		expect(isAcceptableApiKey(undefined)).toBe(false);
+		expect(isAcceptableApiKey(123 as unknown)).toBe(false);
+	});
+});
 
-assert.ok(!looksTruncated("sk-ws-01-abcdef"), "legacy key never flagged");
-assert.ok(!looksTruncated(""), "empty never flagged");
-assert.ok(!looksTruncated(undefined), "undefined never flagged");
-assert.ok(!looksTruncated("eyJonlyjwt"), "bare JWT-ish string never flagged (unknown format)");
+describe("looksTruncated", () => {
+	it("leaves a complete Devin token alone, surrounding whitespace included", () => {
+		expect(looksTruncated(DEVIN_KEY)).toBe(false);
+		expect(looksTruncated(`  ${DEVIN_KEY}  `)).toBe(false);
+	});
 
-console.log("OK key-format self-test passed");
+	it("flags a token whose $JWT suffix was eaten by expansion", () => {
+		expect(looksTruncated("devin-session-token")).toBe(true);
+		expect(looksTruncated("devin-session-token$")).toBe(true);
+		expect(looksTruncated("devin-session-token$garbage")).toBe(true);
+	});
 
-describe("search key-format selftest", async () => {
-	it("passes", async () => {});
+	it("never flags keys in formats it does not recognize", () => {
+		expect(looksTruncated("sk-ws-01-abcdef")).toBe(false);
+		expect(looksTruncated("eyJonlyjwt")).toBe(false);
+		expect(looksTruncated("")).toBe(false);
+		expect(looksTruncated(undefined)).toBe(false);
+	});
 });

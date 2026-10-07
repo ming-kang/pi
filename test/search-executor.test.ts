@@ -1,8 +1,7 @@
-import { strict as assert } from "node:assert";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { type GrepFn, ToolExecutor } from "../src/extensions/search/executor.ts";
 import { PathSandbox } from "../src/extensions/search/sandbox.ts";
 import { renderTree } from "../src/extensions/search/tree.ts";
@@ -16,56 +15,77 @@ writeFileSync(join(root, ".hidden"), "secret\n");
 writeFileSync(join(root, "node_modules", "junk.js"), "junk\n");
 
 const sandbox = new PathSandbox(root);
-
 const fakeGrep: GrepFn = async (pattern) => `a.ts:2:const ${pattern} = auth();`;
 const ex = new ToolExecutor(sandbox, fakeGrep);
 
-assert.equal(ex.readfile("/codebase/a.ts", 1, 2), "1:line1\n2:const token = auth();", "readfile range");
+afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-assert.equal(await ex.rg("token", "/codebase", null), "/codebase/a.ts:2:const token = auth();", "rg remap");
-assert.ok(ex.collectedRgPatterns.includes("token"), "rg pattern collected");
-
-{
-	const out = ex.tree("/codebase", 1);
-	assert.ok(out.startsWith("/codebase"), "tree root label");
-	assert.ok(out.includes("a.ts") && out.includes("sub"), "tree entries");
-}
-
-{
-	const out = ex.ls("/codebase", false, false);
-	assert.ok(out.includes("a.ts") && out.includes("sub"), "ls entries");
-	assert.ok(!out.includes(".hidden"), "ls hides dotfiles");
-	assert.ok(ex.ls("/codebase", false, true).includes(".hidden"), "ls -a shows dotfiles");
-}
-
-{
-	const out = ex.glob("**/*.ts", "/codebase", "file");
-	assert.ok(out.includes("/codebase/a.ts"), "glob a.ts");
-	assert.ok(out.includes("/codebase/sub/b.ts"), "glob sub/b.ts");
-}
-
-assert.match(ex.readfile("/codebase/../../etc/passwd", null, null), /outside project root/, "readfile escape");
-assert.match(ex.tree("/etc", null), /outside project root/, "tree absolute escape");
-assert.match(await ex.rg("xyz", "/codebase/../..", null), /outside project root/, "rg escape");
-
-{
-	const out = await ex.execToolCall({
-		command1: { type: "readfile", file: "/codebase/a.ts", start_line: 1, end_line: 1 },
-		command2: { type: "ls", path: "/codebase" },
+describe("ToolExecutor.readfile", () => {
+	it("numbers the requested line range", () => {
+		expect(ex.readfile("/codebase/a.ts", 1, 2)).toBe("1:line1\n2:const token = auth();");
 	});
-	assert.ok(out.includes("<command1_result>") && out.includes("</command1_result>"), "command1 wrapper");
-	assert.ok(out.includes("<command2_result>"), "command2 wrapper");
-	assert.ok(out.includes("1:line1"), "command1 output");
-}
+});
 
-{
-	const t = renderTree(root, "/codebase", { maxDepth: 2 });
-	assert.equal(t.split("\n")[0], "/codebase", "renderTree root line");
-	assert.ok(t.includes("a.ts") && t.includes("sub"), "renderTree entries");
-}
+describe("ToolExecutor.rg", () => {
+	it("remaps hits onto the virtual root and collects the pattern", async () => {
+		expect(await ex.rg("token", "/codebase", null)).toBe("/codebase/a.ts:2:const token = auth();");
+		expect(ex.collectedRgPatterns).toContain("token");
+	});
+});
 
-console.log("OK executor self-test passed");
+describe("ToolExecutor.tree", () => {
+	it("labels the root and lists entries", () => {
+		const out = ex.tree("/codebase", 1);
+		expect(out.startsWith("/codebase")).toBe(true);
+		expect(out).toContain("a.ts");
+		expect(out).toContain("sub");
+	});
+});
 
-describe("search executor selftest", async () => {
-	it("passes", async () => {});
+describe("ToolExecutor.ls", () => {
+	it("hides dotfiles unless `all` is set", () => {
+		const out = ex.ls("/codebase", false, false);
+		expect(out).toContain("a.ts");
+		expect(out).toContain("sub");
+		expect(out).not.toContain(".hidden");
+		expect(ex.ls("/codebase", false, true)).toContain(".hidden");
+	});
+});
+
+describe("ToolExecutor.glob", () => {
+	it("matches recursively on **", () => {
+		const out = ex.glob("**/*.ts", "/codebase", "file");
+		expect(out).toContain("/codebase/a.ts");
+		expect(out).toContain("/codebase/sub/b.ts");
+	});
+});
+
+describe("path escapes", () => {
+	it("refuses every command whose path leaves the root", async () => {
+		expect(ex.readfile("/codebase/../../etc/passwd", null, null)).toMatch(/outside project root/);
+		expect(ex.tree("/etc", null)).toMatch(/outside project root/);
+		expect(await ex.rg("xyz", "/codebase/../..", null)).toMatch(/outside project root/);
+	});
+});
+
+describe("ToolExecutor.execToolCall", () => {
+	it("wraps each command result in its own tag", async () => {
+		const out = await ex.execToolCall({
+			command1: { type: "readfile", file: "/codebase/a.ts", start_line: 1, end_line: 1 },
+			command2: { type: "ls", path: "/codebase" },
+		});
+		expect(out).toContain("<command1_result>");
+		expect(out).toContain("</command1_result>");
+		expect(out).toContain("<command2_result>");
+		expect(out).toContain("1:line1");
+	});
+});
+
+describe("renderTree", () => {
+	it("starts at the label and lists entries", () => {
+		const t = renderTree(root, "/codebase", { maxDepth: 2 });
+		expect(t.split("\n")[0]).toBe("/codebase");
+		expect(t).toContain("a.ts");
+		expect(t).toContain("sub");
+	});
 });

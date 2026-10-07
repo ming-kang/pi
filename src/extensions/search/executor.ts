@@ -1,16 +1,11 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { envInt } from "./clamp.ts";
 import type { PathSandbox } from "./sandbox.ts";
 import { renderTree } from "./tree.ts";
 
-function readIntEnv(name: string, def: number, min: number, max: number): number {
-	const parsed = Number.parseInt(process.env[name] ?? "", 10);
-	if (!Number.isFinite(parsed)) return def;
-	return Math.min(max, Math.max(min, parsed));
-}
-
-const RESULT_MAX_LINES = readIntEnv("FC_RESULT_MAX_LINES", 50, 1, 500);
-const LINE_MAX_CHARS = readIntEnv("FC_LINE_MAX_CHARS", 250, 20, 10000);
+const RESULT_MAX_LINES = envInt("FC_RESULT_MAX_LINES", 50, 1, 500);
+const LINE_MAX_CHARS = envInt("FC_LINE_MAX_CHARS", 250, 20, 10000);
 // biome-ignore lint/suspicious/noTemplateCurlyInString: the literal `${` characters are intentional
 const GLOB_REGEX_META = ".+^${}()|\\";
 

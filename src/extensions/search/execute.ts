@@ -1,26 +1,17 @@
 import { isAbsolute, resolve } from "node:path";
+import { clampInt, envInt } from "./clamp.ts";
+import { formatSearchResult } from "./format.ts";
 import { createPiGrepFn } from "./grep-backend.ts";
 import { PathSandbox } from "./sandbox.ts";
-import { formatSearchResult, search } from "./search.ts";
+import { search } from "./search.ts";
 
-function clampEnv(name: string, def: number, min: number, max: number): number {
-	const parsed = Number.parseInt(process.env[name] ?? "", 10);
-	if (!Number.isFinite(parsed)) return def;
-	return Math.min(max, Math.max(min, parsed));
-}
-
-function clampParam(v: unknown, def: number, min: number, max: number): number {
-	if (typeof v !== "number" || !Number.isFinite(v)) return def;
-	return Math.min(max, Math.max(min, Math.round(v)));
-}
-
-const MAX_COMMANDS = clampEnv("FC_MAX_COMMANDS", 8, 1, 8);
-const TIMEOUT_MS = clampEnv("FC_TIMEOUT_MS", 30000, 5000, 120000);
+const MAX_COMMANDS = envInt("FC_MAX_COMMANDS", 8, 1, 8);
+const TIMEOUT_MS = envInt("FC_TIMEOUT_MS", 30000, 5000, 120000);
 const REPO_MAP_MODE = process.env.FC_REPO_MAP_MODE === "classic" ? "classic" : "hotspot";
-const HOTSPOT_BASE_DEPTH = clampEnv("FC_HOTSPOT_BASE_DEPTH", 1, 1, 4);
-const HOTSPOT_TOP_K = clampEnv("FC_HOTSPOT_TOP_K", 4, 1, 10);
-const HOTSPOT_TREE_DEPTH = clampEnv("FC_HOTSPOT_TREE_DEPTH", 2, 1, 6);
-const HOTSPOT_MAX_BYTES = clampEnv("FC_HOTSPOT_MAX_BYTES", 120 * 1024, 16 * 1024, 250 * 1024);
+const HOTSPOT_BASE_DEPTH = envInt("FC_HOTSPOT_BASE_DEPTH", 1, 1, 4);
+const HOTSPOT_TOP_K = envInt("FC_HOTSPOT_TOP_K", 4, 1, 10);
+const HOTSPOT_TREE_DEPTH = envInt("FC_HOTSPOT_TREE_DEPTH", 2, 1, 6);
+const HOTSPOT_MAX_BYTES = envInt("FC_HOTSPOT_MAX_BYTES", 120 * 1024, 16 * 1024, 250 * 1024);
 
 export interface CodeSearchParams {
 	query?: string;
@@ -66,9 +57,9 @@ export async function runCodeSearch(
 		projectRoot = candidate;
 	}
 
-	const treeDepth = clampParam(params.tree_depth, 3, 0, 6);
-	const maxTurns = clampParam(params.max_turns, 3, 1, 5);
-	const maxResults = clampParam(params.max_results, 10, 1, 30);
+	const treeDepth = clampInt(params.tree_depth, 3, 0, 6);
+	const maxTurns = clampInt(params.max_turns, 3, 1, 5);
+	const maxResults = clampInt(params.max_results, 10, 1, 30);
 	const excludePaths = Array.isArray(params.exclude_paths)
 		? params.exclude_paths.filter((p): p is string => typeof p === "string")
 		: [];

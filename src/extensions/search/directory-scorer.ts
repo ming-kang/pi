@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 
-import { DEFAULT_EXCLUDES as CANONICAL_EXCLUDES } from "./excludes.ts";
+import { DEFAULT_EXCLUDES } from "./excludes.ts";
 
 const BM25_K1 = 1.2;
 const BM25_B = 0.75;
@@ -10,7 +10,8 @@ const RRF_K = 60;
 const FIELD_WEIGHTS = { dir_name: 1.0, path_tokens: 4.0, metadata: 3.0, headers: 2.0 } as const;
 type FieldName = keyof typeof FIELD_WEIGHTS;
 
-const DEFAULT_EXCLUDES = new Set(CANONICAL_EXCLUDES);
+/** Membership form of the canonical list, for the hot path in the profile walk. */
+const EXCLUDE_SET = new Set(DEFAULT_EXCLUDES);
 
 const STOPWORDS = new Set([
 	"the",
@@ -331,7 +332,7 @@ function buildDirectoryProfile(projectRoot: string, dirName: string, excludePath
 		}
 		for (const entry of entries) {
 			const name = entry.name;
-			if (DEFAULT_EXCLUDES.has(name) || excludeSet.has(name)) continue;
+			if (EXCLUDE_SET.has(name) || excludeSet.has(name)) continue;
 			if (name.startsWith(".") && name !== ".github") continue;
 			const fullPath = join(currentPath, name);
 			const relPath = relative(projectRoot, fullPath);

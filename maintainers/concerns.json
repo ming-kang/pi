@@ -108,6 +108,7 @@
 				"test/search-oauth.test.ts",
 				"test/search-web.test.ts",
 				"test/search-protocol.test.ts",
+				"test/search-clamp.test.ts",
 				"test/search-client.test.ts",
 				"test/search-search.test.ts",
 				"test/search-executor.test.ts",

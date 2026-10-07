@@ -1,4 +1,4 @@
-import { fetchWebSearch, type WebSearchItem } from "./client.ts";
+import { fetchWebSearch, type WebSearchItem } from "./web-client.ts";
 
 export interface WebSearchParams {
 	query?: string;

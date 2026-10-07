@@ -3,7 +3,8 @@
 import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
-const VIRTUAL_ROOT = "/codebase";
+/** The path the backend believes it is working in; every model-supplied path is written in these terms. */
+export const VIRTUAL_ROOT = "/codebase";
 
 function within(base: string, p: string): boolean {
 	const rel = relative(base, p);

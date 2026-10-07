@@ -57,41 +57,24 @@ export function decodeVarint(buf: Buffer, offset: number): [number, number] {
 	return [value, offset];
 }
 
+/** Pull the protobuf string fields out of a frame, walking past every other wire type. */
 export function extractStrings(data: Buffer): string[] {
 	const strings: string[] = [];
 	let i = 0;
 	while (i < data.length) {
-		let tag = 0;
-		let shift = 0;
-		while (i < data.length) {
-			const b = data[i++]!;
-			tag |= (b & 0x7f) << shift;
-			shift += 7;
-			if (!(b & 0x80)) break;
-		}
+		const [tag, afterTag] = decodeVarint(data, i);
+		i = afterTag;
 		const wire = tag & 0x7;
 		if (wire === 0) {
-			while (i < data.length) {
-				const b = data[i++]!;
-				if (!(b & 0x80)) break;
-			}
+			i = decodeVarint(data, i)[1]; // a varint field: skip its value
 		} else if (wire === 1) {
 			i += 8; // 64-bit fixed
 		} else if (wire === 2) {
-			let length = 0;
-			shift = 0;
-			while (i < data.length) {
-				const b = data[i++]!;
-				length |= (b & 0x7f) << shift;
-				shift += 7;
-				if (!(b & 0x80)) break;
-			}
+			const [length, afterLength] = decodeVarint(data, i);
+			i = afterLength;
 			if (i + length <= data.length) {
-				const raw = data.subarray(i, i + length);
-				try {
-					const text = raw.toString("utf-8");
-					if (text.length > 5) strings.push(text);
-				} catch {}
+				const text = data.subarray(i, i + length).toString("utf-8");
+				if (text.length > 5) strings.push(text);
 			}
 			i += length;
 		} else if (wire === 5) {

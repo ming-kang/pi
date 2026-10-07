@@ -1,59 +1,61 @@
-import { strict as assert } from "node:assert";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it } from "vitest";
-
+import { afterAll, describe, expect, it } from "vitest";
+import { parseAnswer } from "../src/extensions/search/answer.ts";
 import type { ChatMessage } from "../src/extensions/search/client.ts";
+import { trimMessages } from "../src/extensions/search/context.ts";
+import { formatSearchResult } from "../src/extensions/search/format.ts";
 import { PathSandbox } from "../src/extensions/search/sandbox.ts";
-import { formatSearchResult, parseAnswer, type SearchResult, trimMessages } from "../src/extensions/search/search.ts";
+import type { SearchResult } from "../src/extensions/search/types.ts";
 
 const root = mkdtempSync(join(tmpdir(), "fc-search-selftest-"));
 writeFileSync(join(root, "a.ts"), "export {};\n");
 const sandbox = new PathSandbox(root);
 
-{
-	const xml = `<ANSWER>
+afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+describe("parseAnswer", () => {
+	it("parses a file with several ranges and strips the virtual prefix", () => {
+		const xml = `<ANSWER>
   <file path="/codebase/a.ts">
     <range>10-60</range>
     <range>80-90</range>
   </file>
 </ANSWER>`;
-	const files = parseAnswer(xml, sandbox);
-	assert.equal(files.length, 1, "one file parsed");
-	assert.equal(files[0]!.path, "a.ts", "virtual prefix stripped from rel path");
-	assert.equal(files[0]!.fullPath, join(sandbox.realRoot, "a.ts"), "fullPath maps under the real root");
-	assert.deepEqual(
-		files[0]!.ranges,
-		[
+		const files = parseAnswer(xml, sandbox);
+		expect(files).toHaveLength(1);
+		expect(files[0]!.path).toBe("a.ts");
+		expect(files[0]!.fullPath).toBe(join(sandbox.realRoot, "a.ts"));
+		expect(files[0]!.ranges).toEqual([
 			[10, 60],
 			[80, 90],
-		],
-		"ranges parsed",
-	);
-}
+		]);
+	});
 
-assert.equal(
-	parseAnswer("<file path='/codebase/a.ts'><range>1-2</range></file>", sandbox).length,
-	1,
-	"single-quote attr",
-);
+	it("accepts a single-quoted path attribute", () => {
+		expect(parseAnswer("<file path='/codebase/a.ts'><range>1-2</range></file>", sandbox)).toHaveLength(1);
+	});
 
-{
-	const evil = `<file path="/codebase/../../etc/passwd"><range>1-2</range></file>
+	it("drops escapes and absolute paths but keeps the in-root survivor", () => {
+		const evil = `<file path="/codebase/../../etc/passwd"><range>1-2</range></file>
 <file path="/etc/passwd"><range>1-2</range></file>
-<file path="C:\\Windows\\system32\\config"><range>1-2</range></file>
+<file path="${String.raw`C:\Windows\system32\config`}"><range>1-2</range></file>
 <file path="/codebase/a.ts"><range>1-1</range></file>`;
-	const files = parseAnswer(evil, sandbox);
-	assert.equal(files.length, 1, "escape/absolute paths refused, in-root survivor kept");
-	assert.equal(files[0]!.path, "a.ts");
-}
+		const files = parseAnswer(evil, sandbox);
+		expect(files).toHaveLength(1);
+		expect(files[0]!.path).toBe("a.ts");
+	});
 
-assert.equal(parseAnswer("no xml at all", sandbox).length, 0, "non-XML -> empty");
+	it("returns nothing for text that is not an ANSWER document", () => {
+		expect(parseAnswer("no xml at all", sandbox)).toHaveLength(0);
+	});
+});
 
 function bigUser(query: string): ChatMessage {
 	return { role: 1, content: `Problem Statement: ${query}\n\nRepo Map (tree -L 3 /codebase):\n${"x".repeat(5000)}` };
 }
+
 function callPair(id: string, content: string): ChatMessage[] {
 	return [
 		{ role: 2, content: `thinking ${id}`, tool_call_id: id, tool_name: "restricted_exec", tool_args_json: "{}" },
@@ -61,84 +63,90 @@ function callPair(id: string, content: string): ChatMessage[] {
 	];
 }
 
-{
-	const messages: ChatMessage[] = [
-		{ role: 5, content: "system" },
-		bigUser("find the auth flow"),
-		...callPair("c1", "old results"),
-		...callPair("c2", "recent results"),
-	];
-	const shrunk = trimMessages(messages, "find the auth flow");
-	assert.ok(shrunk, "trim reports success");
-	assert.equal(messages[0]!.content, "system", "system message preserved first");
-	assert.ok(messages[1]!.content.includes("omitted"), "repo map compacted away");
-	const call = messages.find((m) => m.role === 2 && m.tool_call_id === "c2");
-	const result = messages.find((m) => m.role === 4 && m.ref_call_id === "c2");
-	assert.ok(call && result, "latest call/result pair intact");
-	assert.ok(!messages.some((m) => m.ref_call_id === "c1"), "older result dropped");
-}
+describe("trimMessages", () => {
+	it("drops the repo map and older exchanges but keeps the newest pair", () => {
+		const messages: ChatMessage[] = [
+			{ role: 5, content: "system" },
+			bigUser("find the auth flow"),
+			...callPair("c1", "old results"),
+			...callPair("c2", "recent results"),
+		];
+		expect(trimMessages(messages, "find the auth flow")).toBe(true);
+		expect(messages[0]!.content).toBe("system");
+		expect(messages[1]!.content).toContain("omitted");
+		expect(messages.find((m) => m.role === 2 && m.tool_call_id === "c2")).toBeDefined();
+		expect(messages.find((m) => m.role === 4 && m.ref_call_id === "c2")).toBeDefined();
+		expect(messages.some((m) => m.ref_call_id === "c1")).toBe(false);
+	});
 
-{
-	const messages: ChatMessage[] = [
-		{ role: 5, content: "system" },
-		{ role: 1, content: "Problem Statement: q" },
-	];
-	assert.equal(trimMessages(messages, "q"), false, "already-minimal conversation refuses to trim");
-	assert.equal(trimMessages([], "q"), false, "empty conversation refuses to trim");
-}
+	it("refuses to trim an already-minimal conversation", () => {
+		const messages: ChatMessage[] = [
+			{ role: 5, content: "system" },
+			{ role: 1, content: "Problem Statement: q" },
+		];
+		expect(trimMessages(messages, "q")).toBe(false);
+		expect(trimMessages([], "q")).toBe(false);
+	});
+});
 
 const FMT = { maxTurns: 3, maxResults: 10, maxCommands: 8, timeoutMs: 30000, excludePaths: ["gen"] };
 
-{
-	const result: SearchResult = {
-		files: [
-			{ path: "a.ts", fullPath: "/repo/a.ts", ranges: [[1, 10]] },
-			{ path: "b.ts", fullPath: "/repo/b.ts", ranges: [] },
-		],
-		rgPatterns: ["authFlow", "ok", "authFlow"],
-		meta: { treeDepth: 3, treeSizeKB: 12.5, fellBack: true, strategy: "hotspot", hotDirs: ["src"], hotspotDepth: 2 },
-	};
-	const text = formatSearchResult(result, FMT);
-	assert.ok(text.includes("Found 2 relevant files."), "count line");
-	assert.ok(text.includes("[1/2] /repo/a.ts (L1-10)"), "numbered file with ranges");
-	assert.ok(text.includes("[2/2] /repo/b.ts") && !text.includes("/repo/b.ts ("), "rangeless file has no parens");
-	assert.ok(text.includes("grep keywords: authFlow"), "rg patterns deduped");
-	assert.ok(!text.includes(" ok"), "short patterns (<3 chars) filtered");
-	assert.ok(text.includes("(fell back from requested depth)"), "fallback noted");
-	assert.ok(text.includes("strategy=hotspot, hotspot_depth=2, hot=[src]"), "meta config line");
-	assert.ok(text.includes("exclude_paths=[gen]"), "exclude paths echoed");
-}
+describe("formatSearchResult", () => {
+	it("renders the reading list, deduped keywords, and the config line", () => {
+		const result: SearchResult = {
+			files: [
+				{ path: "a.ts", fullPath: "/repo/a.ts", ranges: [[1, 10]] },
+				{ path: "b.ts", fullPath: "/repo/b.ts", ranges: [] },
+			],
+			rgPatterns: ["authFlow", "ok", "authFlow"],
+			meta: {
+				treeDepth: 3,
+				treeSizeKB: 12.5,
+				fellBack: true,
+				strategy: "hotspot",
+				hotDirs: ["src"],
+				hotspotDepth: 2,
+			},
+		};
+		const text = formatSearchResult(result, FMT);
+		expect(text).toContain("Found 2 relevant files.");
+		expect(text).toContain("[1/2] /repo/a.ts (L1-10)");
+		expect(text).toContain("[2/2] /repo/b.ts");
+		expect(text).not.toContain("/repo/b.ts (");
+		expect(text).toContain("grep keywords: authFlow");
+		expect(text).not.toContain(" ok");
+		expect(text).toContain("(fell back from requested depth)");
+		expect(text).toContain("strategy=hotspot, hotspot_depth=2, hot=[src]");
+		expect(text).toContain("exclude_paths=[gen]");
+	});
 
-{
-	const text = formatSearchResult(
-		{
-			files: [],
-			error: "PAYLOAD_TOO_LARGE: too big",
-			meta: { treeDepth: 4, treeSizeKB: 300, fellBack: false, errorCode: "PAYLOAD_TOO_LARGE" },
-		},
-		FMT,
-	);
-	assert.ok(text.startsWith("Error: PAYLOAD_TOO_LARGE"), "error line first");
-	assert.ok(text.includes("[diagnostic] error_type=PAYLOAD_TOO_LARGE"), "diagnostic present");
-	assert.ok(text.includes("reduce tree_depth"), "payload hint attached");
-}
+	it("leads an error with the code, then diagnostics, config, and a hint", () => {
+		const text = formatSearchResult(
+			{
+				files: [],
+				error: "PAYLOAD_TOO_LARGE: too big",
+				meta: { treeDepth: 4, treeSizeKB: 300, fellBack: false, errorCode: "PAYLOAD_TOO_LARGE" },
+			},
+			FMT,
+		);
+		expect(text.startsWith("Error: PAYLOAD_TOO_LARGE")).toBe(true);
+		expect(text).toContain("[diagnostic] error_type=PAYLOAD_TOO_LARGE");
+		expect(text).toContain("reduce tree_depth");
+	});
 
-assert.equal(formatSearchResult({ files: [] }, FMT), "No relevant files found.", "empty result message");
-assert.ok(
-	formatSearchResult({ files: [], rawResponse: "the model rambled" }, FMT).includes(
-		"Raw response:\nthe model rambled",
-	),
-	"raw response surfaced when no files",
-);
+	it("says so plainly when nothing was found and there is no prose to show", () => {
+		expect(formatSearchResult({ files: [] }, FMT)).toBe("No relevant files found.");
+	});
 
-{
-	const text = formatSearchResult({ files: [], rawResponse: "r".repeat(5000) }, FMT);
-	assert.ok(text.length < 2600, "long raw response bounded");
-	assert.ok(text.includes("[raw response truncated: 5000 chars total]"), "truncation notice present");
-}
+	it("surfaces the raw response when the model produced no files", () => {
+		expect(formatSearchResult({ files: [], rawResponse: "the model rambled" }, FMT)).toContain(
+			"Raw response:\nthe model rambled",
+		);
+	});
 
-console.log("OK search self-test passed");
-
-describe("search search selftest", async () => {
-	it("passes", async () => {});
+	it("bounds a long raw response and says how much was dropped", () => {
+		const text = formatSearchResult({ files: [], rawResponse: "r".repeat(5000) }, FMT);
+		expect(text.length).toBeLessThan(2600);
+		expect(text).toContain("[raw response truncated: 5000 chars total]");
+	});
 });

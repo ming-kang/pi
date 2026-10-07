@@ -44,3 +44,6 @@ export const CMD_STATUS = "search-status";
 export const CMD_LOGOUT = "search-logout";
 
 export const ENV_KEY = "SEARCH_KEY";
+
+/** Windsurf/Devin handshake identity: both backends key their protocol behavior off this app id. */
+export const WS_APP = "windsurf";
