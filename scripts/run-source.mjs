@@ -76,6 +76,7 @@ export const credentialVariables = [
 	"QWEN_TOKEN_PLAN_API_KEY",
 	"QWEN_TOKEN_PLAN_CN_API_KEY",
 	"RADIUS_API_KEY",
+	"SEARCH_KEY",
 	"TOGETHER_API_KEY",
 	"XAI_API_KEY",
 	"XIAOMI_API_KEY",

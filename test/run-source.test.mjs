@@ -16,7 +16,7 @@ function documentedProviderVariables() {
 	for (const match of providers.matchAll(/export\s+([A-Z][A-Z0-9_]+)=/g)) variables.add(match[1]);
 	for (const path of [
 		join(root, "docs", "llama-cpp.md"),
-		join(root, "docs", "bundled", "extensions", "web-search.md"),
+		join(root, "docs", "bundled", "extensions", "search.md"),
 	]) {
 		const contents = readFileSync(path, "utf8");
 		for (const match of contents.matchAll(/\b([A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|BASE_URL))\b/g)) {
