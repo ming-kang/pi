@@ -133,7 +133,7 @@ describe("search web tool output", () => {
 		try {
 			const { text, details } = await runWebSearch({ query: "q" }, KEY);
 			expect(details.status).toBe("error");
-			expect(text).toContain("/search-login");
+			expect(text).toContain("/search");
 		} finally {
 			vi.unstubAllGlobals();
 		}

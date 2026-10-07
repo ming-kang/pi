@@ -38,10 +38,8 @@ export const WEB_TOOL_GUIDELINES = [
 	"Do not use `web_search` for questions answerable from the local repository; use code_search, read, or grep for those.",
 ];
 
-export const CMD_KEY = "search-key";
-export const CMD_LOGIN = "search-login";
-export const CMD_STATUS = "search-status";
-export const CMD_LOGOUT = "search-logout";
+/** The single entry point: sign in with an account, paste a key, or clear the saved key. */
+export const CMD_SEARCH = "search";
 
 export const ENV_KEY = "SEARCH_KEY";
 

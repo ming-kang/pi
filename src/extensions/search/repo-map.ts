@@ -3,20 +3,17 @@ import { join } from "node:path";
 import { type ProbeFn, scoreDirectories } from "./directory-scorer.ts";
 import { DEFAULT_EXCLUDES, gitignoreDirNames, MAX_TREE_BYTES, renderTree } from "./tree.ts";
 
-export interface HotspotConfig {
-	baseDepth: number;
-	topK: number;
-	hotspotDepth: number;
-	maxBytes: number;
-}
+/** Ranked subtrees: how many hot directories to expand, how deep, and the byte budget they share. */
+const HOTSPOT_TOP_K = 4;
+const HOTSPOT_DEPTH = 2;
+const HOTSPOT_MAX_BYTES = 120 * 1024;
 
 export interface RepoMapOptions {
-	mode: "classic" | "hotspot";
 	query: string;
+	/** Skeleton depth of the base tree; `renderBudgeted` walks it down until the tree fits its budget. */
 	treeDepth: number;
 	excludePaths: string[];
 	probeFn?: ProbeFn;
-	hotspot: HotspotConfig;
 	signal?: AbortSignal;
 }
 
@@ -26,23 +23,12 @@ export interface RepoMap {
 	hotspotDepth?: number;
 	sizeBytes: number;
 	fellBack: boolean;
-	strategy: "classic" | "hotspot";
 	hotDirs: string[];
 }
 
 function buildExclude(realRoot: string, excludePaths: string[]): (name: string) => boolean {
 	const set = new Set([...DEFAULT_EXCLUDES, ...gitignoreDirNames(realRoot), ...excludePaths]);
 	return (name) => set.has(name);
-}
-
-function suggestDepth(realRoot: string): number {
-	let count = 0;
-	try {
-		count = readdirSync(realRoot).length;
-	} catch {}
-	if (count < 500) return 4;
-	if (count <= 5000) return 3;
-	return 2;
 }
 
 function renderBudgeted(
@@ -78,39 +64,24 @@ function listTopLevelDirs(realRoot: string, exclude: (name: string) => boolean):
 	return dirs;
 }
 
-function buildClassic(
-	realRoot: string,
-	label: string,
-	opts: RepoMapOptions,
-	exclude: (name: string) => boolean,
-): RepoMap {
-	const target = opts.treeDepth === 0 ? suggestDepth(realRoot) : opts.treeDepth;
-	const { tree, depth, fellBack } = renderBudgeted(realRoot, label, target, exclude);
-	return { tree, depth, sizeBytes: Buffer.byteLength(tree, "utf-8"), fellBack, strategy: "classic", hotDirs: [] };
-}
+/**
+ * A whole-repo skeleton plus the subtrees a query points at: the planner gets the global shape
+ * cheaply, and the deepest detail where the query looks. The skeleton depth `tree_depth` asks for
+ * is walked down until the tree fits, which the caller reports as `fellBack`.
+ */
+export async function buildRepoMap(realRoot: string, label: string, opts: RepoMapOptions): Promise<RepoMap> {
+	const exclude = buildExclude(realRoot, opts.excludePaths);
+	const base = renderBudgeted(realRoot, label, opts.treeDepth, exclude);
+	const baseOnly: RepoMap = {
+		tree: base.tree,
+		depth: base.depth,
+		sizeBytes: Buffer.byteLength(base.tree, "utf-8"),
+		fellBack: base.fellBack,
+		hotDirs: [],
+	};
 
-async function buildHotspot(
-	realRoot: string,
-	label: string,
-	opts: RepoMapOptions,
-	exclude: (name: string) => boolean,
-): Promise<RepoMap> {
-	const cfg = opts.hotspot;
-	const base = renderBudgeted(realRoot, label, cfg.baseDepth, exclude);
 	const topDirs = listTopLevelDirs(realRoot, exclude);
-
-	if (topDirs.length === 0) {
-		return {
-			tree: base.tree,
-			depth: base.depth,
-			sizeBytes: Buffer.byteLength(base.tree, "utf-8"),
-			fellBack: base.fellBack,
-			strategy: "hotspot",
-			hotDirs: [],
-		};
-	}
-
-	const hotspotDepth = opts.treeDepth > cfg.hotspotDepth ? Math.min(4, opts.treeDepth) : cfg.hotspotDepth;
+	if (topDirs.length === 0) return baseOnly;
 
 	let hotDirs: string[] = [];
 	let pathSpines: string[] = [];
@@ -121,7 +92,7 @@ async function buildHotspot(
 			topDirs,
 			[...gitignoreDirNames(realRoot), ...opts.excludePaths],
 			{
-				topK: cfg.topK,
+				topK: HOTSPOT_TOP_K,
 				probeFn: opts.probeFn,
 				minReturn: 2,
 				signal: opts.signal,
@@ -130,19 +101,12 @@ async function buildHotspot(
 		hotDirs = scored.hotDirs;
 		pathSpines = scored.pathSpines;
 	} catch {
-		return {
-			tree: base.tree,
-			depth: base.depth,
-			sizeBytes: Buffer.byteLength(base.tree, "utf-8"),
-			fellBack: base.fellBack,
-			strategy: "hotspot",
-			hotDirs: [],
-		};
+		return baseOnly;
 	}
 
 	const hotspotEntries = hotDirs.map((dir) => ({
 		dir,
-		tree: renderTree(join(realRoot, dir), `${label}/${dir}`, { maxDepth: hotspotDepth, exclude }),
+		tree: renderTree(join(realRoot, dir), `${label}/${dir}`, { maxDepth: HOTSPOT_DEPTH, exclude }),
 	}));
 	const spineSection = pathSpines.length
 		? `# Relevant File Paths (high-signal candidates)\n${pathSpines.map((p) => `- ${label}/${p.replace(/\\/g, "/")}`).join("\n")}`
@@ -159,12 +123,12 @@ async function buildHotspot(
 	let tree = assemble(kept, spineSection);
 	let sizeBytes = Buffer.byteLength(tree, "utf-8");
 
-	if (sizeBytes > cfg.maxBytes) {
+	if (sizeBytes > HOTSPOT_MAX_BYTES) {
 		if (spineSection) {
 			tree = assemble(kept, "");
 			sizeBytes = Buffer.byteLength(tree, "utf-8");
 		}
-		while (sizeBytes > cfg.maxBytes && kept.length > 0) {
+		while (sizeBytes > HOTSPOT_MAX_BYTES && kept.length > 0) {
 			kept.pop();
 			tree = assemble(kept, "");
 			sizeBytes = Buffer.byteLength(tree, "utf-8");
@@ -174,16 +138,9 @@ async function buildHotspot(
 	return {
 		tree,
 		depth: base.depth,
-		hotspotDepth,
+		hotspotDepth: HOTSPOT_DEPTH,
 		sizeBytes,
 		fellBack: base.fellBack,
-		strategy: "hotspot",
 		hotDirs: kept.map((h) => h.dir),
 	};
-}
-
-export async function buildRepoMap(realRoot: string, label: string, opts: RepoMapOptions): Promise<RepoMap> {
-	const exclude = buildExclude(realRoot, opts.excludePaths);
-	if (opts.mode === "classic") return buildClassic(realRoot, label, opts, exclude);
-	return buildHotspot(realRoot, label, opts, exclude);
 }

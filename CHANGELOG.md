@@ -4,9 +4,15 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- The search extension's four commands (`/search-key`, `/search-login`, `/search-status`, `/search-logout`) are now one [`/search` menu](docs/bundled/extensions/search.md): sign in with a Devin account, paste a key, or clear the saved key. Clearing a key now asks for confirmation, and submitting an empty key dialog no longer clears it.
+- Removed the search extension's `WS_*` and `FC_*` tuning environment variables. `SEARCH_KEY` remains for headless and CI runs.
+- Removed the search extension's `classic` repo-map strategy; the query-ranked hotspot map is the only one. `code_search`'s `tree_depth` now sets the skeleton depth of the base tree (1–4, default 2) instead of an unspecified "repo-map depth".
+
 ### Fixed
 
-- Corrected the [search](docs/bundled/extensions/search.md) page to match the code: the work bounds are the `FC_RESULT_MAX_LINES` and `FC_LINE_MAX_CHARS` caps rather than a per-file byte limit or a 400-line read window, `rg` patterns are regular expressions rather than literals, and file contents do reach Devin as `readfile` results.
+- Corrected the [search](docs/bundled/extensions/search.md) page to match the code: the work bounds are the result-line and line-length caps rather than a per-file byte limit or a 400-line read window, `rg` patterns are regular expressions rather than literals, and file contents do reach Devin as `readfile` results.
 
 ## [1.0.5] - 2026-10-06
 

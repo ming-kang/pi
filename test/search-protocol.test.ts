@@ -1,5 +1,3 @@
-import { existsSync } from "node:fs";
-import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
 	connectFrameDecode,
@@ -86,26 +84,5 @@ describe("extractStrings", () => {
 
 	it("stops cleanly when a length-delimited field is truncated", () => {
 		expect(extractStrings(Buffer.from([0x22, 0x20, 0x61]))).toEqual([]);
-	});
-});
-
-describe("upstream parity", () => {
-	it("matches the upstream encoder when FC_UPSTREAM points at it", async () => {
-		const upstream = process.env.FC_UPSTREAM;
-		if (!upstream || !existsSync(upstream)) return;
-		const up = await import(pathToFileURL(upstream).href);
-		const build = (Enc: typeof ProtobufEncoder) => {
-			const sub = new Enc().writeString(1, "hello-world");
-			return new Enc()
-				.writeVarint(2, 300)
-				.writeString(3, "fast-context")
-				.writeBytes(30, Buffer.from([0x00, 0x01]))
-				.writeMessage(6, sub)
-				.toBuffer();
-		};
-		const mine = build(ProtobufEncoder);
-		expect(mine).toEqual(build(up.ProtobufEncoder));
-		expect(extractStrings(mine)).toEqual(up.extractStrings(mine));
-		expect(connectFrameDecode(connectFrameEncode(mine))).toEqual(up.connectFrameDecode(up.connectFrameEncode(mine)));
 	});
 });

@@ -19,7 +19,7 @@ import { reconcileSearchTools } from "./reconcile.ts";
 import { CodeSearchParamsSchema, WebSearchParamsSchema } from "./schema.ts";
 import { runWebSearch, type WebSearchDetails } from "./web.ts";
 
-const NOT_CONFIGURED = "Error: Devin Search is not configured. Run /search-key or /search-login.";
+const NOT_CONFIGURED = "Error: Devin Search is not configured. Run /search to sign in.";
 
 interface SearchToolSpec<TParams extends TSchema, TDetails> {
 	name: string;

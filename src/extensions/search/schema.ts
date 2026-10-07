@@ -13,10 +13,10 @@ export const CodeSearchParamsSchema = Type.Object({
 	),
 	tree_depth: Type.Optional(
 		Type.Integer({
-			minimum: 0,
-			maximum: 6,
+			minimum: 1,
+			maximum: 4,
 			description:
-				"Repo-map tree depth (0-6, default 3; 0 = auto). Use 1-2 for huge repos, 3 for most repos, and 4-6 only for small focused projects.",
+				"Repo-map skeleton depth (1-4, default 2). The map is trimmed to its byte budget, so a deep tree on a large repo falls back automatically; raise it only for a small repository you want to see whole.",
 		}),
 	),
 	max_turns: Type.Optional(

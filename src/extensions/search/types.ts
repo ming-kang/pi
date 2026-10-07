@@ -12,11 +12,6 @@ export interface SearchOptions {
 	treeDepth?: number;
 	timeoutMs?: number;
 	excludePaths?: string[];
-	repoMapMode?: "classic" | "hotspot";
-	hotspotBaseDepth?: number;
-	hotspotTopK?: number;
-	hotspotTreeDepth?: number;
-	hotspotMaxBytes?: number;
 	onProgress?: (msg: string) => void;
 	signal?: AbortSignal;
 }
@@ -33,7 +28,7 @@ export interface SearchMeta {
 	treeDepth: number;
 	treeSizeKB: number;
 	fellBack: boolean;
-	strategy?: "classic" | "hotspot";
+	strategy?: "hotspot";
 	hotDirs?: string[];
 	hotspotDepth?: number;
 	errorCode?: string;

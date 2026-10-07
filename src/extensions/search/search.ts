@@ -31,14 +31,9 @@ export async function search(opts: SearchOptions): Promise<SearchResult> {
 		maxTurns = 3,
 		maxCommands = 8,
 		maxResults = 10,
-		treeDepth = 3,
+		treeDepth = 2,
 		timeoutMs = 30000,
 		excludePaths = [],
-		repoMapMode = "hotspot",
-		hotspotBaseDepth = 1,
-		hotspotTopK = 4,
-		hotspotTreeDepth = 2,
-		hotspotMaxBytes = 120 * 1024,
 		onProgress,
 	} = opts;
 	const log = (m: string) => onProgress?.(m);
@@ -73,23 +68,14 @@ export async function search(opts: SearchOptions): Promise<SearchResult> {
 
 	log("Mapping repo…");
 	const map = await buildRepoMap(sandbox.realRoot, VIRTUAL_ROOT, {
-		mode: repoMapMode,
 		query,
 		treeDepth,
 		excludePaths,
 		probeFn,
-		hotspot: {
-			baseDepth: hotspotBaseDepth,
-			topK: hotspotTopK,
-			hotspotDepth: hotspotTreeDepth,
-			maxBytes: hotspotMaxBytes,
-		},
 		signal: opts.signal,
 	});
 	const hot = map.hotDirs.length ? ` · hot: ${map.hotDirs.join(", ")}` : "";
-	log(
-		`Mapped repo (${map.strategy}${hot}, ${(map.sizeBytes / 1024).toFixed(1)}KB${map.fellBack ? ", fell back" : ""})`,
-	);
+	log(`Mapped repo (hotspot${hot}, ${(map.sizeBytes / 1024).toFixed(1)}KB${map.fellBack ? ", fell back" : ""})`);
 
 	const messages: ChatMessage[] = [
 		{ role: 5, content: systemPrompt },
@@ -104,7 +90,8 @@ export async function search(opts: SearchOptions): Promise<SearchResult> {
 		treeDepth: map.depth,
 		treeSizeKB: +(map.sizeBytes / 1024).toFixed(1),
 		fellBack: map.fellBack,
-		strategy: map.strategy,
+		// The one repo-map strategy; the diagnostic line still names it so results stay comparable.
+		strategy: "hotspot",
 		hotDirs: map.hotDirs,
 		hotspotDepth: map.hotspotDepth,
 		contextTrimmed: contextTrimmed || undefined,

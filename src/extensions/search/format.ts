@@ -21,13 +21,12 @@ function truncateText(text: string, maxLength: number): string {
 function hintFor(code?: string): string {
 	if (code === "PAYLOAD_TOO_LARGE" || code === "TIMEOUT")
 		return "\n[hint] Payload/timeout error. Try: reduce tree_depth, reduce max_turns, add exclude_paths, or narrow project_path to a subdirectory.";
-	if (code === "AUTH_ERROR")
-		return "\n[hint] Devin authentication failed; re-authenticate with /search-login or set a new key with /search-key.";
+	if (code === "AUTH_ERROR") return "\n[hint] Devin authentication failed; run /search to sign in again.";
 	if (code === "RATE_LIMITED") return "\n[hint] Rate limited. Wait a moment and retry.";
 	return "\n[hint] If the error is payload-related, try a lower tree_depth value or add exclude_paths.";
 }
 
-/** `, strategy=hotspot, hotspot_depth=2, hot=[src]` — empty unless the repo map ran in hotspot mode. */
+/** `, strategy=hotspot, hotspot_depth=2, hot=[src]` — empty for metas that carry no hotspot data, such as error diagnostics. */
 function strategySuffix(meta: SearchMeta): string {
 	if (!meta.strategy) return "";
 	const depth = meta.hotspotDepth ? `, hotspot_depth=${meta.hotspotDepth}` : "";

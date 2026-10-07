@@ -9,10 +9,10 @@ import { connectFrameDecode, connectFrameEncode, extractStrings, ProtobufEncoder
 // backend keys its protocol behavior off them, so they are pinned rather than derived.
 const API_BASE = "https://server.self-serve.windsurf.com/exa.api_server_pb.ApiServerService";
 const AUTH_BASE = "https://server.self-serve.windsurf.com/exa.auth_pb.AuthService";
-const WS_APP_VER = process.env.WS_APP_VER || "1.48.2";
-const WS_LS_VER = process.env.WS_LS_VER || "1.9544.35";
-/** Escape hatch for protocol drift, not a user-facing model picker. */
-const WS_MODEL = process.env.WS_MODEL || "MODEL_SWE_1_6_FAST";
+const WS_APP_VER = "1.48.2";
+const WS_LS_VER = "1.9544.35";
+/** Pinned protocol model id, not a user-facing model picker. */
+const WS_MODEL = "MODEL_SWE_1_6_FAST";
 
 const USER_AGENT = "connect-go/1.18.1 (go1.25.5)";
 const SENTRY_PUBLIC_KEY = "b813f73488da69eedec534dba1029111";

@@ -70,7 +70,7 @@ export async function runWebSearch(
 		const fe = e as { code?: string };
 		const errorMessage =
 			fe.code === "AUTH_ERROR"
-				? "Devin rejected the key. Re-authenticate with /search-login or set a new key with /search-key."
+				? "Devin rejected the key. Run /search to sign in again."
 				: fe.code === "RATE_LIMITED"
 					? "Devin rate-limited the web search. Wait a moment and retry."
 					: message;

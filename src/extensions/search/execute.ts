@@ -1,17 +1,13 @@
 import { isAbsolute, resolve } from "node:path";
-import { clampInt, envInt } from "./clamp.ts";
+import { clampInt } from "./clamp.ts";
 import { formatSearchResult } from "./format.ts";
 import { createPiGrepFn } from "./grep-backend.ts";
 import { PathSandbox } from "./sandbox.ts";
 import { search } from "./search.ts";
 
-const MAX_COMMANDS = envInt("FC_MAX_COMMANDS", 8, 1, 8);
-const TIMEOUT_MS = envInt("FC_TIMEOUT_MS", 30000, 5000, 120000);
-const REPO_MAP_MODE = process.env.FC_REPO_MAP_MODE === "classic" ? "classic" : "hotspot";
-const HOTSPOT_BASE_DEPTH = envInt("FC_HOTSPOT_BASE_DEPTH", 1, 1, 4);
-const HOTSPOT_TOP_K = envInt("FC_HOTSPOT_TOP_K", 4, 1, 10);
-const HOTSPOT_TREE_DEPTH = envInt("FC_HOTSPOT_TREE_DEPTH", 2, 1, 6);
-const HOTSPOT_MAX_BYTES = envInt("FC_HOTSPOT_MAX_BYTES", 120 * 1024, 16 * 1024, 250 * 1024);
+/** Fixed loop budget; the tool parameters are the only model-facing knobs. */
+const MAX_COMMANDS = 8;
+const TIMEOUT_MS = 30_000;
 
 export interface CodeSearchParams {
 	query?: string;
@@ -57,7 +53,7 @@ export async function runCodeSearch(
 		projectRoot = candidate;
 	}
 
-	const treeDepth = clampInt(params.tree_depth, 3, 0, 6);
+	const treeDepth = clampInt(params.tree_depth, 2, 1, 4);
 	const maxTurns = clampInt(params.max_turns, 3, 1, 5);
 	const maxResults = clampInt(params.max_results, 10, 1, 30);
 	const excludePaths = Array.isArray(params.exclude_paths)
@@ -75,11 +71,6 @@ export async function runCodeSearch(
 		treeDepth,
 		timeoutMs: TIMEOUT_MS,
 		excludePaths,
-		repoMapMode: REPO_MAP_MODE,
-		hotspotBaseDepth: HOTSPOT_BASE_DEPTH,
-		hotspotTopK: HOTSPOT_TOP_K,
-		hotspotTreeDepth: HOTSPOT_TREE_DEPTH,
-		hotspotMaxBytes: HOTSPOT_MAX_BYTES,
 		signal,
 		onProgress,
 	});

@@ -61,12 +61,12 @@ export async function exchangeCode(attempt: OAuthAttempt, code: string, options:
 			signal: AbortSignal.timeout(120_000),
 		});
 	} catch {
-		throw new OAuthError("Could not reach Devin's token endpoint. Check your network and retry /search-login.");
+		throw new OAuthError("Could not reach Devin's token endpoint. Check your network and retry /search.");
 	}
 	const text = await response.text();
 	if (!response.ok) {
 		throw new OAuthError(
-			`Devin rejected the authorization code (HTTP ${response.status}). The code is one-time and short-lived — start /search-login again.`,
+			`Devin rejected the authorization code (HTTP ${response.status}). The code is one-time and short-lived — start /search again.`,
 		);
 	}
 	let data: unknown;

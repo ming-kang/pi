@@ -300,7 +300,7 @@ function extractFileHeaders(filePath: string): string {
 }
 
 const _profileCache = new Map<string, { profile: DirProfile; cachedAt: number }>();
-const PROFILE_CACHE_TTL_MS = (Number.parseInt(process.env.FC_PROFILE_CACHE_TTL ?? "", 10) || 120) * 1000;
+const PROFILE_CACHE_TTL_MS = 120_000;
 const MAX_HEADER_FILES = 80;
 
 function buildDirectoryProfile(projectRoot: string, dirName: string, excludePaths: string[], maxDepth = 3): DirProfile {
