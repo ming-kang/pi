@@ -81,10 +81,6 @@
           "path": "bundled/extensions/statusline.md"
         },
         {
-          "title": "Web Search",
-          "path": "bundled/extensions/web-search.md"
-        },
-        {
           "title": "Bundled themes",
           "path": "bundled/themes.md"
         },
