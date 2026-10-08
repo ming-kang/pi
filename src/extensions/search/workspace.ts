@@ -125,7 +125,8 @@ export class Workspace {
 		let rel: string;
 		if (normalized === VIRTUAL_ROOT || normalized.startsWith(`${VIRTUAL_ROOT}/`)) {
 			rel = normalized.slice(VIRTUAL_ROOT.length);
-		} else if (isAbsolute(virtual) || normalized.startsWith("/")) {
+		} else if (isAbsolute(virtual) || normalized.startsWith("/") || /^[a-zA-Z]:/.test(normalized)) {
+			// A drive-letter path is another drive on Windows and a stray filename elsewhere; refuse it everywhere.
 			return null;
 		} else {
 			rel = normalized;
