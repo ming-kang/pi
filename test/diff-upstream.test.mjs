@@ -508,7 +508,8 @@ describe("diff-upstream applyUpstreamRelease", () => {
 		expect(result.stdout).toContain("deleted drop.txt");
 		// Locally dropped paths stay dropped; locally changed deletions stay for review.
 		expect(existsSync(join(repo.root, "sub", "b.txt"))).toBe(false);
-		expect(result.stdout).toContain("skipped sub/b.txt");
+		expect(result.stdout).toContain("Left for porting by hand");
+		expect(result.stdout).toContain("sub/b.txt (dropped here, changed upstream)");
 		expect(read(repo, "mod.txt")).toBe("local mod\n");
 		expect(result.stdout).toContain("conflict mod.txt");
 	});

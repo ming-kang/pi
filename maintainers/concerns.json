@@ -262,7 +262,7 @@
 		{
 			"id": "tool-presentation",
 			"why": "Tool rows are compact dot/rail blocks owned by src/modes/interactive/tool-view/; multiline blocks leave a blank line before the next tool, while single-line blocks stay tight. Upstream's Box shell is dropped.",
-			"watch": "Upstream fixes to the dropped tool-execution.ts (image conversion, click to expand, lifecycle) and to the renderers are ported by hand; npm run sync lists them as skipped. Retire the fork if upstream ships a shell whose look is configurable.",
+			"watch": "Upstream fixes to the dropped tool-execution.ts (image conversion, click to expand, lifecycle) and to the renderers are ported by hand; npm run sync lists them for porting by hand. Retire the fork if upstream ships a shell whose look is configurable.",
 			"paths": [
 				{
 					"path": "src/core/tools/edit.ts"

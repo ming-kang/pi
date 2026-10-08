@@ -751,7 +751,8 @@ export function applyUpstreamChanges(root, baseTree, targetTree, git) {
 					git("add", "--intent-to-add", "--force", "--", path);
 					results.push({ action: "added", path });
 				} else {
-					results.push({ action: "skipped", path, detail: "dropped locally" });
+					// Upstream changed a path this distribution dropped or replaced: the change is not applied, so a person must port it.
+					results.push({ action: "review", path, detail: "dropped here, changed upstream" });
 				}
 				continue;
 			}
@@ -877,7 +878,7 @@ export function applyUpstreamRelease({ root, tag, stdout, stderr }) {
 		// The recorded baseline has already moved, so name both trees.
 		writeLine(stdout, `  Inspect each with: git diff ${manifest.sourceTree} ${targetTree} -- <path>`);
 	}
-	const summary = ["merged", "added", "deleted", "skipped", "conflict", "review"]
+	const summary = ["merged", "added", "deleted", "conflict", "review"]
 		.map((action) => `${counts[action] ?? 0} ${action}`)
 		.join(", ");
 	writeLine(stdout, "");
