@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-08
+
 ### Added
 
 - Added the bundled [Devin Search](docs/bundled/extensions/search.md) extension. `code_search` finds where behavior lives in the local repository: Devin's SWE-grep model plans `rg`, `readfile`, and `tree` commands that run locally, confined to the working directory, and returns files with line ranges. `web_search` returns titles, URLs, and query-relevant page excerpts. In the transcript each call is one line with its query and result count; expanding it lists the files and line ranges, or the result titles and sites. Sign in once with `/search` (browser sign-in or a pasted token); `SEARCH_KEY` covers headless runs.
