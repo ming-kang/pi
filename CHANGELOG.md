@@ -7,6 +7,33 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 ### Added
 
 - Added the bundled [Devin Search](docs/bundled/extensions/search.md) extension. `code_search` finds where behavior lives in the local repository: Devin's SWE-grep model plans `rg`, `readfile`, and `tree` commands that run locally, confined to the working directory, and returns files with line ranges. `web_search` returns titles, URLs, and query-relevant page excerpts. In the transcript each call is one line with its query and result count; expanding it lists the files and line ranges, or the result titles and sites. Sign in once with `/search` (browser sign-in or a pasted token); `SEARCH_KEY` covers headless runs.
+- Adopted upstream v1.1.0:
+  - Pi reports its state with OSC 7501 program status, so supporting terminals and agent dashboards see whether it is working, blocked on a dialog or login, done, or failed; `PI_PROGRAM_STATUS=1|0` overrides detection (see [Terminal setup](docs/terminal-setup.md#program-status)). `agent_settled` events carry `aborted`.
+  - `--tools` accepts `+name` and `-name` entries, which change the default tool selection instead of replacing it, for example `pi -t +codemode`.
+  - OpenAI's GPT-6 Luna is a classifier model through the Decisions API (`OPENAI_API_KEY`), and codemode's `models.classify()` takes `images` for classifiers that accept them. llama.cpp 0.6.0 or later decision models (Julia-1, Laya, Kev, lev, OpenJev) run natively as classifiers through `/v1/systemone`.
+  - Claude Haiku 5.5 (`anthropic/claude-haiku-5-5`), with adaptive thinking up to `xhigh`/`max` effort.
+  - The tool render context and `tool_execution_end` events carry `durationMs`, and the tool render context carries `outputPad`.
+
+### Changed
+
+- `outputPad` also applies to `!` command output, summary blocks, and the output of tools that render their own shell.
+- `pi mcp login --timeout` limits the whole sign-in, not only the wait for the browser.
+
+### Fixed
+
+- Bash and PowerShell results keep `Took` after a session reloads, and the live `Took` no longer includes wall-clock steps; both show the recorded execution time.
+- `pi update` keeps only the new release and the one it updated from, instead of every old release.
+- `!` and RPC `bash` output no longer keeps fragments of color codes, such as a stray `m`, when a code was split across output chunks.
+- Codemode output items no longer run together: with several text items each starts with a `==> text N/M <==` line, and `console` calls follow in one `<console_output>` block. The codemode description marks `searchTools()`, `describeTool()`, and `describeNamespace()` as async.
+- `/mcp` opens at once and stays usable while servers enable, reconnect, or disable. MCP OAuth sign-ins cancel with Esc at every step, stop when the session ends, and time out each authorization-server request after 15 seconds; shutdown no longer waits to refresh an expiring token.
+- Images are no longer dropped as "could not be resized" under `node --watch`.
+- Clipboard paste works in Termux, and failed copies there name the Termux:API package.
+- The fullscreen text selection no longer survives a session switch or transcript rebuild.
+- OpenAI models on Bedrock honor the thinking level; Codex requests honor `originator` and `User-Agent` overrides in `models.json` headers; `server_busy` and Mistral `finish_reason: "error"` responses are retried.
+- Output limits assume 3.5 characters per token instead of 4, which reduces context-limit failures.
+- Session costs no longer undercount long prompts on models with prompt-length pricing tiers.
+- Anthropic browser login falls back to a free loopback port when port 53692 is reserved or in use.
+- Radius models disabled by an organization owner are no longer listed, and Markdown links are clickable in Herdr.
 
 ### Removed
 

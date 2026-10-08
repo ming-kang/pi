@@ -2,8 +2,7 @@ import { join } from "node:path";
 import { Agent, type StreamFn } from "@earendil-works/pi-agent-core";
 import {
 	type AssistantMessage,
-	type AssistantMessageEvent,
-	EventStream,
+	createAssistantMessageEventStream,
 	fauxAssistantMessage,
 	registerFauxProvider,
 	streamSimple,
@@ -29,19 +28,6 @@ const usage: Usage = {
 	totalTokens: 30,
 	cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 0.3 },
 };
-
-class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
-	constructor() {
-		super(
-			(event) => event.type === "done" || event.type === "error",
-			(event) => {
-				if (event.type === "done") return event.message;
-				if (event.type === "error") return event.error;
-				throw new Error("Unexpected event type");
-			},
-		);
-	}
-}
 
 describe("session-owned background host", () => {
 	const cleanups: (() => void)[] = [];
@@ -676,7 +662,7 @@ describe("session-owned background host", () => {
 	it("keeps a completion claimed while it waits in the steering queue for the next run", async () => {
 		let calls = 0;
 		const session = await host(true, undefined, undefined, SessionManager.inMemory(), (_model, _context, options) => {
-			const stream = new MockAssistantStream();
+			const stream = createAssistantMessageEventStream();
 			calls++;
 			queueMicrotask(() => stream.push({ type: "start", partial: fauxAssistantMessage("") }));
 			if (calls > 1) {

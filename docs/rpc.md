@@ -941,8 +941,10 @@ Emitted when one low-level agent run completes. Contains all messages generated 
 
 Emitted after the full session-level run settles. At this point Pi will not continue automatically through retry, compaction retry, or queued follow-up messages.
 
+`aborted` is `true` when the run ended because it was aborted, for example with Escape.
+
 ```json
-{"type": "agent_settled"}
+{"type": "agent_settled", "aborted": false}
 ```
 
 ### turn_start / turn_end
@@ -1083,11 +1085,12 @@ When complete:
     "content": [{"type": "text", "text": "total 48\n..."}],
     "details": {...}
   },
-  "isError": false
+  "isError": false,
+  "durationMs": 42
 }
 ```
 
-Use `toolCallId` to correlate events. The `partialResult` shape is tool-defined; built-in bash snapshots can be rendered by replacement, while other tools may use a different shape.
+`durationMs` is how long the tool's `execute()` took, measured with a monotonic clock; it is absent when the tool did not run. Use `toolCallId` to correlate events. The `partialResult` shape is tool-defined; built-in bash snapshots can be rendered by replacement, while other tools may use a different shape.
 
 ### queue_update
 

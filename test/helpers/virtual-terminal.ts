@@ -1,4 +1,4 @@
-import type { Terminal } from "@earendil-works/pi-tui";
+import type { ProgramStatus, Terminal } from "@earendil-works/pi-tui";
 import type { Terminal as XtermTerminalType } from "@xterm/headless";
 import xterm from "@xterm/headless";
 
@@ -98,6 +98,8 @@ export class VirtualTerminal implements Terminal {
 	}
 
 	setProgress(_active: boolean): void {}
+
+	setProgramStatus(_status: ProgramStatus): void {}
 
 	// Test-specific methods not in Terminal interface
 

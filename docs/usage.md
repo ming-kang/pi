@@ -209,12 +209,14 @@ cat README.md | pi -p "Summarize this text"
 
 | Option | Description |
 |--------|-------------|
-| `--tools <list>`, `-t <list>` | Allowlist specific built-in, extension, and custom tools; entries are names or `*` patterns, and MCP tools are kept unless an entry starts with `mcp__` |
+| `--tools <list>`, `-t <list>` | Allowlist specific built-in, extension, and custom tools; entries are names or `*` patterns, and MCP tools are kept unless an entry starts with `mcp__`. A list of only `+name` and `-name` entries changes the default selection instead |
 | `--exclude-tools <list>`, `-xt <list>` | Disable tools by name or `*` pattern, MCP tools included |
 | `--no-builtin-tools`, `-nbt` | Disable built-in tools but keep extension/custom tools enabled |
 | `--no-tools`, `-nt` | Disable all tools, MCP tools included |
 
 Built-in tools: `read`, `bash`, `powershell` (Windows), `edit`, `write`, `grep`, `find`, `ls`.
+
+Like `defaultTools`, `--tools` also accepts a list of only `+name` and `-name` entries, which adds tools to or removes them from the default selection: `pi --tools +codemode,-write` keeps the other default tools, enables `codemode`, and disables `write`. These entries take exact tool names, not `*` patterns; use `--exclude-tools` to disable tools by pattern. Plain names and `+name`/`-name` entries cannot be mixed. `/reload` enables tools newly added to `defaultTools`, but a tool removed with `-name` stays removed.
 
 `--tools` selects the tools declared to the model. It does not remove MCP tools, whose reach is set by their [exposure](mcp.md#control-tool-exposure): `pi --tools read,codemode` keeps every MCP tool callable from codemode scripts. An MCP tool that no entry names or matches is never declared directly, whatever its exposure; only `tool_search`, if listed, can load it. Once an entry starts with `mcp__`, `--tools` filters MCP tools too, so this keeps only the tools of the `radius` server:
 
@@ -336,10 +338,10 @@ To turn on `codemode` for every session, add it to the default tools in `~/.pi/a
 }
 ```
 
-This keeps `read`, `bash`, `edit`, and `write` and adds `codemode`. For one invocation, list every tool, since `--tools` replaces the selection:
+This keeps `read`, `bash`, `edit`, and `write` and adds `codemode`. For one invocation, add it with `--tools`:
 
 ```sh
-pi --tools read,bash,edit,write,codemode
+pi --tools +codemode
 ```
 
 Codemode is useful without MCP: scripts can run several tool calls in parallel, filter large output before it reaches the model, call classifier models such as TypeSafe's Jev through `models.classify()` (see [Classifier models](models.md#use-classifier-models)), and generate images through `models.generateImages()` (see [Image models](models.md#use-image-models)).

@@ -59,6 +59,7 @@ import {
 import * as builtinProviderCatalog from "@earendil-works/pi-ai/providers/all";
 import {
 	assertChatModel,
+	assertClassifierInputSupported,
 	assertClassifierModel,
 	assertImageModel,
 	classifierErrorResult,
@@ -809,6 +810,7 @@ export class ModelRuntime implements Models {
 	): Promise<ClassifierResult> {
 		try {
 			assertClassifierModel(model);
+			assertClassifierInputSupported(model, context);
 			const prepared = await this.prepareRequest(model, options);
 			if (!prepared.provider.classify) {
 				throw new ModelsError("provider", `Provider ${model.provider} does not support classification`);

@@ -222,6 +222,23 @@ The `auth.json` key for this provider is `azure`, renamed from `azure-openai-res
 
 The `azure` provider serves both Azure OpenAI Responses deployments and Azure AI Foundry Chat Completions deployments (for example `azure/deepseek-v4-pro`).
 
+Pi sends the model ID as the deployment name. If a deployment has a different name, map it with `AZURE_OPENAI_DEPLOYMENT_NAME_MAP`.
+
+To use a Foundry model that Pi does not include, add it under `azure` in [`models.json`](models.md#configure-a-compatible-endpoint) with `api: "openai-completions"`. Custom models require a `baseUrl`; `AZURE_OPENAI_BASE_URL` and `AZURE_OPENAI_RESOURCE_NAME` take priority over it when set:
+
+```json
+{
+  "providers": {
+    "azure": {
+      "baseUrl": "https://your-resource.services.ai.azure.com",
+      "models": [
+        { "id": "your-deployment", "api": "openai-completions" }
+      ]
+    }
+  }
+}
+```
+
 ### Amazon Bedrock
 
 Use `/login amazon-bedrock` to store a Bedrock API key, or configure one of the ambient AWS credential sources below:

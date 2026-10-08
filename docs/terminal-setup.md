@@ -175,3 +175,17 @@ The built-in terminal has limited escape sequence support. Shift+Enter cannot be
 If you want the hardware cursor visible, set `PI_HARDWARE_CURSOR=1` before running pi (disabled by default for compatibility).
 
 Consider using a dedicated terminal emulator for the best experience.
+
+## Program status
+
+Pi reports its state with the [Program Status Protocol (OSC 7501)](https://www.superlogical.com/rex/docs/build/program-status), so terminals and agent dashboards can show whether it is working, waiting for you, done, or failed:
+
+| State | When |
+|---|---|
+| `working` | An agent run or compaction is in progress. The message is the session name. |
+| `blocked` | An extension dialog or login waits for you. The message is the dialog title. |
+| `done` | A run finished. The message is the session name. |
+| `error` | A run ended with an error that is not retried. The message is the first line of the error. |
+| `idle` | Pi started, or you cancelled the run. |
+
+Reports never contain prompts or model output. Pi sends them only after the terminal answers the protocol's support query; tmux and screen do not forward them. Set `PI_PROGRAM_STATUS=1` to send reports without asking, or `PI_PROGRAM_STATUS=0` to turn them off.

@@ -22,6 +22,7 @@ export type { ToolRenderers };
 export interface ToolExecutionOptions {
 	showImages?: boolean;
 	imageWidthCells?: number;
+	outputPad?: number;
 }
 
 let builtInRenderers: ReturnType<typeof createAllToolRenderers> | undefined;
@@ -47,6 +48,7 @@ export class ToolExecutionComponent extends Container {
 	private expanded = false;
 	private showImages: boolean;
 	private imageWidthCells: number;
+	private outputPad: number;
 	private isPartial = true;
 	private toolDefinition?: ToolRenderers;
 	private ui: TUI;
@@ -57,6 +59,7 @@ export class ToolExecutionComponent extends Container {
 		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 		isError: boolean;
 		details?: any;
+		durationMs?: number;
 	};
 	private hideComponent = false;
 	private disposed = false;
@@ -77,6 +80,7 @@ export class ToolExecutionComponent extends Container {
 		this.toolDefinition = toolDefinition;
 		this.showImages = options.showImages ?? true;
 		this.imageWidthCells = options.imageWidthCells ?? 60;
+		this.outputPad = options.outputPad ?? 1;
 		this.ui = ui;
 		this.cwd = cwd;
 
@@ -129,6 +133,8 @@ export class ToolExecutionComponent extends Container {
 			expanded: this.expanded,
 			showImages: this.showImages,
 			isError: this.result?.isError ?? false,
+			durationMs: this.isPartial ? undefined : this.result?.durationMs,
+			outputPad: this.outputPad,
 			result: this.result
 				? {
 						content: this.result.content as AgentToolResult<unknown>["content"],
@@ -193,6 +199,8 @@ export class ToolExecutionComponent extends Container {
 			content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 			details?: any;
 			isError: boolean;
+			/** Execution time of a final result. */
+			durationMs?: number;
 		},
 		isPartial = false,
 	): void {
@@ -203,6 +211,11 @@ export class ToolExecutionComponent extends Container {
 
 	setExpanded(expanded: boolean): void {
 		this.expanded = expanded;
+		this.updateDisplay();
+	}
+
+	setOutputPad(outputPad: number): void {
+		this.outputPad = outputPad;
 		this.updateDisplay();
 	}
 

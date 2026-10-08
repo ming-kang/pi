@@ -227,7 +227,7 @@ export const editRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rende
 			return component;
 		}
 		component.addChild(new Spacer(1));
-		component.addChild(new Text(output, 1, 0));
+		component.addChild(new Text(output, context.outputPad, 0));
 		return component;
 	},
 };

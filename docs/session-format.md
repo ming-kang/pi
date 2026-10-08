@@ -125,6 +125,7 @@ interface AssistantMessage {
   responseModel?: string;
   responseId?: string;
   providerThinkingLevel?: string;
+  thinkingLevel?: ModelThinkingLevel;
   diagnostics?: AssistantMessageDiagnostic[];
   usage: Usage;
   stopReason: "pending" | "stop" | "length" | "toolUse" | "error" | "aborted" | "deferred";

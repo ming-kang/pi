@@ -610,7 +610,8 @@ pi.on("agent_before_settle", async (event, ctx) => {
   };
 });
 
-pi.on("agent_settled", async (_event, ctx) => {
+pi.on("agent_settled", async (event, ctx) => {
+  // event.aborted is true when the run ended because it was aborted, for example with Escape.
   // ctx.isIdle() is true; runs requested here start after all settled handlers finish.
 });
 ```
@@ -731,6 +732,7 @@ pi.on("tool_execution_update", async (event, ctx) => {
 
 pi.on("tool_execution_end", async (event, ctx) => {
   // event.toolCallId, event.toolName, event.result, event.isError
+  // event.durationMs - execute() time in ms (monotonic); absent when the tool did not run
 });
 ```
 
@@ -2473,6 +2475,8 @@ pi.registerTool({
 - `lastComponent` - the previously returned component for that slot, if any
 - `invalidate()` - request a rerender of this tool row
 - `toolCallId`, `cwd`, `executionStarted`, `argsComplete`, `isPartial`, `expanded`, `showImages`, `isError`
+- `durationMs` - how long the tool's execution took, from the final result; `undefined` while it runs, when it did not run, or for results stored before durations were recorded
+- `outputPad` - horizontal padding from the `outputPad` setting; renderers with `renderShell: "self"` apply it themselves
 - `result` - the current partial or final result, if one has arrived
 
 Use `context.state` for cross-slot shared state. Keep slot-local caches on the returned component instance when you want to reuse and mutate the same component across renders.

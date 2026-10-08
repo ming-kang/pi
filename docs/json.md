@@ -32,7 +32,7 @@ Session events are defined by `AgentSessionEvent`:
 type AgentSessionEvent =
   | Exclude<AgentEvent, { type: "agent_end" }>
   | { type: "agent_end"; messages: AgentMessage[]; willRetry: boolean }
-  | { type: "agent_settled" }
+  | { type: "agent_settled"; aborted: boolean }
   | { type: "queue_update"; steering: readonly string[]; followUp: readonly string[] }
   | { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
   | { type: "entry_appended"; entry: SessionEntry }
@@ -68,7 +68,7 @@ type AgentEvent =
   // Tool execution
   | { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }
   | { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }
-  | { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean };
+  | { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean; durationMs?: number };
 ```
 
 ## Message Types

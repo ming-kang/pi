@@ -108,6 +108,24 @@ describe("bash tool call rendering", () => {
 		expect(renderCall(component, 120)).toBe(settled);
 	});
 
+	test("shows a result's recorded duration, also for a result restored without a live start", () => {
+		const render = (live: boolean): string => {
+			vi.useFakeTimers();
+			vi.setSystemTime(0);
+			const component = createRenderer("sleep 4");
+			if (live) {
+				component.markExecutionStarted();
+				component.updateResult({ content: [], isError: false }, true);
+				// The wall clock jumps; the recorded duration does not.
+				vi.advanceTimersByTime(3_600_000);
+			}
+			component.updateResult({ content: [], isError: false, durationMs: 4_200 }, false);
+			return renderCall(component, 120);
+		};
+		expect(render(true)).toContain("Took 4.2s");
+		expect(render(false)).toContain("Took 4.2s");
+	});
+
 	test("stops the Elapsed refresh when the row is disposed while running", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
