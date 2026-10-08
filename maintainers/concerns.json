@@ -104,16 +104,8 @@
 				"test/statusline-extension.test.ts",
 				"test/statusline-session.test.ts",
 				"test/search-lifecycle.test.ts",
-				"test/search-keystore.test.ts",
-				"test/search-oauth.test.ts",
-				"test/search-web.test.ts",
-				"test/search-protocol.test.ts",
-				"test/search-clamp.test.ts",
-				"test/search-client.test.ts",
-				"test/search-search.test.ts",
-				"test/search-executor.test.ts",
-				"test/search-sandbox.test.ts",
-				"test/search-key-format.test.ts",
+				"test/search-credential.test.ts",
+				"test/search-code-search.test.ts",
 				"test/built-in-extensions.test.ts"
 			]
 		},

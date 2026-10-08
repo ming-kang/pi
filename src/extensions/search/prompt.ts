@@ -1,4 +1,13 @@
-const SYSTEM_PROMPT_TEMPLATE = `You are an expert software engineer, responsible for providing context \
+/** Planning rounds before the final answer is forced, commands per round, and files per answer. */
+export const MAX_TURNS = 3;
+export const MAX_COMMANDS = 8;
+export const MAX_RESULTS = 10;
+
+/**
+ * The SWE-grep planner prompt, kept close to the Windsurf original the backend model was tuned on.
+ * The budgets it states are the ones code-search.ts enforces.
+ */
+export const SYSTEM_PROMPT = `You are an expert software engineer, responsible for providing context \
 to another engineer to solve a code issue in the current codebase. \
 The user will present you with a description of the issue, and it is \
 your job to provide a series of file paths with associated line ranges \
@@ -76,36 +85,36 @@ must change.
 
 # TOOL USE GUIDELINES
 - You must use a SINGLE restricted_exec call in your answer, that lets \
-you execute at most {max_commands} commands in a single turn. Each command must be \
+you execute at most ${MAX_COMMANDS} commands in a single turn. Each command must be \
 an object with a \`type\` field of \`rg\`, \`readfile\`, or \`tree\` and the appropriate fields for that type.
 - Example restricted_exec usage:
-[TOOL_CALLS]restricted_exec[ARGS]{{
-  "command1": {{
+[TOOL_CALLS]restricted_exec[ARGS]{
+  "command1": {
     "type": "rg",
     "pattern": "Controller",
     "path": "/codebase/slime",
     "include": ["**/*.py"],
     "exclude": ["**/node_modules/**", "**/.git/**", "**/dist/**", \
 "**/build/**", "**/.venv/**", "**/__pycache__/**"]
-  }},
-  "command2": {{
+  },
+  "command2": {
     "type": "readfile",
     "file": "/codebase/slime/train.py",
     "start_line": 1,
     "end_line": 200
-  }},
-  "command3": {{
+  },
+  "command3": {
     "type": "tree",
     "path": "/codebase/slime/",
     "levels": 2
-  }}
-}}
-- You have at most {max_turns} turns to interact with the environment by calling \
+  }
+}
+- You have at most ${MAX_TURNS} turns to interact with the environment by calling \
 tools, so issuing multiple commands at once is necessary and encouraged \
 to speed up your research.
-- Each command result may be truncated to 50 lines; prefer multiple \
+- Each command result may be truncated to 40 lines; prefer multiple \
 targeted reads/searches to build complete context.
-- DO NOT EVER USE MORE THAN {max_commands} commands in a single turn, or you will \
+- DO NOT EVER USE MORE THAN ${MAX_COMMANDS} commands in a single turn, or you will \
 be penalized.
 
 # ANSWER FORMAT (strict format, including tags)
@@ -141,103 +150,80 @@ Do NOT return irrelevant files (such as entry points or config files) just \
 to provide some output. An empty answer is always better than a misleading one.
 
 # RESULT COUNT
-Aim to return at most {max_results} files in your answer. Focus on the most \
+Aim to return at most ${MAX_RESULTS} files in your answer. Focus on the most \
 relevant files first. If fewer files are relevant, return fewer.
 `;
 
-export const FINAL_FORCE_ANSWER =
+export const FORCE_ANSWER =
 	"You have no turns left. Now you MUST provide your final ANSWER, even if it's not complete.";
 
-export function buildSystemPrompt(maxTurns = 3, maxCommands = 8, maxResults = 10): string {
-	return SYSTEM_PROMPT_TEMPLATE.replaceAll("{max_turns}", String(maxTurns))
-		.replaceAll("{max_commands}", String(maxCommands))
-		.replaceAll("{max_results}", String(maxResults));
-}
+export const RETRY_TOOL_CALL =
+	"Your last reply did not contain a valid tool call. Reply with exactly one restricted_exec or answer call.";
 
-function buildCommandSchema(n: number): Record<string, unknown> {
-	return {
-		type: "object",
-		description: `Command ${n} to execute. Must be one of: rg, readfile, or tree.`,
-		oneOf: [
-			{
-				properties: {
-					type: { type: "string", const: "rg", description: "Search for patterns in files using ripgrep." },
-					pattern: { type: "string", description: "The regex pattern to search for." },
-					path: { type: "string", description: "The path to search in." },
-					include: { type: "array", items: { type: "string" }, description: "File patterns to include." },
-					exclude: { type: "array", items: { type: "string" }, description: "File patterns to exclude." },
-				},
-				required: ["type", "pattern", "path"],
-			},
-			{
-				properties: {
-					type: {
-						type: "string",
-						const: "readfile",
-						description: "Read contents of a file with optional line range.",
-					},
-					file: { type: "string", description: "Path to the file to read." },
-					start_line: { type: "integer", description: "Starting line number (1-indexed)." },
-					end_line: { type: "integer", description: "Ending line number (1-indexed)." },
-				},
-				required: ["type", "file"],
-			},
-			{
-				properties: {
-					type: { type: "string", const: "tree", description: "Display directory structure as a tree." },
-					path: { type: "string", description: "Path to the directory." },
-					levels: { type: "integer", description: "Number of directory levels." },
-				},
-				required: ["type", "path"],
-			},
-			{
-				properties: {
-					type: { type: "string", const: "ls", description: "List files in a directory." },
-					path: { type: "string", description: "Path to the directory." },
-					long_format: { type: "boolean" },
-					all: { type: "boolean" },
-				},
-				required: ["type", "path"],
-			},
-			{
-				properties: {
-					type: { type: "string", const: "glob", description: "Find files matching a glob pattern." },
-					pattern: { type: "string" },
-					path: { type: "string" },
-					type_filter: { type: "string", enum: ["file", "directory", "all"] },
-				},
-				required: ["type", "pattern", "path"],
-			},
-		],
-	};
-}
-
-export function getToolDefinitions(maxCommands = 8): string {
-	const props: Record<string, unknown> = {};
-	for (let i = 1; i <= maxCommands; i++) {
-		props[`command${i}`] = buildCommandSchema(i);
-	}
-	const tools = [
+const COMMAND_SCHEMA = {
+	type: "object",
+	description: "One command. Must be one of: rg, readfile, or tree.",
+	oneOf: [
 		{
-			type: "function",
-			function: {
-				name: "restricted_exec",
-				description: "Execute restricted commands (rg, readfile, tree, ls, glob) in parallel.",
-				parameters: { type: "object", properties: props, required: ["command1"] },
+			properties: {
+				type: { type: "string", const: "rg", description: "Search for patterns in files using ripgrep." },
+				pattern: { type: "string", description: "The regex pattern to search for." },
+				path: { type: "string", description: "The path to search in." },
+				include: { type: "array", items: { type: "string" }, description: "File patterns to include." },
+				exclude: { type: "array", items: { type: "string" }, description: "File patterns to exclude." },
 			},
+			required: ["type", "pattern", "path"],
 		},
 		{
-			type: "function",
-			function: {
-				name: "answer",
-				description: "Final answer with relevant files and line ranges.",
-				parameters: {
-					type: "object",
-					properties: { answer: { type: "string", description: "The final answer in XML format." } },
-					required: ["answer"],
+			properties: {
+				type: {
+					type: "string",
+					const: "readfile",
+					description: "Read contents of a file with optional line range.",
 				},
+				file: { type: "string", description: "Path to the file to read." },
+				start_line: { type: "integer", description: "Starting line number (1-indexed)." },
+				end_line: { type: "integer", description: "Ending line number (1-indexed)." },
+			},
+			required: ["type", "file"],
+		},
+		{
+			properties: {
+				type: { type: "string", const: "tree", description: "Display directory structure as a tree." },
+				path: { type: "string", description: "Path to the directory." },
+				levels: { type: "integer", description: "Number of directory levels." },
+			},
+			required: ["type", "path"],
+		},
+	],
+};
+
+/** The planner's two tools, in the OpenAI function format the backend expects. */
+export const TOOL_DEFINITIONS = JSON.stringify([
+	{
+		type: "function",
+		function: {
+			name: "restricted_exec",
+			description: "Execute restricted commands (rg, readfile, tree) in parallel.",
+			parameters: {
+				type: "object",
+				properties: Object.fromEntries(
+					Array.from({ length: MAX_COMMANDS }, (_, i) => [`command${i + 1}`, COMMAND_SCHEMA]),
+				),
+				required: ["command1"],
 			},
 		},
-	];
-	return JSON.stringify(tools);
-}
+	},
+	{
+		type: "function",
+		function: {
+			name: "answer",
+			description: "Final answer with relevant files and line ranges.",
+			parameters: {
+				type: "object",
+				properties: { answer: { type: "string", description: "The final answer in XML format." } },
+				required: ["answer"],
+			},
+		},
+	},
+]);

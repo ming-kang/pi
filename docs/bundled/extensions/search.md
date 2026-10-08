@@ -1,57 +1,50 @@
 # Search
 
-Two tools powered by Devin's hosted backends, sharing one Devin key:
+Devin Search adds two tools that share one Devin sign-in:
 
-| Tool | What it does | Backend |
-|---|---|---|
-| `code_search` | Semantic code discovery in the local repo | Devin SWE-grep agent loop |
-| `web_search` | Live web search | Devin `GetWebSearchResults` JSON |
+| Tool | What it does |
+|---|---|
+| `code_search` | Finds where behavior lives in the local repository from a plain-language description |
+| `web_search` | Searches the live web and returns page excerpts |
 
-`code_search` sends your query plus a compact repo map to Devin, which plans a small number of restricted search commands (`rg`/`readfile`/`tree`/`ls`/`glob`) and returns candidate files with line ranges and grep keywords. **This extension executes those commands locally in a strict sandbox**: every path is confined to the current working directory, symlinks are refused, `.gitignore` and default noise directories are honored. What leaves your machine is the repo map of names and paths plus the contents of the files the backend asks to `readfile`. Results are a reading list.
+In the transcript, each call is one line: the query, then live progress while it runs and the number of files or results once it finishes. Expand it (`Ctrl+O` or a click) to see the files with their line ranges, or the result titles with their sites; titles open the page. A failed call always shows its error.
 
-`web_search` sends the query and returns titles, URLs, dates, and snippets. Snippets are truncated and the key is redacted out of all backend responses before parsing.
+## Signing in
 
-## Getting a key
+Run `/search` to open the Devin Search panel. It shows whether you are signed in and offers:
 
-Both tools stay hidden from the model until a Devin key exists. Configure it with `/search`, which opens one menu:
+- **Sign in with browser** opens `app.devin.ai` (the panel also shows the link, and the copy key copies it). Approve access, then paste the code Devin shows into the panel. Pasting a session token there works too.
+- **Paste a token** saves an existing Devin session token.
+- **Sign out** removes the saved token after a confirmation.
 
-- **Sign in with Devin account** — opens `app.devin.ai/auth/cli/continue` in your browser and repeats the URL in the notification in case the browser does not open. Sign in, copy the one-time authorization code, and paste it into the dialog. The code is exchanged at `api.devin.ai/auth/cli/token` and the resulting session token is saved. There is no local HTTP listener and no refresh grant.
-- **Sign in with Devin key** — paste a Devin key into the dialog. The dialog warns when the value looks truncated (a `$` eaten by shell or config expansion). Submitting an empty field changes nothing.
-- **Clear saved key** — listed only while a key is saved, and only after a confirmation. It deletes the key file and disables both tools.
-- **`SEARCH_KEY`** environment variable — for headless and CI runs. Used only when no key file exists; `/search` cannot clear it, so unset the variable instead.
+The panel checks every new token with Devin before saving it, so a rejected token never replaces a working one. The token is saved, exactly as Devin issued it, to `~/.pi/agent/search-auth.json`.
 
-The menu heading names the current state: the masked key and whether it was `saved by account login`, `saved from a pasted key`, or came `from SEARCH_KEY`.
+For headless and CI runs, set `SEARCH_KEY` to a Devin session token. A saved token takes precedence over it.
 
-The key is persisted to `~/.pi/agent/search/config.json`.
+Without a credential, a session starts with both tools turned off. Signing in turns them on; turning one off with `/tools` is respected.
 
-## Security model
+## code_search
 
-Enforced by this extension, not by the remote backend:
+`code_search` sends your query and a directory tree of the working directory (up to three levels, without dependency, build, and `.gitignore`d directories) to Devin's SWE-grep model. The model plans up to three rounds of up to eight read-only commands, `rg`, `readfile`, and `tree`, which run on your machine, and then answers with files and line ranges. The result is a reading list to verify, not evidence.
 
-- **Path containment.** Every model-supplied path passes through `PathSandbox` and must resolve inside the current working directory; `..` sequences, other drives, and symlinks are rejected before any filesystem access.
-- **Read-only execution.** Only the five structured commands above exist: no shell and no writes. `rg` patterns are matched by the local ripgrep tool, which treats them as regular expressions, and `glob` is matched by a small local matcher that supports `*`, `?`, and `[...]`.
-- **Bounded work.** Every command result is capped at 50 lines with 250 characters per line, the repo map is trimmed under its byte budget, and each request runs under a 30 s timeout.
+What leaves your machine: the query, the directory tree, and the output of the commands the model runs, including the file contents it reads.
 
-## Parameters (code_search)
+Enforced locally, not by Devin:
 
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `query` | string | required | Natural-language description of the behavior, flow, or concept to locate. English matches best; keep identifiers and error text verbatim |
-| `project_path` | string | cwd | Subtree to search; must resolve inside cwd. Narrow it for monorepos |
-| `tree_depth` | int 1–4 | 2 | Skeleton depth of the repo map. The map is trimmed to its byte budget, so a large repo falls back on its own |
-| `max_turns` | int 1–5 | 3 | Search/planning rounds. Use 1–2 for orientation, 4–5 for complex cross-module tracing |
-| `max_results` | int 1–30 | 10 | Maximum candidate files. Prefer 3–8 for focused work |
-| `exclude_paths` | string[] | `[]` | Extra names to exclude from the repo map, on top of defaults |
-
-## Parameters (web_search)
+- **Confinement.** Every path the model names must resolve inside the searched directory, both as written and after following symlinks.
+- **Read-only.** The three commands are the only operations; there is no shell and no write.
+- **Bounded output.** Each command result is capped at 40 lines of 200 characters, and each request times out after 30 seconds.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `query` | string | required | Web search query. Be specific: product names, versions, error text |
+| `query` | string | required | The behavior, flow, error, or concept to locate, in concise English. Keep identifiers and error text verbatim |
+| `path` | string | working directory | Subdirectory to search; must be inside the working directory |
+
+## web_search
+
+`web_search` returns up to 10 results, each with a title, URL, and the parts of the page that match the query (shortened to 1,500 characters).
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `query` | string | required | Search query. Be specific: product names, versions, exact error text |
 | `max_results` | int 1–10 | 5 | Results to return |
-
-## Environment variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `SEARCH_KEY` | — | Devin key for headless runs, when no key file exists |

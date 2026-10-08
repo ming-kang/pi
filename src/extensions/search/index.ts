@@ -1,113 +1,132 @@
-import type { Static, TSchema } from "typebox";
-import type { ExtensionAPI, ExtensionToolContext } from "../../core/extensions/types.ts";
-import { registerCommands } from "./commands.ts";
+/**
+ * Devin Search: `code_search` and `web_search`, both authenticated by one Devin sign-in.
+ *
+ * Both tools stay registered so `/tools` and old transcripts know them; a session without a
+ * credential starts with them inactive, and signing in or out through `/search` toggles them.
+ */
+import { resolve } from "node:path";
+import { type Static, Type } from "typebox";
+import type { ExtensionAPI } from "../../core/extensions/types.ts";
+import { truncateHead } from "../../core/tools/truncate.ts";
+import { codeSearch, formatLocations } from "./code-search.ts";
+import { registerSearchCommand, syncTools } from "./command.ts";
+import { getCredential } from "./credential.ts";
+import { DevinAuthError, type WebResult, webSearch } from "./devin.ts";
 import {
-	CODE_TOOL_DESCRIPTION,
-	CODE_TOOL_GUIDELINES,
-	CODE_TOOL_LABEL,
-	CODE_TOOL_NAME,
-	CODE_TOOL_SNIPPET,
-	WEB_TOOL_DESCRIPTION,
-	WEB_TOOL_GUIDELINES,
-	WEB_TOOL_LABEL,
-	WEB_TOOL_NAME,
-	WEB_TOOL_SNIPPET,
-} from "./constants.ts";
-import { type CodeSearchDetails, runCodeSearch } from "./execute.ts";
-import { getApiKey } from "./keystore.ts";
-import { reconcileSearchTools } from "./reconcile.ts";
-import { CodeSearchParamsSchema, WebSearchParamsSchema } from "./schema.ts";
-import { runWebSearch, type WebSearchDetails } from "./web.ts";
+	type CodeSearchDetails,
+	renderCodeSearchCall,
+	renderCodeSearchResult,
+	renderWebSearchCall,
+	renderWebSearchResult,
+	type WebSearchDetails,
+} from "./render.ts";
+import { isInside } from "./workspace.ts";
 
-const NOT_CONFIGURED = "Error: Devin Search is not configured. Run /search to sign in.";
+const WEB_EXCERPT_MAX_CHARS = 1500;
 
-interface SearchToolSpec<TParams extends TSchema, TDetails> {
-	name: string;
-	label: string;
-	description: string;
-	promptSnippet: string;
-	promptGuidelines: string[];
-	parameters: TParams;
-	/** Details reported when no key is configured; the model only ever sees NOT_CONFIGURED. */
-	unavailable: TDetails;
-	/** Progress line shown before the runner emits its own. */
-	startMessage?: string;
-	/** Let the tool frame its own output instead of the standard shell. */
-	renderShell?: "self";
-	run(
-		params: Static<TParams>,
-		apiKey: string,
-		ctx: ExtensionToolContext,
-		onProgress: (msg: string) => void,
-		signal?: AbortSignal,
-	): Promise<{ text: string; details: TDetails }>;
+const CodeSearchParams = Type.Object({
+	query: Type.String({
+		description:
+			"Natural-language description of the behavior, flow, error, or concept to locate, in concise English. Keep identifiers, API names, and error text verbatim. Not for a bare symbol, filename, or literal.",
+	}),
+	path: Type.Optional(
+		Type.String({
+			description:
+				"Subdirectory to search, relative to or inside the working directory. Defaults to the working directory.",
+		}),
+	),
+});
+
+const WebSearchParams = Type.Object({
+	query: Type.String({
+		description: "Web search query. Be specific: product names, versions, exact error text. English matches best.",
+	}),
+	max_results: Type.Optional(Type.Integer({ minimum: 1, maximum: 10, description: "Results to return (default 5)." })),
+});
+
+const SIGN_IN_HINT = "Ask the user to run /search to sign in to Devin.";
+
+/** Run a Devin call with the current credential; credential failures tell the model what fixes them. */
+async function withDevin<T>(run: (apiKey: string) => Promise<T>): Promise<T> {
+	const credential = getCredential();
+	if (!credential) throw new Error(`Devin Search is not signed in. ${SIGN_IN_HINT}`);
+	try {
+		return await run(credential.apiKey);
+	} catch (error) {
+		throw error instanceof DevinAuthError ? new Error(`${error.message} ${SIGN_IN_HINT}`) : error;
+	}
 }
 
-/**
- * Both search tools share one contract: hide behind a configured key, stream progress lines, and
- * return `{ text, details }`. Only the schema, the copy, and the runner differ.
- */
-function registerSearchTool<TParams extends TSchema, TDetails>(
-	pi: ExtensionAPI,
-	spec: SearchToolSpec<TParams, TDetails>,
-): void {
-	pi.registerTool<TParams, TDetails>({
-		name: spec.name,
-		label: spec.label,
-		description: spec.description,
-		promptSnippet: spec.promptSnippet,
-		promptGuidelines: spec.promptGuidelines,
-		parameters: spec.parameters,
-		...(spec.renderShell ? { renderShell: spec.renderShell } : {}),
-
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			const apiKey = getApiKey();
-			if (!apiKey) {
-				return { content: [{ type: "text" as const, text: NOT_CONFIGURED }], details: spec.unavailable };
-			}
-			// Progress updates carry no details; the final result is what callers read.
-			const update = (text: string) =>
-				onUpdate?.({ content: [{ type: "text" as const, text }], details: {} as TDetails });
-			if (spec.startMessage) update(spec.startMessage);
-			const { text, details } = await spec.run(params, apiKey, ctx, update, signal);
-			return { content: [{ type: "text" as const, text }], details };
-		},
+export function formatWebResults(query: string, results: WebResult[]): string {
+	if (!results.length) return `No web results for "${query}".`;
+	const blocks = results.map((r, i) => {
+		const lines = [`${i + 1}. ${r.title ?? r.url}`, `   ${r.url}`];
+		if (r.summary) {
+			const excerpt = r.summary.replace(/\n\s*\n+/g, "\n").trim();
+			lines.push(excerpt.length > WEB_EXCERPT_MAX_CHARS ? `${excerpt.slice(0, WEB_EXCERPT_MAX_CHARS)}…` : excerpt);
+		}
+		return lines.join("\n");
 	});
+	return truncateHead(`Web results for "${query}":\n\n${blocks.join("\n\n")}`).content;
 }
 
 export default function search(pi: ExtensionAPI): void {
-	registerSearchTool<typeof CodeSearchParamsSchema, CodeSearchDetails>(pi, {
-		name: CODE_TOOL_NAME,
-		label: CODE_TOOL_LABEL,
-		description: CODE_TOOL_DESCRIPTION,
-		promptSnippet: CODE_TOOL_SNIPPET,
-		promptGuidelines: CODE_TOOL_GUIDELINES,
-		parameters: CodeSearchParamsSchema,
-		unavailable: { errorMessage: "tool unavailable" },
-		startMessage: "Consulting Devin…",
-		renderShell: "self",
-		run: (params, apiKey, ctx, onProgress, signal) => runCodeSearch(params, apiKey, ctx.cwd, signal, onProgress),
+	pi.registerTool<typeof CodeSearchParams, CodeSearchDetails>({
+		name: "code_search",
+		label: "Code Search",
+		description:
+			"Find where behavior lives in the local repository by describing it, powered by Devin's SWE-grep agent. " +
+			"Use it when the relevant files are unknown: exploration, tracing a flow or bug, planning a change in " +
+			"unfamiliar code. Returns candidate files with line ranges — a reading list to verify with read or grep. " +
+			"For known paths, exact symbols, or literal strings, use find, grep, or read directly.",
+		promptSnippet: "Locate unknown local code by describing behavior; verify results with read",
+		promptGuidelines: [
+			"Use `code_search` first when you do not know which files implement a behavior; use grep/find for exact names and literals.",
+			"Treat `code_search` results as a reading list: read the returned ranges before editing.",
+		],
+		parameters: CodeSearchParams,
+		renderCall: renderCodeSearchCall,
+		renderResult: renderCodeSearchResult,
+
+		async execute(_toolCallId, params: Static<typeof CodeSearchParams>, signal, onUpdate, ctx) {
+			const root = resolve(ctx.cwd, params.path ?? ".");
+			if (!isInside(ctx.cwd, root)) throw new Error(`path must be inside the working directory (${ctx.cwd}).`);
+			const locations = await withDevin((apiKey) =>
+				codeSearch({
+					apiKey,
+					query: params.query.trim(),
+					root,
+					cwd: ctx.cwd,
+					signal,
+					onProgress: (text) => onUpdate?.({ content: [{ type: "text", text }], details: { locations: [] } }),
+				}),
+			);
+			return { content: [{ type: "text", text: formatLocations(locations) }], details: { locations } };
+		},
 	});
 
-	registerSearchTool<typeof WebSearchParamsSchema, WebSearchDetails>(pi, {
-		name: WEB_TOOL_NAME,
-		label: WEB_TOOL_LABEL,
-		description: WEB_TOOL_DESCRIPTION,
-		promptSnippet: WEB_TOOL_SNIPPET,
-		promptGuidelines: WEB_TOOL_GUIDELINES,
-		parameters: WebSearchParamsSchema,
-		unavailable: { status: "error", query: "", sources: [], truncated: false, errorMessage: "tool unavailable" },
-		run: (params, apiKey, _ctx, onProgress, signal) => runWebSearch(params, apiKey, signal, onProgress),
+	pi.registerTool<typeof WebSearchParams, WebSearchDetails>({
+		name: "web_search",
+		label: "Web Search",
+		description:
+			"Search the live web through Devin. Use it for facts outside the repository: library and API docs, error " +
+			"messages, release notes, current versions. Returns titles, URLs, and query-relevant page excerpts.",
+		promptSnippet: "Live web search: external docs, errors, releases, current facts",
+		promptGuidelines: ["Use `web_search` instead of guessing for version-, release-, or date-sensitive facts."],
+		parameters: WebSearchParams,
+		renderCall: renderWebSearchCall,
+		renderResult: renderWebSearchResult,
+
+		async execute(_toolCallId, params: Static<typeof WebSearchParams>, signal) {
+			const query = params.query.trim();
+			const results = await withDevin((apiKey) => webSearch(apiKey, query, params.max_results ?? 5, signal));
+			return {
+				content: [{ type: "text", text: formatWebResults(query, results) }],
+				details: { results: results.map(({ url, title }) => ({ url, title })) },
+			};
+		},
 	});
 
-	registerCommands(pi);
-
-	// Both hooks matter: session events cover startup/new/reload/resume, while
-	// before_agent_start applies a mid-session key change without a restart.
-	pi.on("session_start", async () => {
-		reconcileSearchTools(pi);
-	});
-	pi.on("before_agent_start", async () => {
-		reconcileSearchTools(pi);
-	});
+	registerSearchCommand(pi);
+	pi.on("session_start", async () => syncTools(pi));
 }
