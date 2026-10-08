@@ -227,7 +227,7 @@ async function verifyInstallation() {
 			"docs/bundled/extensions/question.md",
 			"docs/bundled/extensions/provider.md",
 			"docs/bundled/extensions/statusline.md",
-			"docs/bundled/extensions/web-search.md",
+			"docs/bundled/extensions/search.md",
 			"docs/bundled/themes.md",
 			"docs/bundled/tool-presentation.md",
 			"docs/docs.json",
