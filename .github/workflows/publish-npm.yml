@@ -97,4 +97,4 @@ jobs:
           path: package
 
       - name: Publish
-        run: npm publish "package/astralyn-pi-${{ needs.release.outputs.version }}.tgz" --access public --provenance --registry=https://registry.npmjs.org
+        run: npm publish "./package/astralyn-pi-${{ needs.release.outputs.version }}.tgz" --access public --provenance --registry=https://registry.npmjs.org
