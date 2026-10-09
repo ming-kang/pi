@@ -118,7 +118,7 @@ describe("Devin responses", () => {
 });
 
 describe("workspace confinement", () => {
-	const workspace = new Workspace(root, async () => "");
+	const workspace = new Workspace(root);
 
 	it("refuses traversal, absolute paths, and other drives", async () => {
 		for (const file of ["/codebase/../escape.ts", "../escape.ts", "/etc/passwd", String.raw`C:\Windows\win.ini`]) {
@@ -139,11 +139,82 @@ describe("workspace confinement", () => {
 		rmSync(outside, { recursive: true, force: true });
 	});
 
-	it("maps grep hits back onto the virtual root", async () => {
-		const grep = new Workspace(root, async () => "retry.ts:1: export function retry() {");
-		expect(await grep.run({ type: "rg", pattern: "retry", path: "/codebase/src" })).toBe(
-			"/codebase/src/retry.ts:1: export function retry() {",
+	it("reports rg hits on the virtual root, for a directory and for a single file", async () => {
+		expect(await workspace.run({ type: "rg", pattern: "retry", path: "/codebase/src" })).toBe(
+			"/codebase/src/retry.ts:1:export function retry() {",
 		);
+		expect(await workspace.run({ type: "rg", pattern: "return", path: "/codebase/src/retry.ts" })).toBe(
+			"/codebase/src/retry.ts:2:  return 1;",
+		);
+	});
+});
+
+describe("workspace rg", () => {
+	const repo = mkdtempSync(join(tmpdir(), "search-rg-"));
+	afterAll(() => rmSync(repo, { recursive: true, force: true }));
+	const write = (path: string, text: string) => {
+		mkdirSync(join(repo, path, ".."), { recursive: true });
+		writeFileSync(join(repo, path), text);
+	};
+
+	it("applies every include and exclude glob", async () => {
+		for (const path of ["src/a.ts", "src/b.tsx", "src/c.js", "test/a.test.ts"]) write(path, "const needle = 1;\n");
+		const out = await new Workspace(repo).run({
+			type: "rg",
+			pattern: "needle",
+			path: "/codebase",
+			include: ["**/*.ts", "**/*.tsx"],
+			exclude: ["**/test/**"],
+		});
+		expect(out).toBe("/codebase/src/a.ts:1:const needle = 1;\n/codebase/src/b.tsx:1:const needle = 1;");
+	});
+
+	it("leads an over-broad search with matches per file", async () => {
+		for (let i = 10; i < 40; i++) write(`many/f${i}.ts`, "hit\nhit\n");
+		write("many/z.ts", "hit\nhit\nhit\n");
+		const lines = (await new Workspace(repo).run({ type: "rg", pattern: "hit", path: "/codebase/many" })).split("\n");
+		expect(lines[0]).toMatch(/^63 matches in 31 files;/);
+		expect(lines[1]).toBe("/codebase/many/z.ts: 3");
+		expect(lines.length).toBeLessThanOrEqual(41);
+	});
+});
+
+describe("workspace visibility and paging", () => {
+	const repo = mkdtempSync(join(tmpdir(), "search-visible-"));
+	afterAll(() => rmSync(repo, { recursive: true, force: true }));
+	const write = (path: string, text: string) => {
+		mkdirSync(join(repo, path, ".."), { recursive: true });
+		writeFileSync(join(repo, path), text);
+	};
+	write(".gitignore", ".env\ndist/\n");
+	write(".env", "TOKEN=SECRET\n");
+	write("dist/bundle.js", "SECRET\n");
+	write("src/a.ts", Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join("\n"));
+	for (let i = 0; i < 30; i++) write(`pkgs/p${i}/index.ts`, "x\n");
+
+	it("keeps ignored files out of readfile, rg, and tree, even when named directly", async () => {
+		const workspace = new Workspace(repo);
+		expect(await workspace.run({ type: "readfile", file: "/codebase/.env" })).toMatch(/not searchable/);
+		expect(await workspace.run({ type: "rg", pattern: "SECRET", path: "/codebase/.env" })).toMatch(/not searchable/);
+		expect(await workspace.run({ type: "rg", pattern: "SECRET", path: "/codebase/dist" })).toMatch(/not searchable/);
+		expect(await workspace.run({ type: "rg", pattern: "SECRET", path: "/codebase" })).toBe("(no matches)");
+		const { tree } = await workspace.repoMap();
+		expect(tree).toContain("└── src/");
+		expect(tree).not.toMatch(/\.env|dist/);
+	});
+
+	it("states a file's length and where to continue a clipped read", async () => {
+		const lines = (await new Workspace(repo).run({ type: "readfile", file: "src/a.ts", end_line: 100 })).split("\n");
+		expect(lines[0]).toBe("/codebase/src/a.ts (100 lines)");
+		expect(lines[1]).toBe("1:line 1");
+		expect(lines.at(-1)).toBe("... (lines 41-100 not shown; continue with start_line=41)");
+	});
+
+	it("shallows a tree that would not fit rather than cutting it off", async () => {
+		const out = await new Workspace(repo).run({ type: "tree", path: "/codebase/pkgs", levels: 2 });
+		expect(out.split("\n")).toHaveLength(32);
+		expect(out).toMatch(/├── p0\/\n/);
+		expect(out).toMatch(/\(levels reduced to 1 to fit\)$/);
 	});
 });
 

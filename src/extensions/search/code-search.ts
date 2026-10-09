@@ -33,15 +33,13 @@ export interface CodeSearchOptions {
 	cwd: string;
 	signal?: AbortSignal;
 	onProgress?: (message: string) => void;
-	/** Test seam for the local `rg` backend. */
-	workspace?: Workspace;
 }
 
 export async function codeSearch(options: CodeSearchOptions): Promise<CodeLocation[]> {
 	const { apiKey, query, signal } = options;
 	const progress = options.onProgress ?? (() => {});
-	const workspace = options.workspace ?? new Workspace(options.root);
-	const map = workspace.repoMap();
+	const workspace = new Workspace(options.root);
+	const map = await workspace.repoMap(signal);
 	const messages: ChatMessage[] = [
 		{ role: "system", content: SYSTEM_PROMPT },
 		{

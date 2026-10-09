@@ -4,6 +4,19 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Rewrote the `code_search` and `web_search` tool descriptions to state each tool's capability and what it returns, moving the routing rule into prompt guidelines, so neither description enumerates example scenarios.
+- `code_search` runs ripgrep directly instead of through Pi's `grep` tool, so the search model's every include and exclude glob and smart case now apply, `.git` is no longer searched, and a search with more than 40 matching lines leads with its matches per file instead of an arbitrary first 40.
+- `code_search`'s directory tree now lists exactly the files ripgrep would search, following every `.gitignore`, `.ignore`, and `.rgignore` instead of a fixed list of dependency and build directory names, and marks directories with a trailing slash; a `tree` too large for one result is shown fewer levels deep instead of being cut off.
+- `code_search`'s `readfile` states the file's length, says which line to continue from when it clips a read, and refuses binary files.
+- `web_search` now tells the model the current month so queries for recent releases use the right year, and asks it to cite the results it relies on as markdown links.
+
+### Fixed
+
+- `code_search` no longer reads or searches ignored files such as `.env` when the search model names them directly; ripgrep searches a path it is handed even when that path is ignored.
+- The `/search` notice in a non-interactive session now reports the credential's source; it previously printed the literal text `$credential.source === "env" ? ENV_KEY : credentialPath()` and `$ENV_KEY`.
+
 ## [1.1.0] - 2026-10-08
 
 ### Added
