@@ -32,7 +32,7 @@ What leaves your machine: the query, the directory tree, and the output of the c
 Enforced locally, not by Devin:
 
 - **Confinement.** Every path the model names must resolve inside the searched directory, both as written and after following symlinks.
-- **Ignored files stay local.** The tree, `rg`, and `readfile` see only the files ripgrep would search: anything excluded by `.gitignore`, `.ignore`, or `.rgignore` (even outside a git repository) and everything under `.git` is neither listed, searched, nor read, even when the model names it. To hide more, such as a committed `vendor/` directory, add it to `.ignore`.
+- **Ignored files stay local.** The tree, `rg`, and `readfile` see only the files ripgrep would search: anything excluded by `.gitignore`, `.ignore`, or `.rgignore` (even outside a git repository) is neither listed, searched, nor read, even when the model names it. So, at any depth and with or without an ignore file, are `.git` and dependency and cache directories such as `node_modules`, `.venv`, and `__pycache__`. To hide more, such as a committed `vendor/` directory, add it to `.ignore`.
 - **Read-only.** The three commands are the only operations; there is no shell and no write.
 - **Bounded output.** Each command result is capped at 40 lines of 200 characters, and each request times out after 30 seconds.
 

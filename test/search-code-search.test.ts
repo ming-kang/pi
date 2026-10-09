@@ -203,6 +203,19 @@ describe("workspace visibility and paging", () => {
 		expect(tree).not.toMatch(/\.env|dist/);
 	});
 
+	it("skips dependency directories no ignore file mentions, but not committed vendor code", async () => {
+		write("web/node_modules/lib/index.js", "SECRET\n");
+		write("vendor/lib.ts", "x\n");
+		const workspace = new Workspace(repo);
+		expect(await workspace.run({ type: "rg", pattern: "SECRET", path: "/codebase" })).toBe("(no matches)");
+		expect(await workspace.run({ type: "readfile", file: "web/node_modules/lib/index.js" })).toMatch(
+			/not searchable/,
+		);
+		const { tree } = await workspace.repoMap();
+		expect(tree).not.toContain("node_modules");
+		expect(tree).toContain("vendor/");
+	});
+
 	it("states a file's length and where to continue a clipped read", async () => {
 		const lines = (await new Workspace(repo).run({ type: "readfile", file: "src/a.ts", end_line: 100 })).split("\n");
 		expect(lines[0]).toBe("/codebase/src/a.ts (100 lines)");

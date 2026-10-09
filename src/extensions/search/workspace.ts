@@ -25,10 +25,35 @@ const MAP_MAX_BYTES = 64 * 1024;
 const MAP_MAX_DEPTH = 3;
 
 /**
- * What every rg call sees: hidden files, and ignore files (`.gitignore`, `.ignore`, `.rgignore`)
- * even outside a git repository. `.git` itself is the one directory `--hidden` would otherwise add.
+ * Directories skipped at any depth on top of the ignore files, for a tree that has none: `.git`,
+ * which `--hidden` would otherwise add, plus dependency installs and tool caches. Names that are
+ * sometimes source or committed code (`build`, `dist`, `vendor`, ...) are left to the ignore files.
  */
-const RG_SCOPE = ["--hidden", "--no-require-git", "--glob", "!.git/"];
+const SKIPPED_DIRS = [
+	".git",
+	"node_modules",
+	"bower_components",
+	".venv",
+	"venv",
+	"__pycache__",
+	".tox",
+	".mypy_cache",
+	".pytest_cache",
+	".ruff_cache",
+	".gradle",
+	".next",
+	".nuxt",
+	".svelte-kit",
+	".turbo",
+	".parcel-cache",
+	".cache",
+];
+
+/**
+ * What every rg call sees: hidden files, ignore files (`.gitignore`, `.ignore`, `.rgignore`) even
+ * outside a git repository, and none of `SKIPPED_DIRS`.
+ */
+const RG_SCOPE = ["--hidden", "--no-require-git", ...SKIPPED_DIRS.flatMap((dir) => ["--glob", `!${dir}/`])];
 
 interface Match {
 	/** Relative to the root, with forward slashes. */
@@ -235,7 +260,7 @@ export class Workspace {
 		if (index.dirs.has(rel)) return { rel, real, kind: "dir" };
 		return {
 			error: existsSync(real)
-				? `Error: not searchable (ignored, inside .git, or an empty directory): ${String(value)}`
+				? `Error: not searchable (ignored, a dependency or cache directory, or empty): ${String(value)}`
 				: `Error: path does not exist: ${String(value)}`,
 		};
 	}
