@@ -73,8 +73,8 @@ export function registerSearchCommand(pi: ExtensionAPI): void {
 				const credential = getCredential();
 				ctx.ui.notify(
 					credential
-						? `Devin Search: signed in ($credential.source === "env" ? ENV_KEY : credentialPath()).`
-						: `Devin Search: not signed in. Run /search interactively, or set $ENV_KEY.`,
+						? `Devin Search: signed in (${credential.source === "env" ? ENV_KEY : credentialPath()}).`
+						: `Devin Search: not signed in. Run /search interactively, or set ${ENV_KEY}.`,
 					credential ? "info" : "warning",
 				);
 				return;
