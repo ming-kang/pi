@@ -75,14 +75,12 @@ export default function search(pi: ExtensionAPI): void {
 		name: "code_search",
 		label: "Code Search",
 		description:
-			"Find where behavior lives in the local repository by describing it, powered by Devin's SWE-grep agent. " +
-			"Use it when the relevant files are unknown: exploration, tracing a flow or bug, planning a change in " +
-			"unfamiliar code. Returns candidate files with line ranges — a reading list to verify with read or grep. " +
-			"For known paths, exact symbols, or literal strings, use find, grep, or read directly.",
-		promptSnippet: "Locate unknown local code by describing behavior; verify results with read",
+			"Find where behavior lives in the local repository from a description of it. " +
+			"Returns candidate files with line ranges.",
+		promptSnippet: "Find code by describing its behavior",
 		promptGuidelines: [
-			"Use `code_search` first when you do not know which files implement a behavior; use grep/find for exact names and literals.",
-			"Treat `code_search` results as a reading list: read the returned ranges before editing.",
+			"Use `code_search` when you cannot name the file or symbol you need; use `read`, `grep`, or `find` when you can.",
+			"Read the returned ranges before editing; the locations are candidates, not answers.",
 		],
 		parameters: CodeSearchParams,
 		renderCall: renderCodeSearchCall,
@@ -105,14 +103,19 @@ export default function search(pi: ExtensionAPI): void {
 		},
 	});
 
+	// Pi's system prompt carries no date, so models otherwise search with their training year.
+	const currentMonth = new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" });
 	pi.registerTool<typeof WebSearchParams, WebSearchDetails>({
 		name: "web_search",
 		label: "Web Search",
 		description:
-			"Search the live web through Devin. Use it for facts outside the repository: library and API docs, error " +
-			"messages, release notes, current versions. Returns titles, URLs, and query-relevant page excerpts.",
-		promptSnippet: "Live web search: external docs, errors, releases, current facts",
-		promptGuidelines: ["Use `web_search` instead of guessing for version-, release-, or date-sensitive facts."],
+			"Search the live web for current information. Returns titles, URLs, and the page excerpts that match the query.",
+		promptSnippet: "Search the live web for current information",
+		promptGuidelines: [
+			"Use `web_search` for information beyond your knowledge cutoff.",
+			`It is ${currentMonth}; put this year in \`web_search\` queries for recent releases, versions, or events, not the year your training data suggests.`,
+			"When an answer relies on `web_search` results, cite each result you used as a markdown link: [Title](URL).",
+		],
 		parameters: WebSearchParams,
 		renderCall: renderWebSearchCall,
 		renderResult: renderWebSearchResult,
