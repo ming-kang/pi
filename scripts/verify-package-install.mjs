@@ -188,15 +188,6 @@ async function verifyInstallation() {
 			"./dist/bundle/rpc-entry.js",
 			"installed RPC export target",
 		);
-		for (const [subpath, source] of [
-			["./client", "./src/client/index.ts"],
-			["./experimental/plugin", "./src/experimental/plugin.ts"],
-		]) {
-			const entry = installedPackage.exports?.[subpath];
-			assertEqual(entry?.source, source, `${subpath} source target`);
-			assertEqual(Object.keys(entry).join(","), "source", `${subpath} export conditions`);
-		}
-
 		for (const packageName of expectedRuntimePackages) {
 			const expectedDependencyVersion = installedPackage.dependencies?.[packageName];
 			if (!expectedDependencyVersion) {
@@ -321,9 +312,6 @@ async function verifyInstallation() {
 import { createAgentSession } from "@astralyn/pi";
 
 assert.equal(typeof createAgentSession, "function");
-for (const subpath of ["@astralyn/pi/client", "@astralyn/pi/experimental/plugin"]) {
-	assert.throws(() => import.meta.resolve(subpath), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
-}
 `,
 		);
 		execFileSync(process.execPath, [importCheckPath], {

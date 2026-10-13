@@ -176,6 +176,8 @@ See [Pi Packages](packages.md) for package sources and security notes.
 
 `--mode` accepts only `text`, `json`, or `rpc`. A missing or invalid value is reported as an error and pi exits with a nonzero status instead of falling back to another mode.
 
+Print mode writes errors to stderr. A final assistant response with an `error` or `aborted` stop reason exits nonzero; a response cut off at the model's output token limit (a `length` stop reason) still prints its partial text to stdout, warns on stderr, and also exits nonzero.
+
 In print mode, pi also reads piped stdin and merges it into the initial prompt:
 
 ```bash

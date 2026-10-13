@@ -7,8 +7,9 @@
  */
 
 import type { ExtensionAPI, ExtensionFactory } from "../../core/extensions/types.ts";
+import { SETTINGS_DEFAULTS } from "../../core/settings-defaults.ts";
 import type { CodemodeMode } from "../../core/settings-manager.ts";
-import { CODEMODE_TOOL_NAME, codemodeSchema, createCodemodeToolDefinition } from "./tool.ts";
+import { createCodemodeToolDefinition } from "./tool.ts";
 
 export interface CodemodeExtensionOptions {
 	/** Overrides the `codemode.mode` setting. */
@@ -20,7 +21,7 @@ export interface CodemodeExtensionOptions {
 }
 
 function readMode(pi: ExtensionAPI): CodemodeMode {
-	return pi.getSettings().codemode?.mode === "only" ? "only" : "on";
+	return pi.getSettings().codemode?.mode === "only" ? "only" : SETTINGS_DEFAULTS.codemode.mode;
 }
 
 function readInlineBudget(pi: ExtensionAPI): number | undefined {
@@ -30,11 +31,6 @@ function readInlineBudget(pi: ExtensionAPI): number | undefined {
 
 export function createCodemodeExtension(options: CodemodeExtensionOptions = {}): ExtensionFactory {
 	return (pi) => {
-		pi.events.on("pi:discover-tool-orchestrators", (candidates) => {
-			if (candidates instanceof Map && candidates.get(CODEMODE_TOOL_NAME) === codemodeSchema) {
-				candidates.set(CODEMODE_TOOL_NAME, true);
-			}
-		});
 		pi.registerTool({
 			...createCodemodeToolDefinition({
 				appendEntry: (customType, data) => pi.appendEntry(customType, data),

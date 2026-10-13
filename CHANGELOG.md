@@ -4,8 +4,24 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Adopted upstream v1.2.0:
+  - With an OpenRouter key, Pi lists only the chat models that key may use, with the key's context size, max output, and prices; the list refreshes in the background and is saved for offline use, and a regional endpoint set as the `baseUrl` in `models.json` filters to its region. See [Providers](docs/providers.md#openrouter).
+  - Published JSON schemas for `settings.json`, `models.json`, `keybindings.json`, and themes under `schemas/`; add `$schema` for editor validation and completion. See [Settings](docs/settings.md).
+  - `PI_CLIPBOARD_OSC52=1` also sends copied text to the terminal with OSC 52 after the local clipboard write, so copies reach a remote client's clipboard when Pi cannot detect the remote session, such as a multiplexer attached from another machine. See [Pi Process Configuration](docs/environment-variables.md#pi-process-configuration).
+  - Tool definitions can declare `reachesTools(input)` so a tool that reaches other tools says which ones a call may reach; the MCP extension uses it to wait for the servers a call needs and to recognize a replacement `codemode` or `tool_search`. Tool namespaces accept `aliases`, and MCP namespaces use the server name. See [Tool exposure](docs/extensions.md#tool-exposure).
+  - Codemode declarations show input constraints (integer, minimum/maximum, pattern, default) and spell out MCP result types; codemode rows show elapsed and total time like bash rows. See [Codemode](docs/codemode.md).
+
 ### Changed
 
+- **Breaking**: `before_agent_start` also fires for runs started by `pi.sendMessage(..., { triggerTurn: true })` while idle. `BeforeAgentStartEvent` is now a union on `messageType`: `"user"` events carry `prompt` and `images`, and `"custom"` events carry the starting `message` and no `prompt`. Handlers that should act only on user prompts must check `event.messageType === "user"`.
+- **Breaking**: the session counts as busy while a run starts, including during `before_agent_start` handlers: `ctx.isIdle()` is false, `pi.sendMessage()` queues into the starting run instead of failing with "Agent is already processing", and `pi.sendUserMessage()` requires `deliverAs`.
+- **Breaking**: themes are validated strictly: only documented top-level fields and color tokens are accepted, so define reusable colors under `vars` and remove unsupported metadata.
+- **Breaking**: `pi mcp list --json` reports `resources: true` for servers that offer resources instead of `resources` and `resourceTemplates` counts.
+- `showHardwareCursor` uses only the terminal cursor instead of also drawing Pi's reverse-video cursor.
+- `serializeConversation()` (compaction, branch summaries, bug reports) omits thinking blocks.
+- Removed the unpublished experimental server, client, and plugin stack (`src/experimental`, `src/cli/experimental`) and the `@earendil-works/pi-client`, `@earendil-works/pi-protocol`, `@earendil-works/pi-server`, `@earendil-works/pi-durable`, and `@earendil-works/chord` dependencies that only it used.
 - Rewrote the `code_search` and `web_search` tool descriptions to state each tool's capability and what it returns, moving the routing rule into prompt guidelines, so neither description enumerates example scenarios.
 - `code_search` runs ripgrep directly instead of through Pi's `grep` tool, so the search model's every include and exclude glob and smart case now apply, `.git` is no longer searched, and a search with more than 40 matching lines leads with its matches per file instead of an arbitrary first 40.
 - `code_search`'s directory tree now lists exactly the files ripgrep would search, following every `.gitignore`, `.ignore`, and `.rgignore` and always skipping dependency and cache directories such as `node_modules`, instead of hiding a fixed list of names that included `build`, `dist`, and `vendor`, and marks directories with a trailing slash; a `tree` too large for one result is shown fewer levels deep instead of being cut off.
@@ -14,6 +30,17 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Fixed
 
+- Adopted upstream v1.2.0 fixes:
+  - Print mode (`-p`) exiting 0 without a warning when the final response was cut off at the model's output token limit; it now prints the partial text, writes a warning to stderr, and exits 1.
+  - A symlinked `AGENTS.md` in a git worktree nested inside its main repo caused no project context file to load.
+  - Key bindings that name a shifted symbol, such as `+` or `ctrl++`, did not match under the Kitty keyboard protocol or modifyOtherKeys.
+  - Reading or writing `auth.json` on Windows failed with `EPERM` when the previous lock folder was still being deleted; Pi now retries briefly.
+  - Mistral streams were aborted mid-generation after the request timeout; the timeout now applies only to waiting for response headers.
+  - Anthropic requests failed when the provider rejected the strict tool set for grammar size, tool count, or union limits; Pi retries once with preferred tools non-strict.
+  - Focused fullscreen overlays blocked mouse-wheel scrolling of the transcript, and fragmented terminal color replies leaked hex values into the prompt.
+  - Codemode blocked the process for seconds to minutes after scripts with many `text()` calls, ignored a `// @options:` line that was not the script's first line, and failed under `node --watch` on Node 24 or 26.
+  - MCP servers with resources registered no tools until every resource was listed, MCP tool calls failed on non-object structured content, and cancelled or timed-out calls were still sent after an OAuth refresh finished.
+  - `~` was not expanded in `!pattern`, `+path`, and `-path` entries of the `extensions`, `skills`, `prompts`, and `themes` settings.
 - `code_search` no longer reads or searches ignored files such as `.env` when the search model names them directly; ripgrep searches a path it is handed even when that path is ignored.
 - The `/search` notice in a non-interactive session now reports the credential's source; it previously printed the literal text `$credential.source === "env" ? ENV_KEY : credentialPath()` and `$ENV_KEY`.
 

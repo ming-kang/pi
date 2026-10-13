@@ -44,9 +44,6 @@
 					"path": "src/core/extensions/virtual-modules.ts"
 				},
 				{
-					"path": "src/experimental/plugins/bundled.ts"
-				},
-				{
 					"path": "src/experimental/source-resolver.ts"
 				},
 				{
@@ -115,6 +112,9 @@
 			"paths": [
 				{
 					"path": "src/core/settings-manager.ts"
+				},
+				{
+					"path": "schemas/settings.schema.json"
 				},
 				{
 					"path": "src/core/extensions/types.ts"
@@ -252,6 +252,12 @@
 				{
 					"path": "src/core/settings-manager.ts",
 					"rewrite": "Deriving the reserve from triggerPercent needs the configured-versus-default split inside upstream's compaction settings resolver."
+				},
+				{
+					"path": "src/core/settings-schema.ts"
+				},
+				{
+					"path": "schemas/settings.schema.json"
 				}
 			],
 			"tests": [
@@ -273,15 +279,6 @@
 				},
 				{
 					"path": "src/core/extensions/types.ts"
-				},
-				{
-					"path": "src/experimental/client-tui-chat.ts"
-				},
-				{
-					"path": "src/experimental/durable/tui.ts"
-				},
-				{
-					"path": "src/experimental/vacation/tui.ts"
 				},
 				{
 					"path": "src/modes/interactive/components/index.ts"
@@ -424,6 +421,9 @@
 					"path": "src/core/keybindings.ts"
 				},
 				{
+					"path": "schemas/keybindings.schema.json"
+				},
+				{
 					"path": "src/core/extensions/runner.ts"
 				}
 			],
@@ -513,16 +513,13 @@
 		},
 		{
 			"id": "extension-orchestration-boundaries",
-			"why": "Bundled extensions remain independent: MCP discovers compatible orchestrators through the public event bus, codemode owns its search helper, and runtime imports stay static.",
+			"why": "Bundled extensions remain independent: MCP names the orchestrator tools without importing them (upstream's reachesTools declares reachability on the tool itself), codemode owns its search helper, and runtime imports stay static.",
 			"paths": [
 				{
 					"path": "src/extensions/codemode/execute.lazy.ts"
 				},
 				{
 					"path": "src/extensions/codemode/execute.ts"
-				},
-				{
-					"path": "src/extensions/codemode/index.ts"
 				},
 				{
 					"path": "src/extensions/mcp/cli.lazy.ts"
@@ -532,9 +529,6 @@
 				},
 				{
 					"path": "src/extensions/mcp/runtime.lazy.ts"
-				},
-				{
-					"path": "src/extensions/tool-search/index.ts"
 				}
 			],
 			"tests": [

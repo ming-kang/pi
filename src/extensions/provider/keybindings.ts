@@ -1,8 +1,8 @@
 import { registerKeybindings } from "../../core/keybinding-registry.ts";
 import { registerListKeybindings } from "../list-keybindings.ts";
 
-declare module "../../core/keybindings.ts" {
-	interface AppKeybindings {
+declare module "@earendil-works/pi-tui" {
+	interface Keybindings {
 		"app.provider.switchPaneLeft": true;
 		"app.provider.switchPaneRight": true;
 		"app.provider.removeEntry": true;

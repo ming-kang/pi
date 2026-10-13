@@ -14,12 +14,10 @@ import {
 } from "../scripts/diff-upstream.mjs";
 
 const runtimeDependencies = {
-	"@earendil-works/chord": "1.2.3",
 	"@earendil-works/pi-agent-core": "1.2.3",
 	"@earendil-works/pi-ai": "1.2.3",
-	"@earendil-works/pi-client": "1.2.3",
-	"@earendil-works/pi-protocol": "1.2.3",
-	"@earendil-works/pi-server": "1.2.3",
+	"@earendil-works/pi-codemode": "1.2.3",
+	"@earendil-works/pi-mcp": "1.2.3",
 	"@earendil-works/pi-tui": "1.2.3",
 };
 
@@ -258,43 +256,43 @@ describe("diff-upstream manifest and dependency validation", () => {
 		expect(result.stderr).toContain("does not satisfy upstream coding-agent range");
 	});
 
-	test("validates client and protocol ranges, root specs, and installed versions", () => {
+	test("validates upstream ranges, root specs, and installed versions", () => {
 		const rangeRepo = createTestRepo({
-			sourceDependencies: { ...runtimeDependencies, "@earendil-works/pi-client": "^2.0.0" },
+			sourceDependencies: { ...runtimeDependencies, "@earendil-works/pi-tui": "^2.0.0" },
 		});
 		const rangeResult = invoke(rangeRepo.root, ["--check"]);
 		expect(rangeResult.code).toBe(1);
 		expect(rangeResult.stderr).toContain(
-			"local dependency @earendil-works/pi-client@1.2.3 does not satisfy upstream coding-agent range ^2.0.0",
+			"local dependency @earendil-works/pi-tui@1.2.3 does not satisfy upstream coding-agent range ^2.0.0",
 		);
 
 		const rootSpecRepo = createTestRepo();
 		const rootSpecShrinkwrapPath = join(rootSpecRepo.root, "npm-shrinkwrap.json");
 		const rootSpecShrinkwrap = readJson(rootSpecShrinkwrapPath);
-		rootSpecShrinkwrap.packages[""].dependencies["@earendil-works/pi-protocol"] = "1.2.4";
+		rootSpecShrinkwrap.packages[""].dependencies["@earendil-works/pi-mcp"] = "1.2.4";
 		writeJson(rootSpecShrinkwrapPath, rootSpecShrinkwrap);
 		const rootSpecResult = invoke(rootSpecRepo.root, ["--check"]);
 		expect(rootSpecResult.code).toBe(1);
 		expect(rootSpecResult.stderr).toContain(
-			"npm-shrinkwrap.json root spec for @earendil-works/pi-protocol (1.2.4) does not match package.json (1.2.3)",
+			"npm-shrinkwrap.json root spec for @earendil-works/pi-mcp (1.2.4) does not match package.json (1.2.3)",
 		);
 
 		const installedRepo = createTestRepo();
 		const installedShrinkwrapPath = join(installedRepo.root, "npm-shrinkwrap.json");
 		const installedShrinkwrap = readJson(installedShrinkwrapPath);
-		installedShrinkwrap.packages["node_modules/@earendil-works/pi-client"].version = "1.2.4";
+		installedShrinkwrap.packages["node_modules/@earendil-works/pi-codemode"].version = "1.2.4";
 		writeJson(installedShrinkwrapPath, installedShrinkwrap);
 		const installedResult = invoke(installedRepo.root, ["--check"]);
 		expect(installedResult.code).toBe(1);
 		expect(installedResult.stderr).toContain(
-			"npm-shrinkwrap.json installed version for @earendil-works/pi-client (1.2.4) does not match package.json (1.2.3)",
+			"npm-shrinkwrap.json installed version for @earendil-works/pi-codemode (1.2.4) does not match package.json (1.2.3)",
 		);
 	});
 
 	test("validates source-only upstream dependencies in either local installation scope", () => {
 		const sourceDependencies = { ...runtimeDependencies };
 		const sourceDevDependencies = {};
-		for (const name of ["@earendil-works/pi-client", "@earendil-works/pi-protocol", "@earendil-works/pi-server"]) {
+		for (const name of ["@earendil-works/pi-codemode", "@earendil-works/pi-mcp"]) {
 			sourceDevDependencies[name] = sourceDependencies[name];
 			delete sourceDependencies[name];
 		}
@@ -305,29 +303,29 @@ describe("diff-upstream manifest and dependency validation", () => {
 
 		const packagePath = join(repo.root, "package.json");
 		const packageJson = readJson(packagePath);
-		packageJson.devDependencies = { "@earendil-works/pi-server": packageJson.dependencies["@earendil-works/pi-server"] };
-		delete packageJson.dependencies["@earendil-works/pi-server"];
+		packageJson.devDependencies = { "@earendil-works/pi-mcp": packageJson.dependencies["@earendil-works/pi-mcp"] };
+		delete packageJson.dependencies["@earendil-works/pi-mcp"];
 		writeJson(packagePath, packageJson);
 		const lockPath = join(repo.root, "npm-shrinkwrap.json");
 		const lock = readJson(lockPath);
 		lock.packages[""].devDependencies = packageJson.devDependencies;
-		delete lock.packages[""].dependencies["@earendil-works/pi-server"];
+		delete lock.packages[""].dependencies["@earendil-works/pi-mcp"];
 		writeJson(lockPath, lock);
 		expect(invoke(repo.root, ["--check"]).code).toBe(0);
-		delete packageJson.devDependencies["@earendil-works/pi-server"];
+		delete packageJson.devDependencies["@earendil-works/pi-mcp"];
 		writeJson(packagePath, packageJson);
 		expect(invoke(repo.root, ["--check"]).stderr).toContain(
-			"package.json dependency @earendil-works/pi-server must be an exact stable semver",
+			"package.json dependency @earendil-works/pi-mcp must be an exact stable semver",
 		);
 
 		const incompatible = createTestRepo({
 			sourceDependencies,
-			sourceDevDependencies: { ...sourceDevDependencies, "@earendil-works/pi-server": "^2.0.0" },
+			sourceDevDependencies: { ...sourceDevDependencies, "@earendil-works/pi-mcp": "^2.0.0" },
 		});
 		const rejected = invoke(incompatible.root, ["--check"]);
 		expect(rejected.code).toBe(1);
 		expect(rejected.stderr).toContain(
-			"local dependency @earendil-works/pi-server@1.2.3 does not satisfy upstream coding-agent range ^2.0.0",
+			"local dependency @earendil-works/pi-mcp@1.2.3 does not satisfy upstream coding-agent range ^2.0.0",
 		);
 	});
 });

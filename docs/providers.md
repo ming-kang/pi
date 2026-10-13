@@ -60,6 +60,22 @@ When the browser runs on another machine, select the copy code login method in `
 - On remote or headless machines (for example over SSH), paste the final redirect URL or authorization code into the login prompt when the browser cannot reach the loopback callback
 - `OPENROUTER_API_KEY` remains available through **Use an API key**
 
+With a key, Pi lists only the OpenRouter chat models that key may use, with the key's context size, max output, and prices. These come from OpenRouter's `/models/user` endpoint and reflect guardrails and provider restrictions set in OpenRouter. Image and classifier models are not filtered.
+
+Pi refreshes the list in the background at startup in interactive mode, when `/model` opens, after `/login`, and on `pi update --models`. The last list is saved and used offline and in `pi -p` and RPC mode. After switching keys outside `/login`, the previous key's list stays until the next refresh.
+
+Regional endpoints filter models to their region. To use one, set the base URL in [`models.json`](models.md):
+
+```json
+{
+  "providers": {
+    "openrouter": { "baseUrl": "https://us.openrouter.ai/api/v1" }
+  }
+}
+```
+
+If the base URL rejects the key at `/models/user` or does not have that endpoint, for example a proxy configured as the OpenRouter base URL, Pi lists every OpenRouter model.
+
 ### Radius
 
 Radius is a service by Earendil Works, the builders of upstream Pi. It provides an AI gateway with organization-level controls and analytics, and artifacts for sharing what you create with Pi. It is in early alpha; see [radius.earendil.com](https://radius.earendil.com).

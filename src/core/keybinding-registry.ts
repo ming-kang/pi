@@ -8,9 +8,10 @@ function sameDefinition(left: KeybindingDefinition, right: KeybindingDefinition)
 
 /**
  * Declare configurable keybindings owned outside core. Bundled extensions call this when
- * their module loads, before any KeybindingsManager is created, and augment AppKeybindings
- * for the ids they add. A definition may also override a built-in default the extension's
- * binding displaces. Registering an id twice requires the same definition.
+ * their module loads, before any KeybindingsManager is created, and augment the pi-tui
+ * Keybindings interface for the ids they add. A definition may also override a built-in
+ * default the extension's binding displaces. Registering an id twice requires the same
+ * definition.
  */
 export function registerKeybindings(definitions: KeybindingDefinitions): void {
 	for (const [id, definition] of Object.entries(definitions)) {

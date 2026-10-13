@@ -8,17 +8,15 @@ import { fileURLToPath } from "node:url";
 import { prerelease, satisfies, valid, validRange } from "semver";
 
 const upstreamDependencyNames = [
-	"@earendil-works/chord",
 	"@earendil-works/pi-agent-core",
 	"@earendil-works/pi-ai",
-	"@earendil-works/pi-client",
-	"@earendil-works/pi-protocol",
-	"@earendil-works/pi-server",
+	"@earendil-works/pi-codemode",
+	"@earendil-works/pi-mcp",
 	"@earendil-works/pi-tui",
 ];
-// This list identifies consumed upstream libraries, not their installation scope.
-// v0.85.0 omitted pi-server's range; newer baselines declare it for source development.
-const legacyUndeclaredDependencies = ["@earendil-works/pi-server"];
+// This list identifies consumed upstream libraries, not their installation scope. v1.2.0
+// dropped the experimental client/server subtree, so chord, pi-client, pi-protocol, and
+// pi-server left the list with it.
 const manifestKeys = ["repository", "tag", "commit", "sourceSubtree", "sourceTree"];
 const ledgerPath = "maintainers/concerns.json";
 const concernRequiredKeys = ["id", "why", "paths"];
@@ -416,9 +414,6 @@ function verifyUpstreamDependencies(upstreamPackage, manifest, failures, readJso
 				for (const dep of upstreamDependencyNames) {
 					const localVer = localVersions[dep];
 					const upstreamRange = upstreamPackage.dependencies[dep] ?? upstreamPackage.devDependencies?.[dep];
-					if (upstreamRange === undefined && legacyUndeclaredDependencies.includes(dep)) {
-						continue;
-					}
 					if (typeof upstreamRange !== "string" || !validRange(upstreamRange)) {
 						failures.push(
 							`baseline package.json dependency ${dep} must be a valid semver range; found ${JSON.stringify(upstreamRange)}`,

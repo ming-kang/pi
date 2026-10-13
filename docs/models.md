@@ -31,6 +31,7 @@ For local OpenAI-compatible servers such as Ollama, LM Studio, and vLLM, each mo
 
 ```json
 {
+  "$schema": "https://raw.githubusercontent.com/ming-kang/pi/main/schemas/models.schema.json",
   "providers": {
     "ollama": {
       "baseUrl": "http://localhost:11434/v1",

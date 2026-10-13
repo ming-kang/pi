@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { detectCapabilities, getTerminalColorMode, type TerminalColorMode } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import { CONFIG_DIR_NAME } from "../config.ts";
@@ -253,7 +253,13 @@ export function loadProjectContextFiles(options: {
 
 	while (true) {
 		const contextFile = loadContextFileFromDir(currentDir);
-		const isShadowed = shadowedContextFile !== undefined && samePath(contextFile?.path, shadowedContextFile);
+		// Compare the directory's real path, not the file's: a worktree AGENTS.md that
+		// symlinks to the main repo's file resolves to the shadowed path itself. relative()
+		// keeps the comparison Windows drive-letter-case-insensitive.
+		const isShadowed =
+			shadowedContextFile !== undefined &&
+			contextFile !== null &&
+			relative(join(canonicalizePath(currentDir), basename(contextFile.path)), shadowedContextFile) === "";
 		if (contextFile && !isShadowed && !seenPaths.has(contextFile.path)) {
 			ancestorContextFiles.unshift(contextFile);
 			seenPaths.add(contextFile.path);

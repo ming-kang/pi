@@ -69,7 +69,7 @@ vim ~/.pi/agent/themes/my-theme.json
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/ming-kang/pi/main/src/modes/interactive/theme/theme-schema.json",
+  "$schema": "https://raw.githubusercontent.com/ming-kang/pi/main/schemas/theme.schema.json",
   "name": "my-theme",
   "vars": {
     "primary": "#00aaff",
@@ -143,7 +143,7 @@ vim ~/.pi/agent/themes/my-theme.json
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/ming-kang/pi/main/src/modes/interactive/theme/theme-schema.json",
+  "$schema": "https://raw.githubusercontent.com/ming-kang/pi/main/schemas/theme.schema.json",
   "name": "my-theme",
   "vars": {
     "blue": "#0066cc",
@@ -164,6 +164,8 @@ vim ~/.pi/agent/themes/my-theme.json
 - `colors` must define all 51 required tokens. `thinkingMax`, `scrollbarThumb`, and the two search highlight tokens are optional and use the fallbacks listed below.
 
 The `$schema` field enables editor auto-completion and validation.
+
+Theme objects are strict: only documented top-level fields and color tokens are accepted. Define reusable custom colors under `vars`; custom keys under `colors` or `export` and additional top-level metadata are rejected.
 
 ## Color Tokens
 

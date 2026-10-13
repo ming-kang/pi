@@ -244,6 +244,7 @@ Create `~/.pi/agent/keybindings.json`:
 
 ```json
 {
+  "$schema": "https://raw.githubusercontent.com/ming-kang/pi/main/schemas/keybindings.schema.json",
   "tui.editor.historyPrevious": "ctrl+p",
   "tui.editor.historyNext": "ctrl+n",
   "tui.editor.deleteWordBackward": ["ctrl+w", "alt+backspace"]

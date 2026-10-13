@@ -7,7 +7,7 @@ Pi uses JSON settings files with project settings overriding global settings. JS
 | `~/.pi/agent/settings.json` | Global (all projects) |
 | `.pi/settings.json` | Project (current directory) |
 
-Edit directly or use `/settings` for common options.
+Edit directly or use `/settings` for common options. Add `"$schema": "https://raw.githubusercontent.com/ming-kang/pi/main/schemas/settings.schema.json"` to `settings.json` for editor validation and completion.
 
 ## Project Trust
 
@@ -90,7 +90,7 @@ Selecting a model or thinking level with Enter changes only the current session.
 | `editorPaddingX` | number | `0` | Horizontal padding for input editor (0-3) |
 | `outputPad` | number | `1` | Horizontal padding for messages, `!` command output, and summary blocks, and for tool output that renders its own shell (0 or 1) |
 | `autocompleteMaxVisible` | number | `5` | Max visible items in autocomplete dropdown (3-20) |
-| `showHardwareCursor` | boolean | `false` | Show the terminal cursor while TUI positions it for IME support |
+| `showHardwareCursor` | boolean | `false` | Use the terminal cursor instead of Pi's drawn cursor. Pi still positions it for IME support |
 | `tuiMode` | string | `"fullscreen"` | Interactive TUI mode: `"fullscreen"` or `"regular"`. Changes from `/settings` apply immediately; `--tui-mode` overrides this setting at startup |
 | `fullscreenExitOutput` | string | `"transcript"` | Fullscreen exit output: `"transcript"` prints the final transcript and resume hint, while `"resume-hint"` restores the previous screen and prints only the resume hint. Has no effect in regular TUI mode |
 | `fullscreenScrollbar` | string | `"auto"` | Fullscreen transcript scrollbar: `"auto"` shows it temporarily while scrolling, `"always"` reserves the rightmost column and keeps it visible, and `"hidden"` hides it. Has no effect in regular TUI mode |

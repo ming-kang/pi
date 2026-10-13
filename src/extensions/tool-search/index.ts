@@ -7,15 +7,10 @@
  */
 
 import type { ExtensionFactory } from "../../core/extensions/types.ts";
-import { createToolSearchToolDefinition, TOOL_SEARCH_TOOL_NAME, toolSearchSchema } from "./tool.ts";
+import { createToolSearchToolDefinition } from "./tool.ts";
 
 export function createToolSearchExtension(): ExtensionFactory {
 	return (pi) => {
-		pi.events.on("pi:discover-tool-orchestrators", (candidates) => {
-			if (candidates instanceof Map && candidates.get(TOOL_SEARCH_TOOL_NAME) === toolSearchSchema) {
-				candidates.set(TOOL_SEARCH_TOOL_NAME, true);
-			}
-		});
 		pi.registerTool({ ...createToolSearchToolDefinition({ tools: pi }), defaultActive: false });
 	};
 }

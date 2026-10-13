@@ -51,7 +51,7 @@ class CursorCell implements Component, Focusable {
 }
 ```
 
-When a focused component has a `focused` property, TUI sets it and looks for `CURSOR_MARKER` in its rendered lines to position the hardware cursor. `Input` and `Editor` already implement this. An extension can query or change the injected TUI's hardware-cursor setting with `tui.getShowHardwareCursor()` and `tui.setShowHardwareCursor(enabled)`; changing it affects the whole application UI.
+When a focused component has a `focused` property, TUI sets it and looks for `CURSOR_MARKER` in its rendered lines to position the hardware cursor. Wrap the cursor cell in `renderFakeCursor()` so the TUI draws it in reverse video, or hides it after `CURSOR_MARKER` when the hardware cursor is shown. `Input` and `Editor` already implement this. An extension can query or change the injected TUI's hardware-cursor setting with `tui.getShowHardwareCursor()` and `tui.setShowHardwareCursor(enabled)`; changing it affects the whole application UI.
 
 A container that owns an `Input` or `Editor` must forward both focus and input to its child. `Container` only groups and renders children; it does not route input for them.
 

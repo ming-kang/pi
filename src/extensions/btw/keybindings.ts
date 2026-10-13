@@ -1,7 +1,7 @@
 import { registerKeybindings } from "../../core/keybinding-registry.ts";
 
-declare module "../../core/keybindings.ts" {
-	interface AppKeybindings {
+declare module "@earendil-works/pi-tui" {
+	interface Keybindings {
 		"app.btw.close": true;
 		"app.btw.cancel": true;
 		"app.btw.scrollUp": true;
