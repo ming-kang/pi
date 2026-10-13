@@ -115,13 +115,7 @@ export function runSource(args = process.argv.slice(2)) {
 	const tsxCli = require.resolve("tsx/cli", { paths: [root] });
 	const child = spawn(
 		process.execPath,
-		[
-			tsxCli,
-			"--tsconfig",
-			join(root, "tsconfig.json"),
-			join(root, "src", "experimental", "cli.ts"),
-			...forwardedArguments,
-		],
+		[tsxCli, "--tsconfig", join(root, "tsconfig.json"), join(root, "src", "cli.ts"), ...forwardedArguments],
 		{ stdio: "inherit", env: environment },
 	);
 	child.on("error", (error) => {
