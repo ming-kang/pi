@@ -246,9 +246,6 @@ async function verifyInstallation() {
 			}
 		}
 		for (const forbiddenPath of [
-			"dist/client",
-			"dist/experimental",
-			"dist/cli/experimental",
 			"dist/extensions/biu",
 			"dist/extensions/explore",
 			"dist/extensions/plan",

@@ -188,33 +188,6 @@ session = runtime.session;
 unsubscribe = session.subscribe(() => {});
 ```
 
-### Experimental Remote Sessions
-
-The `@astralyn/pi/client` subpath provides a lifecycle controller and transcript reducers for applications that connect to a remote Pi server. It is available only in a source checkout under the `source` condition, together with `@astralyn/pi/experimental/plugin`; neither subpath is a published runtime export. See [Experimental remote harness](development.md#experimental-remote-harness). Transport and protocol primitives come from the exact `@earendil-works/pi-client` and `@earendil-works/pi-protocol` dependencies.
-
-```typescript
-import { PiClient } from "@earendil-works/pi-client";
-import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
-import { RemoteSession } from "@astralyn/pi/client";
-
-await using client = await PiClient.connect({
-  transportFactory: createUnixTransportFactory({ path: "/tmp/pi.sock" }),
-});
-await using session = await RemoteSession.create(client, {
-  cwd: "/workspace/project",
-});
-
-const unsubscribe = session.subscribe(({ lifecycle, snapshot, transcript }) => {
-  console.log(lifecycle.status, snapshot?.phase, transcript.length);
-});
-await session.submit("Inspect this project");
-unsubscribe();
-```
-
-Use `RemoteSession.open(client, sessionId)` to acquire an existing session. The controller serializes open/create/submit/model/thinking operations, selects prompt versus steering behavior from the remote phase, supports abort and reconnect, and releases its exclusive session lease on disposal. `createTranscriptState()`, `applyTranscriptSnapshot()`, `applyTranscriptProgress()`, and `selectTranscript()` are also exported for lower-level clients that manage transcript state directly.
-
-This API is experimental. Match client and server protocol versions, bound transport queues and frame sizes, authenticate the transport, and treat peers as untrusted.
-
 ### Prompting and Message Queueing
 
 `PromptOptions` controls prompt expansion, queueing behavior while streaming, and prompt preflight notifications:

@@ -39,19 +39,6 @@ npm run test:isolated
 
 The isolated runner preserves individual arguments and forwards them to Vitest, isolates home/configuration/cache/credentials, and preflights its required tools. Interactive verification requirements are defined by the repository's `AGENTS.md`.
 
-## Experimental remote harness
-
-Server/client integration is source-only. On a POSIX system:
-
-```bash
-PI_EXPERIMENTAL=1 npm run dev -- server
-PI_EXPERIMENTAL=1 npm run dev -- client
-```
-
-The source launcher uses `src/experimental/cli.ts` and falls back to the stable CLI for ordinary commands. `PI_SERVER_DIR` selects the server profile/socket directory (default `~/.pi/server`); `PI_SERVER_ID` selects the server ID when `--server-id` is omitted. The durable server requires POSIX process APIs.
-
-The `client` and `experimental/plugin` package subpaths resolve under the `source` condition in a checkout. Their implementations and commands are excluded from distributed builds; the local SDK and stdio RPC remain supported. The development-only libraries are installed when preparing a source checkout.
-
 ## Repository layout
 
 - `src/**`: runtime and source-only experimental code.

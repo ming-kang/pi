@@ -16,6 +16,10 @@
           "path": "usage.md"
         },
         {
+          "title": "Sessions",
+          "path": "sessions.md"
+        },
+        {
           "title": "Providers",
           "path": "providers.md"
         },
@@ -79,6 +83,10 @@
         {
           "title": "Statusline",
           "path": "bundled/extensions/statusline.md"
+        },
+        {
+          "title": "Search",
+          "path": "bundled/extensions/search.md"
         },
         {
           "title": "Bundled themes",

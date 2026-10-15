@@ -19,10 +19,6 @@ Upstream libraries are consumed from their published npm packages, exactly pinne
 | Direct consumers | Scope | Reason |
 | --- | --- | --- |
 | Pi AI, Agent core, TUI, Codemode, MCP, QuickJS WASI | Production | SDK, tools, interactive runtime, MCP transports, and sandbox execution. |
-| Chord | Production | The bundles keep Agent core's external Chord imports. It does not enable the experimental server. |
-| Client, Durable, Protocol, Server | Development | Imported only under `src/client/`, `src/experimental/`, and `src/cli/experimental/`, which the build excludes. |
-
-The experimental `client` and `experimental/plugin` subpaths expose only the `source` condition, and the durable server is POSIX-only.
 
 ## Ownership
 
