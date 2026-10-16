@@ -28,6 +28,10 @@
           "path": "llama-cpp.md"
         },
         {
+          "title": "NVIDIA RTX",
+          "path": "nvidia-rtx-llama-cpp.md"
+        },
+        {
           "title": "Security",
           "path": "security.md"
         },

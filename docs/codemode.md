@@ -224,5 +224,6 @@ for (const block of result.output) {
 ## Limits
 
 - A script's VM has 256 MB of memory. Running out throws `InternalError: out of memory`; filter or aggregate large data instead of accumulating it.
+- At most two codemode workers may be alive across all sessions in one pi process. A cancelled worker occupies its slot until it exits. At capacity, new scripts fail immediately without starting another worker; retry after an existing worker exits.
 - A script that waits on a promise that can never settle (no tool call pending) fails immediately, since there are no timers.
 - Scripts cannot start other `codemode` scripts.

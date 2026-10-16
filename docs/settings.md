@@ -308,6 +308,7 @@ An empty array starts with no built-in tools while preserving extension and SDK 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `sessionDir` | string | - | Directory where session files are stored. Accepts absolute or relative paths, plus `~`. |
+| `sessionShareDestination` | `"auto" \| "gist" \| "radius"` | `"auto"` | Destination used by `/share`. `auto` uses Radius when signed in and otherwise creates a private GitHub gist. `gist` always uses a gist. `radius` requires Radius authentication and never falls back to a gist. |
 
 ```json
 { "sessionDir": ".pi/sessions" }

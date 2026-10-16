@@ -32,7 +32,7 @@ For the JSONL file format and SessionManager API, see [Session Format](session-f
 | `/clone` | Duplicate the current active branch into a new session |
 | `/compact [prompt]` | Summarize older context; see [Compaction](compaction.md) |
 | `/export [file]` | Export session to HTML |
-| `/share` | Upload as private GitHub gist with shareable HTML link |
+| `/share` | Upload the session for a shareable HTML link; a Radius artifact when signed in, otherwise a private GitHub gist (see [`sessionShareDestination`](settings.md#sessions)) |
 | `/bug [description]` | Report a bug to the Pi developers; see [Reporting Bugs](#reporting-bugs) |
 
 ## Resuming and Deleting Sessions

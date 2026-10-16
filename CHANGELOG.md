@@ -4,6 +4,38 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Adopted upstream v1.3.0:
+  - `sessionShareDestination` setting (`auto`, `gist`, or `radius`) chooses where `/share` uploads, and is also selectable in `/settings`. See [Settings](docs/settings.md#sessions).
+  - Changing the thinking level mid-session on OpenAI GPT-6 with an API key preserves the prompt cache.
+  - New [Run Pi with NVIDIA RTX and llama.cpp](docs/nvidia-rtx-llama-cpp.md) guide: convert an NVIDIA inference recipe into a llama.cpp router preset.
+
+### Changed
+
+- **Breaking**: the `kimi-coding` provider moved to OpenAI Chat Completions at `https://api.kimi.com/coding/v1`, so `models.json` base URL overrides for it must now include `/v1`. Kimi models accept tools added mid-conversation without invalidating the prompt cache.
+- Switching models discards a previous model's thinking blocks instead of showing them to the new model as text.
+- Resumed sessions keep the tools activated during the session; `--tools +name`/`-name` layers on top of the restored set, and only `--tools`, `--no-tools`, or `--no-builtin-tools` selects tools explicitly.
+- The `@earendil-works/*` packages now pin each other to exact release versions, so a fresh install cannot mix incompatible internal packages.
+
+### Fixed
+
+- Adopted upstream v1.3.0 fixes:
+  - Stopping or timing out a codemode script no longer hangs on a non-interruptible built-in, and repeated timeouts no longer accumulate workers: at most two codemode workers stay alive across all sessions, and at capacity a new script fails immediately. See [Codemode](docs/codemode.md#limits).
+  - `--model` now prefers the provider with credentials when several providers offer the model and reports the ambiguity otherwise; `--models` and `enabledModels` add a model offered by several providers for each, with a warning.
+  - `read` line-range labels rendered garbage for numeric-string or null arguments in the TUI, session tree, and HTML exports.
+  - Prompt templates no longer drop empty quoted arguments (`""`/`''`), which shifted positional arguments.
+  - Tool-call parsing no longer drops fields on invalid `\u` escapes such as `\usepackage`, and malformed final tool-call JSON fails validation and shows the raw arguments instead of running partially.
+  - Anthropic and Bedrock Claude 400 errors when an error tool result contains images; images are now sent after the turn's tool results.
+  - OpenCode Go Gemini 404s (Zen and Go moved to `opencode.ai/inference` endpoints, with Google Generative AI support added) and MiniMax M2.7 "Model does not support this protocol".
+  - Auto-retry now covers gateway "Unable to forward upstream stream" and "The service is temporarily unavailable" errors; the latter also broke first-attempt compaction.
+  - Thinking no longer renders after the answer when a proxy such as LiteLLM sends reasoning and content in one chunk.
+  - Gemini 4 Argon on Vertex failed with "Thinking budget is not supported"; the thinking level is now honored on the Gemini API.
+  - Xiaomi MiMo 400 errors at `minimal` thinking; the models now expose only `off` and `high`.
+  - `openai-codex/gpt-6.1-sol` uses the 500K context window instead of 272K.
+  - Claude Haiku 5.5 and Opus 5 `off` thinking level.
+  - An extension's `ctx.ui.custom({ overlay: true })` `done()` closed the topmost overlay instead of its own.
+
 ## [1.2.0] - 2026-10-13
 
 ### Added

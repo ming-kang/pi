@@ -133,7 +133,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 
 Use `/export [file]` to write a session to HTML.
 
-Use `/share` to upload a private GitHub gist with a shareable HTML link.
+Use `/share` to upload the session and get a shareable HTML link. By default, Radius authentication makes the artifact visible to your Radius organization; otherwise, Pi creates a private GitHub gist through the GitHub CLI. The [`sessionShareDestination`](settings.md#sessions) setting can force either destination. Review the session first because it can contain prompts, tool output, file contents, and credentials exposed during the conversation.
 
 If you use pi for open source work and want to publish sessions for model, prompt, tool, and evaluation research, see [`badlogic/pi-share-hf`](https://github.com/badlogic/pi-share-hf). It publishes sessions to Hugging Face datasets.
 
@@ -189,10 +189,10 @@ cat README.md | pi -p "Summarize this text"
 | Option | Description |
 |--------|-------------|
 | `--provider <name>` | Provider to search for `--model`, such as `anthropic` or `openai`; requires `--model` |
-| `--model <pattern>` | Model pattern or ID; supports `provider/id` and optional `:<thinking>` |
-| `--api-key <key>` | API key, overriding environment variables |
+| `--model <pattern>` | Model pattern or ID; supports `provider/id` and optional `:<thinking>`. If several providers match, Pi prefers the one with credentials, otherwise it asks for `--provider` |
+| `--api-key <key>` | API key, overriding environment variables; does not choose between providers that offer the same model |
 | `--thinking <level>` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
-| `--models <patterns>` | Comma-separated patterns for Ctrl+P cycling |
+| `--models <patterns>` | Comma-separated patterns for Ctrl+P cycling; a model offered by several providers is added for each, with a warning |
 | `--list-models [search]` | List available models |
 
 ### Session Options

@@ -2988,12 +2988,14 @@ export class InteractiveMode {
 
 		return new Promise((resolve, reject) => {
 			let component: Component & { dispose?(): void };
+			let overlayHandle: OverlayHandle | undefined;
 			let closed = false;
 
 			const close = (result: T) => {
 				if (closed) return;
 				closed = true;
-				if (isOverlay) this.ui.hideOverlay();
+				// Remove this overlay, not the topmost one: another overlay may have opened above it.
+				if (isOverlay) overlayHandle?.hide();
 				else restoreEditor();
 				// Note: both branches above already call requestRender
 				resolve(result);
@@ -3022,9 +3024,9 @@ export class InteractiveMode {
 							const w = (component as { width?: number }).width;
 							return w ? { width: w } : undefined;
 						};
-						const handle = this.ui.showOverlay(component, resolveOptions());
+						overlayHandle = this.ui.showOverlay(component, resolveOptions());
 						// Expose handle to caller for visibility control
-						options?.onHandle?.(handle);
+						options?.onHandle?.(overlayHandle);
 					} else {
 						this.disposeActiveSelector();
 						this.editorContainer.clear();
@@ -4954,6 +4956,7 @@ export class InteractiveMode {
 					steeringMode: this.session.steeringMode,
 					followUpMode: this.session.followUpMode,
 					transport: this.settingsManager.getTransport(),
+					sessionShareDestination: this.settingsManager.getSessionShareDestination(),
 					httpIdleTimeoutMs: this.settingsManager.getHttpIdleTimeoutMs(),
 					cacheWarmingMode: this.settingsManager.getCacheWarmingMode(),
 					thinkingLevel: this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
@@ -5024,6 +5027,9 @@ export class InteractiveMode {
 					onTransportChange: (transport) => {
 						this.settingsManager.setTransport(transport);
 						this.session.agent.transport = transport;
+					},
+					onSessionShareDestinationChange: (destination) => {
+						this.settingsManager.setSessionShareDestination(destination);
 					},
 					onHttpIdleTimeoutMsChange: (timeoutMs) => {
 						this.settingsManager.setHttpIdleTimeoutMs(timeoutMs);
