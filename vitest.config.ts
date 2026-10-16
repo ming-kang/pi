@@ -16,7 +16,7 @@ export default defineConfig({
 		server: {
 			deps: {
 				external: [/@silvia-odwyer\/photon-node/],
-				inline: [/@earendil-works\/pi-(?:agent-core|ai|tui)/],
+				inline: [/@earendil-works\/pi-(?:agent-core|ai|codemode|tui)/],
 			},
 		},
 	},
