@@ -250,7 +250,20 @@ export class TasksMenu implements Component, Focusable {
 		const kb = this.options.keybindings;
 		this.feedback = undefined;
 		try {
-			if (this.help) {
+			if (this.layout?.tooSmall) {
+				// The resize notice owns the screen; keys must not act on the hidden panel.
+				// Cancel unwinds one transient state at a time, then closes.
+				if (kb.matches(data, "tui.select.cancel")) {
+					if (this.help) this.help = undefined;
+					else if (this.searching) this.finishSearch(true);
+					else if (this.pendingKill) this.clearKill();
+					else {
+						this.dispose();
+						this.options.onClose();
+						return;
+					}
+				}
+			} else if (this.help) {
 				if (kb.matches(data, "tui.select.cancel") || kb.matches(data, "app.tasks.help")) this.help = undefined;
 				else if (kb.matches(data, "app.tasks.top") || kb.matches(data, "app.tasks.bottom"))
 					this.help.jump(kb.matches(data, "app.tasks.bottom"), false);
@@ -302,7 +315,7 @@ export class TasksMenu implements Component, Focusable {
 		this.render(event.width);
 		const layout = this.layout!;
 		if (event.type === "wheel" && event.wheelDelta) {
-			if (!this.pendingKill && event.y >= 2 && event.y < this.options.tui.terminal.rows - 3) {
+			if (!this.pendingKill && !layout.tooSmall && event.y >= 2 && event.y < this.options.tui.terminal.rows - 3) {
 				const delta = Math.sign(event.wheelDelta) * Math.min(20, Math.abs(event.wheelDelta));
 				const region = this.width >= 100 ? (event.x < layout.listWidth ? "list" : "inspector") : this.focus;
 				if (this.help) this.help.move(delta, false, false);
@@ -340,6 +353,7 @@ export class TasksMenu implements Component, Focusable {
 					!this.pendingKill &&
 					!this.searching &&
 					!this.help &&
+					!layout.tooSmall &&
 					event.y >= 1 &&
 					event.y < this.options.tui.terminal.rows - 2 &&
 					this.width >= 100

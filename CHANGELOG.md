@@ -20,6 +20,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Fixed
 
+- `/tasks` below its minimum size (60×14) rendered a three-line notice floating over the transcript while the panel still owned input, so the transcript looked active but would not scroll. The notice is now a centered dialog that covers the screen, and keys other than Escape no longer act on the hidden panel.
 - Adopted upstream v1.3.0 fixes:
   - Stopping or timing out a codemode script no longer hangs on a non-interruptible built-in, and repeated timeouts no longer accumulate workers: at most two codemode workers stay alive across all sessions, and at capacity a new script fails immediately. See [Codemode](docs/codemode.md#limits).
   - `--model` now prefers the provider with credentials when several providers offer the model and reports the ambiguity otherwise; `--models` and `enabledModels` add a model offered by several providers for each, with a warning.

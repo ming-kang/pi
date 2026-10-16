@@ -26,6 +26,8 @@ export interface TasksLayout {
 	listWidth: number;
 	listPageSize: number;
 	lines: string[];
+	/** The terminal is below the supported size; only a full-screen resize notice is shown. */
+	tooSmall?: boolean;
 }
 interface LayoutOptions {
 	width: number;
@@ -50,12 +52,6 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 	const hint = (key: Keybinding) => keyLabel(key, { keybindings });
 	const result: TasksLayout = { hits: [], listWidth: 0, listPageSize: 1, lines: [] };
 	if (width < 1 || height < 1) return result;
-	if (width < 60 || height < 14) {
-		result.lines = ["Tasks", "Terminal too small for /tasks. Resize to 60×14.", `${hint("tui.select.cancel")} close`]
-			.slice(0, height)
-			.map((line) => pad(line, width));
-		return result;
-	}
 	const wide = width >= 100;
 	const listWidth = wide ? Math.min(42, Math.max(32, Math.floor(width * 0.32))) : width;
 	const rightWidth = wide ? width - listWidth - 1 : width;
@@ -72,6 +68,36 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 			border(`└${"─".repeat(size - 2)}┘`),
 		];
 	};
+	if (width < 60 || height < 14) {
+		// The panel is modal: a floating notice would leave the transcript visible yet
+		// unscrollable, so the notice owns every row as a centered dialog. Only a truly
+		// tiny terminal, where even the dialog does not fit, gets bare covering lines.
+		result.tooSmall = true;
+		const message = "Terminal too small for /tasks. Enlarge the window to continue.";
+		const close = `${hint("tui.select.cancel")} close`;
+		const boxWidth = Math.min(width, 46);
+		const inner = boxWidth - 2;
+		const wrapped = wrapTextWithAnsi(message, inner).map((line) => theme.fg("warning", line));
+		const spacious = [theme.fg("text", "Tasks"), "", ...wrapped, "", theme.fg("dim", close)];
+		const tight = [theme.fg("text", "Tasks"), ...wrapped, theme.fg("dim", close)];
+		const body = height >= spacious.length + 2 ? spacious : tight;
+		if (inner >= 16 && height >= body.length + 2) {
+			const box = pane(body, boxWidth, false);
+			const left = Math.floor((width - boxWidth) / 2);
+			const top = Math.max(0, Math.floor((height - box.length) / 2));
+			const blank = " ".repeat(width);
+			result.lines = [
+				...Array.from({ length: top }, () => blank),
+				...box.map((line) => " ".repeat(left) + line + " ".repeat(width - left - boxWidth)),
+				...Array.from({ length: height - top - box.length }, () => blank),
+			];
+			hits.push({ x: left + 1, y: top + body.length, width: visibleWidth(close), cancel: true });
+		} else {
+			result.lines = ["Tasks", message, close].slice(0, height).map((line) => pad(line, width));
+			while (result.lines.length < height) result.lines.push(" ".repeat(width));
+		}
+		return result;
+	}
 	const visible = list.render(selection, theme, listWidth - 2, bodyHeight);
 	let listHeader = theme.fg("text", "Tasks");
 	const searchLabel = `${hint("app.tasks.search")} find`;
