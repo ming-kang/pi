@@ -8,18 +8,6 @@
       "type": "string",
       "description": "JSON Schema reference."
     },
-    "extensionSettings": {
-      "type": "object",
-      "patternProperties": {
-        "^.*$": {
-          "type": "object",
-          "patternProperties": {
-            "^.*$": {}
-          }
-        }
-      },
-      "description": "Per-extension global JSON namespaces, written through the extension settings API."
-    },
     "lastChangelogVersion": {
       "type": "string"
     },

@@ -4,6 +4,11 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking**: removed the undocumented `ctx.getExtensionSettings()` / `ctx.setExtensionSettings()` extension API and the `extensionSettings` settings key. No bundled extension, documented example, or test outside its own suite used it; the `explore` extension that motivated it is no longer bundled.
+- Removed the unused `ignoreConfig` option from `createGrepToolDefinition()`; no caller passed it since `code_search` was rebuilt on ripgrep directly.
+
 ## [1.3.0] - 2026-10-16
 
 ### Added

@@ -213,11 +213,6 @@ const SkillsInputSchema = Type.Union(
 export const SettingsSchema = Type.Object(
 	{
 		$schema: Type.Optional(Type.String({ description: "JSON Schema reference." })),
-		extensionSettings: Type.Optional(
-			Type.Record(Type.String(), Type.Record(Type.String(), Type.Unknown()), {
-				description: "Per-extension global JSON namespaces, written through the extension settings API.",
-			}),
-		),
 		lastChangelogVersion: Type.Optional(Type.String()),
 		defaultProvider: Type.Optional(Type.String()),
 		defaultModel: Type.Optional(Type.String()),

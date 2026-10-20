@@ -90,9 +90,6 @@
 			"paths": [
 				{
 					"path": "src/extensions/index.ts"
-				},
-				{
-					"path": "src/core/tools/grep.ts"
 				}
 			],
 			"tests": [
@@ -104,30 +101,6 @@
 				"test/search-credential.test.ts",
 				"test/search-code-search.test.ts",
 				"test/built-in-extensions.test.ts"
-			]
-		},
-		{
-			"id": "extension-settings",
-			"why": "Extensions replace their own global JSON namespace through the session's SettingsManager, with explicit save failures.",
-			"paths": [
-				{
-					"path": "src/core/settings-manager.ts"
-				},
-				{
-					"path": "schemas/settings.schema.json"
-				},
-				{
-					"path": "src/core/extensions/types.ts"
-				},
-				{
-					"path": "src/core/extensions/runner.ts"
-				},
-				{
-					"path": "src/core/agent-session.ts"
-				}
-			],
-			"tests": [
-				"test/extension-settings.test.ts"
 			]
 		},
 		{
