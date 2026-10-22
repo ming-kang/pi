@@ -38,6 +38,17 @@ export function nextVersion(current, upstreamTag) {
 	return `${major}.${minor}.${patch + 1}`;
 }
 
+/**
+ * Move the root version in the hidden lockfile. `npm version` only rewrites
+ * package.json, and the lockfile checks require all three copies to match.
+ */
+export function stampShrinkwrap(text, version) {
+	const lock = JSON.parse(text);
+	lock.version = version;
+	if (lock.packages?.[""]) lock.packages[""].version = version;
+	return `${JSON.stringify(lock, null, "\t")}\n`;
+}
+
 /** Move the [Unreleased] entries under a new release heading, leaving [Unreleased] empty. */
 export function stampChangelog(text, version, date) {
 	const lines = text.split("\n");
@@ -131,6 +142,7 @@ async function release(requested, { dryRun, yes }) {
 	const tag = `pi-v${version}`;
 
 	const changelogPath = join(root, "CHANGELOG.md");
+	const shrinkwrapPath = join(root, "npm-shrinkwrap.json");
 	const date = new Date().toISOString().slice(0, 10);
 	const changelog = stampChangelog(readFileSync(changelogPath, "utf8"), version, date);
 	if (isPublished(version)) throw new Error(`${PACKAGE_NAME}@${version} is already on npm.`);
@@ -147,6 +159,7 @@ async function release(requested, { dryRun, yes }) {
 
 	writeFileSync(changelogPath, changelog);
 	npm(["version", version, "--no-git-tag-version", "--ignore-scripts"], { capture: true });
+	writeFileSync(shrinkwrapPath, stampShrinkwrap(readFileSync(shrinkwrapPath, "utf8"), version));
 	run("git", ["add", "--", "CHANGELOG.md", "package.json", "npm-shrinkwrap.json"]);
 	run("git", ["commit", "-m", `chore: release ${version}`]);
 	run("git", ["tag", "-a", tag, "-m", `${PACKAGE_NAME} ${version}`]);

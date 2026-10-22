@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { classifyLockfileChanges } from "../scripts/check-lockfile-commit.mjs";
-import { nextVersion, stampChangelog } from "../scripts/release.mjs";
+import { nextVersion, stampChangelog, stampShrinkwrap } from "../scripts/release.mjs";
 
 describe("nextVersion", () => {
 	test("increments the patch within upstream's line and resets it on a newer line", () => {
@@ -53,6 +53,28 @@ describe("stampChangelog", () => {
 		const stamped = stampChangelog(changelog, "1.0.6", "2026-10-07");
 		expect(() => stampChangelog(stamped, "1.0.7", "2026-10-08")).toThrow("nothing to release");
 		expect(() => stampChangelog(changelog, "1.0.5", "2026-10-08")).toThrow("already has a heading");
+	});
+});
+
+describe("stampShrinkwrap", () => {
+	const lock = `${JSON.stringify(
+		{
+			name: "@astralyn/pi",
+			version: "1.3.0",
+			lockfileVersion: 3,
+			packages: {
+				"": { name: "@astralyn/pi", version: "1.3.0", dependencies: { chalk: "6.0.0" } },
+				"node_modules/chalk": { version: "6.0.0" },
+			},
+		},
+		null,
+		"\t",
+	)}\n`;
+
+	test("moves both root version copies and leaves every other lockfile entry untouched", () => {
+		const stamped = stampShrinkwrap(lock, "1.3.1");
+		expect(stamped).toBe(lock.replaceAll('"1.3.0"', '"1.3.1"'));
+		expect(JSON.parse(stamped).packages["node_modules/chalk"]).toEqual({ version: "6.0.0" });
 	});
 });
 
