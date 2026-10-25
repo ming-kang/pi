@@ -29,7 +29,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - Adopted upstream v1.4.0 fixes:
   - Fixed `models.schema.json` missing field descriptions, which left editors without hints.
   - Fixed `pi update` when `managed-install.json` starts with a UTF-8 BOM.
-  - Fixed HTML export showing literal Markdown emphasis markers next to CJK punctuation, and an unclosed `$` display-math block corrupting later tables.
+  - Fixed HTML export showing literal Markdown emphasis markers next to CJK punctuation, and an unclosed `$$` display-math block corrupting later tables.
   - Fixed terminal input modes and the alternate screen staying active when Pi exits without its normal teardown.
   - Fixed concurrent extension dialogs replacing one another and leaving the first promise pending; closing the visible dialog now restores the previous one.
   - Fixed clipboard-helper processes being suspended with Pi after Ctrl+Z on Linux, and pasting hanging afterward.
