@@ -160,6 +160,31 @@ describe("public Background management", () => {
 		await h.service.wait(id, 1000);
 		expect(textOf(await runRead(h.service, { action: "read", taskId: id }))).toContain("final report");
 	});
+	it("returns no_tasks immediately for waitAny and rejects a cross-task byte offset", async () => {
+		const service = new TaskRuntime({ enabled: true });
+		services.push(service);
+		const result = await runWait(service, { action: "wait" });
+		expect(result.details).toMatchObject({ outcome: "no_tasks", timedOut: false, running: 0 });
+		expect(textOf(result)).toContain("No background tasks are running");
+		await expect(runWait(service, { action: "wait", sinceBytes: 0 })).rejects.toThrow("does not accept 'sinceBytes'");
+	});
+
+	it("returns steering interruption separately from timeout without consuming the task", async () => {
+		const h = running();
+		await h.outcome;
+		const id = h.service.list()[0]!.id;
+		const interrupt = new AbortController();
+		const ready = vi.fn();
+		const waiting = runWait(h.service, { action: "wait", taskId: id }, undefined, ready, interrupt.signal);
+		interrupt.abort();
+		const result = await waiting;
+		expect(result.details).toMatchObject({ outcome: "interrupted", timedOut: false, taskId: id, status: "running" });
+		expect(ready).not.toHaveBeenCalled();
+		expect(h.control.signal.aborted).toBe(false);
+		expect(textOf(result)).toContain("the task was not stopped");
+		h.finish();
+	});
+
 	it("reports a closed host instead of claiming execution continues", async () => {
 		const h = running();
 		await h.outcome;
@@ -878,6 +903,7 @@ describe("renderTasksCall", () => {
 		][] = [
 			[{ action: "read", taskId: "bg-3f", mode: "tail", bytes: 8192 }, /^tasks read bg-3f tail/],
 			[{ action: "wait", taskId: "3f", waitMs: 20_000 }, /^tasks wait 3f 20s/],
+			[{ action: "wait" }, /^tasks wait any/],
 			[{ action: "kill", taskId: "bg-3f" }, /^tasks kill bg-3f/],
 			[{ action: "list" }, /^tasks list/],
 		];
@@ -966,6 +992,53 @@ describe("renderTasksResult", () => {
 		fg: (_color: string, text: string) => text,
 		bold: (text: string) => text,
 	} as unknown as Theme;
+
+	it("renders waitAny and interruption outcomes without inventing a task status", () => {
+		const noTasks = renderTasksResult(
+			{
+				content: [],
+				details: {
+					action: "wait",
+					outcome: "no_tasks",
+					timedOut: false,
+					exitCode: undefined,
+					waitedMs: 0,
+					deltaBytes: 0,
+					totalBytes: 0,
+					deltaTruncated: false,
+					outputPath: "",
+					running: 0,
+				},
+			},
+			{ expanded: false, isPartial: false },
+			plainTheme,
+			{ args: { action: "wait" }, state: {} } as ToolRenderContext,
+		);
+		expect(noTasks.render(200).map(stripTerminalSequences).join("\n")).toContain("No background tasks running");
+		const interrupted = renderTasksResult(
+			{
+				content: [],
+				details: {
+					action: "wait",
+					outcome: "interrupted",
+					timedOut: false,
+					exitCode: undefined,
+					waitedMs: 1000,
+					deltaBytes: 0,
+					totalBytes: 0,
+					deltaTruncated: false,
+					outputPath: "",
+					running: 2,
+				},
+			},
+			{ expanded: false, isPartial: false },
+			plainTheme,
+			{ args: { action: "wait" }, state: {} } as ToolRenderContext,
+		);
+		expect(interrupted.render(200).map(stripTerminalSequences).join("\n")).toContain(
+			"any wait interrupted after 1s · 2 still running",
+		);
+	});
 
 	it("shows the saved text of a result from an older tool version", () => {
 		const component = renderTasksResult(

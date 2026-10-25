@@ -4,6 +4,8 @@ import { boundTail, boundText, TASK_DETAILS_BYTES, TASK_RESULT_BYTES, TASK_TITLE
 import type { TaskCompletionSnapshot, TaskSnapshot, TaskTerminalStatus, TaskText } from "./types.ts";
 
 const OUTPUT_BYTES = 40 * 1024;
+/** Replay keeps the larger snapshot; automatic model turns get only a small readable tail. */
+const MODEL_OUTPUT_BYTES = 8 * 1024;
 const MODEL_LINES = 2000;
 
 /** Read data properties only, including at the persisted-message boundary. */
@@ -217,7 +219,10 @@ function notificationText(snapshot: TaskCompletionSnapshot): string {
 	const prefix = `${header.join("\n")}\n\n`;
 	const guidance = nextStepLine(snapshot.status);
 	const suffix = guidance ? `\n\n${guidance}` : "";
-	const remaining = TASK_RESULT_BYTES - Buffer.byteLength(prefix) - Buffer.byteLength(suffix);
+	const remaining = Math.min(
+		MODEL_OUTPUT_BYTES,
+		TASK_RESULT_BYTES - Buffer.byteLength(prefix) - Buffer.byteLength(suffix),
+	);
 	const lines = MODEL_LINES - prefix.split("\n").length - (guidance ? 3 : 0);
 	const output = snapshot.output.text ? snapshot.output : { text: "No text result.", truncated: false };
 	return prefix + modelTail(output, remaining, lines) + suffix;

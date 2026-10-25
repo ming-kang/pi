@@ -22,19 +22,26 @@ export interface TasksReadDetails {
 	outputPath: string;
 }
 
+export type TasksWaitOutcome = "settled" | "interrupted" | "timed_out" | "no_tasks";
+
 export interface TasksWaitDetails {
 	kind?: TaskKind;
 	action: "wait";
-	taskId: string;
-	/** True when the wait window expired and the task is still running. */
+	/** Absent only in historical results; new calls always record the reason the wait ended. */
+	outcome?: TasksWaitOutcome;
+	/** Undefined for waitAny with no selected task, or when no tasks were running. */
+	taskId?: string;
+	/** Retained for compatibility with historical details; true only for a wait-window expiry. */
 	timedOut: boolean;
-	status: TaskStatus;
+	status?: TaskStatus;
 	exitCode: number | null | undefined;
 	waitedMs: number;
 	deltaBytes: number;
 	totalBytes: number;
 	deltaTruncated: boolean;
 	outputPath: string;
+	/** Initial waitAny cohort members still running when the wait ended. */
+	running?: number;
 }
 
 export interface TasksKillDetails {

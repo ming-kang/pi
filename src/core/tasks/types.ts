@@ -118,7 +118,12 @@ export interface TasksContext {
 	get(id: string): TaskSnapshot;
 	read(id: string, options?: { mode?: "head" | "tail"; bytes?: number; sinceBytes?: number }): Promise<TaskRead>;
 	/** Observation only: terminal delivery is acknowledged by the host via markDelivered after result persistence. */
-	wait(id: string, timeoutMs?: number, signal?: AbortSignal): Promise<TaskSnapshot>;
+	wait(id: string, timeoutMs?: number, signal?: AbortSignal, interruptSignal?: AbortSignal): Promise<TaskSnapshot>;
+	/**
+	 * Observe the first task running at call time to settle. Returns undefined when there is
+	 * no such task, the window ends, or interruptSignal fires. Tasks started later are excluded.
+	 */
+	waitAny(timeoutMs?: number, signal?: AbortSignal, interruptSignal?: AbortSignal): Promise<TaskSnapshot | undefined>;
 	kill(id: string): boolean;
 	/**
 	 * Move running foreground executions to the background while background slots remain;

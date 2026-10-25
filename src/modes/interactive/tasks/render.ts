@@ -102,16 +102,12 @@ function renderWaitCall(args: TasksRenderInput, theme: Theme, context: ToolRende
 	// and replayed history rows that never settle; executionStarted narrows it to
 	// a call that is actually running. The live display also needs shell-owned
 	// state; without it (standalone renders) fall back to the static line.
-	const pending =
-		context.executionStarted === true &&
-		context.isPartial === true &&
-		context.state !== undefined &&
-		taskId.length > 0;
+	const pending = context.executionStarted === true && context.isPartial === true && context.state !== undefined;
 	scheduleWaitRefresh(context, pending);
 	if (!pending) {
 		const ms = args.waitMs !== undefined ? ` ${formatDuration(clampWaitMs(args.waitMs))}` : "";
 		return new Text(
-			`${theme.fg("toolTitle", theme.bold("tasks wait "))}${theme.fg("accent", args.taskId ?? "")}${theme.fg("muted", ms)}`,
+			`${theme.fg("toolTitle", theme.bold("tasks wait "))}${theme.fg("accent", taskId || "any")}${theme.fg("muted", ms)}`,
 			0,
 			0,
 		);
@@ -120,7 +116,7 @@ function renderWaitCall(args: TasksRenderInput, theme: Theme, context: ToolRende
 	if (state.waitStartedAt === undefined) state.waitStartedAt = Date.now();
 	const elapsed = `waiting ${formatDuration(Date.now() - state.waitStartedAt)}/${formatDuration(clampWaitMs(args.waitMs))}`;
 	return new Text(
-		`${theme.fg("toolTitle", theme.bold("tasks wait "))}${theme.fg("accent", taskId)} ${theme.fg("muted", elapsed)}`,
+		`${theme.fg("toolTitle", theme.bold("tasks wait "))}${theme.fg("accent", taskId || "any")} ${theme.fg("muted", elapsed)}`,
 		0,
 		0,
 	);
@@ -168,11 +164,21 @@ function resultSummaryLine(details: TasksDetails, theme: Theme, expanded: boolea
 			return `${theme.fg("muted", "→ ")}${theme.fg("accent", details.taskId)}${theme.fg("muted", `${details.status ? ` ${statusName(details.status)} ·` : ""} ${size}${details.outputPath ? ` · ${shownPath(details.outputPath)}` : ""}`)}`;
 		}
 		case "wait": {
-			if (details.timedOut) {
-				return `${theme.fg(statusColor(details.status), statusGlyph(details.status))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", ` ${statusName(details.status)} · wait ended after ${formatDuration(details.waitedMs)} · ${formatSize(details.totalBytes)}`)}`;
+			const outcome = details.outcome ?? (details.timedOut ? "timed_out" : "settled");
+			if (outcome === "no_tasks") return theme.fg("muted", "→ No background tasks running");
+			const taskId = details.taskId ?? "any";
+			if (outcome === "interrupted") {
+				const running = details.running ? ` · ${details.running} still running` : "";
+				return `${theme.fg(statusColor("cancelled"), statusGlyph("cancelled"))} ${theme.fg("accent", taskId)}${theme.fg("muted", ` wait interrupted after ${formatDuration(details.waitedMs)}${running}`)}`;
 			}
+			if (outcome === "timed_out") {
+				const status = details.status ?? "running";
+				const running = details.taskId ? formatSize(details.totalBytes) : `${details.running ?? 0} still running`;
+				return `${theme.fg(statusColor(status), statusGlyph(status))} ${theme.fg("accent", taskId)}${theme.fg("muted", ` ${statusName(status)} · wait ended after ${formatDuration(details.waitedMs)} · ${running}`)}`;
+			}
+			const status = details.status ?? "completed";
 			const exit = exitSuffix(details.exitCode, ", ");
-			return `${theme.fg(statusColor(details.status), statusGlyph(details.status))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", ` ${statusName(details.status)}${exit} · waited ${formatDuration(details.waitedMs)} · +${formatSize(details.deltaBytes)}`)}`;
+			return `${theme.fg(statusColor(status), statusGlyph(status))} ${theme.fg("accent", taskId)}${theme.fg("muted", ` ${statusName(status)}${exit} · waited ${formatDuration(details.waitedMs)} · +${formatSize(details.deltaBytes)}`)}`;
 		}
 		case "kill": {
 			const status = details.status ?? (details.requested ? "stopping" : "cancelled");

@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
 import type { CustomMessage } from "../messages.ts";
 import type { SessionEntry, SessionManager } from "../session-manager.ts";
@@ -8,6 +8,7 @@ import { truncateHead } from "../tools/truncate.ts";
 import { getTaskUsageRecord, TASK_USAGE_TYPE } from "../usage-totals.ts";
 import { TaskDelivery } from "./delivery.ts";
 import { TASK_HISTORY_VERSION } from "./history.ts";
+import { TaskContextReminder } from "./reminder.ts";
 import { TaskRuntime } from "./runtime.ts";
 import type { TaskSnapshot } from "./types.ts";
 
@@ -39,6 +40,8 @@ export class TaskSession {
 	private enabled = false;
 	private disposed = false;
 	private generation = 0;
+	private waitInterrupt = new AbortController();
+	private readonly contextReminder = new TaskContextReminder();
 	readonly delivery: TaskDelivery;
 	private readonly quarantine: QuarantinedTaskSettlement[] = [];
 
@@ -55,6 +58,29 @@ export class TaskSession {
 
 	get service(): TaskRuntime {
 		return this._service;
+	}
+
+	get waitInterruptSignal(): AbortSignal {
+		return this.waitInterrupt.signal;
+	}
+
+	/** End only current task waits; the next wait observes a fresh signal. */
+	interruptWaits(): void {
+		const previous = this.waitInterrupt;
+		this.waitInterrupt = new AbortController();
+		previous.abort();
+	}
+
+	noteCompaction(): void {
+		this.contextReminder.compacted();
+	}
+
+	projectContextReminder(messages: AgentMessage[]): AgentMessage[] {
+		return this.contextReminder.project(this.service, messages);
+	}
+
+	noteAssistantCompleted(): void {
+		this.contextReminder.assistantCompleted();
 	}
 
 	get quarantinedSettlements(): readonly QuarantinedTaskSettlement[] {
@@ -92,6 +118,7 @@ export class TaskSession {
 
 	/** Called after the old service's bounded shutdown, while lifecycle delivery is paused. */
 	replaceService(): void {
+		this.contextReminder.reset();
 		this.service.close();
 		this._service = this.createService();
 		this.delivery.retry();
@@ -194,6 +221,8 @@ export class TaskSession {
 
 	dispose(): void {
 		this.disposed = true;
+		this.contextReminder.reset();
+		this.interruptWaits();
 		this.service.close();
 		this.delivery.dispose();
 	}

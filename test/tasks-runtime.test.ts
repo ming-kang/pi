@@ -627,6 +627,50 @@ describe("bounded lifecycle and snapshots", () => {
 	});
 });
 
+describe("task wait cohorts", () => {
+	it("interrupts one or any wait without cancelling execution or consuming completion", async () => {
+		const bg = service();
+		const item = job({ background: true });
+		await bg.execute(item.execution);
+		const interrupt = new AbortController();
+		const one = bg.wait(item.control.id, 60_000, undefined, interrupt.signal);
+		const any = bg.waitAny(60_000, undefined, interrupt.signal);
+		expect(getEventListeners(interrupt.signal, "abort")).toHaveLength(2);
+		interrupt.abort();
+		expect((await one).status).toBe("running");
+		expect(await any).toBeUndefined();
+		expect(getEventListeners(interrupt.signal, "abort")).toHaveLength(0);
+		expect(item.control.signal.aborted).toBe(false);
+		item.completion.resolve({ result: result("finished later") });
+		await tick();
+		expect(bg.pendingNotifications()).toHaveLength(1);
+	});
+
+	it("waitAny observes only the initial cohort and returns its first settlement", async () => {
+		const bg = service();
+		const first = job({ background: true, title: "first" });
+		await bg.execute(first.execution);
+		let observed = false;
+		const waiting = bg.waitAny(60_000).then((task) => {
+			observed = true;
+			return task;
+		});
+		const late = job({ background: true, title: "late" });
+		await bg.execute(late.execution);
+		late.completion.resolve({ result: result("late") });
+		await tick();
+		expect(observed).toBe(false);
+		first.completion.resolve({ result: result("first") });
+		expect((await waiting)?.id).toBe(first.control.id);
+		expect(
+			bg
+				.pendingNotifications()
+				.map((task) => task.id)
+				.sort(),
+		).toEqual([first.control.id, late.control.id].sort());
+	});
+});
+
 describe("handoff and cleanup races", () => {
 	it("completion wins if settled first; detach wins if handed off first, with one accounting event", async () => {
 		const accounting = vi.fn();

@@ -4,6 +4,16 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- `tasks wait` can omit `taskId` to wait for the first task already running at call time, returning `no_tasks` immediately when none are active. A settled waitAny delivers only its winner through the persisted tool result; later completions still use ordinary notification delivery. See [Tasks](docs/bundled/tasks.md#management-tool).
+- New steering input ends an active `tasks wait` with `interrupted` without cancelling the task, allowing user input or another task's completion to proceed promptly. Follow-up input does not interrupt waits.
+- Successful compaction adds one request-local reminder of still-active background tasks to the next main-agent request, preventing duplicate work without persisting the reminder or starting a turn.
+
+### Changed
+
+- Automatic task completion notifications now include an 8 KiB output tail in model context instead of 40 KiB; replay details and expanded cards retain the larger tail, with `tasks read` available for more output. Task tool descriptions and prompt guidance cover waitAny, interruption, and the four wait outcomes.
+
 ## [1.3.1] - 2026-10-22
 
 ### Changed

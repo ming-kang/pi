@@ -7,6 +7,7 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
 export function createTasksToolDefinition(
 	onWaitResult?: (toolCallId: string, taskId: string) => void,
+	waitInterruptSignal?: () => AbortSignal | undefined,
 ): ToolDefinition<typeof tasksSchema, TasksDetails, TasksRenderState> {
 	return {
 		name: "tasks",
@@ -22,7 +23,13 @@ export function createTasksToolDefinition(
 					case "read":
 						return await runRead(ctx.tasks, params);
 					case "wait":
-						return await runWait(ctx.tasks, params, signal, (taskId) => onWaitResult?.(_id, taskId));
+						return await runWait(
+							ctx.tasks,
+							params,
+							signal,
+							(taskId) => onWaitResult?.(_id, taskId),
+							waitInterruptSignal?.(),
+						);
 					case "kill":
 						return runKill(ctx.tasks, params);
 					case "list":

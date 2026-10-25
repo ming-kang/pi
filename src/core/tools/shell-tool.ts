@@ -279,7 +279,7 @@ export function createShellToolDefinition(
 	return {
 		name: config.name,
 		label: config.label,
-		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr, truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a temp file. Optionally provide a timeout in seconds (no default). Choose the mode per call: foreground (default) blocks until the command exits — use it when your next step needs the output; background: true returns immediately with a task ID — use it for long-running work (builds, servers, watchers, big test suites) or when you have independent work to continue. A handoff is not completion: the result arrives later as an automatic completion notification; meanwhile use tasks read to inspect output, tasks wait to block until it settles, tasks kill to stop it. Background output is limited to 20 MiB; an expired tasks wait window never stops the command.`,
+		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr, truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a temp file. Optionally provide a timeout in seconds (no default). Choose the mode per call: foreground (default) blocks until the command exits — use it when your next step needs the output; background: true returns immediately with a task ID — use it for long-running work (builds, servers, watchers, big test suites) or when you have independent work to continue. A handoff is not completion: the result arrives later as an automatic completion notification; meanwhile use tasks read to inspect output, tasks wait with an ID for one task or without one for any running task, and tasks kill to stop it. Steering interrupts only a wait, never execution. Background output is limited to 20 MiB; an expired tasks wait window never stops the command.`,
 		promptSnippet: config.promptSnippet,
 		promptGuidelines: exposeSessionEnvironment && config.promptGuidelines ? [...config.promptGuidelines] : undefined,
 		parameters: bashSchema,
@@ -344,7 +344,7 @@ export function createShellToolDefinition(
 				run: (control) => run({ control }),
 			});
 			if (outcome.kind === "result") return shellToolResult(outcome, true);
-			const tail = `Task ID: ${outcome.task.id}. Status: ${outcome.task.status}. Completion arrives automatically as a notification — do not poll or immediately wait on it; continue with other work or hand back to the user. Use tasks read to inspect output, tasks wait only when your next step is blocked on the result (prefer foreground next time in that case), or tasks kill to stop it.`;
+			const tail = `Task ID: ${outcome.task.id}. Status: ${outcome.task.status}. Completion arrives automatically as a notification — do not poll or immediately wait on it; continue with other work or hand back to the user. Use tasks read to inspect output, tasks wait only when your next step is blocked on a result (one ID or any running task; prefer foreground next time in that case), or tasks kill to stop it.`;
 			// Shell execution can become background work in two ways, and the model has to know which
 			// one it got: a submitted background command starts from an empty log, while a detached
 			// one already holds output and keeps its original timeout.

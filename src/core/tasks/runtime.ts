@@ -432,12 +432,15 @@ export class TaskRuntime implements TasksContext {
 		);
 	}
 
-	/** Observe completion without consuming delivery; the host acknowledges only persisted tool results. */
-	async wait(id: string, timeoutMs = 20_000, signal?: AbortSignal): Promise<TaskSnapshot> {
-		if (signal?.aborted) throw signal.reason ?? new Error("Wait aborted");
-		const record = this.lookup(id);
-		if (record.settled) return snapshotOf(record);
-		return new Promise<TaskSnapshot>((resolve, reject) => {
+	/** One event-driven waiter can observe a whole waitAny cohort without per-task timers. */
+	private waitForRecords(
+		records: readonly TaskRecord[],
+		timeoutMs: number,
+		signal?: AbortSignal,
+		interruptSignal?: AbortSignal,
+	): Promise<void> {
+		if (records.some((record) => record.settled) || interruptSignal?.aborted) return Promise.resolve();
+		return new Promise<void>((resolve, reject) => {
 			let finished = false;
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			const complete = (aborted = false) => {
@@ -445,19 +448,54 @@ export class TaskRuntime implements TasksContext {
 				finished = true;
 				if (timer !== undefined) clearTimeout(timer);
 				signal?.removeEventListener("abort", abort);
-				record.waiters.delete(wake);
+				interruptSignal?.removeEventListener("abort", interrupt);
+				for (const record of records) record.waiters.delete(wake);
 				if (aborted) reject(signal?.reason ?? new Error("Wait aborted"));
-				else resolve(snapshotOf(record));
+				else resolve();
 				this.store.trim();
 				this.emit();
 			};
 			const wake = () => complete();
 			const abort = () => complete(true);
-			record.waiters.add(wake);
+			const interrupt = () => complete();
+			for (const record of records) record.waiters.add(wake);
 			signal?.addEventListener("abort", abort, { once: true });
+			interruptSignal?.addEventListener("abort", interrupt, { once: true });
 			timer = setTimeout(wake, finiteLimit(timeoutMs, 20_000, 60_000));
-			if (this.closed) wake();
+			if (this.closed || interruptSignal?.aborted) wake();
+			if (signal?.aborted) abort();
 		});
+	}
+
+	/** Observe completion without consuming delivery; the host acknowledges only persisted tool results. */
+	async wait(
+		id: string,
+		timeoutMs = 20_000,
+		signal?: AbortSignal,
+		interruptSignal?: AbortSignal,
+	): Promise<TaskSnapshot> {
+		if (signal?.aborted) throw signal.reason ?? new Error("Wait aborted");
+		const record = this.lookup(id);
+		if (record.settled) return snapshotOf(record);
+		await this.waitForRecords([record], timeoutMs, signal, interruptSignal);
+		return snapshotOf(record);
+	}
+
+	async waitAny(
+		timeoutMs = 20_000,
+		signal?: AbortSignal,
+		interruptSignal?: AbortSignal,
+	): Promise<TaskSnapshot | undefined> {
+		if (signal?.aborted) throw signal.reason ?? new Error("Wait aborted");
+		const records = [...this.store.records.values()].filter(
+			(record) => record.visible && record.task.mode === "background" && !record.settled,
+		);
+		if (records.length === 0 || interruptSignal?.aborted) return undefined;
+		await this.waitForRecords(records, timeoutMs, signal, interruptSignal);
+		const settled = records
+			.filter((record) => record.settled)
+			.sort((left, right) => (left.task.endedAt ?? 0) - (right.task.endedAt ?? 0))[0];
+		return settled ? snapshotOf(settled) : undefined;
 	}
 
 	kill(id: string): boolean {

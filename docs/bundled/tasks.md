@@ -28,22 +28,30 @@ Hosts can prohibit background execution with `backgroundAllowed: false`. This re
 |---|---|---|
 | `list` | — | Lists active and up to five retained finished records, at most 100 rows; foreground executions are omitted with a count (they deliver inline in the transcript) |
 | `read` | `taskId`, optional `mode`, `bytes` | Reads bounded output/report while running or after completion |
-| `wait` | `taskId`, optional `waitMs`, `sinceBytes` | Waits within a deadline and returns status plus bounded output/report |
+| `wait` | optional `taskId`, `waitMs`, `sinceBytes` | Waits for one task, or for any task running at call time when `taskId` is omitted |
 | `kill` | `taskId` | Requests cancellation of the selected task |
 
-Use the execution ID returned by the native tool or `tasks list`. An unknown or stale `taskId` fails with the session's current tasks listed inline (active first, then recent finishes), so the next call can use a real ID without a separate list call; an ambiguous prefix lists exactly the tasks it matched.
+Use the execution ID returned by the native tool or `tasks list`. An unknown or stale `taskId` fails with the session's current tasks listed inline (active first, then recent finishes), so the next call can use a real ID without a separate list call; an ambiguous prefix lists exactly the tasks it matched. Only `wait` makes `taskId` optional: omitting it waits for the first terminal result among background tasks that were running when the call started, and returns `no_tasks` immediately when that cohort is empty. Tasks started during the wait are not part of the cohort.
 
 ```json
 { "action": "read", "taskId": "<execution-id>", "mode": "tail", "bytes": 8192 }
 ```
 
-Reads default to an 8KB tail. `bytes` clamps between 256 bytes and 48KB; `mode` can be `head` or `tail`. A Bash output path is included when available. Tasks without a log return their bounded published result. Every read and wait reports the byte range it returned and where to continue, for example `bytes 92160–100352 of 100352 · next sinceBytes 100352`.
+Reads default to an 8KB tail. `bytes` clamps between 256 bytes and 48KB; `mode` can be `head` or `tail`. A Bash output path is included when available. Tasks without a log return their bounded published result. Every read and settled wait reports its byte range and where to continue, for example `bytes 92160–100352 of 100352 · next sinceBytes 100352`. Use a returned offset with that task's ID; waitAny does not accept a cross-task offset.
 
 ```json
 { "action": "wait", "taskId": "<execution-id>", "waitMs": 20000, "sinceBytes": 4096 }
 ```
 
-`waitMs` defaults to 20 seconds and clamps between 1 and 60 seconds. Wait output is limited to 32KB, optionally starting after `sinceBytes`. When more than 32KB was written after `sinceBytes`, the wait returns the newest 32KB and reports how many bytes it skipped. Expiry or cancellation ends only the wait, not execution. Continue independent work instead of sleep-polling or repeatedly reading; wait when the next step genuinely depends on the result.
+Wait for any task already running at call time by omitting the ID:
+
+```json
+{ "action": "wait", "waitMs": 20000 }
+```
+
+`waitMs` defaults to 20 seconds and clamps between 1 and 60 seconds. A task that reaches a terminal state produces a `settled` outcome; expiry produces `timed_out` and leaves execution running. New steering input produces `interrupted` and ends only the wait, so the new input can proceed without cancelling the task; follow-up input does not interrupt it. A background completion steered into the run can interrupt a wait on another task the same way.
+
+Wait output is limited to 32KB. With `taskId`, it can start after `sinceBytes`; when more than 32KB was written after that offset, the wait returns the newest 32KB and reports how many bytes it skipped. `sinceBytes` is rejected without `taskId` because offsets belong to one task. Interrupted waits do not read output. A settled waitAny reads the winning task and lists initial cohort members still running. Continue independent work instead of sleep-polling or repeatedly reading; wait when the next step genuinely depends on a result.
 
 ```json
 { "action": "kill", "taskId": "<execution-id>" }
@@ -51,7 +59,7 @@ Reads default to an 8KB tail. `bytes` clamps between 256 bytes and 48KB; `mode` 
 
 A cancellation request is not proof that execution has stopped. The task can remain `stopping` during cleanup. Read its later terminal status for the outcome. Partial, failed, cancelled and timeout outcomes are not displayed as successful completion.
 
-All model-facing management responses, including listings and error messages, are bounded to 50KB and 2,000 lines overall. Repeated reads do not add usage or restart execution. Completion delivery and usage accounting belong to the host, not panel refreshes.
+All model-facing management responses, including listings and error messages, are bounded to 50KB and 2,000 lines overall. Reads and settled waits report byte ranges and the next `sinceBytes`; waitAny accepts no cross-task input offset, so use the winning task's ID with its returned offset. Repeated reads do not add usage or restart execution. Completion delivery and usage accounting belong to the host, not panel refreshes.
 
 ## `/tasks` panel
 
@@ -98,7 +106,7 @@ Interactive `task-completion` messages have a compact collapsed summary: outcome
 
 Expanded notifications separate **Command** (or **Task** for a titled task), **Directory**, **Result** or **Error** with the recorded exit code, a bounded plain-text **Output** tail, **Log** and the full execution ID. The saved output keeps the end of the result, where the outcome is, and carries an explicit truncation flag. Screen line limits are independent of source truncation. These are previews of the saved bounded completion.
 
-Rendering reads the self-contained `TaskCompletionSnapshot` in message `details`, so `/reload`, history eviction, expired logs and restart do not require a live task lookup. The session generates model-facing `content` from the same facts; `details` never enters model context or usage accounting. Commands containing `Output:` and literal truncation notices remain ordinary data. See the [snapshot contract](../session-format.md#background-records).
+Rendering reads the self-contained `TaskCompletionSnapshot` in message `details`, so `/reload`, history eviction, expired logs and restart do not require a live task lookup. The session generates model-facing `content` from the same facts; `details` never enters model context or usage accounting. Replay details retain a 40 KiB output tail, while the automatic model-facing notification includes only an 8 KiB tail plus the log path and truncation guidance for `tasks read`. Commands containing `Output:` and literal truncation notices remain ordinary data. See the [snapshot contract](../session-format.md#background-records).
 
 Only the current structured completion format (version 2) is specialized. Older completions, including version-1 shell and report completions, and malformed details receive a bounded plain **Details** view of their saved message; no text reconstruction or migration is performed. Legacy `background-task` notifications show as plain messages. HTML export and `/tree` selector labels continue to display the saved message content.
 
@@ -118,7 +126,9 @@ Terminal snapshots persist as version-2 `task-result` custom entries; usage rema
 
 Delivered history outside the selected branch can be released and restored on return, so it does not fill the new branch's history budget. Undelivered completions stay protected while their branch is hidden. Pending delivery, pins and active reads use a separate allowance within the total runtime retention cap; restoration respects the same cap.
 
-Completion delivery follows the same queueing path as interactive input. While the agent is running, a completion is steered into that run, so it lands right after the current tool batch — exactly like a message the user types mid-run, and behind any already queued steering. An idle session starts a completion turn instead. User preflight (input hooks, model and authentication checks, compaction) still holds delivery, so a user message is always the first thing a new run sees. One bounded completion is in flight at a time. Each execution produces one completion. A terminal `tasks wait` coordinates with automatic delivery only after its tool result is persisted: while `tasks wait` prepares a result for persistence, that task is not announced, and aborting during output reading does not lose the pending completion. Direct SDK waits remain observational until explicitly acknowledged. Plain reads and panel selection retain output without delaying notifications. Progress and repeated reads do not inject messages or add usage. `agent_settled` still describes the main agent, not the end of all background executions.
+Completion delivery follows the same queueing path as interactive input. While the agent is running, a completion is steered into that run, so it lands right after the current tool batch — exactly like a message the user types mid-run, and behind any already queued steering. An idle session starts a completion turn instead. User preflight (input hooks, model and authentication checks, compaction) still holds delivery, so a user message is always the first thing a new run sees. One bounded completion is in flight at a time. Each execution produces one completion. A terminal `tasks wait` coordinates with automatic delivery only after its tool result is persisted: while `tasks wait` prepares a result for persistence, that task is not announced, and aborting during output reading does not lose the pending completion. A settled waitAny applies the same receipt to its winning task and releases the rest of the cohort for ordinary delivery. Direct SDK waits remain observational until explicitly acknowledged. Plain reads and panel selection retain output without delaying notifications. Progress and repeated reads do not inject messages or add usage. `agent_settled` still describes the main agent, not the end of all background executions.
+
+After a successful compaction, the next main-agent request includes one bounded, request-local reminder listing background tasks still active at that moment. It warns against duplicate work without creating a turn or entering session history. A successful assistant response consumes it; failed or aborted requests leave it eligible for the next attempt. If no tasks are active, the reminder is cleared instead of being carried forward to unrelated future work.
 
 Failed completion delivery leaves the terminal result available for inspection rather than silently discarding it, and warns through the extension error channel. The next user prompt retries delivery automatically; SDK hosts can also call `session.retryTaskNotifications()` explicitly after resolving the failure. There is no infinite timer retry loop. A completion that a run emitted but never persisted, and a completion dropped by clearing the queue, fail the same way; one still sitting in the queue when its run ends stays claimed, because the next run delivers that same message.
 

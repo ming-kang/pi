@@ -24,7 +24,11 @@ export const tasksSchema = Type.Object({
 		description: "Which task operation to perform",
 	}),
 	// — read / wait / kill —
-	taskId: Type.Optional(Type.String({ description: "Task execution id (read/wait/kill)" })),
+	taskId: Type.Optional(
+		Type.String({
+			description: "Task execution id (read/wait/kill). Omit for wait to wait for any task running at call time.",
+		}),
+	),
 	// — read —
 	mode: Type.Optional(
 		StringEnum(["tail", "head"] as const, {
@@ -45,7 +49,7 @@ export const tasksSchema = Type.Object({
 	sinceBytes: Type.Optional(
 		Type.Number({
 			description:
-				"Only return output written after this byte offset — use the 'next sinceBytes' value from a previous read or wait (wait)",
+				"Only return output written after this byte offset — use the 'next sinceBytes' value from a previous read or wait (wait with taskId only)",
 		}),
 	),
 });
@@ -86,11 +90,12 @@ export const TASKS_TOOL_DESCRIPTION =
 	"Completion is delivered to you automatically as a notification — never poll. " +
 	"list: bounded activity/history listing; find task IDs here. " +
 	"read: bounded output or report slice (head/tail). " +
-	"wait: block up to waitMs for a task to settle; cancelling the wait ends only the wait, never the task. " +
+	"wait: block up to waitMs for one task to settle, or omit taskId to wait for any task running at call time; no running tasks returns immediately. New steering input ends only the wait with outcome interrupted; it never stops the task. " +
 	"kill: request cancellation of a whole task. " +
-	"tasks cannot start work; submit background work through its owning tool. Each read or wait reports its byte range and the next sinceBytes. Output is capped at 50KB per response.";
-export const TASKS_PROMPT_SNIPPET = "Manage background tasks (list, read, wait, kill)";
+	"tasks cannot start work; submit background work through its owning tool. A wait ends as settled, interrupted, timed_out, or no_tasks. Timeout or cancellation ends only the wait, never execution. Reads and settled waits report byte ranges; use next sinceBytes only with that task's ID. Output is capped at 50KB per response.";
+export const TASKS_PROMPT_SNIPPET = "Manage background tasks; wait for a specific task or any running task";
 export const TASKS_PROMPT_GUIDELINES = [
 	"Start background work through its owning tool with background: true; continue independent work while it runs.",
-	"A finished background task delivers its result automatically as a notification; use tasks wait only when your next step is blocked on it, and never sleep-poll with repeated reads.",
+	"A finished background task delivers its result automatically as a notification. Use tasks wait only when your next step is blocked: provide taskId for one task or omit it for any task running at call time; never sleep-poll with repeated reads.",
+	"A new steering message interrupts only an active tasks wait so you can read the new input; it does not cancel execution. A wait timeout is not a task failure.",
 ];

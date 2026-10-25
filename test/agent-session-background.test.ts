@@ -1021,6 +1021,194 @@ describe("session-owned background host", () => {
 		execution.finish();
 	});
 
+	it("ends a task wait for user steering without stopping the task", async () => {
+		const waitArgs = { action: "wait", taskId: "" };
+		const session = await host(true, undefined, [
+			{
+				...fauxAssistantMessage(""),
+				stopReason: "toolUse",
+				content: [{ type: "toolCall", id: "wait-steer", name: "tasks", arguments: waitArgs }],
+			},
+			fauxAssistantMessage("steering noticed"),
+			fauxAssistantMessage("completion noticed"),
+		]);
+		await session.bindExtensions({ tasksEnabled: true });
+		const execution = await task(session);
+		waitArgs.taskId = execution.id;
+		const waiting = vi.spyOn(session.tasks, "wait");
+		const prompting = session.prompt("wait");
+		await vi.waitFor(() => expect(waiting).toHaveBeenCalled());
+		await session.steer("new instruction");
+		await prompting;
+		const toolResult = session.messages.find((message) => message.role === "toolResult");
+		expect(toolResult?.role === "toolResult" && toolResult.details).toMatchObject({
+			outcome: "interrupted",
+			timedOut: false,
+			taskId: execution.id,
+		});
+		expect(session.tasks.get(execution.id).status).toBe("running");
+		expect(execution.control.signal.aborted).toBe(false);
+		expect(JSON.stringify(session.messages)).toContain("new instruction");
+		execution.finish();
+		await vi.waitFor(() => expect(deliveredCompletions(session)).toBe(1));
+		await session.waitForIdle();
+	});
+
+	it("does not interrupt a wait for followUp input", async () => {
+		const waitArgs = { action: "wait", taskId: "" };
+		const session = await host(true, undefined, [
+			{
+				...fauxAssistantMessage(""),
+				stopReason: "toolUse",
+				content: [{ type: "toolCall", id: "wait-follow-up", name: "tasks", arguments: waitArgs }],
+			},
+			fauxAssistantMessage("task and follow-up received"),
+		]);
+		await session.bindExtensions({ tasksEnabled: true });
+		const execution = await task(session);
+		waitArgs.taskId = execution.id;
+		const waiting = vi.spyOn(session.tasks, "wait");
+		const prompting = session.prompt("wait");
+		await vi.waitFor(() => expect(waiting).toHaveBeenCalled());
+		await session.followUp("later");
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(session.messages.some((message) => message.role === "toolResult")).toBe(false);
+		execution.finish();
+		await prompting;
+		const toolResult = session.messages.find((message) => message.role === "toolResult");
+		expect(toolResult?.role === "toolResult" && toolResult.details).toMatchObject({
+			outcome: "settled",
+			taskId: execution.id,
+		});
+		expect(JSON.stringify(session.messages)).toContain("later");
+		expect(deliveredCompletions(session)).toBe(0);
+	});
+
+	it("lets another task's completion interrupt a wait exactly once", async () => {
+		const waitArgs = { action: "wait", taskId: "" };
+		const session = await host(true, undefined, [
+			{
+				...fauxAssistantMessage(""),
+				stopReason: "toolUse",
+				content: [{ type: "toolCall", id: "wait-other", name: "tasks", arguments: waitArgs }],
+			},
+			fauxAssistantMessage("other completion noticed"),
+			fauxAssistantMessage("first completion noticed"),
+		]);
+		await session.bindExtensions({ tasksEnabled: true });
+		const first = await task(session);
+		const other = await task(session);
+		waitArgs.taskId = first.id;
+		const waiting = vi.spyOn(session.tasks, "wait");
+		const prompting = session.prompt("wait for first");
+		await vi.waitFor(() => expect(waiting).toHaveBeenCalled());
+		other.finish();
+		await prompting;
+		const toolResult = session.messages.find((message) => message.role === "toolResult");
+		expect(toolResult?.role === "toolResult" && toolResult.details).toMatchObject({
+			outcome: "interrupted",
+			taskId: first.id,
+		});
+		expect(session.tasks.get(first.id).status).toBe("running");
+		expect(deliveredCompletions(session)).toBe(1);
+		expect(
+			session.messages.some(
+				(message) =>
+					message.role === "custom" && (message.details as { taskId?: string } | undefined)?.taskId === other.id,
+			),
+		).toBe(true);
+		first.finish();
+		await vi.waitFor(() => expect(deliveredCompletions(session)).toBe(2));
+		await session.waitForIdle();
+	});
+
+	it("delivers a waitAny winner through its tool result and later completions through notification", async () => {
+		const session = await host(true, undefined, [
+			{
+				...fauxAssistantMessage(""),
+				stopReason: "toolUse",
+				content: [{ type: "toolCall", id: "wait-any", name: "tasks", arguments: { action: "wait" } }],
+			},
+			fauxAssistantMessage("winner received through waitAny"),
+			fauxAssistantMessage("remaining completion noticed"),
+		]);
+		await session.bindExtensions({ tasksEnabled: true });
+		const first = await task(session);
+		const winner = await task(session);
+		const waiting = vi.spyOn(session.tasks, "waitAny");
+		const prompting = session.prompt("wait for any");
+		await vi.waitFor(() => expect(waiting).toHaveBeenCalled());
+		winner.finish();
+		await prompting;
+		const toolResult = session.messages.find((message) => message.role === "toolResult");
+		expect(toolResult?.role === "toolResult" && toolResult.details).toMatchObject({
+			outcome: "settled",
+			timedOut: false,
+			taskId: winner.id,
+			running: 1,
+		});
+		expect(deliveredCompletions(session)).toBe(0);
+		expect(session.tasks.get(first.id).status).toBe("running");
+		first.finish();
+		await vi.waitFor(() => expect(deliveredCompletions(session)).toBe(1));
+		await session.waitForIdle();
+		expect(
+			session.messages.some(
+				(message) =>
+					message.role === "custom" && (message.details as { taskId?: string } | undefined)?.taskId === first.id,
+			),
+		).toBe(true);
+	});
+
+	it("keeps the compaction reminder across failed requests and consumes it only after success", async () => {
+		const requests: string[] = [];
+		const capture: StreamFn = (model, context, options) => {
+			requests.push(JSON.stringify(context.messages));
+			return streamSimple(model, context, options);
+		};
+		const session = await host(
+			true,
+			(pi) => {
+				pi.on("session_before_compact", (event) => ({
+					compaction: {
+						summary: "Compacted context",
+						firstKeptEntryId: event.preparation.firstKeptEntryId,
+						tokensBefore: event.preparation.tokensBefore,
+					},
+				}));
+			},
+			[
+				fauxAssistantMessage("first"),
+				{ ...fauxAssistantMessage("failed"), stopReason: "error", errorMessage: "provider failed" },
+				fauxAssistantMessage("third"),
+				fauxAssistantMessage("fourth"),
+				fauxAssistantMessage("completion"),
+			],
+			undefined,
+			capture,
+		);
+		session.settingsManager.applyOverrides({ compaction: { keepRecentTokens: 1 }, retry: { enabled: false } });
+		await session.bindExtensions({ tasksEnabled: true });
+		const execution = await task(session);
+		await session.prompt("first");
+		expect(requests[0]).not.toContain("Context was compacted");
+		await session.compact();
+		expect(requests).toHaveLength(1);
+		expect(session.tasks.get(execution.id).status).toBe("running");
+		await session.prompt("second");
+		expect(requests).toHaveLength(2);
+		expect(requests[1]).toContain("Context was compacted");
+		expect(requests[1]).toContain(execution.id);
+		await session.prompt("third");
+		expect(requests[2]).toContain("Context was compacted");
+		await session.prompt("fourth");
+		expect(requests[3]).not.toContain("Context was compacted");
+		expect(JSON.stringify(session.messages)).not.toContain("Context was compacted");
+		execution.finish();
+		await vi.waitFor(() => expect(deliveredCompletions(session)).toBe(1));
+		await session.waitForIdle();
+	});
+
 	/** An extension hook that parks inside a lifecycle operation until released. */
 	function hookGate() {
 		let entered!: () => void;

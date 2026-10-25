@@ -40,6 +40,8 @@ Invariants:
 
 - Completion delivery pauses during preflight, compaction, reload, tree navigation, and session replacement, and stays paused across runs that `agent_settled` handlers defer; otherwise a completion turn and a deferred prompt can start in the same idle gap.
 - Queued next-turn context is consumed only after its entry is persisted.
+- Post-compaction active-task reminders are computed from the live runtime into the next request projection, never persisted or allowed to start a turn; only a successful assistant response consumes them.
+- Steering interrupts only `tasks wait`, never task execution. A waitAny observes one initial cohort and acknowledges only its winner after the tool result persists; the other tasks return to ordinary delivery.
 - Only background work counts toward the active limit, so a background task never blocks a foreground command; foreground and background history have separate quotas.
 - `task-result` and `task-completion` records are version 2 and `task-usage` is version 1; older records are not migrated, and runtime replacement never reattaches execution.
 

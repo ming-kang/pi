@@ -118,6 +118,18 @@ describe("background completion data contract", () => {
 		expect(saved.content).toContain("FINAL: 3 tests failed");
 	});
 
+	it("keeps replay output larger than the bounded model-facing completion tail", () => {
+		const output = `${"x".repeat(100_000)}FINAL`;
+		const saved = taskCompletionMessage(
+			task({ result: { content: [{ type: "text", text: output }], details: undefined } }),
+		);
+		expect(saved.details?.output.truncated).toBe(true);
+		expect(Buffer.byteLength(saved.details?.output.text ?? "")).toBeGreaterThan(8 * 1024);
+		expect(Buffer.byteLength(String(saved.content))).toBeLessThan(12 * 1024);
+		expect(saved.content).toContain("FINAL");
+		expect(saved.content).toContain("use tasks read");
+	});
+
 	it("records truncation when results or commands are bounded by supervision", async () => {
 		const service = new TaskRuntime({ enabled: true });
 		try {

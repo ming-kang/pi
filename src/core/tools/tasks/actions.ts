@@ -131,19 +131,136 @@ export async function runRead(background: TasksContext, input: TasksInput): Prom
 		throw lookupFailure(background, id, error);
 	}
 }
+function activeBackgroundTasks(background: TasksContext): TaskSnapshot[] {
+	return background.list().filter((task) => task.mode === "background" && !isTaskTerminal(task.status));
+}
+
+function stillRunningText(tasks: TaskSnapshot[]): string {
+	return tasks.length > 0 ? `\n\n[still_running]\n${tasks.map((task) => describeTaskLine(task)).join("\n")}` : "";
+}
+
+function emptyWaitDetails(
+	outcome: "interrupted" | "timed_out" | "no_tasks",
+	waitedMs: number,
+	running: number,
+): TasksWaitDetails {
+	return {
+		action: "wait",
+		outcome,
+		timedOut: outcome === "timed_out",
+		exitCode: undefined,
+		waitedMs,
+		deltaBytes: 0,
+		totalBytes: 0,
+		deltaTruncated: false,
+		outputPath: "",
+		running,
+	};
+}
+
+async function runWaitAny(
+	background: TasksContext,
+	input: TasksInput,
+	signal?: AbortSignal,
+	onReady?: (taskId: string) => void,
+	interruptSignal?: AbortSignal,
+): Promise<AgentToolResult<TasksWaitDetails>> {
+	const candidates = activeBackgroundTasks(background);
+	if (candidates.length === 0) {
+		return result(
+			"No background tasks are running, so there is nothing to wait for. Finished tasks report back via automatic notification.",
+			emptyWaitDetails("no_tasks", 0, 0),
+		);
+	}
+	// Holds cover the whole initial cohort until the winning result is ready for
+	// persistence. Other completed tasks resume ordinary notification delivery on release.
+	const releases = candidates.map((task) => background.holdDelivery(task.id));
+	const start = Date.now();
+	try {
+		const task = await background.waitAny(clampWaitMs(input.waitMs), signal, interruptSignal);
+		const ids = new Set(candidates.map((candidate) => candidate.id));
+		const running = activeBackgroundTasks(background).filter((candidate) => ids.has(candidate.id));
+		if (!task) {
+			const interrupted = !background.closed && interruptSignal?.aborted === true;
+			const outcome = interrupted ? "interrupted" : "timed_out";
+			const note = background.closed
+				? "The host closed; execution state is unconfirmed."
+				: interrupted
+					? "New steering input ended this wait early. Read the new input before deciding what to do next; no task was stopped."
+					: "The wait window expired; running tasks continue. Prefer other work over waiting again.";
+			return result(
+				`${note}${stillRunningText(running)}`,
+				emptyWaitDetails(outcome, Date.now() - start, running.length),
+			);
+		}
+		const slice = await background.read(task.id, { bytes: TASKS_WAIT_DELTA_BYTES });
+		signal?.throwIfAborted();
+		onReady?.(task.id);
+		return result(
+			`${readText(`[${describeTaskLine(task)} · waitAny settled · ${rangeText(slice)}]`, slice)}${stillRunningText(running)}`,
+			{
+				action: "wait",
+				outcome: "settled",
+				taskId: task.id,
+				status: task.status,
+				kind: task.kind,
+				timedOut: false,
+				exitCode: task.exitCode,
+				waitedMs: Date.now() - start,
+				deltaBytes: Buffer.byteLength(slice.text),
+				totalBytes: slice.totalBytes,
+				deltaTruncated: slice.truncated,
+				outputPath: task.outputPath ?? "",
+				running: running.length,
+			},
+		);
+	} finally {
+		for (const release of releases) release();
+	}
+}
+
 export async function runWait(
 	background: TasksContext,
 	input: TasksInput,
 	signal?: AbortSignal,
 	onReady?: (taskId: string) => void,
+	interruptSignal?: AbortSignal,
 ): Promise<AgentToolResult<TasksWaitDetails>> {
+	if (!input.taskId?.trim()) {
+		if (input.sinceBytes !== undefined)
+			throw new Error("action 'wait' without 'taskId' does not accept 'sinceBytes'; offsets belong to one task.");
+		return runWaitAny(background, input, signal, onReady, interruptSignal);
+	}
 	const id = requireTaskId(input);
 	try {
 		const release = background.holdDelivery(id);
 		try {
 			const start = Date.now();
-			const task = await background.wait(id, clampWaitMs(input.waitMs), signal);
-			const timedOut = !isTaskTerminal(task.status);
+			const task = await background.wait(id, clampWaitMs(input.waitMs), signal, interruptSignal);
+			const settled = isTaskTerminal(task.status);
+			const interrupted = !settled && !background.closed && interruptSignal?.aborted === true;
+			const timedOut = !settled && !interrupted;
+			const outcome = settled ? "settled" : interrupted ? "interrupted" : "timed_out";
+			const waitedMs = Date.now() - start;
+			if (interrupted) {
+				return result(
+					`[${describeTaskLine(task)} · interrupted by steering; execution continues]\nRead the new input before deciding whether to wait again; the task was not stopped.`,
+					{
+						action: "wait",
+						outcome,
+						taskId: task.id,
+						status: task.status,
+						kind: task.kind,
+						timedOut: false,
+						exitCode: task.exitCode,
+						waitedMs,
+						deltaBytes: 0,
+						totalBytes: 0,
+						deltaTruncated: false,
+						outputPath: task.outputPath ?? "",
+					},
+				);
+			}
 			// A closed host resolves waits early without settling anything; do not claim
 			// the execution merely outlived the wait window.
 			const windowNote = background.closed
@@ -154,15 +271,16 @@ export async function runWait(
 			const sinceBytes = clampSinceBytes(input.sinceBytes);
 			const slice = await background.read(id, { bytes: TASKS_WAIT_DELTA_BYTES, sinceBytes });
 			signal?.throwIfAborted();
-			if (!timedOut) onReady?.(task.id);
+			if (settled) onReady?.(task.id);
 			return result(readText(`[${describeTaskLine(task)}${windowNote} · ${rangeText(slice, sinceBytes)}]`, slice), {
 				action: "wait",
+				outcome,
 				taskId: task.id,
 				status: task.status,
 				kind: task.kind,
 				timedOut,
 				exitCode: task.exitCode,
-				waitedMs: Date.now() - start,
+				waitedMs,
 				deltaBytes: Buffer.byteLength(slice.text),
 				totalBytes: slice.totalBytes,
 				deltaTruncated: slice.truncated,

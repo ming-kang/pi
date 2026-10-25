@@ -513,6 +513,7 @@ export class AgentSession {
 			deliver: (message, waitForPersistence) => {
 				if (this.isStreaming) {
 					this.agent.steer(message);
+					this._tasksHost.interruptWaits();
 					return waitForPersistence();
 				}
 				// An idle delivery starts its own custom-message run, which consumes the
@@ -554,6 +555,7 @@ export class AgentSession {
 		this._installAgentBoundaryHooks();
 		this._installHiddenDeclarationsProjection();
 		this._installAgentForcedPromptProjection();
+		this._installTaskContextReminderProjection();
 
 		this._buildRuntime({
 			activeToolNames: this._initialActiveToolNames,
@@ -1200,6 +1202,13 @@ export class AgentSession {
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = async (event: AgentEvent): Promise<void> => {
 		if (event.type === "message_start") this._tasksHost.delivery.messageStarted(event.message);
+		if (
+			event.type === "message_end" &&
+			event.message.role === "assistant" &&
+			event.message.stopReason !== "error" &&
+			event.message.stopReason !== "aborted"
+		)
+			this._tasksHost.noteAssistantCompleted();
 		// An abort requested while the run was starting, e.g. during before_agent_start, stops it
 		// here. agent_start is awaited before the first request.
 		if (event.type === "agent_start" && this._agentRunAbortRequested) this.agent.abort();
@@ -1907,6 +1916,15 @@ export class AgentSession {
 		};
 	}
 
+	/** Reminders live only in the request projection and survive failed requests until observed. */
+	private _installTaskContextReminderProjection(): void {
+		const previousTransformContext = this.agent.transformContext;
+		this.agent.transformContext = async (messages, signal) => {
+			const transformed = previousTransformContext ? await previousTransformContext(messages, signal) : messages;
+			return this._tasksHost.projectContextReminder(transformed);
+		};
+	}
+
 	/**
 	 * Restore the active tool loadout declared by the session transcript, if it declares one.
 	 * Tools reachable only from other tools are never declared, but they do not depend on the active
@@ -2409,6 +2427,7 @@ export class AgentSession {
 			content,
 			timestamp: Date.now(),
 		});
+		this._tasksHost.interruptWaits();
 	}
 
 	/**
@@ -2472,6 +2491,7 @@ export class AgentSession {
 				this.agent.followUp(appMessage);
 			} else {
 				this.agent.steer(appMessage);
+				this._tasksHost.interruptWaits();
 			}
 		} else if (options?.triggerTurn) {
 			if (this._isEmittingAgentSettled) {
@@ -3013,6 +3033,7 @@ export class AgentSession {
 			}
 
 			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
+			this._tasksHost.noteCompaction();
 			const newEntries = this.sessionManager.getEntries();
 			this._refreshFinalizedContext();
 			const estimatedTokensAfter = estimateMessagesTokens(this.sessionManager.buildSessionProjection().messages);
@@ -3349,6 +3370,7 @@ export class AgentSession {
 			abortController.signal.throwIfAborted();
 
 			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
+			this._tasksHost.noteCompaction();
 			const newEntries = this.sessionManager.getEntries();
 			this._refreshFinalizedContext();
 			const estimatedTokensAfter = estimateMessagesTokens(this.sessionManager.buildSessionProjection().messages);
@@ -3820,8 +3842,9 @@ export class AgentSession {
 
 		this._baseToolDefinitions.set(
 			"tasks",
-			createTasksToolDefinition((callId, taskId) =>
-				this._tasksHost.delivery.prepareWait(callId, taskId),
+			createTasksToolDefinition(
+				(callId, taskId) => this._tasksHost.delivery.prepareWait(callId, taskId),
+				() => this._tasksHost.waitInterruptSignal,
 			) as ToolDefinition,
 		);
 		const extensionsResult = this._resourceLoader.getExtensions();

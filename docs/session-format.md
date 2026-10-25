@@ -351,11 +351,11 @@ The retained tool result contains bounded text (up to 48 KiB) and no executor-pr
 
 Terminal history is restored only from the selected branch's valid version-2 result records; older fields such as `format` and `projection` are ignored. Version-1 result records are ignored without migration; their independent usage entries still participate in accounting. This is read-only history: no processes or workers are restarted or reattached, and restoration does not replay usage settlement or completion events. Forks can carry historical entries on their copied path, never live execution handles.
 
-These `custom` entries do not enter model context. Automatic delivery creates a `custom_message` with `customType: "task-completion"`, `display: true`, and a self-contained `TaskCompletionSnapshot` in `details`. The session formats `content` from the same snapshot, with a total limit of 48 KiB and 2,000 lines, keeping the end of the output. Only `content` is sent to the model.
+These `custom` entries do not enter model context. Automatic delivery creates a `custom_message` with `customType: "task-completion"`, `display: true`, and a self-contained `TaskCompletionSnapshot` in `details`. The session formats `content` from the same snapshot, with a total limit of 48 KiB and 2,000 lines, keeping only an 8 KiB output tail for the automatic model turn. Only `content` is sent to the model.
 
 Completion details use one format, `version: 2`, bounded to 120 KiB of serialized JSON including escaping. It has `version`, `kind`, `taskId`, `title`, terminal `status`, numeric millisecond `startedAt` and `endedAt`, and `output: { text, truncated }`, plus optional `error`, `command: { text, truncated }`, `cwd`, `outputPath`, and `exitCode` (a number, or `null` when signal-reaped).
 
-`output` is the end of the final result text, bounded to 40 KiB including JSON escaping. Source flags survive further clipping. Missing shell metadata is left unspecified. The renderer sanitizes terminal control sequences and applies separate display row limits.
+`output` is the end of the final result text, bounded to 40 KiB including JSON escaping for replay and expanded rendering; the smaller model-facing projection does not change this stored field. Source flags survive further clipping. Missing shell metadata is left unspecified. The renderer sanitizes terminal control sequences and applies separate display row limits.
 
 A shell completion's `details` can look like this:
 

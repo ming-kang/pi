@@ -1167,7 +1167,8 @@ Session-bound `TasksContext` supervises native and extension-owned execution. Fo
 | `execute<T>(execution)` | Returns `{ kind: "result", result, status?, error? }` or `{ kind: "background", task }` |
 | `list()` / `get(id)` | Bounded, read-only (frozen) retained snapshots; IDs support unique prefixes |
 | `read(id, options?)` | Bounded head, tail, or byte-offset output |
-| `wait(id, timeoutMs?, signal?)` | Observation only; timeout or cancellation ends the wait, not execution |
+| `wait(id, timeoutMs?, signal?, interruptSignal?)` | Observation only; timeout, cancellation, or `interruptSignal` ends the wait, not execution |
+| `waitAny(timeoutMs?, signal?, interruptSignal?)` | Observes the first task running at call time to settle; returns `undefined` for an empty cohort, timeout, interruption, or closed host. Later tasks are excluded |
 | `kill(id)` | Requests cancellation; `stopping` is not a terminal status |
 | `detach(id)` / `detachForeground()` | Hands off one task, or eligible foreground tasks oldest first while background slots remain, without restarting them; throws when every background slot is taken |
 | `canDetach(id)` | Reports whether an execution can move now, including host policy and available background slots; does not change the execution |
@@ -1181,7 +1182,7 @@ Session-bound `TasksContext` supervises native and extension-owned execution. Fo
 
 `TaskControl<T>` exposes `id`, `signal`, `mode`, `accept()`, `publish(result)`, `setOutputPath(path, cleanup?)`, `onModeChange(listener)`, and `requestCancel()`. `publish` replaces the task's bounded text result, which the `/tasks` panel, `tasks read`, and the completion notification show; a task with an output path is read from that log instead. Call `accept()` after whole-invocation preflight, before allowing a background handoff. Use the control's signal throughout execution. Parent-call cancellation is disconnected after handoff, while runtime shutdown still cancels the task. Mode subscriptions concern only this task; executors do not need the global registry to observe their own handoff or cancel themselves.
 
-Completion messages store a self-contained `TaskCompletionSnapshot`; only their bounded `content` enters model context. Built-in `tasks wait` binds delivery to the actual tool call, and the host confirms it after successful persistence. Ordinary extension reads/waits do not acknowledge delivery, and arbitrary tool-result detail fields cannot acknowledge a task.
+Completion messages store a self-contained `TaskCompletionSnapshot`; only their bounded `content` enters model context, with an 8 KiB output tail while replay details retain 40 KiB. Built-in `tasks wait` binds delivery to the actual tool call, and the host confirms it after successful persistence; a settled waitAny binds only its winning task. Ordinary extension reads/waits, including `waitAny`, do not acknowledge delivery, and arbitrary tool-result detail fields cannot acknowledge a task.
 
 ```typescript
 const outcome = await ctx.tasks.execute({
