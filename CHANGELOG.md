@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-25
+
 ### Added
 
 - `tasks wait` can omit `taskId` to wait for the first task already running at call time, returning `no_tasks` immediately when none are active. A settled waitAny delivers only its winner through the persisted tool result; later completions still use ordinary notification delivery. See [Tasks](docs/bundled/tasks.md#management-tool).
