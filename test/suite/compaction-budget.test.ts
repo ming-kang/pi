@@ -39,14 +39,12 @@ describe("compaction budgets on small windows", () => {
 		harnesses.push(harness);
 		harness.setResponses([
 			fauxAssistantMessage(fauxToolCall("large_result", {}), { stopReason: "toolUse" }),
-			(context, options) => {
+			(context) => {
 				// Regression test for #9652: clear boundaries and continuation wording avoid the reasoning-extraction false positive.
 				expect(JSON.stringify(context.messages)).toContain("# Conversation\\n[User]: big-request:");
 				expect(JSON.stringify(context.messages)).toContain(
 					"# Instructions\\nThe messages above are earlier context from an ongoing conversation.",
 				);
-				// The 80% reserve exceeds the model's own output limit, which then caps the summary.
-				expect(options?.maxTokens).toBe(8192);
 				return fauxAssistantMessage("A short summary of the original request.");
 			},
 			(context) => {
@@ -98,12 +96,7 @@ describe("compaction budgets on small windows", () => {
 		expect(prepareCompaction(entries, settings)).toBeDefined();
 		// Without the model window, the default 20K retention keeps this whole session.
 		expect(prepareCompaction(entries, harness.settingsManager.getCompactionSettings())).toBeUndefined();
-		harness.setResponses([
-			(_context, options) => {
-				expect(options?.maxTokens).toBe(8192);
-				return fauxAssistantMessage("Summary of the first two turns.");
-			},
-		]);
+		harness.setResponses([() => fauxAssistantMessage("Summary of the first two turns.")]);
 
 		const result = await harness.session.compact();
 

@@ -1,5 +1,5 @@
 import type { Message, ModelsSimpleStreamOptions, Tool } from "@earendil-works/pi-ai";
-import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
+import { getCurrentSystemPrompt, getCurrentTools, PI_ATTRIBUTION } from "@earendil-works/pi-ai";
 import { type TObject, Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BtwAgent } from "../src/extensions/btw/agent.ts";
@@ -150,7 +150,7 @@ describe("SDK context snapshots", () => {
 		expect(calls).toBe(2);
 	});
 
-	it("reads attribution settings when snapshot headers are transformed", async () => {
+	it("captures client identity from the current attribution settings", async () => {
 		const telemetry = process.env.PI_TELEMETRY;
 		delete process.env.PI_TELEMETRY;
 		const fixture = await createBtwTestSession({
@@ -160,12 +160,11 @@ describe("SDK context snapshots", () => {
 		});
 		cleanups.push(fixture.cleanup);
 		try {
-			// Options built while attribution is on must follow a later opt-out, as upstream's
-			// per-request header transform does.
-			const { streamOptions } = await fixture.session.getContextSnapshot();
-			expect(await streamOptions.transformHeaders?.({})).toMatchObject({ "X-OpenRouter-Title": "pi" });
+			const attributed = await fixture.session.getContextSnapshot();
+			expect(attributed.streamOptions.identity?.attribution).toEqual(PI_ATTRIBUTION);
 			fixture.settingsManager.setEnableInstallTelemetry(false);
-			expect(await streamOptions.transformHeaders?.({})).toEqual({});
+			const anonymous = await fixture.session.getContextSnapshot();
+			expect(anonymous.streamOptions.identity?.attribution).toBeNull();
 		} finally {
 			if (telemetry !== undefined) process.env.PI_TELEMETRY = telemetry;
 		}

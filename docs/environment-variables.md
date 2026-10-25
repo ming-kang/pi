@@ -84,6 +84,7 @@ These variables are read by Pi itself:
 | `PI_OFFLINE` | Disable startup network operations, including npm version checks, package update checks, and model refresh |
 | `PI_SKIP_VERSION_CHECK` | Skip the Pi version update check at startup. This prevents the npm registry latest-version request |
 | `PI_TELEMETRY` | Override optional provider attribution headers: `1`/`true`/`yes` or `0`/`false`/`no`. This does not disable version checks |
+| `PI_CODEMODE_MAX_WORKERS` | Maximum codemode workers alive at once across all sessions in the process; default `2`. Each worker's script may use up to 256 MB. Raise it when one process runs several sessions, such as in-process subagents. Further scripts wait for a free worker. See [Codemode](codemode.md) |
 | `PI_CACHE_RETENTION` | Set to `long` for extended provider prompt caching where supported |
 | `PI_SHARE_VIEWER_URL` | Override the base URL used by `/share` |
 | `PI_RADIUS_GATEWAY` | Override the Radius gateway origin used by `/bug` uploads |

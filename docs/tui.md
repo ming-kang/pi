@@ -105,6 +105,77 @@ const result = await ctx.ui.custom<string | null>((tui, theme, keybindings, done
 
 The factory receives Pi's current `TUI`, semantic `Theme`, and configured `KeybindingsManager`. It may return a component synchronously or as a promise. The `custom()` promise resolves only when the component calls `done(result)`.
 
+
+### Build a minimal custom screen
+
+This complete extension shows the custom-component lifecycle: render within the supplied width, use injected keybindings, invalidate cached output after state changes, request a render, and finish through `done()`.
+
+```typescript
+import type { ExtensionAPI } from "@astralyn/pi";
+import { truncateToWidth } from "@earendil-works/pi-tui";
+
+export default function (pi: ExtensionAPI) {
+  pi.registerCommand("pick-target", {
+    description: "Pick a deployment target",
+    handler: async (_args, ctx) => {
+      if (ctx.mode !== "tui") {
+        ctx.ui.notify("pick-target requires interactive mode", "error");
+        return;
+      }
+
+      const choices = ["development", "staging", "production"];
+      const selected = await ctx.ui.custom<string | undefined>((tui, theme, keybindings, done) => {
+        let selectedIndex = 0;
+        let cachedWidth: number | undefined;
+        let cachedLines: string[] | undefined;
+
+        const invalidate = () => {
+          cachedWidth = undefined;
+          cachedLines = undefined;
+        };
+
+        return {
+          render(width: number): string[] {
+            if (cachedLines && cachedWidth === width) return cachedLines;
+
+            cachedWidth = width;
+            cachedLines = [
+              theme.fg("accent", "Choose a deployment target"),
+              ...choices.map((choice, index) => `${index === selectedIndex ? "> " : "  "}${choice}`),
+              theme.fg("dim", "up/down move, enter selects, escape cancels"),
+            ].map((line) => truncateToWidth(line, width));
+            return cachedLines;
+          },
+          handleInput(data: string): void {
+            if (keybindings.matches(data, "tui.select.up")) {
+              selectedIndex = (selectedIndex - 1 + choices.length) % choices.length;
+            } else if (keybindings.matches(data, "tui.select.down")) {
+              selectedIndex = (selectedIndex + 1) % choices.length;
+            } else if (keybindings.matches(data, "tui.select.confirm")) {
+              done(choices[selectedIndex]);
+              return;
+            } else if (keybindings.matches(data, "tui.select.cancel")) {
+              done(undefined);
+              return;
+            } else {
+              return;
+            }
+
+            invalidate();
+            tui.requestRender();
+          },
+          invalidate,
+        };
+      });
+
+      if (selected) ctx.ui.notify(`Selected ${selected}`, "info");
+    },
+  });
+}
+```
+
+This component does not display a text cursor, so it does not need `Focusable`. A component containing `Input` or `Editor` must implement `Focusable` and propagate its `focused` value to that child.
+
 ### Disposal
 
 A component returned from `ctx.ui.custom()`, `setWidget()`, `setFooter()`, or `setHeader()` may also implement `dispose(): void`. Use it to stop timers, abort owned work, and unsubscribe listeners. Pi calls it after a custom component finishes, or when a widget, footer, or header is replaced or cleared.

@@ -142,7 +142,7 @@ Version checks read the latest `@astralyn/pi` version from npm. Set `PI_SKIP_VER
 |---------|------|---------|-------------|
 | `compaction.enabled` | boolean | `true` | Enable auto-compaction |
 | `compaction.triggerPercent` | number | `85` | Percentage of the context window that triggers auto-compaction (clamped to 20–95) |
-| `compaction.reserveTokens` | number | derived | Fixed reserve below the context window; overrides `triggerPercent` |
+| `compaction.reserveTokens` | number | derived | Free context tokens below which automatic compaction starts; overrides `triggerPercent` |
 | `compaction.keepRecentTokens` | number | `20000` | Recent-message retention target, capped at half the trigger line when the reserve is derived |
 | `compaction.modelOverrides` | object | - | Per-model `reserveTokens` / `keepRecentTokens` overrides keyed by exact `"provider/modelId"` |
 
@@ -156,7 +156,7 @@ Version checks read the latest `@astralyn/pi` version from npm. Set `PI_SKIP_VER
 }
 ```
 
-Compaction triggers at `contextWindow − reserveTokens`. Unless `reserveTokens` is set, the reserve is derived from `triggerPercent` for the active model's window, so large-window models compact at 85% usage instead of upstream's ~98%. Setting `reserveTokens` restores a fixed reserve.
+Compaction triggers at `contextWindow − reserveTokens`. Unless `reserveTokens` is set, the reserve is derived from `triggerPercent` for the active model's window, so large-window models compact at 85% usage instead of upstream's ~98%. Setting `reserveTokens` restores a fixed reserve. Either way, summarization uses the model's output limit rather than the reserve.
 
 The retention target shrinks with a derived reserve without changing the saved settings. Whole messages and tool-call/result groups can exceed the retention target. See [Compaction](compaction.md#how-it-works) for the budget rules and examples.
 

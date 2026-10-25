@@ -481,6 +481,9 @@
 				},
 				{
 					"path": "test/"
+				},
+				{
+					"path": "scripts/generate-references.ts"
 				}
 			]
 		},

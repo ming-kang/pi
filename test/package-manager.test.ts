@@ -1611,7 +1611,10 @@ Content`,
 		// #10765
 		it("should expand ~ in exclusion and exact patterns", async () => {
 			const previousHome = process.env.HOME;
+			const previousUserProfile = process.env.USERPROFILE;
 			process.env.HOME = tempDir;
+			// Node's os.homedir() reads USERPROFILE on Windows.
+			process.env.USERPROFILE = tempDir;
 
 			try {
 				const skillsDir = join(tempDir, "extra", "skills");
@@ -1635,6 +1638,11 @@ Content`,
 					delete process.env.HOME;
 				} else {
 					process.env.HOME = previousHome;
+				}
+				if (previousUserProfile === undefined) {
+					delete process.env.USERPROFILE;
+				} else {
+					process.env.USERPROFILE = previousUserProfile;
 				}
 			}
 		});

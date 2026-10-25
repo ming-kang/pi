@@ -151,6 +151,10 @@
       "title": "Reference",
       "items": [
         {
+          "title": "Models Configuration",
+          "path": "models-configuration.md"
+        },
+        {
           "title": "Environment Variables",
           "path": "environment-variables.md"
         },

@@ -9,10 +9,44 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - `tasks wait` can omit `taskId` to wait for the first task already running at call time, returning `no_tasks` immediately when none are active. A settled waitAny delivers only its winner through the persisted tool result; later completions still use ordinary notification delivery. See [Tasks](docs/bundled/tasks.md#management-tool).
 - New steering input ends an active `tasks wait` with `interrupted` without cancelling the task, allowing user input or another task's completion to proceed promptly. Follow-up input does not interrupt waits.
 - Successful compaction adds one request-local reminder of still-active background tasks to the next main-agent request, preventing duplicate work without persisting the reminder or starting a turn.
+- Adopted upstream v1.4.0:
+  - A generated [Models Configuration](docs/models-configuration.md) reference documents every provider, model, model override, input-limit, and compatibility field of `models.json`.
+  - Codemode `models.classify()` accepts images for TypeSafe Jev and Cloudflare Clef models, and lists Jev 1.14 plus Clef Omni on Workers AI and OpenRouter. Provider-level `compat` applies to classifier models, including the System One `imageInput` and `sendImageOptInHeader` fields.
+  - Codemode worker admission waits for a free worker instead of failing immediately, and `PI_CODEMODE_MAX_WORKERS` raises the process-wide worker limit.
+  - Rex terminals are detected for OSC 8 hyperlinks, truecolor, and inline images.
 
 ### Changed
 
 - Automatic task completion notifications now include an 8 KiB output tail in model context instead of 40 KiB; replay details and expanded cards retain the larger tail, with `tasks read` available for more output. Task tool descriptions and prompt guidance cover waitAny, interruption, and the four wait outcomes.
+- Adopted upstream v1.4.0:
+  - Compaction and branch summaries use the model's output limit instead of a fixed reserve-derived cap, so long reasoning no longer hits the summary token cap. `reserveTokens` (or this distribution's `triggerPercent`) now only controls when automatic compaction starts.
+  - Provider attribution headers now come from pi-ai's client identity. `before_provider_headers` handlers no longer see the OpenRouter, NVIDIA NIM, and OpenCode attribution headers; returning `null` for one still removes it. Cloudflare requests send Pi's detailed `User-Agent`, and OpenCode sends `x-opencode-client` whenever attribution is enabled.
+  - The default GitHub Copilot model is now `gpt-6.1-sol`; the default NVIDIA model is `nvidia/nemotron-3.5-super-vl-120b-a12b`; and the default Xiaomi models are `mimo-v2.6-pro`.
+  - Grok 4.3 and Grok 4.5 on `xai` offer the `xhigh` thinking level. ChatGPT Business workspace usage-limit errors are not retried and explain how to raise the limit.
+
+### Fixed
+
+- Adopted upstream v1.4.0 fixes:
+  - Fixed `models.schema.json` missing field descriptions, which left editors without hints.
+  - Fixed `pi update` when `managed-install.json` starts with a UTF-8 BOM.
+  - Fixed HTML export showing literal Markdown emphasis markers next to CJK punctuation, and an unclosed `$` display-math block corrupting later tables.
+  - Fixed terminal input modes and the alternate screen staying active when Pi exits without its normal teardown.
+  - Fixed concurrent extension dialogs replacing one another and leaving the first promise pending; closing the visible dialog now restores the previous one.
+  - Fixed clipboard-helper processes being suspended with Pi after Ctrl+Z on Linux, and pasting hanging afterward.
+  - Fixed extensions failing to import `@earendil-works/pi-ai/models` through the extension loader.
+  - Fixed `mcp.json` files with a UTF-8 BOM skipping all servers.
+  - Fixed `/compact <instructions>` being ignored for a split turn prefix.
+  - Fixed resumed sessions and `/tree` navigation leaving extension tools inactive when they registered after the transcript recorded its loadout.
+  - Fixed recovery from a response cut off at the output limit leaving orphaned tool results that broke every later provider request.
+  - Fixed `grep` honoring `RIPGREP_CONFIG_PATH` and silently changing a regex search to a literal one.
+  - Fixed Windows shell discovery for Microsoft Store aliases, PowerShell outside `PATH`, and nonstandard Windows installations; legacy WSL `bash.exe` now receives commands over stdin.
+  - Fixed GitHub Copilot sessions with large request bodies returning HTTP 413 instead of compacting and retrying.
+  - Fixed `openai-codex` offering models that fail for ChatGPT accounts.
+  - Fixed whitespace-only tool output causing OpenAI and Google request errors.
+  - Fixed automatic retry for additional gateway failures, Codex proxy disconnects, and transient Vertex OAuth refresh failures.
+  - Fixed OpenAI Responses prompt-cache loss after a deferred tool was removed.
+  - Fixed Cloudflare Workers AI classifier pricing.
+  - Fixed `@` file autocomplete for queries containing regex metacharacters.
 
 ## [1.3.1] - 2026-10-22
 

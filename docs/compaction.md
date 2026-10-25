@@ -33,6 +33,8 @@ contextTokens > contextWindow − reserveTokens
 
 > **Distribution note:** upstream Pi's default is a fixed 16384-token reserve, which on large windows delays compaction until ~98% usage. This distribution derives the reserve from `triggerPercent` instead. Setting `compaction.reserveTokens` explicitly — globally or per model — still wins and restores upstream's fixed-reserve behavior for that model.
 
+Whether the reserve comes from `triggerPercent` or an explicit `reserveTokens`, it only decides when compaction starts. Summary requests use the model's output limit, reduced when needed so input and output fit the context window.
+
 During a multi-turn agent run, Pi checks this threshold against the canonical session projection after tools finish and their results are appended, before starting the next assistant response. If the threshold is crossed, Pi compacts during `prepareNextTurn`, then performs the existing catch-up steering poll before `turn_start`, and resumes with the summary and retained messages. It skips this between-turn check when the completed tool batch terminates the run and no queued message requires another response. Pi also checks the threshold before a new user prompt and performs final-attempt overflow recovery after a low-level agent run ends.
 
 A provider context-overflow error or an early final `stopReason: "length"` can select one compact-and-retry recovery attempt. Length responses with tool calls retain their synthetic failed tool results and follow the ordinary tool/queue scheduler rather than forcing the run to end.
@@ -438,7 +440,7 @@ Configure compaction in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settin
 |---------|---------|-------------|
 | `enabled` | `true` | Enable auto-compaction |
 | `triggerPercent` | `85` | Percentage of the context window that triggers auto-compaction (clamped to 20–95) |
-| `reserveTokens` | derived | Fixed reserve below the window; overrides `triggerPercent` for the models it applies to |
+| `reserveTokens` | derived | Free context tokens below which auto-compaction starts; overrides `triggerPercent` for the models it applies to |
 | `keepRecentTokens` | `20000` | Recent-message retention target, capped at half the trigger line when the reserve is derived |
 
 Disable auto-compaction with `"enabled": false`. You can still compact manually with `/compact`.
@@ -461,7 +463,7 @@ Use `compaction.modelOverrides` to tune the reserve and the retention target per
 }
 ```
 
-Keys are exact, case-sensitive `provider/modelId` values, including any slashes within the model ID. Each value falls back independently from the model override to the ordinary setting to the built-in default; an override's `reserveTokens` replaces the percentage-derived reserve for that model only. Values must be non-negative safe integers. Invalid values in the matching model override produce an error when read; only omitted fields fall back to the ordinary setting. Model override entries must be objects. Invalid ordinary token settings produce an error when read, even if the active model has a valid override. `enabled` and `triggerPercent` remain global, not model-specific.
+Keys are exact, case-sensitive `provider/modelId` values, including any slashes within the model ID. Each value falls back independently from the model override to the ordinary setting to the built-in default; an override's `reserveTokens` replaces the percentage-derived reserve for that model only. `reserveTokens` never caps summary output. Values must be non-negative safe integers. Invalid values in the matching model override produce an error when read; only omitted fields fall back to the ordinary setting. Model override entries must be objects. Invalid ordinary token settings produce an error when read, even if the active model has a valid override. `enabled` and `triggerPercent` remain global, not model-specific.
 
 These resolved values are used for manual compaction, all automatic threshold checks, overflow recovery, and extension-visible `preparation.settings`, which carries the resolved `reserveTokens` rather than the percentage. Model switches affect subsequent checks and compactions without changing ordinary settings. Compaction already in progress uses the model and settings captured for that operation. Branch summarization settings are unaffected.
 
