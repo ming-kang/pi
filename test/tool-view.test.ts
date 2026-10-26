@@ -1,12 +1,15 @@
 import { Container, Spacer, Text, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
-import type { ToolDefinition } from "../src/core/extensions/types.ts";
+import { createToolHtmlRenderer } from "../src/core/export-html/tool-renderer.ts";
+import type { ToolDefinition, ToolRenderers } from "../src/core/extensions/types.ts";
 import { createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { createReadToolDefinition } from "../src/core/tools/read.ts";
 import { withBuiltInRenderers } from "../src/core/tools/renderers/index.ts";
+import { ToolExecutionComponent as NativeToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { PendingToolMap, ToolChatContainer } from "../src/modes/interactive/tool-view/chat.ts";
+import { withToolShell } from "../src/modes/interactive/tool-view/shell.ts";
 import { FramedComponent, gutterWidth, toolStyle } from "../src/modes/interactive/tool-view/style.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/tool-view/tool-execution.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -387,5 +390,72 @@ describe("chat lifecycle", () => {
 		const chat = new ToolChatContainer();
 		chat.addChild(new Container());
 		expect(chat.render(40)).toEqual([]);
+	});
+});
+
+describe("tool shell boundaries", () => {
+	beforeAll(() => {
+		initTheme("dark");
+	});
+
+	test("keeps native chrome without a shell and respects explicit self ownership", () => {
+		const definition = createReadToolDefinition(process.cwd());
+		const native = new NativeToolExecutionComponent(
+			"read",
+			"native",
+			{ path: "notes.txt" },
+			{},
+			definition,
+			fakeTui(),
+			process.cwd(),
+		);
+		const styled = new NativeToolExecutionComponent(
+			"read",
+			"styled",
+			{ path: "notes.txt" },
+			{},
+			withToolShell("read", definition),
+			fakeTui(),
+			process.cwd(),
+		);
+		expect(stripAnsi(native.render(80).join("\n"))).not.toContain("●");
+		expect(stripAnsi(styled.render(80).join("\n"))).toContain("● read");
+
+		const selfDefinition: ToolRenderers = {
+			renderShell: "self",
+			renderCall: () => new Text("self-owned", 0, 0),
+		};
+		const self = new NativeToolExecutionComponent(
+			"custom",
+			"self",
+			{},
+			{},
+			withToolShell("custom", selfDefinition),
+			fakeTui(),
+			process.cwd(),
+		);
+		const selfOutput = stripAnsi(self.render(80).join("\n"));
+		expect(selfOutput).toContain("self-owned");
+		expect(selfOutput).not.toContain("●");
+	});
+
+	test("does not expose the TUI shell to HTML export", () => {
+		const definition: ToolRenderers = {
+			renderCall: () => new Text("call", 0, 0),
+			renderResult: () => new Text("result", 0, 0),
+		};
+		const renderHtml = (renderers: ToolRenderers) => {
+			const renderer = createToolHtmlRenderer({
+				getToolRenderers: () => renderers,
+				theme,
+				cwd: process.cwd(),
+				width: 40,
+			});
+			return {
+				call: renderer.renderCall("html-call", "custom", {}),
+				result: renderer.renderResult("html-call", "custom", [], undefined, false),
+			};
+		};
+		expect(renderHtml(withToolShell("custom", definition))).toEqual(renderHtml(definition));
 	});
 });

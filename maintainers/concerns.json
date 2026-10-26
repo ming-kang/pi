@@ -253,33 +253,43 @@
 		},
 		{
 			"id": "tool-presentation",
-			"why": "Tool rows are compact dot/rail blocks owned by src/modes/interactive/tool-view/; multiline blocks leave a blank line before the next tool, while single-line blocks stay tight. Upstream's Box shell is dropped.",
-			"watch": "Upstream fixes to the dropped tool-execution.ts (image conversion, click to expand, lifecycle) and to the renderers are ported by hand; npm run sync lists them for porting by hand. Retire the fork if upstream ships a shell whose look is configurable.",
+			"why": "The bundled tool-presentation extension supplies compact dot/rail TUI chrome while upstream owns tool lifecycle and provides the native Box fallback.",
+			"watch": "Native lifecycle fixes should need little or no porting. Recheck the thin shell, row-gap, result-context, and disposal additions plus distribution renderers when upstream touches them; retire the local shell hook if upstream provides equivalent configurable TUI chrome. Verify native fallback and HTML export as well as interactive states.",
 			"paths": [
 				{
 					"path": "src/core/tools/edit.ts"
 				},
 				{
 					"path": "src/core/tools/renderers/",
-					"rewrite": "Bash keeps a truncating, highlighted call line and its background handoff text, and Edit hangs its bounded preview off the rail instead of a background Box."
+					"rewrite": "Built-in renderer semantics remain distribution-owned; the separate TUI shell supplies marker and rail framing rather than a background Box."
+				},
+				{
+					"path": "src/core/extensions/index.ts"
 				},
 				{
 					"path": "src/core/extensions/types.ts"
 				},
 				{
+					"path": "src/index.ts"
+				},
+				{
 					"path": "src/modes/interactive/components/index.ts"
 				},
 				{
-					"path": "src/modes/interactive/components/tool-execution.ts"
+					"path": "src/modes/interactive/components/tool-execution.ts",
+					"rewrite": "The upstream lifecycle remains in place; the local additions only consume optional TUI shell metadata, expose row spacing, preserve result context, and dispose renderer state."
 				},
 				{
-					"path": "src/modes/interactive/interactive-mode.ts"
+					"path": "src/modes/interactive/interactive-mode.ts",
+					"rewrite": "The interactive host constructs the native component and obtains its shell through the existing renderer resolver."
 				}
 			],
 			"tests": [
 				"test/bash-tool-rendering.test.ts",
+				"test/built-in-extensions.test.ts",
 				"test/edit-tool-no-full-redraw.test.ts",
 				"test/tool-execution-component.test.ts",
+				"test/tool-renderer-examples.test.ts",
 				"test/tool-view.test.ts"
 			]
 		},

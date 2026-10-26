@@ -39,23 +39,25 @@ The `Ctrl+B` background hint is not part of a tool row. Once a foreground manage
 
 The look is defined in one place, `src/modes/interactive/tool-view/style.ts`: the marker and rail glyphs, their colors, the spacing between blocks, and which tools fold their result. `FramedComponent` in the same file hangs a component's lines off the marker or the rail and derives the gutter width from the glyphs.
 
-`tool-view/tool-execution.ts` owns one call's lifecycle: pending, success and error states, expansion, image placement and Kitty conversion, and renderer disposal. `tool-view/chat.ts` owns the chat container that measures tool blocks for spacing and disposes rows when the chat clears. Extension tools and built-in tools use the same shell, so a third-party tool gets the same dot and rail without any change.
+The upstream `components/tool-execution.ts` owns one call's lifecycle: pending, success and error states, expansion, image placement and Kitty conversion, and renderer disposal. The bundled `tool-presentation` extension attaches a TUI-only shell through the existing tool renderer resolver; `tool-view/shell.ts` maps the visual policy to that shell. The old `tool-view/tool-execution.ts` path is only a compatibility adapter for direct source imports, not a second lifecycle implementation.
 
-Built-in renderers remain responsible for semantic content such as file paths, syntax highlighting, search results, Diff previews, and command output. They return plain components; the shell frames them.
+`tool-view/chat.ts` owns the chat container that measures tool blocks for spacing and disposes rows when the chat clears. It reads each row's gap policy: upstream rows keep one blank line, while the distribution shell uses the compact policy above. Extension tools and built-in tools use the same shell unless they explicitly own a self shell.
+
+Built-in renderers remain responsible for semantic content such as file paths, syntax highlighting, search results, Diff previews, and command output. They return plain components; the native component passes them to the shell without wrapping their renderer functions. HTML export uses only those renderers and ignores the TUI shell, so it retains its existing output. Disable `builtin:tool-presentation` (for example with `-builtin:tool-presentation` in extension settings) to use the upstream Box presentation instead.
 
 ## Renderer inheritance
 
 | Tool definition | Behavior |
 |---|---|
-| No `renderCall`/`renderResult` | Uses the native call and result fallback. |
-| Custom renderer with the default shell | Uses the native shell around the custom content. |
-| `renderShell: "self"` | Keeps complete ownership of the tool's layout. |
+| No `renderCall`/`renderResult` | Uses the active shell's call and result fallback. |
+| Custom renderer with the default shell | Uses the distribution shell around the custom content, or upstream Box when the extension is disabled. |
+| `renderShell: "self"` | Keeps complete ownership of the tool's layout; no distribution shell is attached. |
 
 Built-in tool definitions are also used when an extension overrides only one renderer slot. A custom call renderer can inherit the built-in result renderer, and vice versa. An extension that overrides a built-in tool with its own result renderer controls what that row shows, including when it is collapsed.
 
 The inherited Bash result renderer keeps its elapsed time even with a custom call renderer. Call and result renderers share `state`; a renderer that adds a `dispose()` callback must also call the previous callback so both renderers can release their resources.
 
-Renderer failures fall back to native generic output rather than breaking the transcript.
+Renderer failures fall back to the active shell's generic output rather than breaking the transcript; without a distribution shell, the upstream generic fallback is used.
 
 ## Generic fallback
 
@@ -89,7 +91,7 @@ The package does not use:
 
 - prototype patching of `ToolExecutionComponent` from an extension;
 - same-name re-registration to replace built-in tools;
-- a global renderer registry exposed through Extension API;
+- a second global renderer registry exposed through Extension API;
 - a restored `tools-view` extension;
 - forced decoration of third-party tools that explicitly own their shell;
 - merging consecutive calls into a collapsed group, or a shell-level progress row.

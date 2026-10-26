@@ -2531,7 +2531,7 @@ export default function (pi: ExtensionAPI) {
 
 Tools can provide `renderCall` and `renderResult` for custom TUI display. See [tui.md](tui.md) for the full component API.
 
-By default, tool output is wrapped in Pi's native call/result shell, which owns the status dot, result rail, spacing between consecutive tool rows, and fallback rendering. A defined `renderCall` or `renderResult` must return a `Component`. If a slot renderer is not defined, the shell uses fallback rendering for that slot. Return content without leading padding: the shell trims leading blank result lines and adds no blank line between consecutive tool rows.
+By default, tool output is wrapped in the active call/result shell, which owns the status dot, result rail, spacing between consecutive tool rows, and fallback rendering. The bundled `tool-presentation` extension supplies the distribution's compact shell; disabling `builtin:tool-presentation` restores the upstream Box shell. A defined `renderCall` or `renderResult` must return a `Component`. If a slot renderer is not defined, the shell uses fallback rendering for that slot. Return content without leading padding: the compact shell trims leading blank result lines and adds no blank line between consecutive single-line tool rows.
 
 Set `renderShell: "self"` when the tool should render its own shell instead of using the native shell. This is useful for tools that need complete control over framing or background behavior, for example large previews that must stay visually stable after the tool settles.
 
@@ -3344,6 +3344,8 @@ A tool that reaches other tools declares which ones a call may reach with `reach
 ### Tool renderer resolution
 
 `pi.registerToolRenderer((toolName, next) => renderers)` chooses `renderCall`, `renderResult`, and `renderShell` for calls to any tool, including tools that are not registered yet, such as MCP tools in a resumed session. Resolvers run in extension load order. `next()` returns the remaining resolvers' result or the registered tool's renderers, so `next() ?? mine` supplies a fallback. Interactive transcripts and HTML exports both use these resolvers.
+
+A resolver can also attach an optional `shell` (`ToolExecutionShell`) for TUI-only framing, fallbacks, and row spacing. The native tool component consumes it after the renderers return their components, so `lastComponent` reuse and renderer ownership are preserved. HTML export ignores `shell`; it never changes tool execution or the model-facing tool declaration. An explicit `renderShell: "self"` always remains tool-owned and is not wrapped by a distribution shell.
 
 ### MCP servers
 

@@ -179,6 +179,7 @@ import {
 } from "./components/status-indicator.ts";
 import { ThemedText } from "./components/themed-text.ts";
 import { ThinkingSelectorComponent } from "./components/thinking-selector.ts";
+import { ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
@@ -205,7 +206,6 @@ import {
 } from "./theme/theme.ts";
 import { InteractiveThemeController } from "./theme/theme-controller.ts";
 import { disposeChatRows, PendingToolMap, ToolChatContainer } from "./tool-view/chat.ts";
-import { ToolExecutionComponent } from "./tool-view/tool-execution.ts";
 import { createInteractiveTui, createInteractiveTuiReference } from "./tui-renderer.ts";
 
 export { createInteractiveTui, createInteractiveTuiReference } from "./tui-renderer.ts";

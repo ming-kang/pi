@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Refactored compact tool presentation around the upstream tool lifecycle with a bundled TUI-only shell. Native Box rendering is available by disabling `builtin:tool-presentation`; renderer ownership, explicit self shells, and HTML export remain unchanged.
+
 ## [1.4.1] - 2026-10-26
 
 ### Added

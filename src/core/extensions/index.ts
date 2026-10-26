@@ -199,6 +199,7 @@ export type {
 	ToolExecutionEndEvent,
 	// Tool execution mode
 	ToolExecutionMode,
+	ToolExecutionShell,
 	ToolExecutionStartEvent,
 	ToolExecutionUpdateEvent,
 	ToolExposure,
@@ -211,6 +212,7 @@ export type {
 	ToolRenderResultOptions,
 	ToolResultEvent,
 	ToolResultEventResult,
+	ToolRowGap,
 	TreePreparation,
 	TurnEndEvent,
 	TurnEndEventResult,

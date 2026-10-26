@@ -515,6 +515,35 @@ export interface ToolRenderContext<TState = any, TArgs = any, TDetails = unknown
 	outputPad: number;
 }
 
+/** Blank lines above a tool row, selected by what precedes it. */
+export interface ToolRowGap {
+	afterTool: number;
+	afterMultilineTool: number;
+	afterOther: number;
+}
+
+/**
+ * Optional TUI chrome for a tool row. The core still owns renderer composition and execution
+ * lifecycle; this hook only frames the components and supplies presentation fallbacks.
+ * It is ignored by HTML export and never changes the tool's model-facing definition.
+ */
+export interface ToolExecutionShell {
+	frame(component: Component, kind: "header" | "body", context: ToolRenderContext): Component;
+	/** Used when the tool has no call renderer, or its call renderer fails. */
+	renderCall?: (args: any, theme: Theme, context: ToolRenderContext) => Component;
+	/** Used when the tool has no result renderer, or its result renderer fails. */
+	renderResult?: (
+		result: AgentToolResult<any>,
+		options: ToolRenderResultOptions,
+		theme: Theme,
+		context: ToolRenderContext,
+	) => Component;
+	/** Return true to omit the current result while keeping the call row visible. */
+	shouldHideResult?(context: ToolRenderContext): boolean;
+	/** Spacing policy consumed by the transcript's tool container. */
+	gap?: ToolRowGap;
+}
+
 /**
  * How the model reaches a tool. "Callable" means callable from other tools through
  * `ctx.executeTool()`, as the `codemode` tool does.
@@ -610,6 +639,8 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	constrainedSampling?: false | ConstrainedSamplingConfig;
 	/** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
 	renderShell?: "default" | "self";
+	/** Optional TUI-only shell supplied by a renderer resolver. Ignored by HTML export. */
+	shell?: ToolExecutionShell;
 
 	/** Optional compatibility shim to prepare raw tool call arguments before schema validation. Must return an object conforming to TParams. */
 	prepareArguments?: (args: unknown) => Static<TParams>;
@@ -690,7 +721,7 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 
 type AnyToolDefinition = ToolDefinition<any, any, any>;
 
-export type ToolRenderers = Pick<AnyToolDefinition, "renderShell" | "renderCall" | "renderResult">;
+export type ToolRenderers = Pick<AnyToolDefinition, "renderShell" | "renderCall" | "renderResult" | "shell">;
 
 /**
  * Chooses how calls to a tool are drawn, including tools that are not registered. `next()` returns

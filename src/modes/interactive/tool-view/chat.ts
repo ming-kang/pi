@@ -1,7 +1,6 @@
 import { type Component, Container } from "@earendil-works/pi-tui";
 import { stripAnsi } from "../../../utils/ansi.ts";
-import { toolStyle } from "./style.ts";
-import { ToolExecutionComponent } from "./tool-execution.ts";
+import { ToolExecutionComponent } from "../components/tool-execution.ts";
 
 function disposeAll(components: Iterable<unknown>): void {
 	for (const component of components) {
@@ -27,7 +26,7 @@ export class ToolChatContainer extends Container {
 				const lines = child.render(width);
 				const start = lines.findIndex((line) => stripAnsi(line).trim().length > 0);
 				if (start === -1) continue;
-				const { afterTool, afterMultilineTool, afterOther } = toolStyle.gap;
+				const { afterTool, afterMultilineTool, afterOther } = child.getToolRowGap();
 				child.setLeadingGap(
 					previous instanceof ToolExecutionComponent
 						? previousHeight > 1
