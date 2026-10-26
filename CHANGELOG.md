@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-10-26
+
 ### Added
 
 - Added the bundled [Cached compaction](docs/bundled/extensions/cached-compaction.md) extension. Manual and automatic compaction now summarize the prepared conversation directly so providers can reuse prompt cache and summaries can read complete tool output, with native overflow and failure fallbacks and a display-only usage card.

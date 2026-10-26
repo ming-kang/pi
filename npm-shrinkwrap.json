@@ -1,12 +1,12 @@
 {
 	"name": "@astralyn/pi",
-	"version": "1.4.0",
+	"version": "1.4.1",
 	"lockfileVersion": 3,
 	"requires": true,
 	"packages": {
 		"": {
 			"name": "@astralyn/pi",
-			"version": "1.4.0",
+			"version": "1.4.1",
 			"license": "MIT",
 			"dependencies": {
 				"@earendil-works/pi-agent-core": "1.4.0",
