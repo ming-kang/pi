@@ -5,18 +5,15 @@ import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeBashWithOperations } from "../src/core/bash-executor.ts";
 import type { ExtensionToolContext } from "../src/core/extensions/types.ts";
-import {
-	type BashOperations,
-	createBashTool,
-	createBashToolDefinition,
-	createLocalBashOperations,
-} from "../src/core/tools/bash.ts";
+import type { BashOperations } from "../src/core/tools/bash.ts";
 import { createEditToolDefinition } from "../src/core/tools/edit.ts";
 import { computeEditsDiff } from "../src/core/tools/edit-diff.ts";
 import { createFindToolDefinition } from "../src/core/tools/find.ts";
 import { createGrepToolDefinition } from "../src/core/tools/grep.ts";
 import { createLsToolDefinition } from "../src/core/tools/ls.ts";
 import { createReadToolDefinition } from "../src/core/tools/read.ts";
+import { createLocalBashOperations } from "../src/core/tools/shell-operations.ts";
+import { createBashTool, createBashToolDefinition } from "../src/core/tools/shell-tool.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
 import {
 	createEditTool,

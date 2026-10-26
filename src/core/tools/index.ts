@@ -1,13 +1,8 @@
-export {
-	type BashOperations,
-	type BashSpawnContext,
-	type BashSpawnHook,
-	type BashToolDetails,
-	type BashToolInput,
-	type BashToolOptions,
-	createBashTool,
-	createBashToolDefinition,
-	createLocalBashOperations,
+export type {
+	BashOperations,
+	BashSpawnContext,
+	BashSpawnHook,
+	BashToolOptions,
 } from "./bash.ts";
 export {
 	createEditTool,
@@ -61,6 +56,13 @@ export {
 	type ReadToolInput,
 	type ReadToolOptions,
 } from "./read.ts";
+export { createLocalBashOperations } from "./shell-operations.ts";
+export {
+	type BashToolDetails,
+	type BashToolInput,
+	createBashTool,
+	createBashToolDefinition,
+} from "./shell-tool.ts";
 export { createTasksTool, createTasksToolDefinition } from "./tasks.ts";
 export {
 	DEFAULT_MAX_BYTES,
@@ -82,13 +84,14 @@ export {
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolDefinition } from "../extensions/types.ts";
-import { type BashToolOptions, createBashTool, createBashToolDefinition } from "./bash.ts";
+import type { BashToolOptions } from "./bash.ts";
 import { createEditTool, createEditToolDefinition, type EditToolOptions } from "./edit.ts";
 import { createFindTool, createFindToolDefinition, type FindToolOptions } from "./find.ts";
 import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "./grep.ts";
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./ls.ts";
 import { createPowerShellTool, createPowerShellToolDefinition, type PowerShellToolOptions } from "./powershell.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.ts";
+import { createBashTool, createBashToolDefinition } from "./shell-tool.ts";
 import { createTasksTool, createTasksToolDefinition } from "./tasks.ts";
 import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./write.ts";
 

@@ -3,13 +3,11 @@ import {
 	type BashOperations,
 	type BashSpawnContext,
 	type BashSpawnHook,
-	type BashToolDetails,
-	type BashToolInput,
 	type BashToolOptions,
 	createLocalShellOperations,
-	createShellToolDefinition,
 	type ShellToolConfig,
-} from "./shell-tool.ts";
+} from "./bash.ts";
+import { type BashToolDetails, type BashToolInput, createShellToolDefinition } from "./shell-tool.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
 const UTF8_OUTPUT_PREFIX = "try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}\n";

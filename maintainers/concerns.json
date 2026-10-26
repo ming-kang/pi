@@ -133,8 +133,7 @@
 					"path": "src/core/sdk.ts"
 				},
 				{
-					"path": "src/core/tools/bash.ts",
-					"rewrite": "Shell calls run through session supervision and the shared shell-execution pipeline, replacing upstream's inline execution path."
+					"path": "src/core/tools/bash.ts"
 				},
 				{
 					"path": "src/core/tools/output-accumulator.ts"
@@ -160,7 +159,8 @@
 					"path": "src/modes/interactive/interactive-mode.ts"
 				},
 				{
-					"path": "src/core/tools/index.ts"
+					"path": "src/core/tools/index.ts",
+					"rewrite": "The base tool map routes bash and powershell through the managed definition while upstream keeps the process loop, so its export and import block splits across modules."
 				},
 				{
 					"path": "src/core/tools/renderers/index.ts"
@@ -256,6 +256,9 @@
 			"why": "The bundled tool-presentation extension supplies compact dot/rail TUI chrome while upstream owns tool lifecycle and provides the native Box fallback.",
 			"watch": "Native lifecycle fixes should need little or no porting. Recheck the thin shell, row-gap, result-context, and disposal additions plus distribution renderers when upstream touches them; retire the local shell hook if upstream provides equivalent configurable TUI chrome. Verify native fallback and HTML export as well as interactive states.",
 			"paths": [
+				{
+					"path": "src/core/tools/bash.ts"
+				},
 				{
 					"path": "src/core/tools/edit.ts"
 				},
@@ -443,18 +446,6 @@
 			"tests": [
 				"test/resource-loader.test.ts",
 				"test/trust-manager-windows.test.ts"
-			]
-		},
-		{
-			"id": "windows-shell-normalization",
-			"why": "CMD-style nul redirects become /dev/null so POSIX shells on Windows cannot create undeletable nul files.",
-			"paths": [
-				{
-					"path": "src/core/tools/bash.ts"
-				}
-			],
-			"tests": [
-				"test/bash-nul-redirect.test.ts"
 			]
 		},
 		{

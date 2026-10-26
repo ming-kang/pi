@@ -150,8 +150,9 @@ import {
 import type { TaskRuntime } from "./tasks/runtime.ts";
 import { type QuarantinedTaskSettlement, TaskSession } from "./tasks/session.ts";
 import type { TaskSnapshot } from "./tasks/types.ts";
-import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
+import type { BashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
+import { createLocalBashOperations } from "./tools/shell-operations.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import { addUsageToTotals, combineUsage, createUsageTotals, getAccountedUsages } from "./usage-totals.ts";
 import {

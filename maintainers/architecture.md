@@ -33,8 +33,11 @@ Tasks is a core capability, not an extension, because completion delivery must f
 | `core/tasks/runtime.ts` | Execution handles, admission, cancellation, and foreground handoff. Executors get a task-local control, not the registry. |
 | `core/tasks/store.ts` | Retained records, output cleanup, and history quotas. |
 | `core/tasks/session.ts`, `delivery.ts` | Journal persistence, exactly-once usage, runtime replacement, late-settlement quarantine, completion claims, and persistence receipts. |
-| `core/tools/shell-tool.ts`, `shell-execution.ts` | Shared Bash and PowerShell execution and output policy. |
+| `core/tools/bash.ts`, `powershell.ts` | Upstream spawn, timeout, and process-tree handling shared by both shell tools. |
+| `core/tools/shell-tool.ts`, `shell-execution.ts` | The managed definition (background, handoff) and the single output owner for a running command. |
 | `core/tools/tasks.ts`, `modes/interactive/tasks/` | The `tasks` tool, `/tasks`, the detach key, the statusline item, and completion cards. |
+
+The shell process loop stays in upstream `core/tools/bash.ts`; `shell-tool.ts` adds only the model-facing contract that must differ, so process fixes merge normally. `shell-operations.ts` owns the narrow Windows command normalization.
 
 Invariants:
 
@@ -53,4 +56,4 @@ Re-check these when a synchronization touches them:
 - **Compaction:** the lifecycle is upstream's. `SettingsManager.getCompactionSettings()` only converts `triggerPercent` into upstream's `reserveTokens` for the active model. The bundled `cached-compaction` extension replaces ordinary summary generation through the public hook; overflow recovery and failed attempts remain native. Previous compaction file details are consumed by shape for both native and extension-provided entries.
 - **Context snapshots:** `ContextSnapshotCapture` records the request prefix after every request projection, so snapshot consumers such as BTW and cached compaction reuse the exact bytes the provider received. It reads `sessionManager.buildSessionProjection()`, which is canonical, rather than `agent.state.messages`, which is a cache. It wraps upstream's `convertToLlm` and request-option builder instead of copying them.
 - **Tool presentation:** upstream's `components/tool-execution.ts` remains the lifecycle owner, with thin TUI-only shell, row-gap, result-context, and disposal hooks. The bundled `tool-presentation` extension attaches the distribution shell through the existing renderer resolver; `tool-view/` owns visual policy and compatibility adapters, not a second lifecycle implementation. Upstream's Box is the fallback when `builtin:tool-presentation` is disabled. Verify pending, success, error, collapsed, expanded, `/reload`, `/tree`, HTML export, and native fallback states in a real terminal.
-- **Windows and lifecycles:** keep shell normalization narrow, and re-check process behavior, selector disposal, and timer lifecycles after upstream changes.
+- **Windows and lifecycles:** keep the normalization in `core/tools/shell-operations.ts` narrow, and re-check process behavior, selector disposal, and timer lifecycles after upstream changes.

@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TasksContext } from "../../src/core/tasks/types.ts";
-import { createLocalBashOperations } from "../../src/core/tools/bash.ts";
+import { createLocalBashOperations } from "../../src/core/tools/shell-operations.ts";
 import { runShellCommand } from "../../src/core/tools/shell-execution.ts";
 import type { BashToolDetails } from "../../src/core/tools/shell-tool.ts";
 

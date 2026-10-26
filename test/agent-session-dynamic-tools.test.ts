@@ -8,7 +8,7 @@ import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
-import { createBashTool } from "../src/core/tools/bash.ts";
+import { createBashTool } from "../src/core/tools/shell-tool.ts";
 
 describe("AgentSession dynamic tool registration", () => {
 	let tempDir: string;

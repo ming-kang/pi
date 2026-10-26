@@ -11,8 +11,9 @@ import { keyHint } from "../../../modes/interactive/components/keybinding-hints.
 import { VisualLinePreview } from "../../../modes/interactive/components/visual-truncate.ts";
 import { highlightCode, theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderContext, ToolRenderResultOptions } from "../../extensions/types.ts";
+import type { ShellToolConfig } from "../bash.ts";
 import { getTextOutput, invalidArgText, startToolTimer, str, toolTimerText } from "../render-utils.ts";
-import type { BashRenderState, BashToolDetails, ShellToolConfig } from "../shell-tool.ts";
+import type { BashRenderState, BashToolDetails } from "../shell-tool.ts";
 import { DEFAULT_MAX_BYTES, formatSize } from "../truncate.ts";
 
 const BASH_PREVIEW_LINES = 5;

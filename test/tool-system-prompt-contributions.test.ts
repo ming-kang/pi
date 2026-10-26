@@ -1,5 +1,4 @@
 import { describe, expect, test } from "vitest";
-import { bashToolSystemPromptContribution, createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { createEditToolDefinition, editToolSystemPromptContribution } from "../src/core/tools/edit.ts";
 import { createFindToolDefinition, findToolSystemPromptContribution } from "../src/core/tools/find.ts";
 import { createGrepToolDefinition, grepToolSystemPromptContribution } from "../src/core/tools/grep.ts";
@@ -9,6 +8,7 @@ import {
 	powershellToolSystemPromptContribution,
 } from "../src/core/tools/powershell.ts";
 import { createReadToolDefinition, readToolSystemPromptContribution } from "../src/core/tools/read.ts";
+import { bashToolSystemPromptContribution, createBashToolDefinition } from "../src/core/tools/shell-tool.ts";
 import { createWriteToolDefinition, writeToolSystemPromptContribution } from "../src/core/tools/write.ts";
 
 const cases = [
