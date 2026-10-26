@@ -17,7 +17,7 @@ Pi has two summarization mechanisms:
 | Compaction | Context exceeds threshold, or `/compact` | Summarize old messages to free up context |
 | Branch summarization | `/tree` navigation | Preserve context when switching branches |
 
-Both use the same structured summary format and track file operations cumulatively. Summarization requests disable prompt-cache writes because these one-off prompts are unlikely to be reused.
+Both use the same structured summary format and track file operations cumulatively. Native summarization requests disable prompt-cache writes because these one-off prompts are unlikely to be reused. The bundled [Cached compaction](bundled/extensions/cached-compaction.md) extension instead summarizes the prepared conversation directly for manual and threshold compaction, allowing provider prompt-cache reuse; overflow recovery and failed cached-path attempts retain the native behavior.
 
 ## Compaction
 

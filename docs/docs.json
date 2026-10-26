@@ -73,6 +73,10 @@
           "path": "bundled/extensions/btw.md"
         },
         {
+          "title": "Cached compaction",
+          "path": "bundled/extensions/cached-compaction.md"
+        },
+        {
           "title": "DeepWiki",
           "path": "bundled/extensions/deepwiki.md"
         },

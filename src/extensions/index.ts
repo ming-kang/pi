@@ -1,5 +1,6 @@
 import type { InlineExtension } from "../core/extensions/types.ts";
 import btwExtension from "./btw/index.ts";
+import cachedCompactionExtension from "./cached-compaction/index.ts";
 import codemodeExtension from "./codemode/index.ts";
 import deepwikiExtension from "./deepwiki/index.ts";
 import llamaExtension from "./llama/index.ts";
@@ -14,6 +15,7 @@ export const builtInExtensions: InlineExtension[] = [
 	{ name: "codemode", factory: codemodeExtension, replaceable: true, builtin: true },
 	{ name: "mcp", factory: mcpExtension, replaceable: true, builtin: true },
 	{ name: "tool-search", factory: toolSearchExtension, replaceable: true, builtin: true },
+	{ name: "cached-compaction", factory: cachedCompactionExtension, replaceable: true, builtin: true },
 	{ name: "llama.cpp", factory: llamaExtension, builtin: true },
 	{ name: "btw", factory: btwExtension, builtin: true },
 	{ name: "deepwiki", factory: deepwikiExtension, builtin: true },

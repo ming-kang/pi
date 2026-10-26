@@ -239,6 +239,19 @@
 			]
 		},
 		{
+			"id": "cached-compaction-files",
+			"why": "Native compaction carries compatible file details through extension-provided checkpoints so cached and native compaction can alternate without losing file history.",
+			"paths": [
+				{
+					"path": "src/core/compaction/compaction.ts"
+				}
+			],
+			"tests": [
+				"test/compaction.test.ts",
+				"test/cached-compaction.test.ts"
+			]
+		},
+		{
 			"id": "tool-presentation",
 			"why": "Tool rows are compact dot/rail blocks owned by src/modes/interactive/tool-view/; multiline blocks leave a blank line before the next tool, while single-line blocks stay tight. Upstream's Box shell is dropped.",
 			"watch": "Upstream fixes to the dropped tool-execution.ts (image conversion, click to expand, lifecycle) and to the renderers are ported by hand; npm run sync lists them for porting by hand. Retire the fork if upstream ships a shell whose look is configurable.",

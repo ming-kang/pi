@@ -562,6 +562,24 @@ describe("prepareCompaction with previous compaction", () => {
 		expect(summarizedText).not.toContain("First summary");
 		expect(preparation!.previousSummary).toBe("First summary");
 	});
+
+	it("should carry native file details from an extension-provided compaction", () => {
+		const u1 = createMessageEntry(createUserMessage("old user".repeat(12)));
+		const a1 = createMessageEntry(createAssistantMessage("old assistant".repeat(12)));
+		const compaction1 = createCompactionEntry("Extension summary", a1.id);
+		compaction1.fromHook = true;
+		compaction1.details = { readFiles: ["old-read.ts"], modifiedFiles: ["old-edit.ts"] };
+		const u2 = createMessageEntry(createUserMessage("new user".repeat(12)));
+		const a2 = createMessageEntry(createAssistantMessage("new assistant".repeat(12), createMockUsage(8000, 2000)));
+
+		const preparation = prepareCompaction([u1, a1, compaction1, u2, a2], {
+			...DEFAULT_COMPACTION_SETTINGS,
+			keepRecentTokens: 1,
+		});
+
+		expect(preparation?.fileOps.read).toContain("old-read.ts");
+		expect(preparation?.fileOps.edited).toContain("old-edit.ts");
+	});
 });
 
 // ============================================================================

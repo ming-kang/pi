@@ -64,17 +64,15 @@ function extractFileOperations(
 ): FileOperations {
 	const fileOps = createFileOps();
 
-	// Collect from previous compaction's details (if pi-generated)
 	if (prevCompactionIndex >= 0) {
 		const prevCompaction = entries[prevCompactionIndex] as CompactionEntry;
-		if (!prevCompaction.fromHook && prevCompaction.details) {
-			// fromHook field kept for session file compatibility
+		if (prevCompaction.details) {
 			const details = prevCompaction.details as CompactionDetails;
 			if (Array.isArray(details.readFiles)) {
-				for (const f of details.readFiles) fileOps.read.add(f);
+				for (const f of details.readFiles) if (typeof f === "string") fileOps.read.add(f);
 			}
 			if (Array.isArray(details.modifiedFiles)) {
-				for (const f of details.modifiedFiles) fileOps.edited.add(f);
+				for (const f of details.modifiedFiles) if (typeof f === "string") fileOps.edited.add(f);
 			}
 		}
 	}
