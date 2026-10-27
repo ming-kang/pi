@@ -2971,9 +2971,10 @@ ctx.ui.setFooter(undefined);  // Restore built-in footer
 ctx.ui.setHeader((_tui, theme) => new Text(theme.fg("accent", "Project ready"), 0, 0));
 ctx.ui.setHeader(undefined);  // Restore built-in header
 
-// Label used for collapsed thinking blocks
+// Label for collapsed thinking blocks while they are actively streaming.
+// Settled blocks use the built-in "Thoughts" label.
 ctx.ui.setHiddenThinkingLabel("Reasoning");
-ctx.ui.setHiddenThinkingLabel();  // Restore default label
+ctx.ui.setHiddenThinkingLabel();  // Restore default active label
 
 // Terminal title
 ctx.ui.setTitle("pi - my-project");

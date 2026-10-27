@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Collapsed thinking now shows up to three live preview lines while streaming and settles to `Thoughts`, with click-to-expand preserved. A custom `setHiddenThinkingLabel()` now labels active streaming blocks only; settled blocks use `Thoughts`.
+
 ## [1.4.2] - 2026-10-26
 
 ### Changed

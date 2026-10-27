@@ -187,7 +187,10 @@ export interface ExtensionUIContext {
 	 */
 	setWorkingIndicator(options?: WorkingIndicatorOptions): void;
 
-	/** Set the label shown for hidden thinking blocks. Call with no argument to restore default. */
+	/**
+	 * Set the label for active hidden thinking blocks during streaming.
+	 * Settled blocks use "Thoughts". Call with no argument to restore the default.
+	 */
 	setHiddenThinkingLabel(label?: string): void;
 
 	/** Set a widget to display above or below the editor. Accepts string array or component factory. */

@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { TuiMouseEvent } from "@earendil-works/pi-tui";
+import { type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
@@ -31,6 +31,28 @@ function createAssistantMessage(
 		stopReason: overrides.stopReason ?? "stop",
 		timestamp: Date.now(),
 	};
+}
+
+function clickComponentRow(component: AssistantMessageComponent, text: string, width = 80): void {
+	const lines = component.render(width);
+	const row = lines.findIndex((line) => stripAnsi(line).includes(text));
+	expect(row).toBeGreaterThanOrEqual(0);
+
+	const event: TuiMouseEvent = {
+		type: "click",
+		button: "left",
+		x: 1,
+		y: row,
+		screenX: 1,
+		screenY: row,
+		width,
+		height: lines.length,
+		shift: false,
+		alt: false,
+		ctrl: false,
+		clickCount: 1,
+	};
+	expect(component.handleMouse(event)?.handled).toBe(true);
 }
 
 describe("AssistantMessageComponent", () => {
@@ -70,7 +92,7 @@ describe("AssistantMessageComponent", () => {
 		);
 		const rendered = component.render(80).join("\n");
 
-		expect(rendered).toContain("Thinking...");
+		expect(rendered).toContain("Thoughts");
 		expect(rendered).toContain("Response was truncated before completion.");
 	});
 
@@ -88,7 +110,7 @@ describe("AssistantMessageComponent", () => {
 		);
 		const rendered = stripAnsi(component.render(80).join("\n"));
 
-		expect(rendered.match(/Thinking\.\.\./g)).toHaveLength(1);
+		expect(rendered.match(/Thoughts/g)).toHaveLength(1);
 		expect(rendered).toContain("answer");
 	});
 
@@ -123,7 +145,7 @@ describe("AssistantMessageComponent", () => {
 
 		const collapsed = stripAnsi(component.render(width).join("\n"));
 		expect(collapsed).not.toContain("first reasoning");
-		expect(collapsed).toContain("Thinking...");
+		expect(collapsed).toContain("Thoughts");
 		expect(collapsed).toContain("second reasoning");
 	});
 
@@ -273,5 +295,167 @@ describe("AssistantMessageComponent", () => {
 		const unpaddedComponent = new UserMessageComponent("hello", undefined, 0);
 		const unpaddedLines = unpaddedComponent.render(40).map((line) => stripAnsi(line));
 		expect(unpaddedLines.some((line) => line.startsWith("hello"))).toBe(true);
+	});
+
+	test("streams a three-line preview under the active thinking label", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(undefined, true);
+		const message = createAssistantMessage([
+			{
+				type: "thinking",
+				thinking:
+					"line 1: analyzing the problem\nline 2: checking the components\nline 3: preparing the plan\nline 4: executing now",
+			},
+		]);
+
+		component.updateContent(message, true);
+		const width = 40;
+		const lines = component.render(width);
+		const rendered = stripAnsi(lines.join("\n"));
+
+		expect(rendered).toContain("Thinking...");
+		expect(rendered).not.toContain("line 1: analyzing the problem");
+		expect(rendered).toContain("line 2: checking the components");
+		expect(rendered).toContain("line 3: preparing the plan");
+		expect(rendered).toContain("line 4: executing now");
+		expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+
+		const previewLines = lines.filter((line) => /line [234]:/.test(stripAnsi(line)));
+		expect(previewLines).toHaveLength(3);
+		expect(previewLines.every((line) => visibleWidth(line) === width)).toBe(true);
+	});
+
+	test("uses Text-compatible layout for narrow CJK previews", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(undefined, true);
+		component.updateContent(
+			createAssistantMessage([{ type: "thinking", thinking: "old 1\nold 2\nold 3\n\t中文思考🙂" }]),
+			true,
+		);
+
+		const width = 24;
+		const lines = component.render(width);
+		const rendered = stripAnsi(lines.join("\n"));
+		expect(rendered).not.toContain("old 1");
+		expect(rendered).toContain("中文思考🙂");
+		expect(rendered).not.toContain("\t");
+		expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+
+		const cjkLine = lines.find((line) => stripAnsi(line).includes("中文思考🙂"));
+		expect(cjkLine).toBeDefined();
+		expect(visibleWidth(cjkLine!)).toBe(width);
+	});
+
+	test("settles to Thoughts when streaming ends", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(undefined, true);
+		const message = createAssistantMessage([
+			{ type: "thinking", thinking: "first step\nsecond step\nthird step\nfourth step" },
+		]);
+
+		component.updateContent(message, true);
+		component.updateContent(message, false);
+		const rendered = stripAnsi(component.render(80).join("\n"));
+		expect(rendered).toContain("Thoughts");
+		expect(rendered).not.toContain("Thinking...");
+		expect(rendered).not.toContain("fourth step");
+	});
+
+	test("settles to Thoughts when assistant text follows during streaming", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(undefined, true);
+		component.updateContent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "first step\nsecond step\nthird step\nfourth step" },
+				{ type: "text", text: "answer" },
+			]),
+			true,
+		);
+
+		const rendered = stripAnsi(component.render(80).join("\n"));
+		expect(rendered).toContain("Thoughts");
+		expect(rendered).toContain("answer");
+		expect(rendered).not.toContain("Thinking...");
+		expect(rendered).not.toContain("fourth step");
+	});
+
+	test("settles to Thoughts when a tool call follows during streaming", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(undefined, true);
+		component.updateContent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "first step\nsecond step\nthird step\nfourth step" },
+				{ type: "text", text: " " },
+				{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "file.txt" } },
+			]),
+			true,
+		);
+
+		const rendered = stripAnsi(component.render(80).join("\n"));
+		expect(rendered).toContain("Thoughts");
+		expect(rendered).not.toContain("Thinking...");
+		expect(rendered).not.toContain("fourth step");
+	});
+
+	test("keeps active and settled thinking labels independent", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(undefined, true);
+		const message = createAssistantMessage([
+			{ type: "thinking", thinking: "first step\nsecond step\nthird step\nfourth step" },
+		]);
+		component.setHiddenThinkingLabel("Reasoning");
+
+		component.updateContent(message, true);
+		let rendered = stripAnsi(component.render(80).join("\n"));
+		expect(rendered).toContain("Reasoning");
+		expect(rendered).toContain("fourth step");
+		expect(rendered).not.toContain("Thinking...");
+
+		component.updateContent(message, false);
+		rendered = stripAnsi(component.render(80).join("\n"));
+		expect(rendered).toContain("Thoughts");
+		expect(rendered).not.toContain("Reasoning");
+		expect(rendered).not.toContain("fourth step");
+	});
+
+	test("expands and collapses active thinking on click", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(undefined, true);
+		component.updateContent(
+			createAssistantMessage([{ type: "thinking", thinking: "first step\nsecond step\nthird step\nfourth step" }]),
+			true,
+		);
+
+		clickComponentRow(component, "Thinking...");
+		let rendered = stripAnsi(component.render(80).join("\n"));
+		expect(rendered).toContain("first step");
+		expect(rendered).toContain("fourth step");
+		expect(rendered).not.toContain("Thinking...");
+
+		clickComponentRow(component, "first step");
+		rendered = stripAnsi(component.render(80).join("\n"));
+		expect(rendered).toContain("Thinking...");
+		expect(rendered).toContain("fourth step");
+		expect(rendered).not.toContain("first step");
+	});
+
+	test("expands and collapses settled thinking on click", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(undefined, true);
+		component.updateContent(
+			createAssistantMessage([{ type: "thinking", thinking: "first step\nsecond step\nthird step\nfourth step" }]),
+			false,
+		);
+
+		clickComponentRow(component, "Thoughts");
+		let rendered = stripAnsi(component.render(80).join("\n"));
+		expect(rendered).toContain("first step");
+		expect(rendered).toContain("fourth step");
+		expect(rendered).not.toContain("Thoughts");
+
+		clickComponentRow(component, "first step");
+		rendered = stripAnsi(component.render(80).join("\n"));
+		expect(rendered).toContain("Thoughts");
+		expect(rendered).not.toContain("first step");
 	});
 });

@@ -139,7 +139,7 @@ import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-
 import { reportBug } from "./bug-report.ts";
 import { createChatViewport } from "./chat-viewport.ts";
 import { ArminComponent } from "./components/armin.ts";
-import { AssistantMessageComponent } from "./components/assistant-message.ts";
+import { AssistantMessageComponent, DEFAULT_ACTIVE_THINKING_LABEL } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
@@ -493,8 +493,7 @@ export class InteractiveMode {
 	private workingVisible = true;
 	private workingIndicatorOptions: WorkingIndicatorOptions | undefined = undefined;
 	private readonly defaultWorkingMessage = "Working";
-	private readonly defaultHiddenThinkingLabel = "Thinking...";
-	private hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
+	private activeThinkingLabel = DEFAULT_ACTIVE_THINKING_LABEL;
 
 	private lastSigintTime = 0;
 	private lastEscapeTime = 0;
@@ -2370,14 +2369,14 @@ export class InteractiveMode {
 	}
 
 	private setHiddenThinkingLabel(label?: string): void {
-		this.hiddenThinkingLabel = label ?? this.defaultHiddenThinkingLabel;
+		this.activeThinkingLabel = label ?? DEFAULT_ACTIVE_THINKING_LABEL;
 		for (const child of this.chatContainer.children) {
 			if (child instanceof AssistantMessageComponent) {
-				child.setHiddenThinkingLabel(this.hiddenThinkingLabel);
+				child.setHiddenThinkingLabel(this.activeThinkingLabel);
 			}
 		}
 		if (this.streamingComponent) {
-			this.streamingComponent.setHiddenThinkingLabel(this.hiddenThinkingLabel);
+			this.streamingComponent.setHiddenThinkingLabel(this.activeThinkingLabel);
 		}
 		this.ui.requestRender();
 	}
@@ -3472,7 +3471,7 @@ export class InteractiveMode {
 						undefined,
 						this.hideThinkingBlock,
 						this.getMarkdownThemeWithSettings(),
-						this.hiddenThinkingLabel,
+						this.activeThinkingLabel,
 						this.outputPad,
 						this.getMarkdownTransformers(),
 					);
@@ -3945,7 +3944,7 @@ export class InteractiveMode {
 					message,
 					this.hideThinkingBlock,
 					this.getMarkdownThemeWithSettings(),
-					this.hiddenThinkingLabel,
+					this.activeThinkingLabel,
 					this.outputPad,
 					this.getMarkdownTransformers(),
 				);

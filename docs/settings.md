@@ -31,7 +31,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `defaultModel` | string | - | Default model ID |
 | `defaultThinkingLevel` | string | - | Global fallback: `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, or `"max"` |
 | `modelThinkingLevels` | object | - | Per-model default thinking levels keyed by `provider/modelId`; set through `/thinking` Ctrl+S or `/settings` |
-| `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output |
+| `hideThinkingBlock` | boolean | `false` | Show up to three live preview lines for collapsed thinking while streaming, then settle to `Thoughts`; click to expand |
 | `showCacheMissNotices` | boolean | `false` | Show transcript notices for significant prompt-cache misses, successful cache-warming usage, compaction or branch-summary usage, and provider recovery diagnostics such as dropped Anthropic thinking blocks |
 | `thinkingBudgets` | object | - | Custom token budgets per thinking level. Anthropic, Google, and Bedrock use these natively. OpenAI-compatible models use them when `compat.thinkingTokenBudgetField` (or `supportsThinkingTokenBudget`) is set. |
 | `cacheWarming` | string | `"streaming"` | Prompt cache-warming mode: `"off"`, `"streaming"`, or `"idle"`. Global setting only. |

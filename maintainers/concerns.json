@@ -526,6 +526,25 @@
 				"test/suite/agent-session-codemode.test.ts",
 				"test/mcp-command.test.ts"
 			]
+		},
+		{
+			"id": "thinking-preview",
+			"why": "Thinking presentation separates active and settled collapsed states while retaining expandable reasoning and a Text-based rolling preview.",
+			"paths": [
+				{
+					"path": "src/modes/interactive/components/assistant-message.ts",
+					"rewrite": "Thinking blocks use expanded, active, and settled views; active blocks compose Text into a rolling preview and settled blocks use Thoughts."
+				},
+				{
+					"path": "src/modes/interactive/interactive-mode.ts"
+				},
+				{
+					"path": "src/core/extensions/types.ts"
+				}
+			],
+			"tests": [
+				"test/assistant-message.test.ts"
+			]
 		}
 	]
 }
