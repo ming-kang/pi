@@ -1,10 +1,10 @@
 # Interactive testing
 
-Use [tui-test](https://github.com/microsoft/tui-test) to check interactive changes without a person at the keyboard. It runs the real CLI in a pseudo-terminal, a terminal device that a program creates, so Pi takes the same `ProcessTerminal` path as in a terminal window: raw input, keyboard negotiation, resizing, and screen updates. Commands then send keys and read the screen as text or as a PNG screenshot. Automated tests keep using the in-process `VirtualTerminal`.
+Use [tui-test](https://github.com/microsoft/tui-test) to verify interactive Terminal UI changes without human input. It launches the real CLI inside a pseudo-terminal (`ProcessTerminal`), supporting raw input, terminal resizing, and screen capture.
 
-## Install
+## Setup
 
-Put tui-test 0.1.0-beta.5 in a directory on `PATH`, such as `~/.local/bin`:
+Download `tui-test` (tested with v0.1.0-beta.5) and ensure it is on your `PATH`:
 
 ```powershell
 gh release download 0.1.0-beta.5 -R microsoft/tui-test -p tui-test-x86_64-pc-windows-msvc.zip -D $env:TEMP --clobber
@@ -12,84 +12,71 @@ Expand-Archive "$env:TEMP\tui-test-x86_64-pc-windows-msvc.zip" "$HOME\.local\bin
 tui-test --version
 ```
 
-This page was verified on Windows; other platforms use the matching asset from the same release. tui-test is in beta and its commands may change, so re-check this page before moving to another version.
+## Quick start
 
-## Start Pi
-
-Run from the repository root in PowerShell:
+Run an offline fixture session in PowerShell:
 
 ```powershell
+# 1. Prepare clean artifacts directory and disable external editor unbinding
 New-Item -ItemType Directory -Force .artifacts\tty\agent | Out-Null
 '{ "app.editor.external": [] }' | Set-Content -Encoding utf8NoBOM .artifacts\tty\agent\keybindings.json
+
+# 2. Launch Pi with the offline fixture provider
 tui-test run --backend xtermjs --cols 100 --rows 40 --cwd "$PWD" `
   --env "PI_CODING_AGENT_DIR=$PWD\.artifacts\tty\agent" --env PI_OFFLINE=1 `
   node scripts/run-source.mjs --no-env --no-session --no-skills --no-prompt-templates `
   --extension test/fixtures/offline-provider.ts --provider offline --model fixture
+
+# 3. Wait for readiness and clear console query noise
 tui-test expect text "Offline fixture" --timeout 30000
 tui-test expect text "8080/8080/8080" --timeout 10000
 tui-test key press Ctrl+U
 ```
 
-This runs the source checkout like `npm run dev`, offline, without saving a session, and without provider credentials or your own settings, skills, and prompt templates. Startup takes about 15 seconds. The agent directory and screenshots stay in the ignored `.artifacts/tty/`; delete it for a clean start, then recreate `keybindings.json`. Always pass `--backend xtermjs` (see [Limits](#limits)).
+## Fixture test scenarios
 
-The `keybindings.json` lines and the last two commands handle a Windows console problem (see [Limits](#limits)): Pi's terminal color query leaves `b:8080/8080/8080` in the editor. The `keybindings.json` unbinds the external editor so that text cannot suspend Pi, and `Ctrl+U` clears it. Pi queries again on `/reload` or a theme change, so clear the editor the same way after those:
+The fixture provider (`test/fixtures/offline-provider.ts`) responds to specific prompts without network access:
 
-```powershell
-tui-test submit "/reload"
-tui-test expect text "8080/8080/8080" --timeout 10000
-tui-test key press Ctrl+U
-```
-
-The fixture provider in `test/fixtures/offline-provider.ts` answers without network access:
-
-| Prompt | Result |
+| Prompt | Scenario tested |
 | --- | --- |
-| `tools` | Calls the `fixture_wait` tool for 2 seconds, then answers. |
-| `tools slow` | Same with a 15-second tool call, long enough to inspect the pending state. |
-| `bg` | Hands a real Bash command to the background; it prints 45 lines over about 15 seconds, so `/tasks` shows it running and then completed. Its completion notice starts one more answer. |
-| `long` | Streams a 45-line answer. |
-| Anything else | A short answer with a thinking block. |
+| `tools` | Triggers a 2-second tool call (`fixture_wait`), tests settled/collapsed rendering. |
+| `tools slow` | Triggers a 15-second tool call, useful for inspecting pending rail/spinner states. |
+| `bg` | Hands off a bash command to background (`/tasks`), tests background cards and completion notices. |
+| `long` | Streams a 45-line markdown answer to test scrolling and viewport truncation. |
+| `highlight` | Streams Python code with comments and docstrings to verify syntax highlighting. |
+| *other* | Returns a short answer with an expandable thinking block. |
 
-A prompt containing `highlight` streams a fenced Python block with a multiline docstring and comment, for checking syntax highlighting. The pty cannot read the terminal's colors (see [Limits](#limits)), so the session runs on the system theme: `syntaxString` is `#008000` and keywords are `#000080`. Assert per-line colors with `tui-test highlight text "docstring line two" --fg "#008000"`; a line that lost its color matches nothing. Keep a `def clamp --fg "#008000"` control, which must not match, so a broken `--fg` cannot pass the check.
+## Driving the terminal
 
-For a state the fixture cannot create, write a fixture extension under `.artifacts/<topic>/` and add `--extension <file>`.
-
-## Drive and inspect
-
-| Command | Effect |
+| Command | Action |
 | --- | --- |
-| `tui-test submit "/provider"` | Type text and press Enter. |
-| `tui-test type "abc"` | Type text only. |
-| `tui-test key press Escape` | Press keys such as `Enter`, `Escape`, `Tab`, `Up`, `PageUp`, `Ctrl+O`, `Alt+v`, or `F2`. |
-| `tui-test expect text "Session Tree" --timeout 5000` | Wait until the text is visible; add `--not` to wait until it is gone. |
-| `tui-test text` | Print the visible screen; `--full` includes scrollback. |
-| `tui-test screenshot -o .artifacts/tty/provider.png` | Save a PNG with theme colors for checking layout and color. |
-| `tui-test resize 72 22` | Resize the terminal. |
-| `tui-test close` | Stop Pi and end the session. |
+| `tui-test submit "<text>"` | Types string and sends `Enter`. |
+| `tui-test type "<text>"` | Types string without pressing Enter. |
+| `tui-test key press <Key>` | Sends keys (`Enter`, `Escape`, `Tab`, `Ctrl+O`, `Ctrl+U`, `Alt+v`, `PageUp`). |
+| `tui-test expect text "<str>"` | Waits until text appears (`--timeout <ms>`). Add `--not` to wait until gone. |
+| `tui-test text` | Dumps visible terminal screen (`--full` includes scrollback buffer). |
+| `tui-test screenshot -o <path>` | Captures current terminal frame as PNG with rendered theme colors. |
+| `tui-test resize <cols> <rows>` | Resizes terminal dimensions. |
+| `tui-test close` | Closes terminal session (`tui-test close --all` cleans up all sessions). |
 
-The session persists between commands until `close`. Pass `--session <name>` on every command to run several sessions at once, and use `tui-test close --all` to remove leftovers.
-
-To check a state change, wait for text that only the new state shows, then for the old state's text to disappear. Earlier transcript content stays on screen and can satisfy a loose match:
+### Example: Tool execution lifecycle
 
 ```powershell
 tui-test submit "tools slow"
-tui-test expect text "Fixture tool is pending"                        # pending
+tui-test expect text "Fixture tool is pending"                        # verify pending rail
 tui-test screenshot -o .artifacts/tty/pending.png
-tui-test expect text "Fixture tool is pending" --not --timeout 20000  # settled
-tui-test expect text "Working" --not --timeout 30000                  # run finished
+tui-test expect text "Fixture tool is pending" --not --timeout 20000  # verify completion
+tui-test expect text "Working" --not --timeout 30000                  # verify response settled
+
 tui-test submit "tools"
-tui-test expect text "4 earlier lines"                                # collapsed
+tui-test expect text "4 earlier lines"                                # verify collapsed tool output
 tui-test key press Ctrl+O
-tui-test expect text "Fixture result line 1 of 14"                    # expanded
+tui-test expect text "Fixture result line 1 of 14"                    # verify expanded output
 ```
 
-The answer keeps streaming after the tool settles, and Pi refuses `/reload` until the run finishes, so wait for the `Working` line to disappear first. `/reload` and `/tree` are ordinary commands: `submit "/tree"`, check the screen, then `key press Escape`.
+## Platform limits and troubleshooting
 
-A collapsed tool result shows its last 10 lines. The fixture result has 14 lines so `Ctrl+O` visibly changes the screen: collapsed shows `… (4 earlier lines, ctrl+o to expand)` plus lines 5–14, expanded shows all 14. Use 40 rows so the expanded block fits; at 30 rows it scrolls, and Pi's full redraw clears the terminal scrollback, so `text --full` cannot recover the earlier lines.
-
-## Limits
-
-- The default backend accepts Pi's request to enable the Kitty keyboard protocol and then encodes keys such as `Escape` as `\x1b[27u`. The Windows console layer between them drops those sequences, so `Escape`, `Ctrl+C`, and `Ctrl+O` silently do nothing. The xterm.js backend sends plain bytes (`\x1b`, `\x03`, `\x0f`) that arrive intact.
-- Plain bytes cannot express `Shift+Enter`, `Ctrl+Enter` (both arrive as Enter), or `Ctrl+Shift+<letter>`. Use `Ctrl+J` for a newline. Write Alt keys in lowercase (`Alt+v`); `Alt+V` adds Shift. This setup therefore checks Pi's non-Kitty input path; `VirtualTerminal` tests cover Kitty mode.
-- `wait idle` never settles while a spinner animates; wait for text instead.
-- The Windows console layer mangles terminal color replies, with every backend. At startup and on `/reload`, Pi asks the terminal for its colors (OSC 10, 11 and 4) and then sends a DA1 request whose reply marks the end of the answers. The console layer answers DA1 itself, immediately, so Pi stops waiting. Then it delivers only the tail of one color reply, `b:8080/8080/8080` followed by BEL (`\x07`), as ordinary keyboard input. The text lands in the editor, and BEL arrives as `Ctrl+G`, which by default opens the external editor and suspends Pi until it exits. Unbinding `app.editor.external` and clearing the line with `Ctrl+U`, as in [Start Pi](#start-pi), avoids both. In a test, a submitted prompt that starts with `b:8080` means the editor was not cleared, and so does a command such as `/tasks` that seems to do nothing. Because the real colors never arrive, this setup cannot check terminal-derived theme colors.
+- **Kitty protocol on Windows:** Windows Console drops Kitty escape sequences (`\x1b[27u`). Always launch `tui-test` with `--backend xtermjs` so plain byte sequences (`\x1b`, `\x0f`) are preserved.
+- **Key modifiers:** Plain bytes cannot differentiate `Shift+Enter` from `Enter`. Use `Ctrl+J` for newlines. Alt combinations must be lowercase (`Alt+v`).
+- **Color query leakage:** At startup and on `/reload`, Pi queries terminal color via OSC 10/11/4. Windows console responds immediately to DA1 and leaks unparsed color fragments (`b:8080/8080/8080` + BEL/`\x07`) into the input buffer. Always unbind `app.editor.external` in `keybindings.json` and clear with `Ctrl+U` upon startup and after `/reload`.
+- **Spinner vs idle:** `wait idle` will never settle while animated spinners or loaders are active. Always wait for explicit text states via `tui-test expect text`.

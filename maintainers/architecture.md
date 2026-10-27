@@ -1,59 +1,56 @@
 # Architecture
 
-The repository contract is [AGENTS.md](../AGENTS.md). This page owns durable design decisions and the reasons behind local behavior; commands belong in the runbooks.
+The repository contract is [AGENTS.md](../AGENTS.md). This document owns durable design decisions, subsystem boundaries, and architectural invariants.
 
 ## Placing new capabilities
 
-This distribution exists to change what Pi can do, and that work lasts longest when upstream files hold as little of it as possible. Place a new capability at the first level that can carry it:
+Place new capabilities at the first level that can carry them:
 
-1. **Extension.** If the public Extension API can express it, build it under `src/extensions/<name>/` and register it in `src/extensions/index.ts`. It never conflicts with upstream and can be replaced or dropped on its own.
-2. **Hook plus extension.** If an extension cannot reach what it needs, add the smallest general-purpose hook to core (an event, a `ctx` method, a UI slot, or a registry), then build the feature as an extension on top of it. Design the hook as if upstream might adopt it: name it for what it exposes rather than for the feature that needs it, and make it usable by a third-party extension. Keep its implementation in a distribution-owned module so upstream files carry only the declaration and the call. `ctx.ui.editorHost`, `ctx.getContextSnapshot()`, extension settings, and the keybinding registry follow this pattern.
-3. **Core capability.** Only when the feature must live inside the session lifecycle or the renderer, as Tasks does. Keep its logic in its own core modules and reach upstream code through thin wrappers around unchanged upstream bodies, as `AgentSession.prompt()` wraps `_promptBody()`.
+1. **Extension (`src/extensions/<name>/`):** The default for any capability expressible via the public Extension API. Extensions never conflict with upstream and can be added, updated, or removed independently.
+2. **Hook plus extension:** When the Extension API cannot reach required state or UI slots, add the smallest general-purpose hook to core (an event, a `ctx` method, or a registry), then implement the feature as an extension on top of it. Design hooks as general capabilities rather than feature-specific patches (`ctx.ui.editorHost`, `ctx.getContextSnapshot()`, dynamic keybindings).
+3. **Core capability:** Only when a feature must integrate directly into the session lifecycle or interactive renderer (such as Tasks). Isolate custom logic in dedicated distribution modules and interact with upstream code via thin wrappers around unchanged bodies.
 
-A feature that keeps growing inside upstream files usually lacks a hook. Every touched upstream path still needs a claim in `concerns.json`; see [Keeping deviations small](upstream.md#keeping-deviations-small).
+Every touched upstream path must be registered in `maintainers/concerns.json`; see [Keeping deviations small](upstream.md#keeping-deviations-small).
 
 ## Dependency boundary
 
-Upstream libraries are consumed from their published npm packages, exactly pinned. A library belongs in `dependencies` when shipped JavaScript or public declarations need it, and in `devDependencies` when only excluded source or tests do.
+Upstream libraries are consumed directly from published npm packages, pinned to exact versions. Never vendor or duplicate them.
 
 | Direct consumers | Scope | Reason |
 | --- | --- | --- |
-| Pi AI, Agent core, TUI, Codemode, MCP, QuickJS WASI | Production | SDK, tools, interactive runtime, MCP transports, and sandbox execution. |
+| Pi AI, Agent core, TUI, Codemode, MCP, QuickJS WASI | Production | SDK, tools, interactive runtime, MCP transports, and sandboxed execution. |
 
-## Ownership
+## Subsystem ownership
 
-Core owns the global lifecycle, native tool presentation, renderer integration, and the keybinding registry. Bundled extensions are ordinary Extension API consumers: they register their own keybindings through `src/core/keybinding-registry.ts`, reach the main editor only through `ctx.ui.editorHost`, and never import each other. `llama`, `codemode`, `mcp`, and `tool-search` come from upstream; the other bundled extensions are distribution additions. MCP finds tool orchestrators such as codemode through the `pi:discover-tool-orchestrators` event rather than imports, so a third-party replacement keeps working.
+- **Core:** Owns session lifecycle, keybinding registry, renderer integration, and native fallback tool presentation.
+- **Bundled extensions:** Ordinary Extension API consumers that never import each other's internals. Upstream provides `llama`, `codemode`, `mcp`, and `tool-search`; the remaining bundled extensions are distribution additions.
+- **Extension boundaries:** Bundled extensions remain decoupled. MCP discovers tool orchestrators (e.g. codemode) via upstream's `ToolDefinition.reachesTools` declaration rather than imports.
 
-## Tasks
+## Tasks subsystem
 
-Tasks is a core capability, not an extension, because completion delivery must follow the session lifecycle. Extensions use it through `ctx.tasks`.
+Tasks is a core capability rather than an extension because completion delivery and state journaling must tie directly to the session lifecycle.
 
-| Module | Owns |
-| --- | --- |
-| `core/tasks/runtime.ts` | Execution handles, admission, cancellation, and foreground handoff. Executors get a task-local control, not the registry. |
-| `core/tasks/store.ts` | Retained records, output cleanup, and history quotas. |
-| `core/tasks/session.ts`, `delivery.ts` | Journal persistence, exactly-once usage, runtime replacement, late-settlement quarantine, completion claims, and persistence receipts. |
-| `core/tools/bash.ts`, `powershell.ts` | Upstream spawn, timeout, and process-tree handling shared by both shell tools. |
-| `core/tools/shell-tool.ts`, `shell-execution.ts` | The managed definition (background, handoff) and the single output owner for a running command. |
-| `core/tools/tasks.ts`, `modes/interactive/tasks/` | The `tasks` tool, `/tasks`, the detach key, the statusline item, and completion cards. |
+### Responsibilities
 
-The shell process loop stays in upstream `core/tools/bash.ts`; `shell-tool.ts` adds only the model-facing contract that must differ, so process fixes merge normally. `shell-operations.ts` owns the narrow Windows command normalization.
+- **Execution & handles (`core/tasks/runtime.ts`):** Admission, cancellation, execution handles, and foreground handoff.
+- **Retention & quotas (`core/tasks/store.ts`):** Retained output files, cleanup, and separate foreground/background history quotas.
+- **Journaling & delivery (`core/tasks/session.ts`, `delivery.ts`):** Session journal persistence, exactly-once usage accounting, completion delivery, and late-settlement quarantine.
+- **Managed shell execution (`core/tools/shell-tool.ts`, `shell-execution.ts`):** Wraps upstream shell tools (`bash.ts`, `powershell.ts`) to provide background orchestration without duplicating process-tree handling.
 
-Invariants:
+### Invariants
 
-- Completion delivery pauses during preflight, compaction, reload, tree navigation, and session replacement, and stays paused across runs that `agent_settled` handlers defer; otherwise a completion turn and a deferred prompt can start in the same idle gap.
-- Queued next-turn context is consumed only after its entry is persisted.
-- Post-compaction active-task reminders are computed from the live runtime into the next request projection, never persisted or allowed to start a turn; only a successful assistant response consumes them.
-- Steering interrupts only `tasks wait`, never task execution. A waitAny observes one initial cohort and acknowledges only its winner after the tool result persists; the other tasks return to ordinary delivery.
-- Only background work counts toward the active limit, so a background task never blocks a foreground command; foreground and background history have separate quotas.
-- `task-result` and `task-completion` records are version 2 and `task-usage` is version 1; older records are not migrated, and runtime replacement never reattaches execution.
+- **Delivery pause:** Completion delivery pauses during preflight, compaction, session reload, tree navigation, and replacement, staying paused across deferred `agent_settled` handlers.
+- **Queue consumption:** Queued next-turn context is consumed only after its entry is successfully persisted.
+- **Post-compaction reminders:** Reminders for active tasks are projected into the next request from the live runtime; they are never persisted or allowed to trigger turns independently.
+- **Steering isolation:** User steering interrupts only `tasks wait`, never task execution.
+- **Quota isolation:** Background task volume does not block foreground command execution.
 
 ## Upstream-sensitive areas
 
-Re-check these when a synchronization touches them:
+Re-verify these areas whenever upstream synchronizations touch them:
 
-- **Bundling:** `scripts/build-bundle.mjs` follows upstream's build strategy, adapted to a standalone package. CLI and RPC run from `dist/bundle/`, the SDK keeps tsc output, and lazy-loaded workers and providers sit beside the chunks that load them. When entrypoints or lazy loaders change, verify a packed installation; bundle size proves nothing.
-- **Compaction:** the lifecycle is upstream's. `SettingsManager.getCompactionSettings()` only converts `triggerPercent` into upstream's `reserveTokens` for the active model. The bundled `cached-compaction` extension replaces ordinary summary generation through the public hook; overflow recovery and failed attempts remain native. Previous compaction file details are consumed by shape for both native and extension-provided entries.
-- **Context snapshots:** `ContextSnapshotCapture` records the request prefix after every request projection, so snapshot consumers such as BTW and cached compaction reuse the exact bytes the provider received. It reads `sessionManager.buildSessionProjection()`, which is canonical, rather than `agent.state.messages`, which is a cache. It wraps upstream's `convertToLlm` and request-option builder instead of copying them.
-- **Tool presentation:** upstream's `components/tool-execution.ts` remains the lifecycle owner, with thin TUI-only shell, row-gap, result-context, and disposal hooks. The bundled `tool-presentation` extension attaches the distribution shell through the existing renderer resolver; `tool-view/` owns visual policy and compatibility adapters, not a second lifecycle implementation. Upstream's Box is the fallback when `builtin:tool-presentation` is disabled. Verify pending, success, error, collapsed, expanded, `/reload`, `/tree`, HTML export, and native fallback states in a real terminal.
-- **Windows and lifecycles:** keep the normalization in `core/tools/shell-operations.ts` narrow, and re-check process behavior, selector disposal, and timer lifecycles after upstream changes.
+- **Bundling:** `scripts/build-bundle.mjs` adapts upstream's bundling strategy for the standalone distribution (`dist/bundle/`). Entrypoints and lazy-loaded assets must be validated with packed tarball verification (`npm run verify:package-install`).
+- **Compaction:** Auto-compaction converts `triggerPercent` to upstream's `reserveTokens`. The bundled `cached-compaction` extension hooks summary generation while leaving fallback and recovery native.
+- **Context snapshots:** `ContextSnapshotCapture` mirrors canonical request projections (`sessionManager.buildSessionProjection()`) so consumers (such as BTW and cached compaction) receive the exact bytes sent to providers.
+- **Tool presentation:** Upstream's `tool-execution.ts` owns execution lifecycle; the bundled `tool-presentation` extension injects compact TUI chrome via existing renderer hooks. Native Box rendering remains the zero-config fallback.
+- **Windows compatibility:** Keep platform path and shell normalizations (`core/tools/shell-operations.ts`) minimal and focused on upstream compatibility gaps.

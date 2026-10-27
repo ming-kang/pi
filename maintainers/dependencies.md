@@ -1,60 +1,83 @@
 # Dependency maintenance
 
-Dependency ownership is defined in [Architecture](architecture.md#dependency-boundary). `package.json` declares installation scope and exact versions; `npm-shrinkwrap.json` records resolution. This page owns installation, verification, and exception handling.
+Dependency boundaries are defined in [Architecture](architecture.md#dependency-boundary). `package.json` declares exact pinned dependencies; `npm-shrinkwrap.json` records resolved artifacts.
 
-## Install and verify
+## Workflows
 
-Use the Node version supported by the package and npm 11.15.0, matching CI. For a clean checkout:
+### 1. Clean checkout installation
+
+Match CI using supported Node and npm 11.15.0:
 
 ```bash
 npm ci --ignore-scripts
 npm run check:installed-deps
+npm run prepare   # run once locally to set up git hooks
 ```
 
-For a local maintainer checkout, run `npm run prepare` once to register the repository's Husky hook. The deliberate `--ignore-scripts` installation does not run that setup automatically.
+`check:installed-deps` verifies that packages on disk match declarations and shrinkwrap resolutions. It runs automatically before `npm test`, `npm run build`, and `npm run check`.
 
-`check:installed-deps` compares root declarations, shrinkwrap specs/resolutions, and the package metadata actually found through Node's search paths. It reads package files, not npm's hidden installation cache. Missing optional packages are allowed. It runs before `npm test`, `npm run build`, and `npm run check`; direct `npx vitest` invocations bypass that npm pretest hook.
+### 2. Updating dependencies
 
-For an intentional dependency update, edit exact versions and installation scopes, then:
+To add or update an exact dependency:
+
+1. Update `package.json` with the exact version (no `^` or `~`).
+2. Refresh the lockfile and install:
+   ```bash
+   npm install --package-lock-only --ignore-scripts
+   npm install --ignore-scripts
+   ```
+3. Verify pins and consistency:
+   ```bash
+   npm run check:pinned-deps
+   npm run check:installed-deps
+   git diff -- package.json npm-shrinkwrap.json
+   ```
+4. For packaging boundary changes, verify with `npm run verify:package-install`.
+
+### 3. Recovering from an inconsistent installation
+
+If npm claims packages are up to date but `check:installed-deps` reports discrepancies, stale installation cache may be interfering. Clear the internal metadata and reinstall:
 
 ```bash
-npm install --package-lock-only --ignore-scripts
+# On Bash:
+rm -f ./node_modules/.package-lock.json
 npm install --ignore-scripts
-npm run check:pinned-deps
 npm run check:installed-deps
-git diff -- package.json npm-shrinkwrap.json
 ```
 
-Review every changed package, dependency scope, resolution, integrity change, and relevant lifecycle script. Run focused tests and a clean build when imports, exports, or build exclusions change. Verify an actual packed installation with development dependencies omitted before handing off a package-boundary change.
+```powershell
+# On PowerShell:
+Remove-Item -LiteralPath ./node_modules/.package-lock.json -ErrorAction SilentlyContinue
+npm install --ignore-scripts
+npm run check:installed-deps
+```
 
-## Release age and explicit exceptions
+If issues persist, perform a clean reset with `npm ci --ignore-scripts`.
 
-The repository's `.npmrc` sets `min-release-age=2` (days). Keep that default for ordinary resolution. `npm run sync` installs the selected upstream release with `--min-release-age=0` for that one command, because the owner chose that exact release; inspect every resulting lockfile change.
+## Lockfile controls and release age
 
-The commit hook accepts a staged `npm-shrinkwrap.json` without acknowledgement when the only changes are the root version and `@earendil-works/*` packages moving to the version in `maintainers/upstream.json`, as in a release commit or a plain synchronization. Any other change (a new or updated third-party package, even one pulled in by an upstream package) prints a bounded summary and needs a reviewed acknowledgement for that commit:
+The repository sets `min-release-age=2` days in `.npmrc` to mitigate supply-chain attacks.
 
-| Control | Scope and meaning |
+| Control | Scope and purpose |
 | --- | --- |
-| `--min-release-age=0` | An exception for one npm resolution/install command. It applies to that command's dependency resolution, so inspect all resulting changes. |
-| `PI_PACKAGE_ALLOW_FRESH=1` | Allows fresh packages in the verifier's child npm installation, for a reviewed fresh upstream release. |
-| `PI_ALLOW_LOCKFILE_CHANGE=1` | Acknowledges review of the staged lockfile for one commit. It does not change npm resolution or replace the other checks. |
+| `--min-release-age=0` | Temporary flag for a single npm command to allow fresh upstream releases. |
+| `PI_PACKAGE_ALLOW_FRESH=1` | Permits fresh packages in packaging verification child processes. |
+| `PI_ALLOW_LOCKFILE_CHANGE=1` | Required to commit `npm-shrinkwrap.json` changes that modify third-party packages. |
 
-Do not change global npm configuration. Scope each flag to its operation; in PowerShell 7:
+### Committing lockfile changes
+
+The pre-commit hook automatically permits shrinkwrap changes when updating `@earendil-works/*` packages during upstream syncs or releases. Any other dependency modification requires explicit acknowledgement via `PI_ALLOW_LOCKFILE_CHANGE=1`.
+
+Scope the environment variable to the commit command:
+
+```bash
+# Bash:
+PI_ALLOW_LOCKFILE_CHANGE=1 git commit -m "chore(deps): update <package>"
+```
 
 ```powershell
+# PowerShell:
 $env:PI_ALLOW_LOCKFILE_CHANGE = "1"
-try { git commit -m "feat: sync upstream v<version>" }
+try { git commit -m "chore(deps): update <package>" }
 finally { Remove-Item Env:PI_ALLOW_LOCKFILE_CHANGE }
 ```
-
-## Recover an inconsistent installation
-
-If npm reports "up to date" but the installed-package check finds old files, first compare the declaration, shrinkwrap entry, and reported package file. A stale `node_modules/.package-lock.json` can mislead npm. Once confirmed, remove only that cache file and reinstall:
-
-```powershell
-Remove-Item -LiteralPath ./node_modules/.package-lock.json
-npm install --ignore-scripts
-npm run check:installed-deps
-```
-
-Use the same reviewed age exception if still necessary. A deliberate `npm ci --ignore-scripts` is the fallback for reconstructing the full managed installation. Resume builds and tests only after the installed-package check passes.

@@ -1,45 +1,32 @@
 # Repository contract
 
- `@astralyn/pi` is a standalone distribution of Pi coding agent, built on `@earendil-works/*` packages. 
-
-[Maintainer guide](maintainers/README.md) maps each topic to the document that owns it.
+`@astralyn/pi` is a standalone distribution of Pi coding agent, built on `@earendil-works/*` packages.
+[Maintainer guide](maintainers/README.md) maps topics to their owning documents.
 
 ## Boundaries
 
-- Consume the installed `@earendil-works/*` dependencies; never vendor or recreate them. See [Architecture](maintainers/architecture.md#dependency-boundary).
-- Extensions live in `src/extensions/`, use the Extension API, and never import each other's internals.
-- Build new capabilities as extensions. When the Extension API cannot reach what one needs, add a small general-purpose hook to core and build the feature on it, rather than putting the feature in core. See [Placing new capabilities](maintainers/architecture.md#placing-new-capabilities).
-- Keep tool schemas, execution protocols, and model-facing results stable; presentation is defined in [Native tool presentation](docs/bundled/tool-presentation.md).
-- Follow upstream conventions: keys go through `KEYBINDINGS` in `src/core/keybindings.ts`, unbounded model-facing output goes through `truncateHead`/`truncateTail`, colors come from semantic theme helpers, and imports are top-level only.
-- Adopt upstream only from release tags via [Upstream synchronization](maintainers/upstream.md) and never merge an upstream tag into this branch. Fix type errors from outdated dependencies by adopting the upstream release that fixes them, not by removing code.
-- Backward compatibility is not required unless asked, but ask before removing functionality that looks intentional.
+- **Dependencies:** Consume installed `@earendil-works/*` dependencies; never vendor or copy them. See [Architecture](maintainers/architecture.md#dependency-boundary).
+- **Capabilities:** Prefer Extension (`src/extensions/`) → Hook + Extension → Core capability. Extensions use the Extension API and never import each other. See [Placing new capabilities](maintainers/architecture.md#placing-new-capabilities).
+- **Conventions:** Keys go through `KEYBINDINGS` in `src/core/keybindings.ts`, unbounded output goes through `truncateHead`/`truncateTail`, colors use semantic theme helpers, and imports are top-level only.
+- **Upstream sync:** Adopt upstream only from release tags via [Upstream synchronization](maintainers/upstream.md); never merge an upstream tag into `main`. Fix type errors by updating dependencies, not by removing code.
 
-## Communication
+## Verification & Commands
 
-Answer questions before editing.
+- **Format & lint:** Run `npm run format` then `npm run check` after code changes; fix every diagnostic.
+- **Focused tests:** Run `npm run test:isolated -- test/<file>.test.ts [-t "<name>"]`. Never run full `npm test` unasked (it reads the real home directory and can fail on host resources).
+- **Upstream ledger:** When modifying or dropping upstream paths, update `maintainers/concerns.json` with the owning concern and covering tests; verify with `npm run diff:upstream -- --check`.
+- **Scripts:** Put ad-hoc scripts in a temp file rather than multi-line inline shell strings.
 
-Use plain, concise language; explain non-trivial problems as problem → concrete example → solution.
+## Testing Rules
 
-## Tests
+- **Observable behavior:** Test observable behavior, not internals, constants, or mock structures. Prefer extending existing tests; for bug fixes, write a failing reproduction first.
+- **When to test:** Add a test only when it catches a plausible future bug that types, linter, and existing tests would miss. Docs, renames, refactors, and type-only changes need none.
+- **Offline harness:** Tests run offline against the faux provider (`test/suite/harness.ts`); opt in to network with `allowNetwork()`. Never use real credentials.
+- **Interactive UI:** Verify terminal UI changes in a real pseudo-terminal per [Interactive testing](maintainers/interactive-testing.md).
 
-- Add a test only when it would catch a plausible future bug that types, lint, and existing tests would miss; docs, renames, refactors, and type-only changes need none. In the final message, name the bug each new test catches.
-- Test observable behavior, not constants, mocks, or implementation details. Prefer extending an existing test; for a bug fix, start from a failing reproduction.
-- Run focused tests while iterating: `npm run test:isolated -- test/<file>.test.ts [-t "<name>"]`. Run the complete suite only when asked or for a release, as `npm run test:isolated` with no arguments; plain `npm test` reads your real home and can fail on host resources. Setup: [Development](docs/development.md).
-- Tests run offline with the faux provider (`test/suite/harness.ts`); opt in to network per test with `allowNetwork()` from `test/test-network-env.ts`. Never use real credentials.
+## Git & Safety Rules
 
-## Build and verification
-
-- Run `npm run format` then `npm run check` after any change, including docs; fix every diagnostic.
-- Dependencies are exactly pinned. Changing one means regenerating `npm-shrinkwrap.json`; a change beyond the release version and upstream packages is committed with `PI_ALLOW_LOCKFILE_CHANGE=1`; see [Dependency maintenance](maintainers/dependencies.md).
-- `PI_BUNDLED_NODE` and the upstream bundling strategy are invariants owned by [Architecture](maintainers/architecture.md). Run `npm run clean` before rebuilding after deleting sources.
-- For entrypoint or packaging changes, pack and run `npm run verify:package-install -- <tarball>`.
-- Verify interactive changes in a real terminal per [Interactive testing](maintainers/interactive-testing.md).
-- Put ad-hoc scripts in a temp file rather than a multi-line shell command.
-
-## Git and release
-
-- Commit only at an owner-requested checkpoint or release. Stage explicit paths and review the staged diff; never commit credentials or machine-specific paths.
-- Never run `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, or `--no-verify`; the pre-commit hook is the check gate.
-- Use Conventional Commits: `<type>[(scope)]: <summary>`.
-- `README.md` and `docs/**` are published; `maintainers/**` is repository-only. Register new docs pages in `docs/docs.json`.
-- Add user-visible changes to `CHANGELOG.md` under `## [Unreleased]`; see [Release](maintainers/release.md).
+- **Commit on request:** Commit only when requested by the user or for a release. Stage explicit paths (`git add <path1> <path2>`); review the staged diff before committing. Use Conventional Commits: `<type>[(scope)]: <summary>`.
+- **Forbidden git operations:** Never run `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, or `--no-verify`.
+- **Lockfile changes:** Direct dependencies stay pinned. Staging `npm-shrinkwrap.json` for anything beyond upstream updates requires `PI_ALLOW_LOCKFILE_CHANGE=1`. See [Dependency maintenance](maintainers/dependencies.md).
+- **Documentation changes:** `README.md` and `docs/**` are published; `maintainers/**` is internal. Register new docs in `docs/docs.json`. Document user-visible changes in `CHANGELOG.md` under `## [Unreleased]`.
