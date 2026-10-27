@@ -9,6 +9,7 @@
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
+import { formatDuration } from "../../../core/tasks/format.ts";
 import { TASK_RESULT_BYTES } from "../../../core/tasks/output.ts";
 import { formatSize } from "../../../core/tools/truncate.ts";
 import {
@@ -43,7 +44,7 @@ export const tasksSchema = Type.Object({
 	// — wait —
 	waitMs: Type.Optional(
 		Type.Number({
-			description: `Max time to wait in ms, default ${TASKS_WAIT_DEFAULT_MS}, max ${TASKS_WAIT_MAX_MS} (wait)`,
+			description: `Maximum wait window in ms (default ${formatDuration(TASKS_WAIT_DEFAULT_MS)}, max ${formatDuration(TASKS_WAIT_MAX_MS)}). Only the wait ends on timeout; execution continues.`,
 		}),
 	),
 	sinceBytes: Type.Optional(
@@ -90,7 +91,7 @@ export const TASKS_TOOL_DESCRIPTION =
 	"Completion is delivered to you automatically as a notification — never poll. " +
 	"list: bounded activity/history listing; find task IDs here. " +
 	"read: bounded output or report slice (head/tail). " +
-	"wait: block up to waitMs for one task to settle, or omit taskId to wait for any task running at call time; no running tasks returns immediately. New steering input ends only the wait with outcome interrupted; it never stops the task. " +
+	"wait: observe one task, or any task running at call time, for up to waitMs; no running tasks returns immediately. New steering input ends only the wait with outcome interrupted; it never stops the task. " +
 	"kill: request cancellation of a whole task. " +
 	"tasks cannot start work; submit background work through its owning tool. A wait ends as settled, interrupted, timed_out, or no_tasks. Timeout or cancellation ends only the wait, never execution. Reads and settled waits report byte ranges; use next sinceBytes only with that task's ID. Output is capped at 50KB per response.";
 export const TASKS_PROMPT_SNIPPET = "Manage background tasks; wait for a specific task or any running task";

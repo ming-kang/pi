@@ -418,6 +418,12 @@
 					"path": "src/core/keybindings.ts"
 				},
 				{
+					"path": "src/core/keybindings-schema.ts"
+				},
+				{
+					"path": "scripts/generate-schemas.ts"
+				},
+				{
 					"path": "schemas/keybindings.schema.json"
 				},
 				{
@@ -426,6 +432,7 @@
 			],
 			"tests": [
 				"test/keybinding-registry.test.ts",
+				"test/config-schemas.test.ts",
 				"test/keybindings.test.ts",
 				"test/extensions-runner-distribution.test.ts"
 			]

@@ -195,58 +195,6 @@
       "$ref": "#/$defs/KeybindingValue",
       "description": "Scroll viewport to bottom"
     },
-    "app.tasks.detach": {
-      "$ref": "#/$defs/KeybindingValue",
-      "description": "Move foreground tasks to the background"
-    },
-    "app.tasks.previousTab": {
-      "$ref": "#/$defs/KeybindingValue",
-      "description": "Show Output in the focused task inspector"
-    },
-    "app.tasks.nextTab": {
-      "$ref": "#/$defs/KeybindingValue",
-      "description": "Show Details in the focused task inspector"
-    },
-    "app.tasks.kill": {
-      "$ref": "#/$defs/KeybindingValue",
-      "description": "Stop the selected task"
-    },
-    "app.tasks.confirmStop": {
-      "$ref": "#/$defs/KeybindingValue",
-      "description": "Confirm stopping the selected task"
-    },
-    "app.tasks.detachSelected": {
-      "$ref": "#/$defs/KeybindingValue",
-      "description": "Move the selected task to the background"
-    },
-    "app.tasks.search": {
-      "$ref": "#/$defs/KeybindingValue",
-      "description": "Search retained task identities and labels"
-    },
-    "app.tasks.follow": {
-      "$ref": "#/$defs/KeybindingValue",
-      "description": "Follow the selected task's output"
-    },
-    "app.tasks.top": {
-      "$ref": "#/$defs/KeybindingValue",
-      "description": "Go to the top of the task list or preview"
-    },
-    "app.tasks.bottom": {
-      "$ref": "#/$defs/KeybindingValue",
-      "description": "Go to the bottom of the task list or preview"
-    },
-    "app.tasks.nextFocus": {
-      "$ref": "#/$defs/KeybindingValue",
-      "description": "Switch between task list and inspector"
-    },
-    "app.tasks.previousFocus": {
-      "$ref": "#/$defs/KeybindingValue",
-      "description": "Switch between task inspector and list"
-    },
-    "app.tasks.help": {
-      "$ref": "#/$defs/KeybindingValue",
-      "description": "Show task controls"
-    },
     "app.interrupt": {
       "$ref": "#/$defs/KeybindingValue",
       "description": "Cancel or abort"
@@ -426,6 +374,90 @@
     "app.tree.filter.cycleBackward": {
       "$ref": "#/$defs/KeybindingValue",
       "description": "Tree filter: cycle backward"
+    },
+    "app.btw.close": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Close the BTW conversation"
+    },
+    "app.btw.cancel": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Stop the BTW answer, or close when idle"
+    },
+    "app.btw.scrollUp": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Scroll BTW up when the editor is empty"
+    },
+    "app.btw.scrollDown": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Scroll BTW down when the editor is empty"
+    },
+    "app.list.toggle": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Toggle selected list item"
+    },
+    "app.provider.switchPaneLeft": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "/provider: focus the left pane"
+    },
+    "app.provider.switchPaneRight": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "/provider: focus the right pane"
+    },
+    "app.provider.removeEntry": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "/provider: remove the selected compat or dictionary entry"
+    },
+    "app.tasks.detach": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Move foreground tasks to the background"
+    },
+    "app.tasks.previousTab": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Show Output in the focused task inspector"
+    },
+    "app.tasks.nextTab": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Show Details in the focused task inspector"
+    },
+    "app.tasks.kill": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Stop the selected task"
+    },
+    "app.tasks.confirmStop": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Confirm stopping the selected task"
+    },
+    "app.tasks.detachSelected": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Move the selected task to the background"
+    },
+    "app.tasks.search": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Search retained task identities and labels"
+    },
+    "app.tasks.follow": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Follow the selected task's output"
+    },
+    "app.tasks.top": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Go to the top of the task list or preview"
+    },
+    "app.tasks.bottom": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Go to the bottom of the task list or preview"
+    },
+    "app.tasks.nextFocus": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Switch between task list and inspector"
+    },
+    "app.tasks.previousFocus": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Switch between task inspector and list"
+    },
+    "app.tasks.help": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Show task controls"
     }
   },
   "additionalProperties": {

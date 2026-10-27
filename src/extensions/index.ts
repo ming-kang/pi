@@ -1,3 +1,4 @@
+import "./keybindings.ts";
 import type { InlineExtension } from "../core/extensions/types.ts";
 import btwExtension from "./btw/index.ts";
 import cachedCompactionExtension from "./cached-compaction/index.ts";

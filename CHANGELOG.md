@@ -8,6 +8,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Changed
 
+- Increased the `tasks wait` ceiling from 60 seconds to 10 minutes while retaining the 20-second default and steering/abort semantics. Wait limits now have one shared definition, tool guidance uses human-readable units, and duration displays omit zero components (`1m`, `1m 5s`, `1h`, `1h 5m`).
 - Moved the complete Tasks management surface into the bundled `tasks` extension: the management tool, `/tasks` panel and command, status/detach controls, keybindings, completion cards, and tree confirmation. Core retains only execution, retention, journaling, usage accounting, and exactly-once delivery behind a small public `TasksContext.session` bridge.
 - Collapsed thinking now shows up to three live preview lines while streaming and settles to `Thoughts`, with click-to-expand preserved. A custom `setHiddenThinkingLabel()` now labels active streaming blocks only; settled blocks use `Thoughts`.
 

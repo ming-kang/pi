@@ -16,9 +16,7 @@ export const TASKS_LIST_FINISHED_SHOWN = 5;
 export const TASKS_WAIT_DELTA_BYTES = 32 * 1024;
 
 /** Wait-window bounds shared by execution and the pending-call renderer. */
-export const TASKS_WAIT_DEFAULT_MS = 20_000;
-export const TASKS_WAIT_MIN_MS = 1_000;
-export const TASKS_WAIT_MAX_MS = 60_000;
+export { TASKS_WAIT_DEFAULT_MS, TASKS_WAIT_MAX_MS, TASKS_WAIT_MIN_MS } from "../../../core/tasks/limits.ts";
 
 /** How long a foreground execution runs before the statusline advertises the detach key. */
 export const TASKS_DETACH_HINT_DELAY_MS = 10_000;

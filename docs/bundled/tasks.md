@@ -49,7 +49,7 @@ Wait for any task already running at call time by omitting the ID:
 { "action": "wait", "waitMs": 20000 }
 ```
 
-`waitMs` defaults to 20 seconds and clamps between 1 and 60 seconds. A task that reaches a terminal state produces a `settled` outcome; expiry produces `timed_out` and leaves execution running. New steering input produces `interrupted` and ends only the wait, so the new input can proceed without cancelling the task; follow-up input does not interrupt it. A background completion steered into the run can interrupt a wait on another task the same way.
+`waitMs` defaults to 20 seconds and clamps between 1 second and 10 minutes. A task that reaches a terminal state produces a `settled` outcome; expiry produces `timed_out` and leaves execution running. New steering input produces `interrupted` and ends only the wait, so the new input can proceed without cancelling the task; follow-up input does not interrupt it. A background completion steered into the run can interrupt a wait on another task the same way.
 
 Wait output is limited to 32KB. With `taskId`, it can start after `sinceBytes`; when more than 32KB was written after that offset, the wait returns the newest 32KB and reports how many bytes it skipped. `sinceBytes` is rejected without `taskId` because offsets belong to one task. Interrupted waits do not read output. A settled waitAny reads the winning task and lists initial cohort members still running. Continue independent work instead of sleep-polling or repeatedly reading; wait when the next step genuinely depends on a result.
 
@@ -63,7 +63,7 @@ All model-facing management responses, including listings and error messages, ar
 
 ## `/tasks` panel
 
-The fullscreen panel has one scrollable list. **Active** groups queued, running and stopping work; **Finished** groups all retained results on the selected branch, including foreground shell results, newest first. Empty groups are hidden. Task summaries show status and elapsed time; foreground/background mode is available in Details. The background action is offered only when the selected task can move.
+The fullscreen panel has one scrollable list. **Active** groups queued, running and stopping work; **Finished** groups all retained results on the selected branch, including foreground shell results, newest first. Empty groups are hidden. Task summaries show status and elapsed time; foreground/background mode is available in Details. Durations omit zero components and separate remaining units (`8s`, `1m`, `1m 5s`, `1h 5m`). The background action is offered only when the selected task can move.
 
 Selection follows the task when it finishes; new work does not steal focus or replace browsed output. The list preserves the selected row's screen position where space permits. Reopening remembers the selected ID and right-hand tab while the runtime remains available. Runtime replacement resets these preferences, and branch navigation removes results outside the visible branch. History remains bounded by the retention limits below.
 

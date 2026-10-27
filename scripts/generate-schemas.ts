@@ -12,6 +12,7 @@ import {
 	ThinkingLevelMapSchema,
 } from "@earendil-works/pi-ai/providers/model-schema";
 import type { TSchema } from "typebox";
+import "../src/extensions/keybindings.ts";
 import { KeybindingsSchema, KeybindingValueSchema } from "../src/core/keybindings-schema.ts";
 import { ModelsConfigSchema } from "../src/core/model-config.ts";
 import { SettingsSchema } from "../src/core/settings-schema.ts";

@@ -114,7 +114,7 @@ function renderWaitCall(args: TasksRenderInput, theme: Theme, context: ToolRende
 	}
 	const state = context.state;
 	if (state.waitStartedAt === undefined) state.waitStartedAt = Date.now();
-	const elapsed = `waiting ${formatDuration(Date.now() - state.waitStartedAt)}/${formatDuration(clampWaitMs(args.waitMs))}`;
+	const elapsed = `waiting ${formatDuration(Date.now() - state.waitStartedAt)} / ${formatDuration(clampWaitMs(args.waitMs))}`;
 	return new Text(
 		`${theme.fg("toolTitle", theme.bold("tasks wait "))}${theme.fg("accent", taskId || "any")} ${theme.fg("muted", elapsed)}`,
 		0,

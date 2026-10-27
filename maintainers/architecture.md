@@ -34,6 +34,7 @@ Tasks splits durable execution from its replaceable management surface. The core
 
 - **Execution & handles (`core/tasks/runtime.ts`):** Admission, cancellation, execution handles, and foreground handoff.
 - **Retention & quotas (`core/tasks/store.ts`):** Retained output files, cleanup, and separate foreground/background history quotas.
+- **Wait policy (`core/tasks/limits.ts`, `format.ts`):** One definition of the 20-second default, 1-second tool floor, and 10-minute ceiling shared by runtime and management; observation timeouts never cancel execution. Compact duration labels omit zero components.
 - **Journaling & delivery (`core/tasks/session.ts`, `delivery.ts`):** Session journal persistence, exactly-once usage accounting, completion delivery, and late-settlement quarantine.
 - **Session bridge (`TasksContext.session`):** The small public adapter for host-backed wait receipts, steering interruption, and branch-impact queries. Standalone runtimes omit it; consumers never import `TaskSession`.
 - **Managed shell execution (`core/tools/shell-tool.ts`, `shell-execution.ts`):** Wraps upstream shell tools (`bash.ts`, `powershell.ts`) to provide background orchestration without duplicating process-tree handling.

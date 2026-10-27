@@ -247,7 +247,7 @@ describe("structured background completion cards", () => {
 		const details = value.details as TaskCompletionSnapshot;
 		details.endedAt = details.startedAt + 72_000;
 		details.exitCode = 42;
-		expect(render(value)).toContain("1m12s");
+		expect(render(value)).toContain("1m 12s");
 		expect(render(value, true)).toContain("exit 42");
 	});
 	it.each(["bash", "powershell", "custom-report"])("shortens %s UUIDs without assuming an executor", (kind) => {

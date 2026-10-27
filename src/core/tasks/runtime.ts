@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
+import { TASKS_WAIT_DEFAULT_MS, TASKS_WAIT_MAX_MS } from "./limits.ts";
 import { boundText, finiteLimit, readOutputSlice, retainResult, sliceText, TASK_TITLE_BYTES } from "./output.ts";
 import { changed, snapshotOf, type TaskRecord, TaskStore } from "./store.ts";
 import {
@@ -466,7 +467,7 @@ export class TaskRuntime implements TasksContext {
 			for (const record of records) record.waiters.add(wake);
 			signal?.addEventListener("abort", abort, { once: true });
 			interruptSignal?.addEventListener("abort", interrupt, { once: true });
-			timer = setTimeout(wake, finiteLimit(timeoutMs, 20_000, 60_000));
+			timer = setTimeout(wake, finiteLimit(timeoutMs, TASKS_WAIT_DEFAULT_MS, TASKS_WAIT_MAX_MS));
 			if (this.closed || interruptSignal?.aborted) wake();
 			if (signal?.aborted) abort();
 		});
@@ -475,7 +476,7 @@ export class TaskRuntime implements TasksContext {
 	/** Observe completion without consuming delivery; the host acknowledges only persisted tool results. */
 	async wait(
 		id: string,
-		timeoutMs = 20_000,
+		timeoutMs = TASKS_WAIT_DEFAULT_MS,
 		signal?: AbortSignal,
 		interruptSignal?: AbortSignal,
 	): Promise<TaskSnapshot> {
@@ -487,7 +488,7 @@ export class TaskRuntime implements TasksContext {
 	}
 
 	async waitAny(
-		timeoutMs = 20_000,
+		timeoutMs = TASKS_WAIT_DEFAULT_MS,
 		signal?: AbortSignal,
 		interruptSignal?: AbortSignal,
 	): Promise<TaskSnapshot | undefined> {
