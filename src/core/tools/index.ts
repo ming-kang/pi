@@ -63,7 +63,6 @@ export {
 	createBashTool,
 	createBashToolDefinition,
 } from "./shell-tool.ts";
-export { createTasksTool, createTasksToolDefinition } from "./tasks.ts";
 export {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -92,14 +91,12 @@ import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./ls.t
 import { createPowerShellTool, createPowerShellToolDefinition, type PowerShellToolOptions } from "./powershell.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.ts";
 import { createBashTool, createBashToolDefinition } from "./shell-tool.ts";
-import { createTasksTool, createTasksToolDefinition } from "./tasks.ts";
 import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./write.ts";
 
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
-export type ToolName = "read" | "bash" | "powershell" | "edit" | "write" | "grep" | "find" | "ls" | "tasks";
+export type ToolName = "read" | "bash" | "powershell" | "edit" | "write" | "grep" | "find" | "ls";
 export const allToolNames: Set<ToolName> = new Set([
-	"tasks",
 	"read",
 	"bash",
 	"powershell",
@@ -123,8 +120,6 @@ export interface ToolsOptions {
 
 export function createToolDefinition(toolName: ToolName, cwd: string, options?: ToolsOptions): ToolDef {
 	switch (toolName) {
-		case "tasks":
-			return createTasksToolDefinition();
 		case "read":
 			return createReadToolDefinition(cwd, options?.read);
 		case "bash":
@@ -148,8 +143,6 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 
 export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptions): Tool {
 	switch (toolName) {
-		case "tasks":
-			return createTasksTool();
 		case "read":
 			return createReadTool(cwd, options?.read);
 		case "bash":
@@ -191,7 +184,6 @@ export function createReadOnlyToolDefinitions(cwd: string, options?: ToolsOption
 
 export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): Record<ToolName, ToolDef> {
 	return {
-		tasks: createTasksToolDefinition(),
 		read: createReadToolDefinition(cwd, options?.read),
 		bash: createBashToolDefinition(cwd, options?.bash),
 		powershell: createPowerShellToolDefinition(cwd, options?.powershell),
@@ -223,7 +215,6 @@ export function createReadOnlyTools(cwd: string, options?: ToolsOptions): Tool[]
 
 export function createAllTools(cwd: string, options?: ToolsOptions): Record<ToolName, Tool> {
 	return {
-		tasks: createTasksTool(),
 		read: createReadTool(cwd, options?.read),
 		bash: createBashTool(cwd, options?.bash),
 		powershell: createPowerShellTool(cwd, options?.powershell),

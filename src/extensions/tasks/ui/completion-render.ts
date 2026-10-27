@@ -5,10 +5,10 @@ import type { CustomMessage } from "../../../core/messages.ts";
 import { runtimeLabel } from "../../../core/tasks/format.ts";
 import { readTaskCompletion } from "../../../core/tasks/presentation.ts";
 import type { TaskTerminalStatus } from "../../../core/tasks/types.ts";
+import { type StatusMarkerColor, statusMarker } from "../../../modes/interactive/components/status-marker.ts";
+import type { Theme } from "../../../modes/interactive/theme/theme.ts";
+import { FramedComponent } from "../../../modes/interactive/tool-view/style.ts";
 import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
-import { type StatusMarkerColor, statusMarker } from "../components/status-marker.ts";
-import type { Theme } from "../theme/theme.ts";
-import { FramedComponent } from "../tool-view/style.ts";
 import { statusName } from "./task-view.ts";
 
 const SOURCE_LIMIT = 64 * 1024;

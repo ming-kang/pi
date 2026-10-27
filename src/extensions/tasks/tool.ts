@@ -1,14 +1,10 @@
-import { renderTasksCall, renderTasksResult, type TasksRenderState } from "../../modes/interactive/tasks/render.ts";
-import type { ToolDefinition } from "../extensions/types.ts";
-import { boundedText, runKill, runList, runRead, runWait } from "./tasks/actions.ts";
-import { TASKS_PROMPT_GUIDELINES, TASKS_PROMPT_SNIPPET, TASKS_TOOL_DESCRIPTION, tasksSchema } from "./tasks/schema.ts";
-import type { TasksDetails } from "./tasks/types.ts";
-import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
+import type { ToolDefinition } from "../../core/extensions/types.ts";
+import { boundedText, runKill, runList, runRead, runWait } from "./tool/actions.ts";
+import { TASKS_PROMPT_GUIDELINES, TASKS_PROMPT_SNIPPET, TASKS_TOOL_DESCRIPTION, tasksSchema } from "./tool/schema.ts";
+import type { TasksDetails } from "./tool/types.ts";
+import { renderTasksCall, renderTasksResult, type TasksRenderState } from "./ui/render.ts";
 
-export function createTasksToolDefinition(
-	onWaitResult?: (toolCallId: string, taskId: string) => void,
-	waitInterruptSignal?: () => AbortSignal | undefined,
-): ToolDefinition<typeof tasksSchema, TasksDetails, TasksRenderState> {
+export function createTasksToolDefinition(): ToolDefinition<typeof tasksSchema, TasksDetails, TasksRenderState> {
 	return {
 		name: "tasks",
 		label: "tasks",
@@ -27,8 +23,8 @@ export function createTasksToolDefinition(
 							ctx.tasks,
 							params,
 							signal,
-							(taskId) => onWaitResult?.(_id, taskId),
-							waitInterruptSignal?.(),
+							(taskId) => ctx.tasks.session?.prepareWait(_id, taskId),
+							ctx.tasks.session?.waitInterruptSignal,
 						);
 					case "kill":
 						return runKill(ctx.tasks, params);
@@ -44,8 +40,4 @@ export function createTasksToolDefinition(
 		renderCall: renderTasksCall,
 		renderResult: renderTasksResult,
 	};
-}
-
-export function createTasksTool() {
-	return wrapToolDefinition(createTasksToolDefinition());
 }

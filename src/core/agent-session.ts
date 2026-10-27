@@ -1,4 +1,3 @@
-import { createTasksToolDefinition } from "./tools/tasks.ts";
 /**
  * AgentSession - Core abstraction for agent lifecycle and session management.
  *
@@ -3826,13 +3825,6 @@ export class AgentSession {
 		// Pending tools that are registered now become active.
 		nextActiveToolNames.push(...this._pendingToolNames);
 
-		if (
-			this.tasks.enabled &&
-			this._initialActiveToolNames?.length !== 0 &&
-			this._toolRegistry.has("tasks") &&
-			this._isAllowedTool("tasks")
-		)
-			nextActiveToolNames.push("tasks");
 		this._setActiveTools([...new Set(nextActiveToolNames)]);
 	}
 
@@ -3871,13 +3863,6 @@ export class AgentSession {
 			Object.entries(baseToolDefinitions).map(([name, tool]) => [name, tool as ToolDefinition]),
 		);
 
-		this._baseToolDefinitions.set(
-			"tasks",
-			createTasksToolDefinition(
-				(callId, taskId) => this._tasksHost.delivery.prepareWait(callId, taskId),
-				() => this._tasksHost.waitInterruptSignal,
-			) as ToolDefinition,
-		);
 		const extensionsResult = this._resourceLoader.getExtensions();
 		if (options.flagValues) {
 			for (const [name, value] of options.flagValues) {

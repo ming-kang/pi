@@ -6,8 +6,8 @@ import { TASK_DETAILS_BYTES, TASK_RESULT_BYTES } from "../src/core/tasks/output.
 import { readTaskCompletion, taskCompletionMessage, taskCompletionSnapshot } from "../src/core/tasks/presentation.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import type { TaskCompletionSnapshot, TaskSnapshot, TaskTerminalStatus } from "../src/core/tasks/types.ts";
+import { renderTaskCompletion } from "../src/extensions/tasks/ui/completion-render.ts";
 import { CustomMessageComponent } from "../src/modes/interactive/components/custom-message.ts";
-import { renderTaskCompletion } from "../src/modes/interactive/tasks/completion-render.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 
 function task(overrides: Partial<TaskSnapshot> = {}): TaskSnapshot {

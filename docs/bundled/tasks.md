@@ -1,6 +1,6 @@
 # Tasks
 
-Tasks is a built-in session capability. The `tasks` tool and `/tasks` panel inspect and control native Bash, PowerShell, and extension-owned work. Execution, retained results, and completion delivery have separate core owners; no Background extension is required.
+Tasks pairs a session-owned execution capability with the bundled `tasks` extension. The core owns execution, retained results, journaling, usage accounting, and exactly-once completion delivery. The extension owns the `tasks` tool, `/tasks` panel, status and detach controls, completion cards, and tree-navigation confirmation for native Bash, PowerShell, and extension-owned work. Disabling `builtin:tasks` removes that management surface; it does not turn the core session lifecycle into an extension concern.
 
 ## Start or detach work
 

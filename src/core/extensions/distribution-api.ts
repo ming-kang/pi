@@ -6,7 +6,7 @@ import type { TerminalInputHandler } from "./types.ts";
 
 export type { ContextSnapshot } from "../context-snapshot.ts";
 export type { ModelRuntime } from "../model-runtime.ts";
-export type { TasksContext } from "../tasks/types.ts";
+export type { TasksContext, TasksSessionContext } from "../tasks/types.ts";
 
 export interface EditorSubmitEvent {
 	/** Expanded, trimmed editor text, before history, command dispatch, or any main-agent queue. */

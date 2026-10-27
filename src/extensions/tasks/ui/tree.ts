@@ -1,23 +1,5 @@
-import { type AppKeybinding, KEYBINDINGS } from "../../../core/keybindings.ts";
 import type { TaskSnapshot } from "../../../core/tasks/types.ts";
 import { cleanTaskText, firstCommandLine } from "./text.ts";
-
-/**
- * Task rows for `/hotkeys`. Task keybindings act outside the editor, so they never showed up in
- * the editor-driven sections; labels come from KEYBINDINGS so the table cannot drift from the
- * binding registry.
- */
-export function hotkeysTaskSection(display: (action: AppKeybinding) => string): string {
-	const detach = KEYBINDINGS["app.tasks.detach"];
-	const detachSelected = KEYBINDINGS["app.tasks.detachSelected"];
-	return `
-**Tasks**
-| Key | Action |
-|-----|--------|
-| \`${display("app.tasks.detach")}\` | ${detach.description} |
-| \`${display("app.tasks.detachSelected")}\` | ${detachSelected.description} (while /tasks is open) |
-`;
-}
 
 /**
  * Ask before tree navigation cancels running tasks: results are saved on their launch branch,

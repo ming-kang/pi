@@ -3,7 +3,6 @@ import type { Component } from "@earendil-works/pi-tui";
 import { Box, Container, Markdown, type MarkdownTheme, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
 import type { MessageRenderer } from "../../../core/extensions/types.ts";
 import type { CustomMessage } from "../../../core/messages.ts";
-import { renderTaskCompletion } from "../tasks/completion-render.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { isPlainPrimaryClick } from "./primary-click.ts";
 
@@ -28,8 +27,7 @@ export class CustomMessageComponent extends Container {
 	) {
 		super();
 		this.message = message;
-		this.customRenderer =
-			customRenderer ?? (message.customType === "task-completion" ? renderTaskCompletion : undefined);
+		this.customRenderer = customRenderer;
 		this.markdownTheme = markdownTheme;
 		this.outputPad = outputPad;
 

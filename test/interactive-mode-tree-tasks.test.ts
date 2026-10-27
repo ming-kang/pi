@@ -1,12 +1,7 @@
-import { Container } from "@earendil-works/pi-tui";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SessionManager } from "../src/core/session-manager.ts";
-import { SettingsManager } from "../src/core/settings-manager.ts";
+import { describe, expect, it, vi } from "vitest";
+import type { ExtensionAPI, ExtensionContext, SessionBeforeTreeEvent } from "../src/core/extensions/types.ts";
 import type { TaskSnapshot } from "../src/core/tasks/types.ts";
-import type { TreeSelectorComponent } from "../src/modes/interactive/components/tree-selector.ts";
-import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
-import { assistantMsg, userMsg } from "./utilities.ts";
+import tasksExtension from "../src/extensions/tasks/index.ts";
 
 function running(command: string): TaskSnapshot {
 	return {
@@ -22,79 +17,51 @@ function running(command: string): TaskSnapshot {
 	};
 }
 
-/** The interactive /tree flow with a fake session whose navigation would stop `stopped`. */
-function treeUI(stopped: TaskSnapshot[], confirm: boolean) {
-	const sessionManager = SessionManager.inMemory();
-	const targetId = sessionManager.appendMessage(userMsg("first"));
-	sessionManager.appendMessage(assistantMsg("reply"));
-	const selectors: TreeSelectorComponent[] = [];
-	const ui = {
-		sessionManager,
-		settingsManager: SettingsManager.inMemory(),
-		session: {
-			isStreaming: false,
-			isCompacting: false,
-			abort: vi.fn(async () => {}),
-			abortBranchSummary: vi.fn(),
-			tasksStoppedByTreeNavigation: vi.fn(() => stopped),
-			navigateTree: vi.fn(async () => ({ cancelled: false })),
-		},
-		defaultEditor: { onEscape: vi.fn() },
-		editor: { getText: () => "", setText: vi.fn() },
-		chatContainer: new Container(),
-		ui: { terminal: { rows: 24 }, requestRender: vi.fn() },
-		showSelector: (create: (done: () => void) => { component: TreeSelectorComponent }) => {
-			selectors.push(create(vi.fn()).component);
-		},
-		showTreeSelector(initialSelectedId?: string) {
-			showTreeSelector.call(ui, initialSelectedId);
-		},
-		showExtensionConfirm: vi.fn(async (_title: string, _message: string) => confirm),
-		showExtensionSelector: vi.fn(async () => "No summary"),
-		restoreQueuedMessagesToEditor: vi.fn(),
-		renderInitialMessages: vi.fn(),
-		showStatus: vi.fn(),
-		showError: vi.fn(),
-		flushCompactionQueue: vi.fn(async () => {}),
-	};
-	const showTreeSelector = Reflect.get(InteractiveMode.prototype, "showTreeSelector") as (
-		this: typeof ui,
-		initialSelectedId?: string,
-	) => void;
-	ui.showTreeSelector();
-	return {
-		ui,
-		selectors,
-		select: () => selectors.at(-1)!.getTreeList().onSelect!(targetId),
-	};
+function treeUI(stopped: TaskSnapshot[], confirm: boolean, hasUI = true) {
+	const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
+	const pi = {
+		on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => handlers.set(event, handler),
+		registerTool: vi.fn(),
+		registerMessageRenderer: vi.fn(),
+		registerCommand: vi.fn(),
+	} as unknown as ExtensionAPI;
+	tasksExtension(pi);
+	const ctx = {
+		hasUI,
+		tasks: { session: { stoppedByTreeNavigation: vi.fn(() => stopped) } },
+		ui: { confirm: vi.fn(async () => confirm) },
+	} as unknown as ExtensionContext;
+	const navigate = () =>
+		handlers.get("session_before_tree")?.({ preparation: { targetId: "target" } } as SessionBeforeTreeEvent, ctx);
+	return { ctx, navigate };
 }
 
-describe("interactive /tree with running tasks", () => {
-	beforeEach(() => initTheme("dark"));
-
+describe("Tasks tree-navigation confirmation", () => {
 	it("navigates without asking when no task would stop", async () => {
 		const h = treeUI([], false);
-		await h.select();
-		expect(h.ui.showExtensionConfirm).not.toHaveBeenCalled();
-		expect(h.ui.session.navigateTree).toHaveBeenCalledOnce();
+		expect(await h.navigate()).toBeUndefined();
+		expect(h.ctx.ui.confirm).not.toHaveBeenCalled();
 	});
 
-	it("lists the tasks it would stop and returns to the tree when declined", async () => {
+	it("lists the tasks it would stop and cancels when declined", async () => {
 		const h = treeUI([running("npm run build"), running("npm run dev\n--watch")], false);
-		await h.select();
-		const [title, message] = h.ui.showExtensionConfirm.mock.calls[0]!;
+		expect(await h.navigate()).toEqual({ cancel: true });
+		const [title, message] = (h.ctx.ui.confirm as ReturnType<typeof vi.fn>).mock.calls[0]!;
 		expect(title).toBe("Stop 2 running tasks?");
 		expect(message).toContain("npm run build");
 		expect(message).toContain("npm run dev");
 		expect(message).not.toContain("--watch");
-		expect(h.ui.session.navigateTree).not.toHaveBeenCalled();
-		expect(h.selectors).toHaveLength(2);
 	});
 
 	it("navigates after the stop is confirmed", async () => {
 		const h = treeUI([running("npm run build")], true);
-		await h.select();
-		expect(h.ui.showExtensionConfirm.mock.calls[0]![0]).toBe("Stop 1 running task?");
-		expect(h.ui.session.navigateTree).toHaveBeenCalledOnce();
+		expect(await h.navigate()).toBeUndefined();
+		expect(h.ctx.ui.confirm).toHaveBeenCalledOnce();
+	});
+
+	it("does not invent a confirmation prompt in a headless host", async () => {
+		const h = treeUI([running("npm run build")], false, false);
+		expect(await h.navigate()).toBeUndefined();
+		expect(h.ctx.ui.confirm).not.toHaveBeenCalled();
 	});
 });

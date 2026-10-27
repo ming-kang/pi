@@ -6,6 +6,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Changed
 
+- Moved the complete Tasks management surface into the bundled `tasks` extension: the management tool, `/tasks` panel and command, status/detach controls, keybindings, completion cards, and tree confirmation. Core retains only execution, retention, journaling, usage accounting, and exactly-once delivery behind a small public `TasksContext.session` bridge.
 - Collapsed thinking now shows up to three live preview lines while streaming and settles to `Thoughts`, with click-to-expand preserved. A custom `setHiddenThinkingLabel()` now labels active streaming blocks only; settled blocks use `Thoughts`.
 
 ## [1.4.2] - 2026-10-26

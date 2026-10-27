@@ -14,6 +14,7 @@ export type {
 	TaskSnapshot,
 	TaskStatus,
 	TasksContext,
+	TasksSessionContext,
 	TaskTerminalStatus,
 	TaskToolOutcome,
 } from "../tasks/types.ts";

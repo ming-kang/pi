@@ -105,11 +105,11 @@
 		},
 		{
 			"id": "background-execution",
-			"why": "Native Tasks supervision, retained output, persistence receipts, and extension-owned execution; the panel preserves selection and bounded history, while the statusline counts active background work and advertises eligible foreground handoff.",
+			"why": "Core owns Tasks execution, retention, persistence receipts, and exactly-once delivery; the bundled extension owns the management tool, panel, presentation, keybindings, and tree confirmation.",
 			"paths": [
 				{
 					"path": "src/core/agent-session.ts",
-					"rewrite": "TaskSession owns result and usage persistence; TaskDelivery owns queued completion and tool-call receipts. Lifecycle pauses wrap upstream-shaped Body methods, and the native tasks tool is bound to the session."
+					"rewrite": "TaskSession owns result and usage persistence; TaskDelivery owns queued completion and tool-call receipts. Lifecycle pauses wrap upstream-shaped Body methods, and TasksContext.session exposes the narrow host bridge used by the management extension."
 				},
 				{
 					"path": "src/core/agent-session-runtime.ts"
@@ -166,9 +166,6 @@
 					"path": "src/core/tools/renderers/index.ts"
 				},
 				{
-					"path": "src/core/slash-commands.ts"
-				},
-				{
 					"path": "src/modes/interactive/components/custom-message.ts"
 				}
 			],
@@ -186,6 +183,7 @@
 				"test/tasks-presentation.test.ts",
 				"test/tasks-usage.test.ts",
 				"test/tasks-extension.test.ts",
+				"test/interactive-mode-tree-tasks.test.ts",
 				"test/tasks-panel.test.ts",
 				"test/suite/tasks-panel.test.ts"
 			]
@@ -414,7 +412,7 @@
 		},
 		{
 			"id": "keybindings",
-			"why": "Extensions register their own configurable keybindings; core merges the registry and reserves the detach key.",
+			"why": "Extensions register configurable keybindings, editor-global reservations, and keyboard-help sections through shared core registries.",
 			"paths": [
 				{
 					"path": "src/core/keybindings.ts"

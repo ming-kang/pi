@@ -78,7 +78,7 @@ describe("regression #3592: no-builtin-tools keeps extension tools enabled", () 
 				.getAllTools()
 				.map((tool) => tool.name)
 				.sort(),
-		).toEqual(["bash", "dynamic_tool", "edit", "find", "grep", "ls", "powershell", "read", "tasks", "write"]);
+		).toEqual(["bash", "dynamic_tool", "edit", "find", "grep", "ls", "powershell", "read", "write"]);
 		expect(session.getActiveToolNames()).toEqual(["dynamic_tool"]);
 		await session.bindExtensions({ tasksEnabled: true });
 		expect(session.getActiveToolNames()).toEqual(["dynamic_tool"]);

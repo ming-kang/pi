@@ -52,6 +52,11 @@ export class TaskRuntime implements TasksContext {
 	get closed(): boolean {
 		return this._closed;
 	}
+
+	get session(): TaskRuntimeOptions["session"] {
+		return this.options.session;
+	}
+
 	private pauses = 0;
 
 	private readonly options: TaskRuntimeOptions;

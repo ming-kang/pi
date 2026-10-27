@@ -9,6 +9,7 @@ import providerExtension from "./provider/index.ts";
 import questionExtension from "./question/index.ts";
 import searchExtension from "./search/index.ts";
 import statuslineExtension from "./statusline/index.ts";
+import tasksExtension from "./tasks/index.ts";
 import toolPresentationExtension from "./tool-presentation/index.ts";
 import toolSearchExtension from "./tool-search/index.ts";
 
@@ -24,5 +25,6 @@ export const builtInExtensions: InlineExtension[] = [
 	{ name: "question", factory: questionExtension, builtin: true },
 	{ name: "statusline", factory: statuslineExtension, builtin: true },
 	{ name: "tool-presentation", factory: toolPresentationExtension, builtin: true },
+	{ name: "tasks", factory: tasksExtension, replaceable: true, builtin: true },
 	{ name: "search", factory: searchExtension, builtin: true },
 ];

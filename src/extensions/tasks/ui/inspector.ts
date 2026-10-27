@@ -1,6 +1,6 @@
 import type { TaskRead, TaskSnapshot, TasksContext } from "../../../core/tasks/types.ts";
 import { isTaskTerminal } from "../../../core/tasks/types.ts";
-import type { Theme } from "../theme/theme.ts";
+import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { TasksTab } from "./model.ts";
 import { cleanTaskText } from "./text.ts";
 import { TaskViewport } from "./viewport.ts";

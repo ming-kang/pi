@@ -109,10 +109,22 @@ export interface TaskRead {
 	fromByte?: number;
 }
 
+/** Optional host integration for products built on the execution runtime. */
+export interface TasksSessionContext {
+	/** Ends only management-tool waits when new steering arrives. */
+	readonly waitInterruptSignal?: AbortSignal;
+	/** Hold a settled result until the wait's tool result has been persisted. */
+	prepareWait(toolCallId: string, taskId: string): void;
+	/** Running tasks that navigating to `targetId` would cancel on this session branch. */
+	stoppedByTreeNavigation(targetId: string): TaskSnapshot[];
+}
+
 /** Session-bound public capability. Captured instances close on runtime replacement. */
 export interface TasksContext {
 	readonly enabled: boolean;
 	readonly closed?: boolean;
+	/** Present when the runtime is attached to Pi's durable session lifecycle. */
+	readonly session?: TasksSessionContext;
 	execute<T>(execution: TaskExecution<T>): Promise<TaskToolOutcome<T>>;
 	list(): TaskSnapshot[];
 	get(id: string): TaskSnapshot;
@@ -144,6 +156,8 @@ export interface TasksContext {
 export interface TaskRuntimeOptions {
 	enabled?: boolean;
 	backgroundAllowed?: boolean;
+	/** Durable host integration; standalone runtimes leave waits observational. */
+	session?: TasksSessionContext;
 	anchor?: () => string | null;
 	/** Concurrent background executions. Foreground work is bounded by its caller instead. */
 	maxActive?: number;

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { registerKeybindings } from "../src/core/keybinding-registry.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 // Bundled extensions register their keybindings when their modules load.
-import "../src/modes/interactive/tasks/index.ts";
+import "../src/extensions/tasks/index.ts";
 import "../src/extensions/btw/index.ts";
 import "../src/extensions/provider/index.ts";
 import "../src/extensions/question/index.ts";

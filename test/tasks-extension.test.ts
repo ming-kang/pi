@@ -18,15 +18,15 @@ import type {
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import type { TaskControl } from "../src/core/tasks/types.ts";
-import { runKill, runList, runRead, runWait } from "../src/core/tools/tasks/actions.ts";
-import type { tasksSchema } from "../src/core/tools/tasks/schema.ts";
-import type { TasksDetails } from "../src/core/tools/tasks/types.ts";
+import { runKill, runList, runRead, runWait } from "../src/extensions/tasks/tool/actions.ts";
+import type { tasksSchema } from "../src/extensions/tasks/tool/schema.ts";
+import type { TasksDetails } from "../src/extensions/tasks/tool/types.ts";
 import {
 	renderTasksCall,
 	renderTasksResult,
 	scheduleWaitRefresh,
 	type TasksRenderState,
-} from "../src/modes/interactive/tasks/render.ts";
+} from "../src/extensions/tasks/ui/render.ts";
 import { initTheme, type Theme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { createTasksHarness } from "./test-tasks-ui.ts";
 

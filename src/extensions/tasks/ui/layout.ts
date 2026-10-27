@@ -3,8 +3,8 @@ import type { AppKeybinding, Keybinding, KeybindingsManager } from "../../../cor
 import { runtimeLabel } from "../../../core/tasks/format.ts";
 import { isTaskTerminal } from "../../../core/tasks/types.ts";
 import { formatSize } from "../../../core/tools/truncate.ts";
-import { keyLabel } from "../components/keybinding-hints.ts";
-import type { Theme } from "../theme/theme.ts";
+import { keyLabel } from "../../../modes/interactive/components/keybinding-hints.ts";
+import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { TaskInspector } from "./inspector.ts";
 import type { TaskList } from "./list.ts";
 import type { TaskSelection, TasksTab } from "./model.ts";

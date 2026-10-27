@@ -351,6 +351,7 @@ export type {
 	TaskSnapshot,
 	TaskStatus,
 	TasksContext,
+	TasksSessionContext,
 	TaskTerminalStatus,
 	TaskText,
 	TaskToolOutcome,

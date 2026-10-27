@@ -9,8 +9,8 @@
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
-import { TASK_RESULT_BYTES } from "../../tasks/output.ts";
-import { formatSize } from "../truncate.ts";
+import { TASK_RESULT_BYTES } from "../../../core/tasks/output.ts";
+import { formatSize } from "../../../core/tools/truncate.ts";
 import {
 	TASKS_LOGS_DEFAULT_BYTES,
 	TASKS_LOGS_MIN_BYTES,

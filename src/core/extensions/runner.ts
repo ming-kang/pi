@@ -14,6 +14,7 @@ import type { KeyId } from "@earendil-works/pi-tui";
 import { type Theme, theme } from "../../modes/interactive/theme/theme.ts";
 import type { CacheWarmingAction } from "../cache-warmer.ts";
 import type { ResourceDiagnostic } from "../diagnostics.ts";
+import { getReservedKeybindings } from "../keybinding-registry.ts";
 import type { KeybindingsConfig } from "../keybindings.ts";
 import type { ModelRegistry } from "../model-registry.ts";
 import type { ScopedModel } from "../model-resolver.ts";
@@ -100,7 +101,6 @@ import type {
 // Only editor-global shortcuts are reserved here. Picker-specific bindings are not.
 const RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS = [
 	"app.interrupt",
-	"app.tasks.detach",
 	"app.clear",
 	"app.exit",
 	"app.suspend",
@@ -124,10 +124,11 @@ type BuiltInKeyBindings = Partial<Record<KeyId, { keybinding: string; restrictOv
 
 const buildBuiltinKeybindings = (resolvedKeybindings: KeybindingsConfig): BuiltInKeyBindings => {
 	const builtinKeybindings = {} as BuiltInKeyBindings;
+	const reserved = new Set<string>([...RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS, ...getReservedKeybindings()]);
 	for (const [keybinding, keys] of Object.entries(resolvedKeybindings)) {
 		if (keys === undefined) continue;
 		const keyList = Array.isArray(keys) ? keys : [keys];
-		const restrictOverride = (RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS as readonly string[]).includes(keybinding);
+		const restrictOverride = reserved.has(keybinding);
 		for (const key of keyList) {
 			const normalizedKey = key.toLowerCase() as KeyId;
 			// If multiple actions bind the same key, the reserved action wins so extensions

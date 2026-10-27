@@ -1,6 +1,6 @@
 /** The inspector's Details and Output content, computed once per task snapshot and output read. */
 import { isTaskTerminal, type TaskRead, type TaskSnapshot } from "../../../core/tasks/types.ts";
-import { highlightCode, type Theme } from "../theme/theme.ts";
+import { highlightCode, type Theme } from "../../../modes/interactive/theme/theme.ts";
 import { cleanTaskText } from "./text.ts";
 
 export interface TaskLines {

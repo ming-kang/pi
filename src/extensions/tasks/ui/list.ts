@@ -1,8 +1,8 @@
 import { stripTerminalSequences, truncateToWidth } from "@earendil-works/pi-tui";
 import { runtimeLabel } from "../../../core/tasks/format.ts";
 import { isTaskTerminal } from "../../../core/tasks/types.ts";
-import { statusMarker } from "../components/status-marker.ts";
-import type { Theme } from "../theme/theme.ts";
+import { statusMarker } from "../../../modes/interactive/components/status-marker.ts";
+import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { TaskSelection } from "./model.ts";
 import { statusName } from "./task-view.ts";
 import { cleanTaskText, firstCommandLine } from "./text.ts";

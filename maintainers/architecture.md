@@ -8,7 +8,7 @@ Place new capabilities at the first level that can carry them:
 
 1. **Extension (`src/extensions/<name>/`):** The default for any capability expressible via the public Extension API. Extensions never conflict with upstream and can be added, updated, or removed independently.
 2. **Hook plus extension:** When the Extension API cannot reach required state or UI slots, add the smallest general-purpose hook to core (an event, a `ctx` method, or a registry), then implement the feature as an extension on top of it. Design hooks as general capabilities rather than feature-specific patches (`ctx.ui.editorHost`, `ctx.getContextSnapshot()`, dynamic keybindings).
-3. **Core capability:** Only when a feature must integrate directly into the session lifecycle or interactive renderer (such as Tasks). Isolate custom logic in dedicated distribution modules and interact with upstream code via thin wrappers around unchanged bodies.
+3. **Core capability:** Only when a feature must integrate directly into the session lifecycle or native execution (such as managed Tasks). Isolate custom logic in dedicated distribution modules and interact with upstream code via thin wrappers around unchanged bodies.
 
 Every touched upstream path must be registered in `maintainers/concerns.json`; see [Keeping deviations small](upstream.md#keeping-deviations-small).
 
@@ -28,14 +28,17 @@ Upstream libraries are consumed directly from published npm packages, pinned to 
 
 ## Tasks subsystem
 
-Tasks is a core capability rather than an extension because completion delivery and state journaling must tie directly to the session lifecycle.
+Tasks splits durable execution from its replaceable management surface. The core owns facts that require session-transaction boundaries; the bundled `tasks` extension owns every user-facing management feature. `interactive-mode.ts`, the native tool registry, and native slash commands do not know about `/tasks`.
 
 ### Responsibilities
 
 - **Execution & handles (`core/tasks/runtime.ts`):** Admission, cancellation, execution handles, and foreground handoff.
 - **Retention & quotas (`core/tasks/store.ts`):** Retained output files, cleanup, and separate foreground/background history quotas.
 - **Journaling & delivery (`core/tasks/session.ts`, `delivery.ts`):** Session journal persistence, exactly-once usage accounting, completion delivery, and late-settlement quarantine.
+- **Session bridge (`TasksContext.session`):** The small public adapter for host-backed wait receipts, steering interruption, and branch-impact queries. Standalone runtimes omit it; consumers never import `TaskSession`.
 - **Managed shell execution (`core/tools/shell-tool.ts`, `shell-execution.ts`):** Wraps upstream shell tools (`bash.ts`, `powershell.ts`) to provide background orchestration without duplicating process-tree handling.
+- **Management (`extensions/tasks/`):** The `tasks` tool, `/tasks` command and panel, status/detach behavior, completion renderer, keybindings, keyboard-help section, and tree-navigation confirmation. The extension uses `ExtensionAPI`, `TasksContext`, and shared presentation primitives, never `TaskSession` or `interactive-mode` internals.
+- **Generic UI registries (`core/keybinding-registry.ts`):** Extension-owned configurable bindings, editor-global reservations, and keyboard-help sections; no Tasks-specific entries live in the core binding or help tables.
 
 ### Invariants
 

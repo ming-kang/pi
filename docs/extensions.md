@@ -1282,7 +1282,9 @@ if (outcome.kind === "result") return outcome.result;
 return { content: [{ type: "text", text: `Task ${outcome.task.id} continues in the background.` }], details: undefined };
 ```
 
-`TaskRuntime`, `TaskRuntimeOptions`, and the public `Task*`/`TasksContext` types are exported from `@astralyn/pi`. Captured capabilities close with their runtime; obtain the replacement from the new session context after reload or session replacement.
+When Pi attaches the runtime to its durable session lifecycle, `ctx.tasks.session` exposes the small host integration used by management products: `waitInterruptSignal`, `prepareWait(toolCallId, taskId)`, and `stoppedByTreeNavigation(targetId)`. Standalone runtimes omit it, leaving waits observational. This bridge lets the bundled `tasks` extension coordinate persisted wait receipts and branch confirmations without importing `TaskSession` or interactive internals.
+
+`TaskRuntime`, `TaskRuntimeOptions`, and the public `Task*`/`TasksContext`/`TasksSessionContext` types are exported from `@astralyn/pi`. Captured capabilities close with their runtime; obtain the replacement from the new session context after reload or session replacement.
 
 ### ctx.isIdle() / ctx.abort() / ctx.hasPendingMessages()
 

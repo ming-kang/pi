@@ -24,20 +24,6 @@ export function useWindowsKeybindings(
 const windowsKeybindings = useWindowsKeybindings();
 
 const APP_KEYBINDINGS = {
-	"app.tasks.detach": { defaultKeys: "ctrl+b", description: "Move foreground tasks to the background" },
-	"app.tasks.previousTab": { defaultKeys: "left", description: "Show Output in the focused task inspector" },
-	"app.tasks.nextTab": { defaultKeys: "right", description: "Show Details in the focused task inspector" },
-	"app.tasks.kill": { defaultKeys: "k", description: "Stop the selected task" },
-	"app.tasks.confirmStop": { defaultKeys: "enter", description: "Confirm stopping the selected task" },
-	"app.tasks.detachSelected": { defaultKeys: "b", description: "Move the selected task to the background" },
-	"app.tasks.search": { defaultKeys: "/", description: "Search retained task identities and labels" },
-	"app.tasks.follow": { defaultKeys: "f", description: "Follow the selected task's output" },
-	"app.tasks.top": { defaultKeys: "home", description: "Go to the top of the task list or preview" },
-	"app.tasks.bottom": { defaultKeys: "end", description: "Go to the bottom of the task list or preview" },
-	"app.tasks.nextFocus": { defaultKeys: "tab", description: "Switch between task list and inspector" },
-	"app.tasks.previousFocus": { defaultKeys: "shift+tab", description: "Switch between task inspector and list" },
-	"app.tasks.help": { defaultKeys: "?", description: "Show task controls" },
-
 	"app.interrupt": { defaultKeys: "escape", description: "Cancel or abort" },
 	"app.clear": { defaultKeys: "ctrl+c", description: "Clear editor" },
 	"app.exit": { defaultKeys: "ctrl+d", description: "Exit when editor is empty" },
@@ -188,12 +174,15 @@ const APP_KEYBINDINGS = {
 	},
 } as const satisfies KeybindingDefinitions;
 
-export type AppKeybinding = keyof typeof APP_KEYBINDINGS;
-export type AppKeybindings = { [K in AppKeybinding]: true };
+type CoreAppKeybinding = keyof typeof APP_KEYBINDINGS;
+export type AppKeybindings = { [K in CoreAppKeybinding]: true };
 
 declare module "@earendil-works/pi-tui" {
 	interface Keybindings extends AppKeybindings {}
 }
+
+/** Includes actions contributed by extension keybinding modules. */
+export type AppKeybinding = Extract<Keybinding, `app.${string}`>;
 
 export const KEYBINDINGS = {
 	...TUI_KEYBINDINGS,

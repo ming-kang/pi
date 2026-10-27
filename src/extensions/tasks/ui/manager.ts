@@ -1,4 +1,5 @@
 /** Panel lifecycle and input routing; selection, output ownership and layout have separate owners. */
+import "../keybindings.ts";
 import {
 	type Component,
 	type Focusable,
@@ -8,8 +9,8 @@ import {
 } from "@earendil-works/pi-tui";
 import type { AppKeybinding, KeybindingsManager } from "../../../core/keybindings.ts";
 import { isTaskTerminal, type TasksContext } from "../../../core/tasks/types.ts";
-import { STATUS_SPINNER_INTERVAL_MS } from "../components/status-marker.ts";
-import type { Theme } from "../theme/theme.ts";
+import { STATUS_SPINNER_INTERVAL_MS } from "../../../modes/interactive/components/status-marker.ts";
+import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import { TaskInspector } from "./inspector.ts";
 import { renderTasksLayout, type TasksLayout } from "./layout.ts";
 import { TaskList } from "./list.ts";

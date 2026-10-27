@@ -2,8 +2,8 @@ import { stripTerminalSequences, type TuiMouseEvent, visibleWidth } from "@earen
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type { TaskSnapshot } from "../src/core/tasks/types.ts";
-import { TasksMenu } from "../src/modes/interactive/tasks/manager.ts";
-import type { TasksPanelState } from "../src/modes/interactive/tasks/model.ts";
+import { TasksMenu } from "../src/extensions/tasks/ui/manager.ts";
+import type { TasksPanelState } from "../src/extensions/tasks/ui/model.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 
 const menus: TasksMenu[] = [];

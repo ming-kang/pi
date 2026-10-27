@@ -8,7 +8,7 @@ import { OutputAccumulator } from "../src/core/tools/output-accumulator.ts";
 import { createPowerShellToolDefinition } from "../src/core/tools/powershell.ts";
 import { MAX_BACKGROUND_OUTPUT_BYTES } from "../src/core/tools/shell-execution.ts";
 import { createBashToolDefinition } from "../src/core/tools/shell-tool.ts";
-import { runRead, runWait } from "../src/core/tools/tasks/actions.ts";
+import { runRead, runWait } from "../src/extensions/tasks/tool/actions.ts";
 
 const services: TaskRuntime[] = [];
 const paths = new Set<string>();

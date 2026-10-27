@@ -9,7 +9,7 @@
  * `exitCode` is three-state: `null` for signal-reaped tasks.
  */
 
-import type { TaskKind, TaskStatus } from "../../tasks/types.ts";
+import type { TaskKind, TaskStatus } from "../../../core/tasks/types.ts";
 
 export interface TasksReadDetails {
 	kind?: TaskKind;

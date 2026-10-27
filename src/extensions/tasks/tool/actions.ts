@@ -1,17 +1,17 @@
 /** Management only: execution and delivery belong to the session task runtime. */
 
-import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
-import type { AgentToolResult } from "../../extensions/types.ts";
-import { runtimeLabel } from "../../tasks/format.ts";
-import { boundText } from "../../tasks/output.ts";
+import type { AgentToolResult } from "../../../core/extensions/types.ts";
+import { runtimeLabel } from "../../../core/tasks/format.ts";
+import { boundText } from "../../../core/tasks/output.ts";
 import {
 	isTaskTerminal,
 	TaskLookupError,
 	type TaskRead,
 	type TaskSnapshot,
 	type TasksContext,
-} from "../../tasks/types.ts";
-import { truncateHead } from "../truncate.ts";
+} from "../../../core/tasks/types.ts";
+import { truncateHead } from "../../../core/tools/truncate.ts";
+import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
 import { TASKS_LIST_FINISHED_SHOWN, TASKS_WAIT_DELTA_BYTES } from "./constants.ts";
 import { clampReadBytes, clampSinceBytes, clampWaitMs, requireTaskId, type TasksInput } from "./schema.ts";
 import type { TasksDetails, TasksKillDetails, TasksListDetails, TasksReadDetails, TasksWaitDetails } from "./types.ts";

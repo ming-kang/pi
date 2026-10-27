@@ -97,14 +97,14 @@ export class TaskSession {
 	 * launch branch. Mirrors navigateTree's destination: selecting a user or custom message moves
 	 * the leaf to its parent.
 	 */
-	stoppedByTreeNavigation(targetId: string): TaskSnapshot[] {
+	stoppedByTreeNavigation(targetId: string, service = this.service): TaskSnapshot[] {
 		const target = this.options.manager.getEntry(targetId);
 		if (!target) return [];
 		const leafId =
 			(target.type === "message" && target.message.role === "user") || target.type === "custom_message"
 				? target.parentId
 				: targetId;
-		return this.service.activeOutsideBranch(this.branchIds(leafId));
+		return service.activeOutsideBranch(this.branchIds(leafId));
 	}
 
 	/** Cancel running tasks launched outside the branch ending at `leafId`. */
@@ -129,9 +129,17 @@ export class TaskSession {
 		const generation = ++this.generation;
 		const sessionId = manager.getSessionId();
 		const sessionFile = manager.getSessionFile();
-		const service = new TaskRuntime({
+		const waitInterruptSignal = () => this.waitInterruptSignal;
+		const service: TaskRuntime = new TaskRuntime({
 			enabled: this.enabled,
 			backgroundAllowed,
+			session: {
+				get waitInterruptSignal() {
+					return waitInterruptSignal();
+				},
+				prepareWait: (toolCallId, taskId) => this.delivery.prepareWait(toolCallId, taskId),
+				stoppedByTreeNavigation: (targetId): TaskSnapshot[] => this.stoppedByTreeNavigation(targetId, service),
+			},
 			anchor: () => manager.getLeafId(),
 			onCleanupError: (message) => this.warn("task_cleanup", message),
 			onSettled: (task, usage) => {

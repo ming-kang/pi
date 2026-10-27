@@ -1,9 +1,9 @@
 import { getKeybindings } from "@earendil-works/pi-tui";
 import type { ExtensionUIContext } from "../../../core/extensions/types.ts";
 import { isTaskTerminal, type TasksContext } from "../../../core/tasks/types.ts";
-import { TASKS_DETACH_HINT_DELAY_MS } from "../../../core/tools/tasks/constants.ts";
-import { keyLabel } from "../components/keybinding-hints.ts";
-import { theme } from "../theme/theme.ts";
+import { keyLabel } from "../../../modes/interactive/components/keybinding-hints.ts";
+import { theme } from "../../../modes/interactive/theme/theme.ts";
+import { TASKS_DETACH_HINT_DELAY_MS } from "../tool/constants.ts";
 import { TasksMenu } from "./manager.ts";
 import type { TasksPanelState } from "./model.ts";
 
@@ -12,7 +12,7 @@ export interface TasksUI {
 	dispose(): void;
 }
 
-/** Host-owned task UI; it is available without loading an extension. */
+/** Extension-owned task UI, bound to one session context at a time. */
 export function bindTasksUI(ctx: { tasks: TasksContext; ui: ExtensionUIContext }): TasksUI {
 	const state: TasksPanelState = { tab: "output" };
 	let unsubscribe: (() => void) | undefined;

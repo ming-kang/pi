@@ -17,6 +17,7 @@ import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import type { TaskControl } from "../src/core/tasks/types.ts";
 import { TASK_USAGE_TYPE } from "../src/core/usage-totals.ts";
+import tasksExtension from "../src/extensions/tasks/index.ts";
 import { createInMemoryModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
 import { createTestExtensionsResult, createTestResourceLoader, userMsg } from "./utilities.ts";
 
@@ -66,7 +67,7 @@ describe("session-owned background host", () => {
 			modelRuntime,
 			backgroundAllowed,
 			resourceLoader: createTestResourceLoader({
-				extensionsResult: await createTestExtensionsResult(factory ? [factory] : []),
+				extensionsResult: await createTestExtensionsResult(factory ? [tasksExtension, factory] : [tasksExtension]),
 			}),
 		});
 		cleanups.push(() => session.dispose());
