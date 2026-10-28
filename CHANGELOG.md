@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.4.4] - 2026-10-28
+
 ### Changed
 
 - Refined `/provider` into a quieter configuration workspace: the provider list is now pure navigation, editor actions are grouped into setup, models, and manage sections, detail panes have contextual titles, save state is visible in the title, and terminals narrower than 72 columns use a single-pane layout.
