@@ -518,7 +518,8 @@
 			"tests": [
 				"test/run-summary.test.ts",
 				"test/built-in-extensions.test.ts",
-				"test/interactive-mode-compaction.test.ts"
+				"test/interactive-mode-compaction.test.ts",
+				"test/suite/regressions/4167-thinking-toggle-pending-tool-render.test.ts"
 			]
 		},
 		{

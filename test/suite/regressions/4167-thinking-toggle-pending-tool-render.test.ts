@@ -35,6 +35,7 @@ type RenderSessionItems = (
 
 type RenderSessionContextThis = {
 	pendingTools: Map<string, ToolExecutionComponent>;
+	extensionTranscriptNotes: Map<string, never>;
 	chatContainer: Container;
 	footer: { invalidate(): void };
 	programStatus: { handleEvent(): void };
@@ -70,6 +71,7 @@ function createFakeInteractiveModeThis(): RenderSessionContextThis {
 	const chatContainer = new Container();
 	return {
 		pendingTools: new Map<string, ToolExecutionComponent>(),
+		extensionTranscriptNotes: new Map<string, never>(),
 		chatContainer,
 		footer: { invalidate: vi.fn() },
 		programStatus: { handleEvent: vi.fn() },
