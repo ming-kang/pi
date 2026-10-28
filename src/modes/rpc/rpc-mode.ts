@@ -207,6 +207,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			// Component factories are not supported in RPC mode - would need TUI access
 		},
 
+		addTranscriptNote(): void {
+			// Transcript notes are local to the interactive TUI.
+		},
+
 		setFooter(_factory: unknown): void {
 			// Custom footer not supported in RPC mode - requires TUI access
 		},

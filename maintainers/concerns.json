@@ -492,6 +492,36 @@
 			]
 		},
 		{
+			"id": "run-summary",
+			"why": "A bundled extension times continuous runs and displays ephemeral, entry-anchored transcript notes without persisting UI-only status.",
+			"paths": [
+				{
+					"path": "src/core/extensions/index.ts"
+				},
+				{
+					"path": "src/core/extensions/runner.ts"
+				},
+				{
+					"path": "src/core/extensions/types.ts"
+				},
+				{
+					"path": "src/index.ts"
+				},
+				{
+					"path": "src/modes/interactive/interactive-mode.ts",
+					"rewrite": "The interactive host owns runtime-scoped transcript notes and reinserts them after their session anchors during transcript rebuilds."
+				},
+				{
+					"path": "src/modes/rpc/rpc-mode.ts"
+				}
+			],
+			"tests": [
+				"test/run-summary.test.ts",
+				"test/built-in-extensions.test.ts",
+				"test/interactive-mode-compaction.test.ts"
+			]
+		},
+		{
 			"id": "docs-and-tests",
 			"why": "Distribution-owned user documentation and tests that track the standalone layout and registered deviations.",
 			"paths": [

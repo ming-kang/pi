@@ -85,6 +85,7 @@ import type {
 	EditorFactory,
 	ExtensionCommandContext,
 	ExtensionRunner,
+	ExtensionTranscriptNoteOptions,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
@@ -281,7 +282,23 @@ type CompactionCostNotice = {
 	usage: Usage;
 };
 
-type RenderSessionItem = AgentMessage | Extract<SessionEntry, { type: "custom" | "usage" }> | CompactionCostNotice;
+type TranscriptNote = {
+	key: string;
+	text: string;
+	afterEntryId: string;
+};
+
+type TranscriptNoteItem = TranscriptNote & { type: "transcript_note" };
+
+type RenderSessionItem =
+	| AgentMessage
+	| Extract<SessionEntry, { type: "custom" | "usage" }>
+	| CompactionCostNotice
+	| TranscriptNoteItem;
+
+function isTranscriptNote(item: RenderSessionItem): item is TranscriptNoteItem {
+	return "type" in item && item.type === "transcript_note";
+}
 
 function isCustomSessionEntry(item: RenderSessionItem): item is Extract<SessionEntry, { type: "custom" }> {
 	return "type" in item && item.type === "custom";
@@ -583,6 +600,11 @@ export class InteractiveMode {
 		handler: (data: string) => { consume?: boolean; data?: string } | undefined;
 		unsubscribe: () => void;
 	}>();
+
+	// Ephemeral extension notes anchored to session entries and rebuilt with the transcript.
+	private extensionTranscriptNotes = new Map<string, TranscriptNote>();
+	private hasRenderedTranscript = false;
+	private transcriptNotesRefreshScheduled = false;
 
 	// Extension widgets (components rendered above/below the editor)
 	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
@@ -2435,6 +2457,9 @@ export class InteractiveMode {
 
 	private resetExtensionUI(): void {
 		this.editorHost.clear();
+		this.extensionTranscriptNotes.clear();
+		this.hasRenderedTranscript = false;
+		this.transcriptNotesRefreshScheduled = false;
 		if (this.extensionDialogs.length > 0) {
 			for (const dialog of this.extensionDialogs) {
 				dialog.component.dispose?.();
@@ -2632,6 +2657,7 @@ export class InteractiveMode {
 			setWorkingIndicator: (options) => this.setWorkingIndicator(options),
 			setHiddenThinkingLabel: (label) => this.setHiddenThinkingLabel(label),
 			setWidget: (key, content, options) => this.setExtensionWidget(key, content, options),
+			addTranscriptNote: (key, text, options) => this.addExtensionTranscriptNote(key, text, options),
 			setFooter: (factory) => this.setExtensionFooter(factory),
 			setHeader: (factory) => this.setExtensionHeader(factory),
 			setTitle: (title) => this.ui.terminal.setTitle(title),
@@ -3806,6 +3832,41 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	private addExtensionTranscriptNote(key: string, text: string, options: ExtensionTranscriptNoteOptions): void {
+		if (this.extensionTranscriptNotes.has(key)) return;
+		const note = { key, text, afterEntryId: options.afterEntryId };
+		this.extensionTranscriptNotes.set(key, note);
+		if (this.hasRenderedTranscript && options.afterEntryId === this.sessionManager.getLeafId()) {
+			this.addTranscriptNoteToChat({ type: "transcript_note", ...note });
+			this.ui.requestRender();
+			return;
+		}
+		this.scheduleTranscriptNotesRefresh();
+	}
+
+	/** Coalesce restored historical notes into one rebuild; initial rendering will pick them up itself. */
+	private scheduleTranscriptNotesRefresh(): void {
+		if (!this.hasRenderedTranscript || this.transcriptNotesRefreshScheduled || !this.session.isIdle) return;
+		this.transcriptNotesRefreshScheduled = true;
+		const session = this.session;
+		queueMicrotask(() => {
+			if (this.session !== session || !this.transcriptNotesRefreshScheduled) return;
+			this.transcriptNotesRefreshScheduled = false;
+			if (!session.isIdle) return;
+			this.rebuildTranscriptWithNotes();
+		});
+	}
+
+	private rebuildTranscriptWithNotes(): void {
+		this.chatContainer.clear();
+		this.renderInitialMessages({ populateHistory: false });
+	}
+
+	private addTranscriptNoteToChat(note: TranscriptNoteItem): void {
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new ThemedText(() => theme.fg("dim", note.text), this.outputPad, 0));
+	}
+
 	private addCustomEntryToChat(entry: Extract<SessionEntry, { type: "custom" }>): void {
 		const renderer = this.session.extensionRunner.getEntryRenderer(entry.customType);
 		if (!renderer) {
@@ -3969,6 +4030,10 @@ export class InteractiveMode {
 		}
 
 		for (const item of items) {
+			if (isTranscriptNote(item)) {
+				this.addTranscriptNoteToChat(item);
+				continue;
+			}
 			if (isCustomSessionEntry(item)) {
 				this.addCustomEntryToChat(item);
 				continue;
@@ -4058,16 +4123,21 @@ export class InteractiveMode {
 		// Selection coordinates point into the transcript being replaced (#9311).
 		if (this.renderer instanceof TuiAltScreen) this.renderer.resetTextSelection();
 		const items = entries.flatMap((entry): RenderSessionItem[] => {
+			const notes = [...this.extensionTranscriptNotes.values()]
+				.filter((note) => note.afterEntryId === entry.id)
+				.map((note): TranscriptNoteItem => ({ type: "transcript_note", ...note }));
 			if (entry.type === "custom" || (entry.type === "usage" && entry.kind === "cache_warm")) {
-				return [entry];
+				return [entry, ...notes];
 			}
 			const messages = sessionEntryToContextMessages(entry);
 			if ((entry.type === "compaction" || entry.type === "branch_summary") && entry.usage && messages.length > 0) {
-				return [...messages, { type: "compaction_cost", kind: entry.type, usage: entry.usage }];
+				return [...messages, { type: "compaction_cost", kind: entry.type, usage: entry.usage }, ...notes];
 			}
-			return messages;
+			return [...messages, ...notes];
 		});
 		this.renderSessionItems(items, options);
+		this.hasRenderedTranscript = true;
+		this.transcriptNotesRefreshScheduled = false;
 	}
 
 	private addCacheWarmingUsage(entry: UsageEntry): void {
@@ -4168,11 +4238,11 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new ThemedText(() => theme.fg("warning", `${label}: ${reBilled}`), 1, 0));
 	}
 
-	renderInitialMessages(): void {
+	renderInitialMessages(options: { populateHistory?: boolean } = {}): void {
 		const entries = this.sessionManager.buildContextEntries();
 		this.renderSessionEntries(entries, {
 			updateFooter: true,
-			populateHistory: true,
+			populateHistory: options.populateHistory ?? true,
 		});
 		this.renderProjectTrustWarningIfNeeded();
 

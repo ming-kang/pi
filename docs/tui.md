@@ -759,6 +759,19 @@ The factory's component is disposed when that widget key is replaced or cleared.
 
 **Examples:** [widget-placement.ts](../examples/extensions/widget-placement.ts)
 
+### Pattern 5b: Ephemeral Transcript Notes
+
+Use `addTranscriptNote()` for a short display-only annotation tied to an existing session entry. Pi renders it in `dim` after that entry, including when compaction or branch navigation rebuilds the transcript. Notes are not persisted, are never sent to the model, and are cleared with the current extension UI runtime. Reusing a key is a no-op, which makes event retries safe.
+
+```typescript
+const afterEntryId = ctx.sessionManager.getLeafId();
+if (afterEntryId) {
+  ctx.ui.addTranscriptNote("run-summary", "Worked for 8s", { afterEntryId });
+}
+```
+
+This is intended for settled annotations. It is not a replacement for widgets, footers, streaming components, or durable custom entries.
+
 ### Pattern 6: Custom Footer
 
 A footer factory receives branch and extension-status data unavailable elsewhere. Return the unsubscribe function as `dispose` so it is released when the footer changes.

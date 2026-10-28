@@ -22,6 +22,7 @@ The following extensions are additions maintained by `@astralyn/pi`:
 | [BTW](extensions/btw.md) | `/btw [question]` | Ask temporary side questions with the current context while the main task continues |
 | [DeepWiki](extensions/deepwiki.md) | `deepwiki` | Query indexed public GitHub repository documentation |
 | [Question](extensions/question.md) | `question` | Ask structured questions through native interactive UI |
+| [Run summary](extensions/run-summary.md) | Transcript note | Show elapsed and completion time after each continuous agent run |
 | [Provider](extensions/provider.md) | `/provider` | Edit models.json providers: connection, API type, and models |
 | [Statusline](extensions/statusline.md) | Footer status | Show concise extension-managed activity state |
 | [Search](extensions/search.md) | `code_search`, `web_search` | Devin-driven semantic code search and web search with one shared key |

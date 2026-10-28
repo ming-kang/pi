@@ -8,6 +8,7 @@ import llamaExtension from "./llama/index.ts";
 import mcpExtension from "./mcp/index.ts";
 import providerExtension from "./provider/index.ts";
 import questionExtension from "./question/index.ts";
+import runSummaryExtension from "./run-summary/index.ts";
 import searchExtension from "./search/index.ts";
 import statuslineExtension from "./statusline/index.ts";
 import tasksExtension from "./tasks/index.ts";
@@ -24,6 +25,7 @@ export const builtInExtensions: InlineExtension[] = [
 	{ name: "deepwiki", factory: deepwikiExtension, builtin: true },
 	{ name: "provider", factory: providerExtension, builtin: true },
 	{ name: "question", factory: questionExtension, builtin: true },
+	{ name: "run-summary", factory: runSummaryExtension, replaceable: true, builtin: true },
 	{ name: "statusline", factory: statuslineExtension, builtin: true },
 	{ name: "tool-presentation", factory: toolPresentationExtension, builtin: true },
 	{ name: "tasks", factory: tasksExtension, replaceable: true, builtin: true },

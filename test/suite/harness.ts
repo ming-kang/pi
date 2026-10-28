@@ -85,6 +85,7 @@ export function createTestUiContext(overrides: Partial<ExtensionUIContext> = {})
 		setWorkingIndicator: () => {},
 		setHiddenThinkingLabel: () => {},
 		setWidget: () => {},
+		addTranscriptNote: () => {},
 		setFooter: () => {},
 		setHeader: () => {},
 		setTitle: () => {},

@@ -85,6 +85,10 @@
           "path": "bundled/extensions/question.md"
         },
         {
+          "title": "Run summary",
+          "path": "bundled/extensions/run-summary.md"
+        },
+        {
           "title": "Provider",
           "path": "bundled/extensions/provider.md"
         },

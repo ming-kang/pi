@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Added interactive run summaries (`Worked for 1m 52s · Done 2026/10/28 13:14`) through the bundled `run-summary` extension. Continuous runs include tools, retries, steering, and queued follow-up work. Persisted run-boundary records restore notes after reload, resume, and branch navigation without entering model context or appearing as chat cards.
+
 ## [1.4.3] - 2026-10-27
 
 ### Changed
