@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { setKeybindings, type TUI, TuiMainScreen } from "@earendil-works/pi-tui";
+import { setKeybindings, type TUI, TuiMainScreen, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { compatFieldsForApi } from "../src/extensions/provider/compat-fields.ts";
@@ -384,6 +384,10 @@ describe("provider editor interactions", () => {
 		const { screen } = editor();
 		screen.handleInput("\x1b[C"); // focus the API Auth pane
 		const page = render(screen);
+		expect(page).toContain("SETUP");
+		expect(page).toContain("MODELS");
+		expect(page).toContain("MANAGE");
+		expect(page).toContain("Connection");
 		expect(page).toContain("baseUrl: https://old.example/v1");
 		expect(page).toContain("apiKey: not set");
 		expect(page).toContain("API Type: openai-completions");
@@ -391,6 +395,7 @@ describe("provider editor interactions", () => {
 		screen.handleInput("\x1b[B");
 		screen.handleInput("\x1b[B"); // API Type row
 		screen.handleInput("\r"); // push the radio sub-page
+		expect(render(screen)).toContain("Connection / API Type");
 		expect(render(screen)).toContain("● openai-completions");
 		screen.handleInput("\x1b[B"); // anthropic-messages
 		screen.handleInput("\r"); // select applies and returns to API Auth
@@ -677,9 +682,16 @@ describe("provider fixed layout", () => {
 	test("the provider list keeps a fixed frame in list, empty, and id-entry modes", () => {
 		const list = new ProviderListScreen(tui, theme, keys, vi.fn(), store);
 		list.focused = true;
+		const initial = stripAnsi(list.render(120).join("\n"));
+		expect(initial).toContain("Providers");
+		expect(initial).not.toContain("models.json");
+		expect(initial).not.toContain("1 model");
+		expect(initial).not.toContain("openai-completions");
 		expect(list.render(120).length).toBe(20);
 		list.handleInput("zzz"); // filter to no match
 		expect(list.render(120).length).toBe(20);
+		expect(stripAnsi(list.render(120).join("\n"))).toContain("No providers match “zzz”.");
+		expect(stripAnsi(list.render(120).join("\n"))).toContain("Enter will create provider “zzz”.");
 		list.handleInput("\r"); // + Add Provider → id entry mode, prefilled from the query
 		expect(list.render(120).length).toBe(20);
 		expect(stripAnsi(list.render(120).join("\n"))).toContain("zzz");
@@ -687,6 +699,51 @@ describe("provider fixed layout", () => {
 		list.handleInput("\r"); // empty id → inline error, still fixed height
 		expect(stripAnsi(list.render(120).join("\n"))).toContain("non-empty");
 		expect(list.render(120).length).toBe(20);
+	});
+
+	test("the narrow editor shows only the focused pane and preserves its fixed frame", () => {
+		const { screen } = editor();
+		const navigation = screen.render(56);
+		expect(navigation.length).toBe(20);
+		expect(stripAnsi(navigation.join("\n"))).toContain("SETUP");
+		expect(stripAnsi(navigation.join("\n"))).not.toContain("baseUrl");
+		expect(stripAnsi(navigation.join("\n"))).not.toContain("│");
+		expect(navigation.every((line) => visibleWidth(stripAnsi(line)) <= 56)).toBe(true);
+
+		screen.handleInput("\x1b[C");
+		const details = screen.render(56);
+		expect(details.length).toBe(20);
+		expect(stripAnsi(details.join("\n"))).toContain("Connection");
+		expect(stripAnsi(details.join("\n"))).toContain("baseUrl: https://old.example/v1");
+		expect(stripAnsi(details.join("\n"))).not.toContain("MANAGE");
+		expect(details.every((line) => visibleWidth(stripAnsi(line)) <= 56)).toBe(true);
+
+		screen.handleInput("\x1b");
+		const returned = stripAnsi(screen.render(56).join("\n"));
+		expect(returned).toContain("MANAGE");
+		expect(returned).not.toContain("baseUrl");
+		screen.dispose();
+	});
+
+	test("the editor title reports saving and failed-save states", async () => {
+		const initial = readFileSync(store.path, "utf8");
+		const { screen } = editor();
+		writeFileSync(store.path, "{ broken JSON");
+		screen.handleInput("\x1b[C");
+		screen.handleInput("\x1b[200~https://new.example/v1\x1b[201~");
+		screen.handleInput("\r");
+		expect(render(screen)).toContain("Saving…");
+		await store.flush();
+		screen.syncFromStore();
+		expect(render(screen)).toContain("Save failed");
+
+		writeFileSync(store.path, initial);
+		store.retrySave();
+		await store.flush();
+		screen.syncFromStore();
+		expect(render(screen)).not.toContain("Saving…");
+		expect(render(screen)).not.toContain("Save failed");
+		screen.dispose();
 	});
 
 	test("the provider list scrolls with a position indicator", () => {
@@ -707,7 +764,7 @@ describe("provider fixed layout", () => {
 		expect(render(screen)).toContain("New Model");
 		screen.handleInput("\x1b"); // cancels id editing → the empty draft is discarded
 		expect(render(screen)).not.toContain("New Model");
-		expect(render(screen)).toContain("› + Add Model");
+		expect(render(screen)).toContain("› + Add model");
 		expect(screen.render(120).length).toBe(20);
 		screen.dispose();
 	});
@@ -726,7 +783,7 @@ describe("provider fixed layout", () => {
 		screen.handleInput("\x1b[A"); // Discard Model
 		screen.handleInput("\r");
 		expect(render(screen)).not.toContain("· draft");
-		expect(render(screen)).toContain("› + Add Model");
+		expect(render(screen)).toContain("› + Add model");
 		screen.dispose();
 	});
 });

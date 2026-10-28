@@ -1,15 +1,11 @@
 /**
  * Two-pane provider editor.
  *
- * Left column: API Auth / Fetch Models, the provider's
- * models (name → id → "New Model" fallback, one draft at a time), then
- * + Add Model and Delete Provider. Right column hosts the selected item's
- * field pane and sub-pane stack; both columns keep their own selection and
- * scroll position. The frame height is fixed: each column scrolls inside a
- * fixed window with a (n/N) position indicator instead of resizing, and the
- * selected row stays accent in both panes while the unfocused pane's other
- * rows dim back. Typing on a value row overwrites, Enter tweaks or enters,
- * ←/→ switch panes, Esc cancels/pops/backs out.
+ * Left column groups connection, models, and management actions. The right
+ * column hosts the selected item's field pane and sub-pane stack. Both columns
+ * scroll inside a fixed-height frame; below the wide-layout threshold, only
+ * the focused column is shown. Typing on a value row overwrites, Enter tweaks
+ * or enters, ←/→ switch panes, and Esc cancels/pops/backs out.
  */
 
 import "../keybindings.ts";
@@ -50,7 +46,7 @@ export type ProviderEditorResult = "back" | "deleted";
 type LeftItem =
 	| { kind: "apiAuth" }
 	| { kind: "fetch" }
-	| { kind: "separator" }
+	| { kind: "section"; label: "SETUP" | "MODELS" | "MANAGE" }
 	| { kind: "model"; modelId: string }
 	| { kind: "draft" }
 	| { kind: "addModel" }
@@ -60,7 +56,8 @@ const LEFT_WIDTH_MIN = 16;
 const LEFT_WIDTH_MAX = 40;
 /** Fixed editor body height: both columns scroll inside it rather than resizing the frame. */
 const BODY_ROWS = 14;
-const MIN_WIDTH = 56;
+const DOUBLE_PANE_MIN_WIDTH = 72;
+const MIN_WIDTH = 32;
 
 function padTo(line: string, width: number): string {
 	const missing = width - visibleWidth(line);
@@ -73,6 +70,8 @@ function leftItemKey(item: LeftItem | undefined): string {
 	switch (item.kind) {
 		case "model":
 			return `model:${item.modelId}`;
+		case "section":
+			return `section:${item.label}`;
 		default:
 			return item.kind;
 	}
@@ -112,6 +111,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 		this.edits = new ProviderEdits(options.store, options.providerId, options.refresher, () => this.refresh());
 		this.host = this.createHost();
 		this.rebuildLeftItems();
+		this.leftIndex = this.selectableIndex(0);
 		this.resetRightStack();
 	}
 
@@ -189,7 +189,10 @@ export class ProviderEditorScreen implements Component, Focusable {
 		const selectedKey = leftItemKey(selected);
 		this.rebuildLeftItems();
 		const nextIndex = this.leftItems.findIndex((item) => leftItemKey(item) === selectedKey);
-		this.leftIndex = nextIndex >= 0 ? nextIndex : Math.min(this.leftIndex, this.selectableIndex(0));
+		this.leftIndex =
+			nextIndex >= 0
+				? nextIndex
+				: this.selectableIndex(Math.min(this.leftIndex, Math.max(0, this.leftItems.length - 1)));
 		// If the selected model vanished externally, rebuild the right column.
 		if (nextIndex < 0 && selected?.kind === "model") {
 			this.resetRightStack();
@@ -202,24 +205,29 @@ export class ProviderEditorScreen implements Component, Focusable {
 	// ------------------------------------------------------------------
 
 	private rebuildLeftItems(): void {
-		const items: LeftItem[] = [{ kind: "apiAuth" }, { kind: "fetch" }, { kind: "separator" }];
+		const items: LeftItem[] = [
+			{ kind: "section", label: "SETUP" },
+			{ kind: "apiAuth" },
+			{ kind: "fetch" },
+			{ kind: "section", label: "MODELS" },
+		];
 		for (const model of this.options.store.getModels(this.options.providerId)) {
 			items.push({ kind: "model", modelId: model.id });
 		}
 		if (this.draft) items.push({ kind: "draft" });
-		items.push({ kind: "separator" }, { kind: "addModel" }, { kind: "deleteProvider" });
+		items.push({ kind: "section", label: "MANAGE" }, { kind: "addModel" }, { kind: "deleteProvider" });
 		this.leftItems = items;
 	}
 
 	private selectableIndex(start: number): number {
-		const index = this.leftItems.findIndex((item, i) => i >= start && item.kind !== "separator");
-		return index >= 0 ? index : 0;
+		const index = this.leftItems.findIndex((item, i) => i >= start && item.kind !== "section");
+		return index >= 0 ? index : this.leftItems.findIndex((item) => item.kind !== "section");
 	}
 
 	private moveLeft(delta: number): void {
 		const selectable = this.leftItems
 			.map((item, index) => ({ item, index }))
-			.filter((entry) => entry.item.kind !== "separator");
+			.filter((entry) => entry.item.kind !== "section");
 		if (selectable.length === 0) return;
 		const position = selectable.findIndex((entry) => entry.index === this.leftIndex);
 		const next = selectable[(position + delta + selectable.length) % selectable.length]!;
@@ -294,7 +302,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 					`Delete provider "${this.options.providerId}" from models.json?` +
 						(builtin ? " The built-in catalog remains and its models may reappear." : "") +
 						" Stored credentials in auth.json are kept.",
-					"Delete Provider",
+					"Delete provider",
 					() => {
 						this.edits.removeProvider();
 						this.done("deleted");
@@ -313,8 +321,8 @@ export class ProviderEditorScreen implements Component, Focusable {
 		const rows: string[] = [];
 		const renderRow = (index: number): string => {
 			const item = this.leftItems[index]!;
-			if (item.kind === "separator") {
-				return theme.fg("borderMuted", `  ${"─".repeat(Math.max(1, width - 4))}`);
+			if (item.kind === "section") {
+				return theme.fg("dim", item.label);
 			}
 			return this.renderLeftItem(item, index === this.leftIndex, focused, width);
 		};
@@ -325,7 +333,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 			const slots = BODY_ROWS - 1;
 			const start = Math.max(0, Math.min(this.leftIndex - Math.floor(slots / 2), this.leftItems.length - slots));
 			for (let index = start; index < start + slots; index++) rows.push(renderRow(index));
-			const selectable: LeftItem[] = this.leftItems.filter((item) => item.kind !== "separator");
+			const selectable: LeftItem[] = this.leftItems.filter((item) => item.kind !== "section");
 			const position = selectable.indexOf(this.leftItems[this.leftIndex]!);
 			rows.push(theme.fg("dim", `  (${position + 1}/${selectable.length})`));
 		}
@@ -356,10 +364,10 @@ export class ProviderEditorScreen implements Component, Focusable {
 				break;
 			}
 			case "addModel":
-				text = "+ Add Model";
+				text = "+ Add model";
 				break;
 			case "deleteProvider":
-				text = "Delete Provider";
+				text = "Delete provider";
 				break;
 			default:
 				text = "";
@@ -503,10 +511,10 @@ export class ProviderEditorScreen implements Component, Focusable {
 				this.pushPane(new ConfirmPane(this.host, message, actionLabel, action)),
 			onModelRemoved: () => {
 				this.rebuildLeftItems();
-				// Land on the next row where the model was; walk back over separators.
+				// Land on the next row where the model was; walk back over section labels.
 				this.leftIndex = Math.min(this.leftIndex, this.leftItems.length - 1);
-				while (this.leftIndex > 0 && this.leftItems[this.leftIndex]?.kind === "separator") this.leftIndex--;
-				if (this.leftItems[this.leftIndex]?.kind === "separator") this.leftIndex = this.selectableIndex(0);
+				while (this.leftIndex > 0 && this.leftItems[this.leftIndex]?.kind === "section") this.leftIndex--;
+				if (this.leftItems[this.leftIndex]?.kind === "section") this.leftIndex = this.selectableIndex(0);
 				this.focusPane = "left";
 				this.resetRightStack();
 				this.refresh();
@@ -560,33 +568,69 @@ export class ProviderEditorScreen implements Component, Focusable {
 				border,
 			];
 		}
-		const leftWidth = this.computeLeftWidth(width);
-		const rightWidth = width - leftWidth - 3;
-		const separator = theme.fg("border", " │ ");
-
 		const title = this.renderTitle(width);
-		// The crumb marks drill-down depth only; base rows are already named by the left selection.
-		const crumb = truncateToWidth(this.theme.fg("muted", this.topPane()?.crumb ?? ""), rightWidth);
-		const leftLines = this.renderLeft(leftWidth);
-		const pane = this.topPane();
-		const paneLines = pane ? windowLines(theme, pane.render(rightWidth), BODY_ROWS - 1, pane.scrollWindow?.()) : [];
-		const rightLines = [crumb, ...paneLines];
-		const body: string[] = [];
-		for (let row = 0; row < BODY_ROWS; row++) {
-			const left = padTo(truncateToWidth(leftLines[row] ?? "", leftWidth), leftWidth);
-			const right = truncateToWidth(rightLines[row] ?? "", rightWidth);
-			body.push(left + separator + right);
+		let body: string[];
+		if (width < DOUBLE_PANE_MIN_WIDTH) {
+			body = this.focusPane === "left" ? this.renderLeft(width) : this.renderRight(width);
+		} else {
+			const leftWidth = this.computeLeftWidth(width);
+			const rightWidth = width - leftWidth - 3;
+			const separator = theme.fg("border", " │ ");
+			const leftLines = this.renderLeft(leftWidth);
+			const rightLines = this.renderRight(rightWidth);
+			body = [];
+			for (let row = 0; row < BODY_ROWS; row++) {
+				const left = padTo(truncateToWidth(leftLines[row] ?? "", leftWidth), leftWidth);
+				const right = truncateToWidth(rightLines[row] ?? "", rightWidth);
+				body.push(left + separator + right);
+			}
 		}
 
 		const footerLines = this.renderFooter(width);
 		return [border, title, border, ...body, border, ...footerLines, border];
 	}
 
+	private renderRight(width: number): string[] {
+		const pane = this.topPane();
+		const paneLines = pane ? windowLines(this.theme, pane.render(width), BODY_ROWS - 1, pane.scrollWindow?.()) : [];
+		return [this.renderPaneTitle(width), ...paneLines];
+	}
+
+	private renderPaneTitle(width: number): string {
+		const item = this.leftItems[this.leftIndex];
+		let base = "";
+		switch (item?.kind) {
+			case "apiAuth":
+				base = "Connection";
+				break;
+			case "fetch":
+				base = "Discover models";
+				break;
+			case "model": {
+				const model = this.options.store.getModel(this.options.providerId, item.modelId);
+				base = model ? modelDisplayName(model) : item.modelId;
+				break;
+			}
+			case "draft":
+				base = "New model";
+				break;
+			case "addModel":
+				base = "Add model";
+				break;
+			case "deleteProvider":
+				base = "Delete provider";
+				break;
+		}
+		const crumb = this.stack.length > 1 ? this.topPane()?.crumb : undefined;
+		const title = crumb ? [base, crumb].filter(Boolean).join(" / ") : base;
+		return truncateToWidth(this.theme.fg("text", this.theme.bold(title)), width);
+	}
+
 	/** Content-driven left width: fits the longest visible label, clamped to 16–40 and 45% of the terminal. */
 	private computeLeftWidth(width: number): number {
 		let longest = 12;
 		for (const item of this.leftItems) {
-			if (item.kind === "separator") continue;
+			if (item.kind === "section") continue;
 			const { text, note } = this.leftItemContent(item);
 			const label = text + (note ? ` ${note}` : "");
 			longest = Math.max(longest, visibleWidth(label));
@@ -597,17 +641,28 @@ export class ProviderEditorScreen implements Component, Focusable {
 
 	private renderTitle(width: number): string {
 		const theme = this.theme;
-		let title = ` /provider · ${this.options.providerId}`;
-		if (isBuiltinProviderId(this.options.providerId)) title += " · overlays built-in catalog";
-		return truncateToWidth(theme.fg("accent", theme.bold(title)), width);
+		const title = theme.fg("accent", theme.bold(` Providers / ${this.options.providerId}`));
+		const status =
+			this.options.store.pendingCount === 0 ? "" : this.options.store.saveFailed ? "Save failed" : "Saving…";
+		if (!status) return truncateToWidth(title, width);
+		const styledStatus = theme.fg(this.options.store.saveFailed ? "error" : "dim", status);
+		const statusWidth = visibleWidth(status);
+		if (statusWidth + 1 >= width) return truncateToWidth(styledStatus, width);
+		const left = truncateToWidth(title, width - statusWidth - 1);
+		return padTo(left, width - statusWidth) + styledStatus;
 	}
 
 	private renderFooter(width: number): string[] {
 		if (this.focusPane === "right") {
-			// The editor owns the way-back hint so every pane's footer is consistent.
-			const hints = [this.topPane()?.hints() ?? "", keyHint("app.provider.switchPaneLeft", "focus left")]
-				.filter(Boolean)
-				.join("  ");
+			const paneHints = this.topPane()?.hints() ?? "";
+			if (width < DOUBLE_PANE_MIN_WIDTH) {
+				// Esc already returns to navigation here; only add the arrow hint when it fits whole.
+				const arrowHint = keyHint("app.provider.switchPaneLeft", "nav");
+				const combined = [paneHints, arrowHint].filter(Boolean).join("  ");
+				return [truncateToWidth(visibleWidth(combined) <= width ? combined : paneHints, width)];
+			}
+			// The editor owns the way-back hint so every wide-layout pane footer is consistent.
+			const hints = [paneHints, keyHint("app.provider.switchPaneLeft", "focus left")].filter(Boolean).join("  ");
 			return [truncateToWidth(hints, width)];
 		}
 		const hints = [

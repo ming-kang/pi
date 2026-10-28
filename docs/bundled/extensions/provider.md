@@ -7,18 +7,20 @@ Minimalist visual editor for the `providers` record of `models.json` (`~/.pi/age
 `/provider` requires interactive TUI mode. The provider list and the editor share the same fixed frame height, so opening a provider never resizes the dialog.
 
 ```text
-/provider         Open the searchable provider list (+ Add Provider; a fruitless search prefills the new id)
+/provider         Open the searchable provider list (+ Add provider; a fruitless search prefills the new id)
 /provider <id>    Jump straight into a provider editor
 ```
 
 ## Editor layout and controls
 
-`/provider` presents a two-pane editor:
+`/provider` presents a two-pane editor on wide terminals:
 
-- **Left column:** Navigation list containing API Auth, Fetch Models, the provider's configured models (display name → `id` → `"New Model"` draft fallback; at most one draft at a time), `+ Add Model`, and `Delete Provider`.
-- **Right column:** Hosts the selected item's field pane and sub-pane stack.
+- **Left column:** Navigation grouped into `SETUP` (API Auth and Fetch Models), `MODELS` (display name → `id` → `"New Model"` draft fallback; at most one draft at a time), and `MANAGE` (`+ Add model` and `Delete provider`).
+- **Right column:** A contextual page title above the selected item's field pane and sub-pane stack. Nested titles show their path, such as `Connection / API Type`.
 
-Both columns keep independent selection and scroll positions. The frame height is fixed: instead of resizing, each column scrolls inside a fixed window with a `(n/N)` position indicator (the `/model` selector convention), and pinned rows such as filter inputs and error lines stay on screen. Exactly one accent `›` selection marker is shown at any time — the pane holding keyboard focus; unfocused panes keep their content readable without any selection marker.
+Below 72 columns, the editor shows only the focused pane: Enter or Right opens the detail view, and Escape or Left returns to navigation. Both layouts retain the same controls and fixed frame height.
+
+Both columns keep independent selection and scroll positions. Instead of resizing, each column scrolls inside a fixed window with a `(n/N)` position indicator (the `/model` selector convention), and pinned rows such as filter inputs and error lines stay on screen. Exactly one accent `›` selection marker is shown at any time — the pane holding keyboard focus; unfocused panes keep their content readable without any selection marker.
 
 Fixed fields keep their `Key: ` prefix while editing, and the selected key and value are highlighted together. Typing or pasting replaces the value; Enter opens the existing value for adjustment. Escape cancels that edit.
 
@@ -29,7 +31,7 @@ Fixed fields keep their `Key: ` prefix while editing, and the selected key and v
 | `↑` / `↓` | `up` / `down` | Navigate rows (wraps at list boundaries) |
 | `←` | `app.provider.switchPaneLeft` (`left`) | Focus the left navigation pane |
 | `→` | `app.provider.switchPaneRight` (`right`) | Focus the right detail pane (never activates an action row) |
-| `Enter` | `enter` | Tweak a value, enter a sub-pane, or activate the selected action row (Fetch Models, + Add Model, Delete Provider) |
+| `Enter` | `enter` | Tweak a value, enter a sub-pane, or activate the selected action row (Fetch Models, + Add model, Delete provider) |
 | Printable typing | | Overwrite the highlighted text or numeric value |
 | `Space` | `app.list.toggle` (`space`) | Toggle booleans and checklist items |
 | `Ctrl+X` | `app.provider.removeEntry` (`ctrl+x`) | Remove the selected compat or dictionary entry |
@@ -105,7 +107,7 @@ The `Use Built-in Data` row in a model's field list provides field-level complet
 
 ## Persistence and runtime refresh
 
-- **Atomic locking:** Edits save immediately. Writes acquire a cross-process lock via `proper-lockfile`, write to a temporary file in the same directory, validate the candidate file with `ModelConfig`, and atomically rename it into place.
+- **Atomic locking:** Edits save immediately. The editor title shows `Saving…` while a write is pending and `Save failed` when edits remain unsaved after an error. Writes acquire a cross-process lock via `proper-lockfile`, write to a temporary file in the same directory, validate the candidate file with `ModelConfig`, and atomically rename it into place.
 - **Backup:** The first write over an existing file creates a `.bak` copy of its content. Symlinked configuration files are edited at their resolved target without replacing the symlink.
 - **Formatting:** Comments and custom indentation are normalized to two-space JSON on save. Unknown top-level and nested values are preserved.
 - **Conflict resolution:** Every save re-reads the file under a cross-process lock and applies pending edits onto the freshest content, so unrelated external edits merge automatically and a same-field race resolves last-writer-wins. Edits targeting externally removed models simply miss, and the view resyncs onto the merged result after each save.

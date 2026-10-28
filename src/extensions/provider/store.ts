@@ -208,6 +208,11 @@ export class ModelsJsonStore {
 		return this.ops.length;
 	}
 
+	/** The latest save failed; pending edits remain available for retry. */
+	get saveFailed(): boolean {
+		return this.lastSaveResult.kind === "error" || this.lastSaveResult.kind === "invalid";
+	}
+
 	getPendingError(providerId?: string): string | undefined {
 		const pending = this.ops.filter((op) => providerId === undefined || op.providerId === providerId);
 		if (pending.length === 0) return undefined;

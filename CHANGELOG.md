@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Refined `/provider` into a quieter configuration workspace: the provider list is now pure navigation, editor actions are grouped into setup, models, and manage sections, detail panes have contextual titles, save state is visible in the title, and terminals narrower than 72 columns use a single-pane layout.
+
 ### Added
 
 - Added interactive run summaries (`Worked for 1m 52s · Done 2026/10/28 13:14`) through the bundled `run-summary` extension. Continuous runs include tools, retries, steering, and queued follow-up work. Persisted run-boundary records restore notes after reload, resume, and branch navigation without entering model context or appearing as chat cards.

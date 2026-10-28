@@ -5,7 +5,6 @@ import type { KeybindingsManager } from "../../../core/keybindings.ts";
 import { DynamicBorder } from "../../../modes/interactive/components/dynamic-border.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
-import { plural } from "../constants.ts";
 import type { ModelsJsonStore } from "../store.ts";
 import { renderInfoLine, renderKeyValueLine, renderPlainLine, ValueEditor, windowLines } from "./value-row.ts";
 
@@ -58,9 +57,10 @@ export class ProviderListScreen implements Component, Focusable {
 	render(width: number): string[] {
 		const theme = this.theme;
 		const border = new DynamicBorder((text) => theme.fg("border", text)).render(width)[0] ?? "";
+		const title = this.mode === "list" ? " Providers" : " New provider";
 		const lines = [
 			border,
-			truncateToWidth(theme.fg("accent", theme.bold(" /provider — models.json providers")), width),
+			truncateToWidth(theme.fg("accent", theme.bold(title)), width),
 			border,
 			renderKeyValueLine(theme, {
 				keyLabel: this.mode === "list" ? "Search" : "Provider id",
@@ -81,32 +81,38 @@ export class ProviderListScreen implements Component, Focusable {
 			const rows: string[] = [];
 			for (let row = 0; row < total; row++) {
 				const id = entries[row - 1];
-				const provider = id === undefined ? undefined : this.store.getProvider(id);
-				const note =
-					id === undefined
-						? undefined
-						: provider
-							? [
-									`${String(provider.models?.length ?? 0)} ${plural(provider.models?.length ?? 0, "model")}`,
-									provider.api,
-								]
-									.filter(Boolean)
-									.join(" · ")
-							: "pending deletion";
 				rows.push(
-					renderPlainLine(theme, row === 0 ? "+ Add Provider" : id!, {
+					renderPlainLine(theme, row === 0 ? "+ Add provider" : id!, {
 						active: row === this.index,
 						paneFocused: this.active,
-						note,
 						width,
 					}),
 				);
 			}
-			if (entries.length === 0)
-				rows.push(renderInfoLine(theme, this.query ? "No matching providers." : "No providers yet.", width));
+			if (entries.length === 0) {
+				const query = this.query.trim();
+				rows.push(
+					renderInfoLine(theme, query ? `No providers match “${query}”.` : "No providers configured.", width),
+				);
+				rows.push(
+					renderInfoLine(
+						theme,
+						query ? `Enter will create provider “${query}”.` : "Enter starts a new provider.",
+						width,
+					),
+				);
+			}
 			area.push(...windowLines(theme, rows, LIST_ROWS, { cursor: this.index }));
-		} else if (this.error) {
-			area.push(truncateToWidth(theme.fg("error", this.error), width));
+		} else {
+			const id = this.input.value.trim();
+			area.push(
+				renderInfoLine(
+					theme,
+					id ? `This becomes the providers.${id} key in models.json.` : "Choose a unique provider id.",
+					width,
+				),
+			);
+			if (this.error) area.push(truncateToWidth(theme.fg("error", this.error), width));
 		}
 		while (area.length < LIST_ROWS) area.push("");
 		const hints =
