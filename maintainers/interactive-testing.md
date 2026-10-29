@@ -39,6 +39,7 @@ The fixture provider (`test/fixtures/offline-provider.ts`) responds to specific 
 
 | Prompt | Scenario tested |
 | --- | --- |
+| `agent` | Delegates to the built-in `Agent`; the child reads `README.md`, then returns a report for Transcript and `/tasks` checks. Add `slow` to keep the report streaming while inspecting activity, or `background slow` to inspect a live detached Agent in `/tasks`. |
 | `tools` | Triggers a 2-second tool call (`fixture_wait`), tests settled/collapsed rendering. |
 | `tools slow` | Triggers a 15-second tool call, useful for inspecting pending rail/spinner states. |
 | `bg` | Hands off a bash command to background (`/tasks`), tests background cards and completion notices. |

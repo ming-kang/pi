@@ -395,6 +395,35 @@
 			]
 		},
 		{
+			"id": "extension-settings",
+			"why": "Extensions persist detached global JSON namespaces through the guarded context API; Agent uses this for model and thinking overrides.",
+			"paths": [
+				{
+					"path": "src/core/agent-session.ts"
+				},
+				{
+					"path": "src/core/extensions/runner.ts"
+				},
+				{
+					"path": "src/core/extensions/types.ts"
+				},
+				{
+					"path": "src/core/settings-manager.ts"
+				},
+				{
+					"path": "src/core/settings-schema.ts"
+				},
+				{
+					"path": "schemas/settings.schema.json"
+				}
+			],
+			"tests": [
+				"test/extension-settings.test.ts",
+				"test/agent-settings.test.ts",
+				"test/agent-extension.test.ts"
+			]
+		},
+		{
 			"id": "provider-editor-support",
 			"why": "The bundled /provider editor edits the models.json path loaded by its runtime.",
 			"paths": [

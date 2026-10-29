@@ -2,7 +2,15 @@ import { randomUUID } from "node:crypto";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
 import { TASKS_WAIT_DEFAULT_MS, TASKS_WAIT_MAX_MS } from "./limits.ts";
-import { boundText, finiteLimit, readOutputSlice, retainResult, sliceText, TASK_TITLE_BYTES } from "./output.ts";
+import {
+	boundText,
+	finiteLimit,
+	readOutputSlice,
+	retainResult,
+	sliceText,
+	TASK_INFO_BYTES,
+	TASK_TITLE_BYTES,
+} from "./output.ts";
 import { changed, snapshotOf, type TaskRecord, TaskStore } from "./store.ts";
 import {
 	TASK_BACKGROUND_REJECTION,
@@ -126,6 +134,7 @@ export class TaskRuntime implements TasksContext {
 		if (!/^[a-z][a-z0-9-]{0,63}$/.test(execution.kind)) throw new Error("Invalid task source");
 		const anchorId = this.options.anchor?.() ?? null;
 		if (anchorId !== null && Buffer.byteLength(anchorId) > 8192) throw new Error("Task branch anchor is too large");
+		const info = execution.info === undefined ? undefined : boundText(execution.info, TASK_INFO_BYTES);
 		const task: TaskSnapshot = {
 			id: `${execution.kind}-${randomUUID()}`,
 			kind: execution.kind,
@@ -139,6 +148,7 @@ export class TaskRuntime implements TasksContext {
 			commandTruncated:
 				execution.command === undefined ? undefined : boundText(execution.command, 8192) !== execution.command,
 			cwd: execution.cwd === undefined ? undefined : boundText(execution.cwd, 4096),
+			info: info === undefined ? undefined : { text: info, truncated: info !== execution.info },
 		};
 		let resolveCaller!: (outcome: TaskToolOutcome<T>) => void;
 		let rejectCaller!: (error: unknown) => void;

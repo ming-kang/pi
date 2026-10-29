@@ -1,5 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { boundedResult, boundText, TASK_RESULT_BYTES, TASK_TITLE_BYTES } from "./output.ts";
+import { boundedResult, boundText, TASK_INFO_BYTES, TASK_RESULT_BYTES, TASK_TITLE_BYTES } from "./output.ts";
 import type { TaskSnapshot } from "./types.ts";
 
 export const TASK_HISTORY_VERSION = 2;
@@ -75,6 +75,15 @@ export function parseTaskHistory(record: unknown): TaskSnapshot | undefined {
 		] as const) {
 			const value = field(source, key);
 			if (value !== undefined) task[key] = historyString(value, bytes, key === "outputPath");
+		}
+		const info = field(source, "info");
+		if (info !== undefined) {
+			const value = dataObject(info);
+			const original = field(value, "text");
+			const truncated = field(value, "truncated");
+			if (typeof truncated !== "boolean") return undefined;
+			const text = historyString(original, TASK_INFO_BYTES);
+			task.info = { text, truncated: truncated || text !== original };
 		}
 		for (const key of ["commandTruncated", "resultTruncated"] as const) {
 			const value = field(source, key);

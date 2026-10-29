@@ -1214,6 +1214,17 @@ Use `ctx.modelRegistry.streamSimple(model, context, options)` for provider-neutr
 
 Both return an `AssistantMessageEventStream`. Iterate it for response events and await `.result()` for the final message. Setup failures produce error events and error results.
 
+### ctx.getExtensionSettings() / ctx.setExtensionSettings()
+
+Extensions can store one JSON object in their own global namespace under `extensionSettings` in `settings.json`:
+
+```typescript
+const settings = ctx.getExtensionSettings("my-extension");
+await ctx.setExtensionSettings("my-extension", { ...settings, model: "provider/model-id" });
+```
+
+Reads return a detached object and reject malformed existing configuration. Writes replace only that namespace, merge with the latest file under the SettingsManager lock, skip unchanged values, and resolve only after successful persistence. Project settings do not override this global API. Namespace names contain lowercase letters, digits, and hyphens, start with a letter, and have at most 64 characters. Await writes before reporting success; captured contexts become stale after session replacement like the rest of `ExtensionContext`.
+
 ### ctx.signal
 
 The current agent abort signal, or `undefined` when no agent turn is active.
@@ -1257,7 +1268,7 @@ Session-bound `TasksContext` supervises native and extension-owned execution. Fo
 | `retain(id)` | Returns an idempotent release function protecting retained data, without delaying notifications |
 | `holdDelivery(id)` | Explicitly retains data and delays automatic delivery until released |
 
-`TaskExecution<T>` supplies `kind`, `title`, `toolCallId`, `run(control)`, optional `command`, `cwd`, `background`, `signal`, and `onUpdate`. `kind` is an executor-owned source label matching `[a-z][a-z0-9-]{0,63}`; the runtime never dispatches on it. At most eight background executions run at once; foreground executions are not limited by them. Foreground and background results have separate history quotas.
+`TaskExecution<T>` supplies `kind`, `title`, `toolCallId`, `run(control)`, optional `command`, `cwd`, `info`, `background`, `signal`, and `onUpdate`. Bounded static `info` text appears in the panel's Details tab; Output continues to show published results. It restores with terminal task history but never enters model context. `kind` is an executor-owned source label matching `[a-z][a-z0-9-]{0,63}`; the runtime never dispatches on it. At most eight background executions run at once; foreground executions are not limited by them. Foreground and background results have separate history quotas.
 
 `run` returns `TaskCompletion<T>`: `{ result, status?, error?, exitCode?, usage? }`. The original tool result is returned to a foreground caller; private `result.details` is not copied into task history. Explicit terminal statuses are `completed`, `partial`, `failed`, `cancelled`, and `timeout`. Usage is settled by the host once; managed foreground results omit usage to avoid billing it twice.
 

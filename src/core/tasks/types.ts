@@ -46,6 +46,8 @@ export interface TaskSnapshot {
 	command?: string;
 	commandTruncated?: boolean;
 	cwd?: string;
+	/** Executor-owned, human-readable Details tab content. */
+	info?: TaskText;
 	/** Process exit code (bash): a number, or null when signal-reaped. Absent while running or unreported. */
 	exitCode?: number | null;
 	outputPath?: string;
@@ -89,6 +91,8 @@ export interface TaskExecution<T> {
 	toolCallId: string;
 	command?: string;
 	cwd?: string;
+	/** Static Details tab text; published results remain the Output tab. */
+	info?: string;
 	background?: boolean;
 	signal?: AbortSignal;
 	onUpdate?: (result: AgentToolResult<T>) => void;

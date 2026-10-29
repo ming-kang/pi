@@ -4,6 +4,11 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Reintroduced lightweight delegation through the bundled `Agent` extension and tool. Independent calls run concurrently with compact real tool activity in the Transcript, final Markdown reports, `/agent` model and thinking overrides stored in `settings.json`, and independent `/tasks` rows whose Output shows activity/reports and whose Details shows the full prompt and execution configuration.
+- Restored global `extensionSettings` namespaces and the guarded `ctx.getExtensionSettings()` / `ctx.setExtensionSettings()` API, now used by Agent and covered for concurrent persistence and stale contexts.
+
 ### Fixed
 
 - Codemode's `searchTools()` now indexes namespace instructions consistently with `tool_search`. CLI built-ins and SDK factories share the upstream search implementation instead of maintaining a separate copy.

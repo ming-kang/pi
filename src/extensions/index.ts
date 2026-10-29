@@ -1,5 +1,6 @@
 import "./keybindings.ts";
 import type { InlineExtension } from "../core/extensions/types.ts";
+import agentExtension from "./agent/index.ts";
 import btwExtension from "./btw/index.ts";
 import cachedCompactionExtension from "./cached-compaction/index.ts";
 import codemodeExtension from "./codemode/index.ts";
@@ -16,6 +17,7 @@ import toolPresentationExtension from "./tool-presentation/index.ts";
 import toolSearchExtension from "./tool-search/index.ts";
 
 export const builtInExtensions: InlineExtension[] = [
+	{ name: "Agent", factory: agentExtension, replaceable: true, builtin: true },
 	{ name: "codemode", factory: codemodeExtension, replaceable: true, builtin: true },
 	{ name: "mcp", factory: mcpExtension, replaceable: true, builtin: true },
 	{ name: "tool-search", factory: toolSearchExtension, replaceable: true, builtin: true },

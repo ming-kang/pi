@@ -17,16 +17,23 @@ export function taskLines(task: TaskSnapshot, read: TaskRead | undefined, theme:
 	const shell = SHELLS[task.kind];
 	const command = cleanTaskText(task.command ?? task.title);
 	const [first = "", ...rest] = shell ? highlightCode(command, shell.language) : command.split("\n");
-	const info = [
-		theme.fg("accent", shell?.name ?? task.kind),
-		`${task.command === undefined ? "Title     " : "Command   "}${first}`,
-		...rest,
-		...(task.commandTruncated ? ["[Saved command truncated.]"] : []),
-		...(task.cwd ? [`Directory ${cleanTaskText(task.cwd)}`] : []),
-		...(task.outputPath ? [`Log       ${cleanTaskText(task.outputPath)}`] : []),
-		// The panel lists task and read diagnostics above these lines.
-		...(task.exitCode !== undefined ? [`Exit      ${task.exitCode ?? "signal"}`] : []),
-	];
+	const info = task.info
+		? [
+				...cleanTaskText(task.info.text)
+					.split("\n")
+					.map((line, index) => theme.fg(index === 0 ? "accent" : "toolOutput", line)),
+				...(task.info.truncated ? [theme.fg("warning", "[Saved details truncated.]")] : []),
+			]
+		: [
+				theme.fg("accent", shell?.name ?? task.kind),
+				`${task.command === undefined ? "Title     " : "Command   "}${first}`,
+				...rest,
+				...(task.commandTruncated ? ["[Saved command truncated.]"] : []),
+				...(task.cwd ? [`Directory ${cleanTaskText(task.cwd)}`] : []),
+				...(task.outputPath ? [`Log       ${cleanTaskText(task.outputPath)}`] : []),
+				// The panel lists task and read diagnostics above these lines.
+				...(task.exitCode !== undefined ? [`Exit      ${task.exitCode ?? "signal"}`] : []),
+			];
 
 	const saved = task.result?.content
 		.filter((block) => block.type === "text")

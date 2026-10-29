@@ -43,6 +43,17 @@ function streamHighlightAnswer(
 
 /** The tool call a `tools` or `bg` prompt requests; `bg` hands a real Bash command to the background. */
 function requestedToolCall(question: string): Pick<ToolCall, "name" | "arguments"> | undefined {
+	if (question.startsWith("agent"))
+		return {
+			name: "Agent",
+			arguments: {
+				prompt: question.includes("slow") ? "Inspect offline fixture slowly" : "Inspect offline fixture",
+				description: "Inspect offline fixture",
+				...(question.includes("background") ? { background: true } : {}),
+			},
+		};
+	if (question.startsWith("Inspect offline fixture"))
+		return { name: "read", arguments: { path: "README.md", offset: 1, limit: 2 } };
 	if (question.startsWith("tools")) return { name: "fixture_wait", arguments: { ms: question.includes("slow") ? 15000 : 2000 } };
 	if (question.startsWith("bg")) return { name: "bash", arguments: { command: 'for i in $(seq 45); do echo "Background line $i"; sleep 0.3; done', background: true } };
 	return undefined;

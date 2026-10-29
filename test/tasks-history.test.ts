@@ -276,6 +276,24 @@ describe("terminal history restoration", () => {
 		expect(zero.list()).toEqual([]);
 	});
 
+	it("round-trips bounded executor Details without restoring private result details", () => {
+		const bg = service();
+		bg.restoreHistory([
+			savedTask("agent-info", 20, {
+				kind: "agent",
+				info: { text: "Agent\nModel test/model\n\nPrompt\nInspect", truncated: false },
+				result: { content: [{ type: "text", text: "report" }], details: { private: true } },
+			}),
+		]);
+		expect(bg.get("agent-info").info).toEqual({
+			text: "Agent\nModel test/model\n\nPrompt\nInspect",
+			truncated: false,
+		});
+		expect(bg.get("agent-info").result?.details).toBeUndefined();
+		bg.restoreHistory([savedTask("agent-bad-info", 30, { kind: "agent", info: { text: "missing flag" } as never })]);
+		expect(bg.list().find((task) => task.id === "agent-bad-info")).toBeUndefined();
+	});
+
 	it("round-trips the process exit code through restored history", () => {
 		const bg = service();
 		bg.restoreHistory([savedTask("bash-exit", 20, { exitCode: 3 })]);

@@ -69,6 +69,10 @@
           "path": "bundled/tasks.md"
         },
         {
+          "title": "Agent",
+          "path": "bundled/extensions/agent.md"
+        },
+        {
           "title": "BTW",
           "path": "bundled/extensions/btw.md"
         },

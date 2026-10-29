@@ -3669,6 +3669,8 @@ export class AgentSession {
 			},
 			{
 				getTasks: () => this.tasks,
+				getExtensionSettings: (namespace) => this.settingsManager.getExtensionSettings(namespace),
+				setExtensionSettings: (namespace, value) => this.settingsManager.setExtensionSettings(namespace, value),
 				getModel: () => this.model,
 				getScopedModels: () => this._scopedModels,
 				isIdle: () => this.isIdle,

@@ -221,6 +221,29 @@ describe("task panel views", () => {
 		expect(h.frame()).toContain("review");
 		expect(h.frame()).toContain("Title     Inspect boundaries");
 	});
+	it("renders executor-owned Details separately from published Output", async () => {
+		const h = harness([
+			task("agent-test", {
+				kind: "agent",
+				command: undefined,
+				title: "Inspect boundaries",
+				info: {
+					text: "Agent\nModel     test/model\nThinking  high\n\nPrompt\nInspect boundaries",
+					truncated: false,
+				},
+			}),
+		]);
+		h.setOutput('✓ read {"path":"src/index.ts"} 2ms');
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.frame()).toContain("✓ read");
+		h.menu.handleInput("\t");
+		h.menu.handleInput("\x1b[C");
+		expect(h.frame()).toContain("Model     test/model");
+		expect(h.frame()).toContain("Thinking  high");
+		expect(h.frame()).toContain("Prompt");
+		expect(h.frame()).not.toContain("Title     Inspect boundaries");
+	});
+
 	it("scrolls long information independently and honors rebound controls", async () => {
 		const command = Array.from({ length: 50 }, (_, i) => `echo parameter-${i}`).join("\n");
 		const h = harness([task("custom", { kind: "custom", command })]);
