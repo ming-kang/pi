@@ -244,6 +244,27 @@ describe("task panel views", () => {
 		expect(h.frame()).not.toContain("Title     Inspect boundaries");
 	});
 
+	it("renders a completed Agent report as Markdown in Output", async () => {
+		const h = harness([
+			task("agent-markdown", {
+				kind: "agent",
+				command: undefined,
+				title: "Inspect Markdown",
+				status: "completed",
+				endedAt: 1000,
+			}),
+		]);
+		h.setOutput("## Report\n\n**Bold** and `src/index.ts`.\n\n- first item");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.frame()).toContain("Report");
+		expect(h.frame()).toContain("Bold and src/index.ts.");
+		expect(h.frame()).toContain("- first item");
+		expect(h.frame()).not.toContain("## Report");
+		expect(h.frame()).not.toContain("**Bold**");
+		expect(h.frame()).not.toContain("`src/index.ts`");
+		expect(h.menu.render(140).join("\n")).toContain(theme.fg("mdCode", "src/index.ts"));
+	});
+
 	it("scrolls long information independently and honors rebound controls", async () => {
 		const command = Array.from({ length: 50 }, (_, i) => `echo parameter-${i}`).join("\n");
 		const h = harness([task("custom", { kind: "custom", command })]);

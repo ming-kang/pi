@@ -16,6 +16,8 @@ export interface AgentActivity {
 	id: string;
 	name: string;
 	args: string;
+	/** Short display label derived from the original arguments; args remains the full bounded form. */
+	target?: string;
 	status: AgentActivityStatus;
 	durationMs?: number;
 	error?: string;
@@ -27,6 +29,8 @@ export interface AgentToolDetails {
 	status: "running" | "background" | TaskTerminalStatus;
 	model: string;
 	thinking: ThinkingLevel;
+	/** Short terminal diagnostic; the complete report and error remain in Tasks Output. */
+	error?: string;
 	activities: AgentActivity[];
 }
 

@@ -1,13 +1,11 @@
-import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import type { AgentToolResult, ToolDefinition } from "../../core/extensions/types.ts";
-import { getTextOutput, replaceTabs, startToolTimer, toolTimerText } from "../../core/tools/render-utils.ts";
-import { VisualLinePreview } from "../../modes/interactive/components/visual-truncate.ts";
-import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
-import { activityGlyph, clipText, formatActivityDuration } from "./activity.ts";
+import { Container, TruncatedText } from "@earendil-works/pi-tui";
+import type { AgentToolResult, ToolDefinition, ToolRenderContext } from "../../core/extensions/types.ts";
+import { getTextOutput, startToolTimer, toolTimerText } from "../../core/tools/render-utils.ts";
+import type { Theme } from "../../modes/interactive/theme/theme.ts";
+import { activityGlyph, activityTarget, clipText, formatActivityDuration } from "./activity.ts";
 import type { AgentActivity, AgentToolDetails } from "./types.ts";
 
-const COLLAPSED_ACTIVITIES = 3;
-const REPORT_PREVIEW_LINES = 3;
+const EXPANDED_ACTIVITIES = 5;
 
 type AgentRenderer = Pick<ToolDefinition<any, AgentToolDetails>, "renderCall" | "renderResult">;
 
@@ -24,19 +22,58 @@ function activityColor(status: AgentActivity["status"]): "warning" | "success" |
 	}
 }
 
-function renderActivity(activity: AgentActivity, theme: Theme, expanded: boolean): string {
-	const args = expanded ? activity.args : clipText(activity.args, 100);
-	const duration = formatActivityDuration(activity.durationMs);
-	let line = `${theme.fg(activityColor(activity.status), activityGlyph(activity.status))} ${theme.fg("toolTitle", activity.name)}`;
-	if (args) line += ` ${theme.fg("muted", args)}`;
-	if (duration) line += ` ${theme.fg("dim", duration)}`;
-	if (expanded && activity.error) line += `\n    ${theme.fg("error", activity.error.replaceAll("\n", "\n    "))}`;
-	return line;
+function targetOf(activity: AgentActivity): string {
+	if (activity.target) return activity.target;
+	try {
+		return activityTarget(activity.name, JSON.parse(activity.args));
+	} catch {
+		return activity.args;
+	}
 }
 
-function detailsOf(result: AgentToolResult<AgentToolDetails>): AgentToolDetails | undefined {
-	const details = result.details;
+function renderActivity(activity: AgentActivity, theme: Theme): string {
+	const target = targetOf(activity);
+	const duration = formatActivityDuration(activity.durationMs);
+	return [
+		`${theme.fg(activityColor(activity.status), activityGlyph(activity.status))} ${theme.fg("toolTitle", activity.name)}${target ? theme.fg("muted", ` ${target}`) : ""}`,
+		...(duration ? [theme.fg("dim", duration)] : []),
+	].join(theme.fg("dim", " · "));
+}
+
+function detailsOf(result: AgentToolResult<AgentToolDetails> | undefined): AgentToolDetails | undefined {
+	const details = result?.details;
 	return details?.version === 1 && Array.isArray(details.activities) ? details : undefined;
+}
+
+function singleLine(text: string, bytes = 120): string {
+	return clipText(text.replace(/\s+/gu, " ").trim(), bytes);
+}
+
+function errorOf(result: AgentToolResult<AgentToolDetails> | undefined, details: AgentToolDetails | undefined): string {
+	if (details?.error) return singleLine(details.error);
+	const output = result ? getTextOutput(result, false).trim() : "";
+	const marker = output.lastIndexOf("Error:");
+	return singleLine(marker >= 0 ? output.slice(marker + 6) : output.split("\n")[0] || "Failed");
+}
+
+function statusText(
+	context: ToolRenderContext<any, any, AgentToolDetails>,
+	details: AgentToolDetails | undefined,
+): string {
+	const status = details?.status;
+	if (status === "background") return "Background · /tasks";
+	const timer = toolTimerText(context, context.isPartial);
+	const duration = timer?.replace(/^(?:Took|Elapsed) /, "");
+	const tasks = details?.taskId ? "/tasks" : undefined;
+	if (context.isPartial || status === "running") {
+		const latest = details?.activities.at(-1);
+		const activity = latest ? `${latest.name}${targetOf(latest) ? ` ${targetOf(latest)}` : ""}` : "Starting…";
+		return [context.expanded ? undefined : activity, duration].filter(Boolean).join(" · ");
+	}
+	if (status === "cancelled") return ["Cancelled", duration, tasks].filter(Boolean).join(" · ");
+	if (status === "failed" || status === "timeout" || context.isError)
+		return [errorOf(context.result, details), duration, tasks].filter(Boolean).join(" · ");
+	return [duration, tasks].filter(Boolean).join(" · ");
 }
 
 export const agentRenderers: AgentRenderer = {
@@ -49,11 +86,12 @@ export const agentRenderers: AgentRenderer = {
 				: typeof input.prompt === "string"
 					? input.prompt
 					: "Delegated task";
+		const status = statusText(context, detailsOf(context.result));
 		const component = (context.lastComponent as Container | undefined) ?? new Container();
 		component.clear();
 		component.addChild(
-			new Text(
-				`${theme.fg("toolTitle", theme.bold("Agent"))} ${theme.fg("muted", clipText(title.replace(/\s+/gu, " ").trim(), 160))}`,
+			new TruncatedText(
+				`${theme.fg("toolTitle", theme.bold("Agent"))} ${theme.fg("muted", singleLine(title, 160))}${status ? theme.fg("dim", ` · ${status}`) : ""}`,
 				0,
 				0,
 			),
@@ -64,51 +102,9 @@ export const agentRenderers: AgentRenderer = {
 		const component = (context.lastComponent as Container | undefined) ?? new Container();
 		component.clear();
 		const details = detailsOf(result);
-		const activities = details?.activities ?? [];
-		const running = options.isPartial || details?.status === "running";
-		const background = details?.status === "background";
-		if (running || background) {
-			if (activities.length) {
-				const shown = options.expanded ? activities : activities.slice(-COLLAPSED_ACTIVITIES);
-				const lines = shown.map((activity) => renderActivity(activity, theme, options.expanded));
-				if (shown.length < activities.length)
-					lines.unshift(theme.fg("dim", `… ${activities.length - shown.length} earlier activities`));
-				component.addChild(new Spacer(1));
-				component.addChild(new Text(lines.join("\n"), 0, 0));
-			} else {
-				component.addChild(new Spacer(1));
-				component.addChild(new Text(theme.fg("muted", "Starting Agent…"), 0, 0));
-			}
-			if (background) {
-				component.addChild(new Text(theme.fg("dim", "Running in background · /tasks to inspect"), 0, 0));
-			}
-		} else {
-			const report = replaceTabs(getTextOutput(result, context.showImages).trim()) || "No report returned.";
-			component.addChild(new Spacer(1));
-			if (options.expanded) {
-				component.addChild(new Markdown(report, 0, 0, getMarkdownTheme()));
-			} else {
-				const styled = report
-					.split("\n")
-					.map((line) => theme.fg("toolOutput", line))
-					.join("\n");
-				component.addChild(
-					new VisualLinePreview({
-						text: styled,
-						maxVisualLines: REPORT_PREVIEW_LINES,
-						keep: "start",
-						formatHint: (hidden) => theme.fg("dim", `… ${hidden} more report lines`),
-					}),
-				);
-			}
-		}
-		if (!background) {
-			const timer = toolTimerText(context, options.isPartial);
-			if (timer) {
-				component.addChild(new Spacer(1));
-				component.addChild(new Text(theme.fg("muted", timer), 0, 0));
-			}
-		}
+		if ((!options.isPartial && details?.status !== "running") || !options.expanded) return component;
+		for (const activity of (details?.activities ?? []).slice(-EXPANDED_ACTIVITIES))
+			component.addChild(new TruncatedText(renderActivity(activity, theme), 0, 0));
 		return component;
 	},
 };

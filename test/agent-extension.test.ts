@@ -41,7 +41,7 @@ describe("Agent delegation", () => {
 			harness.session.extensionRunner.createToolContext("agent-call", undefined),
 		);
 		expect(getMessageText(result)).toContain("entry.ts:1");
-		expect(result.details?.activities).toMatchObject([{ name: "read", status: "ok" }]);
+		expect(result.details?.activities).toMatchObject([{ name: "read", target: "entry.ts", status: "ok" }]);
 		const task = harness.session.tasks.list()[0]!;
 		expect(task).toMatchObject({ kind: "agent", title: "Inspect entry", status: "completed" });
 		expect(task.info?.text).toContain("Inspect entry.ts and report the export");

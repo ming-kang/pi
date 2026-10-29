@@ -1,6 +1,7 @@
 /** The inspector's Details and Output content, computed once per task snapshot and output read. */
+import { Markdown } from "@earendil-works/pi-tui";
 import { isTaskTerminal, type TaskRead, type TaskSnapshot } from "../../../core/tasks/types.ts";
-import { highlightCode, type Theme } from "../../../modes/interactive/theme/theme.ts";
+import { getMarkdownTheme, highlightCode, type Theme } from "../../../modes/interactive/theme/theme.ts";
 import { cleanTaskText } from "./text.ts";
 
 export interface TaskLines {
@@ -13,7 +14,12 @@ const SHELLS: Record<string, { name: string; language: string }> = {
 	powershell: { name: "PowerShell", language: "powershell" },
 };
 
-export function taskLines(task: TaskSnapshot, read: TaskRead | undefined, theme: Theme): TaskLines {
+export function taskLines(
+	task: TaskSnapshot,
+	read: TaskRead | undefined,
+	theme: Theme,
+	outputWidth: number,
+): TaskLines {
 	const shell = SHELLS[task.kind];
 	const command = cleanTaskText(task.command ?? task.title);
 	const [first = "", ...rest] = shell ? highlightCode(command, shell.language) : command.split("\n");
@@ -45,10 +51,14 @@ export function taskLines(task: TaskSnapshot, read: TaskRead | undefined, theme:
 			: isTaskTerminal(task.status)
 				? "No saved output."
 				: "No output yet.";
-	// Color each line: the panel lays out and borders lines independently.
-	const output = cleanTaskText((read ? read.text : saved) || empty)
-		.split("\n")
-		.map((line) => theme.fg("toolOutput", line));
+	const text = cleanTaskText((read ? read.text : saved) || empty);
+	// Agent activity and shell logs stay literal; only a settled report is Markdown.
+	const output =
+		task.kind === "agent" && task.status === "completed"
+			? new Markdown(text, 0, 0, getMarkdownTheme(), {
+					color: (line) => theme.fg("toolOutput", line),
+				}).render(Math.max(1, outputWidth))
+			: text.split("\n").map((line) => theme.fg("toolOutput", line));
 	if (read?.readError) output.unshift(theme.fg("warning", "Log unavailable; showing saved result."));
 	if ((!read || read.readError) && task.resultTruncated) output.push(theme.fg("warning", "Saved result truncated."));
 	return { info, output };

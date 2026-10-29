@@ -15,6 +15,25 @@ export function compactArguments(args: unknown): string {
 	}
 }
 
+/** A short display target; full arguments remain available in Tasks Output. */
+export function activityTarget(name: string, args: unknown): string {
+	if (!args || typeof args !== "object" || Array.isArray(args)) return compactArguments(args);
+	const record = args as Record<string, unknown>;
+	const keys =
+		name === "bash" || name === "powershell"
+			? ["command"]
+			: name === "grep" || name === "find"
+				? ["pattern", "path"]
+				: ["path", "pattern", "command"];
+	for (const key of keys) {
+		const value = record[key];
+		if (typeof value !== "string" || !value.trim()) continue;
+		const first = key === "command" ? value.split(/\r?\n/).find((line) => line.trim()) : value;
+		return clipText((first ?? value).trim().replace(/[ \t]+/gu, " "), 160);
+	}
+	return compactArguments(args);
+}
+
 export function formatActivityDuration(ms: number | undefined): string {
 	if (ms === undefined) return "";
 	return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;

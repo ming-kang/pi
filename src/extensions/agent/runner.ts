@@ -10,7 +10,14 @@ import { SettingsManager } from "../../core/settings-manager.ts";
 import type { TaskCompletion, TaskControl, TaskTerminalStatus } from "../../core/tasks/types.ts";
 import { combineUsage } from "../../core/usage-totals.ts";
 import { raceWithAbortSignal } from "../../utils/abort.ts";
-import { activitiesText, boundedAgentText, clipText, compactArguments, finalAssistantText } from "./activity.ts";
+import {
+	activitiesText,
+	activityTarget,
+	boundedAgentText,
+	clipText,
+	compactArguments,
+	finalAssistantText,
+} from "./activity.ts";
 import { AGENT_MAX_ACTIVITIES, type AgentActivity, type AgentToolDetails, emptyUsage } from "./types.ts";
 
 const AGENT_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
@@ -119,12 +126,13 @@ export async function runAgent(
 	const seen = new WeakSet<AgentMessage>();
 	const activities: AgentActivity[] = [];
 	const modelName = `${request.model.provider}/${request.model.id}`;
-	const details = (status: AgentToolDetails["status"]): AgentToolDetails => ({
+	const details = (status: AgentToolDetails["status"], error?: string): AgentToolDetails => ({
 		version: 1,
 		taskId: control.id,
 		status,
 		model: modelName,
 		thinking: request.thinking,
+		...(error ? { error } : {}),
 		activities: structuredClone(activities),
 	});
 	const publish = () => {
@@ -193,6 +201,7 @@ export async function runAgent(
 					id: event.toolCallId,
 					name: event.toolName,
 					args: compactArguments(event.args),
+					target: activityTarget(event.toolName, event.args),
 					status: "running",
 				});
 				if (activities.length > AGENT_MAX_ACTIVITIES) activities.shift();
@@ -237,7 +246,7 @@ export async function runAgent(
 			usage,
 			result: {
 				content: [{ type: "text", text: finalText(report, error) }],
-				details: details(status),
+				details: details(status, error),
 				...(status === "completed" ? {} : { isError: true }),
 			},
 		};
@@ -251,7 +260,7 @@ export async function runAgent(
 			usage,
 			result: {
 				content: [{ type: "text", text: finalText(report, reason) }],
-				details: details(status),
+				details: details(status, reason),
 				isError: true,
 			},
 		};

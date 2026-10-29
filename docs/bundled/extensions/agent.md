@@ -41,17 +41,20 @@ Omit either field to inherit it. Thinking is clamped to the effective model's su
 
 ## Transcript and Tasks
 
-The Transcript is intentionally small. It does not repeat the prompt, model, working directory, or other inspector metadata.
+The Transcript only describes status and current work. It never includes the Prompt or final report, and settled rows do not grow when expanded.
 
 | State | Collapsed | Expanded |
 |---|---|---|
-| Running | Recent real tool activity in `✓/…/✗ tool {args} duration` form | More retained activity, with tool errors |
-| Background handoff | A compact activity snapshot and `/tasks` hint | More of that snapshot |
-| Completed | A three-line report preview | The full bounded Markdown report |
+| Running | One line with the latest tool, a short path or command target, and elapsed time | The same heading plus the latest five activities in `✓/…/✗ tool target · duration` form |
+| Background handoff | One `Background · /tasks` status line | Identical |
+| Completed | One duration and `/tasks` status line | Identical |
+| Failed or cancelled | One short diagnostic or cancellation line | Identical |
+
+Shell activity shows only the first non-empty command line. Bash and PowerShell retain their actual tool names; stdout, stderr, full JSON arguments, and additional activity remain in Tasks.
 
 In `/tasks`, each Agent remains an independent row:
 
-- **Output** shows its actual tool activity while running and its final report after settlement.
+- **Output** shows actual tool activity while running and the complete final report with Markdown formatting after successful completion.
 - **Details** shows the full Prompt, working directory, model, and thinking level.
 
 Use `tasks read`, `tasks wait`, or `tasks kill` with the Task ID. Selection, scrolling, cancellation, foreground detach, history, and completion delivery are owned by the shared Tasks implementation. Parent cancellation stops foreground-owned work; detached work continues until it finishes or is killed. Reload, session replacement, and shutdown cancel active Agents.

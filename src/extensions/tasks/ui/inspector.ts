@@ -26,7 +26,7 @@ export class TaskInspector {
 	private reading = false;
 	private disposed = false;
 	/** Snapshots are immutable, so identity tells when the lines must be rebuilt. */
-	private cache?: { task: TaskSnapshot; read?: TaskRead; lines: TaskLines };
+	private cache?: { task: TaskSnapshot; read?: TaskRead; width: number; lines: TaskLines };
 	constructor(options: InspectorOptions) {
 		this.options = options;
 	}
@@ -81,12 +81,12 @@ export class TaskInspector {
 			if (!this.disposed && this.task?.id !== task.id) await this.refresh();
 		}
 	}
-	lines(tab: TasksTab): string[] {
+	lines(tab: TasksTab, width: number): string[] {
 		const task = this.task;
 		if (!task) return [];
 		const read = this.position.read;
-		if (this.cache?.task !== task || this.cache.read !== read)
-			this.cache = { task, read, lines: taskLines(task, read, this.options.theme) };
+		if (this.cache?.task !== task || this.cache.read !== read || this.cache.width !== width)
+			this.cache = { task, read, width, lines: taskLines(task, read, this.options.theme, width) };
 		return this.cache.lines[tab];
 	}
 	dispose(): void {

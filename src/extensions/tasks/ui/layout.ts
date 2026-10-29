@@ -131,7 +131,7 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 				theme.fg("text", cleanTaskText(firstCommandLine(task.command ?? task.title))),
 				theme.fg("muted", `${statusName(task.status)} · ${runtimeLabel(task)}`),
 			);
-		const lines = inspector.lines(tab);
+		const lines = inspector.lines(tab, rightWidth - 2);
 		const position = inspector.position;
 		const read = position.read;
 		const diagnostics = [task.error, read?.readError].filter((text): text is string => !!text).map(cleanTaskText);
