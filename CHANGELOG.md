@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Fixed
+
+- Codemode's `searchTools()` now indexes namespace instructions consistently with `tool_search`. CLI built-ins and SDK factories share the upstream search implementation instead of maintaining a separate copy.
+
 ## [1.4.4] - 2026-10-28
 
 ### Changed

@@ -12,8 +12,8 @@ import type {
 	OpenAICompletionsCompat,
 	OpenAIResponsesCompat,
 } from "@earendil-works/pi-ai";
+import { OpenAICompletionsCompatSchema } from "@earendil-works/pi-ai/providers/compat-schema";
 import { Compile } from "typebox/compile";
-import { OpenAICompletionsCompatSchema } from "../../core/model-config.ts";
 
 export type CompatValueKind = "boolean" | "enum" | "number" | "stringMap" | "json";
 

@@ -396,11 +396,8 @@
 		},
 		{
 			"id": "provider-editor-support",
-			"why": "The bundled /provider editor validates and edits the models.json the runtime loads.",
+			"why": "The bundled /provider editor edits the models.json path loaded by its runtime.",
 			"paths": [
-				{
-					"path": "src/core/model-config.ts"
-				},
 				{
 					"path": "src/core/model-runtime.ts"
 				}
@@ -535,32 +532,6 @@
 				{
 					"path": "scripts/generate-references.ts"
 				}
-			]
-		},
-		{
-			"id": "extension-orchestration-boundaries",
-			"why": "Bundled extensions remain independent: MCP names the orchestrator tools without importing them (upstream's reachesTools declares reachability on the tool itself), codemode owns its search helper, and runtime imports stay static.",
-			"paths": [
-				{
-					"path": "src/extensions/codemode/execute.lazy.ts"
-				},
-				{
-					"path": "src/extensions/codemode/execute.ts"
-				},
-				{
-					"path": "src/extensions/mcp/cli.lazy.ts"
-				},
-				{
-					"path": "src/extensions/mcp/index.ts"
-				},
-				{
-					"path": "src/extensions/mcp/runtime.lazy.ts"
-				}
-			],
-			"tests": [
-				"test/suite/agent-session-mcp.test.ts",
-				"test/suite/agent-session-codemode.test.ts",
-				"test/mcp-command.test.ts"
 			]
 		},
 		{

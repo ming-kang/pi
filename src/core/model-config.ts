@@ -1,7 +1,7 @@
 /** Immutable, credential-blind models.json snapshot. */
 
 import { readFile } from "node:fs/promises";
-import { OpenAICompletionsCompatSchema, ProviderCompatSchema } from "@earendil-works/pi-ai/providers/compat-schema";
+import { ProviderCompatSchema } from "@earendil-works/pi-ai/providers/compat-schema";
 import {
 	ModelCostSchema,
 	ModelInputLimitsSchema,
@@ -36,9 +36,6 @@ const SamplingParamsFieldSchema = Type.Record(Type.String(), Type.Unknown(), {
 const HeadersSchema = Type.Record(Type.String(), Type.String(), {
 	description: "Request headers. Values resolve like apiKey.",
 });
-
-/** Re-exported for the bundled /provider editor, which validates compat values against models.json's own schema. */
-export { OpenAICompletionsCompatSchema };
 
 /** Model fields shared by models entries and modelOverrides entries. Defaults apply only to models entries. */
 const ModelFieldDescriptions = {

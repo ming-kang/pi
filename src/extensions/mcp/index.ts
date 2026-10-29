@@ -40,6 +40,8 @@ import type {
 import { mcpNamespace } from "../../core/mcp-servers.ts";
 import type { ModelRegistry } from "../../core/model-registry.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
+import { CODEMODE_TOOL_NAME } from "../codemode/tool.ts";
+import { TOOL_SEARCH_TOOL_NAME } from "../tool-search/tool.ts";
 import {
 	getMcpToolExposure,
 	type LoadedMcpConfig,
@@ -89,8 +91,6 @@ export interface McpExtensionOptions {
 }
 
 const DEFAULT_STARTUP_WAIT_MS = 10_000;
-const CODEMODE_TOOL_NAME = "codemode";
-const TOOL_SEARCH_TOOL_NAME = "tool_search";
 
 const RESOURCE_TOOL_NAMES: ReadonlySet<string> = new Set([
 	LIST_MCP_RESOURCES_TOOL,

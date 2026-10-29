@@ -1,3 +1,2 @@
-import * as runtime from "./runtime.ts";
-
-export const loadMcpRuntime = async () => runtime;
+/** Loads the MCP client, transports, and OAuth sign-in on first use (see runtime.ts). */
+export const loadMcpRuntime = () => import("./runtime.ts");
