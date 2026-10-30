@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { callDeepWiki } from "../src/extensions/deepwiki/client.ts";
-import { DEEPWIKI_RESPONSE_BODY_BYTES } from "../src/extensions/deepwiki/http.ts";
+
+const RESPONSE_BODY_BYTES = 8 * 1024 * 1024;
 
 function rpcResult(text: string, extra: Record<string, unknown> = {}): string {
 	return JSON.stringify({
@@ -136,6 +137,75 @@ describe("DeepWiki MCP client", () => {
 		expect(fetchMock).toHaveBeenCalledOnce();
 	});
 
+	it("retries a transient HTTP status and returns the successful attempt", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(new Response("busy", { status: 503 }))
+			.mockResolvedValueOnce(new Response(rpcResult("Recovered after 503")));
+		vi.stubGlobal("fetch", fetchMock);
+		const result = await callDeepWiki({ action: "structure", repoName: uniqueRepo("retry-503") }, undefined);
+		expect(result.text).toBe("Recovered after 503");
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("retries a network failure", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockRejectedValueOnce(new TypeError("fetch failed"))
+			.mockResolvedValueOnce(new Response(rpcResult("Recovered after network error")));
+		vi.stubGlobal("fetch", fetchMock);
+		const result = await callDeepWiki({ action: "structure", repoName: uniqueRepo("retry-network") }, undefined);
+		expect(result.text).toBe("Recovered after network error");
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("surfaces a non-retryable HTTP status with its body and does not retry it", async () => {
+		const fetchMock = vi.fn(async () => new Response("bad request", { status: 400 }));
+		vi.stubGlobal("fetch", fetchMock);
+		await expect(callDeepWiki({ action: "structure", repoName: uniqueRepo("http-400") }, undefined)).rejects.toThrow(
+			"DeepWiki HTTP 400: bad request",
+		);
+		expect(fetchMock).toHaveBeenCalledOnce();
+	});
+
+	it("gives up on a persistent transient status after bounded retries", async () => {
+		const fetchMock = vi.fn(async () => new Response("down", { status: 503 }));
+		vi.stubGlobal("fetch", fetchMock);
+		await expect(callDeepWiki({ action: "structure", repoName: uniqueRepo("http-503") }, undefined)).rejects.toThrow(
+			"DeepWiki HTTP 503: down",
+		);
+		expect(fetchMock).toHaveBeenCalledTimes(3);
+	});
+
+	it("cancels a pending body read when the caller aborts and does not retry", async () => {
+		let markPull: (() => void) | undefined;
+		const pulled = new Promise<void>((resolve) => {
+			markPull = resolve;
+		});
+		const cancelled = vi.fn();
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(
+					new ReadableStream<Uint8Array>({
+						pull() {
+							markPull?.();
+							return new Promise<void>(() => {});
+						},
+						cancel: cancelled,
+					}),
+				),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		const controller = new AbortController();
+		const request = callDeepWiki({ action: "structure", repoName: uniqueRepo("abort-body") }, controller.signal);
+		await pulled;
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		controller.abort();
+		await expect(request).rejects.toThrow("DeepWiki request aborted");
+		expect(cancelled).toHaveBeenCalledOnce();
+		expect(fetchMock).toHaveBeenCalledOnce();
+	});
+
 	it("does not cache an oversized transport response", async () => {
 		const fetchMock = vi
 			.fn()
@@ -144,7 +214,7 @@ describe("DeepWiki MCP client", () => {
 					new Response(
 						new ReadableStream<Uint8Array>({
 							start(controller) {
-								controller.enqueue(new Uint8Array(DEEPWIKI_RESPONSE_BODY_BYTES + 1));
+								controller.enqueue(new Uint8Array(RESPONSE_BODY_BYTES + 1));
 							},
 						}),
 					),
@@ -153,7 +223,7 @@ describe("DeepWiki MCP client", () => {
 		vi.stubGlobal("fetch", fetchMock);
 		const params = { action: "structure" as const, repoName: uniqueRepo("oversize-cache") };
 		await expect(callDeepWiki(params, undefined)).rejects.toThrow(
-			`DeepWiki response exceeded ${DEEPWIKI_RESPONSE_BODY_BYTES} bytes`,
+			`DeepWiki response exceeded ${RESPONSE_BODY_BYTES} bytes`,
 		);
 		await expect(callDeepWiki(params, undefined)).resolves.toMatchObject({ text: "Recovered response" });
 		expect(fetchMock).toHaveBeenCalledTimes(2);

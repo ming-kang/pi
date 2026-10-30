@@ -52,10 +52,12 @@ Avoid DeepWiki when the authoritative source is local or time-sensitive:
 
 - A repository may not be indexed. DeepWiki can return that as normal text, so the extension treats repository-not-found messages as tool errors.
 - All model-facing responses are capped at 120,000 characters. `contents` prefers `# Page:` boundaries (whole pages kept in order; at least the first page survives, cut mid-page if it alone exceeds the budget). Its trailing notice reports shown/total pages, the full length, up to 20 omitted page titles, and points at `page` reads and `action: "question"` for the rest. `structure` and `question` append a focused-request truncation notice. Details carry `shownPages` / `truncatedChars` when applicable; `outputLength` always reflects the full cached response. Single-page reads set `requestedPage` / `pageIndex` and share the same hard budget.
-- Each transport response is streamed with an 8 MiB byte limit before JSON/SSE parsing; oversized, failed, aborted, and timed-out responses never enter the cache. Network attempts time out after 45 seconds and surface as Pi tool errors.
+- Each transport response is streamed with an 8 MiB byte limit before JSON/SSE parsing; oversized, failed, aborted, and timed-out responses never enter the cache. Network failures and transient HTTP statuses (408, 425, 429, 500, 502, 503, 504) are retried up to twice without delay; caller cancellation and timeouts are not retried. The whole call, retries included, times out after 45 seconds and surfaces as a Pi tool error.
 - Use local Pi tools (`read`, `grep`, `find`, `ls`) for workspace state. DeepWiki answers describe repository snapshots indexed by DeepWiki, not local uncommitted files.
 
 ## Implementation notes
+
+Each uncached call is one stateless JSON-RPC `tools/call` POST: DeepWiki's endpoint issues no MCP session, so the extension skips the initialize handshake that `McpClient` would add to every call. It validates the response with `@earendil-works/pi-mcp`'s JSON-RPC parser and reads either a JSON or an SSE body.
 
 DeepWiki's public MCP endpoint exposes exactly three operations: list a wiki's page titles, return the whole generated wiki as one document, and answer a question. There is no per-page fetch upstream — `page` is implemented by this extension: it fetches the full wiki (or reuses the 10-minute cache) and slices out the requested page locally. The first `contents` call for a repo pays the network cost; subsequent page reads within the cache window are instant and free.
 
