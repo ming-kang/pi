@@ -5,6 +5,7 @@ import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { parseFrontmatter } from "../utils/frontmatter.ts";
 import { canonicalizePath, resolvePath } from "../utils/paths.ts";
 import type { ResourceDiagnostic } from "./diagnostics.ts";
+import type { SkillInvocationOverride } from "./settings-schema.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 
 /** Max name length per spec */
@@ -70,6 +71,8 @@ export interface SkillFrontmatter {
 	"disable-model-invocation"?: boolean;
 	[key: string]: unknown;
 }
+
+export type SkillEffectiveState = "on" | "user-only" | "off";
 
 export interface Skill {
 	name: string;
@@ -511,4 +514,29 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 		skills: Array.from(skillMap.values()),
 		diagnostics: [...allDiagnostics, ...collisionDiagnostics],
 	};
+}
+
+/** Resolve the user-facing state without changing the existing load and prompt pipelines. */
+export function resolveSkillEffectiveState(options: {
+	enabled: boolean;
+	invocationOverride?: SkillInvocationOverride;
+	frontmatterDisableModelInvocation?: boolean;
+}): SkillEffectiveState {
+	if (!options.enabled) return "off";
+	if (options.invocationOverride === "user-only") return "user-only";
+	if (options.invocationOverride === "model-and-user") return "on";
+	return options.frontmatterDisableModelInvocation ? "user-only" : "on";
+}
+
+/** Read the author-level default used by `pi config`; malformed or unreadable skills keep the default. */
+export function readSkillDisableModelInvocation(skillPath: string): boolean {
+	try {
+		const filePath =
+			existsSync(skillPath) && statSync(skillPath).isDirectory() ? join(skillPath, "SKILL.md") : skillPath;
+		if (!existsSync(filePath)) return false;
+		const { frontmatter } = parseFrontmatter<SkillFrontmatter>(readFileSync(filePath, "utf-8"));
+		return frontmatter["disable-model-invocation"] === true;
+	} catch {
+		return false;
+	}
 }

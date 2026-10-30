@@ -175,6 +175,11 @@ const CodemodeSettingsSchema = Type.Object({
 	),
 });
 
+const SkillInvocationOverrideSchema = Type.Union([Type.Literal("model-and-user"), Type.Literal("user-only")]);
+const SkillInvocationOverridesSchema = Type.Record(Type.String(), SkillInvocationOverrideSchema, {
+	description: "Per-skill invocation overrides, keyed by skill file or directory path.",
+});
+
 const PackageSourceSchema = Type.Union(
 	[
 		Type.String({ description: "Load all resources from the package." }),
@@ -187,6 +192,7 @@ const PackageSourceSchema = Type.Union(
 			skills: Type.Optional(Type.Array(Type.String())),
 			prompts: Type.Optional(Type.Array(Type.String())),
 			themes: Type.Optional(Type.Array(Type.String())),
+			skillInvocationOverrides: Type.Optional(SkillInvocationOverridesSchema),
 		}),
 	],
 	{
@@ -325,6 +331,7 @@ export const SettingsSchema = Type.Object(
 			}),
 		),
 		skills: Type.Optional(SkillsInputSchema),
+		skillInvocationOverrides: Type.Optional(SkillInvocationOverridesSchema),
 		prompts: Type.Optional(
 			Type.Array(Type.String(), { description: "Local prompt template file paths or directories." }),
 		),
@@ -485,6 +492,8 @@ export type QuietStartup = NonNullable<SettingsInput["quietStartup"]>;
 export type TransportSetting = NonNullable<SettingsInput["transport"]>;
 export type SessionShareDestination = NonNullable<SettingsInput["sessionShareDestination"]>;
 export type PackageSource = Static<typeof PackageSourceSchema>;
+export type SkillInvocationOverride = Static<typeof SkillInvocationOverrideSchema>;
+export type SkillInvocationOverrides = Static<typeof SkillInvocationOverridesSchema>;
 export type FullscreenExitOutput = NonNullable<SettingsInput["fullscreenExitOutput"]>;
 export type TuiMode = NonNullable<SettingsInput["tuiMode"]>;
 export type CacheWarmingMode = NonNullable<SettingsInput["cacheWarming"]>;

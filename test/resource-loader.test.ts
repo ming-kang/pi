@@ -8,7 +8,7 @@ import { ExtensionRunner } from "../src/core/extensions/runner.ts";
 import { DefaultResourceLoader, loadProjectContextFiles } from "../src/core/resource-loader.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
-import type { Skill } from "../src/core/skills.ts";
+import { formatSkillsForPrompt, type Skill } from "../src/core/skills.ts";
 import { createSyntheticSourceInfo } from "../src/core/source-info.ts";
 
 import { createModelRegistry } from "./model-runtime-test-utils.ts";
@@ -439,6 +439,40 @@ Content`,
 			expect(skills.some((s) => s.name === "skip-skill")).toBe(false);
 			expect(prompts.some((p) => p.name === "skip")).toBe(false);
 			expect(themes.some((t) => t.sourcePath?.endsWith("skip.json"))).toBe(false);
+		});
+
+		it("should apply invocation overrides while preserving skill loading", async () => {
+			const settingsManager = SettingsManager.inMemory({
+				skills: ["-skills/off-skill"],
+				skillInvocationOverrides: {
+					"skills/manual-skill": "user-only",
+					"skills/author-only": "model-and-user",
+					"skills/off-skill": "model-and-user",
+				},
+			});
+			for (const [name, disableModelInvocation] of [
+				["manual-skill", false],
+				["author-only", true],
+				["off-skill", false],
+			] as const) {
+				const skillDir = join(agentDir, "skills", name);
+				mkdirSync(skillDir, { recursive: true });
+				writeFileSync(
+					join(skillDir, "SKILL.md"),
+					`---\nname: ${name}\ndescription: ${name}\ndisable-model-invocation: ${disableModelInvocation}\n---\nContent`,
+				);
+			}
+
+			const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+			await loader.reload();
+			const { skills } = loader.getSkills();
+
+			expect(skills.find((skill) => skill.name === "manual-skill")?.disableModelInvocation).toBe(true);
+			expect(skills.find((skill) => skill.name === "author-only")?.disableModelInvocation).toBe(false);
+			expect(skills.some((skill) => skill.name === "off-skill")).toBe(false);
+			const prompt = formatSkillsForPrompt(skills);
+			expect(prompt).toContain("<name>author-only</name>");
+			expect(prompt).not.toContain("<name>manual-skill</name>");
 		});
 
 		it("should discover AGENTS.md context files", async () => {

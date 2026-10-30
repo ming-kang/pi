@@ -30,6 +30,7 @@ import { DefaultPackageManager, type PathMetadata, type ResolvedResource } from 
 import type { PromptTemplate } from "./prompt-templates.ts";
 import { loadPromptTemplates } from "./prompt-templates.ts";
 import { SettingsManager } from "./settings-manager.ts";
+import type { SkillInvocationOverride } from "./settings-schema.ts";
 import type { Skill } from "./skills.ts";
 import { loadSkills } from "./skills.ts";
 import {
@@ -366,6 +367,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private appendSystemPrompt: string[];
 	private appendSystemPromptSourcePaths: string[];
 	private lastSkillPaths: string[];
+	private skillInvocationOverrides = new Map<string, SkillInvocationOverride>();
 	private extensionSkillSourceInfos: Map<string, SourceInfo>;
 	private extensionPromptSourceInfos: Map<string, SourceInfo>;
 	private extensionThemeSourceInfos: Map<string, SourceInfo>;
@@ -536,6 +538,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.resourceMetadataByPath = new Map();
 		const metadataByPath = this.resourceMetadataByPath;
 
+		this.skillInvocationOverrides = new Map();
 		this.extensionSkillSourceInfos = new Map();
 		this.extensionPromptSourceInfos = new Map();
 		this.extensionThemeSourceInfos = new Map();
@@ -557,7 +560,13 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const enabledPrompts = getEnabledPaths(resolvedPaths.prompts);
 		const enabledThemes = getEnabledPaths(resolvedPaths.themes);
 
-		const enabledSkills = enabledSkillResources.map((resource) => this.mapSkillPath(resource, metadataByPath));
+		const enabledSkills = enabledSkillResources.map((resource) => {
+			const path = this.mapSkillPath(resource, metadataByPath);
+			if (resource.skillInvocationOverride) {
+				this.skillInvocationOverrides.set(canonicalizePath(path), resource.skillInvocationOverride);
+			}
+			return path;
+		});
 
 		// Add CLI paths metadata
 		for (const r of cliExtensionPaths.extensions) {
@@ -852,13 +861,22 @@ export class DefaultResourceLoader implements ResourceLoader {
 			});
 		}
 		const resolvedSkills = this.skillsOverride ? this.skillsOverride(skillsResult) : skillsResult;
-		this.skills = resolvedSkills.skills.map((skill) => ({
-			...skill,
-			sourceInfo:
-				this.findSourceInfoForPath(skill.filePath, this.extensionSkillSourceInfos, metadataByPath) ??
-				skill.sourceInfo ??
-				this.getDefaultSourceInfoForPath(skill.filePath),
-		}));
+		this.skills = resolvedSkills.skills.map((skill) => {
+			const invocationOverride = this.skillInvocationOverrides.get(canonicalizePath(skill.filePath));
+			return {
+				...skill,
+				disableModelInvocation:
+					invocationOverride === "user-only"
+						? true
+						: invocationOverride === "model-and-user"
+							? false
+							: skill.disableModelInvocation,
+				sourceInfo:
+					this.findSourceInfoForPath(skill.filePath, this.extensionSkillSourceInfos, metadataByPath) ??
+					skill.sourceInfo ??
+					this.getDefaultSourceInfoForPath(skill.filePath),
+			};
+		});
 		this.skillDiagnostics = resolvedSkills.diagnostics;
 	}
 

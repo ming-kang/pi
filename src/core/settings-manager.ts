@@ -22,6 +22,7 @@ import type {
 	QuietStartup,
 	SessionShareDestination,
 	Settings,
+	SkillInvocationOverrides,
 	ThinkingBudgetsSettings,
 	TransportSetting,
 	TuiMode,
@@ -46,6 +47,8 @@ export type {
 	RetrySettings,
 	SessionShareDestination,
 	Settings,
+	SkillInvocationOverride,
+	SkillInvocationOverrides,
 	TerminalSettings,
 	ThinkingBudgetsSettings,
 	TransportSetting,
@@ -1195,6 +1198,19 @@ export class SettingsManager {
 	setProjectSkillPaths(paths: string[]): void {
 		this.updateProjectSettings("skills", (settings) => {
 			settings.skills = paths;
+		});
+	}
+
+	setSkillInvocationOverrides(overrides: SkillInvocationOverrides | undefined): void {
+		this.globalSettings.skillInvocationOverrides =
+			overrides && Object.keys(overrides).length > 0 ? overrides : undefined;
+		this.markModified("skillInvocationOverrides");
+		this.save();
+	}
+
+	setProjectSkillInvocationOverrides(overrides: SkillInvocationOverrides | undefined): void {
+		this.updateProjectSettings("skillInvocationOverrides", (settings) => {
+			settings.skillInvocationOverrides = overrides && Object.keys(overrides).length > 0 ? overrides : undefined;
 		});
 	}
 

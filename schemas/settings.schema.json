@@ -338,6 +338,24 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "skillInvocationOverrides": {
+                "type": "object",
+                "patternProperties": {
+                  "^.*$": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "const": "model-and-user"
+                      },
+                      {
+                        "type": "string",
+                        "const": "user-only"
+                      }
+                    ]
+                  }
+                },
+                "description": "Per-skill invocation overrides, keyed by skill file or directory path."
               }
             }
           }
@@ -382,6 +400,24 @@
         }
       ],
       "description": "Local skill file paths or directories."
+    },
+    "skillInvocationOverrides": {
+      "type": "object",
+      "patternProperties": {
+        "^.*$": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "model-and-user"
+            },
+            {
+              "type": "string",
+              "const": "user-only"
+            }
+          ]
+        }
+      },
+      "description": "Per-skill invocation overrides, keyed by skill file or directory path."
     },
     "prompts": {
       "type": "array",

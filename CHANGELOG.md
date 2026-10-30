@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- `pi config` now cycles skills through On, User only, and Off, with project-local inheritance and explicit overrides. User-only skills stay available through `/skill:name` without being advertised to the model; the same policy is available through `skillInvocationOverrides` in global, project, and package settings.
+
 ### Changed
 
 - **Breaking (extension and SDK API):** `TasksContext.wait()` and `waitAny()` now take an options object and return a typed result. `wait(id, { timeoutMs?, signal?, toolCallId?, read? })` returns `{ outcome, waitedMs, task, read? }`; `waitAny({ timeoutMs?, signal?, toolCallId?, read? })` returns `{ outcome, waitedMs, task?, read?, running }`. `outcome` is `settled`, `timed_out`, `interrupted`, or `closed`, plus `no_tasks` for an empty `waitAny` cohort. The runtime now owns the whole `tasks wait` delivery protocol: it holds delivery before the wait, reads, registers the persisted-result receipt for the given `toolCallId`, and then releases, and it applies steering interruption itself. `interruptSignal` parameters, `TasksContext.holdDelivery()`, `TasksSessionContext.waitInterruptSignal`, and `TasksSessionContext.prepareWait()` are removed; `TasksSessionContext` keeps only `stoppedByTreeNavigation()`. Hosts embedding a `TaskRuntime` can supply `TaskRuntimeOptions.waits` for the same behavior. `holdDelivery()` remains on `TaskRuntime` for host delivery code.
