@@ -1,92 +1,424 @@
-import type { TUI } from "@earendil-works/pi-tui";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { type Component, setKeybindings, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExtensionUIContext } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { openAgentSettings, readAgentSettings, resolveAgentConfiguration } from "../src/extensions/agent/settings.ts";
-import { ModelSelectorComponent } from "../src/modes/interactive/components/model-selector.ts";
-import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
-import { createHarness, type Harness } from "./suite/harness.ts";
+import { initTheme, type Theme, theme } from "../src/modes/interactive/theme/theme.ts";
+import { stripAnsi } from "../src/utils/ansi.ts";
+import { createFakeTui } from "./suite/fake-tui.ts";
+import { createHarness, createTestUiContext, type Harness } from "./suite/harness.ts";
 
+type UiStep = (component: Component) => void;
+type UiComponent = Component & { dispose?(): void };
+type UiFactory<T> = (
+	tui: TUI,
+	theme: Theme,
+	keys: KeybindingsManager,
+	done: (result: T) => void,
+) => UiComponent | Promise<UiComponent>;
 let harness: Harness;
+
+beforeEach(() => {
+	initTheme("dark");
+	setKeybindings(new KeybindingsManager());
+});
 afterEach(() => {
 	harness?.cleanup();
 	vi.restoreAllMocks();
 });
 
+function frame(component: Component, width = 100): string {
+	return stripAnsi(component.render(width).join("\n"));
+}
+
+function input(component: Component, data: string): void {
+	if (!component.handleInput) throw new Error("Expected an interactive selector");
+	component.handleInput(data);
+}
+
+function action(label: string): UiStep {
+	return (component) => {
+		for (let attempt = 0; attempt < 3; attempt++) {
+			if (
+				frame(component)
+					.split("\n")
+					.some((line) => line.startsWith(`› ${label}`))
+			) {
+				input(component, "\r");
+				return;
+			}
+			input(component, "\x1b[B");
+		}
+		throw new Error(`Could not focus ${label}`);
+	};
+}
+
+function pick(query: string): UiStep {
+	return (component) => {
+		for (const char of query) input(component, char);
+		input(component, "\r");
+	};
+}
+
+function cancel(component: Component): void {
+	input(component, "\x1b");
+}
+
+function mouse(component: Component, type: "press" | "click", y: number): void {
+	const event = { type, button: "left" as const, x: 2, y, screenX: 2, screenY: y, width: 80, height: 12 };
+	component.handleMouse?.({ ...event, shift: false, alt: false, ctrl: false });
+}
+
+/** Drive real component input and observe rendered frames and persisted settings. */
+function installUi(steps: UiStep[] = [], keys = new KeybindingsManager()) {
+	setKeybindings(keys);
+	const frames: string[] = [];
+	const notify = vi.fn();
+	const custom: ExtensionUIContext["custom"] = async <T>(factory: UiFactory<T>) => {
+		let closed = false;
+		let result: T | undefined;
+		const tui = createFakeTui();
+		const component = await factory(tui, theme, keys, (value) => {
+			closed = true;
+			result = value;
+		});
+		try {
+			frames.push(frame(component));
+			(steps.shift() ?? cancel)(component);
+			if (!closed) throw new Error("UI step did not close the selector");
+			return result as T;
+		} finally {
+			component.dispose?.();
+		}
+	};
+	const runner = harness.session.extensionRunner;
+	runner.setUIContext(createTestUiContext({ custom, notify }), "tui");
+	return { ctx: runner.createCommandContext(), frames, notify };
+}
+
+async function maxSession(): Promise<void> {
+	harness = await createHarness({
+		models: [
+			{ id: "main", reasoning: true },
+			{ id: "worker", reasoning: true },
+		],
+	});
+	await harness.session.setModel({ ...harness.models[0]!, thinkingLevelMap: { xhigh: "xhigh", max: "max" } });
+	harness.session.setThinkingLevel("max");
+}
+
 describe("Agent settings", () => {
-	it("saves model and thinking overrides for future Agents and restores inheritance", async () => {
-		harness = await createHarness({ models: [{ id: "main" }, { id: "worker" }] });
-		const runner = harness.session.extensionRunner;
-		const choice = `${harness.models[1]!.provider}/${harness.models[1]!.id}`;
-		const custom = vi.fn().mockResolvedValueOnce(harness.models[1]!);
-		const select = vi
-			.fn()
-			.mockImplementationOnce((_title, options) => Promise.resolve(options[0]))
-			.mockImplementationOnce((_title, options) => Promise.resolve(options[1]))
-			.mockResolvedValueOnce("high")
-			.mockResolvedValueOnce(undefined)
-			.mockImplementationOnce((_title, options) => Promise.resolve(options[2]))
-			.mockImplementationOnce((_title, options) => Promise.resolve(options[1]))
-			.mockResolvedValueOnce("Follow current session")
-			.mockResolvedValue(undefined);
-		runner.setUIContext({ ...runner.getUIContext(), custom, select, notify: vi.fn() }, "tui");
-		const ctx = runner.createCommandContext();
-		await ctx.setExtensionSettings("other", { preserve: true });
+	it("shows aligned inherited values and always offers the combined reset", async () => {
+		harness = await createHarness({ models: [{ id: "main", reasoning: true }] });
+		harness.session.setThinkingLevel("high");
+		const { ctx, frames } = installUi();
 		await openAgentSettings(ctx);
-		expect(readAgentSettings(ctx)).toEqual({ model: choice, thinking: "high" });
-		expect(resolveAgentConfiguration(ctx).model.id).toBe("worker");
-		expect(harness.session.model?.id).toBe("main");
-		await openAgentSettings(ctx);
-		expect(readAgentSettings(ctx)).toEqual({});
-		expect(ctx.getExtensionSettings("other")).toEqual({ preserve: true });
+		expect(frames[0]).toContain("Agent Settings");
+		expect(frames[0]).toMatch(/› Model\s+faux\/main · Follow current session/);
+		expect(frames[0]).toMatch(/Effort\s+high · Follow current session/);
+		expect(frames[0]).toContain("Reset to follow current session");
+		expect(frames[0]).toContain("↑/↓ navigate · Enter change · Esc close");
+		const modelRow = frames[0]!.split("\n").find((line) => line.startsWith("› Model"))!;
+		const effortRow = frames[0]!.split("\n").find((line) => line.startsWith("  Effort"))!;
+		expect(modelRow.indexOf("faux/main")).toBe(effortRow.indexOf("high"));
+		expect(ctx.getExtensionSettings("agent")).toEqual({});
 	});
 
-	it("does not save on Escape and reports failed persistence", async () => {
-		harness = await createHarness();
-		const runner = harness.session.extensionRunner;
-		const custom = vi.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce(harness.models[0]!);
-		const select = vi
-			.fn()
-			.mockImplementationOnce((_title, options) => Promise.resolve(options[0]))
-			.mockResolvedValueOnce(undefined)
-			.mockImplementationOnce((_title, options) => Promise.resolve(options[0]))
-			.mockResolvedValue(undefined);
-		const notify = vi.fn();
-		runner.setUIContext({ ...runner.getUIContext(), custom, select, notify }, "tui");
-		const ctx = runner.createCommandContext();
-		const save = vi.spyOn(harness.settingsManager, "setExtensionSettings");
+	it.each([
+		{ settings: { model: "faux/worker" }, modelFollows: false, effortFollows: true },
+		{ settings: { thinking: "medium" }, modelFollows: true, effortFollows: false },
+		{ settings: { model: "faux/worker", thinking: "medium" }, modelFollows: false, effortFollows: false },
+	])("labels each field's inheritance independently: $settings", async ({ settings, modelFollows, effortFollows }) => {
+		harness = await createHarness({
+			models: [
+				{ id: "main", reasoning: true },
+				{ id: "worker", reasoning: true },
+			],
+		});
+		const { ctx, frames } = installUi();
+		await ctx.setExtensionSettings("agent", settings);
 		await openAgentSettings(ctx);
-		expect(save).not.toHaveBeenCalled();
-		save.mockRejectedValue(new Error("Disk unavailable"));
-		await openAgentSettings(ctx);
-		expect(notify).toHaveBeenCalledWith("Could not save Agent settings: Disk unavailable", "error");
+		const rows = frames[0]!.split("\n");
+		expect(rows.find((line) => line.startsWith("› Model"))!.includes("Follow current session")).toBe(modelFollows);
+		expect(rows.find((line) => line.startsWith("  Effort"))!.includes("Follow current session")).toBe(effortFollows);
 	});
 
-	it("uses the native scoped model selector instead of flattening the full catalog", async () => {
-		initTheme("dark");
+	it.each([true, false])(
+		"shows the effective inherited thinking level and preserves the request (follow=%s)",
+		async (following) => {
+			await maxSession();
+			const { ctx, frames } = installUi();
+			const saved = { model: "faux/worker", ...(following ? {} : { thinking: "max" }) };
+			await ctx.setExtensionSettings("agent", saved);
+			await openAgentSettings(ctx);
+			const effortRow = frames[0]!.split("\n").find((line) => line.startsWith("  Effort"))!;
+			expect(effortRow).toMatch(/Effort\s+max → high/);
+			expect(effortRow.includes("Follow current session")).toBe(following);
+			expect(resolveAgentConfiguration(ctx).thinking).toBe("high");
+			expect(harness.session.thinkingLevel).toBe("max");
+			expect(ctx.getExtensionSettings("agent")).toEqual(saved);
+		},
+	);
+
+	it("reuses scoped model search without switching the parent or saving global defaults", async () => {
 		harness = await createHarness({ models: [{ id: "main" }, { id: "worker" }] });
 		harness.session.setScopedModels([{ model: harness.models[1]! }]);
-		const runner = harness.session.extensionRunner;
-		const custom = vi.fn().mockImplementation(async (factory) => {
-			const component = await factory(
-				{ requestRender: vi.fn() } as unknown as TUI,
-				theme,
-				new KeybindingsManager(),
-				() => {},
-			);
-			expect(component).toBeInstanceOf(ModelSelectorComponent);
-			const frame = component.render(100).join("\n");
-			expect(frame).toContain("worker");
-			expect(frame).not.toContain("main [");
-			component.dispose();
-			return undefined;
+		const { ctx, frames } = installUi([
+			action("Model"),
+			(component) => {
+				expect(frame(component)).toContain("worker [faux]");
+				expect(frame(component)).not.toContain("main [faux]");
+				expect(frame(component)).not.toContain("set as default");
+				input(component, "\x13");
+				input(component, "\t");
+				expect(frame(component)).toContain("main [faux]");
+				pick("worker")(component);
+			},
+		]);
+		await openAgentSettings(ctx);
+		expect(readAgentSettings(ctx)).toEqual({ model: "faux/worker" });
+		expect(frames.at(-1)).toMatch(/› Model\s+faux\/worker\s*\n/);
+		expect(harness.session.model?.id).toBe("main");
+		expect(harness.settingsManager.getDefaultModel()).toBeUndefined();
+		expect(harness.session.scopedModels.map((entry) => entry.model.id)).toEqual(["worker"]);
+	});
+
+	it("reuses supported thinking search and saves only an Agent effort override", async () => {
+		await maxSession();
+		const { ctx, frames } = installUi([
+			action("Effort"),
+			(component) => {
+				const output = frame(component);
+				expect(output).toContain("Thinking Level");
+				expect(output).toMatch(/→ ✓ high/);
+				expect(output).not.toMatch(/^\s*[→✓ ]*max\s/m);
+				expect(output).not.toContain("set as default");
+				expect(output).not.toContain("in-session");
+				input(component, "\x13");
+				pick("medium")(component);
+			},
+		]);
+		await ctx.setExtensionSettings("agent", { model: "faux/worker" });
+		await openAgentSettings(ctx);
+		expect(readAgentSettings(ctx)).toEqual({ model: "faux/worker", thinking: "medium" });
+		expect(frames.at(-1)).toMatch(/› Effort\s+medium\s*\n/);
+		expect(harness.session.thinkingLevel).toBe("max");
+		expect(harness.settingsManager.getDefaultThinkingLevel()).toBeUndefined();
+	});
+
+	it("makes an explicit choice fixed even when it equals the inherited effective level", async () => {
+		await maxSession();
+		const { ctx } = installUi([action("Effort"), pick("high")]);
+		await ctx.setExtensionSettings("agent", { model: "faux/worker" });
+		await openAgentSettings(ctx);
+		expect(readAgentSettings(ctx)).toEqual({ model: "faux/worker", thinking: "high" });
+		harness.session.setThinkingLevel("low");
+		expect(resolveAgentConfiguration(ctx).thinking).toBe("high");
+	});
+
+	it("resets both overrides in one write and preserves unrelated settings", async () => {
+		await maxSession();
+		const { ctx, frames } = installUi([action("Reset to follow current session")]);
+		await ctx.setExtensionSettings("agent", { model: "faux/worker", thinking: "high", retain: true });
+		await ctx.setExtensionSettings("other", { preserve: 42 });
+		const save = vi.spyOn(harness.settingsManager, "setExtensionSettings");
+		await openAgentSettings(ctx);
+		expect(save).toHaveBeenCalledExactlyOnceWith("agent", { retain: true });
+		expect(ctx.getExtensionSettings("other")).toEqual({ preserve: 42 });
+		expect(readAgentSettings(ctx)).toEqual({});
+		expect(resolveAgentConfiguration(ctx).model.id).toBe("main");
+		expect(resolveAgentConfiguration(ctx).thinking).toBe("max");
+		expect(frames.at(-1)).toMatch(/Model\s+faux\/main · Follow current session/);
+		expect(frames.at(-1)).toMatch(/Effort\s+max · Follow current session/);
+		expect(frames.at(-1)).toContain("› Reset to follow current session");
+
+		const again = installUi([action("Reset to follow current session")]);
+		await openAgentSettings(again.ctx);
+		expect(save).toHaveBeenCalledOnce();
+	});
+
+	it("does not mutate malformed settings when cancelling either picker", async () => {
+		harness = await createHarness();
+		const { ctx, frames } = installUi([action("Model"), cancel, action("Effort"), cancel]);
+		const saved = { model: "gpt-4o", thinking: "impossible", preserve: 42 };
+		await ctx.setExtensionSettings("agent", saved);
+		const save = vi.spyOn(harness.settingsManager, "setExtensionSettings");
+		await openAgentSettings(ctx);
+		expect(frames[0]).toMatch(/Model\s+gpt-4o \[invalid\]/);
+		expect(frames[0]).toMatch(/Effort\s+impossible \[invalid\]/);
+		expect(save).not.toHaveBeenCalled();
+		expect(ctx.getExtensionSettings("agent")).toEqual(saved);
+	});
+
+	it("repairs an invalid model choice without changing the other fields", async () => {
+		harness = await createHarness({ models: [{ id: "main" }, { id: "worker", reasoning: true }] });
+		const { ctx } = installUi([action("Model"), pick("worker")]);
+		await ctx.setExtensionSettings("agent", { model: "gpt-4o", thinking: "high", retain: "yes" });
+		expect(() => resolveAgentConfiguration(ctx)).toThrow("Invalid Agent model setting");
+		await openAgentSettings(ctx);
+		expect(ctx.getExtensionSettings("agent")).toEqual({ model: "faux/worker", thinking: "high", retain: "yes" });
+		expect(resolveAgentConfiguration(ctx).model.id).toBe("worker");
+	});
+
+	it("repairs an invalid effort choice without changing the model or other fields", async () => {
+		harness = await createHarness({ models: [{ id: "main" }, { id: "worker", reasoning: true }] });
+		const { ctx } = installUi([action("Effort"), pick("high")]);
+		await ctx.setExtensionSettings("agent", { model: "faux/worker", thinking: "impossible", customFlag: true });
+		expect(() => readAgentSettings(ctx)).toThrow("Invalid Agent effort setting");
+		await openAgentSettings(ctx);
+		expect(ctx.getExtensionSettings("agent")).toEqual({ model: "faux/worker", thinking: "high", customFlag: true });
+	});
+
+	it.each([
+		{ model: 123, thinking: true, modelLabel: "123 [invalid]", effortLabel: "true [invalid]" },
+		{
+			model: "x".repeat(2000),
+			thinking: { invalid: "x".repeat(2000) },
+			modelLabel: "[invalid]",
+			effortLabel: "[invalid]",
+		},
+	])("keeps invalid indicators bounded and resets both damaged fields: $modelLabel", async (stored) => {
+		harness = await createHarness();
+		const { ctx, frames } = installUi([action("Reset to follow current session")]);
+		await ctx.setExtensionSettings("agent", { model: stored.model, thinking: stored.thinking, keep: "yes" });
+		await openAgentSettings(ctx);
+		expect(frames[0]).toContain(stored.modelLabel);
+		expect(frames[0]).toContain(stored.effortLabel);
+		expect(frames[0]).not.toContain("x".repeat(100));
+		expect(ctx.getExtensionSettings("agent")).toEqual({ keep: "yes" });
+	});
+
+	it("does not substitute parent capabilities when the configured model is unavailable", async () => {
+		await maxSession();
+		const { ctx, frames } = installUi();
+		const saved = { model: "missing/model", thinking: "max" };
+		await ctx.setExtensionSettings("agent", saved);
+		await openAgentSettings(ctx);
+		expect(frames[0]).toContain("missing/model [unavailable]");
+		expect(frames[0]).toMatch(/Effort\s+max \[unresolved\]/);
+		expect(() => resolveAgentConfiguration(ctx)).toThrow("Agent model is unavailable: missing/model");
+		expect(ctx.getExtensionSettings("agent")).toEqual(saved);
+	});
+
+	it("fits narrow terminals and keeps unavailable markers ahead of long model names", async () => {
+		harness = await createHarness();
+		const { ctx } = installUi([
+			(component) => {
+				for (const width of [0, 1, 8, 24, 40, 80, 120]) {
+					expect(component.render(width).every((line) => visibleWidth(line) <= width)).toBe(true);
+				}
+				expect(frame(component, 40)).toContain("[unavailable]");
+				cancel(component);
+			},
+		]);
+		await ctx.setExtensionSettings("agent", { model: `missing/${"模型🙂".repeat(100)}` });
+		await openAgentSettings(ctx);
+	});
+
+	it("keeps the inheritance marker readable on narrow terminals", async () => {
+		harness = await createHarness({ models: [{ id: "a-rather-long-model-identifier", reasoning: true }] });
+		harness.session.setThinkingLevel("high");
+		const { ctx } = installUi([
+			(component) => {
+				expect(frame(component, 120)).toContain("· Follow current session");
+				expect(frame(component, 40)).toContain("· follow");
+				expect(frame(component, 40)).not.toContain("Follow current session");
+				expect(frame(component, 30)).toContain("· follow");
+				cancel(component);
+			},
+		]);
+		await openAgentSettings(ctx);
+	});
+
+	it("selects rows with the mouse without drifting from the layout", async () => {
+		harness = await createHarness({
+			models: [
+				{ id: "main", reasoning: true },
+				{ id: "worker", reasoning: true },
+			],
 		});
-		const select = vi
-			.fn()
-			.mockImplementationOnce((_title, options) => Promise.resolve(options[0]))
-			.mockResolvedValueOnce(undefined);
-		runner.setUIContext({ ...runner.getUIContext(), custom, select }, "tui");
-		await openAgentSettings(runner.createCommandContext());
-		expect(custom).toHaveBeenCalledOnce();
+		const { ctx, frames } = installUi([
+			(component) => {
+				mouse(component, "press", 4);
+				expect(frame(component)).toMatch(/› Effort/);
+				mouse(component, "click", 3);
+				expect(frame(component)).toMatch(/› Effort/);
+				cancel(component);
+			},
+		]);
+		await openAgentSettings(ctx);
+		expect(frames[0]).toMatch(/› Model/);
+	});
+
+	it("opens a picker when a row is clicked", async () => {
+		harness = await createHarness({
+			models: [
+				{ id: "main", reasoning: true },
+				{ id: "worker", reasoning: true },
+			],
+		});
+		const { ctx } = installUi([(component) => mouse(component, "click", 2), pick("worker")]);
+		await openAgentSettings(ctx);
+		expect(readAgentSettings(ctx)).toEqual({ model: "faux/worker" });
+	});
+
+	it("uses configured keys for both navigation and compact hints", async () => {
+		harness = await createHarness();
+		const keys = new KeybindingsManager({
+			"tui.select.up": "ctrl+p",
+			"tui.select.down": "ctrl+n",
+			"tui.select.confirm": "ctrl+x",
+			"tui.select.cancel": "ctrl+g",
+		});
+		const { ctx } = installUi(
+			[
+				(component) => {
+					expect(frame(component)).toContain("Ctrl+P/Ctrl+N navigate · Ctrl+X change · Ctrl+G close");
+					input(component, "\x0e");
+					expect(frame(component)).toMatch(/› Effort/);
+					input(component, "\x18");
+				},
+				(component) => input(component, "\x07"),
+				(component) => input(component, "\x07"),
+			],
+			keys,
+		);
+		await openAgentSettings(ctx);
+		expect(readAgentSettings(ctx)).toEqual({});
+	});
+
+	it.each(["Model", "Effort", "Reset to follow current session"])(
+		"reports failed persistence without claiming success: %s",
+		async (label) => {
+			harness = await createHarness({
+				models: [
+					{ id: "main", reasoning: true },
+					{ id: "worker", reasoning: true },
+				],
+			});
+			const steps = [
+				action(label),
+				...(label === "Model" ? [pick("worker")] : label === "Effort" ? [pick("high")] : []),
+			];
+			const { ctx, notify } = installUi(steps);
+			const saved = { model: "faux/main", thinking: "low", keep: true };
+			await ctx.setExtensionSettings("agent", saved);
+			vi.spyOn(harness.settingsManager, "setExtensionSettings").mockRejectedValueOnce(new Error("Disk unavailable"));
+			await openAgentSettings(ctx);
+			expect(notify).toHaveBeenCalledExactlyOnceWith("Could not save Agent settings: Disk unavailable", "error");
+			expect(ctx.getExtensionSettings("agent")).toEqual(saved);
+		},
+	);
+
+	it("does not open a panel or overwrite broken settings storage", async () => {
+		harness = await createHarness();
+		const { ctx, frames, notify } = installUi();
+		vi.spyOn(harness.settingsManager, "getExtensionSettings").mockImplementationOnce(() => {
+			throw new Error("Invalid extension settings object");
+		});
+		await openAgentSettings(ctx);
+		expect(notify).toHaveBeenCalledWith("Invalid extension settings object", "error");
+		expect(frames).toEqual([]);
 	});
 
 	it("rejects malformed or unavailable saved configuration instead of falling back", async () => {
@@ -95,7 +427,7 @@ describe("Agent settings", () => {
 		await ctx.setExtensionSettings("agent", { model: "missing/model" });
 		expect(() => resolveAgentConfiguration(ctx)).toThrow("Agent model is unavailable: missing/model");
 		await ctx.setExtensionSettings("agent", { thinking: "impossible" });
-		expect(() => readAgentSettings(ctx)).toThrow("Invalid Agent thinking setting");
+		expect(() => readAgentSettings(ctx)).toThrow("Invalid Agent effort setting");
 	});
 
 	it("rejects a captured settings context after its session is disposed", async () => {
@@ -106,242 +438,18 @@ describe("Agent settings", () => {
 		expect(() => ctx.setExtensionSettings("agent", {})).toThrow(/stale/);
 	});
 
-	it("recovers from invalid model setting by selecting a valid model or resetting inheritance, preserving other keys", async () => {
-		harness = await createHarness({ models: [{ id: "main" }, { id: "worker" }] });
-		const runner = harness.session.extensionRunner;
-		const choice = `${harness.models[1]!.provider}/${harness.models[1]!.id}`;
-		const custom = vi.fn().mockResolvedValueOnce(harness.models[1]!);
-		const select = vi
-			.fn()
-			.mockImplementationOnce((_title, options) => {
-				expect(options[0]).toContain("Model · gpt-4o [invalid]");
-				expect(options).toContain("Reset model to follow current session");
-				return Promise.resolve(options[0]);
-			})
-			.mockImplementationOnce((_title, options) => {
-				expect(options[0]).toContain(`Model · ${choice}`);
-				return Promise.resolve("Reset model to follow current session");
-			})
-			.mockResolvedValueOnce(undefined);
-		const notify = vi.fn();
-		runner.setUIContext({ ...runner.getUIContext(), custom, select, notify }, "tui");
-		const ctx = runner.createCommandContext();
-		await ctx.setExtensionSettings("agent", { model: "gpt-4o", retain: "yes" });
-		await ctx.setExtensionSettings("other", { untouched: 1 });
-
-		expect(() => readAgentSettings(ctx)).toThrow("Invalid Agent model setting. Choose a model with /agent.");
-		expect(() => resolveAgentConfiguration(ctx)).toThrow("Invalid Agent model setting. Choose a model with /agent.");
-
-		await openAgentSettings(ctx);
-
-		expect(select).toHaveBeenCalled();
-		expect(notify).toHaveBeenCalledWith(`Agent model: ${choice}`, "info");
-		expect(notify).toHaveBeenCalledWith("Agent model: Follow current session", "info");
-		expect(ctx.getExtensionSettings("agent")).toEqual({ retain: "yes" });
-		expect(ctx.getExtensionSettings("other")).toEqual({ untouched: 1 });
-		expect(readAgentSettings(ctx)).toEqual({});
-	});
-
-	it("recovers from invalid thinking setting by selecting a valid level or resetting inheritance, preserving other keys", async () => {
-		harness = await createHarness({ models: [{ id: "main" }, { id: "worker", reasoning: true }] });
-		const runner = harness.session.extensionRunner;
-		const select = vi
-			.fn()
-			.mockImplementationOnce((_title, options) => {
-				expect(options[1]).toContain("Thinking · impossible [invalid]");
-				expect(options).toContain("Reset thinking to follow current session");
-				return Promise.resolve(options[1]);
-			})
-			.mockImplementationOnce((_title, options) => {
-				expect(options).toContain("Follow current session");
-				expect(options).toContain("high");
-				return Promise.resolve("high");
-			})
-			.mockImplementationOnce((_title, options) => {
-				expect(options[1]).toContain("Thinking · high");
-				return Promise.resolve("Reset thinking to follow current session");
-			})
-			.mockResolvedValueOnce(undefined);
-		const notify = vi.fn();
-		runner.setUIContext({ ...runner.getUIContext(), select, notify }, "tui");
-		const ctx = runner.createCommandContext();
-		await ctx.setExtensionSettings("agent", { model: "faux/worker", thinking: "impossible", customFlag: true });
-
-		expect(() => readAgentSettings(ctx)).toThrow(
-			"Invalid Agent thinking setting. Choose a thinking level with /agent.",
-		);
-		expect(() => resolveAgentConfiguration(ctx)).toThrow(
-			"Invalid Agent thinking setting. Choose a thinking level with /agent.",
-		);
-
-		await openAgentSettings(ctx);
-
-		expect(select).toHaveBeenCalled();
-		expect(notify).toHaveBeenCalledWith("Agent thinking: high", "info");
-		expect(notify).toHaveBeenCalledWith("Agent thinking: Follow current session", "info");
-		expect(ctx.getExtensionSettings("agent")).toEqual({ model: "faux/worker", customFlag: true });
-		expect(readAgentSettings(ctx)).toEqual({ model: "faux/worker" });
-	});
-
-	it("allows resetting thinking when the configured model is unavailable", async () => {
-		harness = await createHarness();
-		const runner = harness.session.extensionRunner;
-		const select = vi
-			.fn()
-			.mockImplementationOnce((_title, options) => {
-				expect(options[0]).toContain("Model · missing/model [unavailable]");
-				expect(options[1]).toContain("Thinking · high");
-				return Promise.resolve(options[1]);
-			})
-			.mockImplementationOnce((_title, options) => {
-				expect(options).toContain("Follow current session");
-				return Promise.resolve("Follow current session");
-			})
-			.mockResolvedValueOnce(undefined);
-		const notify = vi.fn();
-		runner.setUIContext({ ...runner.getUIContext(), select, notify }, "tui");
-		const ctx = runner.createCommandContext();
-		await ctx.setExtensionSettings("agent", { model: "missing/model", thinking: "high" });
-
-		expect(() => resolveAgentConfiguration(ctx)).toThrow("Agent model is unavailable: missing/model");
-
-		await openAgentSettings(ctx);
-
-		expect(notify).toHaveBeenCalledWith("Agent thinking: Follow current session", "info");
-		expect(ctx.getExtensionSettings("agent")).toEqual({ model: "missing/model" });
-		expect(readAgentSettings(ctx)).toEqual({ model: "missing/model" });
-		expect(() => resolveAgentConfiguration(ctx)).toThrow("Agent model is unavailable: missing/model");
-	});
-
-	it("does not mutate invalid settings on Escape", async () => {
-		harness = await createHarness();
-		const runner = harness.session.extensionRunner;
-		const custom = vi.fn().mockResolvedValueOnce(undefined);
-		const select = vi
-			.fn()
-			.mockImplementationOnce((_title, options) => Promise.resolve(options[0]))
-			.mockImplementationOnce((_title, options) => Promise.resolve(options[1]))
-			.mockResolvedValueOnce(undefined)
-			.mockResolvedValueOnce(undefined);
-		const notify = vi.fn();
-		runner.setUIContext({ ...runner.getUIContext(), custom, select, notify }, "tui");
-		const ctx = runner.createCommandContext();
-		await ctx.setExtensionSettings("agent", { model: "gpt-4o", thinking: "impossible", preserve: 42 });
-		const saveSpy = vi.spyOn(harness.settingsManager, "setExtensionSettings");
-
-		await openAgentSettings(ctx);
-
-		expect(select).toHaveBeenCalled();
-		expect(custom).toHaveBeenCalled();
-		expect(saveSpy).not.toHaveBeenCalled();
-		expect(ctx.getExtensionSettings("agent")).toEqual({ model: "gpt-4o", thinking: "impossible", preserve: 42 });
-	});
-
-	it("reports persistence errors when repairing invalid settings without claiming success", async () => {
-		harness = await createHarness();
-		const runner = harness.session.extensionRunner;
-		const select = vi
-			.fn()
-			.mockImplementationOnce((_title, _options) => Promise.resolve("Reset model to follow current session"))
-			.mockResolvedValueOnce(undefined);
-		const notify = vi.fn();
-		runner.setUIContext({ ...runner.getUIContext(), select, notify }, "tui");
-		const ctx = runner.createCommandContext();
-		await ctx.setExtensionSettings("agent", { model: "gpt-4o" });
-		vi.spyOn(harness.settingsManager, "setExtensionSettings").mockRejectedValueOnce(new Error("Disk full"));
-
-		await openAgentSettings(ctx);
-
-		expect(notify).toHaveBeenCalledWith("Could not save Agent settings: Disk full", "error");
-		expect(ctx.getExtensionSettings("agent")).toEqual({ model: "gpt-4o" });
-	});
-
-	it("reports non-destructive error when getExtensionSettings throws from broken storage", async () => {
-		harness = await createHarness();
-		const runner = harness.session.extensionRunner;
-		const select = vi.fn();
-		const notify = vi.fn();
-		runner.setUIContext({ ...runner.getUIContext(), select, notify }, "tui");
-		const ctx = runner.createCommandContext();
-		vi.spyOn(harness.settingsManager, "getExtensionSettings").mockImplementationOnce(() => {
-			throw new Error("Invalid extension settings object");
-		});
-
-		await openAgentSettings(ctx);
-
-		expect(notify).toHaveBeenCalledWith("Invalid extension settings object", "error");
-		expect(select).not.toHaveBeenCalled();
-	});
-
-	it("notifies errors in non-tui mode on invalid settings and announces valid settings", async () => {
+	it("reports errors and valid settings without opening TUI in non-interactive modes", async () => {
 		harness = await createHarness();
 		const runner = harness.session.extensionRunner;
 		const notify = vi.fn();
 		runner.setUIContext({ ...runner.getUIContext(), notify }, "print");
 		const ctx = runner.createCommandContext();
 		await ctx.setExtensionSettings("agent", { model: "invalid-bare-model" });
-
 		await openAgentSettings(ctx);
 		expect(notify).toHaveBeenCalledWith("Invalid Agent model setting. Choose a model with /agent.", "error");
-
 		notify.mockClear();
 		await ctx.setExtensionSettings("agent", { model: "faux/main", thinking: "high" });
 		await openAgentSettings(ctx);
-		expect(notify).toHaveBeenCalledWith("Agent model: faux/main · Thinking: high", "info");
-	});
-
-	it("keeps invalid-setting indicators visible without echoing oversized values", async () => {
-		harness = await createHarness();
-		const runner = harness.session.extensionRunner;
-		let labels: string[] = [];
-		const select = vi.fn().mockImplementation(async (_title, options) => {
-			labels = options;
-			return undefined;
-		});
-		runner.setUIContext({ ...runner.getUIContext(), select }, "tui");
-		const ctx = runner.createCommandContext();
-		const stored = { model: "x".repeat(2000), thinking: { invalid: "x".repeat(2000) } };
-		await ctx.setExtensionSettings("agent", stored);
-		await openAgentSettings(ctx);
-		expect(labels[0]).toBe("Model · [invalid]");
-		expect(labels[1]).toBe("Thinking · [invalid]");
-		expect(ctx.getExtensionSettings("agent")).toEqual(stored);
-	});
-
-	it("formats edge-case invalid types and supports resetting both invalid fields sequentially", async () => {
-		harness = await createHarness();
-		const runner = harness.session.extensionRunner;
-		const select = vi
-			.fn()
-			.mockImplementationOnce((_title, options) => {
-				expect(options[0]).toContain("Model · 123 [invalid]");
-				expect(options[1]).toContain("Thinking · true [invalid]");
-				expect(options).toContain("Reset model to follow current session");
-				expect(options).toContain("Reset thinking to follow current session");
-				return Promise.resolve("Reset thinking to follow current session");
-			})
-			.mockImplementationOnce((_title, options) => {
-				expect(options[0]).toContain("Model · 123 [invalid]");
-				expect(options[1]).toContain("Follow current session");
-				expect(options).toContain("Reset model to follow current session");
-				expect(options).not.toContain("Reset thinking to follow current session");
-				return Promise.resolve("Reset model to follow current session");
-			})
-			.mockImplementationOnce((_title, options) => {
-				expect(options[0]).toContain("Follow current session");
-				expect(options[1]).toContain("Follow current session");
-				expect(options).not.toContain("Reset model to follow current session");
-				expect(options).not.toContain("Reset thinking to follow current session");
-				return Promise.resolve(undefined);
-			});
-		const notify = vi.fn();
-		runner.setUIContext({ ...runner.getUIContext(), select, notify }, "tui");
-		const ctx = runner.createCommandContext();
-		await ctx.setExtensionSettings("agent", { model: 123, thinking: true, preservedKey: "keep-me" });
-
-		await openAgentSettings(ctx);
-
-		expect(ctx.getExtensionSettings("agent")).toEqual({ preservedKey: "keep-me" });
-		expect(readAgentSettings(ctx)).toEqual({});
+		expect(notify).toHaveBeenCalledWith("Agent model: faux/main · Effort: high", "info");
 	});
 });

@@ -4,6 +4,14 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Refined `/agent` into a compact, aligned Model/Effort panel with inline inheritance markers, requested-to-effective effort conversions, and an always-visible action that resets both overrides together. Agent now reuses the searchable native model and thinking pickers without changing the parent session or global defaults.
+
+### Fixed
+
+- Selection-only native pickers show working confirmation and cancellation hints without advertising unavailable global-default saving or main-session thinking controls.
+
 ## [1.4.5] - 2026-10-30
 
 ### Added

@@ -24,7 +24,9 @@ Resource discovery preserves the parent's project-trust decision. Declining trus
 
 ## Model and thinking settings
 
-Run `/agent` to choose **Model** or **Thinking**. The model picker is searchable; either setting can follow the current session. Choices apply only to future Agents and never switch the parent session or change running work.
+Run `/agent` to choose **Model** or **Effort**, reusing the searchable `/model` and `/thinking` selectors. The compact panel shows the full `provider/model-id` and current effort on aligned single lines. An unset field adds `· Follow current session`; when the requested effort is unsupported, the panel shows the requested and effective levels, such as `max → high · Follow current session`. Fixed overrides also show a conversion when necessary, without the inheritance suffix. Choices apply only to future Agents and never switch the parent session or change running work.
+
+**Reset to follow current session** is always available and clears both Agent overrides in one save, preserving unrelated settings. Resetting fields that already inherit is a no-op. Choosing a specific model or effort makes that field fixed, even when it equals the inherited value. Picker confirmation never changes global model or thinking defaults.
 
 Settings are stored in the global `settings.json`:
 
@@ -41,7 +43,7 @@ Settings are stored in the global `settings.json`:
 
 Omit either field to inherit it. Thinking is clamped to the effective model's supported levels. A configured model that no longer exists or has no authentication fails explicitly instead of silently selecting another model.
 
-Malformed model or thinking fields are marked `[invalid]` in `/agent`, where you can replace them or explicitly reset each field to follow the current session. Escape leaves settings unchanged, and repairs preserve the other fields and extension namespaces. Invalid JSON or a malformed namespace object must be repaired in `settings.json`; Pi does not overwrite that damaged configuration automatically.
+Malformed model or thinking fields are marked `[invalid]` in `/agent`, where you can replace them through their native picker or explicitly reset both fields to follow the current session. A missing model is marked `[unavailable]`, and effort stays `[unresolved]` rather than using the parent model's capabilities. Cancelling a picker leaves its setting unchanged; closing the panel retains earlier confirmed saves. Repairs preserve the other fields and extension namespaces. Invalid JSON or a malformed namespace object must be repaired in `settings.json`; Pi does not overwrite that damaged configuration automatically.
 
 ## Transcript and Tasks
 

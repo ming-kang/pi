@@ -133,19 +133,13 @@ export class ModelSelectorComponent extends Container implements Focusable {
 
 		this.addChild(new Spacer(1));
 
-		// Hint
-		if (this.onSelectAsDefaultCallback) {
-			this.addChild(
-				new Text(
-					theme.fg(
-						"dim",
-						`  ${keyDisplayText("tui.select.confirm")} to select · ${keyDisplayText("app.models.save")} to set as default · ${keyDisplayText("tui.select.cancel")} to cancel`,
-					),
-					0,
-					0,
-				),
-			);
-		}
+		// Selection-only consumers have no global-default action.
+		const hints = [
+			`${keyDisplayText("tui.select.confirm")} to select`,
+			...(this.onSelectAsDefaultCallback ? [`${keyDisplayText("app.models.save")} to set as default`] : []),
+			`${keyDisplayText("tui.select.cancel")} to cancel`,
+		];
+		this.addChild(new Text(theme.fg("dim", `  ${hints.join(" · ")}`), 0, 0));
 
 		// Add bottom border
 		this.addChild(new DynamicBorder());

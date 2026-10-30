@@ -35,6 +35,20 @@ describe("thinking selector", () => {
 		expect(getLevelRow("high")?.startsWith("→   high")).toBe(true);
 	});
 
+	it("shows only supported controls for selection-only callers", () => {
+		const select = vi.fn();
+		const selector = new ThinkingSelectorComponent("medium", ["medium", "high"], select, () => {});
+		const frame = stripAnsi(selector.render(80).join("\n"));
+		expect(frame).toContain("Enter to select");
+		expect(frame).toContain("Escape/Ctrl+C to cancel");
+		expect(frame).not.toContain("set as default");
+		expect(frame).not.toContain("in-session");
+		selector.handleInput("\x13");
+		expect(select).not.toHaveBeenCalled();
+		selector.handleInput("\r");
+		expect(select).toHaveBeenCalledWith("medium");
+	});
+
 	it("uses the configured save binding", () => {
 		setKeybindings(new KeybindingsManager({ "app.thinking.save": "ctrl+r" }));
 		const saveDefault = vi.fn();

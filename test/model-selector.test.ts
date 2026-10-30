@@ -1,14 +1,11 @@
-import { setKeybindings, type TUI } from "@earendil-works/pi-tui";
+import { setKeybindings } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { ModelSelectorComponent } from "../src/modes/interactive/components/model-selector.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
+import { createFakeTui } from "./suite/fake-tui.ts";
 import { createHarness, type Harness } from "./suite/harness.ts";
-
-function createFakeTui(): TUI {
-	return { requestRender: () => {} } as unknown as TUI;
-}
 
 describe("model selector", () => {
 	let harness: Harness | undefined;
@@ -53,6 +50,28 @@ describe("model selector", () => {
 		selector.handleInput("\x1b[B");
 		expect(getModelRow("current-model")).toBe(`  ✓ current-model [${currentModel.provider}]`);
 		expect(getModelRow("browsed-model")).toBe(`→   browsed-model [${currentModel.provider}]`);
+		selector.dispose();
+	});
+
+	it("shows confirmation and cancellation hints without a default-save action", async () => {
+		harness = await createHarness();
+		const select = vi.fn();
+		const selector = new ModelSelectorComponent(
+			createFakeTui(),
+			harness.getModel(),
+			harness.session.modelRuntime,
+			[],
+			select,
+			() => {},
+		);
+		const frame = stripAnsi(selector.render(120).join("\n"));
+		expect(frame).toContain("Enter to select");
+		expect(frame).toContain("Escape/Ctrl+C to cancel");
+		expect(frame).not.toContain("set as default");
+		selector.handleInput("\x13");
+		expect(select).not.toHaveBeenCalled();
+		selector.handleInput("\r");
+		expect(select).toHaveBeenCalledWith(harness.getModel());
 		selector.dispose();
 	});
 

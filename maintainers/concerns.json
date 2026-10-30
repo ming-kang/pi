@@ -315,7 +315,7 @@
 		},
 		{
 			"id": "interactive-hints",
-			"why": "Selectors and custom messages resolve each configured key for compact hints, and custom messages expand on click.",
+			"why": "Selectors advertise only available actions and resolve configured keys for compact hints, and custom messages expand on click.",
 			"paths": [
 				{
 					"path": "src/modes/interactive/components/custom-message.ts"
@@ -326,12 +326,23 @@
 				},
 				{
 					"path": "src/modes/interactive/components/keybinding-hints.ts"
+				},
+				{
+					"path": "src/modes/interactive/components/model-selector.ts",
+					"rewrite": "Native model selection-only consumers still show confirmation and cancellation hints without advertising global-default saving."
+				},
+				{
+					"path": "src/modes/interactive/components/thinking-selector.ts",
+					"rewrite": "Native thinking selection-only consumers omit main-session cycling and global-default hints while retaining the searchable supported-level picker."
 				}
 			],
 			"tests": [
 				"test/custom-message-click.test.ts",
 				"test/extension-selector.test.ts",
-				"test/keybinding-hints.test.ts"
+				"test/keybinding-hints.test.ts",
+				"test/model-selector.test.ts",
+				"test/thinking-selector.test.ts",
+				"test/agent-settings.test.ts"
 			]
 		},
 		{

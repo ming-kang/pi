@@ -4,6 +4,13 @@ import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "../../core/defau
 import type { ExtensionCommandContext, ExtensionContext } from "../../core/extensions/types.ts";
 import { truncateHead } from "../../core/tools/truncate.ts";
 import { ModelSelectorComponent } from "../../modes/interactive/components/model-selector.ts";
+import { ThinkingSelectorComponent } from "../../modes/interactive/components/thinking-selector.ts";
+import {
+	type AgentSettingsAction,
+	type AgentSettingsField,
+	AgentSettingsPanel,
+	type AgentSettingsRow,
+} from "./settings-panel.ts";
 import { AGENT_SETTINGS_NAMESPACE, type AgentSettings } from "./types.ts";
 
 type SettingsContext = Pick<ExtensionContext, "getExtensionSettings" | "setExtensionSettings">;
@@ -42,8 +49,38 @@ export function readAgentSettings(ctx: Pick<ExtensionContext, "getExtensionSetti
 	if (inspection.invalidModel !== undefined)
 		throw new Error("Invalid Agent model setting. Choose a model with /agent.");
 	if (inspection.invalidThinking !== undefined)
-		throw new Error("Invalid Agent thinking setting. Choose a thinking level with /agent.");
+		throw new Error("Invalid Agent effort setting. Choose an effort level with /agent.");
 	return { model: inspection.model, thinking: inspection.thinking };
+}
+
+interface AgentModelResolution {
+	model: Model<any>;
+	/** Listed by `/model` right now. The availability snapshot can lag auth changes, so this is display-only. */
+	available: boolean;
+}
+
+function resolveAgentModel(
+	ctx: Pick<ModelContext, "model" | "modelRuntime">,
+	reference?: string,
+): AgentModelResolution | undefined {
+	if (!reference) return ctx.model ? { model: ctx.model, available: true } : undefined;
+	const slash = reference.indexOf("/");
+	if (slash <= 0) return undefined;
+	const model = ctx.modelRuntime.getModel(reference.slice(0, slash), reference.slice(slash + 1));
+	if (!model) return undefined;
+	const available = ctx.modelRuntime
+		.getAvailableSnapshot()
+		.some((item) => item.provider === model.provider && item.id === model.id);
+	return { model, available };
+}
+
+function requestedEffort(ctx: Pick<ModelContext, "thinkingLevel">, settings: AgentSettings): ThinkingLevel {
+	return settings.thinking ?? ctx.thinkingLevel ?? DEFAULT_THINKING_LEVEL;
+}
+
+/** Clamp a requested level to what the model supports. */
+function supportedEffort(model: Model<any>, requested: ThinkingLevel): ThinkingLevel {
+	return clampThinkingLevel(model, requested) as ThinkingLevel;
 }
 
 export function resolveAgentConfiguration(ctx: ModelContext & Pick<ExtensionContext, "getExtensionSettings">): {
@@ -52,18 +89,16 @@ export function resolveAgentConfiguration(ctx: ModelContext & Pick<ExtensionCont
 	settings: AgentSettings;
 } {
 	const settings = readAgentSettings(ctx);
-	let model: Model<any> | undefined;
-	if (settings.model) {
-		const slash = settings.model.indexOf("/");
-		model = ctx.modelRuntime.getModel(settings.model.slice(0, slash), settings.model.slice(slash + 1));
-		if (!model) throw new Error(`Agent model is unavailable: ${settings.model}`);
-	} else model = ctx.model;
-	if (!model) throw new Error("Agent has no model to follow. Choose one with /agent.");
-	const thinking = clampThinkingLevel(
-		model,
-		settings.thinking ?? ctx.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
-	) as ThinkingLevel;
-	return { model, thinking, settings };
+	const resolution = resolveAgentModel(ctx, settings.model);
+	if (!resolution) {
+		if (settings.model) throw new Error(`Agent model is unavailable: ${settings.model}`);
+		throw new Error("Agent has no model to follow. Choose one with /agent.");
+	}
+	return {
+		model: resolution.model,
+		thinking: supportedEffort(resolution.model, requestedEffort(ctx, settings)),
+		settings,
+	};
 }
 
 async function saveAgentSettings(
@@ -79,37 +114,97 @@ async function saveAgentSettings(
 }
 
 async function selectAgentModel(ctx: ExtensionCommandContext, current: string): Promise<string | undefined> {
-	const saved = ctx.modelRuntime.getAvailableSnapshot().find((model) => `${model.provider}/${model.id}` === current);
+	// Preselect the saved reference even when it is unavailable, so the picker can repair it.
+	const saved = resolveAgentModel(ctx, current)?.model;
 	const selected = await ctx.ui.custom<Model<any> | undefined>(
 		(tui, _theme, _keys, done) =>
-			new ModelSelectorComponent(
-				tui,
-				saved ?? ctx.model,
-				ctx.modelRuntime,
-				ctx.scopedModels,
-				(model) => done(model),
-				() => done(undefined),
+			new ModelSelectorComponent(tui, saved ?? ctx.model, ctx.modelRuntime, ctx.scopedModels, done, () =>
+				done(undefined),
 			),
 	);
 	return selected ? `${selected.provider}/${selected.id}` : undefined;
 }
 
-function formatInvalid(value: unknown): string {
+async function selectAgentThinking(
+	ctx: ExtensionCommandContext,
+	settings: AgentSettings,
+	model: Model<any> | undefined,
+): Promise<ThinkingLevel | undefined> {
+	const requested = requestedEffort(ctx, settings);
+	const current = model ? supportedEffort(model, requested) : requested;
+	const available = model ? getSupportedThinkingLevels(model) : [...THINKING_LEVEL_OPTIONS];
+	return ctx.ui.custom<ThinkingLevel | undefined>(
+		(_tui, _theme, _keys, done) => new ThinkingSelectorComponent(current, available, done, () => done(undefined)),
+	);
+}
+
+function formatInvalidValue(value: unknown): string {
 	let text = "";
 	try {
 		text = typeof value === "string" ? value : (JSON.stringify(value) ?? "");
 	} catch {}
-	const label = truncateHead(text, { maxLines: 1, maxBytes: 80 }).content;
-	return label ? `${label} [invalid]` : "[invalid]";
+	return truncateHead(text, { maxLines: 1, maxBytes: 80 }).content;
 }
 
-/** Two small native selectors; every confirmed choice affects future Agents only. */
+function invalidField(raw: unknown): AgentSettingsField {
+	return { value: formatInvalidValue(raw), status: "[invalid]", tone: "error" };
+}
+
+function describeModel(
+	inspection: InspectedAgentSettings,
+	resolution: AgentModelResolution | undefined,
+): AgentSettingsField {
+	if (inspection.invalidModel !== undefined) return invalidField(inspection.invalidModel);
+	if (!resolution) return { value: inspection.model ?? "", status: "[unavailable]", tone: "warning" };
+	return {
+		value: `${resolution.model.provider}/${resolution.model.id}`,
+		following: inspection.model === undefined,
+		...(resolution.available ? {} : { status: "[unavailable]", tone: "warning" as const }),
+	};
+}
+
+function describeEffort(
+	ctx: ModelContext,
+	inspection: InspectedAgentSettings,
+	model: Model<any> | undefined,
+): AgentSettingsField {
+	if (inspection.invalidThinking !== undefined) return invalidField(inspection.invalidThinking);
+	const requested = requestedEffort(ctx, inspection);
+	const following = inspection.thinking === undefined;
+	if (!model) return { value: requested, following, status: "[unresolved]", tone: "warning" };
+	const effective = supportedEffort(model, requested);
+	if (effective === requested) return { value: requested, following };
+	return { value: `${requested} → ${effective}`, following, tone: "warning" };
+}
+
+function hasOverrides(inspection: InspectedAgentSettings): boolean {
+	return (
+		inspection.model !== undefined ||
+		inspection.thinking !== undefined ||
+		inspection.invalidModel !== undefined ||
+		inspection.invalidThinking !== undefined
+	);
+}
+
+function settingsRows(
+	ctx: ModelContext,
+	inspection: InspectedAgentSettings,
+	resolution: AgentModelResolution | undefined,
+): AgentSettingsRow[] {
+	return [
+		{ action: "model", label: "Model", field: describeModel(inspection, resolution) },
+		{ action: "thinking", label: "Effort", field: describeEffort(ctx, inspection, resolution?.model) },
+		{ action: "reset", label: "Reset to follow current session" },
+	];
+}
+
+/** The native pickers save only Agent overrides; reset clears both in one write. */
 export async function openAgentSettings(ctx: ExtensionCommandContext): Promise<void> {
 	if (ctx.mode !== "tui") {
 		try {
 			const settings = readAgentSettings(ctx);
 			ctx.ui.notify(
-				`Agent model: ${settings.model ?? "Follow current session"} · Thinking: ${settings.thinking ?? "Follow current session"}`,
+				`Agent model: ${settings.model ?? "Follow current session"} · Effort: ${settings.thinking ?? "Follow current session"}`,
 				"info",
 			);
 		} catch (error) {
@@ -117,6 +212,7 @@ export async function openAgentSettings(ctx: ExtensionCommandContext): Promise<v
 		}
 		return;
 	}
+	let selectedAction: AgentSettingsAction = "model";
 	while (true) {
 		let inspection: InspectedAgentSettings;
 		try {
@@ -125,72 +221,40 @@ export async function openAgentSettings(ctx: ExtensionCommandContext): Promise<v
 			ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 			return;
 		}
-		let modelLabel: string;
-		if (inspection.invalidModel !== undefined) {
-			modelLabel = formatInvalid(inspection.invalidModel);
-		} else if (inspection.model) {
-			const modelAvailable = ctx.modelRuntime
-				.getAvailableSnapshot()
-				.some((model) => `${model.provider}/${model.id}` === inspection.model);
-			modelLabel = `${inspection.model}${modelAvailable ? "" : " [unavailable]"}`;
-		} else {
-			modelLabel = `Follow current session${ctx.model ? ` (${ctx.model.provider}/${ctx.model.id})` : ""}`;
-		}
-		let thinkingLabel: string;
-		if (inspection.invalidThinking !== undefined) {
-			thinkingLabel = formatInvalid(inspection.invalidThinking);
-		} else if (inspection.thinking) {
-			thinkingLabel = inspection.thinking;
-		} else {
-			thinkingLabel = `Follow current session (${ctx.thinkingLevel ?? DEFAULT_THINKING_LEVEL})`;
-		}
-		const modelAction = `Model · ${modelLabel}`;
-		const thinkingAction = `Thinking · ${thinkingLabel}`;
-		const followModelAction = "Reset model to follow current session";
-		const followThinkingAction = "Reset thinking to follow current session";
-		const hasModelOverride = inspection.model !== undefined || inspection.invalidModel !== undefined;
-		const hasThinkingOverride = inspection.thinking !== undefined || inspection.invalidThinking !== undefined;
-		const action = await ctx.ui.select("Agent settings", [
-			modelAction,
-			thinkingAction,
-			...(hasModelOverride ? [followModelAction] : []),
-			...(hasThinkingOverride ? [followThinkingAction] : []),
-		]);
+		const resolution = inspection.invalidModel !== undefined ? undefined : resolveAgentModel(ctx, inspection.model);
+		const action = await ctx.ui.custom<AgentSettingsAction | undefined>(
+			(tui, theme, keys, done) =>
+				new AgentSettingsPanel(
+					tui,
+					theme,
+					keys,
+					settingsRows(ctx, inspection, resolution),
+					selectedAction,
+					done,
+					() => done(undefined),
+				),
+		);
 		if (!action) return;
+		selectedAction = action;
 		try {
-			if (action === followModelAction) {
-				await saveAgentSettings(ctx, { model: null });
-				ctx.ui.notify("Agent model: Follow current session", "info");
-			} else if (action === followThinkingAction) {
-				await saveAgentSettings(ctx, { thinking: null });
-				ctx.ui.notify("Agent thinking: Follow current session", "info");
-			} else if (action === modelAction) {
+			if (action === "reset") {
+				if (!hasOverrides(inspection)) continue;
+				await saveAgentSettings(ctx, { model: null, thinking: null });
+				ctx.ui.notify("Agent settings: Follow current session", "info");
+			} else if (action === "model") {
 				const selected = await selectAgentModel(ctx, inspection.model ?? "");
 				if (selected === undefined || selected === inspection.model) continue;
 				await saveAgentSettings(ctx, { model: selected });
 				ctx.ui.notify(`Agent model: ${selected}`, "info");
-			} else if (action === thinkingAction) {
-				let supported: Set<ThinkingLevel> | undefined;
-				if (inspection.model) {
-					const slash = inspection.model.indexOf("/");
-					const model = ctx.modelRuntime.getModel(
-						inspection.model.slice(0, slash),
-						inspection.model.slice(slash + 1),
-					);
-					if (model) supported = new Set(getSupportedThinkingLevels(model));
-				}
-				if (!supported && ctx.model) {
-					supported = new Set(getSupportedThinkingLevels(ctx.model));
-				}
-				const selected = await ctx.ui.select("Agent thinking", [
-					"Follow current session",
-					...THINKING_LEVEL_OPTIONS.filter((level) => !supported || supported.has(level)),
-				]);
-				if (selected === undefined) continue;
-				const thinking = selected === "Follow current session" ? null : (selected as ThinkingLevel);
-				if ((thinking ?? undefined) === inspection.thinking && inspection.invalidThinking === undefined) continue;
-				await saveAgentSettings(ctx, { thinking });
-				ctx.ui.notify(`Agent thinking: ${thinking ?? "Follow current session"}`, "info");
+			} else if (action === "thinking") {
+				const selected = await selectAgentThinking(ctx, inspection, resolution?.model);
+				if (
+					selected === undefined ||
+					(selected === inspection.thinking && inspection.invalidThinking === undefined)
+				)
+					continue;
+				await saveAgentSettings(ctx, { thinking: selected });
+				ctx.ui.notify(`Agent effort: ${selected}`, "info");
 			}
 		} catch (error) {
 			ctx.ui.notify(
