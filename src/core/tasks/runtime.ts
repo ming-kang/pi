@@ -1,27 +1,24 @@
 import { randomUUID } from "node:crypto";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { Usage } from "@earendil-works/pi-ai/compat";
+import { Execution, type ExecutionHost, errorText } from "./execution.ts";
 import { TASKS_WAIT_DEFAULT_MS, TASKS_WAIT_MAX_MS } from "./limits.ts";
 import {
+	boundFacts,
+	boundInput,
 	boundText,
 	finiteLimit,
 	readOutputSlice,
-	retainResult,
 	sliceText,
-	TASK_INFO_BYTES,
-	TASK_MESSAGE_BYTES,
-	TASK_RESULT_BYTES,
+	TASK_LABEL_BYTES,
 	TASK_TITLE_BYTES,
 } from "./output.ts";
-import { changed, snapshotOf, type TaskRecord, TaskStore } from "./store.ts";
+import { TaskScheduler } from "./scheduler.ts";
+import { snapshotOf, type TaskRecord, TaskStore } from "./store.ts";
 import {
 	TASK_BACKGROUND_REJECTION,
-	type TaskCompletion,
-	type TaskControl,
+	TASK_KIND_PATTERN,
 	type TaskExecution,
-	TaskExecutionError,
 	TaskLookupError,
-	type TaskMode,
 	type TaskRead,
 	type TaskRuntimeOptions,
 	type TaskSnapshot,
@@ -29,37 +26,45 @@ import {
 	type TaskToolOutcome,
 } from "./types.ts";
 
-interface ActiveTask {
-	controller: AbortController;
-	steer?: (message: string) => void | Promise<void>;
-	accepted: boolean;
-	handedOff: boolean;
-	detachRequested: boolean;
-	publishedUsage?: Usage;
-	modeListeners: Set<(mode: TaskMode) => void>;
-	removeParent(): void;
-	handoff(): void;
-	done: Promise<void>;
-}
-
-function errorText(error: unknown): string {
-	try {
-		return boundText(error instanceof Error ? error.message : String(error), 4096);
-	} catch {
-		return "Task execution failed (unprintable error)";
-	}
-}
-
 /** Session-local supervision. Executors own their processes, items and output files. */
 export class TaskRuntime implements TasksContext {
 	private readonly store: TaskStore;
-	private readonly executions = new Map<string, ActiveTask>();
+	private readonly executions = new Map<string, Execution<unknown>>();
+	private readonly scheduler = new TaskScheduler();
 	private readonly listeners = new Set<() => void>();
-	private readonly maxActive: number;
+	private readonly host: ExecutionHost;
+	private readonly maxBackground: number;
 	private readonly maxHistory: number;
 	private readonly maxRetained: number;
+	private readonly options: TaskRuntimeOptions;
 	private configuredEnabled: boolean;
 	private _closed = false;
+	private pauses = 0;
+
+	constructor(options: TaskRuntimeOptions = {}) {
+		this.options = options;
+		this.configuredEnabled = options.enabled ?? false;
+		this.maxBackground = Math.max(1, finiteLimit(options.maxBackground, 8, 128));
+		this.maxHistory = finiteLimit(options.maxHistory, 32, 1024);
+		// Separate foreground and background histories, plus the protected-record allowance.
+		this.maxRetained = this.maxBackground + 2 * Math.max(1, this.maxHistory) + this.maxHistory;
+		this.store = new TaskStore(this.maxHistory, this.maxRetained, () => this.closed, options.onCleanupError);
+		const runtime = this;
+		this.host = {
+			get closed() {
+				return runtime.closed;
+			},
+			emit: () => this.emit(),
+			message: (task, text) => this.options.onMessage?.(task, text) ?? false,
+			settle: (task, usage) => this.options.onSettled?.(task, usage),
+			released: (execution) => {
+				this.executions.delete(execution.task.id);
+				this.scheduler.release(execution);
+				this.store.trim();
+				this.emit();
+			},
+		};
+	}
 
 	get closed(): boolean {
 		return this._closed;
@@ -69,23 +74,9 @@ export class TaskRuntime implements TasksContext {
 		return this.options.session;
 	}
 
-	private pauses = 0;
-
-	private readonly options: TaskRuntimeOptions;
-
-	constructor(options: TaskRuntimeOptions = {}) {
-		this.options = options;
-		this.configuredEnabled = options.enabled ?? false;
-		this.maxActive = Math.max(1, finiteLimit(options.maxActive, 8, 128));
-		this.maxHistory = finiteLimit(options.maxHistory, 32, 1024);
-		// Separate foreground and background histories, plus the protected-record allowance.
-		this.maxRetained = this.maxActive + 2 * Math.max(1, this.maxHistory) + this.maxHistory;
-		this.store = new TaskStore(this.maxHistory, this.maxRetained, () => this.closed, options.onCleanupError);
-	}
-
 	/**
-	 * Rehydrate terminal version-2 custom data only, newest endedAt in each history
-	 * (later input wins ties). Existing runtime records win ID collisions. No execution, accounting,
+	 * Rehydrate terminal snapshots only, newest endedAt in each history (later input wins
+	 * ties). Existing runtime records win ID collisions. No execution, accounting,
 	 * notification, or deletion ownership is restored. Foreground records take their output
 	 * from the branch's tool results. The host supplies the current branch; closed services
 	 * ignore restoration.
@@ -106,7 +97,7 @@ export class TaskRuntime implements TasksContext {
 		this.emit();
 	}
 
-	/** Foreground work is bounded by its caller; only background work holds a slot. */
+	/** Foreground work is bounded by its caller; only background work, queued or running, holds a slot. */
 	private backgroundActive(): number {
 		let count = 0;
 		for (const record of this.store.records.values())
@@ -116,7 +107,7 @@ export class TaskRuntime implements TasksContext {
 
 	private limitError(): Error {
 		return new Error(
-			`Background task limit reached (${this.maxActive}); stop or wait for a background task, or run in the foreground.`,
+			`Background task limit reached (${this.maxBackground}); stop or wait for a background task, or run in the foreground.`,
 		);
 	}
 
@@ -126,7 +117,7 @@ export class TaskRuntime implements TasksContext {
 		if (this.closed) throw new Error("Task service is closed");
 		if (execution.background) {
 			if (!this.enabled) throw new Error("Background execution is not available in this host");
-			if (this.backgroundActive() >= this.maxActive) throw this.limitError();
+			if (this.backgroundActive() >= this.maxBackground) throw this.limitError();
 			if (this.store.records.size + this.store.cleanups.size >= this.maxRetained) {
 				throw new Error(
 					"Task history retention limit reached; deliver pending notifications or release pinned or claimed records",
@@ -134,32 +125,26 @@ export class TaskRuntime implements TasksContext {
 			}
 		}
 		if (execution.signal?.aborted) throw execution.signal.reason ?? new Error("Execution aborted");
-		if (!/^[a-z][a-z0-9-]{0,63}$/.test(execution.kind)) throw new Error("Invalid task source");
+		if (!TASK_KIND_PATTERN.test(execution.kind)) throw new Error("Invalid task source");
+		const concurrency = execution.concurrency;
+		if (concurrency && (!concurrency.key || !Number.isSafeInteger(concurrency.limit) || concurrency.limit < 1))
+			throw new Error("Invalid task concurrency");
 		const anchorId = this.options.anchor?.() ?? null;
 		if (anchorId !== null && Buffer.byteLength(anchorId) > 8192) throw new Error("Task branch anchor is too large");
-		const info = execution.info === undefined ? undefined : boundText(execution.info, TASK_INFO_BYTES);
 		const task: TaskSnapshot = {
 			id: `${execution.kind}-${randomUUID()}`,
 			kind: execution.kind,
+			label: boundText(execution.label ?? execution.kind, TASK_LABEL_BYTES),
 			title: boundText(execution.title, TASK_TITLE_BYTES),
+			output: execution.output ?? "log",
+			...(execution.input ? { input: boundInput(execution.input) } : {}),
+			...(execution.facts?.length ? { facts: boundFacts(execution.facts) } : {}),
 			toolCallId: boundText(execution.toolCallId, 512),
 			anchorId,
 			mode: execution.background ? "background" : "foreground",
 			status: "queued",
 			startedAt: Date.now(),
-			command: execution.command === undefined ? undefined : boundText(execution.command, 8192),
-			commandTruncated:
-				execution.command === undefined ? undefined : boundText(execution.command, 8192) !== execution.command,
-			cwd: execution.cwd === undefined ? undefined : boundText(execution.cwd, 4096),
-			info: info === undefined ? undefined : { text: info, truncated: info !== execution.info },
 		};
-		let resolveCaller!: (outcome: TaskToolOutcome<T>) => void;
-		let rejectCaller!: (error: unknown) => void;
-		const caller = new Promise<TaskToolOutcome<T>>((resolve, reject) => {
-			resolveCaller = resolve;
-			rejectCaller = reject;
-		});
-		let resolveDone!: () => void;
 		const record: TaskRecord = {
 			task,
 			settled: false,
@@ -169,194 +154,18 @@ export class TaskRuntime implements TasksContext {
 			deliveryHolds: 0,
 			waiters: new Set(),
 		};
-		const active: ActiveTask = {
-			controller: new AbortController(),
-			accepted: false,
-			handedOff: false,
-			detachRequested: execution.background ?? false,
-			modeListeners: new Set(),
-			removeParent: () => {},
-			handoff: () => {
-				if (
-					!active.accepted ||
-					!active.detachRequested ||
-					record.settled ||
-					active.handedOff ||
-					this.closed ||
-					!record.visible ||
-					active.controller.signal.aborted
-				)
-					return;
-				active.handedOff = true;
-				task.mode = "background";
-				changed(record);
-				active.removeParent();
-				resolveCaller({ kind: "background", task: snapshotOf(record) });
-				this.emit();
-			},
-			done: new Promise<void>((resolve) => {
-				resolveDone = resolve;
-			}),
-		};
-		const parentSignal = execution.signal;
-		let onUpdate = execution.background ? undefined : execution.onUpdate;
-		const parentAbort = () => {
-			if (!active.detachRequested || !active.accepted) this.cancel(record);
-		};
-		parentSignal?.addEventListener("abort", parentAbort, { once: true });
-		active.removeParent = () => {
-			parentSignal?.removeEventListener("abort", parentAbort);
-			onUpdate = undefined;
-		};
+		const active = new Execution(this.host, record, execution);
 		this.store.records.set(task.id, record);
-		this.executions.set(task.id, active);
-		const control: TaskControl<T> = {
-			id: task.id,
-			signal: active.controller.signal,
-			get mode() {
-				return task.mode;
-			},
-			onModeChange: (listener) => {
-				if (record.settled || this.closed) return () => {};
-				active.modeListeners.add(listener);
-				return () => {
-					active.modeListeners.delete(listener);
-				};
-			},
-			requestCancel: () => this.cancel(record),
-			accept: () => {
-				if (record.settled || active.accepted || this.closed || active.controller.signal.aborted) return;
-				active.accepted = true;
-				if (task.status === "queued") task.status = "running";
-				changed(record);
-				if (active.detachRequested) active.removeParent();
-				// Let an already available final result win over a handoff.
-				queueMicrotask(() => queueMicrotask(active.handoff));
-				this.emit();
-			},
-			publish: (result, display) => {
-				if (record.settled || this.closed) return;
-				retainResult(task, result);
-				if (display !== undefined) this.setDisplay(task, display);
-				changed(record);
-				if (result.usage !== undefined) active.publishedUsage = structuredClone(result.usage);
-				if (!active.detachRequested && !active.handedOff) {
-					try {
-						onUpdate?.(result);
-					} catch {
-						/* UI observers cannot stop execution. */
-					}
-				}
-				this.emit();
-			},
-			sendMessage: (message) => {
-				if (record.settled || this.closed || !this.options.onMessage || !message.trim()) return false;
-				return this.options.onMessage(snapshotOf(record), boundText(message, TASK_MESSAGE_BYTES));
-			},
-			onSteer: (listener) => {
-				if (record.settled || this.closed) return () => {};
-				active.steer = listener;
-				return () => {
-					if (active.steer === listener) active.steer = undefined;
-				};
-			},
-			setOutputPath: (path, cleanup) => {
-				if (record.settled) {
-					if (cleanup) throw new Error("Task execution has settled");
-					return;
-				}
-				if (record.cleanup) throw new Error("Managed output is already registered");
-				// Never truncate a real filesystem path into a different path.
-				if (Buffer.byteLength(path) > 8192) throw new Error("Task output path is too large");
-				record.cleanup = cleanup;
-				task.outputPath = path;
-				changed(record);
-				this.emit();
-			},
-		};
-		const finish = (completion: TaskCompletion<T> | undefined, error?: unknown) => {
-			if (record.settled) return;
-			record.settled = true;
-			active.steer = undefined;
-			active.modeListeners.clear();
-			active.removeParent();
-			task.endedAt = Date.now();
-			const failed = completion === undefined;
-			task.status =
-				completion?.status ??
-				(error instanceof TaskExecutionError
-					? error.status
-					: active.controller.signal.aborted
-						? "cancelled"
-						: failed
-							? "failed"
-							: "completed");
-			if (completion) {
-				retainResult(task, completion.result);
-				if (completion.display !== undefined) this.setDisplay(task, completion.display);
-				if (completion.error !== undefined) task.error = boundText(completion.error, 4096);
-				if (completion.exitCode !== undefined) task.exitCode = completion.exitCode;
-			}
-			if (failed) {
-				task.error = errorText(error);
-				retainResult(
-					task,
-					{ content: [{ type: "text", text: task.error }, ...(task.result?.content ?? [])], details: undefined },
-					task.resultTruncated,
-				);
-			}
-			changed(record);
-			let settlementWarning: string | undefined;
-			try {
-				this.options.onSettled?.(
-					snapshotOf(record),
-					completion?.usage ?? completion?.result.usage ?? active.publishedUsage,
-				);
-			} catch (accountingError) {
-				const warning = `Usage settlement failed: ${errorText(accountingError)}`;
-				settlementWarning = warning;
-				task.error = boundText([task.error, warning].filter(Boolean).join("\n"), 8192);
-				retainResult(
-					task,
-					{ content: [{ type: "text", text: warning }, ...(task.result?.content ?? [])], details: undefined },
-					task.resultTruncated,
-				);
-				changed(record);
-			}
-			active.publishedUsage = undefined;
-			// Delivery becomes eligible only after settlement is persisted.
-			record.delivery = active.handedOff ? "pending" : "delivered";
-			if (!active.handedOff) {
-				if (failed) rejectCaller(error);
-				else {
-					const { usage: _usage, ...result } = completion.result;
-					if (settlementWarning) result.content = [{ type: "text", text: settlementWarning }, ...result.content];
-					resolveCaller({ kind: "result", result, status: task.status, error: task.error });
-				}
-			}
-			for (const waiter of [...record.waiters]) waiter();
-			resolveDone();
-			this.executions.delete(task.id);
-			this.store.trim();
-			this.emit();
-		};
-		// The rejection handler is installed immediately, including for synchronous preflight throws.
-		try {
-			const running = execution.run(control);
-			void Promise.resolve(running).then(
-				(result) => finish(result),
-				(error: unknown) => finish(undefined, error),
-			);
-		} catch (error) {
-			finish(undefined, error);
-		}
+		this.executions.set(task.id, active as Execution<unknown>);
+		this.scheduler.schedule(active);
+		// Queued background work returns at once; started work hands off after its own accept().
+		if (active.queued) active.handoff();
 		this.emit();
-		return caller;
+		return active.caller;
 	}
 
 	private detachable(record: TaskRecord): boolean {
-		const active = this.executions.get(record.task.id);
-		return !!active && !record.settled && !active.detachRequested && !active.controller.signal.aborted;
+		return this.executions.get(record.task.id)?.detachable ?? false;
 	}
 
 	detachForeground(): number {
@@ -365,48 +174,29 @@ export class TaskRuntime implements TasksContext {
 			.filter((record) => this.detachable(record))
 			.sort((left, right) => left.task.startedAt - right.task.startedAt);
 		if (!eligible.length) return 0;
-		const free = this.maxActive - this.backgroundActive();
+		const free = this.maxBackground - this.backgroundActive();
 		if (free <= 0) throw this.limitError();
-		const records = eligible.slice(0, free);
-		for (const record of records) this.prepareDetach(record);
-		for (const record of records) this.finishDetach(record);
+		const executions = eligible.slice(0, free).map((record) => this.executions.get(record.task.id)!);
+		for (const execution of executions) execution.requestDetach();
+		for (const execution of executions) execution.completeDetach();
 		this.emit();
-		return records.length;
+		return executions.length;
 	}
 
 	canDetach(id: string): boolean {
 		const record = this.lookup(id);
-		return this.enabled && this.backgroundActive() < this.maxActive && this.detachable(record);
+		return this.enabled && this.backgroundActive() < this.maxBackground && this.detachable(record);
 	}
 
 	detach(id: string): boolean {
 		const record = this.lookup(id);
 		if (!this.enabled || !this.detachable(record)) return false;
-		if (this.backgroundActive() >= this.maxActive) throw this.limitError();
-		this.prepareDetach(record);
-		this.finishDetach(record);
+		if (this.backgroundActive() >= this.maxBackground) throw this.limitError();
+		const execution = this.executions.get(record.task.id)!;
+		execution.requestDetach();
+		execution.completeDetach();
 		this.emit();
 		return true;
-	}
-
-	private prepareDetach(record: TaskRecord): void {
-		const active = this.executions.get(record.task.id)!;
-		active.detachRequested = true;
-		record.task.mode = "background";
-		changed(record);
-		if (active.accepted) active.removeParent();
-	}
-
-	private finishDetach(record: TaskRecord): void {
-		const active = this.executions.get(record.task.id)!;
-		active.handoff();
-		for (const listener of active.modeListeners) {
-			try {
-				listener(record.task.mode);
-			} catch {
-				/* Executors own their diagnostics. */
-			}
-		}
 	}
 
 	list(): TaskSnapshot[] {
@@ -429,18 +219,10 @@ export class TaskRuntime implements TasksContext {
 		return snapshotOf(this.lookup(id));
 	}
 
-	private setDisplay(task: TaskSnapshot, display: string): void {
-		const text = boundText(display, TASK_RESULT_BYTES);
-		task.display = { text, truncated: text !== display };
-	}
-
 	async steer(id: string, message: string): Promise<boolean> {
 		const record = this.lookup(id);
-		const active = this.executions.get(record.task.id);
-		if (!active?.steer || record.settled || this.closed || active.controller.signal.aborted || !message.trim())
-			return false;
-		await active.steer(boundText(message, TASK_MESSAGE_BYTES));
-		return true;
+		if (this.closed) return false;
+		return (await this.executions.get(record.task.id)?.steer(message)) ?? false;
 	}
 
 	async read(
@@ -469,14 +251,7 @@ export class TaskRuntime implements TasksContext {
 	}
 
 	private resultText(task: TaskSnapshot): string {
-		return boundText(
-			task.result?.content
-				.filter((block) => block.type === "text")
-				.map((block) => block.text)
-				.join("\n") ||
-				task.error ||
-				"No output yet.",
-		);
+		return task.result?.text || task.error || "No output yet.";
 	}
 
 	/** One event-driven waiter can observe a whole waitAny cohort without per-task timers. */
@@ -550,13 +325,7 @@ export class TaskRuntime implements TasksContext {
 	}
 
 	private cancel(record: TaskRecord): boolean {
-		const active = this.executions.get(record.task.id);
-		if (!active || record.settled || active.controller.signal.aborted) return false;
-		record.task.status = "stopping";
-		changed(record);
-		active.controller.abort();
-		this.emit();
-		return true;
+		return this.executions.get(record.task.id)?.cancel() ?? false;
 	}
 
 	subscribe(listener: () => void): () => void {
@@ -645,7 +414,7 @@ export class TaskRuntime implements TasksContext {
 		this._closed = true;
 		this.listeners.clear();
 		for (const record of this.store.records.values()) {
-			this.executions.get(record.task.id)?.removeParent();
+			this.executions.get(record.task.id)?.releaseParent();
 			this.cancel(record);
 			for (const waiter of [...record.waiters]) waiter();
 		}

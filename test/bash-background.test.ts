@@ -51,8 +51,9 @@ function execution() {
 		fail: (error: string) => reject(new Error(error)),
 	};
 }
-function text(result: { content: Array<{ type: string; text?: string }> } | undefined) {
-	return result?.content.map((part) => part.text ?? "").join("\n") ?? "";
+function text(result: { content: Array<{ type: string; text?: string }> } | { text: string } | undefined) {
+	if (!result) return "";
+	return "content" in result ? result.content.map((part) => part.text ?? "").join("\n") : result.text;
 }
 afterEach(async () => {
 	for (const service of services.splice(0)) await service.shutdown();
@@ -79,10 +80,17 @@ describe("native managed shell execution", () => {
 			child.output("[Output truncated.]\nCommand exited with code 0\n");
 			child.fail("Executor-specific failure");
 			const task = await background.wait(submitted.details!.background!.taskId);
-			expect(task).toMatchObject({ command, status: "failed", error: "Executor-specific failure" });
-			expect(task.result?.content).toEqual([
-				{ type: "text", text: "[Output truncated.]\nCommand exited with code 0\n\n\nExecutor-specific failure" },
-			]);
+			expect(task).toMatchObject({
+				title: command,
+				input: { label: "Command", text: command },
+				facts: [["Directory", process.cwd()]],
+				status: "failed",
+				error: "Executor-specific failure",
+			});
+			expect(task.result).toEqual({
+				text: "[Output truncated.]\nCommand exited with code 0\n\n\nExecutor-specific failure",
+				truncated: false,
+			});
 		},
 	);
 
@@ -103,7 +111,7 @@ describe("native managed shell execution", () => {
 			expect(outcome.result.details?.background?.kind).toBe("background");
 			const task = await background.wait(outcome.result.details!.background!.taskId);
 			expect(task).toMatchObject({ status: "failed", error: diagnostic });
-		} else expect(outcome.error).toMatchObject({ status: "failed", message: diagnostic });
+		} else expect(outcome.error).toMatchObject({ message: diagnostic });
 		expect(exec).toHaveBeenCalledOnce();
 	});
 
@@ -137,8 +145,7 @@ describe("native managed shell execution", () => {
 		);
 		if (mode === "exit") {
 			await expect(call).resolves.toMatchObject({ isError: true, structuredContent: { exit_code: 42 } });
-		} else if (diagnostic)
-			await expect(call).rejects.toMatchObject({ name: "TaskExecutionError", status, message: diagnostic });
+		} else if (diagnostic) await expect(call).rejects.toThrow(diagnostic);
 		else {
 			const result = await call;
 			expect(text(result)).toBe("(no output)");
@@ -340,7 +347,6 @@ describe("native managed shell execution", () => {
 			expect(text(final.result)).toBe("héllo €");
 			expect(final.status).toBe("completed");
 			expect(final.outputPath).toBe(result.details?.fullOutputPath);
-			expect(final.result?.details).toBeUndefined();
 		},
 	);
 
@@ -468,6 +474,7 @@ describe("native managed shell execution", () => {
 		expect(text(final.result)).toContain("partial output");
 		const diagnostic = exitCode === null ? "Command terminated without an exit code" : "Command exited with code 42";
 		expect(final.error).toBe(diagnostic);
+		expect(final.facts).toContainEqual(["Exit", exitCode === null ? "signal" : "42"]);
 		const read = text(await runRead(background, { action: "read", taskId: final.id }));
 		expect(read).toContain(diagnostic);
 		expect(read).toContain("partial output");

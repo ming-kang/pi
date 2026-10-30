@@ -101,10 +101,10 @@ describe("AgentSession.getSessionStats", () => {
 	it("counts each background ledger identity once without changing message counts", async () => {
 		const { session, sessionManager } = await createSession();
 		try {
-			const record = { version: 1, taskId: "background-group", usage: createUsage(123) };
-			sessionManager.appendCustomEntry("task-usage", record);
-			sessionManager.appendCustomEntry("task-usage", record);
-			sessionManager.appendCustomEntry("task-result", { version: 1, task: { id: record.taskId } });
+			const record = { version: 3, task: { id: "background-group" }, usage: createUsage(123) };
+			sessionManager.appendCustomEntry("task-record", record);
+			sessionManager.appendCustomEntry("task-record", record);
+			sessionManager.appendCustomEntry("task-record", { version: 3, task: record.task });
 			const stats = session.getSessionStats();
 			expect(stats.tokens.total).toBe(123);
 			expect(stats.totalMessages).toBe(0);

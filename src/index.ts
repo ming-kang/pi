@@ -339,15 +339,19 @@ export {
 	type SkillFrontmatter,
 } from "./core/skills.ts";
 export { createSyntheticSourceInfo } from "./core/source-info.ts";
+export type { TaskCompletionDetails } from "./core/tasks/presentation.ts";
 export { TaskRuntime } from "./core/tasks/runtime.ts";
 export type {
+	TaskChannel,
 	TaskCompletion,
-	TaskCompletionSnapshot,
 	TaskControl,
 	TaskExecution,
+	TaskFact,
+	TaskInput,
 	TaskKind,
 	TaskMessageSnapshot,
 	TaskMode,
+	TaskOutputKind,
 	TaskRead,
 	TaskRuntimeOptions,
 	TaskSnapshot,
@@ -357,6 +361,7 @@ export type {
 	TaskTerminalStatus,
 	TaskText,
 	TaskToolOutcome,
+	TaskUpdate,
 } from "./core/tasks/types.ts";
 export { type EditDiffResult, generateDiffString, generateUnifiedPatch } from "./core/tools/edit-diff.ts";
 // Tools

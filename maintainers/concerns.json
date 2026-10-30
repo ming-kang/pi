@@ -146,7 +146,7 @@
 				},
 				{
 					"path": "src/core/usage-totals.ts",
-					"rewrite": "The task-usage ledger counts once per task, which turns upstream's accounting loop into a shared generator."
+					"rewrite": "Task usage settlements, in task-record entries or released task-usage entries, count once per task, which turns upstream's accounting loop into a shared generator."
 				},
 				{
 					"path": "src/index.ts"

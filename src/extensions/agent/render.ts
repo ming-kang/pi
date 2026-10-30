@@ -92,7 +92,7 @@ function renderActivity(activity: AgentActivity, theme: Theme): string {
 
 function detailsOf(result: AgentToolResult<AgentToolDetails> | undefined): AgentToolDetails | undefined {
 	const details = result?.details;
-	return details?.version === 1 && Array.isArray(details.activities) ? details : undefined;
+	return details?.version === 2 && typeof details.state === "string" ? details : undefined;
 }
 
 function singleLine(text: string, bytes = 120): string {
@@ -100,7 +100,7 @@ function singleLine(text: string, bytes = 120): string {
 }
 
 function errorOf(result: AgentToolResult<AgentToolDetails> | undefined, details: AgentToolDetails | undefined): string {
-	if (details?.error) return singleLine(details.error, 240);
+	if (details && "error" in details && details.error) return singleLine(details.error, 240);
 	const output = result ? getTextOutput(result, false).trim() : "";
 	const marker = output.lastIndexOf("Error:");
 	return singleLine(marker >= 0 ? output.slice(marker + 6) : output.split("\n")[0] || "Failed", 240);
@@ -110,7 +110,7 @@ function statusParts(
 	context: ToolRenderContext<any, any, AgentToolDetails>,
 	details: AgentToolDetails | undefined,
 ): StatusParts {
-	const status = details?.status;
+	const status = details?.state;
 	if (status === "background") {
 		toolTimerText(context, false);
 		return { diagnostic: "Background", tasks: "/tasks" };
@@ -119,7 +119,7 @@ function statusParts(
 	const duration = timer?.replace(/^(?:Took|Elapsed) /, "");
 	const tasks = details?.taskId ? "/tasks" : undefined;
 	if (context.isPartial || status === "running") {
-		const latest = details?.activities.at(-1);
+		const latest = details?.state === "running" ? details.activities.at(-1) : undefined;
 		const activity = latest ? `${latest.name}${targetOf(latest) ? ` ${targetOf(latest)}` : ""}` : "Starting…";
 		return { diagnostic: context.expanded ? undefined : activity, duration };
 	}
@@ -149,8 +149,9 @@ export const agentRenderers: AgentRenderer = {
 		const component = (context.lastComponent as Container | undefined) ?? new Container();
 		component.clear();
 		const details = detailsOf(result);
-		if ((!options.isPartial && details?.status !== "running") || !options.expanded) return component;
-		for (const activity of (details?.activities ?? []).slice(-EXPANDED_ACTIVITIES))
+		// Only live progress carries activities; settled rows stay one line.
+		if (details?.state !== "running" || !options.expanded) return component;
+		for (const activity of details.activities.slice(-EXPANDED_ACTIVITIES))
 			component.addChild(new TruncatedText(renderActivity(activity, theme), 0, 0));
 		return component;
 	},

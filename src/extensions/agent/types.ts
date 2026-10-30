@@ -2,10 +2,12 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { TaskTerminalStatus } from "../../core/tasks/types.ts";
 
 export const AGENT_SETTINGS_NAMESPACE = "agent";
+export const AGENT_PROMPT_BYTES = 16 * 1024;
 export const AGENT_REPORT_BYTES = 24 * 1024;
 export const AGENT_MAX_ACTIVITIES = 50;
 export const AGENT_MAX_MESSAGES = 20;
 export const AGENT_TEXT_BYTES = 48 * 1024;
+export const AGENT_CONCURRENCY = 4;
 
 export interface AgentSettings {
 	model?: string;
@@ -25,29 +27,17 @@ export interface AgentActivity {
 	error?: string;
 }
 
-export interface AgentSupervisorMessage {
-	direction: "inbound" | "outbound";
+/** One explicit exchange between a running Agent and the parent that delegated to it. */
+export interface AgentParentMessage {
+	from: "agent" | "parent";
 	text: string;
 }
 
-export interface AgentToolDetails {
-	version: 1;
-	taskId: string;
-	status: "running" | "background" | TaskTerminalStatus;
-	model: string;
-	thinking: ThinkingLevel;
-	/** Short terminal diagnostic; the complete report and error remain in Tasks Output. */
-	error?: string;
-	activities: AgentActivity[];
-}
-
-export function emptyUsage() {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
+/**
+ * Agent tool-result details. Only progress updates carry activities; the persisted result
+ * keeps the transcript row's facts, and the full history lives in the task's Output.
+ */
+export type AgentToolDetails =
+	| { version: 2; state: "running"; taskId: string; activities: AgentActivity[] }
+	| { version: 2; state: "background"; taskId: string; byUser: boolean }
+	| { version: 2; state: TaskTerminalStatus; taskId: string; error?: string };

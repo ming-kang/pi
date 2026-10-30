@@ -10,7 +10,7 @@ export async function confirmStopBranchTasks(
 	confirm: (title: string, message: string) => Promise<boolean>,
 ): Promise<boolean> {
 	if (stopped.length === 0) return true;
-	const shown = stopped.slice(0, 5).map((task) => `  ${cleanTaskText(firstCommandLine(task.command ?? task.title))}`);
+	const shown = stopped.slice(0, 5).map((task) => `  ${cleanTaskText(firstCommandLine(task.title))}`);
 	if (stopped.length > shown.length) shown.push(`  …and ${stopped.length - shown.length} more`);
 	return confirm(
 		`Stop ${stopped.length} running task${stopped.length === 1 ? "" : "s"}?`,

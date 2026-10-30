@@ -9,10 +9,11 @@ import type { CustomMessage } from "../src/core/messages.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { TaskDelivery } from "../src/core/tasks/delivery.ts";
 import {
-	boundedResult,
 	boundText,
 	readOutputSlice,
-	TASK_DETAILS_BYTES,
+	resultText,
+	TASK_FACT_BYTES,
+	TASK_INPUT_BYTES,
 	TASK_RESULT_BYTES,
 } from "../src/core/tasks/output.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
@@ -93,7 +94,7 @@ describe("TaskRuntime execution ownership", () => {
 		const update = vi.fn();
 		const jobs = [job({ signal: parent.signal, onUpdate: update }), job({ kind: "report", signal: parent.signal })];
 		const calls = jobs.map((item) => bg.execute(item.execution));
-		jobs[0]!.control.publish(result("progress"));
+		jobs[0]!.control.publish({ result: result("progress") });
 		const observed: string[][] = [];
 		bg.subscribe(() => {
 			observed.push(bg.list().map((task) => task.mode));
@@ -104,7 +105,7 @@ describe("TaskRuntime execution ownership", () => {
 		expect((await Promise.all(calls)).map((outcome) => outcome.kind)).toEqual(["background", "background"]);
 		expect(getEventListeners(parent.signal, "abort")).toHaveLength(0);
 		parent.abort();
-		jobs[0]!.control.publish(result("late"));
+		jobs[0]!.control.publish({ result: result("late") });
 		expect(update).toHaveBeenCalledTimes(1);
 		for (const item of jobs) {
 			expect(item.control.signal.aborted).toBe(false);
@@ -121,12 +122,12 @@ describe("TaskRuntime execution ownership", () => {
 		const item = job({ background: true });
 		const call = bg.execute(item.execution);
 		expect(await bg.steer(item.control.id, "too early")).toBe(false);
-		const steering = vi.fn(async () => {});
-		const unregister = item.control.onSteer(steering);
-		item.control.publish(result("Public progress"), "Tool calls\n✓ read entry.ts");
+		const steering = vi.fn(async () => true);
+		const unregister = item.control.channel.onSteer(steering);
+		item.control.publish({ result: result("Public progress"), display: "Tool calls\n✓ read entry.ts" });
 		expect((await bg.read(item.control.id)).text).toBe("Public progress");
 		expect(bg.get(item.control.id).display).toEqual({ text: "Tool calls\n✓ read entry.ts", truncated: false });
-		expect(item.control.sendMessage("Explicit update")).toBe(true);
+		expect(item.control.channel.send("Explicit update")).toBe(true);
 		expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({ id: item.control.id }), "Explicit update");
 		expect(await bg.steer(item.control.id, "Focus on tests")).toBe(true);
 		expect(steering).toHaveBeenCalledWith("Focus on tests");
@@ -137,7 +138,7 @@ describe("TaskRuntime execution ownership", () => {
 		expect((await bg.read(item.control.id)).text).toBe("Final report");
 		expect(bg.get(item.control.id).display?.text).toBe("Tool calls\n✓ done");
 		expect(await bg.steer(item.control.id, "Too late")).toBe(false);
-		expect(item.control.sendMessage("Too late")).toBe(false);
+		expect(item.control.channel.send("Too late")).toBe(false);
 	});
 
 	it("waits for explicit whole-invocation acceptance after detach", async () => {
@@ -198,7 +199,7 @@ describe("TaskRuntime execution ownership", () => {
 		const bg = service();
 		const item = job();
 		const call = bg.execute(item.execution);
-		item.control.publish(result("apparently done"));
+		item.control.publish({ result: result("apparently done") });
 		expect(bg.get(item.control.id).status).toBe("running");
 		item.completion.resolve({ result: result("authoritative"), status: "partial" });
 		expect(await call).toEqual({
@@ -286,14 +287,14 @@ describe("TaskRuntime execution ownership", () => {
 			},
 		});
 		const call = bg.execute(item.execution);
-		item.control.publish(result("progress"));
+		item.control.publish({ result: result("progress") });
 		item.completion.resolve({ result: result("final") });
 		await call;
 		const count = listener.mock.calls.length;
-		item.control.publish(result("late"));
-		item.control.setOutputPath("late-path");
+		item.control.publish({ result: result("late") });
+		item.control.attachOutput("late-path");
 		expect(listener).toHaveBeenCalledTimes(count);
-		expect(bg.get(item.control.id).result).toEqual({ ...result("final"), details: undefined });
+		expect(bg.get(item.control.id).result).toEqual({ text: "final", truncated: false });
 		unsubscribe();
 	});
 });
@@ -383,13 +384,12 @@ describe("delivery and accounting", () => {
 		bg = service({ onSettled });
 		const item = job();
 		const call = bg.execute(item.execution);
-		item.control.publish({ ...result(), usage });
-		expect(bg.get(item.control.id).result?.usage).toBeUndefined();
+		item.control.publish({ result: result(), usage });
 		item.completion.resolve({ result: { ...result(), usage } });
 		expect(await call).toEqual({ kind: "result", result: result(), status: "completed", error: undefined });
 		expect(onSettled).toHaveBeenCalledTimes(1);
 		expect(onSettled.mock.calls[0] as unknown).toEqual([
-			expect.objectContaining({ result: { ...result(), details: undefined } } as unknown),
+			expect.objectContaining({ result: { text: "done", truncated: false } } as unknown),
 			usage,
 		]);
 		await bg.read(item.control.id);
@@ -540,7 +540,7 @@ describe("bounded lifecycle and snapshots", () => {
 	});
 
 	it("pins selected results, releases idempotently and caps pathological pin retention", async () => {
-		const bg = service({ maxHistory: 1, maxActive: 1 });
+		const bg = service({ maxHistory: 1, maxBackground: 1 });
 		const first = job();
 		const call = bg.execute(first.execution);
 		const unpin = bg.retain(first.control.id);
@@ -611,21 +611,24 @@ describe("bounded lifecycle and snapshots", () => {
 	it("bounds metadata, stored content and intact-or-omitted details", async () => {
 		const bg = service();
 		const huge = "😀".repeat(100_000);
-		const item = job({ title: huge, command: huge, cwd: huge, toolCallId: huge });
+		const item = job({
+			title: huge,
+			input: { label: "Command", text: huge, truncated: false },
+			facts: [["Directory", huge]],
+			toolCallId: huge,
+		});
 		const call = bg.execute(item.execution);
-		item.control.publish(result(huge));
+		item.control.publish({ result: result(huge) });
 		const snapshot = bg.get(item.control.id);
 		expect(Buffer.byteLength(snapshot.title)).toBeLessThanOrEqual(1024);
-		expect(Buffer.byteLength(snapshot.command!)).toBeLessThanOrEqual(8192);
+		expect(Buffer.byteLength(snapshot.input!.text)).toBeLessThanOrEqual(TASK_INPUT_BYTES);
+		expect(snapshot.input!.truncated).toBe(true);
+		expect(Buffer.byteLength(snapshot.facts![0]![1])).toBeLessThanOrEqual(TASK_FACT_BYTES);
 		expect(Buffer.byteLength((await bg.read(item.control.id, { bytes: Infinity })).text)).toBeLessThanOrEqual(8192);
-		const details = { large: huge };
-		const stored = boundedResult({ content: [{ type: "text", text: huge }], details });
-		expect(stored.details).toBeUndefined();
-		expect(Buffer.byteLength(stored.content[0]!.type === "text" ? stored.content[0]!.text : "")).toBeLessThanOrEqual(
-			TASK_RESULT_BYTES,
-		);
-		const intact = { nested: ["a".repeat(TASK_DETAILS_BYTES - 100)] };
-		expect(boundedResult({ content: [], details: intact }).details).toEqual(intact);
+		const stored = resultText({ content: [{ type: "text", text: huge }], details: { large: huge } });
+		expect(Buffer.byteLength(stored.text)).toBeLessThanOrEqual(TASK_RESULT_BYTES);
+		expect(stored.truncated).toBe(true);
+		expect(snapshot.result?.truncated).toBe(true);
 		item.completion.resolve({ result: result() });
 		await call;
 	});
@@ -680,7 +683,7 @@ describe("bounded lifecycle and snapshots", () => {
 	});
 
 	it("retains every undelivered completion while its branch is hidden", async () => {
-		const bg = service({ maxHistory: 1, maxActive: 1, anchor: () => "A" });
+		const bg = service({ maxHistory: 1, maxBackground: 1, anchor: () => "A" });
 		const ids: string[] = [];
 		for (let index = 0; index < 3; index++) {
 			const item = job({ background: true });
@@ -827,7 +830,7 @@ describe("handoff and cleanup races", () => {
 	});
 
 	it("bounds claimed history instead of letting stalled delivery grow records indefinitely", async () => {
-		const bg = service({ maxActive: 1, maxHistory: 1 });
+		const bg = service({ maxBackground: 1, maxHistory: 1 });
 		for (let i = 0; i < 4; i++) {
 			const item = job({ background: true });
 			await bg.execute(item.execution);
@@ -853,7 +856,7 @@ describe("owned output leases", () => {
 			const item = job();
 			const call = bg.execute(item.execution);
 			const cleanup = vi.fn(() => unlink(path));
-			item.control.setOutputPath(path, cleanup);
+			item.control.attachOutput(path, cleanup);
 			const release = bg.retain(item.control.id);
 			const reading = bg.read(item.control.id);
 			item.completion.resolve({ result: result("final text") });
@@ -876,7 +879,7 @@ describe("owned output leases", () => {
 		const item = job({ background: true });
 		await bg.execute(item.execution);
 		const cleanup = vi.fn();
-		item.control.setOutputPath("owned", cleanup);
+		item.control.attachOutput("owned", cleanup);
 		const release = bg.retain(item.control.id);
 		await bg.shutdown(0);
 		expect(cleanup).not.toHaveBeenCalled();
@@ -904,7 +907,7 @@ describe("owned output leases", () => {
 		);
 		await bg.shutdown(0);
 		const cleanup = vi.fn();
-		control.setOutputPath("late-owned-file", cleanup);
+		control.attachOutput("late-owned-file", cleanup);
 		expect(cleanup).not.toHaveBeenCalled();
 		gate.resolve({ result: result("late final") });
 		await call;
@@ -917,24 +920,24 @@ describe("owned output leases", () => {
 		const warning = vi.fn((_message: string) => {
 			throw new Error("observer failed");
 		});
-		const bg = service({ maxHistory: 0, maxActive: 1, onCleanupError: warning });
+		const bg = service({ maxHistory: 0, maxBackground: 1, onCleanupError: warning });
 		const item = job();
 		const call = bg.execute(item.execution);
 		const cleanup = vi.fn(async () => {
 			throw new Error("x".repeat(10000));
 		});
-		item.control.setOutputPath("owned", cleanup);
+		item.control.attachOutput("owned", cleanup);
 		item.completion.resolve({ result: result() });
 		await call;
 		await bg.shutdown();
 		expect(cleanup).toHaveBeenCalledOnce();
 		expect(warning.mock.calls[0]![0].length).toBeLessThanOrEqual(4096);
-		const stalled = service({ maxHistory: 0, maxActive: 1 });
+		const stalled = service({ maxHistory: 0, maxBackground: 1 });
 		for (let i = 0; i < 3; i++) {
 			await stalled.execute(
 				job({
 					run: async (control) => {
-						control.setOutputPath("owned", () => new Promise(() => {}));
+						control.attachOutput("owned", () => new Promise(() => {}));
 						return { result: result() };
 					},
 				}).execution,
@@ -1006,14 +1009,14 @@ describe("bounded UTF-8 output", () => {
 			const bg = service({ maxHistory: 0 });
 			const item = job();
 			const call = bg.execute(item.execution);
-			item.control.setOutputPath(path);
+			item.control.attachOutput(path);
 			const output = await bg.read(item.control.id, { bytes: 1_000_000 });
 			expect(output.totalBytes).toBe(200_000);
 			expect(output.truncated).toBe(true);
 			expect(Buffer.byteLength(output.text)).toBe(TASK_RESULT_BYTES);
-			item.control.setOutputPath(join(dir, "missing"));
+			item.control.attachOutput(join(dir, "missing"));
 			expect((await bg.read(item.control.id)).readError).toContain("Output could not be read");
-			item.control.setOutputPath(path);
+			item.control.attachOutput(path);
 			item.completion.resolve({ result: result() });
 			await call;
 			await bg.shutdown();
@@ -1033,7 +1036,7 @@ describe("terminal diagnostics and partial usage", () => {
 			const bg = service();
 			const item = job({ background: true });
 			await bg.execute(item.execution);
-			item.control.setOutputPath(path, () => rm(path, { force: true }));
+			item.control.attachOutput(path, () => rm(path, { force: true }));
 			item.completion.resolve({
 				result: result(`stored report ${"x".repeat(20000)}`),
 				status: "failed",
@@ -1061,7 +1064,7 @@ describe("terminal diagnostics and partial usage", () => {
 	});
 
 	it.each(["reject", "completion", "result"] as const)(
-		"settles cumulative published usage once with %s precedence",
+		"settles cumulative published usage once when the execution ends by %s",
 		async (finish) => {
 			const usage = (input: number): Usage => ({
 				input,
@@ -1075,11 +1078,11 @@ describe("terminal diagnostics and partial usage", () => {
 			const bg = service({ onSettled });
 			const item = job({ background: true });
 			await bg.execute(item.execution);
-			item.control.publish({ ...result(), usage: usage(2) });
+			item.control.publish({ result: result(), usage: usage(2) });
 			const last = usage(5);
-			item.control.publish({ ...result(), usage: last });
+			item.control.publish({ result: result(), usage: last });
 			last.input = 999;
-			item.control.publish(result("no usage does not clear snapshot"));
+			item.control.publish({ result: result("no usage does not clear snapshot") });
 			if (finish === "reject") item.completion.reject(new Error("failed after work"));
 			else
 				item.completion.resolve({
@@ -1089,10 +1092,9 @@ describe("terminal diagnostics and partial usage", () => {
 			await tick();
 			await bg.read(item.control.id);
 			await bg.wait(item.control.id);
-			item.control.publish({ ...result(), usage: usage(99) });
+			item.control.publish({ result: result(), usage: usage(99) });
 			expect(onSettled).toHaveBeenCalledOnce();
 			expect(onSettled.mock.calls[0]![1]).toEqual(usage(finish === "reject" ? 5 : finish === "completion" ? 9 : 7));
-			expect(bg.get(item.control.id).result?.usage).toBeUndefined();
 		},
 	);
 
@@ -1102,50 +1104,46 @@ describe("terminal diagnostics and partial usage", () => {
 		const item = job({ background: true });
 		await bg.execute(item.execution);
 		const details = { ok: true, usage: { input: 999 } };
-		item.control.publish({ content: [], details });
+		item.control.publish({ result: { content: [], details } });
 		item.completion.reject(new Error("failed"));
 		await tick();
 		expect(onSettled).toHaveBeenCalledOnce();
 		expect(onSettled.mock.calls[0]![1]).toBeUndefined();
 	});
 
-	it("stores the reported process exit code on the settled task", async () => {
+	it("lets terminal facts replace launch facts with the same label", async () => {
 		const bg = service();
-		const item = job();
+		const item = job({
+			facts: [
+				["Directory", "/repo"],
+				["Exit", "pending"],
+			],
+		});
 		const call = bg.execute(item.execution);
-		item.completion.resolve({ result: result(), exitCode: 2, status: "failed" });
+		item.completion.resolve({ result: result(), facts: [["Exit", "2"]], status: "failed" });
 		await call;
-		expect(bg.list().at(-1)?.exitCode).toBe(2);
-
-		const reaped = job();
-		const reapedCall = bg.execute(reaped.execution);
-		reaped.completion.resolve({ result: result(), exitCode: null, status: "cancelled" });
-		await reapedCall;
-		expect(bg.list().at(-1)?.exitCode).toBeNull();
-
-		const unreported = job();
-		const unreportedCall = bg.execute(unreported.execution);
-		unreported.completion.resolve({ result: result() });
-		await unreportedCall;
-		expect(bg.list().at(-1)?.exitCode).toBeUndefined();
+		expect(bg.list().at(-1)?.facts).toEqual([
+			["Directory", "/repo"],
+			["Exit", "2"],
+		]);
 	});
 });
 
 describe("foreground and background admission", () => {
 	it("runs foreground work while background work fills every slot", async () => {
-		const bg = service({ maxActive: 2 });
+		const bg = service({ maxBackground: 2 });
 		for (let i = 0; i < 2; i++) await bg.execute(job({ background: true }).execution);
 		expect((await bg.execute(job({ run: async () => ({ result: result() }) }).execution)).kind).toBe("result");
 	});
 
 	it("does not count running foreground work against background admission", async () => {
-		const bg = service({ maxActive: 2 });
+		const bg = service({ maxBackground: 2 });
 		for (let i = 0; i < 2; i++) void bg.execute(job().execution);
 		expect((await bg.execute(job({ background: true }).execution)).kind).toBe("background");
 	});
 
 	it("detaches only as many foreground tasks as background slots allow", async () => {
-		const bg = service({ maxActive: 2 });
+		const bg = service({ maxBackground: 2 });
 		await bg.execute(job({ background: true }).execution);
 		const first = job();
 		const second = job();
@@ -1183,12 +1181,12 @@ describe("watchers and mode changes", () => {
 		void bg.execute(second.execution);
 		const changed = vi.fn();
 		first.control.onModeChange(changed);
-		second.control.publish(result("progress"));
+		second.control.publish({ result: result("progress") });
 		expect(changed).not.toHaveBeenCalled();
 		bg.detach(first.control.id);
 		await call;
 		expect(changed).toHaveBeenCalledExactlyOnceWith("background");
-		first.control.requestCancel();
+		first.control.cancel();
 		expect(first.control.signal.aborted).toBe(true);
 		expect(second.control.signal.aborted).toBe(false);
 	});
@@ -1225,5 +1223,56 @@ describe("task result persistence receipts", () => {
 		host.delivery.messagePersisted({ ...message, details: undefined });
 		expect(host.service.pendingNotifications()).toHaveLength(0);
 		host.dispose();
+	});
+});
+
+describe("concurrency lanes", () => {
+	const lane = { key: "agent", limit: 1 };
+
+	it("hands queued background work back at once and starts it when a slot frees", async () => {
+		const bg = service();
+		const first = job({ background: true, concurrency: lane });
+		const second = job({ background: true, concurrency: lane });
+		expect((await bg.execute(first.execution)).kind).toBe("background");
+		const queued = await bg.execute(second.execution);
+		if (queued.kind !== "background") throw new Error("Expected handoff");
+		expect(queued.task.status).toBe("queued");
+		expect(second.run).not.toHaveBeenCalled();
+		first.completion.resolve({ result: result("first") });
+		await vi.waitFor(() => expect(second.run).toHaveBeenCalledOnce());
+		expect(bg.get(queued.task.id).status).toBe("running");
+		second.completion.resolve({ result: result("second") });
+		expect((await bg.wait(queued.task.id)).status).toBe("completed");
+	});
+
+	it("cancels queued work without starting it and lets a queued foreground caller move", async () => {
+		const bg = service();
+		const running = job({ concurrency: lane });
+		const cancelled = job({ concurrency: lane });
+		const moved = job({ concurrency: lane });
+		const runningCall = bg.execute(running.execution);
+		const cancelledCall = bg.execute(cancelled.execution);
+		const movedCall = bg.execute(moved.execution);
+		const [, cancelledTask, movedTask] = bg.list();
+		expect(bg.kill(cancelledTask!.id)).toBe(true);
+		await expect(cancelledCall).rejects.toThrow("cancelled before it started");
+		expect(bg.get(cancelledTask!.id).status).toBe("cancelled");
+		expect(cancelled.run).not.toHaveBeenCalled();
+		expect(bg.detach(movedTask!.id)).toBe(true);
+		expect((await movedCall).kind).toBe("background");
+		running.completion.resolve({ result: result() });
+		await runningCall;
+		await vi.waitFor(() => expect(moved.run).toHaveBeenCalledOnce());
+		moved.completion.resolve({ result: result() });
+		expect((await bg.wait(movedTask!.id)).status).toBe("completed");
+	});
+
+	it("reports steering a handler declines as not accepted", async () => {
+		const bg = service();
+		const item = job({ background: true });
+		await bg.execute(item.execution);
+		item.control.channel.onSteer(() => false);
+		expect(await bg.steer(item.control.id, "Too late for this run")).toBe(false);
+		item.completion.resolve({ result: result() });
 	});
 });

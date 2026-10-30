@@ -7,8 +7,9 @@ function running(command: string): TaskSnapshot {
 	return {
 		id: `bash-${command.length}`,
 		kind: "bash",
+		label: "Bash",
 		title: command,
-		command,
+		output: "log",
 		toolCallId: "call",
 		anchorId: "elsewhere",
 		mode: "background",

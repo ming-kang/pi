@@ -1,5 +1,6 @@
 import type { Usage } from "@earendil-works/pi-ai/compat";
 import type { SessionEntry } from "./session-manager.ts";
+import { TASK_RECORD_TYPE, TASK_SNAPSHOT_VERSION } from "./tasks/codec.ts";
 
 export interface UsageTotals {
 	input: number;
@@ -57,10 +58,7 @@ export interface UsageCostBreakdownEntry {
 	tokens: number;
 }
 
-export const TASK_USAGE_TYPE = "task-usage";
-
 export interface TaskUsageRecord {
-	version: 1;
 	taskId: string;
 	usage: Usage;
 }
@@ -73,13 +71,23 @@ function isUsageValue(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
-/** Validate persisted ledger data and return only its serializable accounting fields. */
-export function getTaskUsageRecord(entry: SessionEntry): TaskUsageRecord | undefined {
-	if (entry.type !== "custom" || entry.customType !== TASK_USAGE_TYPE) return undefined;
+/** Released sessions settled usage in separate entries; their billing still counts. */
+const LEGACY_TASK_USAGE_TYPE = "task-usage";
+
+function settledTaskId(entry: SessionEntry): unknown {
+	if (entry.type !== "custom" || !isRecord(entry.data)) return undefined;
 	const data = entry.data;
-	if (!isRecord(data) || data.version !== 1 || typeof data.taskId !== "string" || !data.taskId.trim()) {
-		return undefined;
-	}
+	if (entry.customType === TASK_RECORD_TYPE)
+		return data.version === TASK_SNAPSHOT_VERSION && isRecord(data.task) ? data.task.id : undefined;
+	if (entry.customType === LEGACY_TASK_USAGE_TYPE) return data.version === 1 ? data.taskId : undefined;
+	return undefined;
+}
+
+/** Validate a task record's usage settlement and return only its serializable accounting fields. */
+export function getTaskUsageRecord(entry: SessionEntry): TaskUsageRecord | undefined {
+	const taskId = settledTaskId(entry);
+	if (typeof taskId !== "string" || !taskId.trim() || entry.type !== "custom") return undefined;
+	const data = entry.data as Record<string, unknown>;
 	const usage = data.usage;
 	if (!isRecord(usage) || !isRecord(usage.cost)) return undefined;
 	const { input, output, cacheRead, cacheWrite, totalTokens, reasoning, cacheWrite1h } = usage;
@@ -100,8 +108,7 @@ export function getTaskUsageRecord(entry: SessionEntry): TaskUsageRecord | undef
 	)
 		return undefined;
 	return {
-		version: 1,
-		taskId: data.taskId,
+		taskId,
 		usage: {
 			input,
 			output,

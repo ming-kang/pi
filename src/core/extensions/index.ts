@@ -5,11 +5,15 @@
 export type { SlashCommandInfo, SlashCommandSource } from "../slash-commands.ts";
 export type { SourceInfo } from "../source-info.ts";
 export type {
+	TaskChannel,
 	TaskCompletion,
 	TaskControl,
 	TaskExecution,
+	TaskFact,
+	TaskInput,
 	TaskKind,
 	TaskMode,
+	TaskOutputKind,
 	TaskRead,
 	TaskSnapshot,
 	TaskStatus,
@@ -17,6 +21,7 @@ export type {
 	TasksSessionContext,
 	TaskTerminalStatus,
 	TaskToolOutcome,
+	TaskUpdate,
 } from "../tasks/types.ts";
 export {
 	createExtensionRuntime,

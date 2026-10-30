@@ -80,7 +80,7 @@ export async function runShellCommand(
 		if (outputError) return;
 		outputError = error instanceof Error ? error : new Error(String(error));
 		try {
-			if (managed) managed.control.requestCancel();
+			if (managed) managed.control.cancel();
 		} catch {
 			// Late data must not throw through a process observer.
 		}
@@ -105,7 +105,7 @@ export async function runShellCommand(
 					}
 				: undefined,
 		};
-		if (managed) managed.control.publish(result);
+		if (managed) managed.control.publish({ result });
 		else options.onUpdate?.(result);
 	};
 	const emitOutputUpdate = () => {
@@ -160,7 +160,7 @@ export async function runShellCommand(
 				});
 			};
 			try {
-				managed.control.setOutputPath(path, cleanup);
+				managed.control.attachOutput(path, cleanup);
 			} catch (error) {
 				await cleanup();
 				throw error;
@@ -205,7 +205,7 @@ export async function runShellCommand(
 		return {
 			status: failure?.status,
 			error: failure?.error,
-			...(exitCode !== undefined ? { exitCode } : {}),
+			...(exitCode !== undefined ? { facts: [["Exit", exitCode === null ? "signal" : String(exitCode)]] } : {}),
 			result: {
 				...(fullOutput && typeof exitCode === "number"
 					? {

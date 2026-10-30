@@ -91,13 +91,13 @@ describe("background completion delivery across an interrupted queue", () => {
 			first.finish();
 			second.finish();
 			await vi.waitFor(() => expect(queued()).toHaveLength(1));
-			expect(queued()[0]).toMatchObject({ details: { taskId: first.id } });
+			expect(queued()[0]).toMatchObject({ details: { task: { id: first.id } } });
 			expect(notices()).toEqual([]);
 			session.clearQueue();
 			await vi.waitFor(() =>
 				expect(warning).toHaveBeenCalledWith(expect.objectContaining({ event: "task_delivery" })),
 			);
-			await vi.waitFor(() => expect(queued()[0]).toMatchObject({ details: { taskId: second.id } }));
+			await vi.waitFor(() => expect(queued()[0]).toMatchObject({ details: { task: { id: second.id } } }));
 			await session.sendCustomMessage(
 				{ customType: "aside", content: "retained context", display: false },
 				{ deliverAs: "nextTurn" },
@@ -121,10 +121,10 @@ describe("background completion delivery across an interrupted queue", () => {
 			expect(session.tasks.pendingNotifications()).toEqual([]);
 			const ledger = sessionManager
 				.getEntries()
-				.flatMap((entry) => (entry.type === "custom" && entry.customType === "task-usage" ? [entry.data] : []));
+				.flatMap((entry) => (entry.type === "custom" && entry.customType === "task-record" ? [entry.data] : []));
 			expect(ledger).toEqual([
-				{ version: 1, taskId: first.id, usage },
-				{ version: 1, taskId: second.id, usage },
+				{ version: 3, task: expect.objectContaining({ id: first.id }), usage },
+				{ version: 3, task: expect.objectContaining({ id: second.id }), usage },
 			]);
 		} finally {
 			first.finish();

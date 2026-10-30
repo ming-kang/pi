@@ -55,14 +55,21 @@ const activities: AgentActivity[] = Array.from({ length: 7 }, (_, index) => ({
 }));
 
 function result(
-	status: AgentToolDetails["status"],
+	state: AgentToolDetails["state"],
 	text = "progress",
 	error?: string,
+	list = activities,
 ): AgentToolResult<AgentToolDetails> {
+	const taskId = "agent-test";
 	return {
 		content: [{ type: "text", text }],
-		details: { version: 1, taskId: "agent-test", status, model: "test/model", thinking: "high", activities, error },
-		isError: status === "failed" || status === "cancelled",
+		details:
+			state === "running"
+				? { version: 2, state, taskId, activities: list }
+				: state === "background"
+					? { version: 2, state, taskId, byUser: false }
+					: { version: 2, state, taskId, error },
+		isError: state === "failed" || state === "cancelled",
 	};
 }
 
@@ -86,8 +93,7 @@ describe("Agent transcript renderer", () => {
 	});
 
 	it("uses concise shell commands and preserves the PowerShell tool name", () => {
-		const running = result("running");
-		running.details.activities = [
+		const running = result("running", "progress", undefined, [
 			{
 				id: "bash",
 				name: "bash",
@@ -103,7 +109,7 @@ describe("Agent transcript renderer", () => {
 				target: activityTarget("powershell", { command: "Get-ChildItem src" }),
 				status: "running",
 			},
-		];
+		]);
 		expect(render(running, { isPartial: true })).toBe("Agent Inspect boundaries · powershell Get-ChildItem src");
 		const expanded = render(running, { isPartial: true, expanded: true });
 		expect(expanded).toContain("bash npm run check · 100ms");

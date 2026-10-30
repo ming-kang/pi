@@ -71,7 +71,10 @@ it("inspects concurrent shell/report work through detach, stop, completion, relo
 		const notices = sessionManager
 			.getEntries()
 			.filter((entry) => entry.type === "custom_message" && entry.customType === "task-completion");
-		expect(session.tasks.get(scenario.failureId)).toMatchObject({ status: "failed", exitCode: 42 });
+		expect(session.tasks.get(scenario.failureId)).toMatchObject({
+			status: "failed",
+			facts: expect.arrayContaining([["Exit", "42"]]),
+		});
 		expect(session.tasks.get(scenario.reportId).status).toBe("partial");
 		menu!.dispose();
 		await session.reload();

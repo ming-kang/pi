@@ -2,10 +2,16 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeEach, describe, expect, it } from "vitest";
 import { type CustomMessage, convertToLlm } from "../src/core/messages.ts";
 import { SessionManager, sessionEntryToContextMessages } from "../src/core/session-manager.ts";
+import { readVersionedTask } from "../src/core/tasks/codec.ts";
 import { TASK_DETAILS_BYTES, TASK_RESULT_BYTES } from "../src/core/tasks/output.ts";
-import { readTaskCompletion, taskCompletionMessage, taskCompletionSnapshot } from "../src/core/tasks/presentation.ts";
+import {
+	projectForModel,
+	type TaskCompletionDetails,
+	taskCompletionDetails,
+	taskCompletionMessage,
+} from "../src/core/tasks/presentation.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
-import type { TaskCompletionSnapshot, TaskSnapshot, TaskTerminalStatus } from "../src/core/tasks/types.ts";
+import type { TaskSnapshot, TaskTerminalStatus } from "../src/core/tasks/types.ts";
 import { renderTaskCompletion } from "../src/extensions/tasks/ui/completion-render.ts";
 import { CustomMessageComponent } from "../src/modes/interactive/components/custom-message.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
@@ -14,66 +20,55 @@ function task(overrides: Partial<TaskSnapshot> = {}): TaskSnapshot {
 	return {
 		id: "bash-contract-task",
 		kind: "bash",
+		label: "Bash",
+		output: "log",
 		mode: "background",
 		status: "completed",
 		title: "npm run build",
+		input: { label: "Command", text: "npm run build", truncated: false, language: "bash" },
+		facts: [["Directory", "/project"]],
 		toolCallId: "call",
 		anchorId: null,
 		startedAt: 10,
 		endedAt: 20,
-		command: "npm run build",
-		cwd: "/project",
 		outputPath: "/tmp/build.log",
-		result: { content: [{ type: "text", text: "build output" }], details: { privateData: "opaque" } },
+		result: { text: "build output", truncated: false },
 		...overrides,
 	};
 }
 
 describe("background completion data contract", () => {
-	it("captures shell facts and never exports private details or accounting", () => {
+	it("saves the replayable task without human-only display or accounting", () => {
 		const source = task({
-			command: "cat <<'EOF'\nOutput: /tmp/example.log\nEOF",
+			input: { label: "Command", text: "cat <<'EOF'\nOutput: /tmp/example.log\nEOF", truncated: false },
 			status: "failed",
 			error: "Arbitrary execution failure",
-			result: { content: [{ type: "text", text: "build output" }], details: { privateData: "opaque" } },
+			display: { text: "human only", truncated: false },
 		});
 		const saved = taskCompletionMessage(source);
-		expect(saved.details).toEqual({
-			version: 2,
-			taskId: source.id,
-			kind: "bash",
-			title: "npm run build",
-			status: "failed",
-			startedAt: 10,
-			endedAt: 20,
-			command: { text: source.command, truncated: false },
-			cwd: "/project",
-			outputPath: "/tmp/build.log",
-			output: { text: "build output", truncated: false },
-			error: "Arbitrary execution failure",
-		});
+		const { display: _display, ...replayed } = source;
+		expect(saved.details).toEqual({ version: 3, task: replayed });
 		expect(saved.content).toContain("Arbitrary execution failure");
-		expect(saved.content).toContain("Output: /tmp/example.log");
+		expect(saved.content).toContain("Directory: /project");
+		expect(saved.content).toContain("Output: /tmp/build.log");
 		expect(saved.content).toContain("build output");
-		expect(saved.details).not.toHaveProperty("result");
+		expect(saved.content).not.toContain("human only");
 		expect(saved.details).not.toHaveProperty("usage");
-		expect(saved.details).not.toHaveProperty("anchorId");
 	});
 
-	it("names a task without a command by its title", () => {
+	it("names every task by its title in the model-facing header", () => {
 		const saved = taskCompletionMessage(
 			task({
 				id: "review-generic",
 				kind: "review",
+				label: "Review",
 				title: "Inspect boundaries",
-				command: undefined,
-				cwd: undefined,
+				input: undefined,
+				facts: undefined,
 				outputPath: undefined,
-				result: { content: [{ type: "text", text: "Executor summary" }], details: undefined },
+				result: { text: "Executor summary", truncated: false },
 			}),
 		);
-		expect(saved.details).toMatchObject({ title: "Inspect boundaries", output: { text: "Executor summary" } });
-		expect(saved.details).not.toHaveProperty("command", expect.anything());
 		expect(saved.content).toContain("Background review review-generic: completed — Inspect boundaries");
 		expect(saved.content).toContain("Executor summary");
 	});
@@ -94,43 +89,47 @@ describe("background completion data contract", () => {
 		expect(completed.content).not.toContain("Next step:");
 	});
 
-	it("carries the process exit code through the completion snapshot", () => {
-		const failed = taskCompletionMessage(task({ status: "failed", exitCode: 2 }));
-		expect(failed.details?.exitCode).toBe(2);
-		// The persisted-message reader round-trips the field.
-		expect(readTaskCompletion(JSON.parse(JSON.stringify(failed.details)))).toMatchObject({ exitCode: 2 });
-
-		const reaped = taskCompletionMessage(task({ status: "cancelled", exitCode: null }));
-		expect(reaped.details?.exitCode).toBeNull();
-
-		const unreported = taskCompletionMessage(task());
-		expect(unreported.details).not.toHaveProperty("exitCode");
-		expect(readTaskCompletion({ ...unreported.details, exitCode: "2" })).toBeUndefined();
-	});
-
-	it("keeps the end of a long output, where its outcome is", () => {
+	it("keeps the end of a long log, where its outcome is", () => {
 		const output = `${"progress line\n".repeat(5000)}FINAL: 3 tests failed`;
-		const saved = taskCompletionMessage(
-			task({ result: { content: [{ type: "text", text: output }], details: undefined } }),
-		);
-		expect(saved.details?.output.truncated).toBe(true);
-		expect(saved.details?.output.text.endsWith("FINAL: 3 tests failed")).toBe(true);
+		const saved = taskCompletionMessage(task({ result: { text: output, truncated: false } }));
+		expect(saved.details?.task.result?.truncated).toBe(true);
+		expect(saved.details?.task.result?.text.endsWith("FINAL: 3 tests failed")).toBe(true);
 		expect(saved.content).toContain("FINAL: 3 tests failed");
-	});
-
-	it("keeps replay output larger than the bounded model-facing completion tail", () => {
-		const output = `${"x".repeat(100_000)}FINAL`;
-		const saved = taskCompletionMessage(
-			task({ result: { content: [{ type: "text", text: output }], details: undefined } }),
-		);
-		expect(saved.details?.output.truncated).toBe(true);
-		expect(Buffer.byteLength(saved.details?.output.text ?? "")).toBeGreaterThan(8 * 1024);
 		expect(Buffer.byteLength(String(saved.content))).toBeLessThan(12 * 1024);
-		expect(saved.content).toContain("FINAL");
 		expect(saved.content).toContain("use tasks read");
 	});
 
-	it("records truncation when results or commands are bounded by supervision", async () => {
+	it("delivers a background report whole, beginning first, as its foreground result would be", () => {
+		const report = `## Summary\nKEY FINDING AT THE TOP\n\n${"detail line\n".repeat(1200)}## End\nLAST LINE`;
+		const saved = taskCompletionMessage(
+			task({
+				id: "agent-report",
+				kind: "agent",
+				label: "Agent",
+				output: "report",
+				title: "Investigate",
+				input: { label: "Prompt", text: "Investigate", truncated: false },
+				outputPath: undefined,
+				result: { text: report, truncated: false },
+			}),
+		);
+		expect(Buffer.byteLength(report)).toBeGreaterThan(8 * 1024);
+		expect(saved.content).toContain("KEY FINDING AT THE TOP");
+		expect(saved.content).toContain("LAST LINE");
+		expect(saved.content).not.toContain("Earlier output truncated");
+		expect(saved.details?.task.result?.text.startsWith("## Summary")).toBe(true);
+	});
+
+	it("keeps the beginning of a report that exceeds the context budget", () => {
+		const report = `TOP\n${"x".repeat(TASK_RESULT_BYTES)}\nBOTTOM`;
+		const content = projectForModel(task({ output: "report", result: { text: report, truncated: false } }));
+		expect(content).toContain("TOP");
+		expect(content).not.toContain("BOTTOM");
+		expect(content).toContain("[Saved output truncated; use tasks read for retained task details.]");
+		expect(Buffer.byteLength(content)).toBeLessThanOrEqual(TASK_RESULT_BYTES);
+	});
+
+	it("records truncation when results or inputs are bounded by supervision", async () => {
 		const service = new TaskRuntime({ enabled: true });
 		try {
 			const literal = "[Output truncated.]";
@@ -138,23 +137,22 @@ describe("background completion data contract", () => {
 				kind: "bash",
 				title: "Generic",
 				toolCallId: "first",
-				command: "x".repeat(20000),
+				input: { label: "Command", text: "x".repeat(40_000), truncated: false },
 				run: async () => ({
 					result: { content: [{ type: "text", text: "界".repeat(50000) }], details: undefined },
 				}),
 			});
-			const first = taskCompletionSnapshot(service.list()[0]!);
+			const first = taskCompletionDetails(service.list()[0]!).task;
 			expect(first.kind).toBe("bash");
-			expect(first.output.truncated).toBe(true);
-			expect(first.command?.truncated).toBe(true);
+			expect(first.result?.truncated).toBe(true);
+			expect(first.input?.truncated).toBe(true);
 			await service.execute({
 				kind: "bash",
 				title: "Literal",
 				toolCallId: "second",
 				run: async () => ({ result: { content: [{ type: "text", text: literal }], details: undefined } }),
 			});
-			const second = taskCompletionSnapshot(service.list()[1]!);
-			expect(second.output).toEqual({ text: literal, truncated: false });
+			expect(taskCompletionDetails(service.list()[1]!).task.result).toEqual({ text: literal, truncated: false });
 		} finally {
 			service.close();
 		}
@@ -162,19 +160,24 @@ describe("background completion data contract", () => {
 
 	it("respects storage, context byte and line budgets with escape-heavy metadata and output", () => {
 		const huge = '界🙂"\\\u0001\n'.repeat(30000);
-		const saved = taskCompletionMessage(
-			task({
-				title: huge,
-				command: huge,
-				cwd: huge,
-				error: huge,
-				result: { content: [{ type: "text", text: huge }], details: undefined },
-			}),
-		);
-		expect(Buffer.byteLength(JSON.stringify(saved.details))).toBeLessThanOrEqual(TASK_DETAILS_BYTES);
-		expect(Buffer.byteLength(String(saved.content))).toBeLessThanOrEqual(TASK_RESULT_BYTES);
-		expect(String(saved.content).split("\n").length).toBeLessThanOrEqual(2000);
-		expect(saved.content).toContain("[Earlier output truncated; use tasks read for retained task details.]");
+		const service = new TaskRuntime({ enabled: true });
+		const run = service.execute({
+			kind: "bash",
+			title: huge,
+			input: { label: "Command", text: huge, truncated: false },
+			facts: [["Directory", huge]],
+			toolCallId: "escape",
+			run: async () => ({ result: { content: [{ type: "text", text: huge }], details: undefined }, error: huge }),
+		});
+		return run.then(() => {
+			const saved = taskCompletionMessage(service.list()[0]!);
+			service.close();
+			expect(Buffer.byteLength(JSON.stringify(saved.details))).toBeLessThanOrEqual(TASK_DETAILS_BYTES);
+			expect(Buffer.byteLength(String(saved.content))).toBeLessThanOrEqual(TASK_RESULT_BYTES);
+			expect(String(saved.content).split("\n").length).toBeLessThanOrEqual(2000);
+			expect(saved.content).toContain("[Earlier output truncated; use tasks read for retained task details.]");
+			expect(readVersionedTask(JSON.parse(JSON.stringify(saved.details)))).toBeDefined();
+		});
 	});
 
 	it("carries details through the session journal and sends only prose to the context", () => {
@@ -185,7 +188,7 @@ describe("background completion data contract", () => {
 		const replay = sessionEntryToContextMessages(entry);
 		expect(replay).toHaveLength(1);
 		if (replay[0]?.role !== "custom") throw new Error("Expected custom message");
-		expect(readTaskCompletion(replay[0].details)).toEqual(saved.details);
+		expect(readVersionedTask(replay[0].details)).toEqual(saved.details?.task);
 		expect(convertToLlm(replay)).toEqual([
 			{
 				role: "user",
@@ -193,15 +196,19 @@ describe("background completion data contract", () => {
 				content: [{ type: "text", text: saved.content }],
 			},
 		]);
-		expect(readTaskCompletion(saved.details)).toEqual(saved.details);
 	});
 
-	it.each([{ version: 1 }, { status: "running" }, { endedAt: 9 }, { output: { text: "missing flag" } }])(
-		"rejects unsupported or incomplete completion metadata: %j",
-		(overrides) => {
-			expect(readTaskCompletion({ ...taskCompletionSnapshot(task()), ...overrides })).toBeUndefined();
-		},
-	);
+	it.each([
+		{ version: 2 },
+		{ task: { status: "running" } },
+		{ task: { endedAt: 9 } },
+		{ task: { result: { text: "missing flag" } } },
+		{ task: { output: "stream" } },
+	])("rejects unsupported or incomplete completion metadata: %j", (overrides) => {
+		const details = taskCompletionDetails(task());
+		const value = { ...details, ...overrides, task: { ...details.task, ...(overrides.task ?? {}) } };
+		expect(readVersionedTask(value)).toBeUndefined();
+	});
 });
 
 const taskId = "bash-12345678-abcd-4321-abcd-123456789012";
@@ -214,20 +221,18 @@ function message(
 }
 function shell(output = "build finished", status: TaskTerminalStatus = "completed", error?: string) {
 	return message({
-		version: 2,
-		taskId,
-		kind: "bash",
-		title: "Build",
-		status,
-		startedAt: 10,
-		endedAt: 20,
-		command: { text: "npm run build", truncated: false },
-		cwd: "/project",
-		outputPath: log,
-		output: { text: output, truncated: false },
-		error,
-	} satisfies TaskCompletionSnapshot);
+		version: 3,
+		task: task({
+			id: taskId,
+			title: "npm run build",
+			status,
+			outputPath: log,
+			result: { text: output, truncated: false },
+			...(error ? { error } : {}),
+		}),
+	} satisfies TaskCompletionDetails);
 }
+const saved = (value: CustomMessage<unknown>) => (value.details as TaskCompletionDetails).task;
 function render(value: CustomMessage<unknown>, expanded = false, width = 120, outputPad = 1) {
 	const lines = renderTaskCompletion(value, { expanded, outputPad }, theme).render(width);
 	expect(lines.length).toBeLessThanOrEqual(128);
@@ -242,18 +247,20 @@ function render(value: CustomMessage<unknown>, expanded = false, width = 120, ou
 beforeEach(() => initTheme("dark"));
 
 describe("structured background completion cards", () => {
-	it("shows saved duration, exit code and report title without looking up live tasks", () => {
+	it("shows saved duration and executor facts without looking up live tasks", () => {
 		const value = shell();
-		const details = value.details as TaskCompletionSnapshot;
-		details.endedAt = details.startedAt + 72_000;
-		details.exitCode = 42;
+		saved(value).endedAt = saved(value).startedAt + 72_000;
+		saved(value).facts = [
+			["Directory", "/project"],
+			["Exit", "42"],
+		];
 		expect(render(value)).toContain("1m 12s");
-		expect(render(value, true)).toContain("exit 42");
+		expect(render(value, true)).toMatch(/Exit\s+42/);
 	});
 	it.each(["bash", "powershell", "custom-report"])("shortens %s UUIDs without assuming an executor", (kind) => {
 		const value = shell();
-		(value.details as TaskCompletionSnapshot).kind = kind;
-		(value.details as TaskCompletionSnapshot).taskId = taskId.replace("bash-", `${kind}-`);
+		saved(value).kind = kind;
+		saved(value).id = taskId.replace("bash-", `${kind}-`);
 		const header = render(value).split("\n")[0];
 		expect(header).toContain(`${kind}-12345678`);
 		expect(header).not.toContain("abcd");
@@ -270,7 +277,18 @@ describe("structured background completion cards", () => {
 		expect(collapsed).not.toContain("build finished");
 		expect(collapsed).not.toContain(taskId);
 		const expanded = render(value, true);
-		for (const item of ["Command", "Directory", "/project", "Result", "Output", "Log", log, taskId, "build finished"])
+		for (const item of [
+			"Command",
+			"Details",
+			"Directory",
+			"/project",
+			"Result",
+			"Output",
+			"Log",
+			log,
+			taskId,
+			"build finished",
+		])
 			expect(expanded).toContain(item);
 		for (const line of expanded.split("\n").slice(1)) expect(line.startsWith("│")).toBe(true);
 		expect(expanded).not.toContain("[task-completion]");
@@ -337,10 +355,14 @@ describe("structured background completion cards", () => {
 
 	it("keeps multiline commands containing metadata lookalikes and renders shell output literally", () => {
 		const value = shell("**literal output**\n# literal heading");
-		const details = value.details as TaskCompletionSnapshot;
-		details.kind = "powershell";
-		details.taskId = taskId.replace("bash-", "powershell-");
-		details.command = { text: "Write-Output @'\nOutput: /tmp/example.log\n'@", truncated: false };
+		saved(value).kind = "powershell";
+		saved(value).label = "PowerShell";
+		saved(value).id = taskId.replace("bash-", "powershell-");
+		saved(value).input = {
+			label: "Command",
+			text: "Write-Output @'\nOutput: /tmp/example.log\n'@",
+			truncated: false,
+		};
 		const expanded = render(value, true);
 		for (const item of [
 			"PowerShell",
@@ -351,27 +373,26 @@ describe("structured background completion cards", () => {
 			"# literal heading",
 		])
 			expect(expanded).toContain(item);
-		expect(expanded).not.toContain("Details");
 	});
 
 	it("uses explicit truncation flags even when output contains a literal truncation notice", () => {
 		const value = shell("[Output truncated.]\nordinary output");
 		expect(render(value, true)).not.toContain("The saved result is truncated");
-		(value.details as TaskCompletionSnapshot).output.truncated = true;
+		saved(value).result!.truncated = true;
 		expect(render(value, true)).toContain("The saved result is truncated");
 	});
 
 	it("names a task without a command by its saved title", () => {
 		const value = shell("Imports reviewed.");
-		const details = value.details as TaskCompletionSnapshot;
-		details.kind = "review";
-		details.taskId = taskId.replace("bash-", "review-");
-		details.title = "Inspect extension boundaries";
-		details.command = undefined;
-		details.cwd = undefined;
-		details.outputPath = undefined;
+		saved(value).kind = "review";
+		saved(value).label = "Review";
+		saved(value).id = taskId.replace("bash-", "review-");
+		saved(value).title = "Inspect extension boundaries";
+		saved(value).input = undefined;
+		saved(value).facts = undefined;
+		saved(value).outputPath = undefined;
 		const collapsed = render(value);
-		expect(collapsed).toMatch(/^● review · Background completed/);
+		expect(collapsed).toMatch(/^● Review · Background completed/);
 		expect(collapsed).toContain("Inspect extension boundaries");
 		const expanded = render(value, true);
 		for (const item of ["Task", "Inspect extension boundaries", "Output", "Imports reviewed."])
@@ -384,7 +405,7 @@ describe("structured background completion cards", () => {
 		expect(render(shell("(no output)"), true)).toContain("(no output)");
 	});
 
-	it.each([undefined, { version: 1 }])("uses bounded plain details for an unsupported snapshot", (details) => {
+	it.each([undefined, { version: 2 }])("uses bounded plain details for an unsupported snapshot", (details) => {
 		const value = message(details, `Background bash ${taskId}: completed — Bash: old prose`);
 		const expanded = render(value, true);
 		expect(expanded).toContain("Notification");

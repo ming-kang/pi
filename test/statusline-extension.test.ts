@@ -159,11 +159,11 @@ describe("statusline usage", () => {
 		const branch = session.getLeafId()!;
 		const footer = await createFooter(session);
 		expect(footer.render(200)[1]).toContain("$1.000");
-		const record = { version: 1, taskId: "group", usage: usage(500, 100, 900, 0, 2) };
-		session.appendCustomEntry("task-usage", record);
+		const record = { version: 3, task: { id: "group" }, usage: usage(500, 100, 900, 0, 2) };
+		session.appendCustomEntry("task-record", record);
 		expect(footer.render(200)[1]).toContain("↑720 ↓135 R968 W31 CH31.3% $3.000");
 		expect(footer.render(200)[1]).toContain("CTX 10.0%/1.0k");
-		session.appendCustomEntry("task-usage", record);
+		session.appendCustomEntry("task-record", record);
 		expect(footer.render(200)[1]).toContain("$3.000");
 		session.branch(branch);
 		expect(footer.render(200)[1]).toContain("↑220 ↓35 R68 W31 CH31.3% $1.000");

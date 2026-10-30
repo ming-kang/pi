@@ -1,14 +1,19 @@
 import { open } from "node:fs/promises";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { TaskSnapshot } from "./types.ts";
+import type { TaskFact, TaskInput, TaskText } from "./types.ts";
 
 export const TASK_RESULT_BYTES = 48 * 1024;
 export const TASK_DETAILS_BYTES = 120 * 1024;
 export const TASK_READ_BYTES = 8 * 1024;
-export const TASK_INFO_BYTES = 24 * 1024;
+export const TASK_INPUT_BYTES = 24 * 1024;
 export const TASK_MESSAGE_BYTES = 16 * 1024;
 /** Task title budget, independent of notification wording and rendering. */
 export const TASK_TITLE_BYTES = 1024;
+export const TASK_LABEL_BYTES = 256;
+export const TASK_FACTS = 16;
+export const TASK_FACT_BYTES = 1024;
+export const TASK_ERROR_BYTES = 4096;
+export const TASK_PATH_BYTES = 8192;
 
 export function finiteLimit(value: number | undefined, fallback: number, ceiling: number): number {
 	return value === undefined || !Number.isFinite(value) ? fallback : Math.max(0, Math.min(ceiling, Math.floor(value)));
@@ -39,6 +44,27 @@ export function boundText(text: string, bytes = TASK_RESULT_BYTES): string {
 	return alignedSlice(buffer, 0, Math.min(limit, buffer.length)).toString("utf8");
 }
 
+export function boundTaskText(text: string, bytes = TASK_RESULT_BYTES): TaskText {
+	const bounded = boundText(text, bytes);
+	return { text: bounded, truncated: bounded !== text };
+}
+
+export function boundInput(input: TaskInput): TaskInput {
+	const text = boundTaskText(input.text, TASK_INPUT_BYTES);
+	return {
+		label: boundText(input.label, TASK_LABEL_BYTES),
+		text: text.text,
+		truncated: input.truncated || text.truncated,
+		...(input.language ? { language: boundText(input.language, 64) } : {}),
+	};
+}
+
+export function boundFacts(facts: readonly TaskFact[]): TaskFact[] {
+	return facts
+		.slice(0, TASK_FACTS)
+		.map(([label, value]): TaskFact => [boundText(label, TASK_LABEL_BYTES), boundText(value, TASK_FACT_BYTES)]);
+}
+
 /** The end of a bounded text, codepoint aligned: a command's outcome is at its end. */
 export function boundTail(text: string, bytes: number): { text: string; truncated: boolean } {
 	const buffer = Buffer.from(text);
@@ -46,44 +72,23 @@ export function boundTail(text: string, bytes: number): { text: string; truncate
 	return { text: alignedSlice(buffer, buffer.length - bytes, buffer.length).toString("utf8"), truncated: true };
 }
 
-/** Keep valid structured details intact or omit them, never truncate serialized JSON. */
-export function boundedResult(result: AgentToolResult<unknown>): AgentToolResult<unknown> {
+/** The bounded model-readable text of a result; images and private details never enter task state. */
+export function resultText(result: AgentToolResult<unknown>): TaskText {
 	let remaining = TASK_RESULT_BYTES;
-	const content: AgentToolResult<unknown>["content"] = [];
+	const parts: string[] = [];
+	let truncated = false;
 	for (const block of result.content) {
-		if (remaining <= 0) break;
-		const text = boundText(block.type === "text" ? block.text : "[Image omitted from background history]", remaining);
-		content.push({ type: "text", text });
-		remaining -= Math.max(1, Buffer.byteLength(text));
+		if (remaining <= 0) {
+			truncated = true;
+			break;
+		}
+		const source = block.type === "text" ? block.text : "[Image omitted from task output]";
+		const text = boundText(source, remaining);
+		if (block.type !== "text" || text !== source) truncated = true;
+		parts.push(text);
+		remaining -= Math.max(1, Buffer.byteLength(text) + 1);
 	}
-	let details: unknown;
-	try {
-		let budget = TASK_DETAILS_BYTES;
-		const json = JSON.stringify(result.details, (key, value: unknown) => {
-			// Stop visiting an oversized structure before constructing an unbounded JSON string.
-			budget -= Buffer.byteLength(key) + 3;
-			budget -= typeof value === "string" ? Buffer.byteLength(value) + 2 : 8;
-			if (budget < 0) throw new Error("Background details exceed the storage budget");
-			return value;
-		});
-		if (json !== undefined && Buffer.byteLength(json) <= TASK_DETAILS_BYTES) details = JSON.parse(json);
-	} catch {
-		// Runtime handles and cyclic details cannot enter a serializable snapshot.
-	}
-	return { content, details };
-}
-
-/** Store the bounded public part of a result; private details never enter task history. */
-export function retainResult(task: TaskSnapshot, result: AgentToolResult<unknown>, truncated = false): void {
-	const bounded = boundedResult({ content: result.content, details: undefined });
-	task.result = bounded;
-	task.resultTruncated =
-		truncated ||
-		bounded.content.length !== result.content.length ||
-		bounded.content.some((block, index) => {
-			const original = result.content[index];
-			return original?.type !== "text" || block.type !== "text" || block.text !== original.text;
-		});
+	return { text: boundText(parts.join("\n")), truncated };
 }
 
 export interface OutputSlice {

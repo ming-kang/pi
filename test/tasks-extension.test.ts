@@ -65,7 +65,7 @@ function running(kind: "bash" | "custom" = "bash") {
 		async run(ctx) {
 			control = ctx;
 			ctx.accept();
-			ctx.publish({ content: [{ type: "text", text: "progress" }], details: undefined });
+			ctx.publish({ result: { content: [{ type: "text", text: "progress" }], details: undefined } });
 			await done;
 			return { result: { content: [{ type: "text", text: "final report" }], details: undefined } };
 		},
@@ -140,8 +140,8 @@ describe("public Background management", () => {
 		const id = h.service.list()[0]!.id;
 		const unsupported = await runSteer(h.service, { action: "steer", taskId: id, message: "Focus on tests" });
 		expect(unsupported.details).toMatchObject({ action: "steer", taskId: id, accepted: false });
-		const steering = vi.fn(async () => {});
-		const unregister = h.control.onSteer(steering);
+		const steering = vi.fn(async () => true);
+		const unregister = h.control.channel.onSteer(steering);
 		const accepted = await runSteer(h.service, { action: "steer", taskId: id, message: "Focus on tests" });
 		expect(accepted.details).toMatchObject({ action: "steer", taskId: id, accepted: true });
 		expect(steering).toHaveBeenCalledWith("Focus on tests");
@@ -158,7 +158,7 @@ describe("public Background management", () => {
 		await h.outcome;
 		const id = h.service.list()[0]!.id;
 		const expired = await runWait(h.service, { action: "wait", taskId: id, waitMs: 0 });
-		expect(expired.details.timedOut).toBe(true);
+		expect(expired.details.outcome).toBe("timed_out");
 		expect(expired.details).not.toHaveProperty("backgroundTaskId");
 		h.finish();
 		const finished = await runWait(h.service, { action: "wait", taskId: id });
@@ -183,7 +183,7 @@ describe("public Background management", () => {
 		const service = new TaskRuntime({ enabled: true });
 		services.push(service);
 		const result = await runWait(service, { action: "wait" });
-		expect(result.details).toMatchObject({ outcome: "no_tasks", timedOut: false, running: 0 });
+		expect(result.details).toMatchObject({ outcome: "no_tasks", running: 0 });
 		expect(textOf(result)).toContain("No background tasks are running");
 		await expect(runWait(service, { action: "wait", sinceBytes: 0 })).rejects.toThrow("does not accept 'sinceBytes'");
 	});
@@ -197,7 +197,7 @@ describe("public Background management", () => {
 		const waiting = runWait(h.service, { action: "wait", taskId: id }, undefined, ready, interrupt.signal);
 		interrupt.abort();
 		const result = await waiting;
-		expect(result.details).toMatchObject({ outcome: "interrupted", timedOut: false, taskId: id, status: "running" });
+		expect(result.details).toMatchObject({ outcome: "interrupted", taskId: id, status: "running" });
 		expect(ready).not.toHaveBeenCalled();
 		expect(h.control.signal.aborted).toBe(false);
 		expect(textOf(result)).toContain("the task was not stopped");
@@ -432,7 +432,7 @@ describe("public Background management", () => {
 			toolCallId: "missing",
 			background: true,
 			async run(control) {
-				control.setOutputPath(join(process.cwd(), `missing-${randomUUID()}.log`));
+				control.attachOutput(join(process.cwd(), `missing-${randomUUID()}.log`));
 				control.accept();
 				return {
 					status: "failed",
@@ -477,7 +477,7 @@ describe("public Background management", () => {
 			toolCallId: "offsets",
 			background: true,
 			async run(control) {
-				control.setOutputPath(path);
+				control.attachOutput(path);
 				control.accept();
 				await done;
 				return { result: { content: [{ type: "text", text: "done" }], details: undefined } };
@@ -708,7 +708,7 @@ describe("public Background management", () => {
 				registerCommand: vi.fn(),
 			} as unknown as ExtensionAPI;
 			createTasksHarness()(pi);
-			const service = new TaskRuntime({ enabled: true, maxActive: 2 });
+			const service = new TaskRuntime({ enabled: true, maxBackground: 2 });
 			services.push(service);
 			let input: TerminalInputHandler | undefined;
 			const { setStatus, updates } = recordStatus();
@@ -1023,8 +1023,6 @@ describe("renderTasksResult", () => {
 				details: {
 					action: "wait",
 					outcome: "no_tasks",
-					timedOut: false,
-					exitCode: undefined,
 					waitedMs: 0,
 					deltaBytes: 0,
 					totalBytes: 0,
@@ -1044,8 +1042,6 @@ describe("renderTasksResult", () => {
 				details: {
 					action: "wait",
 					outcome: "interrupted",
-					timedOut: false,
-					exitCode: undefined,
 					waitedMs: 1000,
 					deltaBytes: 0,
 					totalBytes: 0,
@@ -1079,26 +1075,6 @@ describe("renderTasksResult", () => {
 
 describe("management outcome facts", () => {
 	beforeEach(() => initTheme("dark"));
-	it.each([0, 42, null])("preserves terminal exit code %s in wait results", async (exitCode) => {
-		const runtime = new TaskRuntime();
-		try {
-			await runtime.execute({
-				kind: "bash",
-				title: "build",
-				toolCallId: "call",
-				run: async () => ({
-					status: exitCode === 0 ? "completed" : "failed",
-					exitCode,
-					result: { content: [{ type: "text", text: "saved output" }], details: undefined },
-				}),
-			});
-			const task = runtime.list()[0]!;
-			const result = await runWait(runtime, { action: "wait", taskId: task.id });
-			expect(result.details.exitCode).toBe(exitCode);
-		} finally {
-			await runtime.shutdown();
-		}
-	});
 	it("does not call stopping work running when a wait ends", () => {
 		const result = renderTasksResult(
 			{
@@ -1106,9 +1082,8 @@ describe("management outcome facts", () => {
 				details: {
 					action: "wait",
 					taskId: "build",
-					timedOut: true,
+					outcome: "timed_out",
 					status: "stopping",
-					exitCode: undefined,
 					waitedMs: 1000,
 					deltaBytes: 0,
 					totalBytes: 0,

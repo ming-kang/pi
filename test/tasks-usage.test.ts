@@ -1,12 +1,8 @@
 import type { Usage } from "@earendil-works/pi-ai/compat";
 import { describe, expect, it } from "vitest";
 import { SessionManager } from "../src/core/session-manager.ts";
-import {
-	getAccountedUsages,
-	getTaskUsageRecord,
-	getUsageCostBreakdown,
-	TASK_USAGE_TYPE,
-} from "../src/core/usage-totals.ts";
+import { TASK_RECORD_TYPE } from "../src/core/tasks/codec.ts";
+import { getAccountedUsages, getTaskUsageRecord, getUsageCostBreakdown } from "../src/core/usage-totals.ts";
 
 const usage: Usage = {
 	input: 10,
@@ -19,32 +15,46 @@ const usage: Usage = {
 
 function ledger(data: unknown) {
 	const manager = SessionManager.inMemory();
-	manager.appendCustomEntry(TASK_USAGE_TYPE, data);
+	manager.appendCustomEntry(TASK_RECORD_TYPE, data);
 	return manager.getEntries()[0];
 }
+const record = (id: string, value: unknown = usage, version = 3) => ({ version, task: { id }, usage: value });
 
 describe("background usage accounting", () => {
 	it("accepts a JSON round-trip including optional provider usage", () => {
-		const data = { version: 1, taskId: "group-1", usage: { ...usage, reasoning: 5, cacheWrite1h: 10 } };
-		expect(getTaskUsageRecord(ledger(JSON.parse(JSON.stringify(data))))).toEqual(data);
+		const data = record("group-1", { ...usage, reasoning: 5, cacheWrite1h: 10 });
+		expect(getTaskUsageRecord(ledger(JSON.parse(JSON.stringify(data))))).toEqual({
+			taskId: "group-1",
+			usage: data.usage,
+		});
 	});
 
 	it.each([
 		{},
-		{ version: 2, taskId: "task", usage },
-		{ version: 1, taskId: "", usage },
-		{ version: 1, taskId: "task", usage: { ...usage, input: -1 } },
-		{ version: 1, taskId: "task", usage: { ...usage, cost: { ...usage.cost, total: Number.NaN } } },
+		record("task", usage, 2),
+		record(""),
+		{ version: 3, task: { id: "task" } },
+		record("task", { ...usage, input: -1 }),
+		record("task", { ...usage, cost: { ...usage.cost, total: Number.NaN } }),
 	])("ignores malformed records: %j", (data) => {
 		expect(getTaskUsageRecord(ledger(data))).toBeUndefined();
 	});
 
+	it("keeps billing usage that released sessions settled in separate entries", () => {
+		const manager = SessionManager.inMemory();
+		manager.appendCustomEntry("task-usage", { version: 1, taskId: "released", usage });
+		manager.appendCustomEntry("task-usage", { version: 2, taskId: "unknown", usage });
+		manager.appendCustomEntry(TASK_RECORD_TYPE, record("released"));
+		manager.appendCustomEntry(TASK_RECORD_TYPE, record("current"));
+		expect(getAccountedUsages(manager.getEntries())).toEqual([usage, usage]);
+	});
+
 	it("deduplicates valid task identities without letting an invalid record reserve an identity", () => {
 		const entries = [
-			ledger({ version: 2, taskId: "task", usage }),
-			ledger({ version: 1, taskId: "task", usage }),
-			ledger({ version: 1, taskId: "task", usage: { ...usage, input: 999 } }),
-			ledger({ version: 1, taskId: "other", usage }),
+			ledger(record("task", usage, 2)),
+			ledger(record("task")),
+			ledger(record("task", { ...usage, input: 999 })),
+			ledger(record("other")),
 		];
 		expect(getAccountedUsages(entries)).toEqual([usage, usage]);
 		expect(getUsageCostBreakdown(entries)).toEqual([{ key: "Tools/summaries", cost: 2, tokens: 200 }]);
@@ -76,8 +86,8 @@ describe("background usage accounting", () => {
 		manager.appendMessage({ ...result, toolCallId: "managed" });
 		manager.appendCompaction("summary", root, 100, undefined, false, usage);
 		manager.branchWithSummary(null, "branch", undefined, false, usage);
-		manager.appendCustomEntry(TASK_USAGE_TYPE, { version: 1, taskId: "managed", usage });
-		manager.appendCustomEntry(TASK_USAGE_TYPE, { version: 1, taskId: "managed", usage });
+		manager.appendCustomEntry(TASK_RECORD_TYPE, record("managed"));
+		manager.appendCustomEntry(TASK_RECORD_TYPE, record("managed"));
 		expect(getAccountedUsages(manager.getEntries())).toHaveLength(5);
 		expect(getUsageCostBreakdown(manager.getEntries())).toEqual([
 			{ key: "Tools/summaries", cost: 4, tokens: 400 },

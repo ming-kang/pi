@@ -1,6 +1,6 @@
 import { type Static, Type } from "typebox";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
-import { type TaskCompletion, TaskExecutionError } from "../tasks/types.ts";
+import type { TaskCompletion } from "../tasks/types.ts";
 import {
 	type BashOperations,
 	type BashToolOptions,
@@ -57,7 +57,7 @@ export type BashRenderState = {
 };
 
 /** Translate terminal shell failures to the native foreground tool contract once. */
-function shellToolResult(completion: TaskCompletion<BashToolDetails | undefined>, managed: boolean) {
+function shellToolResult(completion: TaskCompletion<BashToolDetails | undefined>) {
 	const status = completion.status;
 	if (completion.result.structuredContent) return completion.result;
 	if (status === "failed" || status === "timeout" || status === "cancelled") {
@@ -66,7 +66,7 @@ function shellToolResult(completion: TaskCompletion<BashToolDetails | undefined>
 			.map((part) => part.text)
 			.join("\n");
 		const message = completion.error ? text || completion.error : `${text ? `${text}\n\n` : ""}Command ${status}`;
-		throw managed ? new TaskExecutionError(message, status) : new Error(message);
+		throw new Error(message);
 	}
 	return completion.result;
 }
@@ -100,54 +100,47 @@ export function createShellToolDefinition(
 			if (host?.closed) throw new Error("Task service is closed");
 			const run = async (managed?: ManagedShellExecution): Promise<TaskCompletion<BashToolDetails | undefined>> => {
 				const signal = managed?.control.signal ?? parentSignal;
-				try {
-					if (managed) {
-						if (signal?.aborted) throw new Error("Command aborted");
-						resolveTimeoutMs(timeout);
-					}
-					const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
-					const spawnContext = resolveSpawnContext(
-						resolvedCommand,
-						ctx?.cwd || cwd,
-						spawnHook,
-						exposeSessionEnvironment,
-						ctx,
-					);
-					return await runShellCommand({
-						operations: ops,
-						context: spawnContext,
-						tempFilePrefix: config.tempFilePrefix,
-						timeout,
-						signal,
-						onUpdate: originalUpdate,
-						managed,
-					});
-				} catch (error) {
-					// Setup and cleanup exceptions carry an explicit terminal status.
-					if (!managed) throw error;
-					throw new TaskExecutionError(
-						error instanceof Error ? error.message : String(error),
-						managed.control.signal.aborted ? "cancelled" : "failed",
-					);
+				if (managed) {
+					if (signal?.aborted) throw new Error("Command aborted");
+					resolveTimeoutMs(timeout);
 				}
+				const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
+				const spawnContext = resolveSpawnContext(
+					resolvedCommand,
+					ctx?.cwd || cwd,
+					spawnHook,
+					exposeSessionEnvironment,
+					ctx,
+				);
+				// A setup throw settles a managed task as failed, or cancelled once its signal fired.
+				return await runShellCommand({
+					operations: ops,
+					context: spawnContext,
+					tempFilePrefix: config.tempFilePrefix,
+					timeout,
+					signal,
+					onUpdate: originalUpdate,
+					managed,
+				});
 			};
 			if (!host) {
 				if (background)
 					throw new Error("Background execution is not available in this host. No command was started.");
-				return shellToolResult(await run(), false);
+				return shellToolResult(await run());
 			}
 			const outcome = await host.execute<BashToolDetails | undefined>({
 				kind: config.name,
+				label: config.shellName[0]!.toUpperCase() + config.shellName.slice(1),
 				title: command,
+				input: { label: "Command", text: command, truncated: false, language: config.name },
+				facts: [["Directory", ctx?.cwd || cwd]],
 				toolCallId,
-				command,
-				cwd: ctx?.cwd || cwd,
 				background,
 				signal: parentSignal,
 				onUpdate: originalUpdate,
 				run: (control) => run({ control }),
 			});
-			if (outcome.kind === "result") return shellToolResult(outcome, true);
+			if (outcome.kind === "result") return shellToolResult(outcome);
 			const tail = `Task ID: ${outcome.task.id}. Status: ${outcome.task.status}. Completion arrives automatically as a notification — do not poll or immediately wait on it; continue with other work or hand back to the user. Use tasks read to inspect output, tasks wait only when your next step is blocked on a result (one ID or any running task; prefer foreground next time in that case), or tasks kill to stop it.`;
 			// Shell execution can become background work in two ways, and the model has to know which
 			// one it got: a submitted background command starts from an empty log, while a detached

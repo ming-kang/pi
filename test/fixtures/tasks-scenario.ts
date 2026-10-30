@@ -20,7 +20,7 @@ export async function startTasksScenario(tasks: TasksContext, cwd: string) {
 		let id = "";
 		const command = `bash ${name}.sh`;
 		const caller = tasks.execute<BashToolDetails | undefined>({
-			kind: "bash", title: name, command, cwd: directory, toolCallId: `fixture-${name}`, background,
+			kind: "bash", label: "Bash", title: name, input: { label: "Command", text: command, truncated: false, language: "bash" }, facts: [["Directory", directory]], toolCallId: `fixture-${name}`, background,
 			run(control) {
 				id = control.id;
 				return runShellCommand({ operations: createLocalBashOperations(), context: { command, cwd: directory, env: { ...process.env, TASK_SCENARIO_PROJECT: cwd } }, tempFilePrefix: "pi-tasks-scenario", signal: control.signal, timeout: 600, managed: { control } });
@@ -37,17 +37,17 @@ export async function startTasksScenario(tasks: TasksContext, cwd: string) {
 	let finishReport!: () => void;
 	const reportGate = new Promise<void>(resolve => { finishReport = resolve; });
 	const report = await tasks.execute({
-		kind: "fixture-report", title: "Review extension boundaries", toolCallId: "fixture-report", background: true,
+		kind: "fixture-report", label: "Review", output: "report", title: "Review extension boundaries", toolCallId: "fixture-report", background: true,
 		async run(control) {
 			control.accept();
-			control.publish({content:[{type:"text",text:"Reviewing imports and reload behavior."}],details:undefined});
+			control.publish({result:{content:[{type:"text",text:"Reviewing imports and reload behavior."}],details:undefined}});
 			await new Promise<void>(resolve => {
 				const abort = () => resolve();
 				control.signal.addEventListener("abort", abort, {once:true});
 				void reportGate.then(() => { control.signal.removeEventListener("abort", abort); resolve(); });
 			});
 			const result = { content: [{type:"text" as const,text:"Imports: public extension boundaries preserved.\nReload: partial findings; Fixture reload diagnostic."}], details: undefined };
-			control.publish(result);
+			control.publish({result});
 			return {status:control.signal.aborted?"cancelled" as const:"partial" as const,result};
 		},
 	});

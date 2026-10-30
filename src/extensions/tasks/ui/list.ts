@@ -28,7 +28,7 @@ export class TaskList {
 	}
 	render(selection: TaskSelection, theme: Theme, width: number, height: number): ListRow[] {
 		const rows: ListRow[] = [];
-		const labels = selection.rows.map((task) => cleanTaskText(firstCommandLine(task.command ?? task.title)));
+		const labels = selection.rows.map((task) => cleanTaskText(firstCommandLine(task.title)));
 		const fitted = labels.map((label) => truncateToWidth(label, Math.max(1, width - 3), "…"));
 		let group = "",
 			selectedLine = -1;

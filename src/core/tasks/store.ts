@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { parseTaskHistory } from "./history.ts";
-import { boundText, retainResult } from "./output.ts";
+import { readVersionedTask } from "./codec.ts";
+import { boundText, resultText } from "./output.ts";
 import type { TaskSnapshot } from "./types.ts";
 
 export interface TaskRecord {
@@ -104,7 +104,7 @@ export class TaskStore {
 		);
 		const newest = new Map<string, TaskSnapshot>();
 		for (const value of records) {
-			const task = parseTaskHistory(value);
+			const task = readVersionedTask(value);
 			if (!task) continue;
 			const existing = this.records.get(task.id);
 			if (existing) {
@@ -130,7 +130,7 @@ export class TaskStore {
 		}
 		for (const task of [...newest.values()].sort((a, b) => a.endedAt! - b.endedAt!)) {
 			const content = toolResults.get(task.toolCallId);
-			if (!task.result && content) retainResult(task, { content, details: undefined });
+			if (!task.result && content) task.result = resultText({ content, details: undefined });
 			// Logs never outlive the runtime that wrote them.
 			const expired = task.outputPath !== undefined;
 			task.outputPath = undefined;

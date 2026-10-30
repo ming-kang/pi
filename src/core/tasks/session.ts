@@ -5,9 +5,9 @@ import type { Usage } from "@earendil-works/pi-ai/compat";
 import type { CustomMessage } from "../messages.ts";
 import type { SessionEntry, SessionManager } from "../session-manager.ts";
 import { truncateHead } from "../tools/truncate.ts";
-import { getTaskUsageRecord, TASK_USAGE_TYPE } from "../usage-totals.ts";
+import { getTaskUsageRecord } from "../usage-totals.ts";
+import { TASK_RECORD_TYPE, TASK_SNAPSHOT_VERSION } from "./codec.ts";
 import { TaskDelivery } from "./delivery.ts";
-import { TASK_HISTORY_VERSION } from "./history.ts";
 import { TaskContextReminder } from "./reminder.ts";
 import { TaskRuntime } from "./runtime.ts";
 import type { TaskSnapshot } from "./types.ts";
@@ -165,7 +165,7 @@ export class TaskSession {
 		const records: unknown[] = [];
 		const toolResults = new Map<string, AgentToolResult<unknown>["content"]>();
 		for (const entry of this.options.manager.getBranch()) {
-			if (entry.type === "custom" && entry.customType === "task-result") records.push(entry.data);
+			if (entry.type === "custom" && entry.customType === TASK_RECORD_TYPE) records.push(entry.data);
 			else if (entry.type === "message" && entry.message.role === "toolResult")
 				toolResults.set(entry.message.toolCallId, entry.message.content);
 		}
@@ -194,31 +194,22 @@ export class TaskSession {
 		);
 	}
 
+	/** One entry per settlement: the bounded terminal snapshot and its first usage settlement. */
 	private persistSettlement(task: TaskSnapshot, usage: Usage | undefined): void {
 		const manager = this.options.manager;
-		const appended: SessionEntry[] = [];
-		const append = (customType: string, data: unknown) => {
-			const entry = manager.getEntry(manager.appendCustomEntry(customType, data));
-			if (entry) appended.push(entry);
-		};
+		const accounted = usage && manager.getEntries().some((entry) => getTaskUsageRecord(entry)?.taskId === task.id);
+		// A foreground result is the tool result the transcript already saves; restoration reads it from there.
+		const { result: _result, ...metadata } = task;
+		const saved = task.mode === "foreground" ? metadata : task;
+		const data = JSON.parse(
+			JSON.stringify({ version: TASK_SNAPSHOT_VERSION, task: saved, ...(usage && !accounted ? { usage } : {}) }),
+		);
+		const entry = manager.getEntry(manager.appendCustomEntry(TASK_RECORD_TYPE, data));
+		if (!entry) return;
 		try {
-			if (usage && !manager.getEntries().some((entry) => getTaskUsageRecord(entry)?.taskId === task.id)) {
-				append(TASK_USAGE_TYPE, { version: 1, taskId: task.id, usage });
-			}
-			// A foreground result is the tool result the transcript already saves; restoration reads it from there.
-			const { result: _result, resultTruncated: _truncated, ...metadata } = task;
-			const saved = task.mode === "foreground" ? metadata : task;
-			append("task-result", JSON.parse(JSON.stringify({ version: TASK_HISTORY_VERSION, task: saved })));
-		} finally {
-			// Complete the writes before observers can replace the runtime or its manager.
-			// If a write fails, still report entries that were successfully appended.
-			for (const entry of appended) {
-				try {
-					this.options.onEntry(entry);
-				} catch {
-					// Observers cannot interrupt settlement or result publication.
-				}
-			}
+			this.options.onEntry(entry);
+		} catch {
+			// Observers cannot interrupt settlement or result publication.
 		}
 	}
 

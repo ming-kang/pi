@@ -5,8 +5,6 @@
  * by the renderers on `/reload`, `/tree`, and session resume. Adding an optional
  * field is free; renaming or repurposing an existing one degrades historical
  * transcripts.
- *
- * `exitCode` is three-state: `null` for signal-reaped tasks.
  */
 
 import type { TaskKind, TaskStatus } from "../../../core/tasks/types.ts";
@@ -27,14 +25,10 @@ export type TasksWaitOutcome = "settled" | "interrupted" | "timed_out" | "no_tas
 export interface TasksWaitDetails {
 	kind?: TaskKind;
 	action: "wait";
-	/** Absent only in historical results; new calls always record the reason the wait ended. */
-	outcome?: TasksWaitOutcome;
+	outcome: TasksWaitOutcome;
 	/** Undefined for waitAny with no selected task, or when no tasks were running. */
 	taskId?: string;
-	/** Retained for compatibility with historical details; true only for a wait-window expiry. */
-	timedOut: boolean;
 	status?: TaskStatus;
-	exitCode: number | null | undefined;
 	waitedMs: number;
 	deltaBytes: number;
 	totalBytes: number;
@@ -56,7 +50,7 @@ export interface TasksKillDetails {
 	status?: TaskStatus;
 	action: "kill";
 	taskId: string;
-	command: string;
+	title: string;
 }
 
 export interface TasksListDetails {

@@ -15,8 +15,8 @@ import { AuthStorage } from "../src/core/auth-storage.ts";
 import type { ExtensionFactory } from "../src/core/extensions/types.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
+import { TASK_RECORD_TYPE } from "../src/core/tasks/codec.ts";
 import type { TaskControl } from "../src/core/tasks/types.ts";
-import { TASK_USAGE_TYPE } from "../src/core/usage-totals.ts";
 import tasksExtension from "../src/extensions/tasks/index.ts";
 import { createInMemoryModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
 import { createTestExtensionsResult, createTestResourceLoader, userMsg } from "./utilities.ts";
@@ -134,26 +134,21 @@ describe("session-owned background host", () => {
 		const session = await host();
 		await session.bindExtensions({ tasksEnabled: true });
 		const resume = session.pauseTaskNotifications();
-		const entries: string[] = [];
-		const snapshotAvailable: boolean[] = [];
+		const entries: unknown[] = [];
 		session.subscribe((event) => {
-			if (event.type === "entry_appended" && event.entry.type === "custom") entries.push(event.entry.customType);
-			if (
-				event.type === "entry_appended" &&
-				event.entry.type === "custom" &&
-				event.entry.customType === TASK_USAGE_TYPE
-			)
-				snapshotAvailable.push(
-					session.sessionManager
-						.getEntries()
-						.some((entry) => entry.type === "custom" && entry.customType === "task-result"),
-				);
+			if (event.type === "entry_appended" && event.entry.type === "custom")
+				entries.push({ type: event.entry.customType, data: event.entry.data });
 		});
 		const execution = await task(session);
 		execution.finish();
 		await vi.waitFor(() => expect(session.tasks.get(execution.id).status).toBe("completed"));
-		expect(entries).toEqual([TASK_USAGE_TYPE, "task-result"]);
-		expect(snapshotAvailable).toEqual([true]);
+		// One record carries the settled task and its usage, so neither can be persisted without the other.
+		expect(entries).toEqual([
+			{
+				type: TASK_RECORD_TYPE,
+				data: { version: 3, task: expect.objectContaining({ id: execution.id, status: "completed" }), usage },
+			},
+		]);
 		expect(session.getSessionStats().tokens.total).toBe(30);
 		expect(session.messages).toHaveLength(0);
 		resume();
@@ -165,12 +160,14 @@ describe("session-owned background host", () => {
 		if (notification.type !== "custom_message") throw new Error("expected notification");
 		expect(notification.customType).toBe("task-completion");
 		expect(notification.details).toMatchObject({
-			version: 2,
-			taskId: execution.id,
-			kind: "custom",
-			status: "completed",
-			startedAt: expect.any(Number),
-			endedAt: expect.any(Number),
+			version: 3,
+			task: {
+				id: execution.id,
+				kind: "custom",
+				status: "completed",
+				startedAt: expect.any(Number),
+				endedAt: expect.any(Number),
+			},
 		});
 		expect(Buffer.byteLength(String(notification.content))).toBeLessThanOrEqual(48 * 1024);
 		expect(session.tasks.pendingNotifications()).toHaveLength(0);
@@ -179,7 +176,7 @@ describe("session-owned background host", () => {
 		expect(
 			session.sessionManager
 				.getEntries()
-				.filter((entry) => entry.type === "custom" && entry.customType === TASK_USAGE_TYPE),
+				.filter((entry) => entry.type === "custom" && entry.customType === TASK_RECORD_TYPE),
 		).toHaveLength(1);
 	});
 
@@ -334,9 +331,9 @@ describe("session-owned background host", () => {
 		await session.navigateTree(root);
 		await session.reload();
 		expect(session.tasks.list()).toEqual([]);
-		const invalid = [null, { version: 1, task: snapshot }, { version: 2, task: { ...snapshot, status: "running" } }];
-		for (const record of invalid) session.sessionManager.appendCustomEntry("task-result", record);
-		session.sessionManager.appendCustomEntry("unrelated", { version: 1, task: snapshot });
+		const invalid = [null, { version: 2, task: snapshot }, { version: 3, task: { ...snapshot, status: "running" } }];
+		for (const record of invalid) session.sessionManager.appendCustomEntry(TASK_RECORD_TYPE, record);
+		session.sessionManager.appendCustomEntry("unrelated", { version: 3, task: snapshot });
 		await session.reload();
 		expect(session.tasks.list()).toEqual([]);
 		await session.navigateTree(resultLeaf);
@@ -355,11 +352,11 @@ describe("session-owned background host", () => {
 		const outcome = await session.tasks.execute({
 			kind: "bash",
 			title: "echo",
-			command: "echo foreground output",
+			input: { label: "Command", text: "echo foreground output", truncated: false },
 			toolCallId: "call-foreground",
 			run: async (control) => {
 				control.accept();
-				return { result: { content: output, details: undefined }, exitCode: 0 };
+				return { result: { content: output, details: undefined }, facts: [["Exit", "0"]] };
 			},
 		});
 		expect(outcome.kind).toBe("result");
@@ -373,15 +370,19 @@ describe("session-owned background host", () => {
 		});
 		const saved = session.sessionManager
 			.getEntries()
-			.flatMap((entry) => (entry.type === "custom" && entry.customType === "task-result" ? [entry.data] : []));
+			.flatMap((entry) => (entry.type === "custom" && entry.customType === TASK_RECORD_TYPE ? [entry.data] : []));
 		expect(saved).toHaveLength(1);
-		expect(saved[0]).toMatchObject({ task: { command: "echo foreground output", exitCode: 0 } });
+		expect(saved[0]).toMatchObject({ task: { input: { text: "echo foreground output" }, facts: [["Exit", "0"]] } });
 		expect(saved[0]).not.toHaveProperty("task.result");
 
 		await session.reload();
 		const [restored] = session.tasks.list();
-		expect(restored).toMatchObject({ mode: "foreground", status: "completed", command: "echo foreground output" });
-		expect(restored?.result?.content).toEqual(output);
+		expect(restored).toMatchObject({
+			mode: "foreground",
+			status: "completed",
+			input: { text: "echo foreground output" },
+		});
+		expect(restored?.result).toEqual({ text: "foreground output", truncated: false });
 		expect((await session.tasks.read(restored!.id)).text).toBe("foreground output");
 	});
 
@@ -411,8 +412,8 @@ describe("session-owned background host", () => {
 		await vi.waitFor(() => expect(session.tasks.get(execution.id).status).toBe("completed"));
 		const snapshot = session.tasks.get(execution.id);
 		for (let index = 0; index < 40; index++) {
-			session.sessionManager.appendCustomEntry("task-result", {
-				version: 2,
+			session.sessionManager.appendCustomEntry(TASK_RECORD_TYPE, {
+				version: 3,
 				task: { ...snapshot, id: `custom-history-${index}`, endedAt: snapshot.endedAt! + index + 1 },
 			});
 		}
@@ -563,7 +564,7 @@ describe("session-owned background host", () => {
 			title: "cleanup",
 			toolCallId: "cleanup",
 			run: async (control) => {
-				control.setOutputPath("unused-output", () => {
+				control.attachOutput("unused-output", () => {
 					throw new Error("cleanup failed".repeat(1000));
 				});
 				return { result: { content: [], details: undefined } };
@@ -957,7 +958,7 @@ describe("session-owned background host", () => {
 			pi.on("session_shutdown", (_event, ctx) => {
 				ledgerAtShutdown = ctx.sessionManager
 					.getEntries()
-					.some((entry) => entry.type === "custom" && entry.customType === TASK_USAGE_TYPE);
+					.some((entry) => entry.type === "custom" && entry.customType === TASK_RECORD_TYPE);
 			});
 		});
 		await session.bindExtensions({ tasksEnabled: true });
@@ -1044,7 +1045,6 @@ describe("session-owned background host", () => {
 		const toolResult = session.messages.find((message) => message.role === "toolResult");
 		expect(toolResult?.role === "toolResult" && toolResult.details).toMatchObject({
 			outcome: "interrupted",
-			timedOut: false,
 			taskId: execution.id,
 		});
 		expect(session.tasks.get(execution.id).status).toBe("running");
@@ -1115,7 +1115,8 @@ describe("session-owned background host", () => {
 		expect(
 			session.messages.some(
 				(message) =>
-					message.role === "custom" && (message.details as { taskId?: string } | undefined)?.taskId === other.id,
+					message.role === "custom" &&
+					(message.details as { task?: { id?: string } } | undefined)?.task?.id === other.id,
 			),
 		).toBe(true);
 		first.finish();
@@ -1144,7 +1145,6 @@ describe("session-owned background host", () => {
 		const toolResult = session.messages.find((message) => message.role === "toolResult");
 		expect(toolResult?.role === "toolResult" && toolResult.details).toMatchObject({
 			outcome: "settled",
-			timedOut: false,
 			taskId: winner.id,
 			running: 1,
 		});
@@ -1156,7 +1156,8 @@ describe("session-owned background host", () => {
 		expect(
 			session.messages.some(
 				(message) =>
-					message.role === "custom" && (message.details as { taskId?: string } | undefined)?.taskId === first.id,
+					message.role === "custom" &&
+					(message.details as { task?: { id?: string } } | undefined)?.task?.id === first.id,
 			),
 		).toBe(true);
 	});

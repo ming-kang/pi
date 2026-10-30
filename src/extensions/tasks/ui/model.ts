@@ -43,7 +43,9 @@ export class TaskSelection {
 		const search = this.query.toLocaleLowerCase().trim();
 		this.rows = search
 			? rows.filter((task) =>
-					`${task.title}\n${task.command ?? ""}\n${task.kind}\n${task.id}`.toLocaleLowerCase().includes(search),
+					`${task.title}\n${task.input?.text ?? ""}\n${task.label}\n${task.kind}\n${task.id}`
+						.toLocaleLowerCase()
+						.includes(search),
 				)
 			: rows;
 		if (!this.rows.some((task) => task.id === selectedId)) this.state.selectedId = this.rows[0]?.id;

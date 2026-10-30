@@ -7,7 +7,7 @@ import { formatSize } from "../../../core/tools/truncate.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import { clampWaitMs, type TasksInput } from "../tool/schema.ts";
 import type { TasksDetails } from "../tool/types.ts";
-import { exitSuffix, statusColor, statusGlyph, statusName } from "./task-view.ts";
+import { statusColor, statusGlyph, statusName } from "./task-view.ts";
 import { fileNameOf } from "./text.ts";
 
 /** Arguments arrive incrementally, so `action` may not be valid yet. */
@@ -170,7 +170,7 @@ function resultSummaryLine(details: TasksDetails, theme: Theme, expanded: boolea
 			return `${theme.fg("muted", "→ ")}${theme.fg("accent", details.taskId)}${theme.fg("muted", `${details.status ? ` ${statusName(details.status)} ·` : ""} ${size}${details.outputPath ? ` · ${shownPath(details.outputPath)}` : ""}`)}`;
 		}
 		case "wait": {
-			const outcome = details.outcome ?? (details.timedOut ? "timed_out" : "settled");
+			const outcome = details.outcome;
 			if (outcome === "no_tasks") return theme.fg("muted", "→ No background tasks running");
 			const taskId = details.taskId ?? "any";
 			if (outcome === "interrupted") {
@@ -183,8 +183,7 @@ function resultSummaryLine(details: TasksDetails, theme: Theme, expanded: boolea
 				return `${theme.fg(statusColor(status), statusGlyph(status))} ${theme.fg("accent", taskId)}${theme.fg("muted", ` ${statusName(status)} · wait ended after ${formatDuration(details.waitedMs)} · ${running}`)}`;
 			}
 			const status = details.status ?? "completed";
-			const exit = exitSuffix(details.exitCode, ", ");
-			return `${theme.fg(statusColor(status), statusGlyph(status))} ${theme.fg("accent", taskId)}${theme.fg("muted", ` ${statusName(status)}${exit} · waited ${formatDuration(details.waitedMs)} · +${formatSize(details.deltaBytes)}`)}`;
+			return `${theme.fg(statusColor(status), statusGlyph(status))} ${theme.fg("accent", taskId)}${theme.fg("muted", ` ${statusName(status)} · waited ${formatDuration(details.waitedMs)} · +${formatSize(details.deltaBytes)}`)}`;
 		}
 		case "steer": {
 			return details.accepted

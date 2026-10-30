@@ -2,9 +2,9 @@
 import { type Component, stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { MessageRenderOptions } from "../../../core/extensions/types.ts";
 import type { CustomMessage } from "../../../core/messages.ts";
+import { readVersionedTask } from "../../../core/tasks/codec.ts";
 import { runtimeLabel } from "../../../core/tasks/format.ts";
-import { readTaskCompletion } from "../../../core/tasks/presentation.ts";
-import type { TaskTerminalStatus } from "../../../core/tasks/types.ts";
+import type { TaskFact, TaskStatus } from "../../../core/tasks/types.ts";
 import { type StatusMarkerColor, statusMarker } from "../../../modes/interactive/components/status-marker.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import { FramedComponent } from "../../../modes/interactive/tool-view/style.ts";
@@ -14,21 +14,20 @@ import { statusName } from "./task-view.ts";
 const SOURCE_LIMIT = 64 * 1024;
 const CARD_ROWS = 128;
 const OUTPUT_ROWS = 20;
-const SHELL_NAMES: Record<string, string> = { bash: "Bash", powershell: "PowerShell" };
-
 interface CompletionView {
+	label?: string;
 	title?: string;
 	duration?: string;
-	exitCode?: number | null;
-	kind?: string;
-	status?: TaskTerminalStatus;
+	status?: TaskStatus;
 	id?: string;
-	command?: string;
-	cwd?: string;
+	input?: { label: string; text: string };
+	facts: TaskFact[];
 	path?: string;
 	diagnostic?: string;
 	/** Undefined for an unreadable message, whose saved content is shown instead. */
 	output?: string;
+	/** A report previews its beginning; a log previews its end. */
+	report?: boolean;
 	body: string;
 	truncated: boolean;
 }
@@ -68,25 +67,25 @@ function savedText(message: CustomMessage<unknown>): { text: string; clipped: bo
 }
 
 function completionView(message: CustomMessage<unknown>): CompletionView {
-	const snapshot = readTaskCompletion(message.details);
-	if (!snapshot) {
+	const task = readVersionedTask(message.details);
+	if (!task) {
 		const { text, clipped } = savedText(message);
-		return { body: text, truncated: clipped };
+		return { body: text, truncated: clipped, facts: [] };
 	}
 	return {
-		title: clean(snapshot.title),
-		duration: runtimeLabel(snapshot),
-		kind: snapshot.kind,
-		status: snapshot.status,
-		id: clean(snapshot.taskId),
-		exitCode: snapshot.exitCode,
-		command: snapshot.command === undefined ? undefined : clean(snapshot.command.text),
-		cwd: snapshot.cwd === undefined ? undefined : clean(snapshot.cwd),
-		path: snapshot.outputPath === undefined ? undefined : clean(snapshot.outputPath),
-		diagnostic: snapshot.error === undefined ? undefined : clean(snapshot.error),
-		output: clean(snapshot.output.text),
+		label: clean(task.label),
+		title: clean(task.title),
+		duration: runtimeLabel(task),
+		status: task.status,
+		id: clean(task.id),
+		input: task.input && { label: clean(task.input.label), text: clean(task.input.text) },
+		facts: (task.facts ?? []).map(([label, value]) => [clean(label), clean(value)]),
+		path: task.outputPath === undefined ? undefined : clean(task.outputPath),
+		diagnostic: task.error === undefined ? undefined : clean(task.error),
+		output: clean(task.result?.text ?? ""),
+		report: task.output === "report",
 		body: "",
-		truncated: snapshot.output.truncated || snapshot.command?.truncated === true,
+		truncated: task.result?.truncated === true || task.input?.truncated === true,
 	};
 }
 
@@ -131,11 +130,10 @@ class CompletionCard implements Component {
 		const bodyWidth = Math.max(1, inner - indent.length);
 		const lines: string[] = [];
 		const status = view.status ? statusName(view.status) : "Result received";
-		const kind = view.kind === undefined ? "Notification" : (SHELL_NAMES[view.kind] ?? view.kind);
 		lines.push(
-			`${theme.fg("toolTitle", theme.bold(kind))}${theme.fg("muted", ` · Background ${status.toLowerCase()}${view.duration ? ` · ${view.duration}` : ""}`)}${view.id ? theme.fg("dim", ` · ${shortId(view.id)}`) : ""}`,
+			`${theme.fg("toolTitle", theme.bold(view.label ?? "Notification"))}${theme.fg("muted", ` · Background ${status.toLowerCase()}${view.duration ? ` · ${view.duration}` : ""}`)}${view.id ? theme.fg("dim", ` · ${shortId(view.id)}`) : ""}`,
 		);
-		const summary = view.command ? `$ ${view.command.split("\n")[0]}` : view.title;
+		const summary = view.title?.split("\n").find((line) => line.trim()) ?? view.title;
 		if (!options.expanded) {
 			if (summary) lines.push(theme.fg("toolOutput", summary));
 			if (view.diagnostic) lines.push(theme.fg(color(view.status), view.diagnostic));
@@ -156,17 +154,20 @@ class CompletionCard implements Component {
 			};
 			if (view.output === undefined) section("Details", view.body || "No text result.", 36);
 			else {
-				if (view.command) section("Command", view.command, 8);
+				if (view.input) section(view.input.label, view.input.text, 8);
 				else if (view.title) section("Task", view.title, 4);
-				if (view.cwd) section("Directory", view.cwd, 2);
+				if (view.facts.length) {
+					const width = Math.max(...view.facts.map(([label]) => label.length)) + 1;
+					section("Details", view.facts.map(([label, value]) => `${label.padEnd(width)}${value}`).join("\n"), 8);
+				}
 				section(
 					view.status === "failed" || view.status === "timeout" ? "Error" : "Result",
-					`${view.diagnostic ?? status}${view.exitCode !== undefined ? ` · ${view.exitCode === null ? "terminated by signal" : `exit ${view.exitCode}`}` : ""}`,
+					view.diagnostic ?? status,
 					4,
 					false,
 					view.status === "failed",
 				);
-				section("Output", !view.output.trim() ? "No output." : view.output, OUTPUT_ROWS, true);
+				section("Output", !view.output.trim() ? "No output." : view.output, OUTPUT_ROWS, !view.report);
 				if (view.path) section("Log", view.path, 4);
 			}
 			if (view.id) {
@@ -198,6 +199,7 @@ export function renderTaskCompletion(
 		view = {
 			body: "The saved notification could not be interpreted. Its original message remains in session history.",
 			truncated: false,
+			facts: [],
 		};
 	}
 	return new CompletionCard(view, options, theme);

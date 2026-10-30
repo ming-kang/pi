@@ -4,7 +4,13 @@ import { join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../src/core/session-manager.ts";
-import { TASK_RESULT_BYTES } from "../src/core/tasks/output.ts";
+import {
+	TASK_FACT_BYTES,
+	TASK_FACTS,
+	TASK_INPUT_BYTES,
+	TASK_LABEL_BYTES,
+	TASK_RESULT_BYTES,
+} from "../src/core/tasks/output.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import { TaskSession } from "../src/core/tasks/session.ts";
 import type { TaskCompletion, TaskControl, TaskExecution, TaskKind, TaskSnapshot } from "../src/core/tasks/types.ts";
@@ -64,18 +70,20 @@ afterEach(() => {
 
 function savedTask(id = "bash-restored", endedAt = 20, overrides: Partial<TaskSnapshot> = {}) {
 	return {
-		version: 2,
+		version: 3,
 		task: {
 			id,
 			kind: "bash",
+			label: "Bash",
 			title: "saved",
+			output: "log",
 			toolCallId: "call",
 			anchorId: null,
 			mode: "background",
 			status: "completed",
 			startedAt: 10,
 			endedAt,
-			result: result("saved report"),
+			result: { text: "saved report", truncated: false },
 			...overrides,
 		} satisfies TaskSnapshot,
 	};
@@ -86,7 +94,7 @@ describe("terminal history restoration", () => {
 		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 		let anchor: string | null = "A";
 		const onSettled = vi.fn();
-		const bg = service({ anchor: () => anchor, onSettled, maxActive: 2 });
+		const bg = service({ anchor: () => anchor, onSettled, maxBackground: 2 });
 		bg.restoreHistory([savedTask("bash-history-A", 20, { anchorId: "A" })]);
 		const ignored = job({ background: true });
 		await bg.execute(ignored.execution);
@@ -113,7 +121,7 @@ describe("terminal history restoration", () => {
 		await bg.cancelOutsideBranch(new Set(["A"]));
 		bg.restoreHistory([
 			savedTask("bash-history-A", 20, { anchorId: "A" }),
-			{ version: 2, task: bg.get(terminal.control.id) },
+			{ version: 3, task: bg.get(terminal.control.id) },
 		]);
 		expect(
 			bg
@@ -136,7 +144,7 @@ describe("terminal history restoration", () => {
 	});
 
 	it("restores history alongside pending completions without spending their retention allowance", async () => {
-		const bg = service({ maxHistory: 1, maxActive: 1 });
+		const bg = service({ maxHistory: 1, maxBackground: 1 });
 		const pending = job({ background: true });
 		await bg.execute(pending.execution);
 		pending.completion.resolve({ result: result() });
@@ -155,7 +163,7 @@ describe("terminal history restoration", () => {
 			const onSettled = vi.fn();
 			const onCleanupError = vi.fn();
 			const observer = vi.fn();
-			const bg = service({ maxHistory: 2, maxActive: 1, onSettled, onCleanupError });
+			const bg = service({ maxHistory: 2, maxBackground: 1, onSettled, onCleanupError });
 			bg.subscribe(observer);
 			bg.restoreHistory([
 				savedTask("bash-new", 50, { outputPath: path, status: "cancelled" }),
@@ -189,14 +197,16 @@ describe("terminal history restoration", () => {
 	});
 	it("ignores malformed and nonterminal records", () => {
 		const bg = service();
-		const malformed: unknown[] = [null, {}, { version: 3, task: savedTask().task }];
+		const malformed: unknown[] = [null, {}, { version: 2, task: savedTask().task }];
 		for (const [key, value] of [
 			["status", "running"],
 			["id", "bash-"],
 			["startedAt", Number.NaN],
-			["result", { content: [null] }],
+			["output", "stream"],
+			["result", { text: "missing flag" }],
+			["facts", [["only label"]]],
 		] as const)
-			malformed.push({ version: 2, task: { ...savedTask().task, [key]: value } });
+			malformed.push({ version: 3, task: { ...savedTask().task, [key]: value } });
 		bg.restoreHistory(malformed);
 		expect(bg.list()).toEqual([]);
 	});
@@ -206,30 +216,26 @@ describe("terminal history restoration", () => {
 		const huge = "😀".repeat(100000);
 		const record = savedTask("custom-group", 20, {
 			kind: "custom",
+			label: huge,
 			title: huge,
-			command: huge,
-			cwd: huge,
+			input: { label: "Command", text: huge, truncated: false },
+			facts: Array.from({ length: 40 }, () => ["Directory", huge] as const),
 			error: huge,
-			result: { content: [{ type: "text", text: huge }], details: { huge } },
+			result: { text: huge, truncated: false },
 		});
 		bg.restoreHistory([record]);
 		const task = bg.get("custom-group");
+		expect(Buffer.byteLength(task.label)).toBeLessThanOrEqual(TASK_LABEL_BYTES);
 		expect(Buffer.byteLength(task.title)).toBeLessThanOrEqual(1024);
-		expect(Buffer.byteLength(task.command!)).toBeLessThanOrEqual(8192);
-		expect(Buffer.byteLength(task.cwd!)).toBeLessThanOrEqual(4096);
+		expect(Buffer.byteLength(task.input!.text)).toBeLessThanOrEqual(TASK_INPUT_BYTES);
+		expect(task.input!.truncated).toBe(true);
+		expect(task.facts).toHaveLength(TASK_FACTS);
+		expect(Buffer.byteLength(task.facts![0]![1])).toBeLessThanOrEqual(TASK_FACT_BYTES);
 		expect(Buffer.byteLength(task.error!)).toBeLessThanOrEqual(4096);
-		expect(task.result?.details).toBeUndefined();
+		expect(task.result?.truncated).toBe(true);
 		expect(Buffer.byteLength((await bg.read(task.id, { bytes: 999999 })).text)).toBeLessThanOrEqual(
 			TASK_RESULT_BYTES,
 		);
-		const cyclic: Record<string, unknown> = {};
-		cyclic.self = cyclic;
-		bg.restoreHistory([
-			savedTask("bash-huge-details", 21, { result: { content: [], details: { huge } } }),
-			savedTask("bash-cycle", 22, { result: { content: [], details: cyclic } }),
-		]);
-		expect(bg.get("bash-huge-details").result?.details).toBeUndefined();
-		expect(bg.get("bash-cycle").result?.details).toBeUndefined();
 	});
 
 	it("reports expired restored paths even with an empty requested slice", async () => {
@@ -276,37 +282,36 @@ describe("terminal history restoration", () => {
 		expect(zero.list()).toEqual([]);
 	});
 
-	it("round-trips bounded executor Details and human Output without private result details", () => {
+	it("round-trips executor input, facts, output shape and human Output", () => {
 		const bg = service();
 		bg.restoreHistory([
 			savedTask("agent-info", 20, {
 				kind: "agent",
-				info: { text: "Agent\nModel test/model\n\nPrompt\nInspect", truncated: false },
+				label: "Agent",
+				output: "report",
+				input: { label: "Prompt", text: "Inspect", truncated: false },
+				facts: [
+					["Model", "test/model"],
+					["Exit", "3"],
+				],
 				display: { text: "Tool calls\n✓ read entry.ts", truncated: false },
-				result: { content: [{ type: "text", text: "report" }], details: { private: true } },
+				result: { text: "report", truncated: false },
 			}),
 		]);
-		expect(bg.get("agent-info").info).toEqual({
-			text: "Agent\nModel test/model\n\nPrompt\nInspect",
-			truncated: false,
+		expect(bg.get("agent-info")).toMatchObject({
+			label: "Agent",
+			output: "report",
+			input: { label: "Prompt", text: "Inspect", truncated: false },
+			facts: [
+				["Model", "test/model"],
+				["Exit", "3"],
+			],
+			display: { text: "Tool calls\n✓ read entry.ts", truncated: false },
 		});
-		expect(bg.get("agent-info").display).toEqual({ text: "Tool calls\n✓ read entry.ts", truncated: false });
-		expect(bg.get("agent-info").result?.details).toBeUndefined();
-		bg.restoreHistory([savedTask("agent-bad-info", 30, { kind: "agent", info: { text: "missing flag" } as never })]);
-		expect(bg.list().find((task) => task.id === "agent-bad-info")).toBeUndefined();
-	});
-
-	it("round-trips the process exit code through restored history", () => {
-		const bg = service();
-		bg.restoreHistory([savedTask("bash-exit", 20, { exitCode: 3 })]);
-		expect(bg.get("bash-exit").exitCode).toBe(3);
-		bg.restoreHistory([savedTask("bash-reaped", 30, { exitCode: null })]);
-		expect(bg.get("bash-reaped").exitCode).toBeNull();
-		bg.restoreHistory([savedTask("bash-unreported", 40)]);
-		expect(bg.get("bash-unreported").exitCode).toBeUndefined();
-		// Malformed values drop the record rather than corrupting the listing.
-		bg.restoreHistory([savedTask("bash-bad", 50, { exitCode: "3" as unknown as number })]);
-		expect(bg.list().find((task) => task.id === "bash-bad")).toBeUndefined();
+		bg.restoreHistory([
+			savedTask("agent-bad-input", 30, { kind: "agent", input: { text: "missing label" } as never }),
+		]);
+		expect(bg.list().find((task) => task.id === "agent-bad-input")).toBeUndefined();
 	});
 });
 
@@ -315,7 +320,7 @@ const textResult = (text: string): AgentToolResult<undefined> => ({
 	details: undefined,
 });
 function retention(maxHistory = 32) {
-	return service({ maxHistory, maxActive: 1 });
+	return service({ maxHistory, maxBackground: 1 });
 }
 function launch(bg: TaskRuntime, kind: TaskKind, background = false, text = "saved report") {
 	let control!: TaskControl<undefined>;
@@ -347,18 +352,20 @@ async function complete(bg: TaskRuntime, kind: TaskKind, background = false, tex
 }
 function saved(id: string, endedAt: number, overrides: Partial<TaskSnapshot> = {}) {
 	return {
-		version: 2,
+		version: 3,
 		task: {
 			id,
 			kind: "bash",
+			label: "Bash",
 			mode: "foreground",
 			title: id,
+			output: "log",
 			toolCallId: id,
 			anchorId: null,
 			status: "completed",
 			startedAt: 0,
 			endedAt,
-			result: textResult(id),
+			result: { text: id, truncated: false },
 			...overrides,
 		} satisfies TaskSnapshot,
 	};
@@ -396,7 +403,7 @@ describe("independent foreground and background histories", () => {
 		const bg = retention(1);
 		const run = launch(bg, "bash");
 		let cleaned = false;
-		run.control.setOutputPath("diagnostic-log", () => {
+		run.control.attachOutput("diagnostic-log", () => {
 			cleaned = true;
 		});
 		expect(bg.detachForeground()).toBe(1);

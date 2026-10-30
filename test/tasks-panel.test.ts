@@ -11,8 +11,10 @@ function task(id: string, overrides: Partial<TaskSnapshot> = {}): TaskSnapshot {
 	return {
 		id,
 		kind: "bash",
-		title: id,
-		command: `echo ${id}`,
+		label: "Bash",
+		title: `echo ${id}`,
+		output: "log",
+		input: { label: "Command", text: `echo ${id}`, truncated: false },
 		mode: "foreground",
 		status: "running",
 		startedAt: 0,
@@ -213,24 +215,28 @@ describe("task panel views", () => {
 		for (const line of ["line-070", "line-079"]) expect(frame).toContain(theme.fg("toolOutput", line));
 	});
 	it("shows a task without a command by its title and kind", async () => {
-		const h = harness([task("review", { kind: "review", command: undefined, title: "Inspect boundaries" })]);
+		const h = harness([
+			task("review", { kind: "review", label: "Review", input: undefined, title: "Inspect boundaries" }),
+		]);
 		await vi.advanceTimersByTimeAsync(0);
 		expect(h.left()).toContain("Inspect boundaries");
 		h.menu.handleInput("\t");
 		h.menu.handleInput("\x1b[C");
-		expect(h.frame()).toContain("review");
+		expect(h.frame()).toContain("Review");
 		expect(h.frame()).toContain("Title     Inspect boundaries");
 	});
 	it("renders executor-owned Details separately from published Output", async () => {
 		const h = harness([
 			task("agent-test", {
 				kind: "agent",
-				command: undefined,
+				label: "Agent",
+				output: "report",
 				title: "Inspect boundaries",
-				info: {
-					text: "Agent\nModel     test/model\nThinking  high\n\nPrompt\nInspect boundaries",
-					truncated: false,
-				},
+				input: { label: "Prompt", text: "Inspect boundaries\nwith a second line", truncated: false },
+				facts: [
+					["Model", "test/model"],
+					["Thinking", "high"],
+				],
 			}),
 		]);
 		h.setOutput('✓ read {"path":"src/index.ts"} 2ms');
@@ -248,12 +254,14 @@ describe("task panel views", () => {
 		const h = harness([
 			task("agent-markdown", {
 				kind: "agent",
-				command: undefined,
+				label: "Agent",
+				output: "report",
+				input: { label: "Prompt", text: "Inspect Markdown", truncated: false },
 				title: "Inspect Markdown",
 				status: "completed",
 				endedAt: 1000,
 				display: {
-					text: 'Supervisor messages\nAgent → Main: Need direction.\n\nTool calls\n✓ read {"path":"src/index.ts"} 2ms',
+					text: 'Parent messages\nAgent → Parent: Need direction.\n\nTool calls\n✓ read {"path":"src/index.ts"} 2ms',
 					truncated: false,
 				},
 			}),
@@ -267,14 +275,20 @@ describe("task panel views", () => {
 		expect(h.frame()).not.toContain("**Bold**");
 		expect(h.frame()).not.toContain("`src/index.ts`");
 		expect(h.menu.render(140).join("\n")).toContain(theme.fg("mdCode", "src/index.ts"));
-		expect(h.frame()).toContain("Agent → Main: Need direction.");
+		expect(h.frame()).toContain("Agent → Parent: Need direction.");
 		expect(h.frame()).toContain("Tool calls");
 		expect(h.frame()).toContain('✓ read {"path":"src/index.ts"} 2ms');
 	});
 
 	it("scrolls long information independently and honors rebound controls", async () => {
 		const command = Array.from({ length: 50 }, (_, i) => `echo parameter-${i}`).join("\n");
-		const h = harness([task("custom", { kind: "custom", command })]);
+		const h = harness([
+			task("custom", {
+				kind: "custom",
+				title: "parameters",
+				input: { label: "Script", text: command, truncated: false },
+			}),
+		]);
 		await vi.advanceTimersByTimeAsync(0);
 		h.keybindings.setUserBindings({ "app.tasks.nextTab": "i", "app.tasks.kill": "x" });
 		h.menu.handleInput("\t");
@@ -645,7 +659,7 @@ describe("task panel interaction", () => {
 		expect(h.frame()).toContain("final output");
 	});
 	it("gives a narrow inspector twelve output lines and keeps metadata behind Details", async () => {
-		const h = harness([backgroundTask("build", { cwd: "/project" })], { width: 72, height: 22 });
+		const h = harness([backgroundTask("build", { facts: [["Directory", "/project"]] })], { width: 72, height: 22 });
 		await vi.advanceTimersByTimeAsync(0);
 		expect(h.frame()).not.toContain("line-079");
 		h.menu.handleInput("\t");

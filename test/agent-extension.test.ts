@@ -3,8 +3,9 @@ import { join } from "node:path";
 import { type Context, fauxAssistantMessage, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sdk from "../src/core/sdk.ts";
+import { TASK_RECORD_TYPE } from "../src/core/tasks/codec.ts";
+import { projectForModel } from "../src/core/tasks/presentation.ts";
 import { createAgentTool } from "../src/extensions/agent/index.ts";
-import { AgentGate } from "../src/extensions/agent/runner.ts";
 import { createHarness, getMessageText, type Harness } from "./suite/harness.ts";
 
 let harness: Harness;
@@ -14,7 +15,7 @@ afterEach(() => {
 });
 
 describe("Agent delegation", () => {
-	it("uses an isolated coding session and returns activity, report, usage and Tasks details", async () => {
+	it("uses an isolated coding session and returns its report with usage and Tasks details", async () => {
 		harness = await createHarness({ settings: { compaction: { enabled: false } } });
 		writeFileSync(join(harness.tempDir, "entry.ts"), "export const answer = 42;\n");
 		harness.setResponses([
@@ -24,7 +25,7 @@ describe("Agent delegation", () => {
 					"bash",
 					"edit",
 					"write",
-					"contact_supervisor",
+					"message_parent",
 				]);
 				expect(JSON.stringify(context.messages)).not.toContain("PRIVATE_PARENT_CONVERSATION");
 				return fauxAssistantMessage(fauxToolCall("read", { path: "entry.ts" }), { stopReason: "toolUse" });
@@ -40,18 +41,26 @@ describe("Agent delegation", () => {
 			harness.session.extensionRunner.createToolContext("agent-call", undefined),
 		);
 		expect(getMessageText(result)).toContain("entry.ts:1");
-		expect(result.details?.activities).toMatchObject([{ name: "read", target: "entry.ts", status: "ok" }]);
+		expect(result.details).toEqual({ version: 2, state: "completed", taskId: expect.any(String) });
 		const task = harness.session.tasks.list()[0]!;
-		expect(task).toMatchObject({ kind: "agent", title: "Inspect entry", status: "completed" });
-		expect(task.info?.text).toContain("Inspect entry.ts and report the export");
-		expect(task.info?.text).toContain(`${harness.models[0]!.provider}/${harness.models[0]!.id}`);
+		expect(task).toMatchObject({
+			kind: "agent",
+			label: "Agent",
+			output: "report",
+			title: "Inspect entry",
+			status: "completed",
+			input: { label: "Prompt", text: "Inspect entry.ts and report the export" },
+		});
+		expect(task.facts).toContainEqual(["Model", `${harness.models[0]!.provider}/${harness.models[0]!.id}`]);
+		expect(task.display?.text).toContain("Tool calls");
+		expect(task.display?.text).toContain('read {"path":"entry.ts"}');
 		expect(task.outputPath).toBeUndefined();
 		expect((await harness.session.tasks.read(task.id)).text).toContain("## Report");
-		expect(
-			harness.sessionManager
-				.getEntries()
-				.filter((entry) => entry.type === "custom" && entry.customType === "task-usage"),
-		).toHaveLength(1);
+		const records = harness.sessionManager
+			.getEntries()
+			.flatMap((entry) => (entry.type === "custom" && entry.customType === TASK_RECORD_TYPE ? [entry.data] : []));
+		expect(records).toEqual([expect.objectContaining({ task: expect.objectContaining({ id: task.id }) })]);
+		expect(records[0]).toHaveProperty("usage.totalTokens");
 	});
 
 	it("preserves an oversized report as managed output and returns a bounded preview", async () => {
@@ -95,13 +104,15 @@ describe("Agent delegation", () => {
 				undefined,
 				harness.session.extensionRunner.createToolContext("background-report", undefined),
 			);
-			expect(handoff.details?.status).toBe("background");
+			expect(handoff.details?.state).toBe("background");
 			const taskId = handoff.details?.taskId;
 			expect(taskId).toBeDefined();
 			const task = await harness.session.tasks.wait(taskId!);
 			expect(task.status).toBe("completed");
 			expect(task.outputPath).toBeDefined();
 			expect(readFileSync(task.outputPath!, "utf8")).toBe(report);
+			// The notification leads with the report's beginning, as a foreground result would.
+			expect(projectForModel(task)).toContain("BACKGROUND");
 		} finally {
 			resumeNotifications();
 		}
@@ -138,7 +149,7 @@ describe("Agent delegation", () => {
 		const taskId = handoff.details!.taskId;
 		await vi.waitFor(() => {
 			const task = harness.session.tasks.get(taskId);
-			expect(getMessageText(task.result)).toContain("Found the export");
+			expect(task.result?.text).toContain("Found the export");
 			expect(task.display?.text).toContain("Tool calls");
 		});
 		const running = await harness.session.tasks.read(taskId);
@@ -152,13 +163,13 @@ describe("Agent delegation", () => {
 		expect(harness.session.tasks.get(taskId).display?.text).toContain("Tool calls");
 	});
 
-	it("pushes only explicit supervisor messages and delivers steering to the same child", async () => {
+	it("pushes only explicit parent messages and delivers steering to the same child", async () => {
 		harness = await createHarness({ settings: { compaction: { enabled: false } } });
 		await harness.session.bindExtensions({ tasksEnabled: true });
 		let releaseChild: ((message: ReturnType<typeof fauxAssistantMessage>) => void) | undefined;
 		let childRequests = 0;
 		const route = (context: Context) => {
-			if (!getCurrentTools(context.messages).some((tool) => tool.name === "contact_supervisor"))
+			if (!getCurrentTools(context.messages).some((tool) => tool.name === "message_parent"))
 				return fauxAssistantMessage("Parent noted the message.");
 			childRequests++;
 			if (childRequests > 1) {
@@ -173,7 +184,7 @@ describe("Agent delegation", () => {
 			fauxAssistantMessage(
 				[
 					{ type: "text", text: "Routine progress remains available on demand." },
-					fauxToolCall("contact_supervisor", { message: "Need direction on compatibility." }),
+					fauxToolCall("message_parent", { message: "Need direction on compatibility." }),
 				],
 				{ stopReason: "toolUse" },
 			),
@@ -182,11 +193,11 @@ describe("Agent delegation", () => {
 			route,
 		]);
 		const handoff = await createAgentTool().execute(
-			"supervisor-message",
+			"parent-message",
 			{ prompt: "Investigate compatibility", background: true },
 			undefined,
 			undefined,
-			harness.session.extensionRunner.createToolContext("supervisor-message", undefined),
+			harness.session.extensionRunner.createToolContext("parent-message", undefined),
 		);
 		const taskId = handoff.details!.taskId;
 		await vi.waitFor(() => {
@@ -211,8 +222,8 @@ describe("Agent delegation", () => {
 		expect((await harness.session.tasks.wait(taskId)).status).toBe("completed");
 		expect((await harness.session.tasks.read(taskId)).text).toBe("Steered final report");
 		const display = harness.session.tasks.get(taskId).display?.text ?? "";
-		expect(display).toContain("Agent → Main: Need direction on compatibility.");
-		expect(display).toContain("Main → Agent: Focus on the compatibility tests");
+		expect(display).toContain("Agent → Parent: Need direction on compatibility.");
+		expect(display).toContain("Parent → Agent: Focus on the compatibility tests");
 	});
 
 	it("honors declined project trust without dropping repository instructions", async () => {
@@ -323,7 +334,7 @@ describe("Agent delegation", () => {
 				},
 				harness.session.extensionRunner.createToolContext("early-cancel", parent.signal),
 			);
-			expect(result.details?.status).toBe("cancelled");
+			expect(result.details?.state).toBe("cancelled");
 			expect(harness.session.tasks.list()[0]?.status).toBe("cancelled");
 			expect(harness.faux.state.callCount).toBe(0);
 			expect(existsSync(join(harness.tempDir, "cancelled.txt"))).toBe(false);
@@ -349,7 +360,7 @@ describe("Agent delegation", () => {
 			undefined,
 			harness.session.extensionRunner.createToolContext("initialization-cancel", parent.signal),
 		);
-		expect(result.details?.status).toBe("cancelled");
+		expect(result.details?.state).toBe("cancelled");
 		expect(harness.faux.state.callCount).toBe(0);
 		expect(child).toBeDefined();
 		expect(() => child!.extensionRunner.createContext().getExtensionSettings("agent")).toThrow(/stale/);
@@ -380,10 +391,10 @@ describe("Agent delegation", () => {
 		await vi.waitFor(() => expect(harness.faux.state.callCount).toBe(2));
 		parent.abort();
 		const result = await running;
-		expect(result.details?.status).toBe("cancelled");
+		expect(result.details?.state).toBe("cancelled");
 		const task = harness.session.tasks.list()[0]!;
 		expect(task.status).toBe("cancelled");
-		expect(getMessageText(task.result)).toContain("Found entry.ts");
+		expect(task.result?.text).toContain("Found entry.ts");
 	});
 
 	it("continues the same Agent after foreground handoff and parent cancellation", async () => {
@@ -412,7 +423,7 @@ describe("Agent delegation", () => {
 		const task = harness.session.tasks.list()[0]!;
 		expect(harness.session.tasks.detach(task.id)).toBe(true);
 		const handoff = await running;
-		expect(handoff.details?.status).toBe("background");
+		expect(handoff.details).toMatchObject({ state: "background", byUser: true });
 		expect(getMessageText(handoff)).toContain(task.id);
 		parent.abort();
 		release();
@@ -421,7 +432,7 @@ describe("Agent delegation", () => {
 		resumeNotifications();
 	});
 
-	it("keeps parallel calls independent and exposes gate waiting as queued Tasks", async () => {
+	it("keeps parallel calls independent and exposes lane waiting as queued Tasks", async () => {
 		harness = await createHarness({ settings: { compaction: { enabled: false } } });
 		const releases: Array<() => void> = [];
 		harness.setResponses(
@@ -432,7 +443,7 @@ describe("Agent delegation", () => {
 				});
 			}),
 		);
-		const tool = createAgentTool(new AgentGate(1));
+		const tool = createAgentTool({ concurrency: 1 });
 		const calls = ["one", "two", "three"].map((name) =>
 			tool.execute(
 				name,
@@ -459,6 +470,41 @@ describe("Agent delegation", () => {
 		expect(harness.session.tasks.list().every((task) => task.status === "completed")).toBe(true);
 	});
 
+	it("returns a queued background Agent immediately and starts it when a slot frees", async () => {
+		harness = await createHarness({ settings: { compaction: { enabled: false } } });
+		await harness.session.bindExtensions({ tasksEnabled: true });
+		harness.session.pauseTaskNotifications();
+		let releaseFirst!: () => void;
+		harness.setResponses([
+			() =>
+				new Promise((resolve) => {
+					releaseFirst = () => resolve(fauxAssistantMessage("First report"));
+				}),
+			fauxAssistantMessage("Queued report"),
+		]);
+		const tool = createAgentTool({ concurrency: 1 });
+		const context = (id: string) => harness.session.extensionRunner.createToolContext(id, undefined);
+		const first = tool.execute("first", { prompt: "first" }, undefined, undefined, context("first"));
+		await vi.waitFor(() => expect(harness.faux.state.callCount).toBe(1));
+		const queued = await tool.execute(
+			"queued",
+			{ prompt: "queued", background: true },
+			undefined,
+			undefined,
+			context("queued"),
+		);
+		expect(queued.details).toMatchObject({ state: "background", byUser: false });
+		expect(getMessageText(queued)).toContain("queued until an Agent slot frees");
+		const taskId = queued.details!.taskId;
+		expect(harness.session.tasks.get(taskId).status).toBe("queued");
+		// Nothing can consume guidance before the worker exists, so the runtime must not claim delivery.
+		expect(await harness.session.tasks.steer(taskId, "Too early")).toBe(false);
+		releaseFirst();
+		expect(getMessageText(await first)).toBe("First report");
+		expect((await harness.session.tasks.wait(taskId)).status).toBe("completed");
+		expect((await harness.session.tasks.read(taskId)).text).toBe("Queued report");
+	});
+
 	it("fails an unavailable configured model before accepting background work", async () => {
 		harness = await createHarness();
 		await harness.session.bindExtensions({ tasksEnabled: true });
@@ -469,28 +515,5 @@ describe("Agent delegation", () => {
 		).rejects.toThrow(/model/i);
 		expect(harness.faux.state.callCount).toBe(0);
 		expect(harness.session.tasks.list()).toEqual([]);
-	});
-});
-
-describe("AgentGate", () => {
-	it("bounds concurrent workers and releases aborted waiters", async () => {
-		const gate = new AgentGate(1);
-		const first = new AbortController();
-		const releaseFirst = await gate.acquire(first.signal);
-		const second = new AbortController();
-		let entered = false;
-		const waiting = gate.acquire(second.signal).then((release) => {
-			entered = true;
-			release();
-		});
-		await Promise.resolve();
-		expect(entered).toBe(false);
-		second.abort();
-		await expect(waiting).rejects.toThrow();
-		const third = new AbortController();
-		const next = gate.acquire(third.signal);
-		releaseFirst();
-		const releaseThird = await next;
-		releaseThird();
 	});
 });

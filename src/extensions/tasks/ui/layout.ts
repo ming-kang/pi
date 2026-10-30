@@ -128,7 +128,7 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 	if (task) {
 		if (!wide)
 			content.push(
-				theme.fg("text", cleanTaskText(firstCommandLine(task.command ?? task.title))),
+				theme.fg("text", cleanTaskText(firstCommandLine(task.title))),
 				theme.fg("muted", `${statusName(task.status)} · ${runtimeLabel(task)}`),
 			);
 		const lines = inspector.lines(tab, rightWidth - 2);
@@ -218,10 +218,7 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 			addHint("tui.select.cancel", "back", { cancel: true });
 		} else {
 			const target = selection.all.find((task) => task.id === options.pendingKill);
-			const command = wrapTextWithAnsi(
-				cleanTaskText(target?.command ?? target?.title ?? options.pendingKill!),
-				width - 2,
-			);
+			const command = wrapTextWithAnsi(cleanTaskText(target?.title ?? options.pendingKill!), width - 2);
 			const preview = command.slice(0, height - 8);
 			if (preview.length < command.length) preview[preview.length - 1] = "… Full command in Details.";
 			body = [
