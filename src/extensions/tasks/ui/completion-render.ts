@@ -1,40 +1,37 @@
 /** Human-facing completion cards. The persisted context message remains untouched. */
-import { type Component, stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { type Component, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { MessageRenderOptions } from "../../../core/extensions/types.ts";
 import type { CustomMessage } from "../../../core/messages.ts";
 import { readVersionedTask } from "../../../core/tasks/codec.ts";
 import { runtimeLabel } from "../../../core/tasks/format.ts";
 import type { TaskFact, TaskStatus } from "../../../core/tasks/types.ts";
-import { type StatusMarkerColor, statusMarker } from "../../../modes/interactive/components/status-marker.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import { FramedComponent } from "../../../modes/interactive/tool-view/style.ts";
-import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
-import { statusName } from "./task-view.ts";
+import { statusName, statusView } from "./status.ts";
+import { cleanTaskText } from "./text.ts";
 
 const SOURCE_LIMIT = 64 * 1024;
 const CARD_ROWS = 128;
 const OUTPUT_ROWS = 20;
-interface CompletionView {
-	label?: string;
-	title?: string;
-	duration?: string;
-	status?: TaskStatus;
-	id?: string;
-	input?: { label: string; text: string };
-	facts: TaskFact[];
-	path?: string;
-	diagnostic?: string;
-	/** Undefined for an unreadable message, whose saved content is shown instead. */
-	output?: string;
-	/** A report previews its beginning; a log previews its end. */
-	report?: boolean;
-	body: string;
-	truncated: boolean;
-}
-
-function clean(text: string): string {
-	return sanitizeBinaryOutput(stripTerminalSequences(text)).replace(/\r\n?/g, "\n");
-}
+/** A persisted task completion, or the saved text of a message that is unreadable or from an older format. */
+type CompletionView =
+	| {
+			kind: "task";
+			label: string;
+			title: string;
+			duration: string;
+			status: TaskStatus;
+			id: string;
+			input?: { label: string; text: string };
+			facts: TaskFact[];
+			path?: string;
+			diagnostic?: string;
+			output: string;
+			/** A report previews its beginning; a log previews its end. */
+			report: boolean;
+			truncated: boolean;
+	  }
+	| { kind: "saved"; body: string; truncated: boolean };
 
 function savedText(message: CustomMessage<unknown>): { text: string; clipped: boolean } {
 	// 64K is a UTF-16 code-unit display budget, not a UTF-8 byte promise; the block
@@ -63,35 +60,32 @@ function savedText(message: CustomMessage<unknown>): { text: string; clipped: bo
 			}
 		}
 	}
-	return { text: clean(text), clipped };
+	return { text: cleanTaskText(text), clipped };
 }
 
 function completionView(message: CustomMessage<unknown>): CompletionView {
 	const task = readVersionedTask(message.details);
 	if (!task) {
 		const { text, clipped } = savedText(message);
-		return { body: text, truncated: clipped, facts: [] };
+		return { kind: "saved", body: text, truncated: clipped };
 	}
 	return {
-		label: clean(task.label),
-		title: clean(task.title),
+		kind: "task",
+		label: cleanTaskText(task.label),
+		title: cleanTaskText(task.title),
 		duration: runtimeLabel(task),
 		status: task.status,
-		id: clean(task.id),
-		input: task.input && { label: clean(task.input.label), text: clean(task.input.text) },
-		facts: (task.facts ?? []).map(([label, value]) => [clean(label), clean(value)]),
-		path: task.outputPath === undefined ? undefined : clean(task.outputPath),
-		diagnostic: task.error === undefined ? undefined : clean(task.error),
-		output: clean(task.result?.text ?? ""),
+		id: cleanTaskText(task.id),
+		input: task.input && { label: cleanTaskText(task.input.label), text: cleanTaskText(task.input.text) },
+		facts: (task.facts ?? []).map(([label, value]) => [cleanTaskText(label), cleanTaskText(value)]),
+		path: task.outputPath === undefined ? undefined : cleanTaskText(task.outputPath),
+		diagnostic: task.error === undefined ? undefined : cleanTaskText(task.error),
+		output: cleanTaskText(task.result?.text ?? ""),
 		report: task.output === "report",
-		body: "",
 		truncated: task.result?.truncated === true || task.input?.truncated === true,
 	};
 }
 
-function color(status: string | undefined): StatusMarkerColor {
-	return status === undefined ? "muted" : statusMarker(status).color;
-}
 function shortId(id: string): string {
 	return id.replace(/^(.+)-([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, "$1-$2");
 }
@@ -111,7 +105,7 @@ class CompletionCard implements Component {
 		const chrome = new FramedComponent(
 			{ render: (contentWidth) => this.renderContent(contentWidth), invalidate() {} },
 			"header",
-			() => color(this.view.status),
+			() => (this.view.kind === "task" ? statusView(this.view.status).color : "muted"),
 		);
 		// The gutter reserves its own cells; clip defensively for one-cell terminals.
 		return chrome.render(width).map((line) => truncateToWidth(line, width, ""));
@@ -129,14 +123,19 @@ class CompletionCard implements Component {
 		const indent = inner >= 3 ? "  " : "";
 		const bodyWidth = Math.max(1, inner - indent.length);
 		const lines: string[] = [];
-		const status = view.status ? statusName(view.status) : "Result received";
+		const status = view.kind === "task" ? statusName(view.status) : "Result received";
+		const label = view.kind === "task" ? view.label : "Notification";
+		const duration = view.kind === "task" && view.duration ? ` · ${view.duration}` : "";
+		const id = view.kind === "task" ? view.id : "";
 		lines.push(
-			`${theme.fg("toolTitle", theme.bold(view.label ?? "Notification"))}${theme.fg("muted", ` · Background ${status.toLowerCase()}${view.duration ? ` · ${view.duration}` : ""}`)}${view.id ? theme.fg("dim", ` · ${shortId(view.id)}`) : ""}`,
+			`${theme.fg("toolTitle", theme.bold(label))}${theme.fg("muted", ` · Background ${status.toLowerCase()}${duration}`)}${id ? theme.fg("dim", ` · ${shortId(id)}`) : ""}`,
 		);
-		const summary = view.title?.split("\n").find((line) => line.trim()) ?? view.title;
 		if (!options.expanded) {
-			if (summary) lines.push(theme.fg("toolOutput", summary));
-			if (view.diagnostic) lines.push(theme.fg(color(view.status), view.diagnostic));
+			if (view.kind === "task") {
+				const summary = view.title.split("\n").find((line) => line.trim()) ?? view.title;
+				if (summary) lines.push(theme.fg("toolOutput", summary));
+				if (view.diagnostic) lines.push(theme.fg(statusView(view.status).color, view.diagnostic));
+			}
 		} else {
 			if (view.truncated) {
 				lines.push(theme.fg("warning", "The saved result is truncated; this is not the complete original output."));
@@ -152,7 +151,7 @@ class CompletionCard implements Component {
 				for (const line of selected) lines.push(indent + line);
 				if (!tail && omitted) lines.push(theme.fg("dim", `${indent}… ${omitted} more display lines omitted`));
 			};
-			if (view.output === undefined) section("Details", view.body || "No text result.", 36);
+			if (view.kind === "saved") section("Details", view.body || "No text result.", 36);
 			else {
 				if (view.input) section(view.input.label, view.input.text, 8);
 				else if (view.title) section("Task", view.title, 4);
@@ -170,8 +169,8 @@ class CompletionCard implements Component {
 				section("Output", !view.output.trim() ? "No output." : view.output, OUTPUT_ROWS, !view.report);
 				if (view.path) section("Log", view.path, 4);
 			}
-			if (view.id) {
-				lines.push("", ...wrapTextWithAnsi(`Task ID: ${view.id}`, inner).map((line) => theme.fg("dim", line)));
+			if (id) {
+				lines.push("", ...wrapTextWithAnsi(`Task ID: ${id}`, inner).map((line) => theme.fg("dim", line)));
 			}
 			lines.push(theme.fg("dim", "Preview of the saved result."));
 		}
@@ -197,9 +196,9 @@ export function renderTaskCompletion(
 		view = completionView(message);
 	} catch {
 		view = {
+			kind: "saved",
 			body: "The saved notification could not be interpreted. Its original message remains in session history.",
 			truncated: false,
-			facts: [],
 		};
 	}
 	return new CompletionCard(view, options, theme);

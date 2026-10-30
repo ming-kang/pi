@@ -14,12 +14,14 @@ import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import { TaskInspector } from "./inspector.ts";
 import { renderTasksLayout, type TasksLayout } from "./layout.ts";
 import { TaskList } from "./list.ts";
-import { TaskSelection, type TasksPanelState } from "./model.ts";
+import { isStoppable, type PanelFocus, type PanelMode, TaskSelection, type TasksPanelState } from "./model.ts";
 import { cleanTaskText } from "./text.ts";
 import { TaskViewport } from "./viewport.ts";
 
-export type TasksManagerHost = Pick<TasksContext, "list" | "read" | "kill" | "subscribe" | "retain"> &
-	Partial<Pick<TasksContext, "detach" | "enabled">>;
+export type TasksManagerHost = Pick<
+	TasksContext,
+	"list" | "read" | "kill" | "subscribe" | "retain" | "canDetach" | "detach"
+>;
 export interface TasksMenuOptions {
 	tui: { requestRender(): void; terminal: { rows: number; columns: number } };
 	theme: Theme;
@@ -30,6 +32,7 @@ export interface TasksMenuOptions {
 	pollIntervalMs?: number;
 }
 
+const BROWSE: PanelMode = { kind: "browse" };
 const actions: AppKeybinding[] = [
 	"app.tasks.search",
 	"app.tasks.kill",
@@ -54,12 +57,9 @@ export class TasksMenu implements Component, Focusable {
 	private readonly unsubscribe: () => void;
 	private readonly pollTimer: ReturnType<typeof setInterval>;
 	private animationTimer?: ReturnType<typeof setInterval>;
-	private pendingKill?: string;
+	private mode: PanelMode = BROWSE;
 	private feedback?: string;
-	private focus: "list" | "inspector" = "list";
-	private searching = false;
-	private beforeSearch?: { id?: string; focus: "list" | "inspector" };
-	private help?: TaskViewport;
+	private focus: PanelFocus = "list";
 	private dirty = true;
 	private tickQueued = false;
 	private refreshQueued = false;
@@ -102,8 +102,8 @@ export class TasksMenu implements Component, Focusable {
 		const selected = this.selection.selected;
 		if (selected && isTaskTerminal(selected.status) && previous && !isTaskTerminal(previous.status))
 			this.feedback = undefined;
-		if (this.pendingKill && (this.pendingKill !== selected?.id || (selected && isTaskTerminal(selected.status))))
-			this.clearKill();
+		if (this.mode.kind === "confirmStop" && (this.mode.taskId !== selected?.id || isTaskTerminal(selected.status)))
+			this.setMode(BROWSE);
 		const animates = this.selection.all.some((task) => task.status === "running");
 		if (animates && !this.animationTimer) {
 			this.animationTimer = setInterval(() => this.options.tui.requestRender(), STATUS_SPINNER_INTERVAL_MS);
@@ -135,47 +135,70 @@ export class TasksMenu implements Component, Focusable {
 	invalidate(): void {
 		this.inspector.invalidate();
 	}
-	private clearKill(): void {
-		this.pendingKill = undefined;
+	/** The one place the mode changes; the search input is focused exactly while searching. */
+	private setMode(next: PanelMode): void {
+		this.mode = next;
+		this.search.focused = next.kind === "search";
+	}
+	/** Unwinds exactly one transient layer; from plain browsing it closes the panel. */
+	private cancel(): void {
+		switch (this.mode.kind) {
+			case "search":
+				this.finishSearch(true);
+				break;
+			case "help":
+			case "confirmStop":
+				this.setMode(BROWSE);
+				break;
+			case "browse":
+				this.close();
+				break;
+		}
+	}
+	private close(): void {
+		this.dispose();
+		this.options.onClose();
 	}
 	private selectedChanged(): void {
-		this.clearKill();
+		if (this.mode.kind === "confirmStop") this.setMode(BROWSE);
 		this.list.showSelection();
 		this.inspector.select(this.selection.selected);
 		this.queueTick(true);
 	}
-	private stop(confirm = false): void {
+	private requestStop(): void {
 		const task = this.selection.selected;
-		if (confirm) {
-			const id = this.pendingKill;
-			this.clearKill();
-			if (!id || id !== task?.id || isTaskTerminal(task.status)) return;
-			this.feedback = this.options.host.kill(id)
-				? "Cancellation requested; waiting for cleanup."
-				: "No new cancellation requested.";
-		} else if (task && !isTaskTerminal(task.status) && task.status !== "stopping") {
-			this.pendingKill = task.id;
-		}
+		if (task && isStoppable(task)) this.setMode({ kind: "confirmStop", taskId: task.id });
+	}
+	private confirmStop(): void {
+		const mode = this.mode;
+		if (mode.kind !== "confirmStop") return;
+		this.setMode(BROWSE);
+		const task = this.selection.selected;
+		if (mode.taskId !== task?.id || isTaskTerminal(task.status)) return;
+		this.feedback = this.options.host.kill(mode.taskId)
+			? "Cancellation requested; waiting for cleanup."
+			: "No new cancellation requested.";
+	}
+	private startSearch(): void {
+		this.setMode({ kind: "search", restore: { id: this.selection.state.selectedId, focus: this.focus } });
+		this.focus = "list";
+		this.search.setValue("");
 	}
 	private finishSearch(cancel: boolean): void {
-		const id = cancel ? this.beforeSearch?.id : this.selection.state.selectedId;
+		const mode = this.mode;
+		if (mode.kind !== "search") return;
+		const id = cancel ? mode.restore.id : this.selection.state.selectedId;
 		if (!cancel && !id) return;
-		this.focus = cancel ? (this.beforeSearch?.focus ?? "list") : "list";
-		this.searching = false;
-		this.search.focused = false;
+		this.focus = cancel ? mode.restore.focus : "list";
+		this.setMode(BROWSE);
 		this.selection.query = "";
 		this.selection.select(id);
-		this.beforeSearch = undefined;
 		this.selectedChanged();
 	}
 	private action(key: AppKeybinding): void {
 		switch (key) {
 			case "app.tasks.search":
-				this.beforeSearch = { id: this.selection.state.selectedId, focus: this.focus };
-				this.focus = "list";
-				this.searching = true;
-				this.search.focused = true;
-				this.search.setValue("");
+				this.startSearch();
 				break;
 			case "app.tasks.previousTab":
 			case "app.tasks.nextTab":
@@ -206,33 +229,29 @@ export class TasksMenu implements Component, Focusable {
 					);
 				break;
 			case "app.tasks.kill":
-				this.stop();
+				this.requestStop();
 				break;
 			case "app.tasks.confirmStop":
-				this.stop(true);
+				this.confirmStop();
 				break;
 			case "app.tasks.detachSelected": {
 				const task = this.selection.selected;
-				if (
-					task?.mode === "foreground" &&
-					!isTaskTerminal(task.status) &&
-					task.status !== "stopping" &&
-					this.options.host.enabled !== false
-				) {
-					this.feedback = this.options.host.detach?.(task.id)
+				// The core decides; a full background lane throws its own explanation, shown as feedback.
+				if (task?.mode === "foreground" && isStoppable(task)) {
+					this.feedback = this.options.host.detach(task.id)
 						? "Selected task moved to background; execution continues."
 						: "This task cannot move to background.";
 				}
 				break;
 			}
 			case "app.tasks.help":
-				this.help = this.help ? undefined : new TaskViewport();
+				this.setMode({ kind: "help", viewport: new TaskViewport() });
 				break;
 		}
 	}
 	private move(direction: number, page = false): void {
-		if (this.help) {
-			this.help.move(direction, page, false);
+		if (this.mode.kind === "help") {
+			this.mode.viewport.move(direction, page, false);
 			return;
 		}
 		if (this.focus === "list") {
@@ -251,67 +270,80 @@ export class TasksMenu implements Component, Focusable {
 		if (this.disposed) return;
 		this.sync();
 		this.render(this.width);
-		const kb = this.options.keybindings;
 		this.feedback = undefined;
 		try {
 			if (this.layout?.tooSmall) {
 				// The resize notice owns the screen; keys must not act on the hidden panel.
-				// Cancel unwinds one transient state at a time, then closes.
-				if (kb.matches(data, "tui.select.cancel")) {
-					if (this.help) this.help = undefined;
-					else if (this.searching) this.finishSearch(true);
-					else if (this.pendingKill) this.clearKill();
-					else {
-						this.dispose();
-						this.options.onClose();
-						return;
-					}
-				}
-			} else if (this.help) {
-				if (kb.matches(data, "tui.select.cancel") || kb.matches(data, "app.tasks.help")) this.help = undefined;
-				else if (kb.matches(data, "app.tasks.top") || kb.matches(data, "app.tasks.bottom"))
-					this.help.jump(kb.matches(data, "app.tasks.bottom"), false);
-				else if (kb.matches(data, "tui.select.up") || kb.matches(data, "tui.editor.pageUp"))
-					this.help.move(-1, kb.matches(data, "tui.editor.pageUp"), false);
-				else if (kb.matches(data, "tui.select.down") || kb.matches(data, "tui.editor.pageDown"))
-					this.help.move(1, kb.matches(data, "tui.editor.pageDown"), false);
-			} else if (this.searching) {
-				if (kb.matches(data, "tui.select.cancel")) this.finishSearch(true);
-				else if (kb.matches(data, "tui.select.confirm")) this.finishSearch(false);
-				else if (kb.matches(data, "tui.select.up") || kb.matches(data, "tui.select.pageUp"))
-					this.move(-1, kb.matches(data, "tui.select.pageUp"));
-				else if (kb.matches(data, "tui.select.down") || kb.matches(data, "tui.select.pageDown"))
-					this.move(1, kb.matches(data, "tui.select.pageDown"));
-				else {
-					this.search.handleInput(data);
-					this.selection.query = this.search.getValue().slice(0, 512);
-					this.selection.refresh();
-					this.selectedChanged();
-				}
-			} else if (this.pendingKill) {
-				if (kb.matches(data, "app.tasks.confirmStop")) this.stop(true);
-				else if (kb.matches(data, "tui.select.cancel")) this.clearKill();
-			} else if (kb.matches(data, "tui.select.cancel")) {
-				this.dispose();
-				this.options.onClose();
-				return;
+				if (this.options.keybindings.matches(data, "tui.select.cancel")) this.cancel();
 			} else {
-				const pageUp = kb.matches(data, this.focus === "list" ? "tui.select.pageUp" : "tui.editor.pageUp");
-				const pageDown = kb.matches(data, this.focus === "list" ? "tui.select.pageDown" : "tui.editor.pageDown");
-				if (pageUp || kb.matches(data, "tui.select.up")) this.move(-1, pageUp);
-				else if (pageDown || kb.matches(data, "tui.select.down")) this.move(1, pageDown);
-				else if (kb.matches(data, "tui.select.confirm")) {
-					if (this.focus === "list" && this.selection.selected) this.focus = "inspector";
-				} else {
-					const key = actions.find((key) => kb.matches(data, key));
-					if (key) this.action(key);
+				switch (this.mode.kind) {
+					case "help":
+						this.helpInput(this.mode.viewport, data);
+						break;
+					case "search":
+						this.searchInput(data);
+						break;
+					case "confirmStop":
+						this.confirmInput(data);
+						break;
+					case "browse":
+						this.browseInput(data);
+						break;
 				}
 			}
 		} catch (error) {
 			this.feedback = cleanTaskText(error instanceof Error ? error.message : String(error));
 		}
+		if (this.disposed) return;
 		this.queueTick(true);
 		this.options.tui.requestRender();
+	}
+	private helpInput(viewport: TaskViewport, data: string): void {
+		const kb = this.options.keybindings;
+		if (kb.matches(data, "tui.select.cancel") || kb.matches(data, "app.tasks.help")) this.setMode(BROWSE);
+		else if (kb.matches(data, "app.tasks.top") || kb.matches(data, "app.tasks.bottom"))
+			viewport.jump(kb.matches(data, "app.tasks.bottom"), false);
+		else if (kb.matches(data, "tui.select.up") || kb.matches(data, "tui.editor.pageUp"))
+			viewport.move(-1, kb.matches(data, "tui.editor.pageUp"), false);
+		else if (kb.matches(data, "tui.select.down") || kb.matches(data, "tui.editor.pageDown"))
+			viewport.move(1, kb.matches(data, "tui.editor.pageDown"), false);
+	}
+	private searchInput(data: string): void {
+		const kb = this.options.keybindings;
+		if (kb.matches(data, "tui.select.cancel")) this.cancel();
+		else if (kb.matches(data, "tui.select.confirm")) this.finishSearch(false);
+		else if (kb.matches(data, "tui.select.up") || kb.matches(data, "tui.select.pageUp"))
+			this.move(-1, kb.matches(data, "tui.select.pageUp"));
+		else if (kb.matches(data, "tui.select.down") || kb.matches(data, "tui.select.pageDown"))
+			this.move(1, kb.matches(data, "tui.select.pageDown"));
+		else {
+			this.search.handleInput(data);
+			this.selection.query = this.search.getValue().slice(0, 512);
+			this.selection.refresh();
+			this.selectedChanged();
+		}
+	}
+	private confirmInput(data: string): void {
+		const kb = this.options.keybindings;
+		if (kb.matches(data, "app.tasks.confirmStop")) this.confirmStop();
+		else if (kb.matches(data, "tui.select.cancel")) this.cancel();
+	}
+	private browseInput(data: string): void {
+		const kb = this.options.keybindings;
+		if (kb.matches(data, "tui.select.cancel")) {
+			this.cancel();
+			return;
+		}
+		const pageUp = kb.matches(data, this.focus === "list" ? "tui.select.pageUp" : "tui.editor.pageUp");
+		const pageDown = kb.matches(data, this.focus === "list" ? "tui.select.pageDown" : "tui.editor.pageDown");
+		if (pageUp || kb.matches(data, "tui.select.up")) this.move(-1, pageUp);
+		else if (pageDown || kb.matches(data, "tui.select.down")) this.move(1, pageDown);
+		else if (kb.matches(data, "tui.select.confirm")) {
+			if (this.focus === "list" && this.selection.selected) this.focus = "inspector";
+		} else {
+			const key = actions.find((key) => kb.matches(data, key));
+			if (key) this.action(key);
+		}
 	}
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
 		if (this.disposed || event.ctrl || event.alt || event.shift) return;
@@ -319,13 +351,19 @@ export class TasksMenu implements Component, Focusable {
 		this.feedback = undefined;
 		this.render(event.width);
 		const layout = this.layout!;
+		const mode = this.mode;
 		if (event.type === "wheel" && event.wheelDelta) {
-			if (!this.pendingKill && !layout.tooSmall && event.y >= 2 && event.y < this.options.tui.terminal.rows - 3) {
+			if (
+				mode.kind !== "confirmStop" &&
+				!layout.tooSmall &&
+				event.y >= 2 &&
+				event.y < this.options.tui.terminal.rows - 3
+			) {
 				const delta = Math.sign(event.wheelDelta) * Math.min(20, Math.abs(event.wheelDelta));
 				const region = this.width >= 100 ? (event.x < layout.listWidth ? "list" : "inspector") : this.focus;
-				if (this.help) this.help.move(delta, false, false);
+				if (mode.kind === "help") mode.viewport.move(delta, false, false);
 				else if (region === "list") this.list.scroll(delta);
-				else if (!this.searching)
+				else if (mode.kind !== "search")
 					this.inspector.position[this.selection.state.tab].move(
 						delta,
 						false,
@@ -335,19 +373,12 @@ export class TasksMenu implements Component, Focusable {
 		} else if (event.type === "click" && event.button === "left") {
 			const hit = layout.hits.find((hit) => hit.y === event.y && event.x >= hit.x && event.x < hit.x + hit.width);
 			try {
-				if (hit?.cancel) {
-					if (this.searching) this.finishSearch(true);
-					else if (this.help) this.help = undefined;
-					else if (this.pendingKill) this.clearKill();
-					else {
-						this.dispose();
-						this.options.onClose();
-					}
-				} else if (hit?.taskId) {
+				if (hit?.cancel) this.cancel();
+				else if (hit?.taskId) {
 					this.selection.select(hit.taskId);
 					this.selectedChanged();
 					this.focus = "list";
-					if (this.searching) this.finishSearch(false);
+					if (mode.kind === "search") this.finishSearch(false);
 				} else if (hit?.tab) {
 					this.focus = "inspector";
 					this.selection.state.tab = hit.tab;
@@ -355,9 +386,7 @@ export class TasksMenu implements Component, Focusable {
 					if (hit.key === "app.tasks.follow") this.focus = "inspector";
 					this.action(hit.key);
 				} else if (
-					!this.pendingKill &&
-					!this.searching &&
-					!this.help &&
+					mode.kind === "browse" &&
 					!layout.tooSmall &&
 					event.y >= 1 &&
 					event.y < this.options.tui.terminal.rows - 2 &&
@@ -384,13 +413,20 @@ export class TasksMenu implements Component, Focusable {
 			inspector: this.inspector,
 			list: this.list,
 			focus: this.focus,
-			searchLine: this.searching ? (width) => this.search.render(width).join("") : undefined,
-			pendingKill: this.pendingKill,
+			mode: this.mode,
+			searchLine: (width) => this.search.render(width).join(""),
 			feedback: this.feedback,
-			help: this.help,
-			canDetach: this.options.host.enabled !== false && !!this.options.host.detach,
+			canDetach: (id) => this.canDetach(id),
 		});
 		return this.layout.lines;
+	}
+	/** The panel's selection can lag the runtime by a notification; a task that is gone cannot move. */
+	private canDetach(id: string): boolean {
+		try {
+			return this.options.host.canDetach(id);
+		} catch {
+			return false;
+		}
 	}
 	dispose(): void {
 		if (this.disposed) return;
@@ -398,7 +434,6 @@ export class TasksMenu implements Component, Focusable {
 		this.selection.state.closedAt = Date.now();
 		clearInterval(this.pollTimer);
 		clearInterval(this.animationTimer);
-		this.clearKill();
 		this.unsubscribe();
 		this.inspector.dispose();
 	}

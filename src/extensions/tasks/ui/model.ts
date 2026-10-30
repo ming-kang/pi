@@ -1,6 +1,24 @@
 import { isTaskTerminal, type TaskSnapshot } from "../../../core/tasks/types.ts";
+import type { TaskViewport } from "./viewport.ts";
 
 export type TasksTab = "output" | "info";
+export type PanelFocus = "list" | "inspector";
+
+/**
+ * The one transient layer over the browsing panel. Each layer owns its data, so a stale
+ * combination (help over a confirmation, a restore point without a search) cannot exist.
+ */
+export type PanelMode =
+	| { kind: "browse" }
+	/** Searching moves focus to the list; `restore` is where Esc returns to. */
+	| { kind: "search"; restore: { id?: string; focus: PanelFocus } }
+	| { kind: "confirmStop"; taskId: string }
+	| { kind: "help"; viewport: TaskViewport };
+
+/** A task can be asked to stop while it is neither settled nor already stopping. */
+export function isStoppable(task: Pick<TaskSnapshot, "status">): boolean {
+	return !isTaskTerminal(task.status) && task.status !== "stopping";
+}
 
 /** Remember navigation within one runtime, without retaining output or execution handles. */
 export interface TasksPanelState {

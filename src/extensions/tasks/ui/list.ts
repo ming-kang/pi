@@ -1,10 +1,9 @@
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { runtimeLabel } from "../../../core/tasks/format.ts";
-import { isTaskTerminal, type TaskSnapshot } from "../../../core/tasks/types.ts";
-import { statusMarker } from "../../../modes/interactive/components/status-marker.ts";
+import { isTaskTerminal, type TaskSnapshot, type TaskStatus } from "../../../core/tasks/types.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { TaskSelection } from "./model.ts";
-import { statusName } from "./task-view.ts";
+import { statusName, statusView } from "./status.ts";
 import { cleanTaskText, firstCommandLine } from "./text.ts";
 
 interface ListRow {
@@ -13,7 +12,7 @@ interface ListRow {
 }
 
 /** Spinner, ✓ and the error × are unique; every other status also needs its name. */
-const SELF_EVIDENT = new Set(["running", "completed", "failed"]);
+const SELF_EVIDENT = new Set<TaskStatus>(["running", "completed", "failed"]);
 
 /** Right-aligned row metadata: the status name when the glyph is ambiguous, a disambiguating ID, and runtime. */
 function rowMeta(task: TaskSnapshot, duplicate: boolean): string {
@@ -55,7 +54,7 @@ export class TaskList {
 			}
 			const selected = task.id === selection.state.selectedId;
 			if (selected) selectedLine = rows.length;
-			const marker = statusMarker(task.status, { now: Date.now() });
+			const marker = statusView(task.status, { now: Date.now() });
 			const label = labels[index]!;
 			const duplicate = titles.some((title, other) => other !== index && title === titles[index]);
 			const meta = rowMeta(task, duplicate);

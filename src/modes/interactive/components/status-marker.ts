@@ -8,6 +8,8 @@
  * call's lifecycle (pending, success, error), not a task's status.
  */
 
+import type { TaskStatus } from "../../../core/tasks/types.ts";
+
 export type StatusMarkerColor = "success" | "error" | "warning" | "accent" | "muted";
 
 export interface StatusMarker {
@@ -34,7 +36,7 @@ export function statusSpinnerFrame(now: number): string {
  * Map an execution status to its marker. Pass `now` to animate a running
  * status as a spinner frame; without it running renders as the static `›`.
  */
-export function statusMarker(status: string, opts?: { now?: number }): StatusMarker {
+export function statusMarker(status: TaskStatus, opts?: { now?: number }): StatusMarker {
 	switch (status) {
 		case "running":
 			return { glyph: opts?.now !== undefined ? statusSpinnerFrame(opts.now) : "›", color: "accent" };
@@ -47,7 +49,6 @@ export function statusMarker(status: string, opts?: { now?: number }): StatusMar
 		case "cancelled":
 		case "stopping":
 		case "partial":
-		case "aborted":
 			return { glyph: "○", color: "warning" };
 		case "queued":
 			return { glyph: "○", color: "muted" };

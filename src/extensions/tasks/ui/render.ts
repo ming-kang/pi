@@ -3,12 +3,13 @@
 import { type Component, Container, Text, TruncatedText } from "@earendil-works/pi-tui";
 import type { AgentToolResult, ToolRenderContext, ToolRenderResultOptions } from "../../../core/extensions/types.ts";
 import { clampWaitMs } from "../../../core/tasks/limits.ts";
+import type { TaskStatus } from "../../../core/tasks/types.ts";
 import { formatSize } from "../../../core/tools/truncate.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import { formatDuration } from "../../../utils/duration.ts";
 import type { TasksInput } from "../tool/schema.ts";
 import type { TasksDetails } from "../tool/types.ts";
-import { statusColor, statusGlyph, statusName } from "./task-view.ts";
+import { statusName, statusView } from "./status.ts";
 import { fileNameOf } from "./text.ts";
 
 /** Arguments arrive incrementally, so `action` may not be valid yet. */
@@ -156,6 +157,10 @@ function resultSummaryLine(details: TasksDetails, theme: Theme, expanded: boolea
 	// Collapsed rows stay compact with the log's file name; the full path
 	// (context-relevant, human-rarely) shows when expanded.
 	const shownPath = (path: string) => (expanded ? path : fileNameOf(path));
+	const mark = (status: TaskStatus) => {
+		const { color, glyph } = statusView(status);
+		return theme.fg(color, glyph);
+	};
 	switch (details.action) {
 		case "read": {
 			const size =
@@ -170,19 +175,19 @@ function resultSummaryLine(details: TasksDetails, theme: Theme, expanded: boolea
 			const taskId = details.taskId ?? "any";
 			if (outcome === "interrupted") {
 				const running = details.running ? ` · ${details.running} still running` : "";
-				return `${theme.fg(statusColor("cancelled"), statusGlyph("cancelled"))} ${theme.fg("accent", taskId)}${theme.fg("muted", ` wait interrupted after ${formatDuration(details.waitedMs)}${running}`)}`;
+				return `${mark("cancelled")} ${theme.fg("accent", taskId)}${theme.fg("muted", ` wait interrupted after ${formatDuration(details.waitedMs)}${running}`)}`;
 			}
 			if (outcome === "timed_out") {
 				const status = details.status ?? "running";
 				const running = details.taskId ? formatSize(details.totalBytes) : `${details.running ?? 0} still running`;
-				return `${theme.fg(statusColor(status), statusGlyph(status))} ${theme.fg("accent", taskId)}${theme.fg("muted", ` ${statusName(status)} · wait ended after ${formatDuration(details.waitedMs)} · ${running}`)}`;
+				return `${mark(status)} ${theme.fg("accent", taskId)}${theme.fg("muted", ` ${statusName(status)} · wait ended after ${formatDuration(details.waitedMs)} · ${running}`)}`;
 			}
 			const status = details.status ?? "completed";
-			return `${theme.fg(statusColor(status), statusGlyph(status))} ${theme.fg("accent", taskId)}${theme.fg("muted", ` ${statusName(status)} · waited ${formatDuration(details.waitedMs)} · +${formatSize(details.deltaBytes)}`)}`;
+			return `${mark(status)} ${theme.fg("accent", taskId)}${theme.fg("muted", ` ${statusName(status)} · waited ${formatDuration(details.waitedMs)} · +${formatSize(details.deltaBytes)}`)}`;
 		}
 		case "kill": {
 			const status = details.status ?? (details.requested ? "stopping" : "cancelled");
-			return `${theme.fg(statusColor(status), statusGlyph(status))} ${theme.fg("accent", details.taskId)}${theme.fg("muted", ` ${statusName(status)}${details.requested ? " · cancellation requested" : ""}`)}`;
+			return `${mark(status)} ${theme.fg("accent", details.taskId)}${theme.fg("muted", ` ${statusName(status)}${details.requested ? " · cancellation requested" : ""}`)}`;
 		}
 		case "list": {
 			const hidden = details.hidden > 0 ? ` · ${details.hidden} more finished` : "";

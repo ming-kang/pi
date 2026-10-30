@@ -45,8 +45,11 @@ function harness(
 			truncated: false,
 		})),
 		kill: vi.fn(() => true),
+		canDetach: vi.fn((id: string) => {
+			const t = tasks.find((candidate) => candidate.id === id);
+			return t?.mode === "foreground" && t.status === "running";
+		}),
 		detach: vi.fn(() => true),
-		enabled: true,
 		retain: vi.fn(() => release),
 		subscribe: (fn: () => void) => {
 			listener = fn;
@@ -534,6 +537,17 @@ describe("task panel interaction", () => {
 		expect(h.frame().split("\n").at(-1)).toContain("Selected task moved to background");
 		h.menu.handleMouse(mouse(stop, 29));
 		expect(h.frame()).toContain('Stop Bash "echo build"?');
+	});
+	it("advertises background only while the host can move the task, and still explains a refusal", () => {
+		const h = harness([backgroundTask("build", { mode: "foreground" })], { width: 120 });
+		expect(h.frame().split("\n").at(-1)).toContain("background");
+		h.host.canDetach.mockReturnValue(false);
+		h.host.detach.mockImplementation(() => {
+			throw new Error("Background task limit reached (2).");
+		});
+		expect(h.frame().split("\n").at(-1)).not.toContain("background");
+		h.menu.handleInput("b");
+		expect(h.frame().split("\n").at(-1)).toContain("Background task limit reached");
 	});
 	it("dismisses stop when its target finishes without stopping the next selection", () => {
 		const h = harness([backgroundTask("build"), backgroundTask("check")], { width: 120 });

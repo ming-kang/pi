@@ -4,12 +4,11 @@ import { runtimeLabel } from "../../../core/tasks/format.ts";
 import { isTaskTerminal } from "../../../core/tasks/types.ts";
 import { formatSize } from "../../../core/tools/truncate.ts";
 import { keyLabel } from "../../../modes/interactive/components/keybinding-hints.ts";
-import { statusMarker } from "../../../modes/interactive/components/status-marker.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { TaskInspector } from "./inspector.ts";
 import type { TaskList } from "./list.ts";
-import type { TaskSelection, TasksTab } from "./model.ts";
-import { statusName } from "./task-view.ts";
+import { isStoppable, type PanelFocus, type PanelMode, type TaskSelection, type TasksTab } from "./model.ts";
+import { modeName, statusName, statusView } from "./status.ts";
 import { cleanTaskText, firstCommandLine } from "./text.ts";
 import type { TaskViewport } from "./viewport.ts";
 
@@ -38,12 +37,13 @@ interface LayoutOptions {
 	selection: TaskSelection;
 	inspector: TaskInspector;
 	list: TaskList;
-	focus: "list" | "inspector";
-	searchLine?: (width: number) => string;
-	pendingKill?: string;
+	focus: PanelFocus;
+	mode: PanelMode;
+	/** Renders the search input line; shown only in search mode. */
+	searchLine: (width: number) => string;
 	feedback?: string;
-	help?: TaskViewport;
-	canDetach: boolean;
+	/** Whether the host would move this task to the background now. */
+	canDetach: (id: string) => boolean;
 }
 const pad = (text: string, width: number) => truncateToWidth(text, Math.max(1, width), "…", true);
 /** Visible width of "Output  Details". */
@@ -51,7 +51,7 @@ const TABS_WIDTH = 15;
 
 /** Cell geometry and mouse targets are produced together, so resize cannot separate them. */
 export function renderTasksLayout(options: LayoutOptions): TasksLayout {
-	const { width, height, theme, selection, inspector, list, focus, keybindings } = options;
+	const { width, height, theme, selection, inspector, list, focus, keybindings, mode } = options;
 	const hint = (key: Keybinding) => keyLabel(key, { keybindings });
 	const result: TasksLayout = { hits: [], listWidth: 0, listPageSize: 1, lines: [] };
 	if (width < 1 || height < 1) return result;
@@ -105,7 +105,7 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 	const visible = list.render(selection, theme, listWidth - 2, bodyHeight);
 	let listHeader = theme.fg("text", "Tasks");
 	const searchLabel = `${hint("app.tasks.search")} find`;
-	if (options.searchLine) listHeader = options.searchLine(listWidth - 2);
+	if (mode.kind === "search") listHeader = options.searchLine(listWidth - 2);
 	else {
 		const x = Math.max(6, listWidth - 2 - visibleWidth(searchLabel));
 		listHeader += " ".repeat(x - 5) + theme.fg("dim", searchLabel);
@@ -126,15 +126,13 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 	const tabLabel = (id: TasksTab, label: string) => theme.style(label, { fg: "text", underline: tab === id });
 	// One header row in every layout: the selected task's source and status, with the tabs on the right.
 	const tabsX = rightWidth - 2 - TABS_WIDTH;
-	const marker = task ? statusMarker(task.status) : undefined;
-	const summary =
-		task && marker
-			? [
-					theme.fg("muted", cleanTaskText(task.label)),
-					theme.fg(marker.color, statusName(task.status)),
-					theme.fg("muted", runtimeLabel(task)),
-				].join(theme.fg("dim", " · "))
-			: "";
+	const summary = task
+		? [
+				theme.fg("muted", cleanTaskText(task.label)),
+				theme.fg(statusView(task.status).color, statusName(task.status)),
+				theme.fg("muted", runtimeLabel(task)),
+			].join(theme.fg("dim", " · "))
+		: "";
 	const shownSummary = truncateToWidth(summary, Math.max(0, tabsX - 1), "…");
 	const right = [
 		`${shownSummary}${" ".repeat(tabsX - visibleWidth(shownSummary))}${tabLabel("output", "Output")}  ${tabLabel("info", "Details")}`,
@@ -157,7 +155,7 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 			content.push(theme.fg("warning", diagnostics.join(" · ").replace(/\n/g, " ")));
 		const source =
 			tab === "info"
-				? inspector.details(`${statusName(task.status)} · ${statusName(task.mode)} · ${runtimeLabel(task)}`)
+				? inspector.details(`${statusName(task.status)} · ${modeName(task.mode)} · ${runtimeLabel(task)}`)
 				: inspector.output(rightWidth - 2);
 		content.push(...position[tab].layout(source, rightWidth - 2, bodyHeight - content.length));
 		if (tab === "output") {
@@ -196,21 +194,21 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 		footer += (footer ? " · " : "") + text;
 		if (target) hits.push({ x, y: height - 1, width: visibleWidth(text), ...target });
 	};
-	if (options.help) {
+	if (mode.kind === "help") {
 		hits.length = 0;
-		panels = pane(helpLines(options.help, hint, theme, width, height), width, false);
+		panels = pane(helpLines(mode.viewport, hint, theme, width, height), width, false);
 		addHint("tui.select.up", `/ ${hint("tui.select.down")} scroll`);
 		addHint("tui.select.cancel", "back", { cancel: true });
-	} else if (options.pendingKill) {
+	} else if (mode.kind === "confirmStop") {
 		// The question borrows only the footer row, so the task stays in view while confirming.
 		hits.length = 0;
-		const target = selection.all.find((task) => task.id === options.pendingKill);
+		const target = selection.all.find((task) => task.id === mode.taskId);
 		const source = cleanTaskText(target?.label ?? "task");
 		const confirm = `${hint("app.tasks.confirmStop")} stop`;
 		const cancel = `${hint("tui.select.cancel")} cancel`;
 		const actions = `${confirm} · ${cancel}`;
 		const room = width - visibleWidth(`Stop ${source} ""?  ${actions}`);
-		const title = cleanTaskText(firstCommandLine(target?.title ?? options.pendingKill));
+		const title = cleanTaskText(firstCommandLine(target?.title ?? mode.taskId));
 		const question = room >= 4 ? `Stop ${source} "${truncateToWidth(title, room, "…")}"?  ` : `Stop ${source}?  `;
 		footer = question + actions;
 		const x = visibleWidth(question);
@@ -218,7 +216,7 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 			{ x, y: height - 1, width: visibleWidth(confirm), key: "app.tasks.confirmStop" },
 			{ x: x + visibleWidth(confirm) + 3, y: height - 1, width: visibleWidth(cancel), cancel: true },
 		);
-	} else if (options.searchLine) {
+	} else if (mode.kind === "search") {
 		// Only search candidates and cancellation are clickable while locating a task.
 		for (let i = hits.length - 1; i >= 0; i--) if (!hits[i]!.taskId) hits.splice(i, 1);
 		addHint("tui.select.up", `/ ${hint("tui.select.down")} choose`);
@@ -234,17 +232,15 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 			addHint("app.tasks.previousTab", "output", { tab: "output" });
 			addHint("app.tasks.nextTab", "details", { tab: "info" });
 		}
-		if (task && !isTaskTerminal(task.status) && task.status !== "stopping") {
-			addHint("app.tasks.kill", "stop", { key: "app.tasks.kill" });
-			if (task.mode === "foreground" && options.canDetach)
-				addHint("app.tasks.detachSelected", "background", { key: "app.tasks.detachSelected" });
-		}
+		if (task && isStoppable(task)) addHint("app.tasks.kill", "stop", { key: "app.tasks.kill" });
+		if (task && options.canDetach(task.id))
+			addHint("app.tasks.detachSelected", "background", { key: "app.tasks.detachSelected" });
 		addHint("app.tasks.help", "keys", { key: "app.tasks.help" });
 		// Feedback borrows the hint row, so the hint hit targets stay live and the click that
 		// dismisses it can act in the same gesture.
 		if (options.feedback) footer = options.feedback;
 	}
-	result.lines = [...panels, theme.fg(options.pendingKill ? "warning" : "dim", pad(footer, width))];
+	result.lines = [...panels, theme.fg(mode.kind === "confirmStop" ? "warning" : "dim", pad(footer, width))];
 	return result;
 }
 

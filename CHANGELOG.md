@@ -15,6 +15,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - **Breaking (SDK):** `AgentSession.tasksStoppedByTreeNavigation()` is removed; use `session.tasks.session?.stoppedByTreeNavigation(targetId)`.
 - Shell tools called without an extension context now run as a foreground task, matching the session path: an already aborted signal rejects with the signal's reason, an invalid `timeout` is rejected before the command starts, and an output-capture failure cancels the command and reports its error.
 
+### Fixed
+
+- The `/tasks` footer now advertises the background key only when the task can move right now. It no longer offers it while every background slot is taken; pressing the key then still explains the limit.
+
 ## [1.4.6] - 2026-10-30
 
 ### Added
