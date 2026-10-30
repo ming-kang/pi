@@ -7,6 +7,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 ### Added
 
 - `TaskReadOptions` is exported from the SDK and extension API as the named shape of `TasksContext.read()` options (`mode`, `bytes`, `sinceBytes`); the `read` options of `wait()` and `waitAny()` are subsets of it.
+- `pi config` now cycles skills through On, User only, and Off, with project-local inheritance and explicit overrides. User-only skills stay available through `/skill:name` without being advertised to the model; the same policy is available through `skillInvocationOverrides` in global, project, and package settings.
 
 ### Changed
 

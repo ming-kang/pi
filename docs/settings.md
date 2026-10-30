@@ -346,11 +346,22 @@ Paths in `~/.pi/agent/settings.json` resolve relative to `~/.pi/agent`. Paths in
 | `packages` | array | `[]` | npm/git packages to load resources from |
 | `extensions` | string[] | `[]` | Local extension file paths or directories |
 | `skills` | string[] | `[]` | Local skill file paths or directories |
+| `skillInvocationOverrides` | object | `{}` | Per-skill invocation policy: `"model-and-user"` or `"user-only"` |
 | `prompts` | string[] | `[]` | Local prompt template paths or directories |
 | `themes` | string[] | `[]` | Local theme file paths or directories |
 | `enableSkillCommands` | boolean | `true` | Register skills as `/skill:name` commands |
 
 Arrays support glob patterns and exclusions. Use `!pattern` to exclude. Use `+path` to force-include an exact path and `-path` to force-exclude an exact path.
+
+`skillInvocationOverrides` uses exact skill file or directory paths as keys. It changes model visibility without changing whether the skill loads; user-only skills remain available as `/skill:name`. Project values override global values. With no override, the skill's `disable-model-invocation` frontmatter applies.
+
+```json
+{
+  "skillInvocationOverrides": {
+    "skills/pdf/SKILL.md": "user-only"
+  }
+}
+```
 
 #### packages
 

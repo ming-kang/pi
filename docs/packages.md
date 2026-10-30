@@ -199,9 +199,10 @@ Filter what a package loads using the object form in settings:
     {
       "source": "npm:my-package",
       "extensions": ["extensions/*.ts", "!extensions/legacy.ts"],
-      "skills": [],
+      "skills": ["skills"],
       "prompts": ["prompts/review.md"],
-      "themes": ["+themes/legacy.json"]
+      "themes": ["+themes/legacy.json"],
+      "skillInvocationOverrides": { "skills/pdf": "user-only" }
     }
   ]
 }
@@ -215,10 +216,11 @@ Filter what a package loads using the object form in settings:
 - `+path` force-includes an exact path.
 - `-path` force-excludes an exact path.
 - Filters layer on top of the manifest. They narrow down what is already allowed.
+- `skillInvocationOverrides` uses package-relative skill files or directories and accepts `"model-and-user"` or `"user-only"`. It controls model visibility, not resource loading.
 
 ## Enable and Disable Resources
 
-Use `pi config` to enable or disable extensions, skills, prompt templates, and themes from installed packages and local directories. `pi config` starts in global settings (`~/.pi/agent/settings.json`); press Tab to switch between global and project-local modes. Use `pi config -l` to start in project overrides (`.pi/settings.json`) with inherited global resources dimmed.
+Use `pi config` to enable or disable extensions, prompt templates, and themes, and to switch skills between On, User only, and Off. User-only skills remain available as `/skill:name` but are omitted from the model's system prompt. `pi config` starts in global settings (`~/.pi/agent/settings.json`); press Tab to switch between global and project-local modes. Use `pi config -l` to start in project overrides (`.pi/settings.json`) with inherited global resources dimmed.
 
 ## Scope and Deduplication
 

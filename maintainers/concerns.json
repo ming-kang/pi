@@ -566,6 +566,41 @@
 			]
 		},
 		{
+			"id": "skill-invocation-overrides",
+			"why": "Skill resources support explicit model-and-user or user-only invocation policies independently of resource loading in pi config and layered settings.",
+			"paths": [
+				{
+					"path": "src/core/package-manager.ts"
+				},
+				{
+					"path": "src/core/resource-loader.ts",
+					"rewrite": "Resolved skill invocation overrides are applied while source metadata is attached, leaving prompt and command consumers unchanged."
+				},
+				{
+					"path": "src/core/settings-manager.ts"
+				},
+				{
+					"path": "src/core/settings-schema.ts"
+				},
+				{
+					"path": "src/core/skills.ts"
+				},
+				{
+					"path": "src/modes/interactive/components/config-selector.ts",
+					"rewrite": "Skill rows use a separate tri-state projection and coordinated load and invocation writes while other resources retain boolean overrides."
+				},
+				{
+					"path": "schemas/settings.schema.json"
+				}
+			],
+			"tests": [
+				"test/package-manager.test.ts",
+				"test/resource-loader.test.ts",
+				"test/package-command-paths.test.ts",
+				"test/config-schemas.test.ts"
+			]
+		},
+		{
 			"id": "docs-and-tests",
 			"why": "Distribution-owned user documentation and tests that track the standalone layout and registered deviations.",
 			"paths": [

@@ -82,6 +82,29 @@ Skills register as `/skill:name` commands:
 
 Arguments after the command are appended to the skill content as `User: <args>`.
 
+### Invocation Policy
+
+Use `pi config` to cycle each skill through three states:
+
+- **On:** the skill is loaded, advertised to the model, and available as `/skill:name`.
+- **User only:** the skill is loaded and available as `/skill:name`, but omitted from the system prompt.
+- **Off:** the skill is not loaded.
+
+Project mode also supports inheriting the global state or explicitly overriding it. Without an override, `disable-model-invocation` in `SKILL.md` determines whether a loaded skill starts as On or User only.
+
+For settings-based configuration, keep using the `skills` array to control loading and add `skillInvocationOverrides` for invocation policy. Keys name exact skill files or directories, and values are `"model-and-user"` or `"user-only"`:
+
+```json
+{
+  "skillInvocationOverrides": {
+    "skills/pdf/SKILL.md": "user-only",
+    "skills/formatter": "model-and-user"
+  }
+}
+```
+
+Project overrides take precedence over global overrides. An explicit `"model-and-user"` also overrides author-level `disable-model-invocation`; removing the override restores the frontmatter default. Invocation overrides do not force a disabled skill to load.
+
 Toggle skill commands via `/settings` in interactive mode or in `settings.json`:
 
 ```json

@@ -17,17 +17,36 @@ import {
 } from "@earendil-works/pi-tui";
 import { CONFIG_DIR_NAME } from "../../../config.ts";
 import type { PathMetadata, ResolvedPaths, ResolvedResource } from "../../../core/package-manager.ts";
-import type { PackageSource, SettingsManager } from "../../../core/settings-manager.ts";
+import type {
+	PackageSource,
+	SettingsManager,
+	SkillInvocationOverride,
+	SkillInvocationOverrides,
+} from "../../../core/settings-manager.ts";
+import {
+	readSkillDisableModelInvocation,
+	resolveSkillEffectiveState,
+	type SkillEffectiveState,
+} from "../../../core/skills.ts";
 import { BUILTIN_PATH_PREFIX } from "../../../core/source-info.ts";
 import { canonicalizePath, isLocalPath, resolvePath } from "../../../utils/paths.ts";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint, rawKeyHint } from "./keybinding-hints.ts";
 
+function hasResourcePattern(patterns: Set<string>, pattern: string): boolean {
+	const normalized = pattern.replace(/\\/g, "/");
+	for (const candidate of patterns) {
+		if (candidate.replace(/\\/g, "/") === normalized) return true;
+	}
+	return false;
+}
+
 type ResourceType = "extensions" | "skills" | "prompts" | "themes";
 type ConfigWriteScope = "global" | "project";
 type SettingsScope = "user" | "project";
 type ProjectOverrideState = "inherit" | "load" | "unload";
+type ProjectSkillOverrideState = SkillEffectiveState | "inherit" | "load";
 export type ScopedResolvedPaths = Record<ConfigWriteScope, ResolvedPaths>;
 
 const RESOURCE_TYPES = ["extensions", "skills", "prompts", "themes"] as const satisfies readonly ResourceType[];
@@ -47,6 +66,8 @@ interface ResourceItem {
 	displayName: string;
 	groupKey: string;
 	subgroupKey: string;
+	skillInvocationOverride?: SkillInvocationOverride;
+	frontmatterDisableModelInvocation?: boolean;
 }
 
 interface ResourceSubgroup {
@@ -152,6 +173,9 @@ function buildGroups(resolved: ResolvedPaths, agentDir: string): ResourceGroup[]
 				displayName,
 				groupKey,
 				subgroupKey,
+				skillInvocationOverride: res.skillInvocationOverride,
+				frontmatterDisableModelInvocation:
+					resourceType === "skills" ? readSkillDisableModelInvocation(path) : undefined,
 			});
 		}
 	};
@@ -209,8 +233,7 @@ class ConfigSelectorHeader implements Component {
 		const title = theme.bold(this.writeScope === "project" ? "Project Local Resources" : "Global Resources");
 		const sep = theme.fg("muted", " · ");
 		const switchHint = this.projectModeAvailable ? keyHint("tui.input.tab", "switch mode") + sep : "";
-		const actionHint =
-			this.writeScope === "project" ? rawKeyHint("space", "cycle inherit/+/-") : rawKeyHint("space", "toggle");
+		const actionHint = rawKeyHint("space", "change");
 		const hint = switchHint + actionHint + sep + rawKeyHint("esc", "close");
 		const spacing = Math.max(1, width - visibleWidth(title) - visibleWidth(hint));
 		const scopeHint =
@@ -237,6 +260,7 @@ class ResourceList implements Component, Focusable {
 	private agentDir: string;
 	private writeScope: ConfigWriteScope;
 	private inheritedEnabledByKey: Map<string, boolean>;
+	private inheritedSkillStateByKey: Map<string, SkillEffectiveState>;
 
 	public onCancel?: () => void;
 	public onExit?: () => void;
@@ -266,6 +290,7 @@ class ResourceList implements Component, Focusable {
 		this.agentDir = agentDir;
 		this.writeScope = writeScope;
 		this.inheritedEnabledByKey = this.buildInheritedEnabledMap(groupsByScope.global);
+		this.inheritedSkillStateByKey = this.buildInheritedSkillStateMap(groupsByScope.global);
 		this.searchInput = new Input();
 		// 8 lines of chrome: top spacer + top border + spacer + header (2 lines) + spacer + bottom spacer + bottom border
 		const chrome = 8;
@@ -290,6 +315,19 @@ class ResourceList implements Component, Focusable {
 			for (const subgroup of group.subgroups) {
 				for (const item of subgroup.items) {
 					result.set(this.getResourceItemKey(item), item.enabled);
+				}
+			}
+		}
+		return result;
+	}
+
+	private buildInheritedSkillStateMap(groups: ResourceGroup[]): Map<string, SkillEffectiveState> {
+		const result = new Map<string, SkillEffectiveState>();
+		for (const group of groups) {
+			for (const subgroup of group.subgroups) {
+				if (subgroup.type !== "skills") continue;
+				for (const item of subgroup.items) {
+					result.set(this.getResourceItemKey(item), this.getSkillEffectiveState(item));
 				}
 			}
 		}
@@ -381,6 +419,12 @@ class ResourceList implements Component, Focusable {
 
 	updateItem(item: ResourceItem, enabled: boolean): void {
 		item.enabled = enabled;
+		if (this.writeScope === "global") {
+			this.inheritedEnabledByKey.set(this.getResourceItemKey(item), enabled);
+			if (item.resourceType === "skills") {
+				this.inheritedSkillStateByKey.set(this.getResourceItemKey(item), this.getSkillEffectiveState(item));
+			}
+		}
 		// Update in groups too
 		for (const group of this.groups) {
 			for (const subgroup of group.subgroups) {
@@ -436,13 +480,11 @@ class ResourceList implements Component, Focusable {
 				const dimmed = this.isDimmedItem(item);
 				const nameText = isSelected && !dimmed ? theme.bold(item.displayName) : item.displayName;
 				const name = dimmed ? theme.fg("dim", nameText) : nameText;
-				lines.push(
-					truncateToWidth(
-						`${cursor}    ${this.renderCheckbox(item)} ${name}${this.getItemSuffix(item)}`,
-						width,
-						"...",
-					),
-				);
+				const prefix = `${cursor}    ${this.renderCheckbox(item)} `;
+				const suffix = this.getItemSuffix(item);
+				const nameWidth = Math.max(1, width - visibleWidth(prefix) - visibleWidth(suffix));
+				const renderedName = truncateToWidth(name, nameWidth, "...");
+				lines.push(truncateToWidth(`${prefix}${renderedName}${suffix}`, width, "..."));
 			}
 		}
 
@@ -520,6 +562,24 @@ class ResourceList implements Component, Focusable {
 	}
 
 	private toggleResource(item: ResourceItem): boolean | undefined {
+		if (item.resourceType === "skills") {
+			if (this.writeScope === "project") {
+				const state = this.getNextProjectSkillOverrideState(item);
+				if (!this.setProjectSkillOverride(item, state)) return undefined;
+				item.skillInvocationOverride =
+					state === "on" ? "model-and-user" : state === "user-only" ? "user-only" : undefined;
+				return state === "inherit" ? this.getInheritedSkillEffectiveState(item) !== "off" : state !== "off";
+			}
+
+			const currentState = this.getSkillEffectiveState(item);
+			const nextState: SkillEffectiveState =
+				currentState === "on" ? "user-only" : currentState === "user-only" ? "off" : "on";
+			this.setGlobalSkillEffectiveState(item, nextState);
+			item.skillInvocationOverride =
+				nextState === "on" ? "model-and-user" : nextState === "user-only" ? "user-only" : undefined;
+			return nextState !== "off";
+		}
+
 		if (this.writeScope === "project") {
 			const state = this.getNextOverrideState(item);
 			if (!this.setProjectResourceOverride(item, state)) return undefined;
@@ -642,7 +702,111 @@ class ResourceList implements Component, Focusable {
 		}
 	}
 
+	private setGlobalSkillEffectiveState(item: ResourceItem, state: SkillEffectiveState): void {
+		const enabled = state !== "off";
+		if (item.metadata.origin === "top-level") this.toggleTopLevelResource(item, enabled);
+		else this.togglePackageResource(item, enabled);
+		this.setSkillInvocationOverride(
+			item,
+			"user",
+			state === "on" ? "model-and-user" : state === "user-only" ? "user-only" : undefined,
+		);
+	}
+
+	private setProjectSkillOverride(item: ResourceItem, state: Exclude<ProjectSkillOverrideState, "load">): boolean {
+		const loadState: ProjectOverrideState = state === "inherit" ? "inherit" : state === "off" ? "unload" : "load";
+		if (!this.setProjectResourceOverride(item, loadState)) return false;
+		this.setSkillInvocationOverride(
+			item,
+			"project",
+			state === "on" ? "model-and-user" : state === "user-only" ? "user-only" : undefined,
+		);
+		return true;
+	}
+
+	private setSkillInvocationOverride(
+		item: ResourceItem,
+		scope: SettingsScope,
+		override: SkillInvocationOverride | undefined,
+	): void {
+		if (item.metadata.origin === "top-level") {
+			const settings =
+				scope === "project" ? this.settingsManager.getProjectSettings() : this.settingsManager.getGlobalSettings();
+			const updated: SkillInvocationOverrides = { ...settings.skillInvocationOverrides };
+			const patterns = this.getTopLevelOverridePatterns(item, scope);
+			for (const pattern of Object.keys(updated)) {
+				if (hasResourcePattern(patterns, pattern)) delete updated[pattern];
+			}
+			if (override) {
+				const pattern =
+					scope === "project" && this.isInheritedGlobalItem(item)
+						? item.path
+						: this.getResourcePatternForScope(item, scope);
+				updated[pattern] = override;
+			}
+			if (scope === "project") this.settingsManager.setProjectSkillInvocationOverrides(updated);
+			else this.settingsManager.setSkillInvocationOverrides(updated);
+			return;
+		}
+
+		const settings =
+			scope === "project" ? this.settingsManager.getProjectSettings() : this.settingsManager.getGlobalSettings();
+		const packages = [...(settings.packages ?? [])];
+		const pkgIndex = packages.findIndex((pkg) =>
+			this.packageSourceStringMatches(
+				item.metadata.source,
+				this.getItemScope(item),
+				typeof pkg === "string" ? pkg : pkg.source,
+				scope,
+			),
+		);
+		if (pkgIndex === -1) return;
+		let pkg = packages[pkgIndex]!;
+		if (typeof pkg === "string") {
+			if (!override) return;
+			pkg = { source: pkg };
+			packages[pkgIndex] = pkg;
+		}
+		const updated: SkillInvocationOverrides = { ...pkg.skillInvocationOverrides };
+		const patterns = this.getPackageSkillInvocationOverridePatterns(item);
+		for (const pattern of Object.keys(updated)) {
+			if (hasResourcePattern(patterns, pattern)) delete updated[pattern];
+		}
+		const pattern = this.getPackageResourcePattern(item);
+		if (override) updated[pattern] = override;
+		pkg.skillInvocationOverrides = Object.keys(updated).length > 0 ? updated : undefined;
+		const hasConfiguration =
+			RESOURCE_TYPES.some((key) => pkg[key] !== undefined) || pkg.skillInvocationOverrides !== undefined;
+		if (!hasConfiguration) {
+			if (scope === "project" && pkg.autoload === false) packages.splice(pkgIndex, 1);
+			else packages[pkgIndex] = pkg.source;
+		}
+		if (scope === "project") this.settingsManager.setProjectPackages(packages);
+		else this.settingsManager.setPackages(packages);
+	}
+
 	private renderCheckbox(item: ResourceItem): string {
+		if (item.resourceType === "skills") {
+			if (this.writeScope === "project") {
+				const state = this.getProjectSkillOverrideState(item);
+				if (state === "on") return theme.fg("success", "[+]");
+				if (state === "user-only") return theme.fg("accent", "[u]");
+				if (state === "off") return theme.fg("warning", "[-]");
+				if (state === "load") {
+					const effectiveState = this.getSkillEffectiveState(item);
+					if (effectiveState === "user-only") return theme.fg("accent", "[u]");
+					if (effectiveState === "off") return theme.fg("warning", "[-]");
+					return theme.fg("success", "[+]");
+				}
+				const inheritedState = this.getInheritedSkillEffectiveState(item);
+				return theme.fg("dim", inheritedState === "on" ? "[x]" : inheritedState === "user-only" ? "[u]" : "[ ]");
+			}
+			const state = this.getSkillEffectiveState(item);
+			if (state === "on") return theme.fg("success", "[x]");
+			if (state === "user-only") return theme.fg("accent", "[u]");
+			return theme.fg("dim", "[ ]");
+		}
+
 		if (this.writeScope === "project") {
 			const state = this.getProjectOverrideState(item);
 			if (state === "load") return theme.fg("success", "[+]");
@@ -653,6 +817,18 @@ class ResourceList implements Component, Focusable {
 	}
 
 	private getItemSuffix(item: ResourceItem): string {
+		if (item.resourceType === "skills") {
+			if (this.writeScope === "project") {
+				const state = this.getProjectSkillOverrideState(item);
+				if (state === "on") return theme.fg("muted", "  project on");
+				if (state === "user-only") return theme.fg("muted", "  project user only");
+				if (state === "off") return theme.fg("muted", "  project off");
+				if (state === "load") return theme.fg("muted", "  project load");
+				return this.isInheritedGlobalItem(item) ? theme.fg("dim", "  inherited global") : "";
+			}
+			return this.getSkillEffectiveState(item) === "user-only" ? theme.fg("accent", "  user only") : "";
+		}
+
 		if (this.writeScope !== "project") return "";
 		const state = this.getProjectOverrideState(item);
 		if (state === "load") return theme.fg("muted", "  project load");
@@ -661,11 +837,87 @@ class ResourceList implements Component, Focusable {
 	}
 
 	private isDimmedItem(item: ResourceItem): boolean {
-		return (
-			this.writeScope === "project" &&
-			this.isInheritedGlobalItem(item) &&
-			this.getProjectOverrideState(item) === "inherit"
-		);
+		if (this.writeScope !== "project" || !this.isInheritedGlobalItem(item)) return false;
+		return item.resourceType === "skills"
+			? this.getProjectSkillOverrideState(item) === "inherit"
+			: this.getProjectOverrideState(item) === "inherit";
+	}
+
+	private getSkillEffectiveState(item: ResourceItem): SkillEffectiveState {
+		return resolveSkillEffectiveState({
+			enabled: item.enabled,
+			invocationOverride: item.skillInvocationOverride,
+			frontmatterDisableModelInvocation: item.frontmatterDisableModelInvocation,
+		});
+	}
+
+	private getInheritedSkillEffectiveState(item: ResourceItem): SkillEffectiveState {
+		const inherited = this.inheritedSkillStateByKey.get(this.getResourceItemKey(item));
+		if (inherited) return inherited;
+		const userScoped = this.getItemScope(item) === "user";
+		return resolveSkillEffectiveState({
+			enabled: userScoped ? item.enabled : true,
+			invocationOverride: userScoped ? item.skillInvocationOverride : undefined,
+			frontmatterDisableModelInvocation: item.frontmatterDisableModelInvocation,
+		});
+	}
+
+	private getNextProjectSkillOverrideState(item: ResourceItem): Exclude<ProjectSkillOverrideState, "load"> {
+		const states: SkillEffectiveState[] = ["on", "user-only", "off"];
+		const inheritedIndex = states.indexOf(this.getInheritedSkillEffectiveState(item));
+		const sequence = [...states.slice(inheritedIndex + 1), ...states.slice(0, inheritedIndex + 1)];
+		const current = this.getProjectSkillOverrideState(item);
+		if (current === "inherit") return sequence[0]!;
+		if (current === "load") return "inherit";
+		const currentIndex = sequence.indexOf(current);
+		return sequence[currentIndex + 1] ?? "inherit";
+	}
+
+	private getProjectSkillOverrideState(item: ResourceItem): ProjectSkillOverrideState {
+		if (this.writeScope !== "project") return "inherit";
+		let loadState: ProjectOverrideState;
+		let invocationOverrides: SkillInvocationOverrides | undefined;
+		let patterns: Set<string>;
+
+		if (item.metadata.origin === "top-level") {
+			const settings = this.settingsManager.getProjectSettings();
+			loadState = this.getOverrideStateFromEntries(
+				(settings.skills ?? []) as string[],
+				this.getTopLevelOverridePatterns(item, "project"),
+				false,
+			);
+			invocationOverrides = settings.skillInvocationOverrides;
+			patterns = this.getTopLevelOverridePatterns(item, "project");
+		} else {
+			const pkg = this.findMatchingPackageSource(item, "project");
+			if (typeof pkg !== "object") return "inherit";
+			loadState =
+				pkg.skills === undefined
+					? "inherit"
+					: this.getOverrideStateFromEntries(
+							pkg.skills,
+							this.getPackageSkillInvocationOverridePatterns(item),
+							pkg.autoload !== false,
+						);
+			invocationOverrides = pkg.skillInvocationOverrides;
+			patterns = this.getPackageSkillInvocationOverridePatterns(item);
+		}
+
+		if (loadState === "unload") return "off";
+		const invocation = this.getSkillInvocationOverrideFromMap(invocationOverrides, patterns);
+		if (invocation) return invocation === "user-only" ? "user-only" : "on";
+		return loadState;
+	}
+
+	private getSkillInvocationOverrideFromMap(
+		overrides: SkillInvocationOverrides | undefined,
+		patterns: Set<string>,
+	): SkillInvocationOverride | undefined {
+		for (const [pattern, override] of Object.entries(overrides ?? {})) {
+			if (!hasResourcePattern(patterns, pattern)) continue;
+			if (override === "model-and-user" || override === "user-only") return override;
+		}
+		return undefined;
 	}
 
 	private setProjectResourceOverride(item: ResourceItem, state: ProjectOverrideState): boolean {
@@ -728,7 +980,10 @@ class ResourceList implements Component, Focusable {
 		);
 		if (state !== "inherit") updated.push(`${state === "load" ? "+" : "-"}${pattern}`);
 		(pkg as Record<string, unknown>)[item.resourceType] = updated.length > 0 ? updated : undefined;
-		if (!RESOURCE_TYPES.some((key) => (pkg as Record<string, unknown>)[key] !== undefined)) {
+		if (
+			!RESOURCE_TYPES.some((key) => (pkg as Record<string, unknown>)[key] !== undefined) &&
+			pkg.skillInvocationOverrides === undefined
+		) {
 			if (pkg.autoload === false) packages.splice(pkgIndex, 1);
 			else packages[pkgIndex] = pkg.source;
 		}
@@ -772,7 +1027,7 @@ class ResourceList implements Component, Focusable {
 		if (entries.length === 0 && emptyArrayIsUnload) return "unload";
 		let state: ProjectOverrideState = "inherit";
 		for (const entry of entries) {
-			if (!patterns.has(this.getPatternEntryTarget(entry))) continue;
+			if (!hasResourcePattern(patterns, this.getPatternEntryTarget(entry))) continue;
 			if (entry.startsWith("!") || entry.startsWith("-")) state = "unload";
 			else state = "load";
 		}
@@ -798,6 +1053,12 @@ class ResourceList implements Component, Focusable {
 			relative(baseDir, item.path),
 		]);
 		if (item.metadata.baseDir) patterns.add(relative(item.metadata.baseDir, item.path));
+		if (item.resourceType === "skills" && basename(item.path) === "SKILL.md") {
+			const parentDir = dirname(item.path);
+			patterns.add(parentDir);
+			patterns.add(relative(baseDir, parentDir));
+			if (item.metadata.baseDir) patterns.add(relative(item.metadata.baseDir, parentDir));
+		}
 		return patterns;
 	}
 
@@ -869,6 +1130,16 @@ class ResourceList implements Component, Focusable {
 	private getPackageResourcePattern(item: ResourceItem): string {
 		const baseDir = item.metadata.baseDir ?? dirname(item.path);
 		return relative(baseDir, item.path);
+	}
+
+	private getPackageSkillInvocationOverridePatterns(item: ResourceItem): Set<string> {
+		const baseDir = item.metadata.baseDir ?? dirname(item.path);
+		const patterns = new Set([this.getPackageResourcePattern(item), item.path]);
+		if (basename(item.path) === "SKILL.md") {
+			patterns.add(relative(baseDir, dirname(item.path)));
+			patterns.add(dirname(item.path));
+		}
+		return patterns;
 	}
 }
 
