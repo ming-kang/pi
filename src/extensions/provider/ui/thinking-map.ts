@@ -5,7 +5,7 @@ import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybi
 import { THINKING_LEVELS, truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
 import { moveSelection } from "./controls.ts";
-import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
+import type { EditorPane, ModelHandle, PaneHost } from "./pane.ts";
 import { renderInfoLine, renderKeyValueLine, renderPlainLine, ValueEditor } from "./value-row.ts";
 
 // -------------------------------------------------------------------------
@@ -25,9 +25,9 @@ export class ThinkingMapPane implements EditorPane {
 	private error: string | undefined;
 	private focused = false;
 
-	private readonly host: EditorHost;
+	private readonly host: PaneHost;
 	private readonly model: ModelHandle;
-	constructor(host: EditorHost, model: ModelHandle) {
+	constructor(host: PaneHost, model: ModelHandle) {
 		this.host = host;
 		this.model = model;
 	}

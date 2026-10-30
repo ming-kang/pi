@@ -1,7 +1,7 @@
 /** Small reusable controls for provider panes; field policy stays with the caller. */
 import type { KeybindingsManager } from "../../../core/keybindings.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
-import type { EditorHost, EditorPane } from "./pane.ts";
+import type { EditorPane, PaneHost } from "./pane.ts";
 import { renderInfoLine, renderPlainLine, ValueEditor } from "./value-row.ts";
 
 /** Returns the wrapped selection, or undefined when this was not a navigation key. */
@@ -21,7 +21,7 @@ export interface Choice<T> {
 	dim?: boolean;
 }
 
-type ControlHost = Pick<EditorHost, "theme" | "keybindings" | "refresh" | "popPane">;
+type ControlHost = Pick<PaneHost, "theme" | "keybindings" | "refresh" | "popPane">;
 interface ChoiceOptions<T> {
 	choices(): readonly Choice<T>[];
 	current(): T;

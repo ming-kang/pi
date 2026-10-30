@@ -8,7 +8,7 @@ import { builtinDefaults } from "../catalog.ts";
 import { API_TYPES, maskApiKey, plural, truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
 import { ChoicePane, InlineEdit, moveSelection } from "./controls.ts";
-import type { EditorHost, EditorPane } from "./pane.ts";
+import type { EditorPane, ProviderPaneHost } from "./pane.ts";
 import { isPrintableInput, renderInfoLine, renderKeyValueLine, type ScrollWindowInfo } from "./value-row.ts";
 
 /**
@@ -61,9 +61,9 @@ export class ApiAuthPane implements EditorPane {
 	private readonly edit: InlineEdit<"baseUrl" | "apiKey">;
 	private focused = false;
 
-	private readonly host: EditorHost;
+	private readonly host: ProviderPaneHost;
 	private readonly registry: Pick<ModelRegistry, "getProviderAuthStatus">;
-	constructor(host: EditorHost, registry: Pick<ModelRegistry, "getProviderAuthStatus">) {
+	constructor(host: ProviderPaneHost, registry: Pick<ModelRegistry, "getProviderAuthStatus">) {
 		this.host = host;
 		this.edit = new InlineEdit(() => host.refresh());
 		this.registry = registry;
@@ -216,7 +216,7 @@ export class ApiAuthPane implements EditorPane {
  * returns. Clearing is refused while any model still resolves its api from
  * the provider — set a model-level API under Model-Specific API first.
  */
-export function createProviderApiPane(host: EditorHost): EditorPane {
+export function createProviderApiPane(host: ProviderPaneHost): EditorPane {
 	const current = () => host.store.getProvider(host.providerId)?.api;
 	return new ChoicePane<string | undefined>(host, "API Type", {
 		current,

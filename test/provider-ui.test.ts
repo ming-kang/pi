@@ -89,7 +89,6 @@ function editor() {
 
 function hostFixture(): { host: EditorHost; model: ModelHandle } {
 	const host: EditorHost = {
-		tui,
 		theme,
 		keybindings: keys,
 		store,
@@ -104,7 +103,6 @@ function hostFixture(): { host: EditorHost; model: ModelHandle } {
 		commitModelDraft: () => undefined,
 		discardModelDraft: vi.fn(),
 		isCurrentModel: () => false,
-		isCurrentProvider: () => false,
 		setFetchStatus: vi.fn(),
 		runFetch: async () => ({ ok: true, models: [{ id: "new-model" }], truncated: false }),
 		importModels: async () => undefined,

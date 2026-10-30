@@ -290,7 +290,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 					this.refresh();
 					return;
 				}
-				if (this.host.isCurrentProvider()) {
+				if (this.options.currentModel?.provider === this.options.providerId) {
 					this.host.notify(
 						"The current model's provider cannot be deleted; switch models with /model first.",
 						"error",
@@ -476,7 +476,6 @@ export class ProviderEditorScreen implements Component, Focusable {
 		const store = this.options.store;
 		const providerId = this.options.providerId;
 		return {
-			tui: this.tui,
 			theme: this.theme,
 			keybindings: this.keybindings,
 			store,
@@ -496,7 +495,6 @@ export class ProviderEditorScreen implements Component, Focusable {
 			discardModelDraft: () => this.discardModelDraft(),
 			isCurrentModel: (modelId) =>
 				this.options.currentModel?.provider === providerId && this.options.currentModel.id === modelId,
-			isCurrentProvider: () => this.options.currentModel?.provider === providerId,
 			setFetchStatus: (status) => {
 				this.fetchStatus = status;
 				this.refresh();

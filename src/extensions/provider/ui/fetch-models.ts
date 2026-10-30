@@ -11,7 +11,7 @@ import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybi
 import { truncate } from "../constants.ts";
 import { modelCatalogUrl, type ProbeModel } from "../probe.ts";
 import { moveSelection } from "./controls.ts";
-import type { EditorHost, EditorPane } from "./pane.ts";
+import type { EditorPane, FetchModelsHost } from "./pane.ts";
 import { renderInfoLine, renderPlainLine, type ScrollWindowInfo, truncateMiddle, ValueEditor } from "./value-row.ts";
 
 interface CatalogResults {
@@ -55,8 +55,8 @@ export class FetchModelsPane implements EditorPane {
 	private focused = false;
 	private disposed = false;
 
-	private readonly host: EditorHost;
-	constructor(host: EditorHost) {
+	private readonly host: FetchModelsHost;
+	constructor(host: FetchModelsHost) {
 		this.host = host;
 
 		this.search = new ValueEditor({

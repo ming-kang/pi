@@ -6,7 +6,7 @@ import { builtinDefaults } from "../catalog.ts";
 import { API_TYPES, INPUT_TYPES, type InputType, truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
 import { ChoicePane, InlineEdit, moveSelection } from "./controls.ts";
-import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
+import type { EditorPane, ModelHandle, PaneHost, ProviderPaneHost } from "./pane.ts";
 import { baseUrlHint, validateBaseUrlValue } from "./provider-fields.ts";
 import { isPrintableInput, renderInfoLine, renderKeyValueLine, renderPlainLine } from "./value-row.ts";
 
@@ -21,7 +21,7 @@ const REASONING_OPTIONS = [
 ] as const;
 
 /** Radio sub-page for reasoning — consistent with the other nested model settings. */
-export function createReasoningPane(host: EditorHost, model: ModelHandle): EditorPane {
+export function createReasoningPane(host: PaneHost, model: ModelHandle): EditorPane {
 	return new ChoicePane<boolean | undefined>(host, "reasoning", {
 		current: () => model.read().reasoning,
 		choices: () => REASONING_OPTIONS.map((option) => ({ ...option, dim: option.value === undefined })),
@@ -42,9 +42,9 @@ export class InputTypesPane implements EditorPane {
 	private error: string | undefined;
 	private focused = false;
 
-	private readonly host: EditorHost;
+	private readonly host: PaneHost;
 	private readonly model: ModelHandle;
-	constructor(host: EditorHost, model: ModelHandle) {
+	constructor(host: PaneHost, model: ModelHandle) {
 		this.host = host;
 		this.model = model;
 	}
@@ -129,9 +129,9 @@ export class CostPane implements EditorPane {
 	private readonly edit: InlineEdit<CostRate>;
 	private focused = false;
 
-	private readonly host: EditorHost;
+	private readonly host: PaneHost;
 	private readonly model: ModelHandle;
-	constructor(host: EditorHost, model: ModelHandle) {
+	constructor(host: PaneHost, model: ModelHandle) {
 		this.host = host;
 		this.edit = new InlineEdit(() => host.refresh());
 		this.model = model;
@@ -253,9 +253,9 @@ export class ModelSpecificApiPane implements EditorPane {
 	private readonly edit: InlineEdit<"baseUrl">;
 	private focused = false;
 
-	private readonly host: EditorHost;
+	private readonly host: ProviderPaneHost;
 	private readonly model: ModelHandle;
-	constructor(host: EditorHost, model: ModelHandle) {
+	constructor(host: ProviderPaneHost, model: ModelHandle) {
 		this.host = host;
 		this.edit = new InlineEdit(() => host.refresh());
 		this.model = model;
@@ -364,7 +364,7 @@ export class ModelSpecificApiPane implements EditorPane {
 }
 
 /** Single-select model api: the inherited default plus every known API tag. Enter applies and returns. */
-export function createModelApiPane(host: EditorHost, model: ModelHandle): EditorPane {
+export function createModelApiPane(host: ProviderPaneHost, model: ModelHandle): EditorPane {
 	const fallback = () => {
 		const provider = host.store.getProvider(host.providerId);
 		return provider?.api ?? builtinDefaults(host.providerId, model.read().id, provider?.api).api;

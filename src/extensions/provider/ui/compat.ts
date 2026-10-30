@@ -13,7 +13,7 @@ import { truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
 import { moveSelection } from "./controls.ts";
 import { DictPane } from "./dictionary.ts";
-import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
+import type { EditorPane, ModelHandle, PaneHost, ProviderPaneHost } from "./pane.ts";
 import {
 	renderInfoLine,
 	renderKeyValueLine,
@@ -47,9 +47,9 @@ export class CompatPane implements EditorPane {
 	private error: string | undefined;
 	private focused = false;
 
-	private readonly host: EditorHost;
+	private readonly host: ProviderPaneHost;
 	private readonly model: ModelHandle;
-	constructor(host: EditorHost, model: ModelHandle) {
+	constructor(host: ProviderPaneHost, model: ModelHandle) {
 		this.host = host;
 		this.model = model;
 	}
@@ -369,12 +369,12 @@ export class CompatKeyPickerPane implements EditorPane {
 	private editor: ValueEditor;
 	private focused = false;
 
-	private readonly host: EditorHost;
+	private readonly host: PaneHost;
 	private readonly api: string;
 	private readonly taken: ReadonlySet<string>;
 	private readonly onPick: (key: string) => void;
 
-	constructor(host: EditorHost, api: string, taken: ReadonlySet<string>, onPick: (key: string) => void) {
+	constructor(host: PaneHost, api: string, taken: ReadonlySet<string>, onPick: (key: string) => void) {
 		this.host = host;
 		this.api = api;
 		this.taken = taken;

@@ -14,7 +14,7 @@ import { type CatalogEntry, computeFieldChanges, type FieldChange, matchBuiltinM
 import { truncate } from "../constants.ts";
 import { jsonEquals } from "../store.ts";
 import { moveSelection } from "./controls.ts";
-import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
+import type { EditorPane, ModelHandle, ProviderPaneHost } from "./pane.ts";
 import { renderInfoLine, renderPlainLine, type ScrollWindowInfo, ValueEditor } from "./value-row.ts";
 
 function formatContext(model: Model<Api>): string {
@@ -29,9 +29,9 @@ export class BuiltinCandidatesPane implements EditorPane {
 	private index = 0;
 	private focused = false;
 
-	private readonly host: EditorHost;
+	private readonly host: ProviderPaneHost;
 	private readonly model: ModelHandle;
-	constructor(host: EditorHost, model: ModelHandle) {
+	constructor(host: ProviderPaneHost, model: ModelHandle) {
 		this.host = host;
 		this.model = model;
 
@@ -140,10 +140,10 @@ export class BuiltinPreviewPane implements EditorPane {
 	private error: string | undefined;
 	private focused = false;
 
-	private readonly host: EditorHost;
+	private readonly host: ProviderPaneHost;
 	private readonly model: ModelHandle;
 	private readonly reference: CatalogEntry;
-	constructor(host: EditorHost, model: ModelHandle, reference: CatalogEntry) {
+	constructor(host: ProviderPaneHost, model: ModelHandle, reference: CatalogEntry) {
 		this.host = host;
 		this.model = model;
 		this.reference = reference;

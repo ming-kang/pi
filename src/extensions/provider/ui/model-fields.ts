@@ -15,7 +15,7 @@ import { BuiltinCandidatesPane } from "./builtin-data.ts";
 import { CompatPane } from "./compat.ts";
 import { moveSelection } from "./controls.ts";
 import { CostPane, createReasoningPane, InputTypesPane, ModelSpecificApiPane } from "./model-options.ts";
-import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
+import type { EditorPane, ModelFieldsHost, ModelHandle } from "./pane.ts";
 import { ThinkingMapPane } from "./thinking-map.ts";
 import {
 	isPrintableInput,
@@ -47,9 +47,9 @@ export class ModelFieldsPane implements EditorPane {
 	private renaming = false;
 	private disposed = false;
 
-	private readonly host: EditorHost;
+	private readonly host: ModelFieldsHost;
 	private readonly model: ModelHandle;
-	constructor(host: EditorHost, model: ModelHandle) {
+	constructor(host: ModelFieldsHost, model: ModelHandle) {
 		this.host = host;
 		this.model = model;
 

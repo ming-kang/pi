@@ -2,7 +2,7 @@
 
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
-import type { EditorHost, EditorPane } from "./pane.ts";
+import type { EditorPane, PaneHost } from "./pane.ts";
 import { CURSOR, renderInfoLine, renderPlainLine } from "./value-row.ts";
 
 /** Static dim text lines (e.g. action-row explanations); optionally Enter-activatable. */
@@ -10,8 +10,8 @@ export class InfoPane implements EditorPane {
 	private readonly lines: string[];
 	private readonly onConfirm: (() => void) | undefined;
 	private focused = false;
-	private readonly host: EditorHost;
-	constructor(host: EditorHost, lines: string[], onConfirm?: () => void) {
+	private readonly host: PaneHost;
+	constructor(host: PaneHost, lines: string[], onConfirm?: () => void) {
 		this.host = host;
 
 		this.lines = lines;
@@ -56,12 +56,12 @@ export class ConfirmPane implements EditorPane {
 	private index = 1; // default to Cancel
 	private focused = false;
 
-	private readonly host: EditorHost;
+	private readonly host: PaneHost;
 	private readonly message: string;
 	private readonly actionLabel: string;
 	private readonly action: () => void;
 
-	constructor(host: EditorHost, message: string, actionLabel: string, action: () => void) {
+	constructor(host: PaneHost, message: string, actionLabel: string, action: () => void) {
 		this.host = host;
 		this.message = message;
 		this.actionLabel = actionLabel;
