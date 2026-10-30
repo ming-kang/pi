@@ -1,3 +1,4 @@
+import { unlink } from "node:fs/promises";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model, Usage } from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../../config.ts";
@@ -10,6 +11,7 @@ import { SettingsManager } from "../../core/settings-manager.ts";
 import type { TaskCompletion, TaskControl, TaskTerminalStatus } from "../../core/tasks/types.ts";
 import { combineUsage } from "../../core/usage-totals.ts";
 import { raceWithAbortSignal } from "../../utils/abort.ts";
+import { writeOutputFile } from "../../utils/output-files.ts";
 import {
 	activitiesText,
 	activityTarget,
@@ -18,9 +20,15 @@ import {
 	compactArguments,
 	finalAssistantText,
 } from "./activity.ts";
-import { AGENT_MAX_ACTIVITIES, type AgentActivity, type AgentToolDetails, emptyUsage } from "./types.ts";
+import {
+	AGENT_MAX_ACTIVITIES,
+	AGENT_REPORT_BYTES,
+	type AgentActivity,
+	type AgentToolDetails,
+	emptyUsage,
+} from "./types.ts";
 
-const AGENT_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+const AGENT_TOOLS = ["read", "bash", "edit", "write"];
 
 /** One small session-local queue; Tasks owns the visible queued/running state. */
 export class AgentGate {
@@ -93,11 +101,11 @@ export interface AgentRequest {
 function workerPrompt(base: string | undefined): string {
 	return [
 		base,
-		"You are an Agent working independently on one delegated coding task.",
-		"You cannot see the parent conversation; rely on the complete task briefing and repository context.",
-		"Work in the assigned directory, stay within the requested scope, and do not ask the end user questions.",
+		"You are an Agent working independently on one delegated task.",
+		"You cannot see the parent conversation. Treat the parent Agent as your caller, rely on the task briefing and available workspace context, and do not ask the end user questions. If anything is unclear, explain the ambiguity in your final report.",
+		"Work in the assigned directory and stay within the requested scope. Use read for known-path file reads and bash for file discovery, search, and shell commands.",
 		"Do not delegate or start background work. Run required commands in the foreground and wait for them.",
-		"Only your final report returns to the caller. Include essential findings or changes, verification, blockers, and unresolved risks; omit process narration.",
+		"Only your final report returns to the caller. Make it self-contained: include essential findings or changes, verification when applicable, blockers, and unresolved risks; omit process narration.",
 	]
 		.filter((part): part is string => Boolean(part?.trim()))
 		.join("\n\n");
@@ -107,9 +115,28 @@ function errorText(error: unknown): string {
 	return clipText(error instanceof Error ? error.message : String(error), 4096);
 }
 
-function finalText(report: string, error: string | undefined): string {
-	if (!report) return error ?? "No report returned.";
-	return error ? boundedAgentText(`${report}\n\nError: ${error}`) : report;
+async function removeOutputFile(path: string): Promise<void> {
+	await unlink(path).catch((error: NodeJS.ErrnoException) => {
+		if (error.code !== "ENOENT") throw error;
+	});
+}
+
+async function finalText(
+	control: TaskControl<AgentToolDetails>,
+	report: string,
+	error: string | undefined,
+): Promise<string> {
+	const text = !report ? (error ?? "No report returned.") : error ? `${report}\n\nError: ${error}` : report;
+	if (Buffer.byteLength(text) <= AGENT_REPORT_BYTES) return text;
+	let path: string | undefined;
+	try {
+		path = await writeOutputFile("pi-agent", ".md", text);
+		control.setOutputPath(path, () => removeOutputFile(path!));
+		return boundedAgentText(text, AGENT_REPORT_BYTES, path);
+	} catch {
+		if (path) await removeOutputFile(path).catch(() => {});
+		return boundedAgentText(text);
+	}
 }
 
 async function prepareWorkerSession(request: AgentRequest, signal: AbortSignal): Promise<CreateAgentSessionOptions> {
@@ -256,7 +283,7 @@ export async function runAgent(
 			error,
 			usage,
 			result: {
-				content: [{ type: "text", text: finalText(report, error) }],
+				content: [{ type: "text", text: await finalText(control, report, error) }],
 				details: details(status, error),
 				...(status === "completed" ? {} : { isError: true }),
 			},
@@ -270,7 +297,7 @@ export async function runAgent(
 			error: reason,
 			usage,
 			result: {
-				content: [{ type: "text", text: finalText(report, reason) }],
+				content: [{ type: "text", text: await finalText(control, report, reason) }],
 				details: details(status, reason),
 				isError: true,
 			},

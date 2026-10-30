@@ -1,6 +1,6 @@
 # Agent — lightweight delegation
 
-The bundled `Agent` extension adds the `Agent` tool and `/agent` settings command. One call delegates one self-contained coding task to a temporary Agent and returns its final report. There are no General/Explore profiles, batch arrays, persistent worker identities, or chain modes.
+The bundled `Agent` extension adds the `Agent` tool and `/agent` settings command. One call delegates one self-contained task to a temporary Agent and returns its final report. Use it sparingly for independent work that clearly benefits from separate context or parallel execution. There are no General/Explore profiles, batch arrays, persistent worker identities, or chain modes.
 
 ## Tool contract
 
@@ -18,7 +18,7 @@ The bundled `Agent` extension adds the `Agent` tool and `/agent` settings comman
 
 Issue parallel `Agent` calls for independent work. Each call is a separate Transcript row and Task, including its own completion notification; there is no aggregate batch view. At most four Agents run concurrently in one extension runtime, with additional calls queued visibly in Tasks. Parallel tasks must not perform overlapping writes.
 
-Agents use the parent's working directory and share its canonical model/authentication runtime. Their isolated in-memory sessions have `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls`, load applicable repository instructions, and do not load extensions, skills, prompt templates, or themes. They cannot recursively delegate or start managed background work. The full child conversation is not persisted separately.
+Agents use the parent's working directory and share its canonical model/authentication runtime. Their isolated in-memory sessions have `read`, `bash`, `edit`, and `write`, with shell commands covering file discovery and search. They load applicable repository instructions and do not load extensions, skills, prompt templates, or themes. They cannot recursively delegate or start managed background work. The full child conversation is not persisted separately.
 
 Resource discovery preserves the parent's project-trust decision. Declining trust skips project `.pi/SYSTEM.md` and `.pi/APPEND_SYSTEM.md` while still loading repository context files such as `AGENTS.md`. Execution uses an isolated snapshot of global settings and trusted project overrides, including request and shell settings; cache warming is disabled for Agents.
 
@@ -58,9 +58,9 @@ Shell activity shows only the first non-empty command line and retains the actua
 
 In `/tasks`, each Agent remains an independent row:
 
-- **Output** shows actual tool activity while running and the complete final report with Markdown formatting after successful completion.
+- **Output** shows actual tool activity while running and the final report with Markdown formatting after successful completion. Oversized reports remain available through their managed output file.
 - **Details** shows the full Prompt, working directory, model, and thinking level.
 
 Use `tasks read`, `tasks wait`, or `tasks kill` with the Task ID. Selection, scrolling, cancellation, foreground detach, history, and completion delivery are owned by the shared Tasks implementation. Parent cancellation stops foreground-owned work, including cancellation received during startup; detached work continues until it finishes or is killed. Reload, session replacement, and shutdown cancel active Agents.
 
-Reports are bounded to 24 KiB, activity history to the latest 50 tool calls, and published task results to the shared Tasks limits. Final reports, static Details, usage, and completion state restore through the parent session branch; live execution never resumes after restart.
+Inline reports are bounded to 24 KiB. Longer reports are written in full to a managed temporary Markdown file, and the tool result includes a bash-style `Full output: <path>` notice. Use `read` on that path or `tasks read` for retained output; a failure to save the file falls back to a bounded report without changing the Agent's outcome. Activity history is limited to the latest 50 tool calls, and published task results use the shared Tasks limits. Inline report previews, static Details, usage, and completion state restore through the parent session branch. Managed output files follow the Tasks lifecycle and never survive restart; live execution never resumes either.

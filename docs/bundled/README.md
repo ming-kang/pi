@@ -19,7 +19,7 @@ The following extensions are additions maintained by `@astralyn/pi`:
 
 | Feature | Tool or command | Purpose |
 |---|---|---|
-| [Agent](extensions/agent.md) | `Agent`, `/agent` | Delegate independent coding tasks with lightweight Transcript activity and Tasks inspection |
+| [Agent](extensions/agent.md) | `Agent`, `/agent` | Delegate independent tasks with lightweight Transcript activity and Tasks inspection |
 | [BTW](extensions/btw.md) | `/btw [question]` | Ask temporary side questions with the current context while the main task continues |
 | [DeepWiki](extensions/deepwiki.md) | `deepwiki` | Query indexed public GitHub repository documentation |
 | [Question](extensions/question.md) | `question` | Ask structured questions through native interactive UI |

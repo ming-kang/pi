@@ -23,7 +23,7 @@ The llama.cpp integration, codemode, MCP, and tool search come from upstream Pi.
 - [Using Pi](docs/usage.md) covers interactive commands, context files, CLI usage, and the `--` end-of-options delimiter.
 - [Windows setup](docs/windows.md) covers Git Bash and the optional PowerShell tool.
 - [Tasks](docs/bundled/tasks.md) covers native shell and extension-owned task execution, Ctrl+B handoff, and `/tasks` management in interactive mode.
-- [Agent delegation](docs/bundled/extensions/agent.md) covers independent coding Agents, `/agent` model and thinking settings, and Tasks integration.
+- [Agent delegation](docs/bundled/extensions/agent.md) covers lightweight delegation for independent tasks, `/agent` model and thinking settings, and Tasks integration.
 - [BTW side questions](docs/bundled/extensions/btw.md) covers temporary conversations that reuse the main context without entering saved session history.
 - [Sessions](docs/sessions.md) and [Compaction](docs/compaction.md) cover saved work and context management.
 - [Extensions](docs/extensions.md), [Skills](docs/skills.md), [Prompt templates](docs/prompt-templates.md), [Themes](docs/themes.md), and [Pi packages](docs/packages.md) cover customization.

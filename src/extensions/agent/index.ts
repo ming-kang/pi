@@ -26,10 +26,10 @@ export function createAgentTool(gate = new AgentGate()): ToolDefinition<typeof a
 		name: "Agent",
 		label: "Agent",
 		description:
-			"Delegate one self-contained coding task to a temporary isolated Agent with read, search, edit and shell tools. Use for independent work that benefits from separate context; do known-path reads and small edits directly. Issue parallel Agent calls for independent tasks. Foreground returns the final report; background returns a task ID and delivers it automatically. The Agent cannot see the parent conversation, so include all necessary context and desired verification in prompt.",
-		promptSnippet: "Delegate an independent coding task",
+			"Delegate independent work to a temporary isolated Agent when separate context or parallel execution offers a clear benefit. Use sparingly; handle known-path reads and small edits directly. The Agent cannot see the parent conversation, so include all necessary context and desired verification in prompt. Foreground returns the final report; background returns a task ID and delivers it automatically.",
+		promptSnippet: "Delegate an independent task",
 		promptGuidelines: [
-			"Give Agent a complete briefing with paths, constraints and expected verification; use parallel calls only for independent, non-overlapping work.",
+			"Give Agent a complete, self-contained briefing with relevant paths, constraints and expected verification; use parallel calls only for independent, non-overlapping work.",
 		],
 		parameters: agentSchema,
 		constrainedSampling: { type: "json_schema", strict: "prefer" },

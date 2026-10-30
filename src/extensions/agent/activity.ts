@@ -64,8 +64,10 @@ export function activitiesText(activities: readonly AgentActivity[]): string {
 	return activities.map((activity) => activityText(activity)).join("\n");
 }
 
-export function boundedAgentText(text: string, maxBytes = AGENT_REPORT_BYTES): string {
-	const notice = "\n\n[Agent output truncated.]";
+export function boundedAgentText(text: string, maxBytes = AGENT_REPORT_BYTES, fullOutputPath?: string): string {
+	const notice = fullOutputPath
+		? `\n\n[Agent output truncated. Full output: ${fullOutputPath}]`
+		: "\n\n[Agent output truncated. Full output unavailable.]";
 	if (Buffer.byteLength(text) <= maxBytes) return text;
 	return boundText(text, maxBytes - Buffer.byteLength(notice)) + notice;
 }
@@ -78,7 +80,7 @@ export function finalAssistantText(messages: readonly AgentMessage[]): string {
 			.filter((block) => block.type === "text")
 			.map((block) => block.text)
 			.join("\n");
-		if (text.trim()) return boundedAgentText(text);
+		if (text.trim()) return text;
 	}
 	return "";
 }

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -24,9 +24,6 @@ describe("Agent delegation", () => {
 					"bash",
 					"edit",
 					"write",
-					"grep",
-					"find",
-					"ls",
 				]);
 				expect(JSON.stringify(context.messages)).not.toContain("PRIVATE_PARENT_CONVERSATION");
 				return fauxAssistantMessage(fauxToolCall("read", { path: "entry.ts" }), { stopReason: "toolUse" });
@@ -47,12 +44,66 @@ describe("Agent delegation", () => {
 		expect(task).toMatchObject({ kind: "agent", title: "Inspect entry", status: "completed" });
 		expect(task.info?.text).toContain("Inspect entry.ts and report the export");
 		expect(task.info?.text).toContain(`${harness.models[0]!.provider}/${harness.models[0]!.id}`);
+		expect(task.outputPath).toBeUndefined();
 		expect((await harness.session.tasks.read(task.id)).text).toContain("## Report");
 		expect(
 			harness.sessionManager
 				.getEntries()
 				.filter((entry) => entry.type === "custom" && entry.customType === "task-usage"),
 		).toHaveLength(1);
+	});
+
+	it("preserves an oversized report as managed output and returns a bounded preview", async () => {
+		harness = await createHarness({ settings: { compaction: { enabled: false } } });
+		const report = `## Report\n\nSTART\n${"🙂".repeat(7000)}\nEND`;
+		harness.setResponses([fauxAssistantMessage(report)]);
+		const result = await createAgentTool().execute(
+			"long-report",
+			{ prompt: "Return the requested report" },
+			undefined,
+			undefined,
+			harness.session.extensionRunner.createToolContext("long-report", undefined),
+		);
+		const text = getMessageText(result);
+		expect(text).toContain("Agent output truncated. Full output:");
+		expect(text).not.toContain("�");
+		expect(text.length).toBeLessThan(report.length);
+		const outputPath = text.match(/Full output: ([^\]\r\n]+)/)?.[1];
+		expect(outputPath).toBeDefined();
+		expect(readFileSync(outputPath!, "utf8")).toBe(report);
+		const task = harness.session.tasks.list()[0]!;
+		expect(task.outputPath).toBe(outputPath);
+		const tail = await harness.session.tasks.read(task.id, { mode: "tail", bytes: 1024 });
+		expect(tail.totalBytes).toBe(Buffer.byteLength(report));
+		expect(tail.text).toContain("END");
+		harness.session.dispose();
+		await vi.waitFor(() => expect(existsSync(outputPath!)).toBe(false));
+	});
+
+	it("keeps an oversized background report available after handoff", async () => {
+		harness = await createHarness({ settings: { compaction: { enabled: false } } });
+		await harness.session.bindExtensions({ tasksEnabled: true });
+		const resumeNotifications = harness.session.pauseTaskNotifications();
+		try {
+			const report = `BACKGROUND\n${"x".repeat(26 * 1024)}`;
+			harness.setResponses([fauxAssistantMessage(report)]);
+			const handoff = await createAgentTool().execute(
+				"background-report",
+				{ prompt: "Return the requested report", background: true },
+				undefined,
+				undefined,
+				harness.session.extensionRunner.createToolContext("background-report", undefined),
+			);
+			expect(handoff.details?.status).toBe("background");
+			const taskId = handoff.details?.taskId;
+			expect(taskId).toBeDefined();
+			const task = await harness.session.tasks.wait(taskId!);
+			expect(task.status).toBe("completed");
+			expect(task.outputPath).toBeDefined();
+			expect(readFileSync(task.outputPath!, "utf8")).toBe(report);
+		} finally {
+			resumeNotifications();
+		}
 	});
 
 	it("honors declined project trust without dropping repository instructions", async () => {
