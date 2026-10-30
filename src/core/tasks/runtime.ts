@@ -9,6 +9,8 @@ import {
 	retainResult,
 	sliceText,
 	TASK_INFO_BYTES,
+	TASK_MESSAGE_BYTES,
+	TASK_RESULT_BYTES,
 	TASK_TITLE_BYTES,
 } from "./output.ts";
 import { changed, snapshotOf, type TaskRecord, TaskStore } from "./store.ts";
@@ -29,6 +31,7 @@ import {
 
 interface ActiveTask {
 	controller: AbortController;
+	steer?: (message: string) => void | Promise<void>;
 	accepted: boolean;
 	handedOff: boolean;
 	detachRequested: boolean;
@@ -231,9 +234,10 @@ export class TaskRuntime implements TasksContext {
 				queueMicrotask(() => queueMicrotask(active.handoff));
 				this.emit();
 			},
-			publish: (result) => {
+			publish: (result, display) => {
 				if (record.settled || this.closed) return;
 				retainResult(task, result);
+				if (display !== undefined) this.setDisplay(task, display);
 				changed(record);
 				if (result.usage !== undefined) active.publishedUsage = structuredClone(result.usage);
 				if (!active.detachRequested && !active.handedOff) {
@@ -244,6 +248,17 @@ export class TaskRuntime implements TasksContext {
 					}
 				}
 				this.emit();
+			},
+			sendMessage: (message) => {
+				if (record.settled || this.closed || !this.options.onMessage || !message.trim()) return false;
+				return this.options.onMessage(snapshotOf(record), boundText(message, TASK_MESSAGE_BYTES));
+			},
+			onSteer: (listener) => {
+				if (record.settled || this.closed) return () => {};
+				active.steer = listener;
+				return () => {
+					if (active.steer === listener) active.steer = undefined;
+				};
 			},
 			setOutputPath: (path, cleanup) => {
 				if (record.settled) {
@@ -262,6 +277,7 @@ export class TaskRuntime implements TasksContext {
 		const finish = (completion: TaskCompletion<T> | undefined, error?: unknown) => {
 			if (record.settled) return;
 			record.settled = true;
+			active.steer = undefined;
 			active.modeListeners.clear();
 			active.removeParent();
 			task.endedAt = Date.now();
@@ -277,6 +293,7 @@ export class TaskRuntime implements TasksContext {
 							: "completed");
 			if (completion) {
 				retainResult(task, completion.result);
+				if (completion.display !== undefined) this.setDisplay(task, completion.display);
 				if (completion.error !== undefined) task.error = boundText(completion.error, 4096);
 				if (completion.exitCode !== undefined) task.exitCode = completion.exitCode;
 			}
@@ -410,6 +427,20 @@ export class TaskRuntime implements TasksContext {
 
 	get(id: string): TaskSnapshot {
 		return snapshotOf(this.lookup(id));
+	}
+
+	private setDisplay(task: TaskSnapshot, display: string): void {
+		const text = boundText(display, TASK_RESULT_BYTES);
+		task.display = { text, truncated: text !== display };
+	}
+
+	async steer(id: string, message: string): Promise<boolean> {
+		const record = this.lookup(id);
+		const active = this.executions.get(record.task.id);
+		if (!active?.steer || record.settled || this.closed || active.controller.signal.aborted || !message.trim())
+			return false;
+		await active.steer(boundText(message, TASK_MESSAGE_BYTES));
+		return true;
 	}
 
 	async read(

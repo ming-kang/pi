@@ -52,7 +52,7 @@ export function taskLines(
 				? "No saved output."
 				: "No output yet.";
 	const text = cleanTaskText((read ? read.text : saved) || empty);
-	// Agent activity and shell logs stay literal; only a settled report is Markdown.
+	// Agent Text and shell logs keep their normal rendering; only a settled report is Markdown.
 	const output =
 		task.kind === "agent" && task.status === "completed"
 			? new Markdown(text, 0, 0, getMarkdownTheme(), {
@@ -60,6 +60,15 @@ export function taskLines(
 				}).render(Math.max(1, outputWidth))
 			: text.split("\n").map((line) => theme.fg("toolOutput", line));
 	if (read?.readError) output.unshift(theme.fg("warning", "Log unavailable; showing saved result."));
+	if (task.display?.text) {
+		if (output.length) output.push("");
+		output.push(
+			...cleanTaskText(task.display.text)
+				.split("\n")
+				.map((line) => theme.fg("toolOutput", line)),
+		);
+	}
+	if (task.display?.truncated) output.push(theme.fg("warning", "Additional output truncated."));
 	if ((!read || read.readError) && task.resultTruncated) output.push(theme.fg("warning", "Saved result truncated."));
 	return { info, output };
 }

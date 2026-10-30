@@ -18,7 +18,7 @@ interface TaskSessionOptions {
 	/** The main session owns input queues, preflight and idle state. */
 	canDeliver(): boolean;
 	/**
-	 * Start a completion turn, or enqueue the message and return waitForPersistence().
+	 * Start a task-message/completion turn, or enqueue it and return waitForPersistence().
 	 * The host owns input routing; this adapter owns the queued delivery's lifetime.
 	 */
 	deliver(message: CustomMessage, waitForPersistence: () => Promise<void>): Promise<void>;
@@ -109,7 +109,9 @@ export class TaskSession {
 
 	/** Cancel running tasks launched outside the branch ending at `leafId`. */
 	cancelOutsideBranch(leafId: string | null): Promise<void> {
-		return this.service.cancelOutsideBranch(this.branchIds(leafId));
+		const ancestors = this.branchIds(leafId);
+		this.delivery.dropOutsideBranch(ancestors);
+		return this.service.cancelOutsideBranch(ancestors);
 	}
 
 	private branchIds(leafId: string | null): Set<string> {
@@ -142,6 +144,7 @@ export class TaskSession {
 			},
 			anchor: () => manager.getLeafId(),
 			onCleanupError: (message) => this.warn("task_cleanup", message),
+			onMessage: (task, message) => this.delivery.enqueue(service, task, message),
 			onSettled: (task, usage) => {
 				const onBranch =
 					manager.getSessionId() === sessionId &&

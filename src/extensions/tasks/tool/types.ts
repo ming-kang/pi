@@ -44,6 +44,13 @@ export interface TasksWaitDetails {
 	running?: number;
 }
 
+export interface TasksSteerDetails {
+	action: "steer";
+	taskId: string;
+	accepted: boolean;
+	status: TaskStatus;
+}
+
 export interface TasksKillDetails {
 	requested?: boolean;
 	status?: TaskStatus;
@@ -62,4 +69,9 @@ export interface TasksListDetails {
 	foregroundOmitted?: number;
 }
 
-export type TasksDetails = TasksReadDetails | TasksKillDetails | TasksListDetails | TasksWaitDetails;
+export type TasksDetails =
+	| TasksReadDetails
+	| TasksSteerDetails
+	| TasksKillDetails
+	| TasksListDetails
+	| TasksWaitDetails;

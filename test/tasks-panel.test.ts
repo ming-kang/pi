@@ -244,7 +244,7 @@ describe("task panel views", () => {
 		expect(h.frame()).not.toContain("Title     Inspect boundaries");
 	});
 
-	it("renders a completed Agent report as Markdown in Output", async () => {
+	it("renders a completed Agent report and human-only activity in Output", async () => {
 		const h = harness([
 			task("agent-markdown", {
 				kind: "agent",
@@ -252,6 +252,10 @@ describe("task panel views", () => {
 				title: "Inspect Markdown",
 				status: "completed",
 				endedAt: 1000,
+				display: {
+					text: 'Supervisor messages\nAgent → Main: Need direction.\n\nTool calls\n✓ read {"path":"src/index.ts"} 2ms',
+					truncated: false,
+				},
 			}),
 		]);
 		h.setOutput("## Report\n\n**Bold** and `src/index.ts`.\n\n- first item");
@@ -263,6 +267,9 @@ describe("task panel views", () => {
 		expect(h.frame()).not.toContain("**Bold**");
 		expect(h.frame()).not.toContain("`src/index.ts`");
 		expect(h.menu.render(140).join("\n")).toContain(theme.fg("mdCode", "src/index.ts"));
+		expect(h.frame()).toContain("Agent → Main: Need direction.");
+		expect(h.frame()).toContain("Tool calls");
+		expect(h.frame()).toContain('✓ read {"path":"src/index.ts"} 2ms');
 	});
 
 	it("scrolls long information independently and honors rebound controls", async () => {

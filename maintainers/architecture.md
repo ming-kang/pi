@@ -38,14 +38,14 @@ Tasks splits durable execution from its replaceable management surface. The core
 - **Journaling & delivery (`core/tasks/session.ts`, `delivery.ts`):** Session journal persistence, exactly-once usage accounting, completion delivery, and late-settlement quarantine.
 - **Session bridge (`TasksContext.session`):** The small public adapter for host-backed wait receipts, steering interruption, and branch-impact queries. Standalone runtimes omit it; consumers never import `TaskSession`.
 - **Managed shell execution (`core/tools/shell-tool.ts`, `shell-execution.ts`):** Wraps upstream shell tools (`bash.ts`, `powershell.ts`) to provide background orchestration without duplicating process-tree handling.
-- **Executor presentation (`core/tasks/types.ts`, `extensions/tasks/ui/views.ts`):** Optional bounded `info` supplies static Details text; published results remain Output. Executors need no custom panel registry or persisted UI components.
+- **Executor presentation (`core/tasks/types.ts`, `extensions/tasks/ui/views.ts`):** Optional bounded `info` supplies static Details text; published results remain model-readable Output, with an optional human-only `display` suffix for Tool calls or supervisor history. Executors need no custom panel registry or persisted UI components.
 - **Management (`extensions/tasks/`):** The `tasks` tool, `/tasks` command and panel, status/detach behavior, completion renderer, keybindings, keyboard-help section, and tree-navigation confirmation. The extension uses `ExtensionAPI`, `TasksContext`, and shared presentation primitives, never `TaskSession` or `interactive-mode` internals.
 - **Generic UI registries (`core/keybinding-registry.ts`):** Extension-owned configurable bindings, editor-global reservations, and keyboard-help sections; no Tasks-specific entries live in the core binding or help tables.
 
 ### Invariants
 
 - **Delivery pause:** Completion delivery pauses during preflight, compaction, session reload, tree navigation, and replacement, staying paused across deferred `agent_settled` handlers.
-- **Queue consumption:** Queued next-turn context is consumed only after its entry is successfully persisted.
+- **Queue consumption:** Queued next-turn context and explicit task messages are consumed only after their entries are successfully persisted; task messages share completion delivery pauses and retry handling.
 - **Post-compaction reminders:** Reminders for active tasks are projected into the next request from the live runtime; they are never persisted or allowed to trigger turns independently.
 - **Steering isolation:** User steering interrupts only `tasks wait`, never task execution.
 - **Quota isolation:** Background task volume does not block foreground command execution.

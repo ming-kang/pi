@@ -32,6 +32,13 @@ export interface TaskCompletionSnapshot {
 	output: TaskText;
 }
 
+export interface TaskMessageSnapshot {
+	version: 1;
+	taskId: string;
+	kind: string;
+	title: string;
+}
+
 /** A read-only view of one task; the runtime returns frozen snapshots. */
 export interface TaskSnapshot {
 	id: string;
@@ -48,6 +55,8 @@ export interface TaskSnapshot {
 	cwd?: string;
 	/** Executor-owned, human-readable Details tab content. */
 	info?: TaskText;
+	/** Additional human-only Output text; model-facing reads use result content instead. */
+	display?: TaskText;
 	/** Process exit code (bash): a number, or null when signal-reaped. Absent while running or unreported. */
 	exitCode?: number | null;
 	outputPath?: string;
@@ -58,6 +67,8 @@ export interface TaskSnapshot {
 
 export interface TaskCompletion<T> {
 	result: AgentToolResult<T>;
+	/** Additional human-only Output text, excluded from tasks read and completion context. */
+	display?: string;
 	status?: TaskTerminalStatus;
 	/** Terminal diagnostic, stored independently of log slices and bounded to 4096 bytes. */
 	error?: string;
@@ -80,7 +91,12 @@ export interface TaskControl<T> {
 	 * published usage is settled once on rejection (never inferred from details).
 	 * Final completion.usage, then completion.result.usage, override that snapshot.
 	 */
-	publish(result: AgentToolResult<T>): void;
+	/** Publish model-readable content and an optional human-only Output suffix. */
+	publish(result: AgentToolResult<T>, display?: string): void;
+	/** Push an explicit executor message to the host; false means no active host accepted it. */
+	sendMessage(message: string): boolean;
+	/** Register the active executor's steering handler. The returned function unregisters it. */
+	onSteer(listener: (message: string) => void | Promise<void>): () => void;
 	/** Register once; cleanup must own only this exclusively-created file and close its writer first. */
 	setOutputPath(path: string, cleanup?: () => void | Promise<void>): void;
 }
@@ -130,6 +146,8 @@ export interface TasksContext {
 	/** Present when the runtime is attached to Pi's durable session lifecycle. */
 	readonly session?: TasksSessionContext;
 	execute<T>(execution: TaskExecution<T>): Promise<TaskToolOutcome<T>>;
+	/** Queue steering with an active executor; false means the task cannot accept it. */
+	steer(id: string, message: string): Promise<boolean>;
 	list(): TaskSnapshot[];
 	get(id: string): TaskSnapshot;
 	read(id: string, options?: { mode?: "head" | "tail"; bytes?: number; sinceBytes?: number }): Promise<TaskRead>;
@@ -169,6 +187,8 @@ export interface TaskRuntimeOptions {
 	maxHistory?: number;
 	/** Best-effort cleanup errors, bounded to 4096 bytes; no retries or execution failure. */
 	onCleanupError?: (message: string) => void;
+	/** Queue an explicit executor message for host delivery; false applies backpressure. */
+	onMessage?: (task: TaskSnapshot, message: string) => boolean;
 	/** Synchronous persistence before terminal observers or notifications. */
 	onSettled?: (task: TaskSnapshot, usage: Usage | undefined) => void;
 }

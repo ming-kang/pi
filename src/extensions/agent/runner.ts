@@ -13,22 +13,27 @@ import { combineUsage } from "../../core/usage-totals.ts";
 import { raceWithAbortSignal } from "../../utils/abort.ts";
 import { writeOutputFile } from "../../utils/output-files.ts";
 import {
-	activitiesText,
 	activityTarget,
+	agentDisplayText,
+	appendAgentText,
+	assistantText,
 	boundedAgentText,
 	clipText,
 	compactArguments,
 	finalAssistantText,
 } from "./activity.ts";
+import { createSupervisorTool } from "./supervisor.ts";
 import {
 	AGENT_MAX_ACTIVITIES,
+	AGENT_MAX_MESSAGES,
 	AGENT_REPORT_BYTES,
 	type AgentActivity,
+	type AgentSupervisorMessage,
 	type AgentToolDetails,
 	emptyUsage,
 } from "./types.ts";
 
-const AGENT_TOOLS = ["read", "bash", "edit", "write"];
+const AGENT_TOOLS = ["read", "bash", "edit", "write", "contact_supervisor"];
 
 /** One small session-local queue; Tasks owns the visible queued/running state. */
 export class AgentGate {
@@ -102,10 +107,10 @@ function workerPrompt(base: string | undefined): string {
 	return [
 		base,
 		"You are an Agent working independently on one delegated task.",
-		"You cannot see the parent conversation. Treat the parent Agent as your caller, rely on the task briefing and available workspace context, and do not ask the end user questions. If anything is unclear, explain the ambiguity in your final report.",
+		"You cannot see the parent conversation. Treat the parent Agent as your caller, rely on the task briefing and available workspace context, and do not ask the end user questions. If the caller needs to know something before your final report, use contact_supervisor; ordinary intermediate text is recorded for inspection but is not pushed.",
 		"Work in the assigned directory and stay within the requested scope. Use read for known-path file reads and bash for file discovery, search, and shell commands.",
 		"Do not delegate or start background work. Run required commands in the foreground and wait for them.",
-		"Only your final report returns to the caller. Make it self-contained: include essential findings or changes, verification when applicable, blockers, and unresolved risks; omit process narration.",
+		"Your final report returns to the caller automatically. Make it self-contained: include essential findings or changes, verification when applicable, blockers, and unresolved risks; omit process narration. contact_supervisor only queues a message and never waits for a reply, so continue useful work and incorporate any later steering.",
 	]
 		.filter((part): part is string => Boolean(part?.trim()))
 		.join("\n\n");
@@ -139,7 +144,11 @@ async function finalText(
 	}
 }
 
-async function prepareWorkerSession(request: AgentRequest, signal: AbortSignal): Promise<CreateAgentSessionOptions> {
+async function prepareWorkerSession(
+	request: AgentRequest,
+	signal: AbortSignal,
+	supervisorTool: ReturnType<typeof createSupervisorTool>,
+): Promise<CreateAgentSessionOptions> {
 	signal.throwIfAborted();
 	const agentDir = getAgentDir();
 	const source = SettingsManager.create(request.cwd, agentDir, { projectTrusted: request.projectTrusted });
@@ -172,6 +181,7 @@ async function prepareWorkerSession(request: AgentRequest, signal: AbortSignal):
 		settingsManager,
 		sessionManager: SessionManager.inMemory(request.cwd),
 		tools: AGENT_TOOLS,
+		customTools: [supervisorTool],
 	};
 }
 
@@ -184,10 +194,13 @@ export async function runAgent(
 	const release = await gate.acquire(signal);
 	let session: AgentSession | undefined;
 	let unsubscribe: (() => void) | undefined;
+	let unsubscribeSteer: (() => void) | undefined;
 	let usage: Usage = emptyUsage();
 	let lastMessage: Extract<AgentMessage, { role: "assistant" }> | undefined;
 	const seen = new WeakSet<AgentMessage>();
 	const activities: AgentActivity[] = [];
+	const supervisorMessages: AgentSupervisorMessage[] = [];
+	let progress = "";
 	const modelName = `${request.model.provider}/${request.model.id}`;
 	const details = (status: AgentToolDetails["status"], error?: string): AgentToolDetails => ({
 		version: 1,
@@ -199,23 +212,41 @@ export async function runAgent(
 		activities: structuredClone(activities),
 	});
 	const publish = () => {
-		control.publish({
-			content: [{ type: "text", text: activities.length ? activitiesText(activities) : "Starting Agent…" }],
-			details: details("running"),
-			usage,
-		});
+		control.publish(
+			{
+				content: [{ type: "text", text: progress }],
+				details: details("running"),
+				usage,
+			},
+			agentDisplayText(supervisorMessages, activities),
+		);
 	};
+	const recordSupervisorMessage = (direction: AgentSupervisorMessage["direction"], text: string) => {
+		supervisorMessages.push({ direction, text });
+		if (supervisorMessages.length > AGENT_MAX_MESSAGES) supervisorMessages.shift();
+		publish();
+	};
+	const supervisorTool = createSupervisorTool((message) => {
+		if (!control.sendMessage(message)) return false;
+		recordSupervisorMessage("outbound", message);
+		return true;
+	});
 	const abort = () => {
 		void session?.abort().catch(() => {});
 	};
 	signal.addEventListener("abort", abort, { once: true });
 	try {
-		const options = await raceWithAbortSignal(prepareWorkerSession(request, signal), signal);
+		const options = await raceWithAbortSignal(prepareWorkerSession(request, signal, supervisorTool), signal);
 		signal.throwIfAborted();
 		// Adopt an actual session before checking cancellation; never race away its cleanup handle.
 		const created = await createAgentSession(options);
 		session = created.session;
 		signal.throwIfAborted();
+		const worker = session;
+		unsubscribeSteer = control.onSteer(async (message) => {
+			await worker.steer(message, undefined, { source: "extension" });
+			recordSupervisorMessage("inbound", message);
+		});
 		unsubscribe = session.subscribe((event) => {
 			// Cancellation during prompt preflight can precede the run's own abort controller.
 			if (event.type === "agent_start" && signal.aborted) {
@@ -227,6 +258,11 @@ export async function runAgent(
 				if (!seen.has(event.message)) {
 					seen.add(event.message);
 					usage = combineUsage(usage, event.message.usage);
+				}
+				const text = assistantText(event.message);
+				if (text.trim()) {
+					progress = appendAgentText(progress, text);
+					publish();
 				}
 				return;
 			}
@@ -282,6 +318,7 @@ export async function runAgent(
 			status,
 			error,
 			usage,
+			display: agentDisplayText(supervisorMessages, activities),
 			result: {
 				content: [{ type: "text", text: await finalText(control, report, error) }],
 				details: details(status, error),
@@ -296,6 +333,7 @@ export async function runAgent(
 			status,
 			error: reason,
 			usage,
+			display: agentDisplayText(supervisorMessages, activities),
 			result: {
 				content: [{ type: "text", text: await finalText(control, report, reason) }],
 				details: details(status, reason),
@@ -304,6 +342,7 @@ export async function runAgent(
 		};
 	} finally {
 		signal.removeEventListener("abort", abort);
+		unsubscribeSteer?.();
 		unsubscribe?.();
 		session?.dispose();
 		release();

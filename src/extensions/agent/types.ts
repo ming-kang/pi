@@ -4,6 +4,8 @@ import type { TaskTerminalStatus } from "../../core/tasks/types.ts";
 export const AGENT_SETTINGS_NAMESPACE = "agent";
 export const AGENT_REPORT_BYTES = 24 * 1024;
 export const AGENT_MAX_ACTIVITIES = 50;
+export const AGENT_MAX_MESSAGES = 20;
+export const AGENT_TEXT_BYTES = 48 * 1024;
 
 export interface AgentSettings {
 	model?: string;
@@ -21,6 +23,11 @@ export interface AgentActivity {
 	status: AgentActivityStatus;
 	durationMs?: number;
 	error?: string;
+}
+
+export interface AgentSupervisorMessage {
+	direction: "inbound" | "outbound";
+	text: string;
 }
 
 export interface AgentToolDetails {

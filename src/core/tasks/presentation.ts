@@ -1,7 +1,13 @@
 import type { CustomMessage } from "../messages.ts";
 import { truncateHead, truncateTail } from "../tools/truncate.ts";
 import { boundTail, boundText, TASK_DETAILS_BYTES, TASK_RESULT_BYTES, TASK_TITLE_BYTES } from "./output.ts";
-import type { TaskCompletionSnapshot, TaskSnapshot, TaskTerminalStatus, TaskText } from "./types.ts";
+import type {
+	TaskCompletionSnapshot,
+	TaskMessageSnapshot,
+	TaskSnapshot,
+	TaskTerminalStatus,
+	TaskText,
+} from "./types.ts";
 
 const OUTPUT_BYTES = 40 * 1024;
 /** Replay keeps the larger snapshot; automatic model turns get only a small readable tail. */
@@ -226,6 +232,17 @@ function notificationText(snapshot: TaskCompletionSnapshot): string {
 	const lines = MODEL_LINES - prefix.split("\n").length - (guidance ? 3 : 0);
 	const output = snapshot.output.text ? snapshot.output : { text: "No text result.", truncated: false };
 	return prefix + modelTail(output, remaining, lines) + suffix;
+}
+
+export function taskMessage(task: TaskSnapshot, text: string): CustomMessage<TaskMessageSnapshot> {
+	return {
+		role: "custom",
+		customType: "task-message",
+		display: true,
+		content: `Message from ${task.kind} task ${task.id} — ${singleLine(task.title)}\n\n${text}`,
+		details: { version: 1, taskId: task.id, kind: task.kind, title: task.title },
+		timestamp: Date.now(),
+	};
 }
 
 export function taskCompletionMessage(task: TaskSnapshot): CustomMessage<TaskCompletionSnapshot> {

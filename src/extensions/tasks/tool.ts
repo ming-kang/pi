@@ -1,5 +1,5 @@
 import type { ToolDefinition } from "../../core/extensions/types.ts";
-import { boundedText, runKill, runList, runRead, runWait } from "./tool/actions.ts";
+import { boundedText, runKill, runList, runRead, runSteer, runWait } from "./tool/actions.ts";
 import { TASKS_PROMPT_GUIDELINES, TASKS_PROMPT_SNIPPET, TASKS_TOOL_DESCRIPTION, tasksSchema } from "./tool/schema.ts";
 import type { TasksDetails } from "./tool/types.ts";
 import { renderTasksCall, renderTasksResult, type TasksRenderState } from "./ui/render.ts";
@@ -26,6 +26,8 @@ export function createTasksToolDefinition(): ToolDefinition<typeof tasksSchema, 
 							(taskId) => ctx.tasks.session?.prepareWait(_id, taskId),
 							ctx.tasks.session?.waitInterruptSignal,
 						);
+					case "steer":
+						return await runSteer(ctx.tasks, params);
 					case "kill":
 						return runKill(ctx.tasks, params);
 					case "list":

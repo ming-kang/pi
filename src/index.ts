@@ -346,6 +346,7 @@ export type {
 	TaskControl,
 	TaskExecution,
 	TaskKind,
+	TaskMessageSnapshot,
 	TaskMode,
 	TaskRead,
 	TaskRuntimeOptions,

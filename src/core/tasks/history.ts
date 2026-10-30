@@ -76,14 +76,18 @@ export function parseTaskHistory(record: unknown): TaskSnapshot | undefined {
 			const value = field(source, key);
 			if (value !== undefined) task[key] = historyString(value, bytes, key === "outputPath");
 		}
-		const info = field(source, "info");
-		if (info !== undefined) {
-			const value = dataObject(info);
+		for (const [key, bytes] of [
+			["info", TASK_INFO_BYTES],
+			["display", TASK_RESULT_BYTES],
+		] as const) {
+			const saved = field(source, key);
+			if (saved === undefined) continue;
+			const value = dataObject(saved);
 			const original = field(value, "text");
 			const truncated = field(value, "truncated");
 			if (typeof truncated !== "boolean") return undefined;
-			const text = historyString(original, TASK_INFO_BYTES);
-			task.info = { text, truncated: truncated || text !== original };
+			const text = historyString(original, bytes);
+			task[key] = { text, truncated: truncated || text !== original };
 		}
 		for (const key of ["commandTruncated", "resultTruncated"] as const) {
 			const value = field(source, key);

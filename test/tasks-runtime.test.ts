@@ -5,7 +5,9 @@ import { join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CustomMessage } from "../src/core/messages.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
+import { TaskDelivery } from "../src/core/tasks/delivery.ts";
 import {
 	boundedResult,
 	boundText,
@@ -111,6 +113,31 @@ describe("TaskRuntime execution ownership", () => {
 		}
 		await tick();
 		expect(bg.pendingNotifications()).toHaveLength(2);
+	});
+
+	it("separates human display from model reads and routes steering only to active handlers", async () => {
+		const onMessage = vi.fn(() => true);
+		const bg = service({ onMessage });
+		const item = job({ background: true });
+		const call = bg.execute(item.execution);
+		expect(await bg.steer(item.control.id, "too early")).toBe(false);
+		const steering = vi.fn(async () => {});
+		const unregister = item.control.onSteer(steering);
+		item.control.publish(result("Public progress"), "Tool calls\n✓ read entry.ts");
+		expect((await bg.read(item.control.id)).text).toBe("Public progress");
+		expect(bg.get(item.control.id).display).toEqual({ text: "Tool calls\n✓ read entry.ts", truncated: false });
+		expect(item.control.sendMessage("Explicit update")).toBe(true);
+		expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({ id: item.control.id }), "Explicit update");
+		expect(await bg.steer(item.control.id, "Focus on tests")).toBe(true);
+		expect(steering).toHaveBeenCalledWith("Focus on tests");
+		unregister();
+		expect(await bg.steer(item.control.id, "No handler")).toBe(false);
+		item.completion.resolve({ result: result("Final report"), display: "Tool calls\n✓ done" });
+		expect((await call).kind).toBe("background");
+		expect((await bg.read(item.control.id)).text).toBe("Final report");
+		expect(bg.get(item.control.id).display?.text).toBe("Tool calls\n✓ done");
+		expect(await bg.steer(item.control.id, "Too late")).toBe(false);
+		expect(item.control.sendMessage("Too late")).toBe(false);
 	});
 
 	it("waits for explicit whole-invocation acceptance after detach", async () => {
@@ -272,6 +299,62 @@ describe("TaskRuntime execution ownership", () => {
 });
 
 describe("delivery and accounting", () => {
+	it("retries an explicit task message until its original content is persisted once", async () => {
+		const bg = service();
+		const item = job({ background: true });
+		await bg.execute(item.execution);
+		const persisted: CustomMessage[] = [];
+		const warnings: string[] = [];
+		let attempts = 0;
+		let delivery!: TaskDelivery;
+		delivery = new TaskDelivery({
+			service: () => bg,
+			canDeliver: () => true,
+			deliver: (message, waitForPersistence) => {
+				attempts++;
+				delivery.messageStarted(message);
+				if (attempts === 1) queueMicrotask(() => delivery.queueCleared());
+				else {
+					persisted.push(message);
+					delivery.messagePersisted(message);
+				}
+				return waitForPersistence();
+			},
+			warn: (_event, message) => warnings.push(message),
+		});
+		expect(delivery.enqueue(bg, bg.get(item.control.id), "Need direction")).toBe(true);
+		await vi.waitFor(() => expect(warnings).toHaveLength(1));
+		expect(persisted).toEqual([]);
+		delivery.retry();
+		await vi.waitFor(() => expect(persisted).toHaveLength(1));
+		expect(attempts).toBe(2);
+		expect(persisted[0]).toMatchObject({ customType: "task-message", details: { taskId: item.control.id } });
+		expect(String(persisted[0]!.content)).toContain("Need direction");
+		delivery.dispose();
+		item.completion.resolve({ result: result() });
+	});
+
+	it("drops undelivered task messages with their hidden launch branch", async () => {
+		const bg = service({ anchor: () => "old-branch" });
+		const item = job({ background: true });
+		await bg.execute(item.execution);
+		let attempts = 0;
+		const delivery = new TaskDelivery({
+			service: () => bg,
+			canDeliver: () => true,
+			deliver: async () => {
+				attempts++;
+			},
+			warn: () => {},
+		});
+		expect(delivery.enqueue(bg, bg.get(item.control.id), "Old branch update")).toBe(true);
+		delivery.dropOutsideBranch(new Set());
+		await tick();
+		expect(attempts).toBe(0);
+		delivery.dispose();
+		item.completion.resolve({ result: result() });
+	});
+
 	it("keeps the executor's foreground content independent of its terminal diagnostic", async () => {
 		const bg = service();
 		const completion = {

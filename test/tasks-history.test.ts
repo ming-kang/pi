@@ -276,12 +276,13 @@ describe("terminal history restoration", () => {
 		expect(zero.list()).toEqual([]);
 	});
 
-	it("round-trips bounded executor Details without restoring private result details", () => {
+	it("round-trips bounded executor Details and human Output without private result details", () => {
 		const bg = service();
 		bg.restoreHistory([
 			savedTask("agent-info", 20, {
 				kind: "agent",
 				info: { text: "Agent\nModel test/model\n\nPrompt\nInspect", truncated: false },
+				display: { text: "Tool calls\n✓ read entry.ts", truncated: false },
 				result: { content: [{ type: "text", text: "report" }], details: { private: true } },
 			}),
 		]);
@@ -289,6 +290,7 @@ describe("terminal history restoration", () => {
 			text: "Agent\nModel test/model\n\nPrompt\nInspect",
 			truncated: false,
 		});
+		expect(bg.get("agent-info").display).toEqual({ text: "Tool calls\n✓ read entry.ts", truncated: false });
 		expect(bg.get("agent-info").result?.details).toBeUndefined();
 		bg.restoreHistory([savedTask("agent-bad-info", 30, { kind: "agent", info: { text: "missing flag" } as never })]);
 		expect(bg.list().find((task) => task.id === "agent-bad-info")).toBeUndefined();

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fauxAssistantMessage, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai/compat";
+import { type Context, fauxAssistantMessage, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sdk from "../src/core/sdk.ts";
 import { createAgentTool } from "../src/extensions/agent/index.ts";
@@ -24,6 +24,7 @@ describe("Agent delegation", () => {
 					"bash",
 					"edit",
 					"write",
+					"contact_supervisor",
 				]);
 				expect(JSON.stringify(context.messages)).not.toContain("PRIVATE_PARENT_CONVERSATION");
 				return fauxAssistantMessage(fauxToolCall("read", { path: "entry.ts" }), { stopReason: "toolUse" });
@@ -104,6 +105,114 @@ describe("Agent delegation", () => {
 		} finally {
 			resumeNotifications();
 		}
+	});
+
+	it("reads public text without tool activity and retains activity for the human Output view", async () => {
+		harness = await createHarness({ settings: { compaction: { enabled: false } } });
+		await harness.session.bindExtensions({ tasksEnabled: true });
+		harness.session.pauseTaskNotifications();
+		writeFileSync(join(harness.tempDir, "entry.ts"), "export const answer = 42;\n");
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		harness.setResponses([
+			fauxAssistantMessage(
+				[{ type: "text", text: "Found the export in entry.ts." }, fauxToolCall("read", { path: "entry.ts" })],
+				{
+					stopReason: "toolUse",
+				},
+			),
+			async () => {
+				await gate;
+				return fauxAssistantMessage("Final report");
+			},
+		]);
+		const handoff = await createAgentTool().execute(
+			"text-projection",
+			{ prompt: "Inspect entry.ts", background: true },
+			undefined,
+			undefined,
+			harness.session.extensionRunner.createToolContext("text-projection", undefined),
+		);
+		const taskId = handoff.details!.taskId;
+		await vi.waitFor(() => {
+			const task = harness.session.tasks.get(taskId);
+			expect(getMessageText(task.result)).toContain("Found the export");
+			expect(task.display?.text).toContain("Tool calls");
+		});
+		const running = await harness.session.tasks.read(taskId);
+		expect(running.text).toContain("Found the export");
+		expect(running.text).not.toContain("Tool calls");
+		expect(running.text).not.toContain('{"path":"entry.ts"}');
+		expect(harness.session.tasks.get(taskId).display?.text).toContain('read {"path":"entry.ts"}');
+		release();
+		expect((await harness.session.tasks.wait(taskId)).status).toBe("completed");
+		expect((await harness.session.tasks.read(taskId)).text).toBe("Final report");
+		expect(harness.session.tasks.get(taskId).display?.text).toContain("Tool calls");
+	});
+
+	it("pushes only explicit supervisor messages and delivers steering to the same child", async () => {
+		harness = await createHarness({ settings: { compaction: { enabled: false } } });
+		await harness.session.bindExtensions({ tasksEnabled: true });
+		let releaseChild: ((message: ReturnType<typeof fauxAssistantMessage>) => void) | undefined;
+		let childRequests = 0;
+		const route = (context: Context) => {
+			if (!getCurrentTools(context.messages).some((tool) => tool.name === "contact_supervisor"))
+				return fauxAssistantMessage("Parent noted the message.");
+			childRequests++;
+			if (childRequests > 1) {
+				expect(JSON.stringify(context.messages)).toContain("Focus on the compatibility tests");
+				return fauxAssistantMessage("Steered final report");
+			}
+			return new Promise<ReturnType<typeof fauxAssistantMessage>>((resolve) => {
+				releaseChild = resolve;
+			});
+		};
+		harness.setResponses([
+			fauxAssistantMessage(
+				[
+					{ type: "text", text: "Routine progress remains available on demand." },
+					fauxToolCall("contact_supervisor", { message: "Need direction on compatibility." }),
+				],
+				{ stopReason: "toolUse" },
+			),
+			route,
+			route,
+			route,
+		]);
+		const handoff = await createAgentTool().execute(
+			"supervisor-message",
+			{ prompt: "Investigate compatibility", background: true },
+			undefined,
+			undefined,
+			harness.session.extensionRunner.createToolContext("supervisor-message", undefined),
+		);
+		const taskId = handoff.details!.taskId;
+		await vi.waitFor(() => {
+			expect(releaseChild).toBeDefined();
+			expect(
+				harness.sessionManager
+					.getEntries()
+					.some((entry) => entry.type === "custom_message" && entry.customType === "task-message"),
+			).toBe(true);
+		});
+		await harness.session.waitForIdle();
+		const message = harness.sessionManager
+			.getEntries()
+			.find((entry) => entry.type === "custom_message" && entry.customType === "task-message");
+		if (message?.type !== "custom_message") throw new Error("Expected a persisted task message");
+		expect(String(message.content)).toContain("Need direction on compatibility.");
+		expect(String(message.content)).toContain(taskId);
+		expect(String(message.content)).not.toContain("Routine progress");
+		expect(await harness.session.tasks.steer(taskId, "Focus on the compatibility tests")).toBe(true);
+		harness.session.pauseTaskNotifications();
+		releaseChild!(fauxAssistantMessage("Intermediate response"));
+		expect((await harness.session.tasks.wait(taskId)).status).toBe("completed");
+		expect((await harness.session.tasks.read(taskId)).text).toBe("Steered final report");
+		const display = harness.session.tasks.get(taskId).display?.text ?? "";
+		expect(display).toContain("Agent → Main: Need direction on compatibility.");
+		expect(display).toContain("Main → Agent: Focus on the compatibility tests");
 	});
 
 	it("honors declined project trust without dropping repository instructions", async () => {

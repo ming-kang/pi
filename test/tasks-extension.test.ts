@@ -18,7 +18,7 @@ import type {
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import type { TaskControl } from "../src/core/tasks/types.ts";
-import { runKill, runList, runRead, runWait } from "../src/extensions/tasks/tool/actions.ts";
+import { runKill, runList, runRead, runSteer, runWait } from "../src/extensions/tasks/tool/actions.ts";
 import type { tasksSchema } from "../src/extensions/tasks/tool/schema.ts";
 import type { TasksDetails } from "../src/extensions/tasks/tool/types.ts";
 import {
@@ -134,6 +134,25 @@ describe("public Background management", () => {
 			expect(textOf(await runWait(h.service, { action: "wait", taskId: id }))).toContain("final report");
 		}
 	});
+	it("queues steering only with an active executor that supports it", async () => {
+		const h = running("custom");
+		await h.outcome;
+		const id = h.service.list()[0]!.id;
+		const unsupported = await runSteer(h.service, { action: "steer", taskId: id, message: "Focus on tests" });
+		expect(unsupported.details).toMatchObject({ action: "steer", taskId: id, accepted: false });
+		const steering = vi.fn(async () => {});
+		const unregister = h.control.onSteer(steering);
+		const accepted = await runSteer(h.service, { action: "steer", taskId: id, message: "Focus on tests" });
+		expect(accepted.details).toMatchObject({ action: "steer", taskId: id, accepted: true });
+		expect(steering).toHaveBeenCalledWith("Focus on tests");
+		expect(textOf(accepted)).toContain("does not mean");
+		await expect(runSteer(h.service, { action: "steer", taskId: id, message: " " })).rejects.toThrow(
+			"requires a non-empty 'message'",
+		);
+		unregister();
+		h.finish();
+	});
+
 	it("marks only terminal wait outcomes, never an expired window or a read", async () => {
 		const h = running();
 		await h.outcome;

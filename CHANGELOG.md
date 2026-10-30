@@ -4,7 +4,13 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Agent workers can push explicit `contact_supervisor` messages to the parent, and `tasks steer` queues guidance with an active Agent through the existing Tasks delivery and steering boundaries.
+
 ### Changed
+
+- Running `tasks read` now returns only an Agent's public assistant Text; `/tasks` Output combines that Text with supervisor messages and compact Tool calls without adding model-facing read options or tool noise.
 
 - Refined `/agent` into a compact, aligned Model/Effort panel with inline inheritance markers, requested-to-effective effort conversions, and an always-visible action that resets both overrides together. Agent now reuses the searchable native model and thinking pickers without changing the parent session or global defaults.
 
