@@ -1,14 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
-import {
-	boundFacts,
-	boundTaskText,
-	boundText,
-	resultText,
-	TASK_ERROR_BYTES,
-	TASK_MESSAGE_BYTES,
-	TASK_PATH_BYTES,
-} from "./output.ts";
+import { boundFacts, boundTaskText, boundText, resultText, TASK_ERROR_BYTES, TASK_PATH_BYTES } from "./output.ts";
 import { changed, snapshotOf, type TaskRecord } from "./store.ts";
 import type {
 	TaskCompletion,
@@ -27,8 +19,6 @@ import type {
 export interface ExecutionHost {
 	readonly closed: boolean;
 	emit(): void;
-	/** Executor message delivery; false applies backpressure. */
-	message(task: TaskSnapshot, text: string): boolean;
 	/** Synchronous persistence before terminal observers or notifications. */
 	settle(task: TaskSnapshot, usage: Usage | undefined): void;
 	/** The execution settled and holds no slot, parent listener or caller any more. */
@@ -77,7 +67,6 @@ export class Execution<T> {
 	private resolveDone!: () => void;
 	private onUpdate?: (result: AgentToolResult<T>) => void;
 	private releaseParentSignal: () => void = () => {};
-	private steerHandler?: (text: string) => boolean | Promise<boolean>;
 	private usage?: Usage;
 	private started = false;
 	private accepted = false;
@@ -119,10 +108,6 @@ export class Execution<T> {
 			attachOutput: (path, cleanup) => this.attachOutput(path, cleanup),
 			cancel: () => {
 				this.cancel();
-			},
-			channel: {
-				send: (text) => this.send(text),
-				onSteer: (handler) => this.onSteer(handler),
 			},
 		};
 	}
@@ -223,12 +208,6 @@ export class Execution<T> {
 		return true;
 	}
 
-	async steer(text: string): Promise<boolean> {
-		const handler = this.steerHandler;
-		if (!handler || this.record.settled || this.host.closed || this.aborted || !text.trim()) return false;
-		return (await handler(boundText(text, TASK_MESSAGE_BYTES))) === true;
-	}
-
 	private onModeChange(listener: (mode: TaskMode) => void): () => void {
 		if (this.record.settled || this.host.closed) return () => {};
 		this.modeListeners.add(listener);
@@ -262,19 +241,6 @@ export class Execution<T> {
 		this.host.emit();
 	}
 
-	private send(text: string): boolean {
-		if (this.record.settled || this.host.closed || !text.trim()) return false;
-		return this.host.message(snapshotOf(this.record), boundText(text, TASK_MESSAGE_BYTES));
-	}
-
-	private onSteer(handler: (text: string) => boolean | Promise<boolean>): () => void {
-		if (this.record.settled || this.host.closed) return () => {};
-		this.steerHandler = handler;
-		return () => {
-			if (this.steerHandler === handler) this.steerHandler = undefined;
-		};
-	}
-
 	private attachOutput(path: string, cleanup?: () => void | Promise<void>): void {
 		if (this.record.settled) {
 			if (cleanup) throw new Error("Task execution has settled");
@@ -294,7 +260,6 @@ export class Execution<T> {
 		const task = this.task;
 		if (record.settled) return;
 		record.settled = true;
-		this.steerHandler = undefined;
 		this.modeListeners.clear();
 		this.releaseParent();
 		task.endedAt = Date.now();

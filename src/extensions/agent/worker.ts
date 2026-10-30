@@ -5,12 +5,11 @@ import { createIsolatedSession } from "../../core/isolated-session.ts";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
 import type { TaskCompletion, TaskControl } from "../../core/tasks/types.ts";
 import { clipText } from "./activity.ts";
-import { createMessageParentTool } from "./parent.ts";
 import { AgentProgress, finalAssistantText } from "./progress.ts";
 import { finalReport } from "./report.ts";
 import type { AgentToolDetails } from "./types.ts";
 
-const WORKER_TOOLS = ["read", "bash", "edit", "write", "message_parent"];
+const WORKER_TOOLS = ["read", "bash", "edit", "write"];
 
 export interface AgentRequest {
 	prompt: string;
@@ -25,10 +24,10 @@ function workerPrompt(base: string | undefined): string {
 	return [
 		base,
 		"You are an Agent working independently on one delegated task.",
-		"You cannot see the parent conversation. The parent Agent delegated this task to you: rely on the task briefing and available workspace context, and do not ask the end user questions. If the parent needs to know something before your final report, use message_parent; ordinary intermediate text is recorded for inspection but is not pushed.",
+		"You cannot see the parent conversation. Treat the parent Agent as your caller, rely on the task briefing and available workspace context, and do not ask the end user questions. If anything is unclear, explain the ambiguity in your final report.",
 		"Work in the assigned directory and stay within the requested scope. Use read for known-path file reads and bash for file discovery, search, and shell commands.",
 		"Do not delegate or start background work. Run required commands in the foreground and wait for them.",
-		"Your final report returns to the parent automatically. Make it self-contained: include essential findings or changes, verification when applicable, blockers, and unresolved risks; omit process narration. message_parent only queues a message and never waits for a reply, so continue useful work and incorporate any later steering.",
+		"Only your final report returns to the caller. Make it self-contained: include essential findings or changes, verification when applicable, blockers, and unresolved risks; omit process narration.",
 	]
 		.filter((part): part is string => Boolean(part?.trim()))
 		.join("\n\n");
@@ -41,8 +40,8 @@ export async function runWorker(
 ): Promise<TaskCompletion<AgentToolDetails>> {
 	const { signal } = control;
 	const progress = new AgentProgress(control);
-	const cleanups: Array<() => void> = [];
 	let session: AgentSession | undefined;
+	let unsubscribe: (() => void) | undefined;
 	const abort = () => {
 		void session?.abort().catch(() => {});
 	};
@@ -56,18 +55,14 @@ export async function runWorker(
 			projectTrusted: request.projectTrusted,
 			systemPrompt: workerPrompt,
 			tools: WORKER_TOOLS,
-			customTools: [createMessageParentTool((text) => progress.sendToParent(text))],
 			signal,
 		});
 		const worker = session;
-		cleanups.push(control.channel.onSteer((text) => progress.steer(worker, text)));
-		cleanups.push(
-			worker.subscribe((event) => {
-				// Cancellation during prompt preflight can precede the run's own abort controller.
-				if (event.type === "agent_start" && signal.aborted) abort();
-				else progress.handle(event);
-			}),
-		);
+		unsubscribe = worker.subscribe((event) => {
+			// Cancellation during prompt preflight can precede the run's own abort controller.
+			if (event.type === "agent_start" && signal.aborted) abort();
+			else progress.handle(event);
+		});
 		progress.publish();
 		control.accept();
 		signal.throwIfAborted();
@@ -84,7 +79,7 @@ export async function runWorker(
 		return progress.complete(status, reason, await finalReport(control, report, reason));
 	} finally {
 		signal.removeEventListener("abort", abort);
-		for (const cleanup of cleanups) cleanup();
+		unsubscribe?.();
 		session?.dispose();
 	}
 }

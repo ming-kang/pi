@@ -32,7 +32,7 @@ function handoffResult(task: TaskSnapshot, byUser: boolean): AgentToolResult<Age
 		content: [
 			{
 				type: "text",
-				text: `${moved}${queued} The report will be delivered automatically. Use tasks read/wait/steer/kill to read text, wait, guide or stop.`,
+				text: `${moved}${queued} The report will be delivered automatically. Use tasks read/wait/kill to inspect, wait or stop.`,
 			},
 		],
 		details: { version: 2, state: "background", taskId: task.id, byUser },
@@ -47,7 +47,7 @@ export function createAgentTool(
 		name: "Agent",
 		label: "Agent",
 		description:
-			"Delegate independent work to a temporary isolated Agent when separate context or parallel execution offers a clear benefit. Use sparingly; handle known-path reads and small edits directly. The Agent cannot see the parent conversation, so include all necessary context and desired verification in prompt. Foreground returns the final report; background returns a task ID and delivers the report automatically. Running Agents publish readable text, can push explicit messages, and accept tasks steer guidance.",
+			"Delegate independent work to a temporary isolated Agent when separate context or parallel execution offers a clear benefit. Use sparingly; handle known-path reads and small edits directly. The Agent cannot see the parent conversation, so include all necessary context and desired verification in prompt. Foreground returns the final report; background returns a task ID and delivers it automatically.",
 		promptSnippet: "Delegate an independent task",
 		promptGuidelines: [
 			"Give Agent a complete, self-contained briefing with relevant paths, constraints and expected verification; use parallel calls only for independent, non-overlapping work.",

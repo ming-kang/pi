@@ -10,7 +10,7 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
 import { formatDuration } from "../../../core/tasks/format.ts";
-import { TASK_MESSAGE_BYTES, TASK_RESULT_BYTES } from "../../../core/tasks/output.ts";
+import { TASK_RESULT_BYTES } from "../../../core/tasks/output.ts";
 import { formatSize } from "../../../core/tools/truncate.ts";
 import {
 	TASKS_LOGS_DEFAULT_BYTES,
@@ -21,14 +21,13 @@ import {
 } from "./constants.ts";
 
 export const tasksSchema = Type.Object({
-	action: StringEnum(["read", "wait", "steer", "kill", "list"] as const, {
+	action: StringEnum(["read", "wait", "kill", "list"] as const, {
 		description: "Which task operation to perform",
 	}),
 	// — read / wait / kill —
 	taskId: Type.Optional(
 		Type.String({
-			description:
-				"Task execution id (read/wait/steer/kill). Omit for wait to wait for any task running at call time.",
+			description: "Task execution id (read/wait/kill). Omit for wait to wait for any task running at call time.",
 		}),
 	),
 	// — read —
@@ -40,12 +39,6 @@ export const tasksSchema = Type.Object({
 	bytes: Type.Optional(
 		Type.Number({
 			description: `Max bytes to return (read, default ${formatSize(TASKS_LOGS_DEFAULT_BYTES)}, max ${formatSize(TASK_RESULT_BYTES)})`,
-		}),
-	),
-	// — steer —
-	message: Type.Optional(
-		Type.String({
-			description: `Instruction to queue for an active task (steer, max ${formatSize(TASK_MESSAGE_BYTES)})`,
 		}),
 	),
 	// — wait —
@@ -78,14 +71,6 @@ export function requireTaskId(input: TasksInput): string {
 	return taskId;
 }
 
-export function requireSteeringMessage(input: TasksInput): string {
-	const message = input.message?.trim();
-	if (!message) throw new Error("action 'steer' requires a non-empty 'message'.");
-	if (Buffer.byteLength(message) > TASK_MESSAGE_BYTES)
-		throw new Error(`Steering message must fit within ${formatSize(TASK_MESSAGE_BYTES)}.`);
-	return message;
-}
-
 export function clampReadBytes(bytes: number | undefined): number {
 	const value = bytes !== undefined && Number.isFinite(bytes) ? bytes : TASKS_LOGS_DEFAULT_BYTES;
 	return Math.min(TASK_RESULT_BYTES, Math.max(TASKS_LOGS_MIN_BYTES, Math.floor(value)));
@@ -105,8 +90,7 @@ export const TASKS_TOOL_DESCRIPTION =
 	"Inspect and control background tasks started by native tools or extensions. " +
 	"Completion is delivered to you automatically as a notification — never poll. " +
 	"list: bounded activity/history listing; find task IDs here. " +
-	"read: bounded model-readable text or report slice (head/tail); tool-call activity stays in /tasks. " +
-	"steer: queue an instruction with an active task that supports steering, such as an Agent. " +
+	"read: bounded model-readable output or report slice (head/tail); tool-call activity stays in /tasks. " +
 	"wait: observe one task, or any task running at call time, for up to waitMs; no running tasks returns immediately. New steering input ends only the wait with outcome interrupted; it never stops the task. " +
 	"kill: request cancellation of a whole task. " +
 	"tasks cannot start work; submit background work through its owning tool. A wait ends as settled, interrupted, timed_out, or no_tasks. Timeout or cancellation ends only the wait, never execution. Reads and settled waits report byte ranges; use next sinceBytes only with that task's ID. Output is capped at 50KB per response.";
@@ -115,5 +99,4 @@ export const TASKS_PROMPT_GUIDELINES = [
 	"Start background work through its owning tool with background: true; continue independent work while it runs.",
 	"A finished background task delivers its result automatically as a notification. Use tasks wait only when your next step is blocked: provide taskId for one task or omit it for any task running at call time; never sleep-poll with repeated reads.",
 	"A new steering message interrupts only an active tasks wait so you can read the new input; it does not cancel execution. A wait timeout is not a task failure.",
-	"Use tasks steer to guide an active Agent after reading its text or receiving its explicit message; terminal tasks cannot be steered.",
 ];

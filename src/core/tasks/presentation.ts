@@ -2,7 +2,7 @@ import type { CustomMessage } from "../messages.ts";
 import { truncateHead, truncateTail } from "../tools/truncate.ts";
 import { TASK_SNAPSHOT_VERSION } from "./codec.ts";
 import { boundTail, boundText, TASK_DETAILS_BYTES, TASK_RESULT_BYTES } from "./output.ts";
-import type { TaskMessageSnapshot, TaskSnapshot, TaskStatus, TaskText } from "./types.ts";
+import type { TaskSnapshot, TaskStatus, TaskText } from "./types.ts";
 
 /** Automatic model turns get only a small readable log tail; reports arrive whole. */
 const MODEL_LOG_BYTES = 8 * 1024;
@@ -101,17 +101,6 @@ export function taskCompletionDetails(task: TaskSnapshot): TaskCompletionDetails
 		if (bytes(JSON.stringify(details)) <= TASK_DETAILS_BYTES) return details;
 	}
 	return { version: TASK_SNAPSHOT_VERSION, task: rest };
-}
-
-export function taskMessage(task: TaskSnapshot, text: string): CustomMessage<TaskMessageSnapshot> {
-	return {
-		role: "custom",
-		customType: "task-message",
-		display: true,
-		content: `Message from ${task.kind} task ${task.id} — ${singleLine(task.title)}\n\n${text}`,
-		details: { version: 1, taskId: task.id, kind: task.kind, title: task.title },
-		timestamp: Date.now(),
-	};
 }
 
 export function taskCompletionMessage(task: TaskSnapshot): CustomMessage<TaskCompletionDetails> {

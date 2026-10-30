@@ -5,7 +5,6 @@
 export type { SlashCommandInfo, SlashCommandSource } from "../slash-commands.ts";
 export type { SourceInfo } from "../source-info.ts";
 export type {
-	TaskChannel,
 	TaskCompletion,
 	TaskControl,
 	TaskExecution,

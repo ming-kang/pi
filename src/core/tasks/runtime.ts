@@ -55,7 +55,6 @@ export class TaskRuntime implements TasksContext {
 				return runtime.closed;
 			},
 			emit: () => this.emit(),
-			message: (task, text) => this.options.onMessage?.(task, text) ?? false,
 			settle: (task, usage) => this.options.onSettled?.(task, usage),
 			released: (execution) => {
 				this.executions.delete(execution.task.id);
@@ -217,12 +216,6 @@ export class TaskRuntime implements TasksContext {
 
 	get(id: string): TaskSnapshot {
 		return snapshotOf(this.lookup(id));
-	}
-
-	async steer(id: string, message: string): Promise<boolean> {
-		const record = this.lookup(id);
-		if (this.closed) return false;
-		return (await this.executions.get(record.task.id)?.steer(message)) ?? false;
 	}
 
 	async read(

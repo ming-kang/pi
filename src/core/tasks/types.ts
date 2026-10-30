@@ -56,13 +56,6 @@ export interface TaskSnapshot {
 	error?: string;
 }
 
-export interface TaskMessageSnapshot {
-	version: 1;
-	taskId: string;
-	kind: string;
-	title: string;
-}
-
 export interface TaskUpdate<T> {
 	/** Model-readable progress; also forwarded to a foreground caller's onUpdate. */
 	result: AgentToolResult<T>;
@@ -86,17 +79,6 @@ export interface TaskCompletion<T> {
 	usage?: Usage;
 }
 
-/** The executor's half of the conversation between a running task and its parent session. */
-export interface TaskChannel {
-	/** Push an explicit message to the parent session; false applies backpressure. */
-	send(text: string): boolean;
-	/**
-	 * Handle parent steering. Return false when the message cannot be consumed now,
-	 * so the caller learns it was not accepted. Returns an unregister function.
-	 */
-	onSteer(handler: (text: string) => boolean | Promise<boolean>): () => void;
-}
-
 export interface TaskControl<T> {
 	readonly id: string;
 	readonly signal: AbortSignal;
@@ -109,7 +91,6 @@ export interface TaskControl<T> {
 	attachOutput(path: string, cleanup?: () => void | Promise<void>): void;
 	/** Cancel this execution, for example when an executor policy limit is exceeded. */
 	cancel(): void;
-	readonly channel: TaskChannel;
 }
 
 export interface TaskExecution<T> {
@@ -164,8 +145,6 @@ export interface TasksContext {
 	/** Present when the runtime is attached to Pi's durable session lifecycle. */
 	readonly session?: TasksSessionContext;
 	execute<T>(execution: TaskExecution<T>): Promise<TaskToolOutcome<T>>;
-	/** Deliver steering to an active executor; false means it was not accepted. */
-	steer(id: string, message: string): Promise<boolean>;
 	list(): TaskSnapshot[];
 	get(id: string): TaskSnapshot;
 	read(id: string, options?: { mode?: "head" | "tail"; bytes?: number; sinceBytes?: number }): Promise<TaskRead>;
@@ -205,8 +184,6 @@ export interface TaskRuntimeOptions {
 	maxHistory?: number;
 	/** Best-effort cleanup errors, bounded to 4096 bytes; no retries or execution failure. */
 	onCleanupError?: (message: string) => void;
-	/** Queue an explicit executor message for host delivery; false applies backpressure. */
-	onMessage?: (task: TaskSnapshot, message: string) => boolean;
 	/** Synchronous persistence before terminal observers or notifications. */
 	onSettled?: (task: TaskSnapshot, usage: Usage | undefined) => void;
 }

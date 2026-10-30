@@ -77,12 +77,6 @@ export function renderTasksCall(
 		}
 		case "wait":
 			return renderWaitCall(args, theme, context);
-		case "steer":
-			return new Text(
-				`${theme.fg("toolTitle", theme.bold("tasks steer "))}${theme.fg("accent", args.taskId ?? "")}`,
-				0,
-				0,
-			);
 		case "kill":
 			return new Text(
 				`${theme.fg("toolTitle", theme.bold("tasks kill "))}${theme.fg("accent", args.taskId ?? "")}`,
@@ -184,11 +178,6 @@ function resultSummaryLine(details: TasksDetails, theme: Theme, expanded: boolea
 			}
 			const status = details.status ?? "completed";
 			return `${theme.fg(statusColor(status), statusGlyph(status))} ${theme.fg("accent", taskId)}${theme.fg("muted", ` ${statusName(status)} · waited ${formatDuration(details.waitedMs)} · +${formatSize(details.deltaBytes)}`)}`;
-		}
-		case "steer": {
-			return details.accepted
-				? `${theme.fg("muted", "→ ")}${theme.fg("accent", details.taskId)}${theme.fg("muted", " · steering queued")}`
-				: `${theme.fg("warning", "… ")}${theme.fg("accent", details.taskId)}${theme.fg("muted", ` · not accepted (${statusName(details.status)})`)}`;
 		}
 		case "kill": {
 			const status = details.status ?? (details.requested ? "stopping" : "cancelled");

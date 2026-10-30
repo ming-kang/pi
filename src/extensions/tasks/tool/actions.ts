@@ -13,22 +13,8 @@ import {
 import { truncateHead } from "../../../core/tools/truncate.ts";
 import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
 import { TASKS_LIST_FINISHED_SHOWN, TASKS_WAIT_DELTA_BYTES } from "./constants.ts";
-import {
-	clampReadBytes,
-	clampSinceBytes,
-	clampWaitMs,
-	requireSteeringMessage,
-	requireTaskId,
-	type TasksInput,
-} from "./schema.ts";
-import type {
-	TasksDetails,
-	TasksKillDetails,
-	TasksListDetails,
-	TasksReadDetails,
-	TasksSteerDetails,
-	TasksWaitDetails,
-} from "./types.ts";
+import { clampReadBytes, clampSinceBytes, clampWaitMs, requireTaskId, type TasksInput } from "./schema.ts";
+import type { TasksDetails, TasksKillDetails, TasksListDetails, TasksReadDetails, TasksWaitDetails } from "./types.ts";
 
 export function boundedText(text: string): string {
 	return truncateHead(sanitizeBinaryOutput(text), { maxBytes: 50 * 1024, maxLines: 2000 }).content;
@@ -299,27 +285,6 @@ export async function runWait(
 		throw lookupFailure(background, id, error);
 	}
 }
-export async function runSteer(
-	background: TasksContext,
-	input: TasksInput,
-): Promise<AgentToolResult<TasksSteerDetails>> {
-	const id = requireTaskId(input);
-	const message = requireSteeringMessage(input);
-	try {
-		const task = background.get(id);
-		const accepted = await background.steer(task.id, message);
-		const current = background.get(task.id);
-		return result(
-			accepted
-				? `Steering queued for ${current.id}. Acceptance does not mean the instruction has been consumed yet.`
-				: `${current.id} cannot accept steering (${current.status}); no message was queued.`,
-			{ action: "steer", taskId: current.id, accepted, status: current.status },
-		);
-	} catch (error) {
-		throw lookupFailure(background, id, error);
-	}
-}
-
 export function runKill(background: TasksContext, input: TasksInput): AgentToolResult<TasksKillDetails> {
 	const id = requireTaskId(input);
 	try {

@@ -342,14 +342,12 @@ export { createSyntheticSourceInfo } from "./core/source-info.ts";
 export type { TaskCompletionDetails } from "./core/tasks/presentation.ts";
 export { TaskRuntime } from "./core/tasks/runtime.ts";
 export type {
-	TaskChannel,
 	TaskCompletion,
 	TaskControl,
 	TaskExecution,
 	TaskFact,
 	TaskInput,
 	TaskKind,
-	TaskMessageSnapshot,
 	TaskMode,
 	TaskOutputKind,
 	TaskRead,

@@ -6,7 +6,6 @@ export const TASK_RESULT_BYTES = 48 * 1024;
 export const TASK_DETAILS_BYTES = 120 * 1024;
 export const TASK_READ_BYTES = 8 * 1024;
 export const TASK_INPUT_BYTES = 24 * 1024;
-export const TASK_MESSAGE_BYTES = 16 * 1024;
 /** Task title budget, independent of notification wording and rendering. */
 export const TASK_TITLE_BYTES = 1024;
 export const TASK_LABEL_BYTES = 256;

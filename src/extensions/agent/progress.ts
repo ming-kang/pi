@@ -1,18 +1,10 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
-import type { AgentSession, AgentSessionEvent } from "../../core/agent-session.ts";
-import { boundTail } from "../../core/tasks/output.ts";
+import type { AgentSessionEvent } from "../../core/agent-session.ts";
 import type { TaskCompletion, TaskControl, TaskTerminalStatus } from "../../core/tasks/types.ts";
 import { combineUsage } from "../../core/usage-totals.ts";
 import { activitiesText, activityTarget, clipText, compactArguments } from "./activity.ts";
-import {
-	AGENT_MAX_ACTIVITIES,
-	AGENT_MAX_MESSAGES,
-	AGENT_TEXT_BYTES,
-	type AgentActivity,
-	type AgentParentMessage,
-	type AgentToolDetails,
-} from "./types.ts";
+import { AGENT_MAX_ACTIVITIES, type AgentActivity, type AgentToolDetails } from "./types.ts";
 
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 
@@ -27,7 +19,7 @@ function emptyUsage(): Usage {
 	};
 }
 
-export function assistantText(message: AgentMessage): string {
+function assistantText(message: AgentMessage): string {
 	if (message.role !== "assistant") return "";
 	return message.content
 		.filter((block) => block.type === "text")
@@ -43,15 +35,6 @@ export function finalAssistantText(messages: readonly AgentMessage[]): string {
 	return "";
 }
 
-function appendText(current: string, addition: string): string {
-	const text = addition.trim();
-	if (!text) return current;
-	const combined = current ? `${current}\n\n${text}` : text;
-	if (Buffer.byteLength(combined) <= AGENT_TEXT_BYTES) return combined;
-	const notice = "[Earlier Agent text omitted.]\n\n";
-	return notice + boundTail(combined, AGENT_TEXT_BYTES - Buffer.byteLength(notice)).text;
-}
-
 function toolErrorText(result: unknown): string {
 	const content = (result as { content?: Array<{ type: string; text?: string }> }).content;
 	const text = content
@@ -62,19 +45,16 @@ function toolErrorText(result: unknown): string {
 }
 
 /**
- * One worker session translated into task progress: public assistant text for the model,
- * tool activity and parent messages for humans, and cumulative usage for the ledger.
+ * One worker session translated into task progress: a one-line status for the model,
+ * tool activity for humans, and cumulative usage for the ledger.
  */
 export class AgentProgress {
 	private readonly control: TaskControl<AgentToolDetails>;
 	private readonly activities: AgentActivity[] = [];
-	private readonly messages: AgentParentMessage[] = [];
 	private readonly counted = new WeakSet<AgentMessage>();
-	private text = "";
+	private calls = 0;
 	private usage: Usage = emptyUsage();
 	private last?: AssistantMessage;
-	/** Steering is accepted only while the worker's loop can still consume it. */
-	private listening = false;
 
 	constructor(control: TaskControl<AgentToolDetails>) {
 		this.control = control;
@@ -82,28 +62,19 @@ export class AgentProgress {
 
 	handle(event: AgentSessionEvent): void {
 		switch (event.type) {
-			case "agent_start":
-				this.listening = true;
-				return;
-			case "agent_end":
-				this.listening = false;
-				return;
-			case "message_end": {
+			case "message_end":
 				if (event.message.role !== "assistant") return;
 				this.last = event.message;
 				if (!this.counted.has(event.message)) {
 					this.counted.add(event.message);
 					this.usage = combineUsage(this.usage, event.message.usage);
 				}
-				const text = assistantText(event.message);
-				if (!text.trim()) return;
-				this.text = appendText(this.text, text);
-				break;
-			}
+				return;
 			case "compaction_end":
 				if (event.result?.usage) this.usage = combineUsage(this.usage, event.result.usage);
 				return;
 			case "tool_execution_start":
+				this.calls++;
 				this.activities.push({
 					id: event.toolCallId,
 					name: event.toolName,
@@ -130,7 +101,7 @@ export class AgentProgress {
 	publish(): void {
 		this.control.publish({
 			result: {
-				content: [{ type: "text", text: this.text }],
+				content: [{ type: "text", text: this.status() }],
 				details: {
 					version: 2,
 					state: "running",
@@ -141,21 +112,6 @@ export class AgentProgress {
 			display: this.display(),
 			usage: this.usage,
 		});
-	}
-
-	/** The worker's message_parent tool. */
-	sendToParent(text: string): boolean {
-		if (!this.control.channel.send(text)) return false;
-		this.record("agent", text);
-		return true;
-	}
-
-	/** The task's steering handler: false once the worker can no longer consume steering. */
-	async steer(session: AgentSession, text: string): Promise<boolean> {
-		if (!this.listening) return false;
-		if ((await session.steer(text, undefined, { source: "extension" })) !== "queued") return false;
-		this.record("parent", text);
-		return true;
 	}
 
 	/** Classify a finished run from its last assistant message. */
@@ -185,22 +141,16 @@ export class AgentProgress {
 		};
 	}
 
-	private record(from: AgentParentMessage["from"], text: string): void {
-		this.messages.push({ from, text });
-		if (this.messages.length > AGENT_MAX_MESSAGES) this.messages.shift();
-		this.publish();
+	/** Model-readable progress: the report is the contract, so intermediate text never leaves the worker. */
+	private status(): string {
+		const latest = this.activities.at(-1);
+		if (!latest) return "Agent running; no tool calls yet.";
+		const calls = `${this.calls} tool ${this.calls === 1 ? "call" : "calls"}`;
+		return `Agent running · ${calls} · latest: ${latest.name}${latest.target ? ` ${latest.target}` : ""}`;
 	}
 
-	/** Human-only Output: parent messages and tool calls, never sent to the model. */
+	/** Human-only Output: compact tool calls, never sent to the model. */
 	private display(): string {
-		const sections: string[] = [];
-		if (this.messages.length)
-			sections.push(
-				`Parent messages\n${this.messages
-					.map((message) => `${message.from === "agent" ? "Agent → Parent" : "Parent → Agent"}: ${message.text}`)
-					.join("\n\n")}`,
-			);
-		if (this.activities.length) sections.push(`Tool calls\n${activitiesText(this.activities)}`);
-		return sections.join("\n\n");
+		return this.activities.length ? `Tool calls\n${activitiesText(this.activities)}` : "";
 	}
 }

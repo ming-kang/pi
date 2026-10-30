@@ -3,7 +3,6 @@ import type { Model } from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../config.ts";
 import { raceWithAbortSignal } from "../utils/abort.ts";
 import type { AgentSession } from "./agent-session.ts";
-import type { ToolDefinition } from "./extensions/types.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
 import { createAgentSession } from "./sdk.ts";
@@ -20,7 +19,6 @@ export interface IsolatedSessionOptions {
 	/** Builds the system prompt from the base prompt Pi would otherwise use. */
 	systemPrompt: (base: string | undefined) => string;
 	tools: string[];
-	customTools?: ToolDefinition<any, any, any>[];
 	signal?: AbortSignal;
 }
 
@@ -68,7 +66,6 @@ export async function createIsolatedSession(options: IsolatedSessionOptions): Pr
 		settingsManager,
 		sessionManager: SessionManager.inMemory(options.cwd),
 		tools: options.tools,
-		customTools: options.customTools,
 	});
 	if (signal?.aborted) {
 		session.dispose();

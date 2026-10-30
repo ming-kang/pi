@@ -27,8 +27,7 @@ Hosts can prohibit background execution with `backgroundAllowed: false`. This re
 | Action | Parameters | Behavior |
 |---|---|---|
 | `list` | — | Lists active and up to five retained finished records, at most 100 rows; foreground executions are omitted with a count (they deliver inline in the transcript) |
-| `read` | `taskId`, optional `mode`, `bytes` | Reads bounded model-readable output/report while running or after completion; running Agents return public Text without Tool calls |
-| `steer` | `taskId`, `message` | Queues guidance with an active executor that supports steering, including Agents |
+| `read` | `taskId`, optional `mode`, `bytes` | Reads bounded model-readable output/report while running or after completion; running Agents return a one-line status without Tool calls |
 | `wait` | optional `taskId`, `waitMs`, `sinceBytes` | Waits for one task, or for any task running at call time when `taskId` is omitted |
 | `kill` | `taskId` | Requests cancellation of the selected task |
 
@@ -38,13 +37,7 @@ Use the execution ID returned by the native tool or `tasks list`. An unknown or 
 { "action": "read", "taskId": "<execution-id>", "mode": "tail", "bytes": 8192 }
 ```
 
-Reads default to an 8KB tail. `bytes` clamps between 256 bytes and 48KB; `mode` can be `head` or `tail`. A Bash output path is included when available. Tasks without a log return their bounded published result. Executors can separately attach human-only display text: `/tasks` shows it, while `tasks read`, settled waits, and completion context exclude it. Agent Tool calls and parent-message history use this display channel, so no read-view parameter is needed. Every read and settled wait reports its byte range and where to continue, for example `bytes 92160–100352 of 100352 · next sinceBytes 100352`. Use a returned offset with that task's ID; waitAny does not accept a cross-task offset.
-
-```json
-{ "action": "steer", "taskId": "<agent-execution-id>", "message": "Focus on the compatibility tests" }
-```
-
-Steering returns whether the active executor accepted the instruction, not whether its model has consumed or followed it. Terminal tasks, cancelled work, and executors without a steering handler reject it without restarting anything. Agent steering arrives at the next safe tool boundary. A foreground Agent's parent cannot issue another tool call until that foreground call returns, so interactive parent/child guidance primarily applies to background or detached work.
+Reads default to an 8KB tail. `bytes` clamps between 256 bytes and 48KB; `mode` can be `head` or `tail`. A Bash output path is included when available. Tasks without a log return their bounded published result. Executors can separately attach human-only display text: `/tasks` shows it, while `tasks read`, settled waits, and completion context exclude it. Agent Tool calls use this display channel, so no read-view parameter is needed. Every read and settled wait reports its byte range and where to continue, for example `bytes 92160–100352 of 100352 · next sinceBytes 100352`. Use a returned offset with that task's ID; waitAny does not accept a cross-task offset.
 
 ```json
 { "action": "wait", "taskId": "<execution-id>", "waitMs": 20000, "sinceBytes": 4096 }
@@ -78,7 +71,7 @@ At 100 columns or more, the task list sits beside an inspector. **Output** shows
 
 The focused pane has a highlighted border. Task selection uses a persistent row background, and the selected right-hand tab uses an underline; neither changes when focus moves. When the system theme has no background colors, the selected row uses inverse text. There are no focus arrows or extra title colors. Narrow terminals show one pane at full width with the same Tab navigation and no focus highlight. The inspector includes task context when the list is hidden. Escape closes the panel from either pane. The minimum supported size is 60 columns by 14 rows; below it, a centered dialog asks for a larger window and covers the screen, because the panel keeps input focus while open.
 
-Every executor is presented the same way, from data it declares: a label such as Bash or Agent, an input, labelled facts, and whether its output is a log or a report. Logs show live plain-text output; other executors show their published result plus any human-only display suffix. A completed report, such as an Agent's, uses the native Markdown renderer while its retained messages and activity remain literal text. Agent Output combines public Text, explicit parent messages, and compact Tool calls. A task without an input shows its title in Details. Missing logs fall back to the saved result. Task status, failure reasons and output-read errors remain distinct.
+Every executor is presented the same way, from data it declares: a label such as Bash or Agent, an input, labelled facts, and whether its output is a log or a report. Logs show live plain-text output; other executors show their published result plus any human-only display suffix. A completed report, such as an Agent's, uses the native Markdown renderer while its retained activity remains literal text. Agent Output combines its status line or report with compact Tool calls. A task without an input shows its title in Details. Missing logs fall back to the saved result. Task status, failure reasons and output-read errors remain distinct.
 
 | Default key | Action |
 |---|---|
@@ -132,8 +125,6 @@ Managed logs are ephemeral: they are retained with the runtime record and cleane
 Each settlement appends one version-3 `task-record` custom entry holding the terminal snapshot and its usage. A foreground snapshot omits its output, which the transcript already saves in the tool result, and restoration reads it back from there. The runtime restores version-3 terminal history from the selected branch for programmatic reads and the panel's Finished group, selecting the newest records independently for each history. Older `task-result` records are left in the session file and are not migrated or restored; usage from released sessions still counts. Live execution never resumes after restart, and restoration does not replay accounting or completion events. Restored records drop their log path: logs never outlive the runtime that wrote them. See [session format](../session-format.md#background-records).
 
 Delivered history outside the selected branch can be released and restored on return, so it does not fill the new branch's history budget. Undelivered completions stay protected while their branch is hidden. Pending delivery, pins and active reads use a separate allowance within the total runtime retention cap; restoration respects the same cap.
-
-Explicit executor messages use `customType: "task-message"` and share the completion delivery queue, pause boundaries, persistence acknowledgement, and retry path. An Agent emits one only through `message_parent`; ordinary assistant Text never triggers a turn. Queued messages are bounded and session-local, are dropped with a replaced runtime or hidden launch branch, and do not resume work after restart. Once persisted, they are ordinary conversation messages containing only the explicit text and source Task identity.
 
 Completion delivery follows the same queueing path as interactive input. While the agent is running, a completion is steered into that run, so it lands right after the current tool batch — exactly like a message the user types mid-run, and behind any already queued steering. An idle session starts a completion turn instead. User preflight (input hooks, model and authentication checks, compaction) still holds delivery, so a user message is always the first thing a new run sees. One bounded completion is in flight at a time. Each execution produces one completion. A terminal `tasks wait` coordinates with automatic delivery only after its tool result is persisted: while `tasks wait` prepares a result for persistence, that task is not announced, and aborting during output reading does not lose the pending completion. A settled waitAny applies the same receipt to its winning task and releases the rest of the cohort for ordinary delivery. Direct SDK waits remain observational until explicitly acknowledged. Plain reads and panel selection retain output without delaying notifications. Progress and repeated reads do not inject messages or add usage. `agent_settled` still describes the main agent, not the end of all background executions.
 
