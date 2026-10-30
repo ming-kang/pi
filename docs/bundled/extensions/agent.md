@@ -1,6 +1,6 @@
 # Agent — lightweight delegation
 
-The bundled `Agent` extension adds the `Agent` tool and `/agent` settings command. One call delegates one self-contained task to a temporary Agent and returns its final report; the Agent does not converse with its parent while it runs. Use it sparingly for independent work that clearly benefits from separate context or parallel execution. There are no General/Explore profiles, batch arrays, persistent worker identities, chain modes, or mid-run messaging and steering.
+The bundled `Agent` extension adds the `Agent` tool and `/agent` settings command. One call delegates one self-contained task to a temporary Agent and returns its final report; the Agent does not converse with its parent while it runs. Use it when independent work clearly benefits from separate context or parallel execution. Keep design and substantial coding in the main session; Agents are primarily for independent research, verification, and well-specified, self-contained implementation. Handle known-path reads and small edits directly. There are no General/Explore profiles, batch arrays, persistent worker identities, chain modes, or mid-run messaging and steering.
 
 ## Tool contract
 
@@ -12,8 +12,8 @@ The bundled `Agent` extension adds the `Agent` tool and `/agent` settings comman
 }
 ```
 
-- `prompt` is required, must be self-contained, and is limited to 16 KiB. The Agent cannot see the parent conversation.
-- `description` is an optional short label for the Transcript and `/tasks`; otherwise Pi derives one from the prompt.
+- `prompt` is required, must be self-contained, and is limited to 16 KiB. The Agent cannot see the parent conversation. Include the goal and rationale, prior findings, relevant paths and constraints, whether to investigate or edit, and expected verification. For open investigations, hand over the question rather than a fragile step-by-step procedure.
+- `description` is an optional short (3–5 word) label for the Transcript and `/tasks`; otherwise Pi derives one from the prompt.
 - `background` is optional. Foreground waits for the report; `true` returns a Task ID once the Agent has initialized, or at once while it waits for a slot, and delivers the report automatically. Interactive **Ctrl+B** can detach a foreground call without restarting it.
 
 Issue parallel `Agent` calls for independent work. Each call is a separate Transcript row and Task, including its own completion notification; there is no aggregate batch view. At most four Agents run at once in a session; additional calls wait as queued Tasks and start when a slot frees. A queued background call returns its Task ID immediately, and **Ctrl+B** can move a queued foreground call to the background before it starts. Parallel tasks must not perform overlapping writes.
