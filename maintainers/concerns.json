@@ -238,16 +238,20 @@
 			]
 		},
 		{
-			"id": "cached-compaction-files",
-			"why": "Native compaction carries compatible file details through extension-provided checkpoints so cached and native compaction can alternate without losing file history.",
+			"id": "cached-compaction",
+			"why": "Native compaction carries compatible file details through extension-provided checkpoints so cached and native compaction can alternate without losing file history, and entries an extension appends during session_compact, such as the cached-compaction card, render after the live summary as they do on resume.",
 			"paths": [
 				{
 					"path": "src/core/compaction/compaction.ts"
+				},
+				{
+					"path": "src/modes/interactive/interactive-mode.ts"
 				}
 			],
 			"tests": [
 				"test/compaction.test.ts",
-				"test/cached-compaction.test.ts"
+				"test/cached-compaction.test.ts",
+				"test/interactive-mode-compaction.test.ts"
 			]
 		},
 		{

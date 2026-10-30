@@ -61,7 +61,7 @@ Tasks splits durable execution from its replaceable management surface. The core
 Re-verify these areas whenever upstream synchronizations touch them:
 
 - **Bundling:** `scripts/build-bundle.mjs` adapts upstream's bundling strategy for the standalone distribution (`dist/bundle/`). Entrypoints and lazy-loaded assets must be validated with packed tarball verification (`npm run verify:package-install`).
-- **Compaction:** Auto-compaction converts `triggerPercent` to upstream's `reserveTokens`. The bundled `cached-compaction` extension hooks summary generation while leaving fallback and recovery native.
+- **Compaction:** Auto-compaction converts `triggerPercent` to upstream's `reserveTokens`. The bundled `cached-compaction` extension hooks summary generation while leaving fallback and recovery native, and appends its card from `session_compact`; the live `compaction_end` rebuild renders entries appended after the compaction below the summary, as resume does.
 - **Context snapshots:** `ContextSnapshotCapture` mirrors canonical request projections (`sessionManager.buildSessionProjection()`) so consumers (such as BTW and cached compaction) receive the exact bytes sent to providers.
 - **Tool presentation:** Upstream's `tool-execution.ts` owns execution lifecycle; the bundled `tool-presentation` extension injects compact TUI chrome via existing renderer hooks. Native Box rendering remains the zero-config fallback.
 - **Windows compatibility:** Keep platform path and shell normalizations (`core/tools/shell-operations.ts`) minimal and focused on upstream compatibility gaps.

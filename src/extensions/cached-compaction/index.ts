@@ -6,8 +6,8 @@ import { checkpointSummary, keptStart, summaryInstruction } from "./summary.ts";
 const CARD_TYPE = "cached-compaction";
 
 export default function cachedCompaction(pi: ExtensionAPI): void {
+	/** Card for the summary returned to the current compaction; every compaction starts by clearing it. */
 	let completed: CachedCompactionCard | undefined;
-	let pendingCard: CachedCompactionCard | undefined;
 
 	pi.registerEntryRenderer(CARD_TYPE, renderCachedCompactionEntry);
 
@@ -67,26 +67,8 @@ export default function cachedCompaction(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_compact", (event) => {
-		if (!event.fromExtension || !completed) return;
 		const card = completed;
 		completed = undefined;
-		pendingCard = card;
-		setTimeout(() => {
-			if (pendingCard !== card) return;
-			pendingCard = undefined;
-			try {
-				pi.appendEntry(CARD_TYPE, card);
-			} catch {
-				// The session may be disposed before the deferred card is appended.
-			}
-		}, 0);
-	});
-
-	pi.on("session_compact_failed", () => {
-		completed = undefined;
-	});
-	pi.on("session_shutdown", () => {
-		completed = undefined;
-		pendingCard = undefined;
+		if (event.fromExtension && card) pi.appendEntry(CARD_TYPE, card);
 	});
 }

@@ -554,6 +554,7 @@ pi.on("session_compact", async (event, ctx) => {
   // event.fromExtension - whether extension provided it
   // event.reason - "manual" (/compact), "threshold", or "overflow"
   // event.willRetry - whether overflow recovery will actually retry after retained-context verification
+  // Entries appended here with pi.appendEntry() render after the compaction summary.
 });
 
 pi.on("session_compact_failed", async (event, ctx) => {

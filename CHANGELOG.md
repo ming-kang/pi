@@ -21,6 +21,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 ### Fixed
 
 - The `/tasks` footer now advertises the background key only when the task can move right now. It no longer offers it while every background slot is taken; pressing the key then still explains the limit.
+- Entries an extension appends in a `session_compact` handler now appear after the compaction summary in the live transcript, as they already did after resuming the session. The cached-compaction card uses this and is saved with the compaction itself instead of on a later tick, so closing the session right after compacting no longer drops it.
 
 ## [1.4.6] - 2026-10-30
 

@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Context, Message } from "@earendil-works/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../src/core/session-manager.ts";
 import cachedCompactionExtension from "../src/extensions/cached-compaction/index.ts";
 import { checkpointSummary, keptStart } from "../src/extensions/cached-compaction/summary.ts";
@@ -63,12 +63,9 @@ describe("cached compaction", () => {
 					.buildSessionProjection()
 					.messages.some((message) => message.role === "compactionSummary"),
 			).toBe(true);
-			await vi.waitFor(() => {
-				expect(
-					fixture.sessionManager
-						.getBranch()
-						.some((entry) => entry.type === "custom" && entry.customType === "cached-compaction"),
-				).toBe(true);
+			expect(fixture.sessionManager.getBranch().at(-1)).toMatchObject({
+				type: "custom",
+				customType: "cached-compaction",
 			});
 			expect(
 				fixture.sessionManager

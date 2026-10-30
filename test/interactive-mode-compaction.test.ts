@@ -106,7 +106,7 @@ describe("InteractiveMode compaction events", () => {
 		);
 	});
 
-	test("renders retained entries and appends the latest summary cost at the bottom", async () => {
+	test("renders the latest summary and its cost between retained entries and entries appended after it", async () => {
 		const usage: Usage = {
 			input: 10,
 			output: 20,
@@ -135,6 +135,14 @@ describe("InteractiveMode compaction events", () => {
 			tokensBefore: 100,
 			usage,
 		};
+		const card: SessionEntry = {
+			type: "custom",
+			id: "card",
+			parentId: "latest",
+			timestamp: "2025-01-02T00:00:01Z",
+			customType: "cached-compaction",
+			data: {},
+		};
 		const fakeThis = {
 			isInitialized: true,
 			footer: { invalidate: vi.fn() },
@@ -144,7 +152,10 @@ describe("InteractiveMode compaction events", () => {
 			defaultEditor: {},
 			statusContainer: { clear: vi.fn() },
 			chatContainer: { clear: vi.fn() },
-			sessionManager: { buildContextEntries: vi.fn().mockReturnValue([latestCompaction, previousCompaction]) },
+			sessionManager: {
+				buildContextEntries: vi.fn().mockReturnValue([latestCompaction, previousCompaction, card]),
+				getBranch: vi.fn().mockReturnValue([previousCompaction, latestCompaction, card]),
+			},
 			renderSessionEntries: vi.fn(),
 			addMessageToChat: vi.fn(),
 			addCompactionCostNotice: vi.fn(),
@@ -181,7 +192,13 @@ describe("InteractiveMode compaction events", () => {
 		});
 
 		expect(fakeThis.chatContainer.clear).toHaveBeenCalledTimes(1);
-		expect(fakeThis.renderSessionEntries).toHaveBeenCalledWith([previousCompaction]);
+		expect(fakeThis.renderSessionEntries.mock.calls).toEqual([[[previousCompaction]], [[card]]]);
+		const [beforeSummary, afterSummary] = fakeThis.renderSessionEntries.mock.invocationCallOrder;
+		const [summaryOrder] = fakeThis.addMessageToChat.mock.invocationCallOrder;
+		const [costOrder] = fakeThis.addCompactionCostNotice.mock.invocationCallOrder;
+		expect(beforeSummary).toBeLessThan(summaryOrder!);
+		expect(summaryOrder).toBeLessThan(costOrder!);
+		expect(costOrder).toBeLessThan(afterSummary!);
 		expect(fakeThis.addMessageToChat).toHaveBeenCalledTimes(1);
 		expect(fakeThis.addMessageToChat).toHaveBeenCalledWith(
 			expect.objectContaining({
