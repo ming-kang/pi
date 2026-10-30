@@ -77,6 +77,9 @@ export class TasksMenu implements Component, Focusable {
 		});
 		this.search = new Input({ prompt: "Find task: ", placeholder: "title, command, kind or ID" });
 		this.sync();
+		this.selection.selectStartedSinceClose();
+		this.inspector.select(this.selection.selected);
+		this.list.showSelection();
 		this.unsubscribe = options.host.subscribe(() => {
 			this.dirty = true;
 			this.queueTick();
@@ -297,8 +300,9 @@ export class TasksMenu implements Component, Focusable {
 				const pageDown = kb.matches(data, this.focus === "list" ? "tui.select.pageDown" : "tui.editor.pageDown");
 				if (pageUp || kb.matches(data, "tui.select.up")) this.move(-1, pageUp);
 				else if (pageDown || kb.matches(data, "tui.select.down")) this.move(1, pageDown);
-				else if (kb.matches(data, "tui.select.confirm")) return;
-				else {
+				else if (kb.matches(data, "tui.select.confirm")) {
+					if (this.focus === "list" && this.selection.selected) this.focus = "inspector";
+				} else {
 					const key = actions.find((key) => kb.matches(data, key));
 					if (key) this.action(key);
 				}
@@ -391,6 +395,7 @@ export class TasksMenu implements Component, Focusable {
 	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
+		this.selection.state.closedAt = Date.now();
 		clearInterval(this.pollTimer);
 		clearInterval(this.animationTimer);
 		this.clearKill();

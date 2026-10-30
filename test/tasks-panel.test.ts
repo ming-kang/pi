@@ -15,6 +15,8 @@ function task(id: string, overrides: Partial<TaskSnapshot> = {}): TaskSnapshot {
 		title: `echo ${id}`,
 		output: "log",
 		input: { label: "Command", text: `echo ${id}`, truncated: false },
+		// Managed shell tasks always stream to a log; the fake host's read serves it.
+		outputPath: `/tmp/${id}.log`,
 		mode: "foreground",
 		status: "running",
 		startedAt: 0,
@@ -239,7 +241,7 @@ describe("task panel views", () => {
 				],
 			}),
 		]);
-		h.setOutput('✓ read {"path":"src/index.ts"} 2ms');
+		h.setOutput("✓ read src/index.ts · 2ms");
 		await vi.advanceTimersByTimeAsync(0);
 		expect(h.frame()).toContain("✓ read");
 		h.menu.handleInput("\t");
@@ -260,14 +262,12 @@ describe("task panel views", () => {
 				title: "Inspect Markdown",
 				status: "completed",
 				endedAt: 1000,
-				display: {
-					text: 'Parent messages\nAgent → Parent: Need direction.\n\nTool calls\n✓ read {"path":"src/index.ts"} 2ms',
-					truncated: false,
-				},
+				// Report tasks have no log; Output renders the published result directly.
+				outputPath: undefined,
+				result: { text: "## Report\n\n**Bold** and `src/index.ts`.\n\n- first item", truncated: false },
+				display: { text: "Tool calls\n✓ read src/index.ts · 2ms", truncated: false },
 			}),
 		]);
-		h.setOutput("## Report\n\n**Bold** and `src/index.ts`.\n\n- first item");
-		await vi.advanceTimersByTimeAsync(0);
 		expect(h.frame()).toContain("Report");
 		expect(h.frame()).toContain("Bold and src/index.ts.");
 		expect(h.frame()).toContain("- first item");
@@ -275,9 +275,54 @@ describe("task panel views", () => {
 		expect(h.frame()).not.toContain("**Bold**");
 		expect(h.frame()).not.toContain("`src/index.ts`");
 		expect(h.menu.render(140).join("\n")).toContain(theme.fg("mdCode", "src/index.ts"));
-		expect(h.frame()).toContain("Agent → Parent: Need direction.");
 		expect(h.frame()).toContain("Tool calls");
-		expect(h.frame()).toContain('✓ read {"path":"src/index.ts"} 2ms');
+		expect(h.frame()).toContain("✓ read src/index.ts · 2ms");
+		expect(h.host.read).not.toHaveBeenCalled();
+	});
+
+	it("shows a published result as soon as it changes, without waiting for a poll", () => {
+		const h = harness([
+			task("agent-live", {
+				kind: "agent",
+				label: "Agent",
+				output: "report",
+				outputPath: undefined,
+				result: { text: "Agent running; no tool calls yet.", truncated: false },
+			}),
+		]);
+		expect(h.frame()).toContain("Agent running; no tool calls yet.");
+		h.tasks[0]!.result = { text: "Agent running · 1 tool call · latest: read a.ts", truncated: false };
+		h.change();
+		expect(h.frame()).toContain("latest: read a.ts");
+	});
+
+	it("puts each task on one row with its source, title and runtime", () => {
+		const h = harness([task("build", { startedAt: 0 }), task("deploy", { kind: "agent", label: "Agent" })]);
+		const row = h
+			.left()
+			.split("\n")
+			.find((line) => line.includes("echo build"))!;
+		expect(row).toMatch(/Bash\s+echo build\s+1s/);
+		expect(h.left()).toMatch(/Agent\s+echo deploy/);
+	});
+
+	it("titles the inspector with the selected task's source and status", () => {
+		const h = harness([task("build"), task("done", { status: "cancelled", endedAt: 500 })], { width: 120 });
+		expect(h.frame().split("\n")[1]).toMatch(/Bash · Running · 1s.*Output\s+Details/);
+		h.menu.handleInput("\x1b[B");
+		expect(h.frame().split("\n")[1]).toContain("Bash · Cancelled");
+	});
+
+	it("starts Details with the source, task ID and status", () => {
+		const h = harness([task("build")]);
+		h.menu.handleInput("\t");
+		h.menu.handleInput("\x1b[C");
+		const frame = h.frame();
+		const row = (label: string) => frame.indexOf(`${label}  `);
+		expect(row("Source")).toBeGreaterThan(-1);
+		expect(row("Source")).toBeLessThan(row("Task ID"));
+		expect(row("Task ID")).toBeLessThan(row("Status"));
+		expect(row("Status")).toBeLessThan(row("Command"));
 	});
 
 	it("scrolls long information independently and honors rebound controls", async () => {
@@ -299,7 +344,7 @@ describe("task panel views", () => {
 		h.menu.handleInput("\x1b[D");
 		expect(h.frame()).toContain("line-079");
 		h.menu.handleInput("k");
-		expect(h.frame()).not.toContain("confirm");
+		expect(h.frame()).not.toContain('Stop Bash "');
 		h.menu.handleInput("x");
 		h.menu.handleInput("\r");
 		expect(h.host.kill).toHaveBeenCalledWith("custom");
@@ -369,9 +414,11 @@ describe("task panel views", () => {
 	it("keeps stop confirmation until cancelled and closes directly from output", async () => {
 		const h = harness();
 		h.menu.handleInput("k");
-		expect(h.frame()).toContain("confirm");
+		expect(h.frame()).toContain('Stop Bash "echo first"?');
+		// The list stays visible behind the footer question.
+		expect(h.left()).toContain("echo second");
 		await vi.advanceTimersByTimeAsync(5000);
-		expect(h.frame()).toContain("confirm");
+		expect(h.frame()).toContain('Stop Bash "echo first"?');
 		h.menu.handleInput("\x1b");
 		expect(h.host.kill).not.toHaveBeenCalled();
 		h.menu.handleInput("\t");
@@ -396,7 +443,7 @@ describe("task panel views", () => {
 		expect(h.state.selectedId).toBe("task-39");
 		h.menu.handleInput("\x1b[B");
 		h.menu.handleInput("n");
-		expect(h.state.selectedId).toBe("task-12");
+		expect(h.state.selectedId).toBe("task-23");
 		await vi.advanceTimersByTimeAsync(0);
 		h.menu.handleInput("\t");
 		h.menu.handleInput("p");
@@ -429,15 +476,13 @@ describe("task panel interaction", () => {
 			expect(lines.length).toBeLessThanOrEqual(14);
 			for (const line of lines) expect(visibleWidth(line)).toBe(width);
 		}
-		expect(h.frame()).toContain("whole task");
-		expect(h.frame()).toContain("Task ID:");
+		expect(h.frame()).toContain("Stop Bash");
 	});
 	it("switches only two panes and preserves the right tab, with border-only focus", async () => {
 		const h = harness([backgroundTask("build"), backgroundTask("check")], { width: 120 });
 		await vi.advanceTimersByTimeAsync(0);
 		const before = h.menu.render(120);
 		h.menu.handleInput("\x1b[C");
-		h.menu.handleInput("\r");
 		h.menu.handleInput("f");
 		expect(h.menu.render(120)).toEqual(before);
 		h.menu.handleInput("\t");
@@ -488,14 +533,14 @@ describe("task panel interaction", () => {
 		h.menu.handleInput("b");
 		expect(h.frame().split("\n").at(-1)).toContain("Selected task moved to background");
 		h.menu.handleMouse(mouse(stop, 29));
-		expect(h.frame()).toContain("Stop task?");
+		expect(h.frame()).toContain('Stop Bash "echo build"?');
 	});
 	it("dismisses stop when its target finishes without stopping the next selection", () => {
 		const h = harness([backgroundTask("build"), backgroundTask("check")], { width: 120 });
 		h.menu.handleInput("k");
 		h.tasks[0]!.status = "completed";
 		h.change();
-		expect(h.frame()).not.toContain("confirm");
+		expect(h.frame()).not.toContain('Stop Bash "');
 		h.menu.handleInput("\x1b[B");
 		h.menu.handleInput("\r");
 		expect(h.host.kill).not.toHaveBeenCalled();
@@ -592,6 +637,22 @@ describe("task panel interaction", () => {
 		const reopened = harness(h.tasks, { state: h.state, width: 120 });
 		expect(reopened.state.selectedId).toBe("build");
 		expect(reopened.frame()).toContain("Failed");
+	});
+	it("selects work started since the panel last closed when reopened", () => {
+		const h = harness([backgroundTask("build"), backgroundTask("check")], { width: 120 });
+		h.menu.handleInput("\x1b[B");
+		h.menu.dispose();
+		h.tasks.push(backgroundTask("deploy", { startedAt: 1500 }));
+		const reopened = harness(h.tasks, { state: h.state, width: 120 });
+		expect(reopened.state.selectedId).toBe("deploy");
+	});
+	it("opens the selected task with Enter, including in a narrow terminal", async () => {
+		const h = harness([backgroundTask("build", { facts: [["Directory", "/project"]] })], { width: 72, height: 22 });
+		await vi.advanceTimersByTimeAsync(0);
+		h.menu.handleInput("\r");
+		expect(h.frame().match(/line-\d+/g)?.length).toBeGreaterThanOrEqual(12);
+		h.menu.handleInput("\x1b[C");
+		expect(h.frame()).toContain("/project");
 	});
 	it("locates all retained results and returns to the complete list", () => {
 		const h = harness([

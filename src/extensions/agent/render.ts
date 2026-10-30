@@ -2,7 +2,7 @@ import { type Component, Container, TruncatedText, truncateToWidth, visibleWidth
 import type { AgentToolResult, ToolDefinition, ToolRenderContext } from "../../core/extensions/types.ts";
 import { getTextOutput, startToolTimer, toolTimerText } from "../../core/tools/render-utils.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
-import { activityGlyph, activityTarget, clipText, formatActivityDuration } from "./activity.ts";
+import { activityGlyph, clipText, formatActivityDuration, targetOf } from "./activity.ts";
 import type { AgentActivity, AgentToolDetails } from "./types.ts";
 
 const EXPANDED_ACTIVITIES = 5;
@@ -69,15 +69,6 @@ function activityColor(status: AgentActivity["status"]): "warning" | "success" |
 			return "error";
 		case "cancelled":
 			return "muted";
-	}
-}
-
-function targetOf(activity: AgentActivity): string {
-	if (activity.target) return activity.target;
-	try {
-		return activityTarget(activity.name, JSON.parse(activity.args));
-	} catch {
-		return activity.args;
 	}
 }
 

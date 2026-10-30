@@ -1,10 +1,9 @@
 import type { TaskRead, TaskSnapshot, TasksContext } from "../../../core/tasks/types.ts";
 import { isTaskTerminal } from "../../../core/tasks/types.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
-import type { TasksTab } from "./model.ts";
 import { cleanTaskText } from "./text.ts";
 import { TaskViewport } from "./viewport.ts";
-import { type TaskLines, taskLines } from "./views.ts";
+import { detailLines, outputLines } from "./views.ts";
 
 interface ReadingPosition {
 	info: TaskViewport;
@@ -26,7 +25,8 @@ export class TaskInspector {
 	private reading = false;
 	private disposed = false;
 	/** Snapshots are immutable, so identity tells when the lines must be rebuilt. */
-	private cache?: { task: TaskSnapshot; read?: TaskRead; width: number; lines: TaskLines };
+	private outputCache?: { task: TaskSnapshot; read?: TaskRead; width: number; lines: string[] };
+	private detailCache?: { task: TaskSnapshot; status: string; lines: string[] };
 	constructor(options: InspectorOptions) {
 		this.options = options;
 	}
@@ -53,7 +53,8 @@ export class TaskInspector {
 		for (const id of this.positions.keys()) if (!ids.has(id)) this.positions.delete(id);
 	}
 	invalidate(): void {
-		this.cache = undefined;
+		this.outputCache = undefined;
+		this.detailCache = undefined;
 	}
 	async refresh(): Promise<void> {
 		const task = this.task;
@@ -81,13 +82,23 @@ export class TaskInspector {
 			if (!this.disposed && this.task?.id !== task.id) await this.refresh();
 		}
 	}
-	lines(tab: TasksTab, width: number): string[] {
+	output(width: number): string[] {
 		const task = this.task;
 		if (!task) return [];
 		const read = this.position.read;
-		if (this.cache?.task !== task || this.cache.read !== read || this.cache.width !== width)
-			this.cache = { task, read, width, lines: taskLines(task, read, this.options.theme, width) };
-		return this.cache.lines[tab];
+		const cache = this.outputCache;
+		if (cache?.task !== task || cache.read !== read || cache.width !== width)
+			this.outputCache = { task, read, width, lines: outputLines(task, read, this.options.theme, width) };
+		return this.outputCache!.lines;
+	}
+	/** `status` carries the runtime, so Details rebuild at most once per displayed tick. */
+	details(status: string): string[] {
+		const task = this.task;
+		if (!task) return [];
+		const cache = this.detailCache;
+		if (cache?.task !== task || cache.status !== status)
+			this.detailCache = { task, status, lines: detailLines(task, status, this.options.theme) };
+		return this.detailCache!.lines;
 	}
 	dispose(): void {
 		if (this.disposed) return;

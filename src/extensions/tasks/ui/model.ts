@@ -6,6 +6,8 @@ export type TasksTab = "output" | "info";
 export interface TasksPanelState {
 	tab: TasksTab;
 	selectedId?: string;
+	/** When the panel last closed; reopening selects work started since then. */
+	closedAt?: number;
 }
 
 /** Selection follows identity, including when its row moves from active work into history. */
@@ -30,6 +32,13 @@ export class TaskSelection {
 	select(id: string | undefined): void {
 		this.state.selectedId = id;
 		this.refresh();
+	}
+	/** On reopen, prefer the newest work started since the panel closed over the remembered row. */
+	selectStartedSinceClose(): void {
+		const { closedAt } = this.state;
+		if (closedAt === undefined) return;
+		const fresh = this.rows.filter((task) => task.startedAt > closedAt);
+		if (fresh.length) this.select(fresh.reduce((a, b) => (b.startedAt > a.startedAt ? b : a)).id);
 	}
 	refresh(): void {
 		const { selectedId } = this.state;

@@ -78,7 +78,9 @@ export function formatKeyLabel(key: string): string {
 		modifiers.push(formatKeyLabelPart(match[1]));
 		remaining = remaining.slice(match[0].length);
 	}
-	const keyPart = formatKeyLabelPart(remaining || "+");
+	// A bare letter stays lowercase: an uppercase "K" alone reads as Shift+K.
+	const keyPart =
+		!modifiers.length && /^[a-z]$/i.test(remaining) ? remaining.toLowerCase() : formatKeyLabelPart(remaining || "+");
 	return [...modifiers, keyPart].join("+");
 }
 

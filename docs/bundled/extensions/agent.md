@@ -60,7 +60,7 @@ Shell activity shows only the first non-empty command line and retains the actua
 
 In `/tasks`, each Agent remains an independent row:
 
-- **Output** shows the status line and compact Tool calls while running. A successful final report uses Markdown formatting, followed by the retained Tool calls. Oversized reports remain available through their managed output file.
+- **Output** shows the status line and compact Tool calls while running, written like the expanded Transcript: `✓ read README.md · 4ms`. A successful final report uses Markdown formatting, followed by the retained Tool calls. Oversized reports remain available through their managed output file.
 - **Details** shows the full Prompt, working directory, model, and thinking level.
 
 Use `tasks read`, `tasks wait`, or `tasks kill` with the Task ID. Reading requires no view options: the status line or report is the model projection, while the `/tasks` panel adds the human-only Tool-call display. Selection, scrolling, cancellation, foreground detach, history, and completion delivery are owned by the shared Tasks implementation. Parent cancellation stops foreground-owned work, including cancellation received during startup; detached work continues until it finishes or is killed. Reload, session replacement, and shutdown cancel active Agents.

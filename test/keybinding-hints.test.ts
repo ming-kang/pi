@@ -13,6 +13,8 @@ describe("compact key labels", () => {
 		expect(formatKeyLabel("left")).toBe("←");
 		expect(formatKeyLabel("pageDown")).toBe("PgDn");
 		expect(formatKeyLabel("ctrl+shift+x")).toBe("Ctrl+Shift+X");
+		expect(formatKeyLabel("k")).toBe("k");
+		expect(formatKeyLabel("shift+k")).toBe("Shift+K");
 		expect(formatKeyLabel("alt+left")).toBe(`${process.platform === "darwin" ? "Option" : "Alt"}+←`);
 	});
 

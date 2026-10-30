@@ -52,7 +52,7 @@ describe("Agent delegation", () => {
 		});
 		expect(task.facts).toContainEqual(["Model", `${harness.models[0]!.provider}/${harness.models[0]!.id}`]);
 		expect(task.display?.text).toContain("Tool calls");
-		expect(task.display?.text).toContain('read {"path":"entry.ts"}');
+		expect(task.display?.text).toContain("✓ read entry.ts · ");
 		expect(task.outputPath).toBeUndefined();
 		expect((await harness.session.tasks.read(task.id)).text).toContain("## Report");
 		const records = harness.sessionManager
@@ -149,8 +149,7 @@ describe("Agent delegation", () => {
 		await vi.waitFor(() => expect(harness.session.tasks.get(taskId).display?.text).toContain("Tool calls"));
 		const running = await harness.session.tasks.read(taskId);
 		expect(running.text).toBe("Agent running · 1 tool call · latest: read entry.ts");
-		expect(running.text).not.toContain('{"path":"entry.ts"}');
-		expect(harness.session.tasks.get(taskId).display?.text).toContain('read {"path":"entry.ts"}');
+		expect(harness.session.tasks.get(taskId).display?.text).toContain("✓ read entry.ts · ");
 		release();
 		expect((await harness.session.tasks.wait(taskId)).status).toBe("completed");
 		expect((await harness.session.tasks.read(taskId)).text).toBe("Final report");

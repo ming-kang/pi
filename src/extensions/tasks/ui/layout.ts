@@ -4,6 +4,7 @@ import { runtimeLabel } from "../../../core/tasks/format.ts";
 import { isTaskTerminal } from "../../../core/tasks/types.ts";
 import { formatSize } from "../../../core/tools/truncate.ts";
 import { keyLabel } from "../../../modes/interactive/components/keybinding-hints.ts";
+import { statusMarker } from "../../../modes/interactive/components/status-marker.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { TaskInspector } from "./inspector.ts";
 import type { TaskList } from "./list.ts";
@@ -45,6 +46,8 @@ interface LayoutOptions {
 	canDetach: boolean;
 }
 const pad = (text: string, width: number) => truncateToWidth(text, Math.max(1, width), "…", true);
+/** Visible width of "Output  Details". */
+const TABS_WIDTH = 15;
 
 /** Cell geometry and mouse targets are produced together, so resize cannot separate them. */
 export function renderTasksLayout(options: LayoutOptions): TasksLayout {
@@ -59,7 +62,8 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 	const bodyHeight = height - 5;
 	const hits = result.hits;
 	result.listWidth = listWidth;
-	result.listPageSize = Math.max(1, Math.floor((bodyHeight - 1) / 2));
+	// One row per task, less the group headings.
+	result.listPageSize = Math.max(1, bodyHeight - 2);
 	const pane = (lines: string[], size: number, active: boolean): string[] => {
 		const border = (text: string) => theme.fg(wide && active ? "borderAccent" : "borderMuted", text);
 		return [
@@ -120,49 +124,61 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 	const task = inspector.task;
 	const tab = selection.state.tab;
 	const tabLabel = (id: TasksTab, label: string) => theme.style(label, { fg: "text", underline: tab === id });
-	const right = [`${tabLabel("output", "Output")}  ${tabLabel("info", "Details")}`];
+	// One header row in every layout: the selected task's source and status, with the tabs on the right.
+	const tabsX = rightWidth - 2 - TABS_WIDTH;
+	const marker = task ? statusMarker(task.status) : undefined;
+	const summary =
+		task && marker
+			? [
+					theme.fg("muted", cleanTaskText(task.label)),
+					theme.fg(marker.color, statusName(task.status)),
+					theme.fg("muted", runtimeLabel(task)),
+				].join(theme.fg("dim", " · "))
+			: "";
+	const shownSummary = truncateToWidth(summary, Math.max(0, tabsX - 1), "…");
+	const right = [
+		`${shownSummary}${" ".repeat(tabsX - visibleWidth(shownSummary))}${tabLabel("output", "Output")}  ${tabLabel("info", "Details")}`,
+	];
 	if (wide || focus === "inspector")
-		hits.push({ x: rightX + 1, y: 1, width: 6, tab: "output" }, { x: rightX + 9, y: 1, width: 7, tab: "info" });
+		hits.push(
+			{ x: rightX + 1 + tabsX, y: 1, width: 6, tab: "output" },
+			{ x: rightX + 9 + tabsX, y: 1, width: 7, tab: "info" },
+		);
 	const content: string[] = [];
 	let reading = "";
 	if (task) {
-		if (!wide)
-			content.push(
-				theme.fg("text", cleanTaskText(firstCommandLine(task.title))),
-				theme.fg("muted", `${statusName(task.status)} · ${runtimeLabel(task)}`),
-			);
-		const lines = inspector.lines(tab, rightWidth - 2);
+		// Without the list beside it, the inspector names the task it shows.
+		if (!wide) content.push(theme.fg("text", cleanTaskText(firstCommandLine(task.title))));
 		const position = inspector.position;
 		const read = position.read;
+		const terminal = isTaskTerminal(task.status);
 		const diagnostics = [task.error, read?.readError].filter((text): text is string => !!text).map(cleanTaskText);
 		if (tab === "output" && diagnostics.length)
 			content.push(theme.fg("warning", diagnostics.join(" · ").replace(/\n/g, " ")));
 		const source =
 			tab === "info"
-				? [
-						`Task ID   ${task.id}`,
-						`Status    ${statusName(task.status)} · ${statusName(task.mode)} · ${runtimeLabel(task)}`,
-						...diagnostics,
-						...lines,
-					]
-				: lines;
+				? inspector.details(`${statusName(task.status)} · ${statusName(task.mode)} · ${runtimeLabel(task)}`)
+				: inspector.output(rightWidth - 2);
 		content.push(...position[tab].layout(source, rightWidth - 2, bodyHeight - content.length));
 		if (tab === "output") {
-			reading = position.output.follow
-				? isTaskTerminal(task.status)
-					? "Finished"
-					: "Live"
-				: isTaskTerminal(task.status)
-					? `Finished · ${hint("app.tasks.follow")} load final output`
-					: `Browsing · ${hint("app.tasks.follow")} follow output`;
-			if (!position.output.follow && (wide || focus === "inspector"))
+			// Only a log holds a browsed snapshot; other output is always the current result.
+			const settled = terminal && task.outputPath === undefined;
+			reading =
+				position.output.follow || settled
+					? terminal
+						? "Finished"
+						: "Live"
+					: terminal
+						? `Finished · ${hint("app.tasks.follow")} load final output`
+						: `Browsing · ${hint("app.tasks.follow")} follow output`;
+			if (!position.output.follow && !settled && (wide || focus === "inspector"))
 				hits.push({
 					x: rightX + 1,
 					y: height - 3,
 					width: Math.min(rightWidth - 2, visibleWidth(reading)),
 					key: "app.tasks.follow",
 				});
-			if (read?.truncated)
+			if (task.outputPath !== undefined && read?.truncated)
 				reading += ` · Tail preview: ${formatSize(Buffer.byteLength(read.text))} of ${formatSize(read.totalBytes)}`;
 		} else if (tab === "info") reading = `Details ${position.info.range}`;
 	} else content.push(theme.fg("muted", "Select a task to inspect its result."));
@@ -180,59 +196,28 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 		footer += (footer ? " · " : "") + text;
 		if (target) hits.push({ x, y: height - 1, width: visibleWidth(text), ...target });
 	};
-	if (options.help || options.pendingKill) {
+	if (options.help) {
 		hits.length = 0;
-		let body: string[];
-		if (options.help) {
-			const controls: [Keybinding, string][] = [
-				["app.tasks.nextFocus", "Switch task list / inspector"],
-				["app.tasks.previousFocus", "Switch inspector / task list"],
-				["app.tasks.previousTab", "Output (inspector only)"],
-				["app.tasks.nextTab", "Details (inspector only)"],
-				["tui.select.up", "Previous task / scroll up"],
-				["tui.select.down", "Next task / scroll down"],
-				["tui.select.pageUp", "Page up in task list"],
-				["tui.select.pageDown", "Page down in task list"],
-				["tui.editor.pageUp", "Page up in inspector"],
-				["tui.editor.pageDown", "Page down in inspector"],
-				["app.tasks.top", "Top of list / content"],
-				["app.tasks.bottom", "Bottom of list / content"],
-				["app.tasks.search", "Locate a retained task; Enter chooses, Escape restores selection"],
-				["app.tasks.follow", "Follow latest / final output (Output only)"],
-				["app.tasks.detach", "Move every eligible foreground execution to the background"],
-				["app.tasks.detachSelected", "Move selected foreground task to background"],
-				["app.tasks.kill", "Request stop of selected whole task"],
-				["app.tasks.confirmStop", "Confirm stop"],
-				["tui.select.cancel", "Close current search, help or confirmation; otherwise close panel"],
-			];
-			body = [
-				theme.fg("text", "Task controls"),
-				...options.help.layout(
-					controls.map(([key, label]) => hint(key).padEnd(14) + label),
-					width - 2,
-					height - 5,
-				),
-				"",
-			];
-			addHint("tui.select.up", `/ ${hint("tui.select.down")} scroll`);
-			addHint("tui.select.cancel", "back", { cancel: true });
-		} else {
-			const target = selection.all.find((task) => task.id === options.pendingKill);
-			const command = wrapTextWithAnsi(cleanTaskText(target?.title ?? options.pendingKill!), width - 2);
-			const preview = command.slice(0, height - 8);
-			if (preview.length < command.length) preview[preview.length - 1] = "… Full command in Details.";
-			body = [
-				theme.fg("text", "Stop task?"),
-				"Stops the whole task, including its active work.",
-				`Task ID: ${options.pendingKill}`,
-				"",
-				...preview,
-			];
-			addHint("app.tasks.confirmStop", "confirm", { key: "app.tasks.confirmStop" });
-			addHint("tui.select.cancel", "cancel", { cancel: true });
-		}
-		while (body.length < height - 3) body.push("");
-		panels = pane(body, width, false);
+		panels = pane(helpLines(options.help, hint, theme, width, height), width, false);
+		addHint("tui.select.up", `/ ${hint("tui.select.down")} scroll`);
+		addHint("tui.select.cancel", "back", { cancel: true });
+	} else if (options.pendingKill) {
+		// The question borrows only the footer row, so the task stays in view while confirming.
+		hits.length = 0;
+		const target = selection.all.find((task) => task.id === options.pendingKill);
+		const source = cleanTaskText(target?.label ?? "task");
+		const confirm = `${hint("app.tasks.confirmStop")} stop`;
+		const cancel = `${hint("tui.select.cancel")} cancel`;
+		const actions = `${confirm} · ${cancel}`;
+		const room = width - visibleWidth(`Stop ${source} ""?  ${actions}`);
+		const title = cleanTaskText(firstCommandLine(target?.title ?? options.pendingKill));
+		const question = room >= 4 ? `Stop ${source} "${truncateToWidth(title, room, "…")}"?  ` : `Stop ${source}?  `;
+		footer = question + actions;
+		const x = visibleWidth(question);
+		hits.push(
+			{ x, y: height - 1, width: visibleWidth(confirm), key: "app.tasks.confirmStop" },
+			{ x: x + visibleWidth(confirm) + 3, y: height - 1, width: visibleWidth(cancel), cancel: true },
+		);
 	} else if (options.searchLine) {
 		// Only search candidates and cancellation are clickable while locating a task.
 		for (let i = hits.length - 1; i >= 0; i--) if (!hits[i]!.taskId) hits.splice(i, 1);
@@ -241,9 +226,8 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 		addHint("tui.select.cancel", "cancel", { cancel: true });
 	} else {
 		addHint("tui.select.up", `/ ${hint("tui.select.down")}${focus === "list" ? " tasks" : " scroll"}`);
-		addHint("app.tasks.nextFocus", focus === "list" ? (tab === "output" ? "output" : "details") : "tasks", {
-			key: "app.tasks.nextFocus",
-		});
+		if (focus === "list") addHint("tui.select.confirm", "open", { tab });
+		else addHint("app.tasks.nextFocus", "tasks", { key: "app.tasks.nextFocus" });
 		addHint("tui.select.cancel", "close", { cancel: true });
 		if (focus === "list") addHint("app.tasks.search", "find", { key: "app.tasks.search" });
 		else {
@@ -262,4 +246,62 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 	}
 	result.lines = [...panels, theme.fg(options.pendingKill ? "warning" : "dim", pad(footer, width))];
 	return result;
+}
+
+/** Controls grouped by purpose; actions sharing a key, such as list and inspector paging, share a row. */
+function helpLines(
+	help: TaskViewport,
+	hint: (key: Keybinding) => string,
+	theme: Theme,
+	width: number,
+	height: number,
+): string[] {
+	const keys = (...bindings: Keybinding[]) => [...new Set(bindings.map(hint).filter(Boolean))].join(" / ");
+	const listPage = keys("tui.select.pageUp", "tui.select.pageDown");
+	const inspectorPage = keys("tui.editor.pageUp", "tui.editor.pageDown");
+	const paging: Array<[string, string]> =
+		listPage === inspectorPage
+			? [[listPage, "Page the list or inspector"]]
+			: [
+					[listPage, "Page the list"],
+					[inspectorPage, "Page the inspector"],
+				];
+	const sections: Array<[string, Array<[string, string]>]> = [
+		[
+			"Navigate",
+			[
+				[keys("tui.select.up", "tui.select.down"), "Select a task, or scroll the inspector"],
+				...paging,
+				[keys("app.tasks.top", "app.tasks.bottom"), "Top or bottom"],
+				[hint("tui.select.confirm"), "Open the selected task"],
+				[keys("app.tasks.nextFocus", "app.tasks.previousFocus"), "Switch between list and inspector"],
+			],
+		],
+		[
+			"View",
+			[
+				[keys("app.tasks.previousTab", "app.tasks.nextTab"), "Output or Details, in the inspector"],
+				[hint("app.tasks.follow"), "Follow the latest output, or load the final output"],
+				[hint("app.tasks.search"), "Find a task; Enter locates it, Esc restores the selection"],
+			],
+		],
+		[
+			"Act",
+			[
+				[hint("app.tasks.kill"), `Stop the selected task; ${hint("app.tasks.confirmStop")} confirms`],
+				[hint("app.tasks.detachSelected"), "Move the selected foreground task to the background"],
+				[hint("app.tasks.detach"), "Move every foreground execution to the background"],
+				[hint("tui.select.cancel"), "Close search, help or confirmation; otherwise the panel"],
+			],
+		],
+	];
+	const keyWidth = Math.max(...sections.flatMap(([, rows]) => rows.map(([key]) => visibleWidth(key)))) + 2;
+	const rows = sections.flatMap(([title, entries], index) => [
+		...(index ? [""] : []),
+		theme.fg("accent", title),
+		...entries.map(([key, label]) => `  ${key}${" ".repeat(keyWidth - visibleWidth(key))}${label}`),
+	]);
+	const body = [theme.fg("text", "Task controls"), ...help.layout(rows, width - 2, height - 5), ""];
+	while (body.length < height - 3) body.push("");
+	return body;
 }

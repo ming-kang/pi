@@ -1,4 +1,4 @@
-/** Compact, bounded formatting of an Agent's tool-call activity. */
+/** Compact, bounded formatting of an Agent's tool-call activity, shared by the Transcript and /tasks. */
 import { boundText } from "../../core/tasks/output.ts";
 import type { AgentActivity } from "./types.ts";
 
@@ -34,6 +34,16 @@ export function activityTarget(name: string, args: unknown): string {
 	return compactArguments(args);
 }
 
+/** The stored display target, or one derived from the bounded arguments. */
+export function targetOf(activity: AgentActivity): string {
+	if (activity.target) return activity.target;
+	try {
+		return activityTarget(activity.name, JSON.parse(activity.args));
+	} catch {
+		return activity.args;
+	}
+}
+
 export function formatActivityDuration(ms: number | undefined): string {
 	if (ms === undefined) return "";
 	return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
@@ -52,9 +62,11 @@ export function activityGlyph(status: AgentActivity["status"]): string {
 	}
 }
 
+/** The Transcript's `glyph tool target · duration` form, plus an indented failure excerpt. */
 export function activityText(activity: AgentActivity, includeError = true): string {
+	const target = targetOf(activity);
 	const duration = formatActivityDuration(activity.durationMs);
-	const line = `${activityGlyph(activity.status)} ${activity.name}${activity.args ? ` ${activity.args}` : ""}${duration ? ` ${duration}` : ""}`;
+	const line = `${activityGlyph(activity.status)} ${activity.name}${target ? ` ${target}` : ""}${duration ? ` · ${duration}` : ""}`;
 	return includeError && activity.error
 		? `${line}\n    ${clipText(activity.error, 1000).replaceAll("\n", "\n    ")}`
 		: line;
