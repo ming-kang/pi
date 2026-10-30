@@ -1,55 +1,10 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { readVersionedTask } from "./codec.ts";
-import { boundText, resultText } from "./output.ts";
+import { errorText, resultText } from "./output.ts";
+import { TaskRecord } from "./record.ts";
 import type { TaskSnapshot } from "./types.ts";
 
-export interface TaskRecord {
-	/** The runtime's working copy. Call changed() after every mutation. */
-	task: TaskSnapshot;
-	settled: boolean;
-	/** Whether the launch anchor is on the selected branch. */
-	visible: boolean;
-	/**
-	 * none: running, or answered inline by its tool call; pending: a settled handoff
-	 * awaiting automatic delivery; claimed: handed to the host; delivered: acknowledged.
-	 */
-	delivery: "none" | "pending" | "claimed" | "delivered";
-	pins: number;
-	deliveryHolds: number;
-	cleanup?: () => void | Promise<void>;
-	readError?: string;
-	waiters: Set<() => void>;
-	/** Frozen snapshot shared by readers until the task changes. */
-	snapshot?: TaskSnapshot;
-}
-
 export const EXPIRED_OUTPUT = "Output has expired: the managed log was released; showing the stored result.";
-
-function freeze<T>(value: T): T {
-	if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
-		for (const child of Object.values(value)) freeze(child);
-		Object.freeze(value);
-	}
-	return value;
-}
-
-/** Readers share one frozen copy, so polling and status rendering never clone unchanged output. */
-export function snapshotOf(record: TaskRecord): TaskSnapshot {
-	record.snapshot ??= freeze(structuredClone(record.task));
-	return record.snapshot;
-}
-
-export function changed(record: TaskRecord): void {
-	record.snapshot = undefined;
-}
-
-function errorText(error: unknown): string {
-	try {
-		return boundText(error instanceof Error ? error.message : String(error), 4096);
-	} catch {
-		return "Task cleanup failed";
-	}
-}
 
 function oldestTask(tasks: Iterable<TaskSnapshot>): TaskSnapshot | undefined {
 	let oldest: TaskSnapshot | undefined;
@@ -63,8 +18,8 @@ const isForeground = (task: TaskSnapshot) => task.mode === "foreground";
 
 /** Retained snapshots and output leases. This store never owns executable handles. */
 export class TaskStore {
-	readonly records = new Map<string, TaskRecord>();
-	readonly cleanups = new Set<Promise<void>>();
+	private readonly records = new Map<string, TaskRecord>();
+	private readonly cleanups = new Set<Promise<void>>();
 	private readonly maxHistory: number;
 	private readonly maxRetained: number;
 	private readonly isClosed: () => boolean;
@@ -84,6 +39,50 @@ export class TaskStore {
 		return this.isClosed();
 	}
 
+	get(id: string): TaskRecord | undefined {
+		return this.records.get(id);
+	}
+
+	/** Records whose ID, or whose ID without its kind prefix, starts with `prefix`. */
+	match(prefix: string): TaskRecord[] {
+		return this.all().filter(
+			({ task }) => task.id.startsWith(prefix) || task.id.slice(task.kind.length + 1).startsWith(prefix),
+		);
+	}
+
+	add(record: TaskRecord): void {
+		this.records.set(record.task.id, record);
+	}
+
+	all(): TaskRecord[] {
+		return [...this.records.values()];
+	}
+
+	/** Records whose execution has not settled, queued or running. */
+	unsettled(): TaskRecord[] {
+		return this.all().filter((record) => !record.settled);
+	}
+
+	/** Records on the selected branch. */
+	visible(): TaskRecord[] {
+		return this.all().filter((record) => record.visible);
+	}
+
+	/** Settled handoffs eligible for automatic delivery. */
+	deliverable(): TaskRecord[] {
+		return this.all().filter((record) => record.deliverable);
+	}
+
+	/** Records plus output cleanups still running; admission bounds this. */
+	retainedCount(): number {
+		return this.records.size + this.cleanups.size;
+	}
+
+	/** Settles once every output cleanup started so far has finished. */
+	cleanupsDone(): Promise<unknown> {
+		return Promise.all(this.cleanups);
+	}
+
 	/**
 	 * Foreground records save no output of their own: their tool result already holds it,
 	 * so `toolResults` maps each tool call ID on the branch to that content.
@@ -100,7 +99,7 @@ export class TaskStore {
 		const backgroundCapacity = Math.max(0, this.maxHistory - (history.length - foreground));
 		const capacity = Math.max(
 			0,
-			Math.min(foregroundCapacity + backgroundCapacity, this.maxRetained - this.records.size - this.cleanups.size),
+			Math.min(foregroundCapacity + backgroundCapacity, this.maxRetained - this.retainedCount()),
 		);
 		const newest = new Map<string, TaskSnapshot>();
 		for (const value of records) {
@@ -134,16 +133,7 @@ export class TaskStore {
 			// Logs never outlive the runtime that wrote them.
 			const expired = task.outputPath !== undefined;
 			task.outputPath = undefined;
-			this.records.set(task.id, {
-				task,
-				settled: true,
-				visible: true,
-				delivery: "delivered",
-				pins: 0,
-				deliveryHolds: 0,
-				waiters: new Set(),
-				readError: expired ? EXPIRED_OUTPUT : undefined,
-			});
+			this.add(TaskRecord.restored(task, expired ? EXPIRED_OUTPUT : undefined));
 		}
 	}
 
@@ -152,14 +142,15 @@ export class TaskStore {
 		const cleanup = record.cleanup;
 		record.cleanup = undefined;
 		// Snapshots retain final bounded text; expired files are never needed to render history.
-		record.task.outputPath = undefined;
-		changed(record);
+		record.update((task) => {
+			task.outputPath = undefined;
+		});
 		record.readError = EXPIRED_OUTPUT;
 		const pending = Promise.resolve()
 			.then(cleanup)
 			.catch((error: unknown) => {
 				try {
-					this.onCleanupError?.(errorText(error));
+					this.onCleanupError?.(errorText(error, "Task cleanup failed"));
 				} catch {
 					/* Cleanup/reporting is best effort, never an unhandled rejection. */
 				}
@@ -170,9 +161,7 @@ export class TaskStore {
 
 	/** Pending delivery, active reads and pins have their own bounded retention allowance. */
 	private historyRecords(): TaskRecord[] {
-		return [...this.records.values()].filter(
-			(record) => record.settled && record.delivery === "delivered" && !record.pins && !record.waiters.size,
-		);
+		return this.all().filter((record) => record.inHistory);
 	}
 
 	trim(): void {

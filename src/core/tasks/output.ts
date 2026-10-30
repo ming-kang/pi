@@ -1,6 +1,7 @@
 import { open } from "node:fs/promises";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { TaskFact, TaskInput, TaskText } from "./types.ts";
+import { finiteLimit } from "../../utils/number.ts";
+import type { TaskFact, TaskInput, TaskReadOptions, TaskText } from "./types.ts";
 
 export const TASK_RESULT_BYTES = 48 * 1024;
 export const TASK_DETAILS_BYTES = 120 * 1024;
@@ -14,8 +15,17 @@ export const TASK_FACT_BYTES = 1024;
 export const TASK_ERROR_BYTES = 4096;
 export const TASK_PATH_BYTES = 8192;
 
-export function finiteLimit(value: number | undefined, fallback: number, ceiling: number): number {
-	return value === undefined || !Number.isFinite(value) ? fallback : Math.max(0, Math.min(ceiling, Math.floor(value)));
+/** A bounded, printable message for any thrown value. */
+export function errorText(error: unknown, fallback = "Task execution failed (unprintable error)"): string {
+	try {
+		return boundText(error instanceof Error ? error.message : String(error), TASK_ERROR_BYTES);
+	} catch {
+		return fallback;
+	}
+}
+
+export function boundReadBytes(bytes: number | undefined): number {
+	return finiteLimit(bytes, TASK_READ_BYTES, TASK_RESULT_BYTES);
 }
 
 /** Both ends are codepoint aligned, including a head read ending inside a character. */
@@ -97,58 +107,46 @@ export interface OutputSlice {
 	fromByte: number;
 }
 
+/**
+ * The byte window a read covers in an output of `size` bytes. `floor` is the first byte the
+ * caller has not seen yet; anything before it never counts as truncated.
+ */
+function readWindow(size: number, options: TaskReadOptions): { start: number; length: number; floor: number } {
+	const bytes = boundReadBytes(options.bytes);
+	const since = finiteLimit(options.sinceBytes, 0, Number.MAX_SAFE_INTEGER);
+	const floor = since > size ? 0 : since;
+	const start =
+		options.sinceBytes !== undefined
+			? Math.max(floor, size - bytes)
+			: options.mode === "head"
+				? 0
+				: Math.max(0, size - bytes);
+	return { start, length: Math.min(bytes, size - start), floor };
+}
+
+function outputSlice(size: number, floor: number, slice: Buffer, fromByte: number): OutputSlice {
+	return { text: slice.toString("utf8"), totalBytes: size, truncated: slice.length < size - floor, fromByte };
+}
+
 /** Positioned, bounded reads only. The executor owns the path and its cleanup. */
-export async function readOutputSlice(
-	path: string,
-	options: { mode?: "head" | "tail"; bytes?: number; sinceBytes?: number } = {},
-): Promise<OutputSlice> {
-	const bytes = finiteLimit(options.bytes, TASK_READ_BYTES, TASK_RESULT_BYTES);
+export async function readOutputSlice(path: string, options: TaskReadOptions = {}): Promise<OutputSlice> {
 	const file = await open(path, "r");
 	try {
 		const { size } = await file.stat();
-		const since = finiteLimit(options.sinceBytes, 0, Number.MAX_SAFE_INTEGER);
-		const floor = since > size ? 0 : since;
-		const start =
-			options.sinceBytes !== undefined
-				? Math.max(floor, size - bytes)
-				: options.mode === "head"
-					? 0
-					: Math.max(0, size - bytes);
-		const length = Math.min(bytes, size - start);
+		const { start, length, floor } = readWindow(size, options);
 		// One extra byte lets alignment distinguish a complete last codepoint.
 		const buffer = Buffer.alloc(Math.min(length + 1, size - start));
 		const { bytesRead } = await file.read(buffer, 0, buffer.length, start);
 		const slice = alignedSlice(buffer.subarray(0, bytesRead), 0, Math.min(length, bytesRead));
-		return {
-			text: slice.toString("utf8"),
-			totalBytes: size,
-			truncated: options.sinceBytes !== undefined ? start > floor || slice.length < length : slice.length < size,
-			fromByte: start + slice.byteOffset - buffer.byteOffset,
-		};
+		return outputSlice(size, floor, slice, start + slice.byteOffset - buffer.byteOffset);
 	} finally {
 		await file.close();
 	}
 }
 
-export function sliceText(
-	text: string,
-	options: { mode?: "head" | "tail"; bytes?: number; sinceBytes?: number } = {},
-): OutputSlice {
+export function sliceText(text: string, options: TaskReadOptions = {}): OutputSlice {
 	const buffer = Buffer.from(text);
-	const bytes = finiteLimit(options.bytes, TASK_READ_BYTES, TASK_RESULT_BYTES);
-	const since = finiteLimit(options.sinceBytes, 0, Number.MAX_SAFE_INTEGER);
-	const floor = since > buffer.length ? 0 : since;
-	const start =
-		options.sinceBytes !== undefined
-			? Math.max(floor, buffer.length - bytes)
-			: options.mode === "head"
-				? 0
-				: Math.max(0, buffer.length - bytes);
-	const slice = alignedSlice(buffer, start, Math.min(buffer.length, start + bytes));
-	return {
-		text: slice.toString("utf8"),
-		totalBytes: buffer.length,
-		truncated: slice.length < buffer.length - floor,
-		fromByte: slice.byteOffset - buffer.byteOffset,
-	};
+	const { start, length, floor } = readWindow(buffer.length, options);
+	const slice = alignedSlice(buffer, start, start + length);
+	return outputSlice(buffer.length, floor, slice, slice.byteOffset - buffer.byteOffset);
 }

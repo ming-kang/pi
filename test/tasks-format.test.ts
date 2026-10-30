@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { formatDuration } from "../src/core/tasks/format.ts";
+import { clampWaitMs, TASKS_WAIT_MAX_MS } from "../src/core/tasks/limits.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
-import { TASKS_WAIT_MAX_MS } from "../src/extensions/tasks/tool/constants.ts";
-import { clampWaitMs, tasksSchema } from "../src/extensions/tasks/tool/schema.ts";
+import { tasksSchema } from "../src/extensions/tasks/tool/schema.ts";
+import { formatDuration } from "../src/utils/duration.ts";
 
 afterEach(() => vi.useRealTimers());
 

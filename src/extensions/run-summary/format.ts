@@ -1,4 +1,4 @@
-import { formatDuration } from "../../core/tasks/format.ts";
+import { formatDuration } from "../../utils/duration.ts";
 
 function pad(value: number): string {
 	return String(value).padStart(2, "0");

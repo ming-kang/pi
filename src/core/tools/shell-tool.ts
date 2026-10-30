@@ -1,6 +1,7 @@
 import { type Static, Type } from "typebox";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
-import type { TaskCompletion } from "../tasks/types.ts";
+import { TaskRuntime } from "../tasks/runtime.ts";
+import type { TaskCompletion, TaskControl, TaskToolOutcome } from "../tasks/types.ts";
 import {
 	type BashOperations,
 	type BashToolOptions,
@@ -9,7 +10,7 @@ import {
 	type ShellToolConfig,
 } from "./bash.ts";
 import { createShellRenderers } from "./renderers/bash.ts";
-import { type ManagedShellExecution, runShellCommand } from "./shell-execution.ts";
+import { runShellCommand } from "./shell-execution.ts";
 import { createLocalBashOperations } from "./shell-operations.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type TruncationResult } from "./truncate.ts";
@@ -96,14 +97,17 @@ export function createShellToolDefinition(
 			originalUpdate?,
 			ctx?: ExtensionContext,
 		) {
-			const host = ctx?.tasks;
-			if (host?.closed) throw new Error("Task service is closed");
-			const run = async (managed?: ManagedShellExecution): Promise<TaskCompletion<BashToolDetails | undefined>> => {
-				const signal = managed?.control.signal ?? parentSignal;
-				if (managed) {
-					if (signal?.aborted) throw new Error("Command aborted");
-					resolveTimeoutMs(timeout);
-				}
+			const sessionTasks = ctx?.tasks;
+			if (sessionTasks?.closed) throw new Error("Task service is closed");
+			if (!sessionTasks && background)
+				throw new Error("Background execution is not available in this host. No command was started.");
+			// Without a session the command still runs as a task, on a throwaway runtime that never backgrounds.
+			const standalone = sessionTasks ? undefined : new TaskRuntime();
+			const run = async (
+				control: TaskControl<BashToolDetails | undefined>,
+			): Promise<TaskCompletion<BashToolDetails | undefined>> => {
+				if (control.signal.aborted) throw new Error("Command aborted");
+				resolveTimeoutMs(timeout);
 				const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
 				const spawnContext = resolveSpawnContext(
 					resolvedCommand,
@@ -112,34 +116,33 @@ export function createShellToolDefinition(
 					exposeSessionEnvironment,
 					ctx,
 				);
-				// A setup throw settles a managed task as failed, or cancelled once its signal fired.
+				// A setup throw settles the task as failed, or cancelled once its signal fired.
 				return await runShellCommand({
 					operations: ops,
 					context: spawnContext,
 					tempFilePrefix: config.tempFilePrefix,
 					timeout,
-					signal,
-					onUpdate: originalUpdate,
-					managed,
+					control,
+					taskLog: sessionTasks !== undefined,
 				});
 			};
-			if (!host) {
-				if (background)
-					throw new Error("Background execution is not available in this host. No command was started.");
-				return shellToolResult(await run());
+			let outcome: TaskToolOutcome<BashToolDetails | undefined>;
+			try {
+				outcome = await (sessionTasks ?? standalone!).execute<BashToolDetails | undefined>({
+					kind: config.name,
+					label: config.shellName[0]!.toUpperCase() + config.shellName.slice(1),
+					title: command,
+					input: { label: "Command", text: command, truncated: false, language: config.name },
+					facts: [["Directory", ctx?.cwd || cwd]],
+					toolCallId,
+					background,
+					signal: parentSignal,
+					onUpdate: originalUpdate,
+					run,
+				});
+			} finally {
+				standalone?.close();
 			}
-			const outcome = await host.execute<BashToolDetails | undefined>({
-				kind: config.name,
-				label: config.shellName[0]!.toUpperCase() + config.shellName.slice(1),
-				title: command,
-				input: { label: "Command", text: command, truncated: false, language: config.name },
-				facts: [["Directory", ctx?.cwd || cwd]],
-				toolCallId,
-				background,
-				signal: parentSignal,
-				onUpdate: originalUpdate,
-				run: (control) => run({ control }),
-			});
 			if (outcome.kind === "result") return shellToolResult(outcome);
 			const tail = `Task ID: ${outcome.task.id}. Status: ${outcome.task.status}. Completion arrives automatically as a notification — do not poll or immediately wait on it; continue with other work or hand back to the user. Use tasks read to inspect output, tasks wait only when your next step is blocked on a result (one ID or any running task; prefer foreground next time in that case), or tasks kill to stop it.`;
 			// Shell execution can become background work in two ways, and the model has to know which

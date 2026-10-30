@@ -2,6 +2,7 @@
 
 import type { AgentToolResult } from "../../../core/extensions/types.ts";
 import { runtimeLabel } from "../../../core/tasks/format.ts";
+import { clampReadBytes, clampWaitMs } from "../../../core/tasks/limits.ts";
 import { boundText } from "../../../core/tasks/output.ts";
 import {
 	isTaskTerminal,
@@ -14,7 +15,7 @@ import {
 import { truncateHead } from "../../../core/tools/truncate.ts";
 import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
 import { TASKS_LIST_FINISHED_SHOWN, TASKS_WAIT_DELTA_BYTES } from "./constants.ts";
-import { clampReadBytes, clampSinceBytes, clampWaitMs, requireTaskId, type TasksInput } from "./schema.ts";
+import { clampSinceBytes, requireTaskId, type TasksInput } from "./schema.ts";
 import type { TasksDetails, TasksKillDetails, TasksListDetails, TasksReadDetails, TasksWaitDetails } from "./types.ts";
 
 export function boundedText(text: string): string {

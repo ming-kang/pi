@@ -216,6 +216,75 @@ describe("TaskRuntime execution ownership", () => {
 		expect(bg.pendingNotifications()).toEqual([]);
 	});
 
+	describe("an accepted execution that already has its final result", () => {
+		const shapes: Record<string, TaskExecution<{ ok: boolean }>["run"]> = {
+			"returns a settled promise right after accept": (control) => {
+				control.accept();
+				return Promise.resolve({ result: result("final") });
+			},
+			"is an async function accepting synchronously": async (control) => {
+				control.accept();
+				return { result: result("final") };
+			},
+			"accepts after an await, then returns without awaiting": async (control) => {
+				await Promise.resolve();
+				control.accept();
+				return { result: result("final") };
+			},
+		};
+
+		it.each(Object.entries(shapes))("answers a background-requested caller when run %s", async (_name, run) => {
+			const background = service();
+			const outcome = await background.execute(job({ background: true, run }).execution);
+			expect(outcome.kind).toBe("result");
+			expect(background.pendingNotifications()).toEqual([]);
+		});
+
+		it("answers a detach-requested caller when run accepts and returns at once", async () => {
+			const detached = service();
+			const gate = deferred<void>();
+			const call = detached.execute(
+				job({
+					run: async (control) => {
+						await gate.promise;
+						control.accept();
+						return { result: result("final") };
+					},
+				}).execution,
+			);
+			expect(detached.detachForeground()).toBe(1);
+			gate.resolve();
+			expect((await call).kind).toBe("result");
+			expect(detached.pendingNotifications()).toEqual([]);
+		});
+
+		it("hands off an accepted execution that keeps running", async () => {
+			const background = service();
+			const item = job({ background: true });
+			const outcome = await background.execute(item.execution);
+			expect(outcome.kind).toBe("background");
+			expect(background.get(item.control.id).mode).toBe("background");
+			item.completion.resolve({ result: result() });
+			await tick();
+			expect(background.pendingNotifications()).toHaveLength(1);
+		});
+
+		it("hands off an accepted execution that still awaits I/O before its result", async () => {
+			const background = service();
+			const outcome = await background.execute(
+				job({
+					background: true,
+					run: async (control) => {
+						control.accept();
+						await new Promise((resolve) => setTimeout(resolve, 5));
+						return { result: result("final") };
+					},
+				}).execution,
+			);
+			expect(outcome.kind).toBe("background");
+		});
+	});
+
 	it("starts no executor for pre-aborted, disabled, closed or worker admission", async () => {
 		const parent = new AbortController();
 		parent.abort(new Error("already cancelled"));

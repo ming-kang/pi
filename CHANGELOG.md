@@ -4,11 +4,16 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- `TaskReadOptions` is exported from the SDK and extension API as the named shape of `TasksContext.read()` options (`mode`, `bytes`, `sinceBytes`); the `read` options of `wait()` and `waitAny()` are subsets of it.
+
 ### Changed
 
 - **Breaking (extension and SDK API):** `TasksContext.wait()` and `waitAny()` now take an options object and return a typed result. `wait(id, { timeoutMs?, signal?, toolCallId?, read? })` returns `{ outcome, waitedMs, task, read? }`; `waitAny({ timeoutMs?, signal?, toolCallId?, read? })` returns `{ outcome, waitedMs, task?, read?, running }`. `outcome` is `settled`, `timed_out`, `interrupted`, or `closed`, plus `no_tasks` for an empty `waitAny` cohort. The runtime now owns the whole `tasks wait` delivery protocol: it holds delivery before the wait, reads, registers the persisted-result receipt for the given `toolCallId`, and then releases, and it applies steering interruption itself. `interruptSignal` parameters, `TasksContext.holdDelivery()`, `TasksSessionContext.waitInterruptSignal`, and `TasksSessionContext.prepareWait()` are removed; `TasksSessionContext` keeps only `stoppedByTreeNavigation()`. Hosts embedding a `TaskRuntime` can supply `TaskRuntimeOptions.waits` for the same behavior. `holdDelivery()` remains on `TaskRuntime` for host delivery code.
 - **Breaking (SDK):** `TaskRuntime.pause()` is removed; delivery pausing has one owner, `session.pauseTaskNotifications()`. `TaskRuntime.pendingNotifications()` and `claimNotification()` no longer return nothing while delivery is paused.
 - **Breaking (SDK):** `AgentSession.tasksStoppedByTreeNavigation()` is removed; use `session.tasks.session?.stoppedByTreeNavigation(targetId)`.
+- Shell tools called without an extension context now run as a foreground task, matching the session path: an already aborted signal rejects with the signal's reason, an invalid `timeout` is rejected before the command starts, and an output-capture failure cancels the command and reports its error.
 
 ## [1.4.6] - 2026-10-30
 

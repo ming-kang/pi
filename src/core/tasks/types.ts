@@ -118,6 +118,16 @@ export type TaskToolOutcome<T> =
 	| { kind: "result"; result: AgentToolResult<T>; status: TaskTerminalStatus; error?: string }
 	| { kind: "background"; task: TaskSnapshot };
 
+/** Which slice of a task's output to read. Defaults to the last 8 KiB. */
+export interface TaskReadOptions {
+	/** `tail` (default) reads the end of the output, `head` its start. */
+	mode?: "head" | "tail";
+	/** Maximum bytes to return, bounded by the runtime. */
+	bytes?: number;
+	/** Only output written after this byte offset; takes precedence over `mode`. */
+	sinceBytes?: number;
+}
+
 export interface TaskRead {
 	task: TaskSnapshot;
 	text: string;
@@ -152,7 +162,7 @@ interface TaskObservationOptions {
 
 export interface TaskWaitOptions extends TaskObservationOptions {
 	/** Read output while delivery is still held; skipped when steering interrupted the wait. */
-	read?: { bytes?: number; sinceBytes?: number };
+	read?: Pick<TaskReadOptions, "bytes" | "sinceBytes">;
 }
 
 export interface TaskWaitResult {
@@ -165,7 +175,7 @@ export interface TaskWaitResult {
 
 export interface TaskWaitAnyOptions extends TaskObservationOptions {
 	/** Read the settled task's output while delivery is still held. */
-	read?: { bytes?: number };
+	read?: Pick<TaskReadOptions, "bytes">;
 }
 
 export interface TaskWaitAnyResult {
@@ -223,7 +233,7 @@ export interface TasksContext {
 	execute<T>(execution: TaskExecution<T>): Promise<TaskToolOutcome<T>>;
 	list(): TaskSnapshot[];
 	get(id: string): TaskSnapshot;
-	read(id: string, options?: { mode?: "head" | "tail"; bytes?: number; sinceBytes?: number }): Promise<TaskRead>;
+	read(id: string, options?: TaskReadOptions): Promise<TaskRead>;
 	/**
 	 * Observe one task. With `toolCallId` in a session host, the whole observation (wait, read,
 	 * receipt) is atomic with respect to automatic delivery; a standalone runtime never

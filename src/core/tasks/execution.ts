@@ -1,7 +1,15 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
-import { boundFacts, boundTaskText, boundText, resultText, TASK_ERROR_BYTES, TASK_PATH_BYTES } from "./output.ts";
-import { changed, snapshotOf, type TaskRecord } from "./store.ts";
+import {
+	boundFacts,
+	boundTaskText,
+	boundText,
+	errorText,
+	resultText,
+	TASK_ERROR_BYTES,
+	TASK_PATH_BYTES,
+} from "./output.ts";
+import type { TaskRecord } from "./record.ts";
 import type {
 	TaskCompletion,
 	TaskControl,
@@ -23,14 +31,6 @@ export interface ExecutionHost {
 	settle(task: TaskSnapshot, usage: Usage | undefined): void;
 	/** The execution settled and holds no slot, parent listener or caller any more. */
 	released(execution: Execution<unknown>): void;
-}
-
-export function errorText(error: unknown): string {
-	try {
-		return boundText(error instanceof Error ? error.message : String(error), TASK_ERROR_BYTES);
-	} catch {
-		return "Task execution failed (unprintable error)";
-	}
 }
 
 function prependText(text: string, result: TaskText | undefined): TaskText {
@@ -72,6 +72,8 @@ export class Execution<T> {
 	private accepted = false;
 	private handedOff = false;
 	private detachRequested: boolean;
+	/** The executor's `run` promise once started. */
+	private running?: Promise<TaskCompletion<T>>;
 
 	constructor(host: ExecutionHost, record: TaskRecord, execution: TaskExecution<T>) {
 		this.host = host;
@@ -112,7 +114,7 @@ export class Execution<T> {
 		};
 	}
 
-	get task(): TaskSnapshot {
+	get task(): Readonly<TaskSnapshot> {
 		return this.record.task;
 	}
 
@@ -148,11 +150,13 @@ export class Execution<T> {
 			return;
 		}
 		this.started = true;
-		this.task.status = "running";
-		changed(this.record);
+		this.record.update((task) => {
+			task.status = "running";
+		});
 		// The rejection handler is installed immediately, including for synchronous preflight throws.
 		try {
-			void Promise.resolve(this.run(this.control)).then(
+			this.running = Promise.resolve(this.run(this.control));
+			void this.running.then(
 				(completion) => this.finish(completion),
 				(error: unknown) => this.finish(undefined, error),
 			);
@@ -173,17 +177,19 @@ export class Execution<T> {
 		)
 			return;
 		this.handedOff = true;
-		this.task.mode = "background";
-		changed(this.record);
+		this.record.update((task) => {
+			task.mode = "background";
+		});
 		this.releaseParent();
-		this.resolveCaller({ kind: "background", task: snapshotOf(this.record) });
+		this.resolveCaller({ kind: "background", task: this.record.snapshot() });
 		this.host.emit();
 	}
 
 	requestDetach(): void {
 		this.detachRequested = true;
-		this.task.mode = "background";
-		changed(this.record);
+		this.record.update((task) => {
+			task.mode = "background";
+		});
 		if (this.accepted) this.releaseParent();
 	}
 
@@ -200,8 +206,9 @@ export class Execution<T> {
 
 	cancel(): boolean {
 		if (this.record.settled || this.aborted) return false;
-		this.task.status = "stopping";
-		changed(this.record);
+		this.record.update((task) => {
+			task.status = "stopping";
+		});
 		this.controller.abort();
 		if (!this.started) this.finish(undefined, new Error("Task cancelled before it started."));
 		this.host.emit();
@@ -220,16 +227,34 @@ export class Execution<T> {
 		if (this.record.settled || this.accepted || this.host.closed || this.aborted) return;
 		this.accepted = true;
 		if (this.detachRequested) this.releaseParent();
-		// Let an already available final result win over a handoff.
-		queueMicrotask(() => queueMicrotask(() => this.handoff()));
+		// An already available final result wins over a handoff, so decide only once the
+		// executor's own synchronous code has yielded.
+		queueMicrotask(() => this.handoffIfRunning());
 		this.host.emit();
+	}
+
+	/**
+	 * Hand off unless `run` has already settled. A reaction on an already settled promise is
+	 * queued at once, ahead of the pending-check below whatever the promise's chain depth, so
+	 * the outcome never depends on how `start()` chains its own handlers.
+	 */
+	private handoffIfRunning(): void {
+		let settled = false;
+		const markSettled = () => {
+			settled = true;
+		};
+		this.running?.then(markSettled, markSettled);
+		void Promise.resolve().then(() => {
+			if (!settled) this.handoff();
+		});
 	}
 
 	private publish(update: TaskUpdate<T>): void {
 		if (this.record.settled || this.host.closed) return;
-		this.task.result = resultText(update.result);
-		if (update.display !== undefined) this.task.display = boundTaskText(update.display);
-		changed(this.record);
+		this.record.update((task) => {
+			task.result = resultText(update.result);
+			if (update.display !== undefined) task.display = boundTaskText(update.display);
+		});
 		if (update.usage !== undefined) this.usage = structuredClone(update.usage);
 		if (!this.detachRequested && !this.handedOff) {
 			try {
@@ -250,54 +275,58 @@ export class Execution<T> {
 		// Never truncate a real filesystem path into a different path.
 		if (Buffer.byteLength(path) > TASK_PATH_BYTES) throw new Error("Task output path is too large");
 		this.record.cleanup = cleanup;
-		this.task.outputPath = path;
-		changed(this.record);
+		this.record.update((task) => {
+			task.outputPath = path;
+		});
 		this.host.emit();
 	}
 
 	private finish(completion: TaskCompletion<T> | undefined, error?: unknown): void {
 		const record = this.record;
-		const task = this.task;
 		if (record.settled) return;
 		record.settled = true;
 		this.modeListeners.clear();
 		this.releaseParent();
-		task.endedAt = Date.now();
 		const status: TaskTerminalStatus = completion
 			? (completion.status ?? (this.aborted ? "cancelled" : "completed"))
 			: this.aborted
 				? "cancelled"
 				: "failed";
-		task.status = status;
-		if (completion) {
-			task.result = resultText(completion.result);
-			if (completion.display !== undefined) task.display = boundTaskText(completion.display);
-			if (completion.error !== undefined) task.error = boundText(completion.error, TASK_ERROR_BYTES);
-			if (completion.facts) task.facts = mergeFacts(task.facts, completion.facts);
-		} else {
-			task.error = errorText(error);
-			task.result = prependText(task.error, task.result);
-		}
-		changed(record);
+		record.update((task) => {
+			task.endedAt = Date.now();
+			task.status = status;
+			if (completion) {
+				task.result = resultText(completion.result);
+				if (completion.display !== undefined) task.display = boundTaskText(completion.display);
+				if (completion.error !== undefined) task.error = boundText(completion.error, TASK_ERROR_BYTES);
+				if (completion.facts) task.facts = mergeFacts(task.facts, completion.facts);
+			} else {
+				task.error = errorText(error);
+				task.result = prependText(task.error, task.result);
+			}
+		});
 		let warning: string | undefined;
 		try {
-			this.host.settle(snapshotOf(record), completion?.usage ?? completion?.result.usage ?? this.usage);
+			this.host.settle(record.snapshot(), completion?.usage ?? completion?.result.usage ?? this.usage);
 		} catch (accountingError) {
-			warning = `Usage settlement failed: ${errorText(accountingError)}`;
-			task.error = boundText([task.error, warning].filter(Boolean).join("\n"), 2 * TASK_ERROR_BYTES);
-			task.result = prependText(warning, task.result);
-			changed(record);
+			const notice = `Usage settlement failed: ${errorText(accountingError)}`;
+			warning = notice;
+			record.update((task) => {
+				task.error = boundText([task.error, notice].filter(Boolean).join("\n"), 2 * TASK_ERROR_BYTES);
+				task.result = prependText(notice, task.result);
+			});
 		}
 		this.usage = undefined;
 		// Delivery becomes eligible only after settlement is persisted.
-		record.delivery = this.handedOff ? "pending" : "delivered";
+		if (this.handedOff) record.queueDelivery();
+		else record.acknowledge();
 		if (!this.handedOff) {
 			if (!completion) this.rejectCaller(error);
 			else {
 				// The task ledger owns usage; a tool result never carries it a second time.
 				const { usage: _usage, ...result } = completion.result;
 				if (warning) result.content = [{ type: "text", text: warning }, ...result.content];
-				this.resolveCaller({ kind: "result", result, status, error: task.error });
+				this.resolveCaller({ kind: "result", result, status, error: record.task.error });
 			}
 		}
 		for (const waiter of [...record.waiters]) waiter();

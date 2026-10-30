@@ -14,6 +14,7 @@ export type {
 	TaskMode,
 	TaskOutputKind,
 	TaskRead,
+	TaskReadOptions,
 	TaskSnapshot,
 	TaskStatus,
 	TasksContext,

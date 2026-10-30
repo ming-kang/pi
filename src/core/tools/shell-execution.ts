@@ -10,18 +10,19 @@ import { formatSize } from "./truncate.ts";
 
 export const MAX_BACKGROUND_OUTPUT_BYTES = 20 * 1024 * 1024;
 
-export interface ManagedShellExecution {
-	control: TaskControl<BashToolDetails | undefined>;
-}
-
 interface ShellExecutionOptions {
 	operations: BashOperations;
 	context: BashSpawnContext;
 	tempFilePrefix: string;
 	timeout?: number;
-	signal?: AbortSignal;
-	onUpdate?: (result: AgentToolResult<BashToolDetails | undefined>) => void;
-	managed?: ManagedShellExecution;
+	/** The task this command runs as; its signal cancels the process. */
+	control: TaskControl<BashToolDetails | undefined>;
+	/**
+	 * The command belongs to a session task, which may leave the foreground: its output log is
+	 * created and attached to the task from the first byte, and a final snapshot is always
+	 * published. Otherwise the log is created only if output is truncated.
+	 */
+	taskLog: boolean;
 }
 
 interface ShellFailure {
@@ -40,12 +41,12 @@ function shellFailure(error: unknown): ShellFailure {
 function formatOutput(
 	output: OutputAccumulator,
 	snapshot: OutputSnapshot,
-	managed: boolean,
+	taskLog: boolean,
 	emptyText: string,
 ): { text: string; details: BashToolDetails | undefined } {
 	const truncation = snapshot.truncation;
 	let text = snapshot.content || emptyText;
-	let details: BashToolDetails | undefined = managed ? { fullOutputPath: snapshot.fullOutputPath } : undefined;
+	let details: BashToolDetails | undefined = taskLog ? { fullOutputPath: snapshot.fullOutputPath } : undefined;
 	if (truncation.truncated) {
 		details = { truncation, fullOutputPath: snapshot.fullOutputPath };
 		const startLine = truncation.totalLines - truncation.outputLines + 1;
@@ -66,8 +67,9 @@ function formatOutput(
 export async function runShellCommand(
 	options: ShellExecutionOptions,
 ): Promise<TaskCompletion<BashToolDetails | undefined>> {
-	const { operations, context, managed, signal, timeout } = options;
-	const output = new OutputAccumulator({ tempFilePrefix: options.tempFilePrefix, persistFromStart: !!managed });
+	const { operations, context, control, taskLog, timeout } = options;
+	const signal = control.signal;
+	const output = new OutputAccumulator({ tempFilePrefix: options.tempFilePrefix, persistFromStart: taskLog });
 	const startedAt = performance.now();
 	let outputError: Error | undefined;
 	let acceptingOutput = true;
@@ -80,20 +82,20 @@ export async function runShellCommand(
 		if (outputError) return;
 		outputError = error instanceof Error ? error : new Error(String(error));
 		try {
-			if (managed) managed.control.cancel();
+			control.cancel();
 		} catch {
 			// Late data must not throw through a process observer.
 		}
 	};
 	const checkOutputLimit = () => {
-		if (managed?.control.mode === "background" && output.getTotalBytes() > MAX_BACKGROUND_OUTPUT_BYTES) {
+		if (control.mode === "background" && output.getTotalBytes() > MAX_BACKGROUND_OUTPUT_BYTES) {
 			failOutput(new Error("Background command exceeded the 20 MiB output limit"));
 		}
 	};
 	const snapshot = () =>
 		output.snapshot({
 			persistIfTruncated: true,
-			maxBytes: managed?.control.mode === "background" ? 40 * 1024 : undefined,
+			maxBytes: control.mode === "background" ? 40 * 1024 : undefined,
 		});
 	const publish = (snapshot?: OutputSnapshot) => {
 		const result: AgentToolResult<BashToolDetails | undefined> = {
@@ -105,11 +107,10 @@ export async function runShellCommand(
 					}
 				: undefined,
 		};
-		if (managed) managed.control.publish({ result });
-		else options.onUpdate?.(result);
+		control.publish({ result });
 	};
 	const emitOutputUpdate = () => {
-		if ((!managed && !options.onUpdate) || !updateDirty) return;
+		if (!updateDirty) return;
 		updateDirty = false;
 		lastUpdateAt = Date.now();
 		publish(snapshot());
@@ -119,7 +120,6 @@ export async function runShellCommand(
 		updateTimer = undefined;
 	};
 	const scheduleOutputUpdate = () => {
-		if (!managed && !options.onUpdate) return;
 		updateDirty = true;
 		const delay = BASH_UPDATE_THROTTLE_MS - (Date.now() - lastUpdateAt);
 		if (delay <= 0) {
@@ -135,23 +135,19 @@ export async function runShellCommand(
 	const handleData = (data: Buffer) => {
 		if (!acceptingOutput || outputError) return;
 		try {
-			if (
-				managed?.control.mode === "background" &&
-				output.getTotalBytes() + data.length > MAX_BACKGROUND_OUTPUT_BYTES
-			) {
+			if (control.mode === "background" && output.getTotalBytes() + data.length > MAX_BACKGROUND_OUTPUT_BYTES) {
 				const remaining = Math.max(0, MAX_BACKGROUND_OUTPUT_BYTES - output.getTotalBytes());
 				output.append(data.subarray(0, remaining));
 				failOutput(new Error("Background command exceeded the 20 MiB output limit"));
 			} else output.append(data);
 			scheduleOutputUpdate();
 		} catch (error) {
-			if (!managed) throw error;
 			failOutput(error);
 		}
 	};
 
 	try {
-		if (managed) {
+		if (taskLog) {
 			const path = output.snapshot().fullOutputPath!;
 			const cleanup = async () => {
 				await output.closeTempFile();
@@ -160,14 +156,14 @@ export async function runShellCommand(
 				});
 			};
 			try {
-				managed.control.attachOutput(path, cleanup);
+				control.attachOutput(path, cleanup);
 			} catch (error) {
 				await cleanup();
 				throw error;
 			}
-			// Detach must check a silent foreground log too, preserving bytes already written.
-			unsubscribe = managed.control.onModeChange(checkOutputLimit);
 		}
+		// Detach must check a silent foreground log too, preserving bytes already written.
+		unsubscribe = control.onModeChange(checkOutputLimit);
 		publish();
 		let failure: ShellFailure | undefined;
 		let exitCode: number | null | undefined;
@@ -179,7 +175,7 @@ export async function runShellCommand(
 				timeout,
 				env: context.env,
 			});
-			managed?.control.accept();
+			control.accept();
 			({ exitCode } = await execution);
 			if (exitCode === null) {
 				failure = { status: "failed", error: "Command terminated without an exit code" };
@@ -192,14 +188,14 @@ export async function runShellCommand(
 		acceptingOutput = false;
 		output.finish();
 		clearUpdateTimer();
-		if (managed) publish(snapshot());
+		if (taskLog) publish(snapshot());
 		else emitOutputUpdate();
 		const final = snapshot();
 		await output.closeTempFile();
 		// Final progress/cleanup can re-enter handoff. Classify policy cancellation
 		// after those callbacks, independently of the process's abort marker.
 		if (outputError) failure = { status: "failed", error: boundText(outputError.message, 4096) };
-		const { text, details } = formatOutput(output, final, !!managed, failure ? "" : "(no output)");
+		const { text, details } = formatOutput(output, final, taskLog, failure ? "" : "(no output)");
 		const fullOutput =
 			typeof exitCode === "number" && !outputError ? await output.readFullOutput(1024 * 1024) : undefined;
 		return {

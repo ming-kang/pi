@@ -2,10 +2,11 @@
 
 import { type Component, Container, Text, TruncatedText } from "@earendil-works/pi-tui";
 import type { AgentToolResult, ToolRenderContext, ToolRenderResultOptions } from "../../../core/extensions/types.ts";
-import { formatDuration } from "../../../core/tasks/format.ts";
+import { clampWaitMs } from "../../../core/tasks/limits.ts";
 import { formatSize } from "../../../core/tools/truncate.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
-import { clampWaitMs, type TasksInput } from "../tool/schema.ts";
+import { formatDuration } from "../../../utils/duration.ts";
+import type { TasksInput } from "../tool/schema.ts";
 import type { TasksDetails } from "../tool/types.ts";
 import { statusColor, statusGlyph, statusName } from "./task-view.ts";
 import { fileNameOf } from "./text.ts";

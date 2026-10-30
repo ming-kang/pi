@@ -9,16 +9,10 @@
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
-import { formatDuration } from "../../../core/tasks/format.ts";
-import { TASK_RESULT_BYTES } from "../../../core/tasks/output.ts";
+import { TASKS_WAIT_DEFAULT_MS, TASKS_WAIT_MAX_MS } from "../../../core/tasks/limits.ts";
+import { TASK_READ_BYTES, TASK_RESULT_BYTES } from "../../../core/tasks/output.ts";
 import { formatSize } from "../../../core/tools/truncate.ts";
-import {
-	TASKS_LOGS_DEFAULT_BYTES,
-	TASKS_LOGS_MIN_BYTES,
-	TASKS_WAIT_DEFAULT_MS,
-	TASKS_WAIT_MAX_MS,
-	TASKS_WAIT_MIN_MS,
-} from "./constants.ts";
+import { formatDuration } from "../../../utils/duration.ts";
 
 export const tasksSchema = Type.Object({
 	action: StringEnum(["read", "wait", "kill", "list"] as const, {
@@ -38,7 +32,7 @@ export const tasksSchema = Type.Object({
 	),
 	bytes: Type.Optional(
 		Type.Number({
-			description: `Max bytes to return (read, default ${formatSize(TASKS_LOGS_DEFAULT_BYTES)}, max ${formatSize(TASK_RESULT_BYTES)})`,
+			description: `Max bytes to return (read, default ${formatSize(TASK_READ_BYTES)}, max ${formatSize(TASK_RESULT_BYTES)})`,
 		}),
 	),
 	// — wait —
@@ -69,17 +63,6 @@ export function requireTaskId(input: TasksInput): string {
 		throw new Error(`action '${input.action}' requires 'taskId' — use action list to find the execution id.`);
 	}
 	return taskId;
-}
-
-export function clampReadBytes(bytes: number | undefined): number {
-	const value = bytes !== undefined && Number.isFinite(bytes) ? bytes : TASKS_LOGS_DEFAULT_BYTES;
-	return Math.min(TASK_RESULT_BYTES, Math.max(TASKS_LOGS_MIN_BYTES, Math.floor(value)));
-}
-
-/** Shared with the pending-call renderer so the window it shows is the one that runs. */
-export function clampWaitMs(waitMs: number | undefined): number {
-	const value = waitMs !== undefined && Number.isFinite(waitMs) ? waitMs : TASKS_WAIT_DEFAULT_MS;
-	return Math.min(TASKS_WAIT_MAX_MS, Math.max(TASKS_WAIT_MIN_MS, Math.floor(value)));
 }
 
 export function clampSinceBytes(sinceBytes: number | undefined): number | undefined {

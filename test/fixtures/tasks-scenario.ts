@@ -23,7 +23,7 @@ export async function startTasksScenario(tasks: TasksContext, cwd: string) {
 			kind: "bash", label: "Bash", title: name, input: { label: "Command", text: command, truncated: false, language: "bash" }, facts: [["Directory", directory]], toolCallId: `fixture-${name}`, background,
 			run(control) {
 				id = control.id;
-				return runShellCommand({ operations: createLocalBashOperations(), context: { command, cwd: directory, env: { ...process.env, TASK_SCENARIO_PROJECT: cwd } }, tempFilePrefix: "pi-tasks-scenario", signal: control.signal, timeout: 600, managed: { control } });
+				return runShellCommand({ operations: createLocalBashOperations(), context: { command, cwd: directory, env: { ...process.env, TASK_SCENARIO_PROJECT: cwd } }, tempFilePrefix: "pi-tasks-scenario", timeout: 600, control, taskLog: true });
 			},
 		});
 		outcomes.push(caller.catch(error => errors.push(String(error))));
