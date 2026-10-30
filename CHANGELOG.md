@@ -6,11 +6,15 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Added
 
-- Agent workers can push explicit `contact_supervisor` messages to the parent, and `tasks steer` queues guidance with an active Agent through the existing Tasks delivery and steering boundaries.
+- Agent workers can push explicit `message_parent` messages to the parent session, and `tasks steer` delivers guidance to an active Agent through the existing Tasks delivery and steering boundaries. Steering now reports whether the worker actually took it, and is declined while an Agent is queued or after its last turn has ended.
+- Task executors can declare a concurrency lane (`{ key, limit }`). Work beyond the limit waits as a visible queued task that can be moved to the background or cancelled before it starts; Agent uses a four-slot lane, so a queued background Agent now returns its Task ID immediately instead of blocking the parent.
 
 ### Changed
 
-- Running `tasks read` now returns only an Agent's public assistant Text; `/tasks` Output combines that Text with supervisor messages and compact Tool calls without adding model-facing read options or tool noise.
+- Running `tasks read` now returns only an Agent's public assistant Text; `/tasks` Output combines that Text with parent messages and compact Tool calls without adding model-facing read options or tool noise.
+- **Breaking (extension API):** Task executors now declare their presentation as data: `label`, `input`, `facts`, and an `output` kind of `log` or `report`. These replace `command`, `cwd`, `info`, and `exitCode`. `TaskControl` gains `publish({ result, display?, usage? })`, `attachOutput`, `cancel`, and a `channel` with `send` and a boolean-returning `onSteer`. `TaskExecutionError` and `TaskCompletionSnapshot` are removed. The `/tasks` panel and completion cards render every executor the same way, and the shell reports its exit code as an `Exit` fact.
+- A background Agent's completion now delivers its report from the beginning, whole when it fits the 48 KiB notification budget, as its foreground result would. Previously only an 8 KiB tail reached the model, which could drop the report's summary.
+- Each task settlement now appends one version-3 `task-record` entry holding the terminal snapshot and its usage, replacing the separate `task-result` and `task-usage` entries. Completion message details are `{ version: 3, task }`. Older result records are not restored as history, but usage from released sessions still counts toward session totals.
 
 - Refined `/agent` into a compact, aligned Model/Effort panel with inline inheritance markers, requested-to-effective effort conversions, and an always-visible action that resets both overrides together. Agent now reuses the searchable native model and thinking pickers without changing the parent session or global defaults.
 

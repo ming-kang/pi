@@ -336,46 +336,50 @@ Use `customType` to identify your extension's entries on reload. Interactive mod
 
 ### Background records
 
-Managed execution uses ordinary version-3 custom entries; it does not add a new session-file version or persist live execution handles. Every managed execution — including a foreground one — appends its own bounded terminal snapshot. A foreground snapshot omits `result`: its tool result already holds the output, and restoration reads it from the tool result with the same `toolCallId` on the branch.
+Managed execution uses ordinary version-3 custom entries; it does not add a new session-file version or persist live execution handles. Every managed execution — including a foreground one — appends exactly one record when it settles, holding its bounded terminal snapshot and the usage settled for it. A foreground snapshot omits `result`: its tool result already holds the output, and restoration reads it from the tool result with the same `toolCallId` on the branch.
 
 | `customType` | `data` | Purpose |
 |---|---|---|
-| `task-usage` | `{ version: 1, taskId, usage }` | Independent settlement of provider-reported nested usage |
-| `task-result` | `{ version: 2, task }` | Bounded terminal `TaskSnapshot` |
+| `task-record` | `{ version: 3, task, usage? }` | Bounded terminal `TaskSnapshot` and its settlement of provider-reported nested usage |
 
-`taskId` is the execution/group ID, not a worker display number. `usage` has the `Usage` shape above. Consumers count only the first valid usage record per ID within the entries they aggregate; malformed records, unsupported versions, blank IDs, and non-finite or negative usage/cost values are ignored. A later valid duplicate is not an adjustment. Do not create these host-owned entries yourself or bill again from a result/read/notification.
+`task.id` is the execution ID, not a worker display number. `usage` has the `Usage` shape above and is absent when the executor reported none. Consumers count only the first valid usage settlement per ID within the entries they aggregate; malformed records, unsupported versions, blank IDs, and non-finite or negative usage/cost values are ignored. A later valid duplicate is not an adjustment. Do not create these host-owned entries yourself or bill again from a result/read/notification.
 
-A `TaskSnapshot` has `id`, `kind` (executor-owned source label, such as `bash`, `powershell`, or an extension-defined label), `title`, `toolCallId`, `anchorId`, `mode`, `status`, and numeric millisecond `startedAt`; optional fields include `endedAt`, `command`, `commandTruncated`, `cwd`, `info`, `display`, `exitCode`, `outputPath`, `result`, `resultTruncated`, and `error`. `info` is bounded executor-owned Details text and `display` is bounded human-only Output suffix text; both use `{ text, truncated }` and are display data, not model context. Truncation flags record clipping at the producing/retention boundary. Mode (`foreground` or `background`) is independent of status. Persisted terminal statuses are `completed`, `partial`, `failed`, `cancelled`, or `timeout`; live snapshots can also be `queued`, `running`, or `stopping`.
+A `TaskSnapshot` has `id`, `kind` (executor-owned source label, such as `bash`, `powershell`, or an extension-defined label), `label` (human source name, such as `Bash` or `Agent`), `title`, `output` (`log` or `report`), `toolCallId`, `anchorId`, `mode`, `status`, and numeric millisecond `startedAt`; optional fields include `endedAt`, `input`, `facts`, `display`, `outputPath`, `result`, and `error`. `input` is `{ label, text, truncated, language? }`, what the task was asked to do; `facts` are up to 16 `[label, value]` Details rows, such as `["Exit", "1"]`. `result` is the bounded model-readable text and `display` is bounded human-only Output suffix text; both use `{ text, truncated }`. Only the result, error and facts reach model context. Truncation flags record clipping at the producing/retention boundary. Mode (`foreground` or `background`) is independent of status. Persisted terminal statuses are `completed`, `partial`, `failed`, `cancelled`, or `timeout`; live snapshots can also be `queued`, `running`, or `stopping`.
 
-The retained tool result contains bounded text (up to 48 KiB) and no executor-private details; images are replaced with a text omission marker. Source truncation is explicit; the reader never recognizes truncation by matching output text. `outputPath`, if present, points to an ephemeral executor-owned file which may already have been removed on eviction or runtime shutdown; restored records drop it. Save important output separately.
+The retained result text is bounded (up to 48 KiB) and carries no executor-private details; images are replaced with a text omission marker. Source truncation is explicit; the reader never recognizes truncation by matching output text. `outputPath`, if present, points to an ephemeral executor-owned file which may already have been removed on eviction or runtime shutdown; restored records drop it. Save important output separately.
 
-Terminal history is restored only from the selected branch's valid version-2 result records; older fields such as `format` and `projection` are ignored. Version-1 result records are ignored without migration; their independent usage entries still participate in accounting. This is read-only history: no processes or workers are restarted or reattached, and restoration does not replay usage settlement or completion events. Forks can carry historical entries on their copied path, never live execution handles.
+Terminal history is restored only from the selected branch's valid version-3 records. Released sessions also contain `task-result` records (versions 1 and 2) and separate version-1 `task-usage` entries, `{ version: 1, taskId, usage }`. Those results are ignored without migration, while their usage entries still count toward session totals. This is read-only history: no processes or workers are restarted or reattached, and restoration does not replay usage settlement or completion events. Forks can carry historical entries on their copied path, never live execution handles.
 
-These `custom` entries do not enter model context. An explicit executor message delivered before settlement instead creates `customType: "task-message"` with `details: { version: 1, taskId, kind, title }`; its content contains only the explicit message and source identity. Automatic terminal delivery creates a `custom_message` with `customType: "task-completion"`, `display: true`, and a self-contained `TaskCompletionSnapshot` in `details`. The session formats `content` from the same snapshot, with a total limit of 48 KiB and 2,000 lines, keeping only an 8 KiB output tail for the automatic model turn. Only `content` is sent to the model.
+These `custom` entries do not enter model context. An explicit executor message delivered before settlement instead creates `customType: "task-message"` with `details: { version: 1, taskId, kind, title }`; its content contains only the explicit message and source identity. Automatic terminal delivery creates a `custom_message` with `customType: "task-completion"`, `display: true`, and `{ version: 3, task }` in `details`. The session formats `content` from the same snapshot, with a total limit of 48 KiB and 2,000 lines. A `log` task contributes only an 8 KiB output tail to the automatic model turn; a `report` task contributes its beginning, whole when it fits. Only `content` is sent to the model.
 
-Completion details use one format, `version: 2`, bounded to 120 KiB of serialized JSON including escaping. It has `version`, `kind`, `taskId`, `title`, terminal `status`, numeric millisecond `startedAt` and `endedAt`, and `output: { text, truncated }`, plus optional `error`, `command: { text, truncated }`, `cwd`, `outputPath`, and `exitCode` (a number, or `null` when signal-reaped).
-
-`output` is the end of the final result text, bounded to 40 KiB including JSON escaping for replay and expanded rendering; the smaller model-facing projection does not change this stored field. Source flags survive further clipping. Missing shell metadata is left unspecified. The renderer sanitizes terminal control sequences and applies separate display row limits.
+Completion details are bounded to 120 KiB of serialized JSON including escaping. `task` is the terminal snapshot without `display`. Its `input` is clipped to 8 KiB, and its `result` keeps the end of a log or the beginning of a report, up to 40 KiB for replay and expanded rendering. The smaller model-facing projection does not change these stored fields. Source flags survive further clipping. The renderer sanitizes terminal control sequences and applies separate display row limits.
 
 A shell completion's `details` can look like this:
 
 ```json
 {
-  "version": 2,
-  "taskId": "bash-12345678-abcd-4321-abcd-123456789012",
-  "kind": "bash",
-  "title": "npm run build",
-  "status": "completed",
-  "startedAt": 1733234400000,
-  "endedAt": 1733234405000,
-  "command": { "text": "npm run build", "truncated": false },
-  "cwd": "/project",
-  "outputPath": "/tmp/pi-bash-example.log",
-  "output": { "text": "Build finished", "truncated": false }
+  "version": 3,
+  "task": {
+    "id": "bash-12345678-abcd-4321-abcd-123456789012",
+    "kind": "bash",
+    "label": "Bash",
+    "title": "npm run build",
+    "output": "log",
+    "input": { "label": "Command", "text": "npm run build", "truncated": false, "language": "bash" },
+    "facts": [["Directory", "/project"], ["Exit", "0"]],
+    "toolCallId": "call_1",
+    "anchorId": "a1b2c3d4",
+    "mode": "background",
+    "status": "completed",
+    "startedAt": 1733234400000,
+    "endedAt": 1733234405000,
+    "outputPath": "/tmp/pi-bash-example.log",
+    "result": { "text": "Build finished", "truncated": false }
+  }
 }
 ```
 
-The message carries everything needed for replay after `/reload`, branch navigation, history eviction or restart; rendering does not open the saved log or query a live task. Unsupported or malformed completion details, including version 1, use bounded plain message text. There is no legacy text parser, dual-format reconstruction or migration.
+The message carries everything needed for replay after `/reload`, branch navigation, history eviction or restart; rendering does not open the saved log or query a live task. Unsupported or malformed completion details, including versions 1 and 2, use bounded plain message text. There is no legacy text parser, dual-format reconstruction or migration.
 
 A completion is acknowledged only after its message is persisted. A terminal `tasks wait` binds a host-owned receipt to the tool-call ID. Only persisting that tool result acknowledges delivery, even if its details were rewritten; aborting during an output read cannot consume a notification. Direct `TasksContext.wait()` is observational. Snapshots and repeated reads do not create more usage. Historical extension-owned `background-task` notifications and old `bg create` tool results remain transcript history shown as saved text, not new runnable tasks.
 

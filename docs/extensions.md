@@ -1256,10 +1256,10 @@ Session-bound `TasksContext` supervises native and extension-owned execution. Fo
 
 | Method | Contract |
 |---|---|
-| `execute<T>(execution)` | Returns `{ kind: "result", result, status?, error? }` or `{ kind: "background", task }` |
+| `execute<T>(execution)` | Returns `{ kind: "result", result, status, error? }` or `{ kind: "background", task }` |
 | `list()` / `get(id)` | Bounded, read-only (frozen) retained snapshots; IDs support unique prefixes |
 | `read(id, options?)` | Bounded head, tail, or byte-offset model-readable output; excludes human-only display text |
-| `steer(id, message)` | Queues guidance with an active executor handler; resolves `false` when unsupported, cancelled, or terminal |
+| `steer(id, message)` | Delivers guidance to the executor's steering handler; resolves `true` only when that handler accepted it, and `false` when unsupported, queued, declined, cancelled, or terminal |
 | `wait(id, timeoutMs?, signal?, interruptSignal?)` | Observation only; timeout, cancellation, or `interruptSignal` ends the wait, not execution |
 | `waitAny(timeoutMs?, signal?, interruptSignal?)` | Observes the first task running at call time to settle; returns `undefined` for an empty cohort, timeout, interruption, or closed host. Later tasks are excluded |
 | `kill(id)` | Requests cancellation; `stopping` is not a terminal status |
@@ -1269,18 +1269,36 @@ Session-bound `TasksContext` supervises native and extension-owned execution. Fo
 | `retain(id)` | Returns an idempotent release function protecting retained data, without delaying notifications |
 | `holdDelivery(id)` | Explicitly retains data and delays automatic delivery until released |
 
-`TaskExecution<T>` supplies `kind`, `title`, `toolCallId`, `run(control)`, optional `command`, `cwd`, `info`, `background`, `signal`, and `onUpdate`. Bounded static `info` text appears in the panel's Details tab; Output continues to show published results plus any display suffix. It restores with terminal task history but never enters model context. `kind` is an executor-owned source label matching `[a-z][a-z0-9-]{0,63}`; the runtime never dispatches on it. At most eight background executions run at once; foreground executions are not limited by them. Foreground and background results have separate history quotas.
+`TaskExecution<T>` supplies `kind`, `title`, `toolCallId`, and `run(control)`, plus optional fields:
 
-`run` returns `TaskCompletion<T>`: `{ result, display?, status?, error?, exitCode?, usage? }`. The original tool result is returned to a foreground caller; private `result.details` is not copied into task history. Optional `display` is bounded human-only Output suffix text, excluded from `tasks read`, settled waits, and completion context. Explicit terminal statuses are `completed`, `partial`, `failed`, `cancelled`, and `timeout`. Usage is settled by the host once; managed foreground results omit usage to avoid billing it twice.
+| Field | Contract |
+|---|---|
+| `label` | Human source name for the panel and completion card, such as `Bash` or `Agent`; defaults to `kind` |
+| `output` | `"log"` (default) or `"report"`. A log's outcome is at its end, so a background completion gives the model an 8 KiB tail. A report leads with its conclusion, so it arrives from its beginning, whole when it fits the 48 KiB context budget, as its foreground result would; a completed report renders as Markdown in `/tasks` |
+| `input` | `{ label, text, truncated, language? }`: what the task was asked to do, such as a command or briefing. Shown in Details and the expanded completion card, highlighted when `language` is set |
+| `facts` | Up to 16 labelled `[label, value]` Details rows, such as `["Directory", cwd]` |
+| `concurrency` | `{ key, limit }`: at most `limit` executions sharing `key` run at once. Later ones wait as `queued` tasks and `run` starts when a slot frees |
+| `background`, `signal`, `onUpdate` | Requested handoff, parent cancellation, and foreground progress forwarding |
 
-`TaskControl<T>` exposes `id`, `signal`, `mode`, `accept()`, `publish(result, display?)`, `sendMessage(message)`, `onSteer(listener)`, `setOutputPath(path, cleanup?)`, `onModeChange(listener)`, and `requestCancel()`. `publish` replaces the bounded model-readable result and optionally the human-only Output suffix; `/tasks` combines them, while model reads and completion notifications use only the result. A task with an output path is read from that log instead. `sendMessage` queues an explicit `task-message` through the host's normal delivery and persistence boundaries, returning `false` on backpressure or after settlement. `onSteer` registers the active executor's asynchronous guidance handler and returns an unregister function. Call `accept()` after whole-invocation preflight, before allowing a background handoff. Use the control's signal throughout execution. Parent-call cancellation is disconnected after handoff, while runtime shutdown still cancels the task. Mode subscriptions concern only this task; executors do not need the global registry to observe their own handoff or cancel themselves.
+`kind` is an executor-owned source label matching `[a-z][a-z0-9-]{0,63}`; the runtime never dispatches on it. Presentation is declared data: the panel and completion card render `label`, `input`, `facts`, and `output` the same way for every executor. Input and facts restore with terminal task history; facts also appear in the completion notification. At most eight background executions, queued ones included, are retained as active at once; foreground executions are not limited by them. Foreground and background results have separate history quotas.
 
-Completion messages store a self-contained `TaskCompletionSnapshot`; only their bounded `content` enters model context, with an 8 KiB output tail while replay details retain 40 KiB. Built-in `tasks wait` binds delivery to the actual tool call, and the host confirms it after successful persistence; a settled waitAny binds only its winning task. Ordinary extension reads/waits, including `waitAny`, do not acknowledge delivery, and arbitrary tool-result detail fields cannot acknowledge a task.
+A caller can be handed off to the background while its task is queued, before `run` starts, or after `run` calls `accept()`. A queued task becomes `running` when its `run` starts; cancelling it settles it as `cancelled` without starting it.
+
+`run` returns `TaskCompletion<T>`: `{ result, status?, display?, error?, facts?, usage? }`. The original tool result is returned to a foreground caller; task history keeps only its bounded text. Optional `display` is bounded human-only Output suffix text, excluded from `tasks read`, settled waits, and completion context. Terminal `facts` replace launch facts with the same label, as the shell does with `["Exit", "42"]`. Explicit terminal statuses are `completed`, `partial`, `failed`, `cancelled`, and `timeout`. The host settles usage once, preferring `usage`, then `result.usage`, then the latest published usage; managed foreground results omit usage to avoid billing it twice.
+
+`TaskControl<T>` exposes `id`, `signal`, `mode`, `onModeChange(listener)`, `accept()`, `publish(update)`, `attachOutput(path, cleanup?)`, `cancel()`, and `channel`. `publish({ result, display?, usage? })` replaces the bounded model-readable result and optionally the human-only Output suffix and cumulative usage; `/tasks` combines result and display, while model reads and completion notifications use only the result. A task with an attached output file is read from that file instead. Call `accept()` after whole-invocation preflight, before allowing a background handoff. Use the control's signal throughout execution. Parent-call cancellation is disconnected after handoff, while runtime shutdown still cancels the task. Mode subscriptions concern only this task; executors do not need the global registry to observe their own handoff or cancel themselves.
+
+`channel` is the executor's half of the conversation with its parent session. `channel.send(text)` queues an explicit `task-message` through the host's normal delivery and persistence boundaries, returning `false` on backpressure or after settlement. `channel.onSteer(handler)` registers the steering handler and returns an unregister function. The handler returns `true` only when it actually took the message, for example `false` once a worker can no longer consume input, and `tasks.steer` reports that answer.
+
+Completion messages store `{ version: 3, task }` in `details`, a bounded terminal `TaskSnapshot`; only their bounded `content` enters model context. Built-in `tasks wait` binds delivery to the actual tool call, and the host confirms it after successful persistence; a settled waitAny binds only its winning task. Ordinary extension reads/waits, including `waitAny`, do not acknowledge delivery, and arbitrary tool-result detail fields cannot acknowledge a task.
 
 ```typescript
 const outcome = await ctx.tasks.execute({
   kind: "report-job",
+  label: "Review",
   title: "Inspect project",
+  output: "report",
+  facts: [["Directory", ctx.cwd]],
   toolCallId,
   signal,
   background: params.background,

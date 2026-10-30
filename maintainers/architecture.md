@@ -32,13 +32,19 @@ Tasks splits durable execution from its replaceable management surface. The core
 
 ### Responsibilities
 
-- **Execution & handles (`core/tasks/runtime.ts`):** Admission, cancellation, execution handles, and foreground handoff.
+- **Admission (`core/tasks/runtime.ts`):** Validation, background capacity, waits, reads, and the registry of live executions.
+- **One execution (`core/tasks/execution.ts`):** The life of a single run: start, accept, publish, handoff, cancellation, steering, and settlement. A caller can be handed off while the task is queued or after `accept()`; never between `run` starting and acceptance.
+- **Concurrency lanes (`core/tasks/scheduler.ts`):** Executor-declared `{ key, limit }` lanes. Queued work is a visible task whose `run` starts when a slot frees, so executors need no private gates.
 - **Retention & quotas (`core/tasks/store.ts`):** Retained output files, cleanup, and separate foreground/background history quotas.
 - **Wait policy (`core/tasks/limits.ts`, `format.ts`):** One definition of the 20-second default, 1-second tool floor, and 10-minute ceiling shared by runtime and management; observation timeouts never cancel execution. Compact duration labels omit zero components.
-- **Journaling & delivery (`core/tasks/session.ts`, `delivery.ts`):** Session journal persistence, exactly-once usage accounting, completion delivery, and late-settlement quarantine.
+- **Journaling & delivery (`core/tasks/session.ts`, `delivery.ts`):** Session journal persistence, exactly-once usage accounting, completion delivery, and late-settlement quarantine. Each settlement appends one `task-record` holding the terminal snapshot and its usage.
+- **Persisted shape (`core/tasks/codec.ts`):** The one reader for version-3 snapshots, shared by history restoration, completion details, and usage accounting.
+- **Model projection (`core/tasks/presentation.ts`):** Background completion text. A `log` contributes its tail; a `report` arrives from its beginning, as the foreground result would have.
 - **Session bridge (`TasksContext.session`):** The small public adapter for host-backed wait receipts, steering interruption, and branch-impact queries. Standalone runtimes omit it; consumers never import `TaskSession`.
 - **Managed shell execution (`core/tools/shell-tool.ts`, `shell-execution.ts`):** Wraps upstream shell tools (`bash.ts`, `powershell.ts`) to provide background orchestration without duplicating process-tree handling.
-- **Executor presentation (`core/tasks/types.ts`, `extensions/tasks/ui/views.ts`):** Optional bounded `info` supplies static Details text; published results remain model-readable Output, with an optional human-only `display` suffix for Tool calls or supervisor history. Executors need no custom panel registry or persisted UI components.
+- **Executor presentation (`core/tasks/types.ts`, `extensions/tasks/ui/`):** Executors declare data, not UI: a `label`, an `input` such as a command or prompt, labelled `facts`, and whether their `output` is a log or a report. The panel and completion card render that data identically for every executor and never branch on `kind`. Published results remain model-readable Output, with an optional human-only `display` suffix for Tool calls or parent-message history. Executors need no custom panel registry or persisted UI components.
+- **Executor channel (`TaskControl.channel`):** `send` pushes an explicit `task-message`; `onSteer` handlers answer whether they actually took the guidance, so `tasks steer` never reports delivery to a worker that cannot consume it.
+- **Isolated sessions (`core/isolated-session.ts`):** Builds an in-memory child `AgentSession` from a settings snapshot with no extensions and no background capability. The Agent extension uses it for workers.
 - **Management (`extensions/tasks/`):** The `tasks` tool, `/tasks` command and panel, status/detach behavior, completion renderer, keybindings, keyboard-help section, and tree-navigation confirmation. The extension uses `ExtensionAPI`, `TasksContext`, and shared presentation primitives, never `TaskSession` or `interactive-mode` internals.
 - **Generic UI registries (`core/keybinding-registry.ts`):** Extension-owned configurable bindings, editor-global reservations, and keyboard-help sections; no Tasks-specific entries live in the core binding or help tables.
 
@@ -49,6 +55,7 @@ Tasks splits durable execution from its replaceable management surface. The core
 - **Post-compaction reminders:** Reminders for active tasks are projected into the next request from the live runtime; they are never persisted or allowed to trigger turns independently.
 - **Steering isolation:** User steering interrupts only `tasks wait`, never task execution.
 - **Quota isolation:** Background task volume does not block foreground command execution.
+- **Released records:** Older `task-result` history is ignored without migration, but released `task-usage` entries still count toward usage totals.
 
 ## Upstream-sensitive areas
 
