@@ -2,22 +2,48 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { clampThinkingLevel, getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai/compat";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "../../core/defaults.ts";
 import type { ExtensionCommandContext, ExtensionContext } from "../../core/extensions/types.ts";
+import { truncateHead } from "../../core/tools/truncate.ts";
 import { ModelSelectorComponent } from "../../modes/interactive/components/model-selector.ts";
 import { AGENT_SETTINGS_NAMESPACE, type AgentSettings } from "./types.ts";
 
 type SettingsContext = Pick<ExtensionContext, "getExtensionSettings" | "setExtensionSettings">;
 type ModelContext = Pick<ExtensionContext, "model" | "modelRuntime" | "thinkingLevel">;
 
+interface InspectedAgentSettings extends AgentSettings {
+	invalidModel?: unknown;
+	invalidThinking?: unknown;
+}
+
+function inspectAgentSettings(ctx: Pick<ExtensionContext, "getExtensionSettings">): InspectedAgentSettings {
+	const raw = ctx.getExtensionSettings(AGENT_SETTINGS_NAMESPACE);
+	let model: string | undefined;
+	let invalidModel: unknown;
+	if (raw.model !== undefined) {
+		if (typeof raw.model === "string" && raw.model.includes("/")) {
+			model = raw.model;
+		} else {
+			invalidModel = raw.model;
+		}
+	}
+	let thinking: ThinkingLevel | undefined;
+	let invalidThinking: unknown;
+	if (raw.thinking !== undefined) {
+		if (typeof raw.thinking === "string" && THINKING_LEVEL_OPTIONS.includes(raw.thinking as ThinkingLevel)) {
+			thinking = raw.thinking as ThinkingLevel;
+		} else {
+			invalidThinking = raw.thinking;
+		}
+	}
+	return { model, thinking, invalidModel, invalidThinking };
+}
+
 export function readAgentSettings(ctx: Pick<ExtensionContext, "getExtensionSettings">): AgentSettings {
-	const value = ctx.getExtensionSettings(AGENT_SETTINGS_NAMESPACE);
-	if (value.model !== undefined && (typeof value.model !== "string" || !value.model.includes("/")))
+	const inspection = inspectAgentSettings(ctx);
+	if (inspection.invalidModel !== undefined)
 		throw new Error("Invalid Agent model setting. Choose a model with /agent.");
-	if (
-		value.thinking !== undefined &&
-		(typeof value.thinking !== "string" || !THINKING_LEVEL_OPTIONS.includes(value.thinking as ThinkingLevel))
-	)
+	if (inspection.invalidThinking !== undefined)
 		throw new Error("Invalid Agent thinking setting. Choose a thinking level with /agent.");
-	return { model: value.model as string | undefined, thinking: value.thinking as ThinkingLevel | undefined };
+	return { model: inspection.model, thinking: inspection.thinking };
 }
 
 export function resolveAgentConfiguration(ctx: ModelContext & Pick<ExtensionContext, "getExtensionSettings">): {
@@ -68,6 +94,15 @@ async function selectAgentModel(ctx: ExtensionCommandContext, current: string): 
 	return selected ? `${selected.provider}/${selected.id}` : undefined;
 }
 
+function formatInvalid(value: unknown): string {
+	let text = "";
+	try {
+		text = typeof value === "string" ? value : (JSON.stringify(value) ?? "");
+	} catch {}
+	const label = truncateHead(text, { maxLines: 1, maxBytes: 80 }).content;
+	return label ? `${label} [invalid]` : "[invalid]";
+}
+
 /** Two small native selectors; every confirmed choice affects future Agents only. */
 export async function openAgentSettings(ctx: ExtensionCommandContext): Promise<void> {
 	if (ctx.mode !== "tui") {
@@ -83,49 +118,77 @@ export async function openAgentSettings(ctx: ExtensionCommandContext): Promise<v
 		return;
 	}
 	while (true) {
-		let settings: AgentSettings;
+		let inspection: InspectedAgentSettings;
 		try {
-			settings = readAgentSettings(ctx);
+			inspection = inspectAgentSettings(ctx);
 		} catch (error) {
 			ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 			return;
 		}
-		const modelAvailable = settings.model
-			? ctx.modelRuntime.getAvailableSnapshot().some((model) => `${model.provider}/${model.id}` === settings.model)
-			: true;
-		const modelLabel = settings.model
-			? `${settings.model}${modelAvailable ? "" : " [unavailable]"}`
-			: `Follow current session${ctx.model ? ` (${ctx.model.provider}/${ctx.model.id})` : ""}`;
-		const thinkingLabel =
-			settings.thinking ?? `Follow current session (${ctx.thinkingLevel ?? DEFAULT_THINKING_LEVEL})`;
+		let modelLabel: string;
+		if (inspection.invalidModel !== undefined) {
+			modelLabel = formatInvalid(inspection.invalidModel);
+		} else if (inspection.model) {
+			const modelAvailable = ctx.modelRuntime
+				.getAvailableSnapshot()
+				.some((model) => `${model.provider}/${model.id}` === inspection.model);
+			modelLabel = `${inspection.model}${modelAvailable ? "" : " [unavailable]"}`;
+		} else {
+			modelLabel = `Follow current session${ctx.model ? ` (${ctx.model.provider}/${ctx.model.id})` : ""}`;
+		}
+		let thinkingLabel: string;
+		if (inspection.invalidThinking !== undefined) {
+			thinkingLabel = formatInvalid(inspection.invalidThinking);
+		} else if (inspection.thinking) {
+			thinkingLabel = inspection.thinking;
+		} else {
+			thinkingLabel = `Follow current session (${ctx.thinkingLevel ?? DEFAULT_THINKING_LEVEL})`;
+		}
 		const modelAction = `Model · ${modelLabel}`;
 		const thinkingAction = `Thinking · ${thinkingLabel}`;
-		const followAction = "Reset model to follow current session";
+		const followModelAction = "Reset model to follow current session";
+		const followThinkingAction = "Reset thinking to follow current session";
+		const hasModelOverride = inspection.model !== undefined || inspection.invalidModel !== undefined;
+		const hasThinkingOverride = inspection.thinking !== undefined || inspection.invalidThinking !== undefined;
 		const action = await ctx.ui.select("Agent settings", [
 			modelAction,
 			thinkingAction,
-			...(settings.model ? [followAction] : []),
+			...(hasModelOverride ? [followModelAction] : []),
+			...(hasThinkingOverride ? [followThinkingAction] : []),
 		]);
 		if (!action) return;
 		try {
-			if (action === followAction) {
+			if (action === followModelAction) {
 				await saveAgentSettings(ctx, { model: null });
 				ctx.ui.notify("Agent model: Follow current session", "info");
+			} else if (action === followThinkingAction) {
+				await saveAgentSettings(ctx, { thinking: null });
+				ctx.ui.notify("Agent thinking: Follow current session", "info");
 			} else if (action === modelAction) {
-				const selected = await selectAgentModel(ctx, settings.model ?? "");
-				if (selected === undefined || selected === settings.model) continue;
+				const selected = await selectAgentModel(ctx, inspection.model ?? "");
+				if (selected === undefined || selected === inspection.model) continue;
 				await saveAgentSettings(ctx, { model: selected });
 				ctx.ui.notify(`Agent model: ${selected}`, "info");
 			} else if (action === thinkingAction) {
-				const { model } = resolveAgentConfiguration(ctx);
-				const supported = new Set(getSupportedThinkingLevels(model));
+				let supported: Set<ThinkingLevel> | undefined;
+				if (inspection.model) {
+					const slash = inspection.model.indexOf("/");
+					const model = ctx.modelRuntime.getModel(
+						inspection.model.slice(0, slash),
+						inspection.model.slice(slash + 1),
+					);
+					if (model) supported = new Set(getSupportedThinkingLevels(model));
+				}
+				if (!supported && ctx.model) {
+					supported = new Set(getSupportedThinkingLevels(ctx.model));
+				}
 				const selected = await ctx.ui.select("Agent thinking", [
 					"Follow current session",
-					...THINKING_LEVEL_OPTIONS.filter((level) => supported.has(level)),
+					...THINKING_LEVEL_OPTIONS.filter((level) => !supported || supported.has(level)),
 				]);
 				if (selected === undefined) continue;
 				const thinking = selected === "Follow current session" ? null : (selected as ThinkingLevel);
-				if ((thinking ?? undefined) === settings.thinking) continue;
+				if ((thinking ?? undefined) === inspection.thinking && inspection.invalidThinking === undefined) continue;
 				await saveAgentSettings(ctx, { thinking });
 				ctx.ui.notify(`Agent thinking: ${thinking ?? "Follow current session"}`, "info");
 			}

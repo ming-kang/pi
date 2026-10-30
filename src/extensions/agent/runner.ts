@@ -4,7 +4,7 @@ import { getAgentDir } from "../../config.ts";
 import type { AgentSession } from "../../core/agent-session.ts";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
 import { DefaultResourceLoader } from "../../core/resource-loader.ts";
-import { createAgentSession } from "../../core/sdk.ts";
+import { type CreateAgentSessionOptions, createAgentSession } from "../../core/sdk.ts";
 import { SessionManager } from "../../core/session-manager.ts";
 import { SettingsManager } from "../../core/settings-manager.ts";
 import type { TaskCompletion, TaskControl, TaskTerminalStatus } from "../../core/tasks/types.ts";
@@ -112,6 +112,42 @@ function finalText(report: string, error: string | undefined): string {
 	return error ? boundedAgentText(`${report}\n\nError: ${error}`) : report;
 }
 
+async function prepareWorkerSession(request: AgentRequest, signal: AbortSignal): Promise<CreateAgentSessionOptions> {
+	signal.throwIfAborted();
+	const agentDir = getAgentDir();
+	const source = SettingsManager.create(request.cwd, agentDir, { projectTrusted: request.projectTrusted });
+	const loader = new DefaultResourceLoader({
+		cwd: request.cwd,
+		agentDir,
+		settingsManager: source,
+		noExtensions: true,
+		noSkills: true,
+		noPromptTemplates: true,
+		noThemes: true,
+		systemPromptOverride: workerPrompt,
+	});
+	await loader.reload();
+	signal.throwIfAborted();
+	// Resource discovery can reload its source; execution owns a detached snapshot, never that source.
+	const settingsManager = SettingsManager.inMemory(
+		{ ...source.getGlobalSettings(), cacheWarming: "off" },
+		{ projectTrusted: request.projectTrusted },
+	);
+	settingsManager.applyOverrides(source.getProjectSettings());
+	return {
+		cwd: request.cwd,
+		agentDir,
+		modelRuntime: request.modelRuntime,
+		model: request.model,
+		thinkingLevel: request.thinking,
+		backgroundAllowed: false,
+		resourceLoader: loader,
+		settingsManager,
+		sessionManager: SessionManager.inMemory(request.cwd),
+		tools: AGENT_TOOLS,
+	};
+}
+
 export async function runAgent(
 	control: TaskControl<AgentToolDetails>,
 	request: AgentRequest,
@@ -147,43 +183,18 @@ export async function runAgent(
 	};
 	signal.addEventListener("abort", abort, { once: true });
 	try {
-		const agentDir = getAgentDir();
-		const source = SettingsManager.create(request.cwd, agentDir, { projectTrusted: request.projectTrusted });
-		const settingsManager = SettingsManager.inMemory({ ...source.getGlobalSettings(), cacheWarming: "off" });
-		settingsManager.applyOverrides(source.getProjectSettings());
-		const loader = new DefaultResourceLoader({
-			cwd: request.cwd,
-			agentDir,
-			settingsManager,
-			noExtensions: true,
-			noSkills: true,
-			noPromptTemplates: true,
-			noThemes: true,
-			systemPromptOverride: workerPrompt,
-		});
-		const initializing = (async () => {
-			await loader.reload();
-			signal.throwIfAborted();
-			const created = await createAgentSession({
-				cwd: request.cwd,
-				agentDir,
-				modelRuntime: request.modelRuntime,
-				model: request.model,
-				thinkingLevel: request.thinking,
-				backgroundAllowed: false,
-				resourceLoader: loader,
-				settingsManager,
-				sessionManager: SessionManager.inMemory(request.cwd),
-				tools: AGENT_TOOLS,
-			});
-			if (signal.aborted) {
-				created.session.dispose();
-				signal.throwIfAborted();
-			}
-			return created.session;
-		})();
-		session = await raceWithAbortSignal(initializing, signal);
+		const options = await raceWithAbortSignal(prepareWorkerSession(request, signal), signal);
+		signal.throwIfAborted();
+		// Adopt an actual session before checking cancellation; never race away its cleanup handle.
+		const created = await createAgentSession(options);
+		session = created.session;
+		signal.throwIfAborted();
 		unsubscribe = session.subscribe((event) => {
+			// Cancellation during prompt preflight can precede the run's own abort controller.
+			if (event.type === "agent_start" && signal.aborted) {
+				abort();
+				return;
+			}
 			if (event.type === "message_end" && event.message.role === "assistant") {
 				lastMessage = event.message;
 				if (!seen.has(event.message)) {
@@ -225,7 +236,7 @@ export async function runAgent(
 		});
 		publish();
 		control.accept();
-		if (signal.aborted) abort();
+		signal.throwIfAborted();
 		await session.prompt(request.prompt, { expandPromptTemplates: false });
 		const report = finalAssistantText(session.messages);
 		const status: TaskTerminalStatus =

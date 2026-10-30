@@ -56,7 +56,16 @@ export function normalizeDisplayText(text: string): string {
 }
 
 export function getTextOutput(
-	result: { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> } | undefined,
+	result:
+		| {
+				content: Array<{
+					type: string;
+					text?: string;
+					data?: string;
+					mimeType?: string;
+				}>;
+		  }
+		| undefined,
 	showImages: boolean,
 ): string {
 	if (!result) return "";
@@ -127,41 +136,64 @@ export function formatToolDuration(ms: number): string {
 	return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${remainder}s`;
 }
 
-/** Renderer state of {@link startToolTimer} and {@link toolTimerText}, kept in `ToolRenderContext.state`. */
+const toolTimerLifecycle = Symbol("toolTimerLifecycle");
+
+/** Row-owned clock state shared by the call and result renderers. */
 interface ToolTimerState {
 	startedAt?: number;
 	endedAt?: number;
 	interval?: ReturnType<typeof setInterval>;
+	dispose?: () => void;
+	[toolTimerLifecycle]?: "active" | "disposed";
+}
+
+function stopToolTimer(state: ToolTimerState): void {
+	state.endedAt ??= Date.now();
+	if (state.interval !== undefined) clearInterval(state.interval);
+	state.interval = undefined;
+}
+
+function bindToolTimerDisposal(state: ToolTimerState): void {
+	if (state[toolTimerLifecycle]) return;
+	state[toolTimerLifecycle] = "active";
+	const previousDispose = state.dispose;
+	state.dispose = () => {
+		if (state[toolTimerLifecycle] === "disposed") return;
+		state[toolTimerLifecycle] = "disposed";
+		stopToolTimer(state);
+		previousDispose?.call(state);
+	};
 }
 
 /** Start the row's clock once execution starts. Call from `renderCall`. */
 export function startToolTimer(context: ToolRenderContext<ToolTimerState>): void {
 	const state = context.state;
-	if (context.executionStarted && state.startedAt === undefined) {
+	bindToolTimerDisposal(state);
+	if (context.executionStarted && state.startedAt === undefined && state[toolTimerLifecycle] !== "disposed") {
 		state.startedAt = Date.now();
 		state.endedAt = undefined;
 	}
 }
 
 /**
- * The row's timing line, from `renderResult`: `Elapsed 4.2s` while the result is partial, redrawn
- * every second, and `Took 4.2s` once it is final. Undefined when the row has no start time and no
- * recorded duration.
+ * Return `Elapsed 4.2s` while live or `Took 4.2s` once final. Only a running clock
+ * schedules repaints; settlement, handoff and row disposal stop them.
  */
 export function toolTimerText(context: ToolRenderContext<ToolTimerState>, isPartial: boolean): string | undefined {
 	const state = context.state;
-	if (state.startedAt !== undefined && isPartial && !state.interval) {
+	bindToolTimerDisposal(state);
+	if (!isPartial || context.isError) {
+		stopToolTimer(state);
+	} else if (
+		context.executionStarted &&
+		state.startedAt !== undefined &&
+		state.endedAt === undefined &&
+		state[toolTimerLifecycle] !== "disposed" &&
+		state.interval === undefined
+	) {
 		state.interval = setInterval(() => context.invalidate(), 1000);
 	}
-	if (!isPartial || context.isError) {
-		state.endedAt ??= Date.now();
-		if (state.interval) {
-			clearInterval(state.interval);
-			state.interval = undefined;
-		}
-	}
-	// A final result's recorded duration wins: it is monotonic and survives reloads. The renderer's own clock is the
-	// fallback for live progress and for results stored without one.
+	// A recorded monotonic duration survives reloads; the local clock is only the live/legacy fallback.
 	if (!isPartial && context.durationMs !== undefined) return `Took ${formatToolDuration(context.durationMs)}`;
 	if (state.startedAt === undefined) return undefined;
 	const endTime = state.endedAt ?? Date.now();

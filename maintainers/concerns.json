@@ -172,6 +172,7 @@
 			"tests": [
 				"test/agent-session-background.test.ts",
 				"test/agent-session-background-lifecycle.test.ts",
+				"test/agent-extension.test.ts",
 				"test/agent-session-stats.test.ts",
 				"test/bash-background.test.ts",
 				"test/footer-width.test.ts",
@@ -265,6 +266,10 @@
 					"rewrite": "Built-in renderer semantics remain distribution-owned; the separate TUI shell supplies marker and rail framing rather than a background Box."
 				},
 				{
+					"path": "src/core/tools/render-utils.ts",
+					"rewrite": "The shared row clock owns idempotent disposal and stops repainting on settlement or handoff, including late renders of disposed rows."
+				},
+				{
 					"path": "src/core/extensions/index.ts"
 				},
 				{
@@ -286,6 +291,7 @@
 				}
 			],
 			"tests": [
+				"test/agent-render.test.ts",
 				"test/bash-tool-rendering.test.ts",
 				"test/built-in-extensions.test.ts",
 				"test/edit-tool-no-full-redraw.test.ts",

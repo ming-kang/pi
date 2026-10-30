@@ -11,6 +11,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Fixed
 
+- Agent startup now preserves project trust and trusted project execution settings. Cancellation during initialization or prompt preflight stops the worker before it can make model requests or file changes.
+- Agent Transcript rows reserve room for status and `/tasks` guidance before truncating long labels, and their repaint clocks stop on handoff or disposal. `/agent` can repair malformed model and thinking fields without losing unrelated settings.
 - Codemode's `searchTools()` now indexes namespace instructions consistently with `tool_search`. CLI built-ins and SDK factories share the upstream search implementation instead of maintaining a separate copy.
 
 ## [1.4.4] - 2026-10-28

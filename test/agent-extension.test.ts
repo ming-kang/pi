@@ -1,7 +1,8 @@
-import { writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as sdk from "../src/core/sdk.ts";
 import { createAgentTool } from "../src/extensions/agent/index.ts";
 import { AgentGate } from "../src/extensions/agent/runner.ts";
 import { createHarness, getMessageText, type Harness } from "./suite/harness.ts";
@@ -52,6 +53,146 @@ describe("Agent delegation", () => {
 				.getEntries()
 				.filter((entry) => entry.type === "custom" && entry.customType === "task-usage"),
 		).toHaveLength(1);
+	});
+
+	it("honors declined project trust without dropping repository instructions", async () => {
+		harness = await createHarness();
+		harness.settingsManager.setProjectTrusted(false);
+		const piDir = join(harness.tempDir, ".pi");
+		mkdirSync(piDir);
+		writeFileSync(join(piDir, "SYSTEM.md"), "UNTRUSTED_SYSTEM_PROMPT");
+		writeFileSync(join(piDir, "APPEND_SYSTEM.md"), "UNTRUSTED_APPEND_PROMPT");
+		writeFileSync(join(harness.tempDir, "AGENTS.md"), "REPOSITORY_INSTRUCTIONS");
+		writeFileSync(join(piDir, "settings.json"), JSON.stringify({ httpIdleTimeoutMs: 12345, transport: "sse" }));
+		let contextText = "";
+		let requestOptions: unknown;
+		harness.setResponses([
+			(context, options) => {
+				contextText = JSON.stringify(context.messages);
+				requestOptions = options;
+				return fauxAssistantMessage("Report");
+			},
+		]);
+		await createAgentTool().execute(
+			"untrusted",
+			{ prompt: "Inspect the repository" },
+			undefined,
+			undefined,
+			harness.session.extensionRunner.createToolContext("untrusted", undefined),
+		);
+		expect(contextText).toContain("REPOSITORY_INSTRUCTIONS");
+		expect(contextText).not.toContain("UNTRUSTED_SYSTEM_PROMPT");
+		expect(contextText).not.toContain("UNTRUSTED_APPEND_PROMPT");
+		expect(requestOptions).toMatchObject({
+			timeoutMs: harness.settingsManager.getHttpIdleTimeoutMs(),
+			transport: harness.settingsManager.getTransport(),
+		});
+	});
+
+	it("keeps trusted project request settings through worker initialization", async () => {
+		harness = await createHarness();
+		const piDir = join(harness.tempDir, ".pi");
+		mkdirSync(piDir);
+		writeFileSync(
+			join(piDir, "settings.json"),
+			JSON.stringify({ httpIdleTimeoutMs: 12345, transport: "sse", compaction: { enabled: false } }),
+		);
+		let requestOptions: unknown;
+		harness.setResponses([
+			(_context, options) => {
+				requestOptions = options;
+				return fauxAssistantMessage("Report");
+			},
+		]);
+		await createAgentTool().execute(
+			"project-settings",
+			{ prompt: "Inspect the repository" },
+			undefined,
+			undefined,
+			harness.session.extensionRunner.createToolContext("project-settings", undefined),
+		);
+		expect(requestOptions).toMatchObject({ timeoutMs: 12345, transport: "sse" });
+	});
+
+	it("applies trusted project shell settings before building the worker tools", async () => {
+		harness = await createHarness();
+		const piDir = join(harness.tempDir, ".pi");
+		mkdirSync(piDir);
+		writeFileSync(
+			join(piDir, "settings.json"),
+			JSON.stringify({ shellCommandPrefix: 'export AGENT_PROJECT_PREFIX="configured"' }),
+		);
+		let shellOutput = "";
+		harness.setResponses([
+			fauxAssistantMessage(fauxToolCall("bash", { command: 'printf "%s" "$AGENT_PROJECT_PREFIX"' }), {
+				stopReason: "toolUse",
+			}),
+			(context) => {
+				shellOutput = getMessageText(context.messages.findLast((message) => message.role === "toolResult"));
+				return fauxAssistantMessage("Report");
+			},
+		]);
+		await createAgentTool().execute(
+			"shell-settings",
+			{ prompt: "Verify the shell configuration" },
+			undefined,
+			undefined,
+			harness.session.extensionRunner.createToolContext("shell-settings", undefined),
+		);
+		expect(shellOutput).toContain("configured");
+	});
+
+	it.each(["startup update", "prompt preflight"])(
+		"does not request a model or write files after cancellation during %s",
+		async (stage) => {
+			harness = await createHarness();
+			harness.setResponses([
+				fauxAssistantMessage(fauxToolCall("write", { path: "cancelled.txt", content: "Should not be written" }), {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage("Wrote the file"),
+			]);
+			const parent = new AbortController();
+			const result = await createAgentTool().execute(
+				"early-cancel",
+				{ prompt: "Write a file" },
+				parent.signal,
+				() => {
+					if (stage === "startup update") parent.abort();
+					else queueMicrotask(() => parent.abort());
+				},
+				harness.session.extensionRunner.createToolContext("early-cancel", parent.signal),
+			);
+			expect(result.details?.status).toBe("cancelled");
+			expect(harness.session.tasks.list()[0]?.status).toBe("cancelled");
+			expect(harness.faux.state.callCount).toBe(0);
+			expect(existsSync(join(harness.tempDir, "cancelled.txt"))).toBe(false);
+		},
+	);
+
+	it("disposes a child created just before initialization cancellation wins", async () => {
+		harness = await createHarness();
+		const parent = new AbortController();
+		const createSession = sdk.createAgentSession;
+		let child: Harness["session"] | undefined;
+		vi.spyOn(sdk, "createAgentSession").mockImplementation(async (options) => {
+			const created = await createSession(options);
+			child = created.session;
+			queueMicrotask(() => queueMicrotask(() => parent.abort()));
+			return created;
+		});
+		harness.setResponses([fauxAssistantMessage("Should not run")]);
+		const result = await createAgentTool().execute(
+			"initialization-cancel",
+			{ prompt: "Inspect the repository" },
+			parent.signal,
+			undefined,
+			harness.session.extensionRunner.createToolContext("initialization-cancel", parent.signal),
+		);
+		expect(result.details?.status).toBe("cancelled");
+		expect(harness.faux.state.callCount).toBe(0);
+		expect(child).toBeDefined();
+		expect(() => child!.extensionRunner.createContext().getExtensionSettings("agent")).toThrow(/stale/);
 	});
 
 	it("cancels a foreground request and preserves its partial report", async () => {
