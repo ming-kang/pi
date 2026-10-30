@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.4.6] - 2026-10-30
+
 ### Added
 
 - Task executors can declare a concurrency lane (`{ key, limit }`). Work beyond the limit waits as a visible queued task that can be moved to the background or cancelled before it starts; Agent uses a four-slot lane, so a queued background Agent now returns its Task ID immediately instead of blocking the parent.
