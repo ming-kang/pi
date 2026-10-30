@@ -4,6 +4,12 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (extension and SDK API):** `TasksContext.wait()` and `waitAny()` now take an options object and return a typed result. `wait(id, { timeoutMs?, signal?, toolCallId?, read? })` returns `{ outcome, waitedMs, task, read? }`; `waitAny({ timeoutMs?, signal?, toolCallId?, read? })` returns `{ outcome, waitedMs, task?, read?, running }`. `outcome` is `settled`, `timed_out`, `interrupted`, or `closed`, plus `no_tasks` for an empty `waitAny` cohort. The runtime now owns the whole `tasks wait` delivery protocol: it holds delivery before the wait, reads, registers the persisted-result receipt for the given `toolCallId`, and then releases, and it applies steering interruption itself. `interruptSignal` parameters, `TasksContext.holdDelivery()`, `TasksSessionContext.waitInterruptSignal`, and `TasksSessionContext.prepareWait()` are removed; `TasksSessionContext` keeps only `stoppedByTreeNavigation()`. Hosts embedding a `TaskRuntime` can supply `TaskRuntimeOptions.waits` for the same behavior. `holdDelivery()` remains on `TaskRuntime` for host delivery code.
+- **Breaking (SDK):** `TaskRuntime.pause()` is removed; delivery pausing has one owner, `session.pauseTaskNotifications()`. `TaskRuntime.pendingNotifications()` and `claimNotification()` no longer return nothing while delivery is paused.
+- **Breaking (SDK):** `AgentSession.tasksStoppedByTreeNavigation()` is removed; use `session.tasks.session?.stoppedByTreeNavigation(targetId)`.
+
 ## [1.4.6] - 2026-10-30
 
 ### Added

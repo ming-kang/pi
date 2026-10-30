@@ -60,10 +60,6 @@ export class TaskSession {
 		return this._service;
 	}
 
-	get waitInterruptSignal(): AbortSignal {
-		return this.waitInterrupt.signal;
-	}
-
 	/** End only current task waits; the next wait observes a fresh signal. */
 	interruptWaits(): void {
 		const previous = this.waitInterrupt;
@@ -129,16 +125,18 @@ export class TaskSession {
 		const generation = ++this.generation;
 		const sessionId = manager.getSessionId();
 		const sessionFile = manager.getSessionFile();
-		const waitInterruptSignal = () => this.waitInterruptSignal;
+		const interrupts = () => this.waitInterrupt.signal;
 		const service: TaskRuntime = new TaskRuntime({
 			enabled: this.enabled,
 			backgroundAllowed,
 			session: {
-				get waitInterruptSignal() {
-					return waitInterruptSignal();
-				},
-				prepareWait: (toolCallId, taskId) => this.delivery.prepareWait(toolCallId, taskId),
 				stoppedByTreeNavigation: (targetId): TaskSnapshot[] => this.stoppedByTreeNavigation(targetId, service),
+			},
+			waits: {
+				get interruptSignal() {
+					return interrupts();
+				},
+				bind: (toolCallId, taskId) => this.delivery.bindWait(service, toolCallId, taskId),
 			},
 			anchor: () => manager.getLeafId(),
 			onCleanupError: (message) => this.warn("task_cleanup", message),

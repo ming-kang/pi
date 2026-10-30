@@ -182,7 +182,7 @@ describe("terminal history restoration", () => {
 				text: "saved report",
 				readError: expect.stringContaining("expired"),
 			});
-			expect((await bg.wait("bash-new")).status).toBe("cancelled");
+			expect((await bg.wait("bash-new")).task.status).toBe("cancelled");
 			expect(onSettled).not.toHaveBeenCalled();
 			expect(observer).not.toHaveBeenCalled();
 			await bg.execute(job({ run: async () => ({ result: result() }) }).execution);

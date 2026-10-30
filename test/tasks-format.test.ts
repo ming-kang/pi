@@ -49,7 +49,7 @@ describe("task wait limits", () => {
 		});
 		if (outcome.kind !== "background") throw new Error("expected a background handoff");
 		let settled = false;
-		const waiting = runtime.wait(outcome.task.id, 600_001).then(() => {
+		const waiting = runtime.wait(outcome.task.id, { timeoutMs: 600_001 }).then(() => {
 			settled = true;
 		});
 		try {

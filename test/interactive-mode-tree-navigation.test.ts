@@ -26,7 +26,6 @@ function createTreeUI() {
 				ui.session.isStreaming = false;
 			}),
 			abortBranchSummary: vi.fn(),
-			tasksStoppedByTreeNavigation: vi.fn(() => []),
 			navigateTree: vi.fn(async () => {
 				if (ui.session.isCompacting) throw new Error(busyMessage);
 				return { cancelled: false };

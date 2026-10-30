@@ -148,7 +148,6 @@ import {
 } from "./system-prompt.ts";
 import type { TaskRuntime } from "./tasks/runtime.ts";
 import { type QuarantinedTaskSettlement, TaskSession } from "./tasks/session.ts";
-import type { TaskSnapshot } from "./tasks/types.ts";
 import type { BashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createLocalBashOperations } from "./tools/shell-operations.ts";
@@ -569,11 +568,6 @@ export class AgentSession {
 
 	get quarantinedTaskSettlements(): readonly QuarantinedTaskSettlement[] {
 		return this._tasksHost.quarantinedSettlements;
-	}
-
-	/** Running tasks that navigating to `targetId` would cancel, so a host can confirm first. */
-	tasksStoppedByTreeNavigation(targetId: string): TaskSnapshot[] {
-		return this._tasksHost.stoppedByTreeNavigation(targetId);
 	}
 
 	/** Pause delivery across asynchronous lifecycle/preflight gaps. Nestable. */

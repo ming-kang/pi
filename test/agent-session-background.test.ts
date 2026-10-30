@@ -172,7 +172,7 @@ describe("session-owned background host", () => {
 		expect(Buffer.byteLength(String(notification.content))).toBeLessThanOrEqual(48 * 1024);
 		expect(session.tasks.pendingNotifications()).toHaveLength(0);
 		await session.tasks.read(execution.id);
-		await session.tasks.wait(execution.id, 0);
+		await session.tasks.wait(execution.id, { timeoutMs: 0 });
 		expect(
 			session.sessionManager
 				.getEntries()
@@ -395,12 +395,12 @@ describe("session-owned background host", () => {
 		const execution = await task(session);
 		const later = session.sessionManager.appendMessage(userMsg("later"));
 		// Selecting a user message moves the leaf to its parent.
-		expect(session.tasksStoppedByTreeNavigation(later)).toEqual([]);
-		expect(session.tasksStoppedByTreeNavigation(launch).map((task) => task.id)).toEqual([execution.id]);
-		expect(session.tasksStoppedByTreeNavigation(root).map((task) => task.id)).toEqual([execution.id]);
+		expect(session.tasks.session!.stoppedByTreeNavigation(later)).toEqual([]);
+		expect(session.tasks.session!.stoppedByTreeNavigation(launch).map((task) => task.id)).toEqual([execution.id]);
+		expect(session.tasks.session!.stoppedByTreeNavigation(root).map((task) => task.id)).toEqual([execution.id]);
 		execution.finish();
 		await vi.waitFor(() => expect(session.tasks.get(execution.id).status).toBe("completed"));
-		expect(session.tasksStoppedByTreeNavigation(root)).toEqual([]);
+		expect(session.tasks.session!.stoppedByTreeNavigation(root)).toEqual([]);
 	});
 
 	it("caps restored history at the runtime terminal-history limit", async () => {

@@ -109,7 +109,7 @@
 			"paths": [
 				{
 					"path": "src/core/agent-session.ts",
-					"rewrite": "TaskSession owns result and usage persistence; TaskDelivery owns queued completion and tool-call receipts. Lifecycle pauses wrap upstream-shaped Body methods, and TasksContext.session exposes the narrow host bridge used by the management extension."
+					"rewrite": "TaskSession owns result and usage persistence; TaskDelivery owns pausing, queued completion and tool-call receipts. Lifecycle pauses wrap upstream-shaped Body methods, and TasksContext.session exposes only the tree-navigation query used by the management extension."
 				},
 				{
 					"path": "src/core/agent-session-runtime.ts"

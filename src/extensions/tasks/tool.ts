@@ -13,19 +13,13 @@ export function createTasksToolDefinition(): ToolDefinition<typeof tasksSchema, 
 		promptGuidelines: TASKS_PROMPT_GUIDELINES,
 		parameters: tasksSchema,
 		constrainedSampling: { type: "json_schema", strict: "prefer" },
-		async execute(_id, params, signal, _onUpdate, ctx) {
+		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			try {
 				switch (params.action) {
 					case "read":
 						return await runRead(ctx.tasks, params);
 					case "wait":
-						return await runWait(
-							ctx.tasks,
-							params,
-							signal,
-							(taskId) => ctx.tasks.session?.prepareWait(_id, taskId),
-							ctx.tasks.session?.waitInterruptSignal,
-						);
+						return await runWait(ctx.tasks, params, signal, toolCallId);
 					case "kill":
 						return runKill(ctx.tasks, params);
 					case "list":

@@ -360,6 +360,12 @@ export type {
 	TaskText,
 	TaskToolOutcome,
 	TaskUpdate,
+	TaskWaitAnyOptions,
+	TaskWaitAnyResult,
+	TaskWaitHost,
+	TaskWaitOptions,
+	TaskWaitOutcome,
+	TaskWaitResult,
 } from "./core/tasks/types.ts";
 export { type EditDiffResult, generateDiffString, generateUnifiedPatch } from "./core/tools/edit-diff.ts";
 // Tools

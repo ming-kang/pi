@@ -341,21 +341,13 @@ describe("delivery and accounting", () => {
 		expect((await bg.read(item.control.id)).text).toContain("disk full");
 	});
 
-	it("supports nested pause, claims, release and delivered states without pausing execution", async () => {
+	it("supports claims, release and delivered states", async () => {
 		const bg = service();
-		const first = bg.pause();
-		const second = bg.pause();
 		const item = job({ background: true });
 		await bg.execute(item.execution);
 		item.completion.resolve({ result: result() });
 		await tick();
 		expect(bg.get(item.control.id).status).toBe("completed");
-		expect(bg.pendingNotifications()).toEqual([]);
-		expect(bg.claimNotification(item.control.id)).toBe(false);
-		first();
-		first();
-		expect(bg.pendingNotifications()).toEqual([]);
-		second();
 		expect(bg.pendingNotifications()).toHaveLength(1);
 		expect(bg.claimNotification(item.control.id)).toBe(true);
 		expect(bg.claimNotification(item.control.id)).toBe(false);
@@ -373,13 +365,13 @@ describe("delivery and accounting", () => {
 		const item = job({ background: true });
 		await bg.execute(item.execution);
 		const parent = new AbortController();
-		const waiting = bg.wait(item.control.id, 60_000, parent.signal);
+		const waiting = bg.wait(item.control.id, { timeoutMs: 60_000, signal: parent.signal });
 		const candidates: number[] = [];
 		bg.subscribe(() => {
 			candidates.push(bg.pendingNotifications().length);
 		});
 		item.completion.resolve({ result: result() });
-		expect((await waiting).status).toBe("completed");
+		expect((await waiting).task.status).toBe("completed");
 		expect(candidates).toContain(1);
 		expect(bg.pendingNotifications()).toHaveLength(1);
 		bg.markDelivered(item.control.id);
@@ -396,14 +388,14 @@ describe("delivery and accounting", () => {
 			const item = job({ background: true });
 			await bg.execute(item.execution);
 			const parent = new AbortController();
-			const waiting = bg.wait(item.control.id, 100, parent.signal);
+			const waiting = bg.wait(item.control.id, { timeoutMs: 100, signal: parent.signal });
 			if (mode === "abort") {
 				const rejected = expect(waiting).rejects.toThrow("stop waiting");
 				parent.abort(new Error("stop waiting"));
 				await rejected;
 			} else {
 				await vi.advanceTimersByTimeAsync(100);
-				expect((await waiting).status).toBe("running");
+				expect((await waiting).task.status).toBe("running");
 			}
 			expect(item.control.signal.aborted).toBe(false);
 			expect(vi.getTimerCount()).toBe(0);
@@ -568,13 +560,13 @@ describe("bounded lifecycle and snapshots", () => {
 		const bg = service();
 		const item = job({ background: true });
 		await bg.execute(item.execution);
-		const waiter = bg.wait(item.control.id, 60_000);
+		const waiter = bg.wait(item.control.id, { timeoutMs: 60_000 });
 		const listener = vi.fn();
 		bg.subscribe(listener);
 		const shutdown = bg.shutdown(25);
 		expect(bg.enabled).toBe(false);
 		expect(item.control.signal.aborted).toBe(true);
-		expect((await waiter).status).toBe("stopping");
+		expect((await waiter).task.status).toBe("stopping");
 		expect(bg.pendingNotifications()).toEqual([]);
 		await vi.advanceTimersByTimeAsync(25);
 		await shutdown;
@@ -645,16 +637,16 @@ describe("bounded lifecycle and snapshots", () => {
 
 describe("task wait cohorts", () => {
 	it("interrupts one or any wait without cancelling execution or consuming completion", async () => {
-		const bg = service();
+		const interrupt = new AbortController();
+		const bg = service({ waits: { interruptSignal: interrupt.signal, bind: vi.fn() } });
 		const item = job({ background: true });
 		await bg.execute(item.execution);
-		const interrupt = new AbortController();
-		const one = bg.wait(item.control.id, 60_000, undefined, interrupt.signal);
-		const any = bg.waitAny(60_000, undefined, interrupt.signal);
+		const one = bg.wait(item.control.id, { timeoutMs: 60_000 });
+		const any = bg.waitAny({ timeoutMs: 60_000 });
 		expect(getEventListeners(interrupt.signal, "abort")).toHaveLength(2);
 		interrupt.abort();
-		expect((await one).status).toBe("running");
-		expect(await any).toBeUndefined();
+		expect(await one).toMatchObject({ outcome: "interrupted", task: { status: "running" } });
+		expect(await any).toMatchObject({ outcome: "interrupted", running: [{ id: item.control.id }] });
 		expect(getEventListeners(interrupt.signal, "abort")).toHaveLength(0);
 		expect(item.control.signal.aborted).toBe(false);
 		item.completion.resolve({ result: result("finished later") });
@@ -667,9 +659,9 @@ describe("task wait cohorts", () => {
 		const first = job({ background: true, title: "first" });
 		await bg.execute(first.execution);
 		let observed = false;
-		const waiting = bg.waitAny(60_000).then((task) => {
+		const waiting = bg.waitAny({ timeoutMs: 60_000 }).then((wait) => {
 			observed = true;
-			return task;
+			return wait;
 		});
 		const late = job({ background: true, title: "late" });
 		await bg.execute(late.execution);
@@ -677,7 +669,7 @@ describe("task wait cohorts", () => {
 		await tick();
 		expect(observed).toBe(false);
 		first.completion.resolve({ result: result("first") });
-		expect((await waiting)?.id).toBe(first.control.id);
+		expect((await waiting).task?.id).toBe(first.control.id);
 		expect(
 			bg
 				.pendingNotifications()
@@ -754,7 +746,9 @@ describe("handoff and cleanup races", () => {
 		await tick();
 		const abort = new AbortController();
 		abort.abort(new Error("wait cancelled"));
-		await expect(bg.wait(item.control.id, 100, abort.signal)).rejects.toThrow("wait cancelled");
+		await expect(bg.wait(item.control.id, { timeoutMs: 100, signal: abort.signal })).rejects.toThrow(
+			"wait cancelled",
+		);
 		expect(getEventListeners(abort.signal, "abort")).toHaveLength(0);
 		expect(bg.pendingNotifications()).toHaveLength(1);
 	});
@@ -1123,35 +1117,132 @@ describe("watchers and mode changes", () => {
 });
 
 describe("task result persistence receipts", () => {
-	it("acknowledges an explicitly bound wait after persistence, independent of rewritten details", async () => {
+	function sessionHost(deliver = vi.fn(async () => {})) {
 		const host = new TaskSession({
 			manager: SessionManager.inMemory(process.cwd()),
 			canDeliver: () => false,
-			deliver: async () => {},
+			deliver,
 			onEntry: () => {},
 			onError: () => {},
 		});
 		host.setEnabled(true);
+		return host;
+	}
+	async function background(host: TaskSession) {
 		const item = job({ background: true });
 		const submitted = await host.service.execute(item.execution);
 		if (submitted.kind !== "background") throw new Error("Expected handoff");
+		return { item, id: submitted.task.id };
+	}
+	const waitResult = (toolCallId: string, details?: { backgroundTaskId: string }) => ({
+		role: "toolResult" as const,
+		toolCallId,
+		toolName: "tasks",
+		content: [],
+		details,
+		isError: false,
+		timestamp: Date.now(),
+	});
+
+	it("acknowledges an explicitly bound wait after persistence, independent of rewritten details", async () => {
+		const host = sessionHost();
+		const { item, id } = await background(host);
 		item.completion.resolve({ result: result("report") });
-		await host.service.wait(submitted.task.id);
-		const message = {
-			role: "toolResult" as const,
-			toolCallId: "wait",
-			toolName: "tasks",
-			content: [],
-			details: { backgroundTaskId: submitted.task.id },
-			isError: false,
-			timestamp: Date.now(),
-		};
-		host.delivery.messagePersisted(message);
+		const observed = await host.service.wait(id, { toolCallId: "wait", read: { bytes: 1024 } });
+		expect(observed).toMatchObject({ outcome: "settled", read: { text: "report" } });
+		expect(host.service.pendingNotifications()).toHaveLength(0);
+		host.delivery.messagePersisted(waitResult("other", { backgroundTaskId: id }));
+		expect(host.service.pendingNotifications()).toHaveLength(0);
+		host.delivery.messagePersisted(waitResult("wait"));
+		expect(host.service.pendingNotifications()).toHaveLength(0);
+		host.dispose();
+	});
+
+	it("keeps a task settled during the wait out of notifications until the wait result is saved", async () => {
+		const host = sessionHost();
+		const { item, id } = await background(host);
+		const candidates: number[] = [];
+		host.service.subscribe(() => candidates.push(host.service.pendingNotifications().length));
+		const waiting = host.service.wait(id, { toolCallId: "wait", timeoutMs: 60_000 });
+		item.completion.resolve({ result: result("report") });
+		expect((await waiting).outcome).toBe("settled");
+		expect(Math.max(0, ...candidates)).toBe(0);
+		host.delivery.agentEnded();
 		expect(host.service.pendingNotifications()).toHaveLength(1);
-		host.delivery.prepareWait("wait", submitted.task.id);
-		expect(host.service.pendingNotifications()).toHaveLength(0);
-		host.delivery.messagePersisted({ ...message, details: undefined });
-		expect(host.service.pendingNotifications()).toHaveLength(0);
+		host.dispose();
+	});
+
+	it("leaves waits observational without a tool call or a session host", async () => {
+		const host = sessionHost();
+		const { item, id } = await background(host);
+		item.completion.resolve({ result: result("report") });
+		await host.service.wait(id);
+		expect(host.service.pendingNotifications()).toHaveLength(1);
+		await host.service.wait(id, { toolCallId: "wait" }).then(() => host.delivery.agentEnded());
+		expect(host.service.pendingNotifications()).toHaveLength(1);
+		host.dispose();
+
+		const bg = service();
+		const standalone = job({ background: true });
+		await bg.execute(standalone.execution);
+		standalone.completion.resolve({ result: result("report") });
+		await bg.wait(standalone.control.id, { toolCallId: "wait" });
+		expect(bg.pendingNotifications()).toHaveLength(1);
+	});
+
+	it("binds only the waitAny winner and releases the rest of the cohort", async () => {
+		const host = sessionHost();
+		const winner = await background(host);
+		const other = await background(host);
+		const waiting = host.service.waitAny({ toolCallId: "wait", timeoutMs: 60_000 });
+		other.item.completion.resolve({ result: result("other") });
+		await tick();
+		winner.item.completion.resolve({ result: result("winner") });
+		const observed = await waiting;
+		expect(observed.outcome).toBe("settled");
+		const chosen = observed.task!.id;
+		const remaining = chosen === winner.id ? other.id : winner.id;
+		expect(host.service.pendingNotifications().map((task) => task.id)).toEqual([remaining]);
+		host.delivery.messagePersisted(waitResult("wait"));
+		expect(host.service.pendingNotifications().map((task) => task.id)).toEqual([remaining]);
+		host.dispose();
+	});
+
+	it("releases the hold when the wait is aborted before its result is ready", async () => {
+		const host = sessionHost();
+		const { item, id } = await background(host);
+		item.completion.resolve({ result: result("report") });
+		await tick();
+		const abort = new AbortController();
+		const waiting = host.service.wait(id, { toolCallId: "wait", signal: abort.signal, read: { bytes: 1024 } });
+		abort.abort(new Error("stop waiting"));
+		await expect(waiting).rejects.toThrow("stop waiting");
+		expect(host.service.pendingNotifications()).toHaveLength(1);
+		host.dispose();
+	});
+
+	it("pauses delivery in nested scopes owned by the delivery state machine", async () => {
+		const deliver = vi.fn(async () => {});
+		const host = new TaskSession({
+			manager: SessionManager.inMemory(process.cwd()),
+			canDeliver: () => true,
+			deliver,
+			onEntry: () => {},
+			onError: () => {},
+		});
+		host.setEnabled(true);
+		const first = host.delivery.pause();
+		const second = host.delivery.pause();
+		const { item } = await background(host);
+		item.completion.resolve({ result: result("report") });
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		expect(host.service.pendingNotifications()).toHaveLength(1);
+		first();
+		first();
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		expect(deliver).not.toHaveBeenCalled();
+		second();
+		await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
 		host.dispose();
 	});
 });
@@ -1172,7 +1263,7 @@ describe("concurrency lanes", () => {
 		await vi.waitFor(() => expect(second.run).toHaveBeenCalledOnce());
 		expect(bg.get(queued.task.id).status).toBe("running");
 		second.completion.resolve({ result: result("second") });
-		expect((await bg.wait(queued.task.id)).status).toBe("completed");
+		expect((await bg.wait(queued.task.id)).task.status).toBe("completed");
 	});
 
 	it("cancels queued work without starting it and lets a queued foreground caller move", async () => {
@@ -1194,6 +1285,6 @@ describe("concurrency lanes", () => {
 		await runningCall;
 		await vi.waitFor(() => expect(moved.run).toHaveBeenCalledOnce());
 		moved.completion.resolve({ result: result() });
-		expect((await bg.wait(movedTask!.id)).status).toBe("completed");
+		expect((await bg.wait(movedTask!.id)).task.status).toBe("completed");
 	});
 });

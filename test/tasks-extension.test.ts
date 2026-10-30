@@ -17,7 +17,7 @@ import type {
 } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
-import type { TaskControl } from "../src/core/tasks/types.ts";
+import type { TaskControl, TaskRuntimeOptions } from "../src/core/tasks/types.ts";
 import { runKill, runList, runRead, runWait } from "../src/extensions/tasks/tool/actions.ts";
 import type { tasksSchema } from "../src/extensions/tasks/tool/schema.ts";
 import type { TasksDetails } from "../src/extensions/tasks/tool/types.ts";
@@ -49,8 +49,8 @@ afterEach(async () => {
 	for (const service of services.splice(0)) await service.shutdown();
 	vi.useRealTimers();
 });
-function running(kind: "bash" | "custom" = "bash") {
-	const service = new TaskRuntime({ enabled: true });
+function running(kind: "bash" | "custom" = "bash", options: TaskRuntimeOptions = {}) {
+	const service = new TaskRuntime({ enabled: true, ...options });
 	services.push(service);
 	let finish!: () => void;
 	let control!: TaskControl<undefined>;
@@ -130,7 +130,7 @@ describe("public Background management", () => {
 			expect(textOf(runList(h.service))).toContain(kind);
 			expect(textOf(await runRead(h.service, { action: "read", taskId: id }))).toContain("progress");
 			h.finish();
-			await h.service.wait(id, 1000);
+			await h.service.wait(id, { timeoutMs: 1000 });
 			expect(textOf(await runWait(h.service, { action: "wait", taskId: id }))).toContain("final report");
 		}
 	});
@@ -157,7 +157,7 @@ describe("public Background management", () => {
 		await expect(wait).rejects.toThrow();
 		expect(h.control.signal.aborted).toBe(false);
 		h.finish();
-		await h.service.wait(id, 1000);
+		await h.service.wait(id, { timeoutMs: 1000 });
 		expect(textOf(await runRead(h.service, { action: "read", taskId: id }))).toContain("final report");
 	});
 	it("returns no_tasks immediately for waitAny and rejects a cross-task byte offset", async () => {
@@ -170,16 +170,16 @@ describe("public Background management", () => {
 	});
 
 	it("returns steering interruption separately from timeout without consuming the task", async () => {
-		const h = running();
+		const interrupt = new AbortController();
+		const bind = vi.fn();
+		const h = running("bash", { waits: { interruptSignal: interrupt.signal, bind } });
 		await h.outcome;
 		const id = h.service.list()[0]!.id;
-		const interrupt = new AbortController();
-		const ready = vi.fn();
-		const waiting = runWait(h.service, { action: "wait", taskId: id }, undefined, ready, interrupt.signal);
+		const waiting = runWait(h.service, { action: "wait", taskId: id }, undefined, "wait-call");
 		interrupt.abort();
 		const result = await waiting;
 		expect(result.details).toMatchObject({ outcome: "interrupted", taskId: id, status: "running" });
-		expect(ready).not.toHaveBeenCalled();
+		expect(bind).not.toHaveBeenCalled();
 		expect(h.control.signal.aborted).toBe(false);
 		expect(textOf(result)).toContain("the task was not stopped");
 		h.finish();
@@ -277,7 +277,7 @@ describe("public Background management", () => {
 				},
 			});
 			const id = service.list()[index]!.id;
-			await service.wait(id, 1000);
+			await service.wait(id, { timeoutMs: 1000 });
 			ids.push(id);
 			vi.advanceTimersByTime(1000);
 		}
@@ -364,7 +364,7 @@ describe("public Background management", () => {
 		expect(ids).toHaveLength(2);
 		// Settle before leaving the branch: handed-off tasks keep delivery pending,
 		// so trim retains them as invisible records instead of expiring them.
-		await Promise.all(ids.map((id) => service.wait(id, 1000)));
+		await Promise.all(ids.map((id) => service.wait(id, { timeoutMs: 1000 })));
 		await service.cancelOutsideBranch(new Set());
 		expect(service.list()).toHaveLength(0);
 		const message = await runRead(service, { action: "read", taskId: "bash" }).then(
@@ -393,7 +393,7 @@ describe("public Background management", () => {
 				},
 			});
 			const id = service.list()[index]!.id;
-			await service.wait(id, 1000);
+			await service.wait(id, { timeoutMs: 1000 });
 			ids.push(id);
 			vi.advanceTimersByTime(1000);
 		}
@@ -605,7 +605,7 @@ describe("public Background management", () => {
 		expect(updates).toHaveBeenLastCalledWith("background", undefined);
 		const calls = updates.mock.calls.length;
 		h.finish();
-		await h.service.wait(h.service.list()[0]!.id, 1000);
+		await h.service.wait(h.service.list()[0]!.id, { timeoutMs: 1000 });
 		expect(updates).toHaveBeenCalledTimes(calls);
 	});
 
@@ -758,11 +758,11 @@ describe("public Background management", () => {
 			expect(vi.getTimerCount()).toBe(0);
 			mixed.finish();
 			await mixed.outcome;
-			await service.wait(service.list().find((task) => task.toolCallId === "mixed")!.id, 1000);
+			await service.wait(service.list().find((task) => task.toolCallId === "mixed")!.id, { timeoutMs: 1000 });
 			expect(updates).toHaveBeenLastCalledWith("background", `1 background task · /tasks to view · ${hint}`);
 			long.finish();
 			await long.outcome;
-			await service.wait(service.list().find((task) => task.toolCallId === "long")!.id, 1000);
+			await service.wait(service.list().find((task) => task.toolCallId === "long")!.id, { timeoutMs: 1000 });
 			expect(updates).toHaveBeenLastCalledWith("background", hint);
 			service.setEnabled(false);
 			expect(updates).toHaveBeenLastCalledWith("background", undefined);
@@ -853,7 +853,7 @@ describe("public Background management", () => {
 			service.kill(secondId);
 			expect(updates).toHaveBeenLastCalledWith("background", "2 background tasks · /tasks to view");
 			second.finish();
-			await service.wait(secondId, 1000);
+			await service.wait(secondId, { timeoutMs: 1000 });
 			expect(updates).toHaveBeenLastCalledWith("background", "1 background task · /tasks to view");
 			// Finished records remain available without keeping the statusline visible.
 			background.finish();

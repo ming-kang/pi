@@ -1,25 +1,27 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { CustomMessage } from "../messages.ts";
 import { taskCompletionMessage } from "./presentation.ts";
-import type { TaskRuntime } from "./runtime.ts";
-import { isTaskTerminal } from "./types.ts";
+import type { TaskDeliveryLedger } from "./types.ts";
 
 export interface TaskDeliveryOptions {
-	service(): TaskRuntime;
+	service(): TaskDeliveryLedger;
 	canDeliver(): boolean;
 	deliver(message: CustomMessage, waitForPersistence: () => Promise<void>): Promise<void>;
 	warn(event: string, message: string): void;
 }
 interface Delivery {
 	id: string;
-	service: TaskRuntime;
+	service: TaskDeliveryLedger;
 	/** Agent-core preserves message identity; extension rewrites mutate it in place. */
 	message: CustomMessage;
 	phase: "pending" | "started" | "persisted";
 	queued?: { resolve(): void; reject(reason: Error): void };
 }
 
-/** Result delivery is independent of execution handles and retained output. */
+/**
+ * Sole owner of delivery policy: pausing, failure tracking, the in-flight completion and wait
+ * receipts. The runtime only answers per-record questions through TaskDeliveryLedger.
+ */
 export class TaskDelivery {
 	private readonly options: TaskDeliveryOptions;
 	private disposed = false;
@@ -27,11 +29,11 @@ export class TaskDelivery {
 	private timer?: ReturnType<typeof setTimeout>;
 	private delivery?: Delivery;
 	private readonly failures = new Set<string>();
-	private readonly waits = new Map<string, { service: TaskRuntime; taskId: string; release(): void }>();
+	private readonly waits = new Map<string, { service: TaskDeliveryLedger; taskId: string; release(): void }>();
 	constructor(options: TaskDeliveryOptions) {
 		this.options = options;
 	}
-	private get service(): TaskRuntime {
+	private get service(): TaskDeliveryLedger {
 		return this.options.service();
 	}
 	private warn(event: string, message: string): void {
@@ -40,13 +42,11 @@ export class TaskDelivery {
 	/** Nestable across asynchronous preflight and service replacement. */
 	pause(): () => void {
 		this.pauses++;
-		const releaseService = this.service.pause();
 		let released = false;
 		return () => {
 			if (released) return;
 			released = true;
 			this.pauses--;
-			releaseService();
 			this.schedule();
 		};
 	}
@@ -67,7 +67,7 @@ export class TaskDelivery {
 		this.timer.unref?.();
 	}
 
-	private canDeliver(service: TaskRuntime): boolean {
+	private canDeliver(service: TaskDeliveryLedger): boolean {
 		return (
 			!this.disposed && service === this.service && service.enabled && this.pauses === 0 && this.options.canDeliver()
 		);
@@ -152,10 +152,11 @@ export class TaskDelivery {
 		if (message.role === "toolResult") this.acknowledgeWait(message.toolCallId);
 	}
 
-	prepareWait(toolCallId: string, taskId: string): void {
-		const service = this.service;
-		const task = service.get(taskId);
-		if (task.mode !== "background" || !isTaskTerminal(task.status)) return;
+	/**
+	 * A wait observed a settled background task. The runtime still holds it; take over that hold
+	 * until the wait's tool result is persisted, then acknowledge it instead of notifying.
+	 */
+	bindWait(service: TaskDeliveryLedger, toolCallId: string, taskId: string): void {
 		this.waits.get(toolCallId)?.release();
 		this.waits.set(toolCallId, { service, taskId, release: service.holdDelivery(taskId) });
 	}

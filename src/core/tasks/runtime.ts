@@ -17,6 +17,7 @@ import { snapshotOf, type TaskRecord, TaskStore } from "./store.ts";
 import {
 	TASK_BACKGROUND_REJECTION,
 	TASK_KIND_PATTERN,
+	type TaskDeliveryLedger,
 	type TaskExecution,
 	TaskLookupError,
 	type TaskRead,
@@ -24,10 +25,15 @@ import {
 	type TaskSnapshot,
 	type TasksContext,
 	type TaskToolOutcome,
+	type TaskWaitAnyOptions,
+	type TaskWaitAnyResult,
+	type TaskWaitOptions,
+	type TaskWaitOutcome,
+	type TaskWaitResult,
 } from "./types.ts";
 
 /** Session-local supervision. Executors own their processes, items and output files. */
-export class TaskRuntime implements TasksContext {
+export class TaskRuntime implements TasksContext, TaskDeliveryLedger {
 	private readonly store: TaskStore;
 	private readonly executions = new Map<string, Execution<unknown>>();
 	private readonly scheduler = new TaskScheduler();
@@ -39,7 +45,6 @@ export class TaskRuntime implements TasksContext {
 	private readonly options: TaskRuntimeOptions;
 	private configuredEnabled: boolean;
 	private _closed = false;
-	private pauses = 0;
 
 	constructor(options: TaskRuntimeOptions = {}) {
 		this.options = options;
@@ -282,35 +287,76 @@ export class TaskRuntime implements TasksContext {
 		});
 	}
 
-	/** Observe completion without consuming delivery; the host acknowledges only persisted tool results. */
-	async wait(
-		id: string,
-		timeoutMs = TASKS_WAIT_DEFAULT_MS,
-		signal?: AbortSignal,
-		interruptSignal?: AbortSignal,
-	): Promise<TaskSnapshot> {
-		if (signal?.aborted) throw signal.reason ?? new Error("Wait aborted");
-		const record = this.lookup(id);
-		if (record.settled) return snapshotOf(record);
-		await this.waitForRecords([record], timeoutMs, signal, interruptSignal);
-		return snapshotOf(record);
+	/**
+	 * One observation: hold delivery for the observed records, wait, read, then register the
+	 * receipt with the host, and only then release. Nothing the caller does between those steps
+	 * can leak a settled result into an automatic notification or lose it.
+	 */
+	private async observe(
+		records: readonly TaskRecord[],
+		options: TaskWaitOptions,
+		/** Record to read when none settled; a cohort has none. */
+		fallback?: TaskRecord,
+	): Promise<{
+		outcome: TaskWaitOutcome;
+		waitedMs: number;
+		settled?: TaskRecord;
+		running: TaskSnapshot[];
+		read?: TaskRead;
+	}> {
+		const { signal } = options;
+		const releases = records.map((record) => this.holdRecord(record));
+		try {
+			const start = Date.now();
+			const interrupt = this.options.waits?.interruptSignal;
+			await this.waitForRecords(records, options.timeoutMs ?? TASKS_WAIT_DEFAULT_MS, signal, interrupt);
+			const waitedMs = Date.now() - start;
+			const settled = records
+				.filter((record) => record.settled)
+				.sort((left, right) => (left.task.endedAt ?? 0) - (right.task.endedAt ?? 0))[0];
+			const outcome: TaskWaitOutcome = settled
+				? "settled"
+				: this.closed
+					? "closed"
+					: interrupt?.aborted
+						? "interrupted"
+						: "timed_out";
+			const running = records.filter((record) => record.visible && !record.settled).map(snapshotOf);
+			const observed = settled ?? fallback;
+			const read =
+				options.read && observed && outcome !== "interrupted"
+					? await this.read(observed.task.id, options.read)
+					: undefined;
+			signal?.throwIfAborted();
+			if (settled && settled.task.mode === "background" && options.toolCallId)
+				this.options.waits?.bind(options.toolCallId, settled.task.id);
+			return { outcome, waitedMs, settled, running, read };
+		} finally {
+			for (const release of releases) release();
+		}
 	}
 
-	async waitAny(
-		timeoutMs = TASKS_WAIT_DEFAULT_MS,
-		signal?: AbortSignal,
-		interruptSignal?: AbortSignal,
-	): Promise<TaskSnapshot | undefined> {
-		if (signal?.aborted) throw signal.reason ?? new Error("Wait aborted");
+	async wait(id: string, options: TaskWaitOptions = {}): Promise<TaskWaitResult> {
+		if (options.signal?.aborted) throw options.signal.reason ?? new Error("Wait aborted");
+		const record = this.lookup(id);
+		const { outcome, waitedMs, read } = await this.observe([record], options, record);
+		return { outcome, waitedMs, task: snapshotOf(record), ...(read ? { read } : {}) };
+	}
+
+	async waitAny(options: TaskWaitAnyOptions = {}): Promise<TaskWaitAnyResult> {
+		if (options.signal?.aborted) throw options.signal.reason ?? new Error("Wait aborted");
 		const records = [...this.store.records.values()].filter(
 			(record) => record.visible && record.task.mode === "background" && !record.settled,
 		);
-		if (records.length === 0 || interruptSignal?.aborted) return undefined;
-		await this.waitForRecords(records, timeoutMs, signal, interruptSignal);
-		const settled = records
-			.filter((record) => record.settled)
-			.sort((left, right) => (left.task.endedAt ?? 0) - (right.task.endedAt ?? 0))[0];
-		return settled ? snapshotOf(settled) : undefined;
+		if (records.length === 0) return { outcome: "no_tasks", waitedMs: 0, running: [] };
+		const { outcome, waitedMs, settled, running, read } = await this.observe(records, options);
+		return {
+			outcome,
+			waitedMs,
+			running,
+			...(settled ? { task: snapshotOf(settled) } : {}),
+			...(read ? { read } : {}),
+		};
 	}
 
 	kill(id: string): boolean {
@@ -333,7 +379,10 @@ export class TaskRuntime implements TasksContext {
 	 * Retention protects snapshots and logs only. Delivery has its own explicit hold.
 	 */
 	retain(id: string): () => void {
-		const record = this.lookup(id);
+		return this.pin(this.lookup(id));
+	}
+
+	private pin(record: TaskRecord): () => void {
 		record.pins++;
 		let released = false;
 		return () => {
@@ -341,36 +390,29 @@ export class TaskRuntime implements TasksContext {
 			released = true;
 			record.pins--;
 			this.store.trim();
-			if (!this.closed && this.pauses === 0 && this.candidate(record)) this.emit();
+			// Listeners decide whether delivery may proceed; TaskDelivery owns pausing.
+			if (!this.closed && this.candidate(record)) this.emit();
 		};
 	}
 
 	holdDelivery(id: string): () => void {
-		const record = this.lookup(id);
-		const releaseRetention = this.retain(id);
+		return this.holdRecord(this.lookup(id));
+	}
+
+	private holdRecord(record: TaskRecord): () => void {
+		const releasePin = this.pin(record);
 		record.deliveryHolds++;
 		let released = false;
 		return () => {
 			if (released) return;
 			released = true;
 			record.deliveryHolds--;
-			releaseRetention();
-		};
-	}
-
-	pause(): () => void {
-		this.pauses++;
-		let resumed = false;
-		return () => {
-			if (resumed) return;
-			resumed = true;
-			this.pauses--;
-			this.emit();
+			releasePin();
 		};
 	}
 
 	pendingNotifications(): TaskSnapshot[] {
-		if (this.closed || this.pauses > 0) return [];
+		if (this.closed) return [];
 		return [...this.store.records.values()].filter((record) => this.candidate(record)).map(snapshotOf);
 	}
 
@@ -380,7 +422,7 @@ export class TaskRuntime implements TasksContext {
 	}
 
 	claimNotification(id: string): boolean {
-		if (this.closed || this.pauses > 0) return false;
+		if (this.closed) return false;
 		const record = this.store.records.get(id);
 		if (!record || !this.candidate(record)) return false;
 		record.delivery = "claimed";

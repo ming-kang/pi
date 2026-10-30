@@ -130,12 +130,88 @@ export interface TaskRead {
 
 /** Optional host integration for products built on the execution runtime. */
 export interface TasksSessionContext {
-	/** Ends only management-tool waits when new steering arrives. */
-	readonly waitInterruptSignal?: AbortSignal;
-	/** Hold a settled result until the wait's tool result has been persisted. */
-	prepareWait(toolCallId: string, taskId: string): void;
 	/** Running tasks that navigating to `targetId` would cancel on this session branch. */
 	stoppedByTreeNavigation(targetId: string): TaskSnapshot[];
+}
+
+/** How a wait ended. `closed` means the host shut down, so execution state is unconfirmed. */
+export type TaskWaitOutcome = "settled" | "interrupted" | "timed_out" | "closed";
+
+interface TaskObservationOptions {
+	/** Defaults to 20 seconds and is bounded by the runtime. A timeout never cancels execution. */
+	timeoutMs?: number;
+	/** Rejects the wait with the signal's reason; execution continues. */
+	signal?: AbortSignal;
+	/**
+	 * The tool call whose result carries this observation to the model. With a session host, a
+	 * settled background task stays out of automatic notifications until that result is persisted.
+	 * Without it, or in a standalone runtime, the wait is purely observational.
+	 */
+	toolCallId?: string;
+}
+
+export interface TaskWaitOptions extends TaskObservationOptions {
+	/** Read output while delivery is still held; skipped when steering interrupted the wait. */
+	read?: { bytes?: number; sinceBytes?: number };
+}
+
+export interface TaskWaitResult {
+	outcome: TaskWaitOutcome;
+	waitedMs: number;
+	/** The task when the wait ended, before `read` was taken. */
+	task: TaskSnapshot;
+	read?: TaskRead;
+}
+
+export interface TaskWaitAnyOptions extends TaskObservationOptions {
+	/** Read the settled task's output while delivery is still held. */
+	read?: { bytes?: number };
+}
+
+export interface TaskWaitAnyResult {
+	/** `no_tasks`: no background task was running at call time, so nothing was observed. */
+	outcome: TaskWaitOutcome | "no_tasks";
+	waitedMs: number;
+	/** The first cohort member to settle; present only for `settled`. */
+	task?: TaskSnapshot;
+	read?: TaskRead;
+	/** Cohort members still running when the wait ended. */
+	running: TaskSnapshot[];
+}
+
+/**
+ * Host hooks that make waits part of a durable session. TaskSession supplies them; products
+ * embedding a bare TaskRuntime omit them and keep waits observational.
+ */
+export interface TaskWaitHost {
+	/** Current steering signal. Aborting it ends management waits only, never execution. */
+	readonly interruptSignal: AbortSignal;
+	/**
+	 * A wait observed a settled background task and its `toolCallId` is known. Called while the
+	 * runtime still holds delivery; the host takes over until that tool result persists.
+	 */
+	bind(toolCallId: string, taskId: string): void;
+}
+
+/**
+ * What TaskDelivery consumes from the runtime. The runtime keeps only the per-record facts that
+ * retention and admission need (a settled handoff is undelivered, claimed or delivered, and a
+ * record under a hold is never a candidate); pausing, failure tracking, the in-flight delivery
+ * and wait receipts belong to TaskDelivery.
+ */
+export interface TaskDeliveryLedger {
+	readonly enabled: boolean;
+	list(): TaskSnapshot[];
+	/** Settled handoffs eligible for automatic delivery: visible, unclaimed, unobserved and unheld. */
+	pendingNotifications(): TaskSnapshot[];
+	/** Take a pending notification; false when it is no longer a candidate. */
+	claimNotification(id: string): boolean;
+	/** Return a claimed notification to pending after a failed delivery. */
+	releaseNotification(id: string): void;
+	/** Acknowledge a persisted delivery or wait result. */
+	markDelivered(id: string): void;
+	/** Keep a record out of automatic delivery, and its output retained, until released. */
+	holdDelivery(id: string): () => void;
 }
 
 /** Session-bound public capability. Captured instances close on runtime replacement. */
@@ -148,13 +224,18 @@ export interface TasksContext {
 	list(): TaskSnapshot[];
 	get(id: string): TaskSnapshot;
 	read(id: string, options?: { mode?: "head" | "tail"; bytes?: number; sinceBytes?: number }): Promise<TaskRead>;
-	/** Observation only: terminal delivery is acknowledged by the host via markDelivered after result persistence. */
-	wait(id: string, timeoutMs?: number, signal?: AbortSignal, interruptSignal?: AbortSignal): Promise<TaskSnapshot>;
 	/**
-	 * Observe the first task running at call time to settle. Returns undefined when there is
-	 * no such task, the window ends, or interruptSignal fires. Tasks started later are excluded.
+	 * Observe one task. With `toolCallId` in a session host, the whole observation (wait, read,
+	 * receipt) is atomic with respect to automatic delivery; a standalone runtime never
+	 * acknowledges delivery. Rejects with `TaskLookupError` for an unknown or ambiguous id.
 	 */
-	waitAny(timeoutMs?: number, signal?: AbortSignal, interruptSignal?: AbortSignal): Promise<TaskSnapshot | undefined>;
+	wait(id: string, options?: TaskWaitOptions): Promise<TaskWaitResult>;
+	/**
+	 * Observe the first task running at call time to settle. Tasks started later are excluded,
+	 * and `no_tasks` is returned for an empty cohort. Delivery holds cover the whole cohort until
+	 * the observation completes; members other than the winner then resume ordinary notification.
+	 */
+	waitAny(options?: TaskWaitAnyOptions): Promise<TaskWaitAnyResult>;
 	kill(id: string): boolean;
 	/**
 	 * Move running foreground executions to the background while background slots remain;
@@ -168,15 +249,15 @@ export interface TasksContext {
 	subscribe(listener: () => void): () => void;
 	/** Keep retained output available without delaying completion delivery. */
 	retain(id: string): () => void;
-	/** Hold automatic delivery while preparing a result for the host to persist. */
-	holdDelivery(id: string): () => void;
 }
 
 export interface TaskRuntimeOptions {
 	enabled?: boolean;
 	backgroundAllowed?: boolean;
-	/** Durable host integration; standalone runtimes leave waits observational. */
+	/** Branch-impact queries for a durable host; standalone runtimes omit it. */
 	session?: TasksSessionContext;
+	/** Wait receipts and steering interruption for a durable host; standalone runtimes leave waits observational. */
+	waits?: TaskWaitHost;
 	anchor?: () => string | null;
 	/** Admission limit for unsettled background tasks; foreground work is bounded by its caller. */
 	maxBackground?: number;

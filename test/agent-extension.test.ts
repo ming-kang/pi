@@ -106,7 +106,7 @@ describe("Agent delegation", () => {
 			expect(handoff.details?.state).toBe("background");
 			const taskId = handoff.details?.taskId;
 			expect(taskId).toBeDefined();
-			const task = await harness.session.tasks.wait(taskId!);
+			const task = (await harness.session.tasks.wait(taskId!)).task;
 			expect(task.status).toBe("completed");
 			expect(task.outputPath).toBeDefined();
 			expect(readFileSync(task.outputPath!, "utf8")).toBe(report);
@@ -151,7 +151,7 @@ describe("Agent delegation", () => {
 		expect(running.text).toBe("Agent running · 1 tool call · latest: read entry.ts");
 		expect(harness.session.tasks.get(taskId).display?.text).toContain("✓ read entry.ts · ");
 		release();
-		expect((await harness.session.tasks.wait(taskId)).status).toBe("completed");
+		expect((await harness.session.tasks.wait(taskId)).task.status).toBe("completed");
 		expect((await harness.session.tasks.read(taskId)).text).toBe("Final report");
 		expect(harness.session.tasks.get(taskId).display?.text).toContain("Tool calls");
 	});
@@ -357,7 +357,7 @@ describe("Agent delegation", () => {
 		expect(getMessageText(handoff)).toContain(task.id);
 		parent.abort();
 		release();
-		expect((await harness.session.tasks.wait(task.id)).status).toBe("completed");
+		expect((await harness.session.tasks.wait(task.id)).task.status).toBe("completed");
 		expect(harness.faux.state.callCount).toBe(1);
 		resumeNotifications();
 	});
@@ -429,7 +429,7 @@ describe("Agent delegation", () => {
 		expect(harness.session.tasks.get(taskId).status).toBe("queued");
 		releaseFirst();
 		expect(getMessageText(await first)).toBe("First report");
-		expect((await harness.session.tasks.wait(taskId)).status).toBe("completed");
+		expect((await harness.session.tasks.wait(taskId)).task.status).toBe("completed");
 		expect((await harness.session.tasks.read(taskId)).text).toBe("Queued report");
 	});
 

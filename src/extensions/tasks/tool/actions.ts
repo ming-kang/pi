@@ -9,6 +9,7 @@ import {
 	type TaskRead,
 	type TaskSnapshot,
 	type TasksContext,
+	type TaskWaitOutcome,
 } from "../../../core/tasks/types.ts";
 import { truncateHead } from "../../../core/tools/truncate.ts";
 import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
@@ -131,156 +132,94 @@ export async function runRead(background: TasksContext, input: TasksInput): Prom
 		throw lookupFailure(background, id, error);
 	}
 }
-function activeBackgroundTasks(background: TasksContext): TaskSnapshot[] {
-	return background.list().filter((task) => task.mode === "background" && !isTaskTerminal(task.status));
-}
-
-function stillRunningText(tasks: TaskSnapshot[]): string {
+function stillRunningText(tasks: readonly TaskSnapshot[]): string {
 	return tasks.length > 0 ? `\n\n[still_running]\n${tasks.map((task) => describeTaskLine(task)).join("\n")}` : "";
 }
 
-function emptyWaitDetails(
-	outcome: "interrupted" | "timed_out" | "no_tasks",
-	waitedMs: number,
-	running: number,
-): TasksWaitDetails {
+/** A finished observation of one task, or of the first task in a waitAny cohort to settle. */
+interface WaitView {
+	scope: "task" | "any";
+	outcome: TaskWaitOutcome | "no_tasks";
+	waitedMs: number;
+	task?: TaskSnapshot;
+	read?: TaskRead;
+	/** Present for waitAny: cohort members still running. */
+	running?: readonly TaskSnapshot[];
+}
+
+function waitDetails({ outcome, waitedMs, task, read, running }: WaitView): TasksWaitDetails {
 	return {
 		action: "wait",
-		outcome,
+		// A closed host is told apart in the text; the stored outcome keeps its historical values.
+		outcome: outcome === "closed" ? "timed_out" : outcome,
+		...(task ? { taskId: task.id, status: task.status, kind: task.kind } : {}),
 		waitedMs,
-		deltaBytes: 0,
-		totalBytes: 0,
-		deltaTruncated: false,
-		outputPath: "",
-		running,
+		deltaBytes: read ? Buffer.byteLength(read.text) : 0,
+		totalBytes: read?.totalBytes ?? 0,
+		deltaTruncated: read?.truncated ?? false,
+		outputPath: task?.outputPath ?? "",
+		...(running ? { running: running.length } : {}),
 	};
 }
 
-async function runWaitAny(
-	background: TasksContext,
-	input: TasksInput,
-	signal?: AbortSignal,
-	onReady?: (taskId: string) => void,
-	interruptSignal?: AbortSignal,
-): Promise<AgentToolResult<TasksWaitDetails>> {
-	const candidates = activeBackgroundTasks(background);
-	if (candidates.length === 0) {
-		return result(
-			"No background tasks are running, so there is nothing to wait for. Finished tasks report back via automatic notification.",
-			emptyWaitDetails("no_tasks", 0, 0),
-		);
+function waitText(view: WaitView, sinceBytes?: number): string {
+	const { scope, outcome, task, read, running } = view;
+	const still = stillRunningText(running ?? []);
+	if (outcome === "no_tasks") {
+		return "No background tasks are running, so there is nothing to wait for. Finished tasks report back via automatic notification.";
 	}
-	// Holds cover the whole initial cohort until the winning result is ready for
-	// persistence. Other completed tasks resume ordinary notification delivery on release.
-	const releases = candidates.map((task) => background.holdDelivery(task.id));
-	const start = Date.now();
-	try {
-		const task = await background.waitAny(clampWaitMs(input.waitMs), signal, interruptSignal);
-		const ids = new Set(candidates.map((candidate) => candidate.id));
-		const running = activeBackgroundTasks(background).filter((candidate) => ids.has(candidate.id));
-		if (!task) {
-			const interrupted = !background.closed && interruptSignal?.aborted === true;
-			const outcome = interrupted ? "interrupted" : "timed_out";
-			const note = background.closed
-				? "The host closed; execution state is unconfirmed."
-				: interrupted
-					? "New steering input ended this wait early. Read the new input before deciding what to do next; no task was stopped."
-					: "The wait window expired; running tasks continue. Prefer other work over waiting again.";
-			return result(
-				`${note}${stillRunningText(running)}`,
-				emptyWaitDetails(outcome, Date.now() - start, running.length),
-			);
-		}
-		const slice = await background.read(task.id, { bytes: TASKS_WAIT_DELTA_BYTES });
-		signal?.throwIfAborted();
-		onReady?.(task.id);
-		return result(
-			`${readText(`[${describeTaskLine(task)} · waitAny settled · ${rangeText(slice)}]`, slice)}${stillRunningText(running)}`,
-			{
-				action: "wait",
-				outcome: "settled",
-				taskId: task.id,
-				status: task.status,
-				kind: task.kind,
-				waitedMs: Date.now() - start,
-				deltaBytes: Buffer.byteLength(slice.text),
-				totalBytes: slice.totalBytes,
-				deltaTruncated: slice.truncated,
-				outputPath: task.outputPath ?? "",
-				running: running.length,
-			},
-		);
-	} finally {
-		for (const release of releases) release();
+	if (read && task) {
+		const header =
+			scope === "any"
+				? `${describeTaskLine(task)} · waitAny settled`
+				: `${describeTaskLine(task)}${
+						outcome === "closed"
+							? " · host closed; execution state unconfirmed"
+							: outcome === "timed_out"
+								? " · wait window expired; execution continues"
+								: ""
+					}`;
+		return `${readText(`[${header} · ${rangeText(read, sinceBytes)}]`, read)}${still}`;
 	}
+	if (scope === "task" && task) {
+		return `[${describeTaskLine(task)} · interrupted by steering; execution continues]\nRead the new input before deciding whether to wait again; the task was not stopped.`;
+	}
+	const note =
+		outcome === "closed"
+			? "The host closed; execution state is unconfirmed."
+			: outcome === "interrupted"
+				? "New steering input ended this wait early. Read the new input before deciding what to do next; no task was stopped."
+				: "The wait window expired; running tasks continue. Prefer other work over waiting again.";
+	return `${note}${still}`;
+}
+
+function waitResult(view: WaitView, sinceBytes?: number): AgentToolResult<TasksWaitDetails> {
+	return result(waitText(view, sinceBytes), waitDetails(view));
 }
 
 export async function runWait(
 	background: TasksContext,
 	input: TasksInput,
 	signal?: AbortSignal,
-	onReady?: (taskId: string) => void,
-	interruptSignal?: AbortSignal,
+	toolCallId?: string,
 ): Promise<AgentToolResult<TasksWaitDetails>> {
+	const timeoutMs = clampWaitMs(input.waitMs);
 	if (!input.taskId?.trim()) {
 		if (input.sinceBytes !== undefined)
 			throw new Error("action 'wait' without 'taskId' does not accept 'sinceBytes'; offsets belong to one task.");
-		return runWaitAny(background, input, signal, onReady, interruptSignal);
+		const any = await background.waitAny({ timeoutMs, signal, toolCallId, read: { bytes: TASKS_WAIT_DELTA_BYTES } });
+		return waitResult({ scope: "any", ...any });
 	}
 	const id = requireTaskId(input);
 	try {
-		const release = background.holdDelivery(id);
-		try {
-			const start = Date.now();
-			const task = await background.wait(id, clampWaitMs(input.waitMs), signal, interruptSignal);
-			const settled = isTaskTerminal(task.status);
-			const interrupted = !settled && !background.closed && interruptSignal?.aborted === true;
-			const timedOut = !settled && !interrupted;
-			const outcome = settled ? "settled" : interrupted ? "interrupted" : "timed_out";
-			const waitedMs = Date.now() - start;
-			if (interrupted) {
-				return result(
-					`[${describeTaskLine(task)} · interrupted by steering; execution continues]\nRead the new input before deciding whether to wait again; the task was not stopped.`,
-					{
-						action: "wait",
-						outcome,
-						taskId: task.id,
-						status: task.status,
-						kind: task.kind,
-						waitedMs,
-						deltaBytes: 0,
-						totalBytes: 0,
-						deltaTruncated: false,
-						outputPath: task.outputPath ?? "",
-					},
-				);
-			}
-			// A closed host resolves waits early without settling anything; do not claim
-			// the execution merely outlived the wait window.
-			const windowNote = background.closed
-				? " · host closed; execution state unconfirmed"
-				: timedOut
-					? " · wait window expired; execution continues"
-					: "";
-			const sinceBytes = clampSinceBytes(input.sinceBytes);
-			const slice = await background.read(id, { bytes: TASKS_WAIT_DELTA_BYTES, sinceBytes });
-			signal?.throwIfAborted();
-			if (settled) onReady?.(task.id);
-			return result(readText(`[${describeTaskLine(task)}${windowNote} · ${rangeText(slice, sinceBytes)}]`, slice), {
-				action: "wait",
-				outcome,
-				taskId: task.id,
-				status: task.status,
-				kind: task.kind,
-				waitedMs,
-				deltaBytes: Buffer.byteLength(slice.text),
-				totalBytes: slice.totalBytes,
-				deltaTruncated: slice.truncated,
-				outputPath: task.outputPath ?? "",
-			});
-		} finally {
-			release();
-		}
+		const sinceBytes = clampSinceBytes(input.sinceBytes);
+		const one = await background.wait(id, {
+			timeoutMs,
+			signal,
+			toolCallId,
+			read: { bytes: TASKS_WAIT_DELTA_BYTES, sinceBytes },
+		});
+		return waitResult({ scope: "task", ...one }, sinceBytes);
 	} catch (error) {
 		throw lookupFailure(background, id, error);
 	}

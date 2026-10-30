@@ -79,7 +79,7 @@ describe("native managed shell execution", () => {
 			);
 			child.output("[Output truncated.]\nCommand exited with code 0\n");
 			child.fail("Executor-specific failure");
-			const task = await background.wait(submitted.details!.background!.taskId);
+			const task = (await background.wait(submitted.details!.background!.taskId)).task;
 			expect(task).toMatchObject({
 				title: command,
 				input: { label: "Command", text: command },
@@ -109,7 +109,7 @@ describe("native managed shell execution", () => {
 			);
 		if (outcome.result) {
 			expect(outcome.result.details?.background?.kind).toBe("background");
-			const task = await background.wait(outcome.result.details!.background!.taskId);
+			const task = (await background.wait(outcome.result.details!.background!.taskId)).task;
 			expect(task).toMatchObject({ status: "failed", error: diagnostic });
 		} else expect(outcome.error).toMatchObject({ message: diagnostic });
 		expect(exec).toHaveBeenCalledOnce();
@@ -265,7 +265,7 @@ describe("native managed shell execution", () => {
 		child.output("still running\n");
 		expect((await background.read(id)).text).toBe("still running\n");
 		child.finish();
-		expect((await background.wait(id)).status).toBe("completed");
+		expect((await background.wait(id)).task.status).toBe("completed");
 		expect(update).toHaveBeenCalledTimes(count);
 	});
 
@@ -343,7 +343,7 @@ describe("native managed shell execution", () => {
 			const id = result.details!.background!.taskId;
 			expect((await background.read(id)).text).toBe("héllo €");
 			child.finish();
-			const final = await background.wait(id);
+			const final = (await background.wait(id)).task;
 			expect(text(final.result)).toBe("héllo €");
 			expect(final.status).toBe("completed");
 			expect(final.outputPath).toBe(result.details?.fullOutputPath);
@@ -370,7 +370,7 @@ describe("native managed shell execution", () => {
 		expect(published).toContain("LATEST");
 		expect(Buffer.byteLength(published)).toBeLessThanOrEqual(48 * 1024);
 		child.finish();
-		const final = await background.wait(id);
+		const final = (await background.wait(id)).task;
 		expect(text(final.result)).toContain("LATEST");
 		expect(text(final.result)).toContain("Full output:");
 	});
@@ -424,7 +424,7 @@ describe("native managed shell execution", () => {
 		);
 		const id = result.details!.background!.taskId;
 		background.kill(id);
-		expect((await background.wait(id)).status).toBe("cancelled");
+		expect((await background.wait(id)).task.status).toBe("cancelled");
 	});
 
 	it("keeps the original timeout deadline across detach", async () => {
@@ -469,7 +469,7 @@ describe("native managed shell execution", () => {
 		);
 		child.output("partial output");
 		child.finish(exitCode);
-		const final = await background.wait(result.details!.background!.taskId);
+		const final = (await background.wait(result.details!.background!.taskId)).task;
 		expect(final.status).toBe("failed");
 		expect(text(final.result)).toContain("partial output");
 		const diagnostic = exitCode === null ? "Command terminated without an exit code" : "Command exited with code 42";
@@ -503,7 +503,7 @@ describe("native managed shell execution", () => {
 			context(background),
 		);
 		child.output(Buffer.alloc(MAX_BACKGROUND_OUTPUT_BYTES + 20, 120));
-		const final = await background.wait(result.details!.background!.taskId);
+		const final = (await background.wait(result.details!.background!.taskId)).task;
 		expect(final.status).toBe("failed");
 		expect(child.options.signal?.aborted).toBe(true);
 		expect(statSync(result.details!.fullOutputPath!).size).toBe(MAX_BACKGROUND_OUTPUT_BYTES);
@@ -528,7 +528,7 @@ describe("native managed shell execution", () => {
 		);
 		child.output("raw log\n".repeat(6000));
 		child.fail(`failure reason ${"界".repeat(6000)}`);
-		const final = await background.wait(result.details!.background!.taskId);
+		const final = (await background.wait(result.details!.background!.taskId)).task;
 		expect(final.error).toMatch(/^failure reason /);
 		expect(final.error).not.toContain("raw log");
 		expect(Buffer.byteLength(final.error!)).toBeLessThanOrEqual(4096);
@@ -562,7 +562,7 @@ describe("native managed shell execution", () => {
 		});
 		try {
 			expect(() => child.output("lost output")).not.toThrow();
-			const final = await background.wait(result.details!.background!.taskId);
+			const final = (await background.wait(result.details!.background!.taskId)).task;
 			expect(final.status).toBe("failed");
 			expect(text(final.result)).toContain("disk write failed");
 			expect(child.options.signal?.aborted).toBe(true);
@@ -580,7 +580,7 @@ describe("native managed shell execution", () => {
 		background.detachForeground();
 		const result = await pending;
 		expect(child.options.signal?.aborted).toBe(true);
-		const task = await background.wait(result.details!.background!.taskId);
+		const task = (await background.wait(result.details!.background!.taskId)).task;
 		expect(task.status).toBe("failed");
 		expect(text(task.result)).toContain("20 MiB output limit");
 		expect(statSync(task.outputPath!).size).toBe(MAX_BACKGROUND_OUTPUT_BYTES + 1);
@@ -606,7 +606,7 @@ describe("native managed shell execution", () => {
 		detachOnUpdate = true;
 		child.finish();
 		const submitted = await pending;
-		const task = await background.wait(submitted.details!.background!.taskId);
+		const task = (await background.wait(submitted.details!.background!.taskId)).task;
 		expect(task.status).toBe("failed");
 		expect(task.error).toBe("Background command exceeded the 20 MiB output limit");
 		expect(child.operations.exec).toHaveBeenCalledOnce();
@@ -641,7 +641,7 @@ describe("native managed shell execution", () => {
 		});
 		try {
 			expect(() => child.output("late")).not.toThrow();
-			const final = await background.wait(result.details!.background!.taskId);
+			const final = (await background.wait(result.details!.background!.taskId)).task;
 			expect(final.status).toBe("failed");
 			expect(text(final.result)).toContain("disk failed after reload");
 			expect(getter).toHaveBeenCalledOnce();

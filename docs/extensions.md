@@ -1259,14 +1259,13 @@ Session-bound `TasksContext` supervises native and extension-owned execution. Fo
 | `execute<T>(execution)` | Returns `{ kind: "result", result, status, error? }` or `{ kind: "background", task }` |
 | `list()` / `get(id)` | Bounded, read-only (frozen) retained snapshots; IDs support unique prefixes |
 | `read(id, options?)` | Bounded head, tail, or byte-offset model-readable output; excludes human-only display text |
-| `wait(id, timeoutMs?, signal?, interruptSignal?)` | Observation only; timeout, cancellation, or `interruptSignal` ends the wait, not execution |
-| `waitAny(timeoutMs?, signal?, interruptSignal?)` | Observes the first task running at call time to settle; returns `undefined` for an empty cohort, timeout, interruption, or closed host. Later tasks are excluded |
+| `wait(id, options?)` | One observation of one task. `options`: `timeoutMs`, `signal`, `toolCallId`, and `read: { bytes?, sinceBytes? }`. Returns `{ outcome, waitedMs, task, read? }` where `outcome` is `settled`, `timed_out`, `interrupted` (host steering), or `closed` (host shut down; state unconfirmed). Timeout, cancellation, or interruption ends the wait, not execution |
+| `waitAny(options?)` | Observes the first task running at call time to settle, with `timeoutMs`, `signal`, `toolCallId`, and `read: { bytes? }`. Returns `{ outcome, waitedMs, task?, read?, running }`; `outcome` adds `no_tasks` for an empty cohort. Later tasks are excluded |
 | `kill(id)` | Requests cancellation; `stopping` is not a terminal status |
 | `detach(id)` / `detachForeground()` | Hands off one task, or eligible foreground tasks oldest first while background slots remain, without restarting them; throws when every background slot is taken |
 | `canDetach(id)` | Reports whether an execution can move now, including host policy and available background slots; does not change the execution |
 | `subscribe(listener)` | Observes task state and progress |
 | `retain(id)` | Returns an idempotent release function protecting retained data, without delaying notifications |
-| `holdDelivery(id)` | Explicitly retains data and delays automatic delivery until released |
 
 `TaskExecution<T>` supplies `kind`, `title`, `toolCallId`, and `run(control)`, plus optional fields:
 
@@ -1287,7 +1286,7 @@ A caller can be handed off to the background while its task is queued, before `r
 
 `TaskControl<T>` exposes `id`, `signal`, `mode`, `onModeChange(listener)`, `accept()`, `publish(update)`, `attachOutput(path, cleanup?)`, and `cancel()`. `publish({ result, display?, usage? })` replaces the bounded model-readable result and optionally the human-only Output suffix and cumulative usage; `/tasks` combines result and display, while model reads and completion notifications use only the result. A task with an attached output file is read from that file instead. Call `accept()` after whole-invocation preflight, before allowing a background handoff. Use the control's signal throughout execution. Parent-call cancellation is disconnected after handoff, while runtime shutdown still cancels the task. Mode subscriptions concern only this task; executors do not need the global registry to observe their own handoff or cancel themselves.
 
-Completion messages store `{ version: 3, task }` in `details`, a bounded terminal `TaskSnapshot`; only their bounded `content` enters model context. Built-in `tasks wait` binds delivery to the actual tool call, and the host confirms it after successful persistence; a settled waitAny binds only its winning task. Ordinary extension reads/waits, including `waitAny`, do not acknowledge delivery, and arbitrary tool-result detail fields cannot acknowledge a task.
+Completion messages store `{ version: 3, task }` in `details`, a bounded terminal `TaskSnapshot`; only their bounded `content` enters model context. Built-in `tasks wait` binds delivery to the actual tool call, and the host confirms it after successful persistence; a settled waitAny binds only its winning task. Reads and waits without a `toolCallId`, including `waitAny`, do not acknowledge delivery, and arbitrary tool-result detail fields cannot acknowledge a task.
 
 ```typescript
 const outcome = await ctx.tasks.execute({
@@ -1309,7 +1308,7 @@ if (outcome.kind === "result") return outcome.result;
 return { content: [{ type: "text", text: `Task ${outcome.task.id} continues in the background.` }], details: undefined };
 ```
 
-When Pi attaches the runtime to its durable session lifecycle, `ctx.tasks.session` exposes the small host integration used by management products: `waitInterruptSignal`, `prepareWait(toolCallId, taskId)`, and `stoppedByTreeNavigation(targetId)`. Standalone runtimes omit it, leaving waits observational. This bridge lets the bundled `tasks` extension coordinate persisted wait receipts and branch confirmations without importing `TaskSession` or interactive internals.
+When Pi attaches the runtime to its durable session lifecycle, `ctx.tasks.session` exposes `stoppedByTreeNavigation(targetId)`, which lists running tasks that navigating to an entry would cancel. Standalone runtimes omit it. Wait receipts and steering interruption are not extension concerns: the runtime applies them inside `wait()` and `waitAny()`. In a session host, passing the tool call's `toolCallId` keeps a settled background task out of automatic notifications from before the wait until that tool result is persisted, so the persisted result acknowledges it exactly once; without a `toolCallId`, or in a standalone runtime, a wait is purely observational.
 
 `TaskRuntime`, `TaskRuntimeOptions`, and the public `Task*`/`TasksContext`/`TasksSessionContext` types are exported from `@astralyn/pi`. Captured capabilities close with their runtime; obtain the replacement from the new session context after reload or session replacement.
 

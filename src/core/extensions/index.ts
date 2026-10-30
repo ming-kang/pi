@@ -21,6 +21,11 @@ export type {
 	TaskTerminalStatus,
 	TaskToolOutcome,
 	TaskUpdate,
+	TaskWaitAnyOptions,
+	TaskWaitAnyResult,
+	TaskWaitOptions,
+	TaskWaitOutcome,
+	TaskWaitResult,
 } from "../tasks/types.ts";
 export {
 	createExtensionRuntime,
