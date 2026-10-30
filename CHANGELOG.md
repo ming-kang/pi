@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.4.5] - 2026-10-30
+
 ### Added
 
 - Reintroduced lightweight delegation through the bundled `Agent` extension and tool. Independent calls run concurrently with one-line Transcript status, `/agent` model and thinking overrides stored in `settings.json`, and independent `/tasks` rows whose Output shows live activity or the final Markdown report and whose Details shows the full prompt and execution configuration.
