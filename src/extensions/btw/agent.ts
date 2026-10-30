@@ -9,6 +9,7 @@ import type { AssistantMessage, Message, Models, Usage } from "@earendil-works/p
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import type { ContextSnapshot } from "../../core/extensions/index.ts";
+import { cacheHitPercent, combineUsage, emptyUsage } from "../../core/usage-totals.ts";
 import {
 	MAX_DISPLAY_CHARS,
 	MAX_MODEL_STEPS,
@@ -46,17 +47,6 @@ interface ActiveQuestion {
 	responseChars: number;
 }
 
-function emptyUsage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
-
 function displayText(text: string): string {
 	return text.length <= MAX_DISPLAY_CHARS ? text : `${text.slice(0, MAX_DISPLAY_CHARS)}\n\n[Display truncated]`;
 }
@@ -64,7 +54,7 @@ function displayText(text: string): string {
 /** An in-memory native Agent. No SessionManager, real tool executors, or main-agent signal. */
 export class BtwAgent implements BtwConversationState {
 	readonly turns: BtwTurn[] = [];
-	readonly usage = emptyUsage();
+	usage = emptyUsage();
 	latestCacheHitPercent: number | undefined;
 	blockedTools = 0;
 	private readonly agent: Agent;
@@ -249,16 +239,8 @@ export class BtwAgent implements BtwConversationState {
 				0,
 			);
 			this.blockedTools += message.content.filter((part) => part.type === "toolCall").length;
-			const usage = message.usage;
-			const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
-			this.latestCacheHitPercent =
-				(usage.cacheRead > 0 || usage.cacheWrite > 0) && promptTokens > 0
-					? (usage.cacheRead / promptTokens) * 100
-					: undefined;
-			for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const)
-				this.usage[key] += usage[key];
-			for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const)
-				this.usage.cost[key] += usage.cost[key];
+			this.latestCacheHitPercent = cacheHitPercent(message.usage);
+			this.usage = combineUsage(this.usage, message.usage);
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
 				turn.status = message.stopReason === "aborted" ? "cancelled" : "error";
 				turn.notice ??=

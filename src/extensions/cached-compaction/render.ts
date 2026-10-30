@@ -1,5 +1,6 @@
 import { Text } from "@earendil-works/pi-tui";
 import type { EntryRenderer } from "../../core/extensions/types.ts";
+import { cacheHitPercent } from "../../core/usage-totals.ts";
 
 export interface CachedCompactionCard {
 	reason: "manual" | "threshold";
@@ -20,7 +21,7 @@ export const renderCachedCompactionEntry: EntryRenderer<CachedCompactionCard> = 
 	const data = entry.data;
 	if (!data) return undefined;
 	const promptTokens = data.input + data.cacheRead + data.cacheWrite;
-	const percentage = promptTokens > 0 ? ((100 * data.cacheRead) / promptTokens).toFixed(1) : "0.0";
+	const percentage = (cacheHitPercent(data) ?? 0).toFixed(1);
 	const title = `Cached compaction · ${data.reason === "manual" ? "manual" : "automatic"}`;
 	const stats = `Cache ${formatTokens(data.cacheRead)}/${formatTokens(promptTokens)} (${percentage}%) · output ${formatTokens(data.output)} · ${(data.durationMs / 1000).toFixed(1)}s`;
 	return new Text(`${theme.fg("accent", title)}\n${theme.fg("dim", stats)}`, 1, 0);

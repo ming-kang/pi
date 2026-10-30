@@ -1,5 +1,11 @@
 import type { ReadonlySessionManager } from "../../core/session-manager.ts";
-import { addUsageToTotals, createUsageTotals, getAccountedUsages, type UsageTotals } from "../../core/usage-totals.ts";
+import {
+	addUsageToTotals,
+	cacheHitPercent,
+	createUsageTotals,
+	getAccountedUsages,
+	type UsageTotals,
+} from "../../core/usage-totals.ts";
 
 export interface UsageSummary extends UsageTotals {
 	latestCacheHitPercent: number | undefined;
@@ -35,11 +41,7 @@ export class BranchUsage {
 		for (let index = entries.length - 1; index >= 0; index--) {
 			const entry = entries[index];
 			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-			const { input, cacheRead, cacheWrite } = entry.message.usage;
-			const promptTokens = input + cacheRead + cacheWrite;
-			if ((cacheRead > 0 || cacheWrite > 0) && promptTokens > 0) {
-				latestCacheHitPercent = (cacheRead / promptTokens) * 100;
-			}
+			latestCacheHitPercent = cacheHitPercent(entry.message.usage);
 			break;
 		}
 

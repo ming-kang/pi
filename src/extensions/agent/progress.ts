@@ -2,22 +2,11 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
 import type { AgentSessionEvent } from "../../core/agent-session.ts";
 import type { TaskCompletion, TaskControl, TaskTerminalStatus } from "../../core/tasks/types.ts";
-import { combineUsage } from "../../core/usage-totals.ts";
+import { combineUsage, emptyUsage } from "../../core/usage-totals.ts";
 import { activitiesText, activityTarget, clipText, compactArguments } from "./activity.ts";
 import { AGENT_MAX_ACTIVITIES, type AgentActivity, type AgentToolDetails } from "./types.ts";
 
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
-
-function emptyUsage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
 
 function assistantText(message: AgentMessage): string {
 	if (message.role !== "assistant") return "";
