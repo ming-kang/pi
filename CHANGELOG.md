@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Fixed
+
+- On Windows, `read`, `write`, `edit`, `ls`, `grep`, and `find` now resolve paths under the bash mount table, such as `/tmp/...` and `/usr/...`, to the directories bash uses instead of the current drive root. The bundled [Shell paths](docs/bundled/extensions/shell-paths.md) extension reads the mounts from the configured shell.
+
 ## [1.4.8] - 2026-10-31
 
 ### Removed

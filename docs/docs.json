@@ -105,6 +105,10 @@
           "path": "bundled/extensions/search.md"
         },
         {
+          "title": "Shell paths",
+          "path": "bundled/extensions/shell-paths.md"
+        },
+        {
           "title": "Bundled themes",
           "path": "bundled/themes.md"
         },

@@ -27,6 +27,7 @@ The following extensions are additions maintained by `@astralyn/pi`:
 | [Provider](extensions/provider.md) | `/provider` | Edit models.json providers: connection, API type, and models |
 | [Statusline](extensions/statusline.md) | Footer status | Show concise extension-managed activity state |
 | [Search](extensions/search.md) | `code_search`, `web_search` | Devin-driven semantic code search and web search with one shared key |
+| [Shell paths](extensions/shell-paths.md) | File tools | Resolve bash mount paths such as `/tmp` on Windows |
 | [Tasks](tasks.md) | `tasks`, `/tasks` | Inspect and control native shell and extension-owned executions |
 
 All bundled extensions use the public Extension API. Enable or disable them in `pi config` or through `builtin:<name>` entries in [settings](../settings.md#codemode-and-tool-selection). `--no-extensions` disables them; `-e builtin:<name>` loads one explicitly.

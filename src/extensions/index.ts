@@ -11,6 +11,7 @@ import providerExtension from "./provider/index.ts";
 import questionExtension from "./question/index.ts";
 import runSummaryExtension from "./run-summary/index.ts";
 import searchExtension from "./search/index.ts";
+import shellPathsExtension from "./shell-paths/index.ts";
 import statuslineExtension from "./statusline/index.ts";
 import tasksExtension from "./tasks/index.ts";
 import toolPresentationExtension from "./tool-presentation/index.ts";
@@ -32,4 +33,5 @@ export const builtInExtensions: InlineExtension[] = [
 	{ name: "tool-presentation", factory: toolPresentationExtension, builtin: true },
 	{ name: "tasks", factory: tasksExtension, replaceable: true, builtin: true },
 	{ name: "search", factory: searchExtension, builtin: true },
+	{ name: "shell-paths", factory: shellPathsExtension, builtin: true },
 ];
