@@ -1,4 +1,11 @@
-import { type Component, type TuiMouseEvent, type TuiMouseEventResult, truncateToWidth } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	stripTerminalSequences,
+	type TuiMouseEvent,
+	type TuiMouseEventResult,
+	truncateToWidth,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
 
 export interface StickyUserMessageAnchor {
@@ -53,9 +60,17 @@ export class StickyUserMessageComponent implements Component {
 
 	render(width: number): string[] {
 		if (!this.judgment || width <= 0) return [];
-		const padding = " ".repeat(Math.max(0, Math.floor(this.getOutputPad())));
-		const line = `${padding}${theme.fg("dim", "↑")} ${theme.fg("muted", this.judgment.summary)}`;
-		return [truncateToWidth(line, width, "…")];
+		const padding = Math.max(0, Math.floor(this.getOutputPad()));
+		// Truncate plain text before styling: the reset that truncation inserts would end the background mid-row.
+		const summaryWidth = Math.max(0, width - padding * 2 - visibleWidth("↑ "));
+		const summary = stripTerminalSequences(truncateToWidth(this.judgment.summary, summaryWidth, "…"));
+		const line = truncateToWidth(
+			`${" ".repeat(padding)}${theme.fg("dim", "↑")} ${theme.fg("muted", summary)}`,
+			width,
+			"",
+		);
+		const fill = " ".repeat(Math.max(0, width - visibleWidth(line)));
+		return [theme.bg("userMessageBg", line + fill)];
 	}
 
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {

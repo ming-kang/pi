@@ -1,3 +1,4 @@
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
@@ -9,19 +10,31 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 const BG_RESET = "\x1b[49m";
 
 describe("UserMessageComponent", () => {
-	test("keeps user message height stable while moving closing OSC markers off line end", () => {
+	test("renders compact full-width rows with OSC markers at line starts", () => {
 		initTheme("dark");
 
-		const component = new UserMessageComponent("hello");
-		const lines = component.render(20);
+		const single = new UserMessageComponent("hello").render(20);
+		expect(single).toHaveLength(1);
+		expect(single[0]!.startsWith(OSC133_ZONE_START + OSC133_ZONE_END + OSC133_ZONE_FINAL)).toBe(true);
+		expect(stripAnsi(single[0]!)).toBe(` ❯ hello${" ".repeat(12)}`);
+		expect(single[0]!.endsWith(BG_RESET)).toBe(true);
 
-		expect(lines).toHaveLength(3);
-		expect(lines[0]).toContain(OSC133_ZONE_START);
-		expect(lines[0].endsWith(BG_RESET)).toBe(true);
-		expect(lines[0]).not.toContain(OSC133_ZONE_END);
-		expect(lines[1]).toContain("hello");
-		expect(lines[2].startsWith(OSC133_ZONE_END + OSC133_ZONE_FINAL)).toBe(true);
-		expect(lines[2].endsWith(BG_RESET)).toBe(true);
+		const multi = new UserMessageComponent("first\n\nsecond").render(20);
+		expect(multi.map((line) => stripAnsi(line).trimEnd())).toEqual([" ❯ first", "", "   second"]);
+		expect(multi[0]!.startsWith(OSC133_ZONE_START)).toBe(true);
+		expect(multi[0]).not.toContain(OSC133_ZONE_END);
+		expect(multi[2]!.startsWith(OSC133_ZONE_END + OSC133_ZONE_FINAL)).toBe(true);
+		for (const line of multi) {
+			expect(visibleWidth(line)).toBe(20);
+			expect(line.endsWith(BG_RESET)).toBe(true);
+		}
+	});
+
+	test("wraps long text under the first text column", () => {
+		initTheme("dark");
+
+		const lines = new UserMessageComponent("alpha beta gamma delta").render(15);
+		expect(lines.map((line) => stripAnsi(line).trimEnd())).toEqual([" ❯ alpha beta", "   gamma delta"]);
 	});
 
 	test("chains Markdown transformers with user message context", () => {
@@ -30,7 +43,7 @@ describe("UserMessageComponent", () => {
 		const component = new UserMessageComponent("The input is $x^2$.", undefined, 1, [
 			(markdown, context) => {
 				calls.push("formula");
-				expect(context).toEqual({ messageType: "user", isStreaming: false, availableWidth: 78 });
+				expect(context).toEqual({ messageType: "user", isStreaming: false, availableWidth: 76 });
 				return markdown.replace("$x^2$", "x²");
 			},
 			(markdown) => {

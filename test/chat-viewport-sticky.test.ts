@@ -42,21 +42,21 @@ describe("fullscreen sticky user message", () => {
 		tui.start();
 		try {
 			await settle(terminal);
-			expect(terminal.getViewport()[0]).toContain("↑ first prompt");
+			expect(terminal.getViewport()[0]).toMatch(/^ ↑ first prompt/);
 			expect(terminal.getViewport().filter((line) => line.includes("first prompt"))).toHaveLength(1);
 
 			terminal.sendInput("\x1b[<0;3;1M");
 			terminal.sendInput("\x1b[<0;3;1m");
 			await settle(terminal);
 
-			expect(terminal.getViewport()[0]).toContain("first prompt");
-			expect(terminal.getViewport()[0]).not.toContain("↑");
-			expect(viewport.transcript.scrollTop).toBe(2);
+			// The original row sits where the pinned row was, with its text in the same column.
+			expect(terminal.getViewport()[0]).toMatch(/^ ❯ first prompt/);
+			expect(viewport.transcript.scrollTop).toBe(1);
 			expect(terminal.getViewport().filter((line) => line.includes("first prompt"))).toHaveLength(1);
 
 			viewport.transcript.scrollBy(1);
 			await settle(terminal);
-			expect(terminal.getViewport()[0]).toContain("↑ first prompt");
+			expect(terminal.getViewport()[0]).toMatch(/^ ↑ first prompt/);
 		} finally {
 			tui.stop();
 		}

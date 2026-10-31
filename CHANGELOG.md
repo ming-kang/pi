@@ -6,7 +6,11 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Added
 
-- Fullscreen mode now keeps a subdued one-line summary of the nearest user message above the viewport at the top of the transcript. Click the summary to scroll back to the original message; regular mode is unchanged.
+- Fullscreen mode now pins a one-line summary of the nearest user message above the viewport at the top of the transcript, on the user message background. Click the summary to scroll back to the original message; regular mode is unchanged.
+
+### Changed
+
+- User messages no longer have a blank background row above and below the text, and start with a `❯` marker; wrapped lines align under the first text column. In fullscreen mode the pinned summary takes over the message's first row in place as it scrolls out of view, with `↑` in the marker's column.
 
 ### Fixed
 

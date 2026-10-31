@@ -49,7 +49,7 @@ describe("sticky user message selection", () => {
 describe("StickyUserMessageComponent", () => {
 	beforeEach(() => initTheme("dark"));
 
-	test("renders one subdued line only while a candidate exists", () => {
+	test("renders one full-width user-message row only while a candidate exists", () => {
 		const component = new StickyUserMessageComponent(
 			() => 1,
 			() => {},
@@ -59,16 +59,15 @@ describe("StickyUserMessageComponent", () => {
 		component.setJudgment({ summary: "first prompt", targetRow: 11 });
 		const lines = component.render(80);
 		expect(lines).toHaveLength(1);
-		expect(lines[0]).toContain(theme.fg("dim", "↑"));
-		expect(lines[0]).toContain(theme.fg("muted", "first prompt"));
-		expect(lines[0]).not.toContain(theme.bg("userMessageBg", "first prompt"));
-		expect(stripTerminalSequences(lines[0]!).trim()).toBe("↑ first prompt");
+		expect(lines[0]).toBe(
+			theme.bg("userMessageBg", ` ${theme.fg("dim", "↑")} ${theme.fg("muted", "first prompt")}${" ".repeat(65)}`),
+		);
 
 		component.setJudgment(undefined);
 		expect(component.render(80)).toEqual([]);
 	});
 
-	test("truncates wide text to one terminal row", () => {
+	test("truncates wide text without dropping the background", () => {
 		const component = new StickyUserMessageComponent(
 			() => 1,
 			() => {},
@@ -76,8 +75,9 @@ describe("StickyUserMessageComponent", () => {
 		component.setJudgment({ summary: "中文 👩‍💻 details ".repeat(100), targetRow: 11 });
 		const lines = component.render(20);
 		expect(lines).toHaveLength(1);
-		expect(visibleWidth(lines[0]!)).toBeLessThanOrEqual(20);
+		expect(visibleWidth(lines[0]!)).toBe(20);
 		expect(stripTerminalSequences(lines[0]!)).toContain("…");
+		expect(lines[0]).not.toContain("\x1b[0m");
 	});
 
 	test("jumps on an unmodified left click and leaves other input alone", () => {

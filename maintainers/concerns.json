@@ -606,14 +606,15 @@
 		},
 		{
 			"id": "fullscreen-sticky-user-message",
-			"why": "Fullscreen transcript navigation pins the nearest scrolled-past user message as a subdued clickable one-line summary.",
+			"why": "Fullscreen transcript navigation pins the nearest scrolled-past user message as a clickable one-line summary on the user message background. User messages render as compact rows behind a `❯` gutter, so the pinned `↑` row replaces the first text row in place with the text in the same column.",
 			"paths": [
 				{
 					"path": "src/modes/interactive/chat-viewport.ts",
 					"rewrite": "The fullscreen transcript adds a sticky-prompt row and compensating content padding, with a ScrollView layout callback supplying rendered user-message anchors."
 				},
 				{
-					"path": "src/modes/interactive/components/user-message.ts"
+					"path": "src/modes/interactive/components/user-message.ts",
+					"rewrite": "The pi-tui Markdown pads both sides evenly, so the component renders it narrower without padding and adds the `❯` gutter, hanging indent, and side padding per row itself."
 				},
 				{
 					"path": "src/modes/interactive/interactive-mode.ts"
@@ -624,6 +625,7 @@
 				"test/chat-viewport-sticky.test.ts",
 				"test/chat-viewport.test.ts",
 				"test/user-message.test.ts",
+				"test/assistant-message.test.ts",
 				"test/tool-view.test.ts",
 				"test/interactive-tui.test.ts"
 			]
