@@ -9,41 +9,37 @@ The distribution follows upstream's `major.minor` line and increments the patch:
 - Distribution-specific fixes and features increment the patch (e.g. `1.4.1`, `1.4.2`).
 - `npm run release` computes the target version automatically.
 
-## Pre-flight checklist
+## Release flow
 
-Before releasing:
-1. Working tree is clean on `main` and up to date.
-2. `CHANGELOG.md` has entries under `## [Unreleased]`.
-3. All checks and ledger validations pass (`npm run check && npm run diff:upstream -- --check`).
-
-## Publication workflow
-
-1. **Preview:**
+1. **Preview without changing anything:**
    ```bash
    npm run release -- --dry-run
    ```
-2. **Release:**
+   This validates the repository, target version, changelog, tags, and npm state, then prints the proposed release. It never asks for confirmation or writes files.
+
+2. **Confirm and release:**
    ```bash
    npm run release
    ```
-   This command:
-   - Verifies the version is not already tagged or published.
+   Non-interactive automation must explicitly opt in:
+   ```bash
+   npm run release -- --yes
+   ```
+   After confirmation, the command:
    - Moves `[Unreleased]` changelog entries to a new version header.
    - Bumps `package.json` and updates `npm-shrinkwrap.json`.
-   - Commits `chore: release <version>`.
-   - Tags `pi-v<version>`.
-   - Pushes `main` and the tag to GitHub.
+   - Commits `chore: release <version>` and creates annotated tag `pi-v<version>`.
+   - Pushes `main` and the tag with one atomic push.
 
-3. **CI Publication:**
-   The tag triggers `publish-npm.yml`, which runs full Ubuntu CI, tests loopback installation from the packed tarball, and publishes to npm with provenance.
+   Declining confirmation, or running non-interactively without `--yes`, leaves the repository unchanged. The pre-commit hook still runs the repository checks before the release commit can be created.
 
-## Recovering a failed release
+3. **Verify and publish in CI:**
+   The tag triggers `publish-npm.yml`. It verifies the tag and version, runs full Ubuntu CI, tests installation from the packed tarball, and publishes that verified artifact to npm with provenance. The release command prints the `gh` commands for watching the run.
 
-If CI fails before npm publication:
-1. Fix the failure on `main` and push the commit.
-2. Move the release tag:
-   ```bash
-   npm run release -- --retag
-   ```
+A pushed tag is immutable, including when its workflow fails before publication.
 
-*Note: If the package was already published to npm, never move or delete the tag. Release a new patch instead.*
+## Failure recovery
+
+- **Atomic push failed:** The release commit and tag remain local. Fix the network, authentication, or remote-state problem, then run the exact `git push --atomic ...` command printed by the script. Do not run `npm run release` again for the same release.
+- **CI failed before npm publication:** For a transient infrastructure failure, rerun the failed workflow for the same tag. If the code or tests must change, land the fix with a new `[Unreleased]` entry and release the next patch instead.
+- **npm publication succeeded:** Never move or delete its tag. Publish any further code change as a new patch.

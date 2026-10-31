@@ -1,6 +1,108 @@
-import { describe, expect, test } from "vitest";
+import { execFileSync, spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterEach, describe, expect, test } from "vitest";
 import { classifyLockfileChanges } from "../scripts/check-lockfile-commit.mjs";
 import { nextVersion, stampChangelog, stampShrinkwrap } from "../scripts/release.mjs";
+
+const temporaryDirectories = [];
+
+afterEach(() => {
+	for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
+
+function git(root, ...args) {
+	return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+}
+
+function writeJson(path, value) {
+	writeFileSync(path, `${JSON.stringify(value, null, "\t")}\n`);
+}
+
+function createReleaseFixture() {
+	const directory = mkdtempSync(join(tmpdir(), "pi-release-test-"));
+	temporaryDirectories.push(directory);
+	const root = join(directory, "work");
+	const remote = join(directory, "origin.git");
+	mkdirSync(join(root, "scripts"), { recursive: true });
+	mkdirSync(join(root, "maintainers"), { recursive: true });
+	copyFileSync(resolve(import.meta.dirname, "../scripts/release.mjs"), join(root, "scripts/release.mjs"));
+
+	writeJson(join(root, "package.json"), {
+		name: "@astralyn/pi",
+		version: "1.0.0",
+		repository: { url: "https://github.com/example/pi" },
+	});
+	writeJson(join(root, "maintainers/upstream.json"), { tag: "v1.0.0" });
+	writeJson(join(root, "npm-shrinkwrap.json"), { version: "1.0.0", packages: { "": { version: "1.0.0" } } });
+	writeFileSync(join(root, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n\n- Fixed a thing.\n");
+
+	// The release script uses the same npm CLI as its parent. This local fixture
+	// supplies the registry response and version bump without touching npm.
+	const npmCli = join(root, "fake-npm.mjs");
+	writeFileSync(
+		npmCli,
+		`import { readFileSync, writeFileSync } from "node:fs";
+if (process.argv[2] === "view") {
+	console.error("npm error code E404");
+	process.exit(1);
+}
+if (process.argv[2] === "version") {
+	const path = new URL("./package.json", import.meta.url);
+	const manifest = JSON.parse(readFileSync(path, "utf8"));
+	manifest.version = process.argv[3];
+	writeFileSync(path, JSON.stringify(manifest, null, "\\t") + "\\n");
+	process.exit(0);
+}
+process.exit(2);
+`,
+	);
+
+	git(root, "init", "--initial-branch=main");
+	git(root, "config", "user.email", "test@example.invalid");
+	git(root, "config", "user.name", "Release Test");
+	git(root, "config", "core.hooksPath", ".git/no-hooks");
+	git(root, "add", ".");
+	git(root, "commit", "-m", "initial");
+	git(directory, "init", "--bare", remote);
+	git(root, "remote", "add", "origin", remote);
+	git(root, "push", "--set-upstream", "origin", "main");
+	return { root, npmCli };
+}
+
+function runRelease({ root, npmCli }, ...args) {
+	const env = Object.fromEntries(
+		Object.entries(process.env).filter(([name]) => name.toLowerCase() !== "npm_execpath"),
+	);
+	return spawnSync(process.execPath, [join(root, "scripts/release.mjs"), ...args], {
+		cwd: root,
+		env: { ...env, npm_execpath: npmCli },
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+}
+
+describe("release confirmation", () => {
+	test("dry-run and a non-interactive release without --yes leave the repository unchanged", () => {
+		const fixture = createReleaseFixture();
+		const head = git(fixture.root, "rev-parse", "HEAD");
+		const releaseFiles = ["CHANGELOG.md", "package.json", "npm-shrinkwrap.json"];
+		const files = releaseFiles.map((file) => readFileSync(join(fixture.root, file), "utf8"));
+
+		const preview = runRelease(fixture, "--dry-run");
+		expect(preview.status, preview.stderr).toBe(0);
+		expect(preview.stdout).toContain("Would release @astralyn/pi@1.0.1");
+		const release = runRelease(fixture);
+		expect(release.status, release.stderr).toBe(1);
+		expect(release.stderr).toContain("Pass --yes");
+
+		expect(git(fixture.root, "rev-parse", "HEAD")).toBe(head);
+		expect(git(fixture.root, "tag", "--list")).toBe("");
+		expect(git(fixture.root, "status", "--porcelain")).toBe("");
+		expect(releaseFiles.map((file) => readFileSync(join(fixture.root, file), "utf8"))).toEqual(files);
+	});
+});
 
 describe("nextVersion", () => {
 	test("increments the patch within upstream's line and resets it on a newer line", () => {

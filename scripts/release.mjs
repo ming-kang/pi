@@ -7,14 +7,13 @@ import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
 const usage = `Usage: npm run release -- [<version>] [--dry-run] [--yes]
-       npm run release -- --retag [--yes]
 
-  (default)  stamp CHANGELOG [Unreleased], bump the version, commit, tag pi-v<version>,
-             and push main and the tag together; the tag's workflow verifies and publishes
+  (default)  validate and confirm the release, stamp CHANGELOG [Unreleased], bump the version,
+             commit, tag pi-v<version>, and push main and the tag together atomically;
+             the tag's workflow verifies and publishes
   <version>  release this version instead of the next one in upstream's major.minor line
-  --dry-run  print the version and changelog section without changing anything
-  --retag    move the current version's tag to HEAD after a publish run failed before npm
-  --yes      push without asking`;
+  --dry-run  print the version and changelog section without asking or changing anything
+  --yes      create and push the release without asking`;
 
 const PACKAGE_NAME = "@astralyn/pi";
 const UNRELEASED = "## [Unreleased]";
@@ -114,7 +113,8 @@ function requireCleanMain() {
 
 async function confirm(question, yes) {
 	if (yes) return true;
-	if (!process.stdin.isTTY) throw new Error("Pass --yes to push without an interactive confirmation.");
+	if (!process.stdin.isTTY)
+		throw new Error("Pass --yes to create and push a release without an interactive confirmation.");
 	const readline = createInterface({ input: process.stdin, output: process.stdout });
 	try {
 		return /^y(es)?$/i.test((await readline.question(`${question} [y/N] `)).trim());
@@ -157,6 +157,14 @@ async function release(requested, { dryRun, yes }) {
 		return;
 	}
 
+	const push = ["push", "--atomic", "origin", "main", `refs/tags/${tag}`];
+	if (
+		!(await confirm(`Create release commit and ${tag}, then push both to origin, which publishes ${version}?`, yes))
+	) {
+		console.log("Release cancelled; no changes made.");
+		return;
+	}
+
 	writeFileSync(changelogPath, changelog);
 	npm(["version", version, "--no-git-tag-version", "--ignore-scripts"], { capture: true });
 	writeFileSync(shrinkwrapPath, stampShrinkwrap(readFileSync(shrinkwrapPath, "utf8"), version));
@@ -164,47 +172,30 @@ async function release(requested, { dryRun, yes }) {
 	run("git", ["commit", "-m", `chore: release ${version}`]);
 	run("git", ["tag", "-a", tag, "-m", `${PACKAGE_NAME} ${version}`]);
 
-	const push = ["push", "--atomic", "origin", "main", `refs/tags/${tag}`];
-	if (!(await confirm(`Push main and ${tag} to origin, which publishes ${version}?`, yes))) {
-		console.log(`Not pushed. Publish later with: git ${push.join(" ")}`);
-		return;
+	try {
+		run("git", push);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(
+			`${message}\nThe release commit and ${tag} remain local. Fix the push problem, then retry with:\n  git ${push.join(" ")}`,
+		);
 	}
-	run("git", push);
-	printWatch(tag);
-}
-
-async function retag({ yes }) {
-	requireCleanMain();
-	if (git("rev-parse", "HEAD") !== git("rev-parse", "origin/main")) {
-		throw new Error("Push main first; the tagged commit must be on origin/main.");
-	}
-	const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-	const tag = `pi-v${version}`;
-	if (isPublished(version)) {
-		throw new Error(`${PACKAGE_NAME}@${version} is on npm; never move its tag. Release a new patch instead.`);
-	}
-	if (!(await confirm(`Move ${tag} to HEAD and force-push it, which reruns publication?`, yes))) return;
-	run("git", ["tag", "-f", "-a", tag, "-m", `${PACKAGE_NAME} ${version}`]);
-	run("git", ["push", "--force", "origin", `refs/tags/${tag}`]);
 	printWatch(tag);
 }
 
 async function main(args) {
 	const flags = new Set(args.filter((arg) => arg.startsWith("--")));
 	const positional = args.filter((arg) => !arg.startsWith("--"));
-	const known = ["--dry-run", "--yes", "--retag"];
-	if (
-		[...flags].some((flag) => !known.includes(flag)) ||
-		positional.length > 1 ||
-		(flags.has("--retag") && (positional.length > 0 || flags.has("--dry-run")))
-	) {
+	const known = ["--dry-run", "--yes"];
+	if ([...flags].some((flag) => !known.includes(flag)) || positional.length > 1) {
 		console.error(usage);
 		return 2;
 	}
 	try {
-		const yes = flags.has("--yes");
-		if (flags.has("--retag")) await retag({ yes });
-		else await release(positional[0]?.replace(/^v/, ""), { dryRun: flags.has("--dry-run"), yes });
+		await release(positional[0]?.replace(/^v/, ""), {
+			dryRun: flags.has("--dry-run"),
+			yes: flags.has("--yes"),
+		});
 		return 0;
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : String(error));
