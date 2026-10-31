@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.4.9] - 2026-10-31
+
 ### Added
 
 - Fullscreen mode now pins a one-line summary of the nearest user message above the viewport at the top of the transcript, on the user message background. Click the summary to scroll back to the original message; regular mode is unchanged.
