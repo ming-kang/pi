@@ -103,7 +103,7 @@ For settings-based configuration, keep using the `skills` array to control loadi
 }
 ```
 
-Project overrides take precedence over global overrides. An explicit `"model-and-user"` also overrides author-level `disable-model-invocation`; removing the override restores the frontmatter default. Invocation overrides do not force a disabled skill to load.
+Relative keys resolve against the directory of the settings file that declares them, so a project key never names a global skill at the same relative path. Project overrides take precedence over global overrides. An explicit `"model-and-user"` also overrides author-level `disable-model-invocation`; removing the override restores the frontmatter default. Invocation overrides do not force a disabled skill to load, but they apply to a skill loaded with `--skill`.
 
 Toggle skill commands via `/settings` in interactive mode or in `settings.json`:
 

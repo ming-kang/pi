@@ -30,7 +30,7 @@ import { DefaultPackageManager, type PathMetadata, type ResolvedResource } from 
 import type { PromptTemplate } from "./prompt-templates.ts";
 import { loadPromptTemplates } from "./prompt-templates.ts";
 import { SettingsManager } from "./settings-manager.ts";
-import type { SkillInvocationOverride } from "./settings-schema.ts";
+import { SkillInvocationPolicy } from "./skill-invocation.ts";
 import type { Skill } from "./skills.ts";
 import { loadSkills } from "./skills.ts";
 import {
@@ -367,7 +367,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private appendSystemPrompt: string[];
 	private appendSystemPromptSourcePaths: string[];
 	private lastSkillPaths: string[];
-	private skillInvocationOverrides = new Map<string, SkillInvocationOverride>();
+	private skillInvocationPolicy: SkillInvocationPolicy;
 	private extensionSkillSourceInfos: Map<string, SourceInfo>;
 	private extensionPromptSourceInfos: Map<string, SourceInfo>;
 	private extensionThemeSourceInfos: Map<string, SourceInfo>;
@@ -390,6 +390,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 			settingsManager: this.settingsManager,
 			builtinExtensions: [...this.builtinExtensions.keys()],
 		});
+		this.skillInvocationPolicy = new SkillInvocationPolicy(this.settingsManager, this.packageManager);
 		this.additionalExtensionPaths = options.additionalExtensionPaths ?? [];
 		this.additionalSkillPaths = options.additionalSkillPaths ?? [];
 		this.additionalPromptTemplatePaths = options.additionalPromptTemplatePaths ?? [];
@@ -538,7 +539,6 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.resourceMetadataByPath = new Map();
 		const metadataByPath = this.resourceMetadataByPath;
 
-		this.skillInvocationOverrides = new Map();
 		this.extensionSkillSourceInfos = new Map();
 		this.extensionPromptSourceInfos = new Map();
 		this.extensionThemeSourceInfos = new Map();
@@ -560,13 +560,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const enabledPrompts = getEnabledPaths(resolvedPaths.prompts);
 		const enabledThemes = getEnabledPaths(resolvedPaths.themes);
 
-		const enabledSkills = enabledSkillResources.map((resource) => {
-			const path = this.mapSkillPath(resource, metadataByPath);
-			if (resource.skillInvocationOverride) {
-				this.skillInvocationOverrides.set(canonicalizePath(path), resource.skillInvocationOverride);
-			}
-			return path;
-		});
+		const enabledSkills = enabledSkillResources.map((resource) => this.mapSkillPath(resource, metadataByPath));
 
 		// Add CLI paths metadata
 		for (const r of cliExtensionPaths.extensions) {
@@ -860,24 +854,31 @@ export class DefaultResourceLoader implements ResourceLoader {
 				includeDefaults: false,
 			});
 		}
-		const resolvedSkills = this.skillsOverride ? this.skillsOverride(skillsResult) : skillsResult;
-		this.skills = resolvedSkills.skills.map((skill) => {
-			const invocationOverride = this.skillInvocationOverrides.get(canonicalizePath(skill.filePath));
-			return {
-				...skill,
-				disableModelInvocation:
-					invocationOverride === "user-only"
-						? true
-						: invocationOverride === "model-and-user"
-							? false
-							: skill.disableModelInvocation,
-				sourceInfo:
-					this.findSourceInfoForPath(skill.filePath, this.extensionSkillSourceInfos, metadataByPath) ??
-					skill.sourceInfo ??
-					this.getDefaultSourceInfoForPath(skill.filePath),
-			};
-		});
+		// Settings decide model visibility for every loaded skill, however it was loaded; the SDK override has the last word.
+		const configured = {
+			...skillsResult,
+			skills: skillsResult.skills.map((skill) => {
+				const override = this.skillInvocationPolicy.resolve(
+					skill.filePath,
+					this.getSkillSourceInfo(skill, metadataByPath),
+				);
+				return override ? { ...skill, disableModelInvocation: override === "user-only" } : skill;
+			}),
+		};
+		const resolvedSkills = this.skillsOverride ? this.skillsOverride(configured) : configured;
+		this.skills = resolvedSkills.skills.map((skill) => ({
+			...skill,
+			sourceInfo: this.getSkillSourceInfo(skill, metadataByPath),
+		}));
 		this.skillDiagnostics = resolvedSkills.diagnostics;
+	}
+
+	private getSkillSourceInfo(skill: Skill, metadataByPath?: Map<string, PathMetadata>): SourceInfo {
+		return (
+			this.findSourceInfoForPath(skill.filePath, this.extensionSkillSourceInfos, metadataByPath) ??
+			skill.sourceInfo ??
+			this.getDefaultSourceInfoForPath(skill.filePath)
+		);
 	}
 
 	private updatePromptsFromPaths(promptPaths: string[], metadataByPath?: Map<string, PathMetadata>): void {

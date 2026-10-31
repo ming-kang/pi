@@ -578,7 +578,7 @@
 				},
 				{
 					"path": "src/core/resource-loader.ts",
-					"rewrite": "Resolved skill invocation overrides are applied while source metadata is attached, leaving prompt and command consumers unchanged."
+					"rewrite": "The shared skill invocation policy is applied to every loaded skill, including --skill and extension skills, before skillsOverride, leaving prompt and command consumers unchanged."
 				},
 				{
 					"path": "src/core/settings-manager.ts"
@@ -591,7 +591,7 @@
 				},
 				{
 					"path": "src/modes/interactive/components/config-selector.ts",
-					"rewrite": "Skill rows use a separate tri-state projection and coordinated load and invocation writes while other resources retain boolean overrides."
+					"rewrite": "Skill rows use a separate tri-state projection whose invocation reads and writes go through the shared skill invocation policy, while other resources retain boolean overrides. Project package entries match by package identity for every resource type."
 				},
 				{
 					"path": "schemas/settings.schema.json"

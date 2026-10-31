@@ -50,13 +50,7 @@ import {
 import { stripBom } from "../utils/text.ts";
 import { isStdoutTakenOver } from "./output-guard.ts";
 import { type PiManifest, readPiManifest } from "./pi-manifest.ts";
-import type {
-	PackageSource,
-	Settings,
-	SettingsManager,
-	SkillInvocationOverride,
-	SkillInvocationOverrides,
-} from "./settings-manager.ts";
+import type { PackageSource, SettingsManager } from "./settings-manager.ts";
 import { BUILTIN_PATH_PREFIX } from "./source-info.ts";
 
 const NETWORK_TIMEOUT_MS = 10000;
@@ -89,7 +83,6 @@ export interface ResolvedResource {
 	path: string;
 	enabled: boolean;
 	metadata: PathMetadata;
-	skillInvocationOverride?: SkillInvocationOverride;
 }
 
 export interface ResolvedPaths {
@@ -998,7 +991,7 @@ export class DefaultPackageManager implements PackageManager {
 			);
 		}
 
-		return this.applySkillInvocationOverrides(this.toResolvedPaths(accumulator), globalSettings, projectSettings);
+		return this.toResolvedPaths(accumulator);
 	}
 
 	async resolveExtensionSources(
@@ -1731,7 +1724,7 @@ export class DefaultPackageManager implements PackageManager {
 	 * For git packages, uses normalized host/path to ensure SSH and HTTPS URLs
 	 * for the same repository are treated as identical.
 	 */
-	private getPackageIdentity(source: string, scope?: SourceScope): string {
+	getPackageIdentity(source: string, scope?: SourceScope): string {
 		const parsed = this.parseSource(source);
 		if (parsed.type === "npm") {
 			return `npm:${parsed.name}`;
@@ -2216,6 +2209,16 @@ export class DefaultPackageManager implements PackageManager {
 		return this.cwd;
 	}
 
+	/** Directories that relative top-level resource paths of `scope` resolve against. */
+	getTopLevelBaseDirs(scope: "user" | "project"): string[] {
+		const userAgentsDir = join(getHomeDir(), ".agents");
+		if (scope === "user") return [this.agentDir, userAgentsDir];
+		const projectAgentsDirs = collectAncestorAgentsSkillDirs(this.cwd)
+			.map((dir) => dirname(dir))
+			.filter((dir) => resolve(dir) !== resolve(userAgentsDir));
+		return [join(this.cwd, CONFIG_DIR_NAME), ...projectAgentsDirs];
+	}
+
 	private resolvePath(input: string): string {
 		return resolvePath(input, this.cwd, { homeDir: getHomeDir(), trim: true });
 	}
@@ -2644,113 +2647,6 @@ export class DefaultPackageManager implements PackageManager {
 			skills: new Map(),
 			prompts: new Map(),
 			themes: new Map(),
-		};
-	}
-
-	private findSkillInvocationOverride(
-		filePath: string,
-		overrides: SkillInvocationOverrides | undefined,
-		baseDir: string,
-	): SkillInvocationOverride | undefined {
-		if (!overrides) return undefined;
-		let directoryMatch: SkillInvocationOverride | undefined;
-		for (const [pattern, override] of Object.entries(overrides)) {
-			if (override !== "model-and-user" && override !== "user-only") continue;
-			if (!matchesAnyExactPattern(filePath, [pattern], baseDir)) continue;
-			const normalized = normalizeExactPattern(pattern);
-			if (normalized === toPosixPath(relative(baseDir, filePath)) || normalized === toPosixPath(filePath)) {
-				return override;
-			}
-			directoryMatch = override;
-		}
-		return directoryMatch;
-	}
-
-	private findSkillInvocationOverrideInBases(
-		filePath: string,
-		overrides: SkillInvocationOverrides | undefined,
-		baseDirs: string[],
-	): SkillInvocationOverride | undefined {
-		for (const baseDir of new Set(baseDirs)) {
-			const override = this.findSkillInvocationOverride(filePath, overrides, baseDir);
-			if (override) return override;
-		}
-		return undefined;
-	}
-
-	private findPackageByIdentity(
-		packages: PackageSource[] | undefined,
-		identity: string,
-		scope: SourceScope,
-	): PackageSource | undefined {
-		return packages?.find((pkg) => this.getPackageIdentity(this.getPackageSourceString(pkg), scope) === identity);
-	}
-
-	private resolveSkillInvocationOverride(
-		resource: ResolvedResource,
-		globalSettings: Settings,
-		projectSettings: Settings,
-	): SkillInvocationOverride | undefined {
-		const { metadata } = resource;
-		const baseDir =
-			metadata.baseDir ?? (metadata.scope === "project" ? join(this.cwd, CONFIG_DIR_NAME) : this.agentDir);
-		const projectTrusted = this.settingsManager.isProjectTrusted();
-
-		if (metadata.origin === "top-level") {
-			const globalBaseDirs = metadata.scope === "user" ? [baseDir] : [this.agentDir, join(getHomeDir(), ".agents")];
-			const projectBaseDirs =
-				metadata.scope === "user" ? [baseDir] : [baseDir, this.agentDir, join(getHomeDir(), ".agents")];
-			const projectOverride = projectTrusted
-				? this.findSkillInvocationOverrideInBases(
-						resource.path,
-						projectSettings.skillInvocationOverrides,
-						projectBaseDirs,
-					)
-				: undefined;
-			const globalOverride = this.findSkillInvocationOverrideInBases(
-				resource.path,
-				globalSettings.skillInvocationOverrides,
-				globalBaseDirs,
-			);
-			return projectOverride ?? globalOverride;
-		}
-
-		const sourceScope = metadata.scope === "project" ? "project" : "user";
-		const identity = this.getPackageIdentity(metadata.source, sourceScope);
-		const globalPackage = this.findPackageByIdentity(globalSettings.packages, identity, "user");
-		const projectPackage = projectTrusted
-			? this.findPackageByIdentity(projectSettings.packages, identity, "project")
-			: undefined;
-		const globalOverride =
-			typeof globalPackage === "object"
-				? this.findSkillInvocationOverride(resource.path, globalPackage.skillInvocationOverrides, baseDir)
-				: undefined;
-		const projectOverride =
-			typeof projectPackage === "object"
-				? this.findSkillInvocationOverride(resource.path, projectPackage.skillInvocationOverrides, baseDir)
-				: undefined;
-
-		if (metadata.scope === "project") {
-			return typeof projectPackage === "object" && projectPackage.autoload === false
-				? (projectOverride ?? globalOverride)
-				: projectOverride;
-		}
-		return typeof projectPackage === "object" && projectPackage.autoload === false
-			? (projectOverride ?? globalOverride)
-			: globalOverride;
-	}
-
-	private applySkillInvocationOverrides(
-		resolved: ResolvedPaths,
-		globalSettings: Settings,
-		projectSettings: Settings,
-	): ResolvedPaths {
-		return {
-			...resolved,
-			skills: resolved.skills.map((resource) => {
-				const override = this.resolveSkillInvocationOverride(resource, globalSettings, projectSettings);
-				return override ? { ...resource, skillInvocationOverride: override } : resource;
-			}),
 		};
 	}
 

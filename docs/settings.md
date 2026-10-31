@@ -353,7 +353,7 @@ Paths in `~/.pi/agent/settings.json` resolve relative to `~/.pi/agent`. Paths in
 
 Arrays support glob patterns and exclusions. Use `!pattern` to exclude. Use `+path` to force-include an exact path and `-path` to force-exclude an exact path.
 
-`skillInvocationOverrides` uses exact skill file or directory paths as keys. It changes model visibility without changing whether the skill loads; user-only skills remain available as `/skill:name`. Project values override global values. With no override, the skill's `disable-model-invocation` frontmatter applies.
+`skillInvocationOverrides` uses exact skill file or directory paths as keys. Relative keys resolve against the directory of the settings file that declares them, plus its `.agents` skill roots: `~/.pi/agent` and `~/.agents` for global settings, `.pi` and the project's `.agents` directories for project settings. A key for a `SKILL.md` file wins over a key for its directory, and a later key wins over an earlier one. It changes model visibility without changing whether the skill loads, and applies to every loaded skill, including skills passed with `--skill`; user-only skills remain available as `/skill:name`. Project values override global values. With no override, the skill's `disable-model-invocation` frontmatter applies.
 
 ```json
 {

@@ -216,7 +216,7 @@ Filter what a package loads using the object form in settings:
 - `+path` force-includes an exact path.
 - `-path` force-excludes an exact path.
 - Filters layer on top of the manifest. They narrow down what is already allowed.
-- `skillInvocationOverrides` uses package-relative skill files or directories and accepts `"model-and-user"` or `"user-only"`. It controls model visibility, not resource loading.
+- `skillInvocationOverrides` uses package-relative skill files or directories and accepts `"model-and-user"` or `"user-only"`. It controls model visibility, not resource loading. A project entry for the same package, matched by package identity rather than the exact source string, layers its overrides over the global entry when it sets `"autoload": false`.
 
 ## Enable and Disable Resources
 

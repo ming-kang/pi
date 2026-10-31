@@ -475,6 +475,135 @@ Content`,
 			expect(prompt).not.toContain("<name>manual-skill</name>");
 		});
 
+		describe("skill invocation policy", () => {
+			beforeEach(() => {
+				// Bound project .agents discovery to this fixture; the temp directory can live under the user home.
+				mkdirSync(join(tempDir, ".git"), { recursive: true });
+			});
+
+			function writeSkill(dir: string, name: string, disableModelInvocation = false): string {
+				mkdirSync(dir, { recursive: true });
+				const file = join(dir, "SKILL.md");
+				writeFileSync(
+					file,
+					`---\nname: ${name}\ndescription: ${name}\ndisable-model-invocation: ${disableModelInvocation}\n---\nContent`,
+				);
+				return file;
+			}
+
+			function invocation(loader: DefaultResourceLoader): Record<string, boolean | undefined> {
+				return Object.fromEntries(
+					loader.getSkills().skills.map((skill) => [skill.name, skill.disableModelInvocation]),
+				);
+			}
+
+			it("should resolve relative invocation keys against the settings file that declares them", async () => {
+				writeSkill(join(agentDir, "skills", "demo"), "global-demo");
+				writeSkill(join(cwd, ".pi", "skills", "demo"), "project-demo", true);
+				const settingsManager = SettingsManager.inMemory({
+					skillInvocationOverrides: { "skills/demo/SKILL.md": "user-only" },
+				});
+				settingsManager.setProjectSkillInvocationOverrides({ "skills/demo/SKILL.md": "model-and-user" });
+
+				const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+				await loader.reload();
+
+				expect(invocation(loader)).toMatchObject({ "global-demo": true, "project-demo": false });
+			});
+
+			it("should apply invocation policy to skills loaded through --skill", async () => {
+				writeSkill(join(agentDir, "skills", "manual"), "manual");
+				const outsideFile = writeSkill(join(tempDir, "outside", "odd"), "odd");
+				const settingsManager = SettingsManager.inMemory({
+					skills: ["-skills/manual"],
+					skillInvocationOverrides: { "skills/manual": "user-only", [outsideFile]: "user-only" },
+				});
+
+				const loader = new DefaultResourceLoader({
+					cwd,
+					agentDir,
+					settingsManager,
+					additionalSkillPaths: [join(agentDir, "skills", "manual"), join(tempDir, "outside", "odd")],
+				});
+				await loader.reload();
+
+				expect(invocation(loader)).toMatchObject({ manual: true, odd: true });
+			});
+
+			it("should apply invocation policy before skillsOverride so the SDK keeps the final say", async () => {
+				writeSkill(join(agentDir, "skills", "manual"), "manual");
+				writeSkill(join(agentDir, "skills", "forced"), "forced");
+				const settingsManager = SettingsManager.inMemory({
+					skillInvocationOverrides: { "skills/manual": "user-only", "skills/forced": "model-and-user" },
+				});
+				const seen: Record<string, boolean | undefined> = {};
+
+				const loader = new DefaultResourceLoader({
+					cwd,
+					agentDir,
+					settingsManager,
+					skillsOverride: (base) => {
+						for (const skill of base.skills) seen[skill.name] = skill.disableModelInvocation;
+						return {
+							...base,
+							skills: base.skills.map((skill) =>
+								skill.name === "forced" ? { ...skill, disableModelInvocation: true } : skill,
+							),
+						};
+					},
+				});
+				await loader.reload();
+
+				expect(seen).toMatchObject({ manual: true, forced: false });
+				expect(invocation(loader)).toMatchObject({ manual: true, forced: true });
+			});
+
+			it("should layer project top-level overrides over global ones and fall back when removed", async () => {
+				const skillPath = writeSkill(join(agentDir, "skills", "manual"), "manual");
+				const settingsManager = SettingsManager.inMemory({
+					skillInvocationOverrides: { "skills/manual": "user-only" },
+				});
+				const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+				const reload = async () => {
+					await loader.reload();
+					return invocation(loader).manual;
+				};
+
+				expect(await reload()).toBe(true);
+				settingsManager.setProjectSkillPaths([skillPath, `+${skillPath}`]);
+				expect(await reload()).toBe(true);
+				settingsManager.setProjectSkillInvocationOverrides({ [skillPath]: "model-and-user" });
+				expect(await reload()).toBe(false);
+				settingsManager.setProjectSkillInvocationOverrides(undefined);
+				settingsManager.setProjectSkillPaths([]);
+				expect(await reload()).toBe(true);
+			});
+
+			it("should layer a project package delta over the global package entry", async () => {
+				const pkgDir = join(tempDir, "invocation-pkg");
+				for (const name of ["skill-a", "skill-b", "skill-c"]) writeSkill(join(pkgDir, "skills", name), name);
+				const settingsManager = SettingsManager.inMemory({
+					packages: [
+						{
+							source: pkgDir,
+							skillInvocationOverrides: {
+								"skills/skill-a": "user-only",
+								"skills/skill-b/SKILL.md": "user-only",
+							},
+						},
+					],
+				});
+				settingsManager.setProjectPackages([
+					{ source: pkgDir, autoload: false, skillInvocationOverrides: { "skills/skill-a": "model-and-user" } },
+				]);
+
+				const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+				await loader.reload();
+
+				expect(invocation(loader)).toMatchObject({ "skill-a": false, "skill-b": true, "skill-c": false });
+			});
+		});
+
 		it("should discover AGENTS.md context files", async () => {
 			writeFileSync(join(cwd, "AGENTS.md"), "# Project Guidelines\n\nBe helpful.");
 

@@ -4,9 +4,18 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking (SDK):** `ResolvedResource.skillInvocationOverride` is removed. Package resolution no longer carries invocation policy; the resource loader applies `skillInvocationOverrides` to the loaded skills.
+
 ### Fixed
 
 - `/agent` no longer flashes the editor when moving between its settings panel and the model or effort picker; every page now stays in one dialog.
+- Skill invocation overrides now mean the same skill in loading and `pi config`:
+  - Relative keys resolve against the settings file that declares them, so a project key no longer changes a global skill at the same relative path.
+  - `pi config` recognizes `./`-prefixed keys and a file key that wins over its directory alias, and replaces every alias of a skill when it writes.
+  - `pi config` edits a project package entry such as `npm:pkg` for a global `npm:pkg@1.0.0` by package identity instead of adding a duplicate entry. This applies to project overrides of every resource type.
+- Skill invocation overrides now apply to skills loaded with `--skill` or provided by extensions, and are applied before an SDK `skillsOverride`, so its result is final.
 
 ## [1.4.7] - 2026-10-31
 

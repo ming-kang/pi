@@ -587,10 +587,9 @@ if (process.platform !== "win32") fs.chmodSync(piPath, 0o755);
 		expect(settingsManager.getProjectSettings().skills).toEqual([]);
 		expect(settingsManager.getProjectSettings().skillInvocationOverrides).toBeUndefined();
 
+		// A project-relative key names .pi/skills/demo, not the inherited global skill at the same relative path.
 		settingsManager.setProjectSkillInvocationOverrides({ "skills/demo/SKILL.md": "user-only" });
-		expect(list.render(100).join("\n")).toContain("project user only");
-		for (let index = 0; index < 3; index++) list.handleInput(" ");
-		expect(settingsManager.getProjectSettings().skillInvocationOverrides).toBeUndefined();
+		expect(list.render(100).join("\n")).not.toContain("project user only");
 	});
 
 	it("preserves other package skill invocation overrides when returning to inherit", async () => {
@@ -644,6 +643,121 @@ if (process.platform !== "win32") fs.chmodSync(piPath, 0o755);
 		expect(pkg.autoload).toBe(false);
 		expect(pkg.skills).toBeUndefined();
 		expect(pkg.skillInvocationOverrides).toEqual({ "skills/skill-b": "user-only" });
+	});
+
+	function writeSkill(dir: string, name: string): string {
+		mkdirSync(dir, { recursive: true });
+		const file = join(dir, "SKILL.md");
+		writeFileSync(file, `---\nname: ${name}\ndescription: ${name}\n---\nContent`);
+		return file;
+	}
+
+	function openConfig(
+		settingsManager: SettingsManager,
+		writeScope: "global" | "project",
+		resolved: { global: ResolvedPaths; project: ResolvedPaths },
+	) {
+		initTheme("dark");
+		return new ConfigSelectorComponent(
+			resolved,
+			settingsManager,
+			projectDir,
+			agentDir,
+			() => {},
+			() => {},
+			() => {},
+			24,
+			writeScope,
+		).getResourceList();
+	}
+
+	async function resolveScopes(settingsManager: SettingsManager) {
+		const globalOnly = SettingsManager.inMemory(settingsManager.getGlobalSettings(), { projectTrusted: false });
+		return {
+			global: await new DefaultPackageManager({ cwd: projectDir, agentDir, settingsManager: globalOnly }).resolve(),
+			project: await new DefaultPackageManager({ cwd: projectDir, agentDir, settingsManager }).resolve(),
+		};
+	}
+
+	it("reads and clears ./-prefixed project invocation keys like the loader", async () => {
+		writeSkill(join(projectDir, ".pi", "skills", "demo"), "demo");
+		const settingsManager = SettingsManager.inMemory();
+		settingsManager.setProjectSkillInvocationOverrides({ "./skills/demo/SKILL.md": "user-only" });
+		const list = openConfig(settingsManager, "project", await resolveScopes(settingsManager));
+
+		expect(list.render(100).join("\n")).toContain("project user only");
+		for (let index = 0; index < 3; index++) list.handleInput(" ");
+
+		expect(settingsManager.getProjectSettings().skills ?? []).toEqual([]);
+		expect(settingsManager.getProjectSettings().skillInvocationOverrides).toBeUndefined();
+	});
+
+	it("replaces a ./-prefixed global invocation key instead of leaving it to win", async () => {
+		writeSkill(join(agentDir, "skills", "demo"), "demo");
+		const settingsManager = SettingsManager.inMemory({
+			skillInvocationOverrides: { "./skills/demo/SKILL.md": "user-only" },
+		});
+		const list = openConfig(settingsManager, "global", await resolveScopes(settingsManager));
+
+		expect(list.render(100).join("\n")).toContain("user only");
+		list.handleInput(" ");
+		list.handleInput(" ");
+
+		expect(settingsManager.getGlobalSettings().skillInvocationOverrides).toEqual({
+			[join("skills", "demo", "SKILL.md")]: "model-and-user",
+		});
+	});
+
+	it("shows the file invocation key that wins over its directory alias and clears both", async () => {
+		writeSkill(join(projectDir, ".pi", "skills", "demo"), "demo");
+		const settingsManager = SettingsManager.inMemory();
+		settingsManager.setProjectSkillInvocationOverrides({
+			"skills/demo": "user-only",
+			"skills/demo/SKILL.md": "model-and-user",
+		});
+		const list = openConfig(settingsManager, "project", await resolveScopes(settingsManager));
+
+		expect(list.render(100).join("\n")).toContain("project on");
+		list.handleInput(" ");
+
+		expect(settingsManager.getProjectSettings().skillInvocationOverrides).toBeUndefined();
+	});
+
+	it("edits an invocation-only package delta by package identity", async () => {
+		const pkgRoot = join(packageDir, "npm-pkg");
+		const skillPath = writeSkill(join(pkgRoot, "skills", "demo"), "demo");
+		const settingsManager = SettingsManager.inMemory({ packages: ["npm:pkg@1.0.0"] });
+		settingsManager.setProjectPackages([
+			{ source: "npm:pkg", autoload: false, skillInvocationOverrides: { "skills/demo": "user-only" } },
+		]);
+		const resolved: ResolvedPaths = {
+			extensions: [],
+			skills: [
+				{
+					path: skillPath,
+					enabled: true,
+					metadata: { source: "npm:pkg@1.0.0", scope: "user", origin: "package", baseDir: pkgRoot },
+				},
+			],
+			prompts: [],
+			themes: [],
+		};
+		const list = openConfig(settingsManager, "project", { global: resolved, project: resolved });
+
+		expect(list.render(100).join("\n")).toContain("project user only");
+		list.handleInput(" ");
+		list.handleInput(" ");
+
+		expect(list.render(100).join("\n")).toContain("project on");
+		const pattern = join("skills", "demo", "SKILL.md");
+		expect(settingsManager.getProjectSettings().packages).toEqual([
+			{
+				source: "npm:pkg",
+				autoload: false,
+				skills: [`+${pattern}`],
+				skillInvocationOverrides: { [pattern]: "model-and-user" },
+			},
+		]);
 	});
 
 	it("cycles project package overrides in config local mode", async () => {
