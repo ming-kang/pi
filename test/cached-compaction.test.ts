@@ -1,9 +1,12 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Context, Message } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import type { SessionEntry } from "../src/core/session-manager.ts";
+import type { CustomEntry, SessionEntry } from "../src/core/session-manager.ts";
 import cachedCompactionExtension from "../src/extensions/cached-compaction/index.ts";
+import { type CachedCompactionCard, renderCachedCompactionEntry } from "../src/extensions/cached-compaction/render.ts";
 import { checkpointSummary, keptStart } from "../src/extensions/cached-compaction/summary.ts";
+import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
+import { stripAnsi } from "../src/utils/ansi.ts";
 import { btwDone, btwResponse } from "./helpers/btw.ts";
 import { createBtwTestSession } from "./helpers/btw-session.ts";
 
@@ -115,6 +118,42 @@ describe("cached compaction", () => {
 		} finally {
 			await cancelled.cleanup();
 		}
+	});
+
+	it("renders the card as a one-line footnote that expands into the prompt breakdown", () => {
+		initTheme("dark");
+		const render = (data: CachedCompactionCard, expanded: boolean) => {
+			const entry: CustomEntry<CachedCompactionCard> = {
+				type: "custom",
+				id: "card",
+				parentId: "compaction",
+				timestamp: "2026-10-31T00:00:00Z",
+				customType: "cached-compaction",
+				data,
+			};
+			const lines = renderCachedCompactionEntry(entry, { expanded }, theme)!.render(120);
+			return lines.map((line) => stripAnsi(line).trimEnd());
+		};
+		const automatic = {
+			reason: "threshold",
+			cacheRead: 641_200,
+			input: 3_100,
+			cacheWrite: 4_500,
+			output: 2_800,
+			durationMs: 18_400,
+		} as const;
+
+		expect(render(automatic, false)).toEqual([" └ from cache · auto · CH 98.8% · ↓2.8k · 18s"]);
+		expect(render(automatic, true)).toEqual([
+			" └ from cache · auto · CH 98.8% · 18s",
+			"   prompt 649k = R641k cached + W4.5k written + ↑3.1k uncached",
+			"   output ↓2.8k",
+		]);
+		expect(render({ ...automatic, reason: "manual", cacheRead: 0, cacheWrite: 0, input: 900 }, true)).toEqual([
+			" └ from cache · manual · 18s",
+			"   prompt 900 = ↑900 uncached",
+			"   output ↓2.8k",
+		]);
 	});
 
 	it("marks repeated kept tool calls from the end and rejects an unknown boundary", () => {

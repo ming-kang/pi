@@ -23,13 +23,22 @@ Native compaction accepts the same native file-list shape in extension-provided 
 
 ## Result card
 
-A successful cached-path compaction adds a persistent display-only card after the summary:
+A successful cached-path compaction adds a persistent display-only card, a one-line footnote under the compaction summary:
 
 ```text
-Cached compaction · manual
-Cache 641.2k/648.8k (98.8%) · output 2.8k · 18.4s
+└ from cache · CH 98.8% · ↓2.8k · 18s
 ```
 
-Automatic compaction is labelled `automatic`. The cache figures are the response's actual `cacheRead` divided by `input + cacheRead + cacheWrite`; the card also shows output tokens and elapsed time. It contains no cost estimate and never enters model context. Native fallback adds no card.
+Automatic compaction adds `auto` after `from cache`. `CH` is the summary request's cache hit rate, its actual `cacheRead` divided by `input + cacheRead + cacheWrite`, written with the same `↑ ↓ R W CH` units as the footer; it is green from 80%, a warning color below 50%, and omitted when the provider reported no cache activity. The card then shows output tokens and elapsed time.
+
+Expanding tool output (Ctrl+O) expands the card with the summary, adding the reason and the prompt broken down by billing:
+
+```text
+└ from cache · manual · CH 98.8% · 18s
+  prompt 649k = R641k cached + W4.5k written + ↑3.1k uncached
+  output ↓2.8k
+```
+
+The card contains no cost estimate and never enters model context. Native fallback adds no card.
 
 The extension registers no commands or settings.
