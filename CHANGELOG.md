@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.4.7] - 2026-10-31
+
 ### Added
 
 - `TaskReadOptions` is exported from the SDK and extension API as the named shape of `TasksContext.read()` options (`mode`, `bytes`, `sinceBytes`); the `read` options of `wait()` and `waitAny()` are subsets of it.
