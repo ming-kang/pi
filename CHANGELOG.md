@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Fullscreen mode now keeps a subdued one-line summary of the nearest user message above the viewport at the top of the transcript. Click the summary to scroll back to the original message; regular mode is unchanged.
+
 ### Fixed
 
 - On Windows, `read`, `write`, `edit`, `ls`, `grep`, and `find` now resolve paths under the bash mount table, such as `/tmp/...` and `/usr/...`, to the directories bash uses instead of the current drive root. The bundled [Shell paths](docs/bundled/extensions/shell-paths.md) extension reads the mounts from the configured shell.

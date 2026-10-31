@@ -206,6 +206,7 @@ import {
 } from "./theme/theme.ts";
 import { InteractiveThemeController } from "./theme/theme-controller.ts";
 import { disposeChatRows, PendingToolMap, ToolChatContainer } from "./tool-view/chat.ts";
+import { TranscriptLayoutContainer } from "./transcript-layout.ts";
 import { createInteractiveTui, createInteractiveTuiReference } from "./tui-renderer.ts";
 
 export { createInteractiveTui, createInteractiveTuiReference } from "./tui-renderer.ts";
@@ -477,8 +478,8 @@ export class InteractiveMode {
 	private ui: TUI;
 	private mainScreenRenderState: TuiMainScreenRenderState | undefined;
 	private loadedResourcesContainer: Container;
-	private chatContainer: Container;
-	private documentContainer: Container;
+	private chatContainer: ToolChatContainer;
+	private documentContainer: TranscriptLayoutContainer;
 	private transcriptScrollView: TuiLayouts.ScrollView | undefined;
 	private fullscreenLayoutRoot: Component | undefined;
 	private pendingMessagesContainer: Container;
@@ -673,7 +674,7 @@ export class InteractiveMode {
 		this.headerContainer = new Container();
 		this.loadedResourcesContainer = new Container();
 		this.chatContainer = new ToolChatContainer();
-		this.documentContainer = new Container();
+		this.documentContainer = new TranscriptLayoutContainer();
 		this.documentContainer.addChild(this.headerContainer);
 		this.documentContainer.addChild(this.loadedResourcesContainer);
 		this.documentContainer.addChild(this.chatContainer);
@@ -1007,6 +1008,7 @@ export class InteractiveMode {
 		this.renderWidgets(); // Initialize with default spacer
 		const viewport = createChatViewport({
 			document: this.documentContainer,
+			chat: this.chatContainer,
 			pendingMessages: this.pendingMessagesContainer,
 			status: this.statusContainer,
 			widgetsAbove: this.widgetContainerAbove,
@@ -1016,6 +1018,7 @@ export class InteractiveMode {
 			scrollbar: this.settingsManager.getFullscreenScrollbar(),
 			scrollbarTrackStyle: (text) => theme.fg("scrollbarTrack", text),
 			scrollbarThumbStyle: (text) => theme.fg("scrollbarThumb", text),
+			outputPad: () => this.outputPad,
 		});
 		this.transcriptScrollView = viewport.transcript;
 		this.fullscreenLayoutRoot = viewport.root;

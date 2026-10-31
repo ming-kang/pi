@@ -1,6 +1,7 @@
-import { type Component, Container } from "@earendil-works/pi-tui";
+import type { Component, Container } from "@earendil-works/pi-tui";
 import { stripAnsi } from "../../../utils/ansi.ts";
 import { ToolExecutionComponent } from "../components/tool-execution.ts";
+import { TranscriptLayoutContainer } from "../transcript-layout.ts";
 
 function disposeAll(components: Iterable<unknown>): void {
 	for (const component of components) {
@@ -15,7 +16,7 @@ function disposeAll(components: Iterable<unknown>): void {
  * Single-line tools read as one compact list; a multiline tool leaves a blank line before the
  * next tool. Clearing the chat disposes its tool rows, so renderer timers never outlive them.
  */
-export class ToolChatContainer extends Container {
+export class ToolChatContainer extends TranscriptLayoutContainer {
 	override render(width: number): string[] {
 		let previous: Component | undefined;
 		let previousHeight = 0;
@@ -38,7 +39,7 @@ export class ToolChatContainer extends Container {
 			}
 			previous = child;
 		}
-		// Keep Container's mouse layout in sync with the final spacing.
+		// Record child rows after the final tool spacing is known.
 		return super.render(width);
 	}
 

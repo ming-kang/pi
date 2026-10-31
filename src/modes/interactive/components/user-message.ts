@@ -1,4 +1,4 @@
-import { Container, Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { Container, Markdown, type MarkdownTheme, stripTerminalSequences } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
@@ -15,6 +15,7 @@ export class UserMessageComponent extends Container {
 	private markdownTheme: MarkdownTheme;
 	private outputPad: number;
 	private markdownTransformers: readonly MarkdownTransformer[];
+	private readonly navigationAnchorOffsets = new Map<number, number>();
 
 	constructor(
 		text: string,
@@ -30,12 +31,32 @@ export class UserMessageComponent extends Container {
 		this.rebuild();
 	}
 
+	getNavigationSummary(): string {
+		return this.text.replaceAll(/\s+/g, " ").trim();
+	}
+
+	/** First visible text row within this component, after Markdown padding and leading blank lines. */
+	getNavigationAnchorOffset(width: number): number {
+		const cached = this.navigationAnchorOffsets.get(width);
+		if (cached !== undefined) return cached;
+		const offset = this.render(width).findIndex((line) => stripTerminalSequences(line).trim().length > 0);
+		const anchorOffset = offset < 0 ? 0 : offset;
+		this.navigationAnchorOffsets.set(width, anchorOffset);
+		return anchorOffset;
+	}
+
 	setOutputPad(padding: number): void {
 		this.outputPad = padding;
 		this.rebuild();
 	}
 
+	override invalidate(): void {
+		super.invalidate();
+		this.navigationAnchorOffsets.clear();
+	}
+
 	private rebuild(): void {
+		this.navigationAnchorOffsets.clear();
 		this.clear();
 		// The Markdown pads and colors its own background: a Box around it would keep a second full-width copy of every
 		// line, with identical output.

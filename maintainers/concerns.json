@@ -605,6 +605,30 @@
 			]
 		},
 		{
+			"id": "fullscreen-sticky-user-message",
+			"why": "Fullscreen transcript navigation pins the nearest scrolled-past user message as a subdued clickable one-line summary.",
+			"paths": [
+				{
+					"path": "src/modes/interactive/chat-viewport.ts",
+					"rewrite": "The fullscreen transcript adds a sticky-prompt row and compensating content padding, with a ScrollView layout callback supplying rendered user-message anchors."
+				},
+				{
+					"path": "src/modes/interactive/components/user-message.ts"
+				},
+				{
+					"path": "src/modes/interactive/interactive-mode.ts"
+				}
+			],
+			"tests": [
+				"test/sticky-user-message.test.ts",
+				"test/chat-viewport-sticky.test.ts",
+				"test/chat-viewport.test.ts",
+				"test/user-message.test.ts",
+				"test/tool-view.test.ts",
+				"test/interactive-tui.test.ts"
+			]
+		},
+		{
 			"id": "docs-and-tests",
 			"why": "Distribution-owned user documentation and tests that track the standalone layout and registered deviations.",
 			"paths": [
