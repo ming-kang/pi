@@ -143,16 +143,16 @@ describe("cached compaction", () => {
 			durationMs: 18_400,
 		} as const;
 
-		expect(render(automatic, false)).toEqual([" └ from cache · auto · CH 98.8% · ↓2.8k · 18s"]);
+		expect(render(automatic, false)).toEqual([" From cache · auto · CH 98.8% · ↓2.8k · 18s"]);
 		expect(render(automatic, true)).toEqual([
-			" └ from cache · auto · CH 98.8% · 18s",
-			"   prompt 649k = R641k cached + W4.5k written + ↑3.1k uncached",
-			"   output ↓2.8k",
+			" From cache · auto · CH 98.8% · 18s",
+			" Prompt 649k = R641k cached + W4.5k written + ↑3.1k uncached",
+			" Output ↓2.8k",
 		]);
 		expect(render({ ...automatic, reason: "manual", cacheRead: 0, cacheWrite: 0, input: 900 }, true)).toEqual([
-			" └ from cache · manual · 18s",
-			"   prompt 900 = ↑900 uncached",
-			"   output ↓2.8k",
+			" From cache · manual · 18s",
+			" Prompt 900 = ↑900 uncached",
+			" Output ↓2.8k",
 		]);
 	});
 
