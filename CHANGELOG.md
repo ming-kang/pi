@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Fixed
+
+- `/agent` no longer flashes the editor when moving between its settings panel and the model or effort picker; every page now stays in one dialog.
+
 ## [1.4.7] - 2026-10-31
 
 ### Added

@@ -69,12 +69,19 @@ function mouse(component: Component, type: "press" | "click", y: number): void {
 	component.handleMouse?.({ ...event, shift: false, alt: false, ctrl: false });
 }
 
-/** Drive real component input and observe rendered frames and persisted settings. */
+/** Let pending saves finish and the next page mount. */
+function settle(): Promise<void> {
+	return new Promise((resolve) => setImmediate(resolve));
+}
+
+/** Drive real component input page by page and observe rendered frames, dialogs, and persisted settings. */
 function installUi(steps: UiStep[] = [], keys = new KeybindingsManager()) {
 	setKeybindings(keys);
 	const frames: string[] = [];
 	const notify = vi.fn();
+	const dialogs = { opened: 0 };
 	const custom: ExtensionUIContext["custom"] = async <T>(factory: UiFactory<T>) => {
+		dialogs.opened++;
 		let closed = false;
 		let result: T | undefined;
 		const tui = createFakeTui();
@@ -83,17 +90,20 @@ function installUi(steps: UiStep[] = [], keys = new KeybindingsManager()) {
 			result = value;
 		});
 		try {
-			frames.push(frame(component));
-			(steps.shift() ?? cancel)(component);
-			if (!closed) throw new Error("UI step did not close the selector");
-			return result as T;
+			for (let page = 0; ; page++) {
+				await settle();
+				if (closed) return result as T;
+				if (page > 20) throw new Error("UI steps did not close the dialog");
+				frames.push(frame(component));
+				(steps.shift() ?? cancel)(component);
+			}
 		} finally {
 			component.dispose?.();
 		}
 	};
 	const runner = harness.session.extensionRunner;
 	runner.setUIContext(createTestUiContext({ custom, notify }), "tui");
-	return { ctx: runner.createCommandContext(), frames, notify };
+	return { ctx: runner.createCommandContext(), frames, notify, dialogs };
 }
 
 async function maxSession(): Promise<void> {
@@ -163,7 +173,7 @@ describe("Agent settings", () => {
 	it("reuses scoped model search without switching the parent or saving global defaults", async () => {
 		harness = await createHarness({ models: [{ id: "main" }, { id: "worker" }] });
 		harness.session.setScopedModels([{ model: harness.models[1]! }]);
-		const { ctx, frames } = installUi([
+		const { ctx, frames, dialogs } = installUi([
 			action("Model"),
 			(component) => {
 				expect(frame(component)).toContain("worker [faux]");
@@ -178,6 +188,8 @@ describe("Agent settings", () => {
 		await openAgentSettings(ctx);
 		expect(readAgentSettings(ctx)).toEqual({ model: "faux/worker" });
 		expect(frames.at(-1)).toMatch(/› Model\s+faux\/worker\s*\n/);
+		// Pages change inside one dialog, so the editor never shows between the panel and the picker.
+		expect(dialogs.opened).toBe(1);
 		expect(harness.session.model?.id).toBe("main");
 		expect(harness.settingsManager.getDefaultModel()).toBeUndefined();
 		expect(harness.session.scopedModels.map((entry) => entry.model.id)).toEqual(["worker"]);

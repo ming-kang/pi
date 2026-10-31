@@ -5,6 +5,7 @@ import type { ExtensionCommandContext, ExtensionContext } from "../../core/exten
 import { truncateHead } from "../../core/tools/truncate.ts";
 import { ModelSelectorComponent } from "../../modes/interactive/components/model-selector.ts";
 import { ThinkingSelectorComponent } from "../../modes/interactive/components/thinking-selector.ts";
+import { AgentSettingsHost } from "./settings-host.ts";
 import {
 	type AgentSettingsAction,
 	type AgentSettingsField,
@@ -113,10 +114,14 @@ async function saveAgentSettings(
 	await ctx.setExtensionSettings(AGENT_SETTINGS_NAMESPACE, next);
 }
 
-async function selectAgentModel(ctx: ExtensionCommandContext, current: string): Promise<string | undefined> {
+async function selectAgentModel(
+	ctx: ExtensionCommandContext,
+	host: AgentSettingsHost,
+	current: string,
+): Promise<string | undefined> {
 	// Preselect the saved reference even when it is unavailable, so the picker can repair it.
 	const saved = resolveAgentModel(ctx, current)?.model;
-	const selected = await ctx.ui.custom<Model<any> | undefined>(
+	const selected = await host.show<Model<any> | undefined>(
 		(tui, _theme, _keys, done) =>
 			new ModelSelectorComponent(tui, saved ?? ctx.model, ctx.modelRuntime, ctx.scopedModels, done, () =>
 				done(undefined),
@@ -127,13 +132,14 @@ async function selectAgentModel(ctx: ExtensionCommandContext, current: string): 
 
 async function selectAgentThinking(
 	ctx: ExtensionCommandContext,
+	host: AgentSettingsHost,
 	settings: AgentSettings,
 	model: Model<any> | undefined,
 ): Promise<ThinkingLevel | undefined> {
 	const requested = requestedEffort(ctx, settings);
 	const current = model ? supportedEffort(model, requested) : requested;
 	const available = model ? getSupportedThinkingLevels(model) : [...THINKING_LEVEL_OPTIONS];
-	return ctx.ui.custom<ThinkingLevel | undefined>(
+	return host.show<ThinkingLevel | undefined>(
 		(_tui, _theme, _keys, done) => new ThinkingSelectorComponent(current, available, done, () => done(undefined)),
 	);
 }
@@ -212,6 +218,19 @@ export async function openAgentSettings(ctx: ExtensionCommandContext): Promise<v
 		}
 		return;
 	}
+	const outcome = await ctx.ui.custom<{ error: unknown } | undefined>((tui, theme, keys, done) => {
+		const host = new AgentSettingsHost(tui, theme, keys);
+		runAgentSettings(ctx, host).then(
+			() => done(undefined),
+			(error: unknown) => done({ error }),
+		);
+		return host;
+	});
+	if (outcome) throw outcome.error;
+}
+
+/** Every page shares one dialog, so moving between them never exposes the editor. */
+async function runAgentSettings(ctx: ExtensionCommandContext, host: AgentSettingsHost): Promise<void> {
 	let selectedAction: AgentSettingsAction = "model";
 	while (true) {
 		let inspection: InspectedAgentSettings;
@@ -222,7 +241,7 @@ export async function openAgentSettings(ctx: ExtensionCommandContext): Promise<v
 			return;
 		}
 		const resolution = inspection.invalidModel !== undefined ? undefined : resolveAgentModel(ctx, inspection.model);
-		const action = await ctx.ui.custom<AgentSettingsAction | undefined>(
+		const action = await host.show<AgentSettingsAction | undefined>(
 			(tui, theme, keys, done) =>
 				new AgentSettingsPanel(
 					tui,
@@ -242,12 +261,12 @@ export async function openAgentSettings(ctx: ExtensionCommandContext): Promise<v
 				await saveAgentSettings(ctx, { model: null, thinking: null });
 				ctx.ui.notify("Agent settings: Follow current session", "info");
 			} else if (action === "model") {
-				const selected = await selectAgentModel(ctx, inspection.model ?? "");
+				const selected = await selectAgentModel(ctx, host, inspection.model ?? "");
 				if (selected === undefined || selected === inspection.model) continue;
 				await saveAgentSettings(ctx, { model: selected });
 				ctx.ui.notify(`Agent model: ${selected}`, "info");
 			} else if (action === "thinking") {
-				const selected = await selectAgentThinking(ctx, inspection, resolution?.model);
+				const selected = await selectAgentThinking(ctx, host, inspection, resolution?.model);
 				if (
 					selected === undefined ||
 					(selected === inspection.thinking && inspection.invalidThinking === undefined)
