@@ -27,12 +27,12 @@ const WEB_EXCERPT_MAX_CHARS = 1500;
 const CodeSearchParams = Type.Object({
 	query: Type.String({
 		description:
-			"Natural-language description of the behavior, flow, error, or concept to locate, in concise English. Keep identifiers, API names, and error text verbatim. Not for a bare symbol, filename, or literal.",
+			"One behavior, flow, or error to locate, in concise English. Keep identifiers and error text verbatim. Not for a bare symbol, filename, or literal.",
 	}),
 	path: Type.Optional(
 		Type.String({
 			description:
-				"Subdirectory to search, relative to or inside the working directory. Defaults to the working directory.",
+				"Subdirectory inside the working directory; set it when you know the subsystem. Defaults to the working directory.",
 		}),
 	),
 });
@@ -75,12 +75,11 @@ export default function search(pi: ExtensionAPI): void {
 		name: "code_search",
 		label: "Code Search",
 		description:
-			"Find where behavior lives in the local repository from a description of it. " +
-			"Returns candidate files with line ranges.",
-		promptSnippet: "Find code by describing its behavior",
+			"Locate code from a plain-language description of a behavior, flow, or error. Returns up to 10 candidate files with line ranges, not every match.",
+		promptSnippet: "Describe a behavior and receive candidate files with line ranges",
 		promptGuidelines: [
-			"Use `code_search` when you cannot name the file or symbol you need; use `read`, `grep`, or `find` when you can.",
-			"Read the returned ranges before editing; the locations are candidates, not answers.",
+			"Use `code_search` primarily to orient in unfamiliar code: where a behavior or error is handled, or how a flow crosses files. When you can name the file, symbol, or literal, search for it directly.",
+			"Treat `code_search` results as a reading list; grep identifiers found there when you need every occurrence, such as all call sites.",
 		],
 		parameters: CodeSearchParams,
 		renderCall: renderCodeSearchCall,
