@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.4.8] - 2026-10-31
+
 ### Removed
 
 - **Breaking (SDK):** `ResolvedResource.skillInvocationOverride` is removed. Package resolution no longer carries invocation policy; the resource loader applies `skillInvocationOverrides` to the loaded skills.
