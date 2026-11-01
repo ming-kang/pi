@@ -43,13 +43,13 @@ jobs:
             throw new Error(`Expected a stable numeric version tag such as pi-v1.0.0, got ${version}.`);
           }
           const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-          const shrinkwrap = JSON.parse(readFileSync("npm-shrinkwrap.json", "utf8"));
+          const lockfile = JSON.parse(readFileSync("package-lock.json", "utf8"));
           if (packageJson.name !== "@astralyn/pi") {
             throw new Error(`Expected the root package to be @astralyn/pi, got ${packageJson.name}.`);
           }
-          if (packageJson.version !== version || shrinkwrap.version !== version) {
+          if (packageJson.version !== version || lockfile.version !== version) {
             throw new Error(
-              `Tag version ${version} must match package.json (${packageJson.version}) and npm-shrinkwrap.json (${shrinkwrap.version}).`,
+              `Tag version ${version} must match package.json (${packageJson.version}) and package-lock.json (${lockfile.version}).`,
             );
           }
           const releaseHeading = `## [${version}] - `;
@@ -88,7 +88,7 @@ jobs:
           node-version: 22
 
       - name: Install OIDC-capable npm
-        run: npm install --global npm@11.15.0
+        run: npm install --global npm@12.2.1
 
       - name: Download verified artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

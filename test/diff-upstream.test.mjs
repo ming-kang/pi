@@ -137,7 +137,7 @@ function createTestRepo({ sourceDependencies = runtimeDependencies, sourceDevDep
 	writeJson(join(root, "maintainers", "upstream.json"), manifest);
 	writeLedger(root);
 
-	writeJson(join(root, "npm-shrinkwrap.json"), {
+	writeJson(join(root, "package-lock.json"), {
 		lockfileVersion: 3,
 		packages: {
 			"": { dependencies: runtimeDependencies },
@@ -249,7 +249,7 @@ describe("diff-upstream manifest and dependency validation", () => {
 		expect(nonObjectRes.stderr).toContain("package.json must be a JSON object");
 	});
 
-	test("detects dependency mismatch between package.json, shrinkwrap, and upstream range", () => {
+	test("detects dependency mismatch between package.json, package-lock, and upstream range", () => {
 		const repo = createTestRepo({ sourceDependencies: { ...runtimeDependencies, "@earendil-works/pi-ai": "^2.0.0" } });
 		const result = invoke(repo.root, ["--check"]);
 		expect(result.code).toBe(1);
@@ -267,25 +267,25 @@ describe("diff-upstream manifest and dependency validation", () => {
 		);
 
 		const rootSpecRepo = createTestRepo();
-		const rootSpecShrinkwrapPath = join(rootSpecRepo.root, "npm-shrinkwrap.json");
-		const rootSpecShrinkwrap = readJson(rootSpecShrinkwrapPath);
-		rootSpecShrinkwrap.packages[""].dependencies["@earendil-works/pi-mcp"] = "1.2.4";
-		writeJson(rootSpecShrinkwrapPath, rootSpecShrinkwrap);
+		const rootSpecLockfilePath = join(rootSpecRepo.root, "package-lock.json");
+		const rootSpecLockfile = readJson(rootSpecLockfilePath);
+		rootSpecLockfile.packages[""].dependencies["@earendil-works/pi-mcp"] = "1.2.4";
+		writeJson(rootSpecLockfilePath, rootSpecLockfile);
 		const rootSpecResult = invoke(rootSpecRepo.root, ["--check"]);
 		expect(rootSpecResult.code).toBe(1);
 		expect(rootSpecResult.stderr).toContain(
-			"npm-shrinkwrap.json root spec for @earendil-works/pi-mcp (1.2.4) does not match package.json (1.2.3)",
+			"package-lock.json root spec for @earendil-works/pi-mcp (1.2.4) does not match package.json (1.2.3)",
 		);
 
 		const installedRepo = createTestRepo();
-		const installedShrinkwrapPath = join(installedRepo.root, "npm-shrinkwrap.json");
-		const installedShrinkwrap = readJson(installedShrinkwrapPath);
-		installedShrinkwrap.packages["node_modules/@earendil-works/pi-codemode"].version = "1.2.4";
-		writeJson(installedShrinkwrapPath, installedShrinkwrap);
+		const installedLockfilePath = join(installedRepo.root, "package-lock.json");
+		const installedLockfile = readJson(installedLockfilePath);
+		installedLockfile.packages["node_modules/@earendil-works/pi-codemode"].version = "1.2.4";
+		writeJson(installedLockfilePath, installedLockfile);
 		const installedResult = invoke(installedRepo.root, ["--check"]);
 		expect(installedResult.code).toBe(1);
 		expect(installedResult.stderr).toContain(
-			"npm-shrinkwrap.json installed version for @earendil-works/pi-codemode (1.2.4) does not match package.json (1.2.3)",
+			"package-lock.json installed version for @earendil-works/pi-codemode (1.2.4) does not match package.json (1.2.3)",
 		);
 	});
 
@@ -306,7 +306,7 @@ describe("diff-upstream manifest and dependency validation", () => {
 		packageJson.devDependencies = { "@earendil-works/pi-mcp": packageJson.dependencies["@earendil-works/pi-mcp"] };
 		delete packageJson.dependencies["@earendil-works/pi-mcp"];
 		writeJson(packagePath, packageJson);
-		const lockPath = join(repo.root, "npm-shrinkwrap.json");
+		const lockPath = join(repo.root, "package-lock.json");
 		const lock = readJson(lockPath);
 		lock.packages[""].devDependencies = packageJson.devDependencies;
 		delete lock.packages[""].dependencies["@earendil-works/pi-mcp"];
@@ -333,7 +333,7 @@ describe("diff-upstream manifest and dependency validation", () => {
 describe("diff-upstream worktree collection and CLI execution", () => {
 	test("checks staged changes against the staged ledger rather than an unstaged repair", () => {
 		const repo = createTestRepo();
-		git(repo.root, "add", "-f", "--", "maintainers/upstream.json", "maintainers/concerns.json", "npm-shrinkwrap.json");
+		git(repo.root, "add", "-f", "--", "maintainers/upstream.json", "maintainers/concerns.json", "package-lock.json");
 		writeFileSync(join(repo.root, "mod.txt"), "changed\n");
 		git(repo.root, "add", "mod.txt");
 		writeLedger(repo.root, [concern("local-fix", ["mod.txt"])]);
@@ -632,7 +632,7 @@ describe("diff-upstream applyUpstreamRelease", () => {
 
 	test("the staged check looks for conflict markers in the index", () => {
 		const repo = createTestRepo();
-		git(repo.root, "add", "-f", "--", "maintainers", "npm-shrinkwrap.json");
+		git(repo.root, "add", "-f", "--", "maintainers", "package-lock.json");
 		const conflicted = ["<<<<<<< distribution", "local()", "=======", "upstream()", ">>>>>>> upstream", ""];
 		writeFileSync(join(repo.root, "src", "app.ts"), conflicted.join("\n"));
 
@@ -713,7 +713,7 @@ describe("diff-upstream registerUpstreamAdoptions", () => {
 	test("leaves the root manifests untracked: they are not paths in the baseline tree", () => {
 		const repo = createTestRepo();
 		expect(register(repo.root)).toEqual([]);
-		expect(git(repo.root, "ls-files", "--", "npm-shrinkwrap.json")).toBe("");
+		expect(git(repo.root, "ls-files", "--", "package-lock.json")).toBe("");
 	});
 });
 
@@ -840,7 +840,7 @@ describe("diff-upstream conflict surface", () => {
 		const repo = createTestRepo();
 		writeLedger(repo.root, [concern("fork-log", ["src/app.ts"])]);
 		writeFileSync(join(repo.root, "src", "app.ts"), thin);
-		git(repo.root, "add", "-f", "--", "maintainers", "npm-shrinkwrap.json", "src/app.ts");
+		git(repo.root, "add", "-f", "--", "maintainers", "package-lock.json", "src/app.ts");
 		writeFileSync(join(repo.root, "src", "app.ts"), wrapped.join("\n"));
 
 		expect(invoke(repo.root, ["--check"]).stderr).toContain("measures as rewrite");

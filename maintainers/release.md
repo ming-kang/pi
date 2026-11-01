@@ -27,7 +27,7 @@ The distribution follows upstream's `major.minor` line and increments the patch:
    ```
    After confirmation, the command:
    - Moves `[Unreleased]` changelog entries to a new version header.
-   - Bumps `package.json` and updates `npm-shrinkwrap.json`.
+   - Bumps `package.json` and updates `package-lock.json`.
    - Commits `chore: release <version>` and creates annotated tag `pi-v<version>`.
    - Pushes `main` and the tag with one atomic push.
 

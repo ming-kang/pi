@@ -20,11 +20,11 @@ export function checkInstalledDependencies(root) {
 	root = resolve(root);
 	const manifestPath = join(root, "package.json");
 	const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-	const lock = JSON.parse(readFileSync(join(root, "npm-shrinkwrap.json"), "utf8"));
+	const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
 	const failures = [];
 	const require = createRequire(manifestPath);
 	if (manifest.version !== lock.version || manifest.version !== lock.packages?.[""]?.version) {
-		failures.push("Package and shrinkwrap root versions must match.");
+		failures.push("Package and package-lock root versions must match.");
 	}
 	for (const section of sections) {
 		const declared = manifest[section] ?? {};
@@ -32,7 +32,7 @@ export function checkInstalledDependencies(root) {
 		for (const name of new Set([...Object.keys(declared), ...Object.keys(locked)])) {
 			const specifier = declared[name];
 			if (specifier !== locked[name]) {
-				failures.push(`${section}.${name}: manifest ${specifier} differs from shrinkwrap ${locked[name]}.`);
+				failures.push(`${section}.${name}: manifest ${specifier} differs from package-lock ${locked[name]}.`);
 			}
 			if (typeof specifier !== "string") {
 				failures.push(`${section}.${name}: expected a version string.`);
@@ -46,7 +46,7 @@ export function checkInstalledDependencies(root) {
 			}
 			const entry = lock.packages?.[`node_modules/${name}`];
 			if (entry?.version !== target.version) {
-				failures.push(`${name}: shrinkwrap resolves ${entry?.version}, expected ${target.version}.`);
+				failures.push(`${name}: package-lock resolves ${entry?.version}, expected ${target.version}.`);
 			}
 			const candidates = (require.resolve.paths(name) ?? []).map((directory) =>
 				join(directory, name, "package.json"),
@@ -81,7 +81,7 @@ if (
 	if (failures.length) {
 		console.error(`Installed dependency checks failed:\n${failures.map((failure) => `  - ${failure}`).join("\n")}`);
 		console.error(
-			"Reconcile package.json, npm-shrinkwrap.json, and node_modules before building or testing. See maintainers/dependencies.md.",
+			"Reconcile package.json, package-lock.json, and node_modules before building or testing. See maintainers/dependencies.md.",
 		);
 		process.exitCode = 1;
 	} else console.log("Verified declared, locked, and installed dependency versions.");

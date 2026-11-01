@@ -33,7 +33,7 @@ export const MAX_PATCH_REINDENT = 10;
 // Applying a release leaves these paths for porting by hand: distribution-owned
 // prose, where this distribution keeps its text and ports upstream facts, and the
 // root manifests, which npm regenerates. Entries match like ledger claims.
-export const REVIEW_PATHS = ["CHANGELOG.md", "README.md", "docs/", "npm-shrinkwrap.json", "package.json"];
+export const REVIEW_PATHS = ["CHANGELOG.md", "README.md", "docs/", "package-lock.json", "package.json"];
 // Applying a release labels conflict sides with these names, and --check refuses
 // any file that still carries the resulting markers.
 const MERGE_LABELS = { ours: "distribution", base: "baseline", theirs: "upstream" };
@@ -340,7 +340,7 @@ function verifyBaseline(manifest, failures, warnings, tryGit) {
 
 function verifyUpstreamDependencies(upstreamPackage, manifest, failures, readJson) {
 	const packageJson = readJson("package.json", failures);
-	const shrinkwrap = readJson("npm-shrinkwrap.json", failures);
+	const lockfile = readJson("package-lock.json", failures);
 
 	const localVersions = {};
 	if (packageJson !== undefined) {
@@ -362,23 +362,23 @@ function verifyUpstreamDependencies(upstreamPackage, manifest, failures, readJso
 		}
 	}
 
-	if (shrinkwrap !== undefined) {
-		if (!isPlainObject(shrinkwrap)) {
-			failures.push("npm-shrinkwrap.json must be a JSON object");
+	if (lockfile !== undefined) {
+		if (!isPlainObject(lockfile)) {
+			failures.push("package-lock.json must be a JSON object");
 		} else {
-			const packages = shrinkwrap.packages;
+			const packages = lockfile.packages;
 			if (!isPlainObject(packages)) {
-				failures.push("npm-shrinkwrap.json.packages must be an object");
+				failures.push("package-lock.json.packages must be an object");
 			} else {
 				const rootPkg = packages[""];
 				if (!isPlainObject(rootPkg) || !isPlainObject(rootPkg.dependencies)) {
-					failures.push('npm-shrinkwrap.json.packages[""].dependencies must be an object');
+					failures.push('package-lock.json.packages[""].dependencies must be an object');
 				} else {
 					for (const dep of upstreamDependencyNames) {
 						const rootSpec = rootPkg.dependencies[dep] ?? rootPkg.devDependencies?.[dep];
 						if (localVersions[dep] && rootSpec !== localVersions[dep]) {
 							failures.push(
-								`npm-shrinkwrap.json root spec for ${dep} (${String(rootSpec)}) does not match package.json (${localVersions[dep]})`,
+								`package-lock.json root spec for ${dep} (${String(rootSpec)}) does not match package.json (${localVersions[dep]})`,
 							);
 						}
 					}
@@ -387,10 +387,10 @@ function verifyUpstreamDependencies(upstreamPackage, manifest, failures, readJso
 				for (const dep of upstreamDependencyNames) {
 					const installed = packages[`node_modules/${dep}`];
 					if (!isPlainObject(installed)) {
-						failures.push(`npm-shrinkwrap.json is missing installed entry node_modules/${dep}`);
+						failures.push(`package-lock.json is missing installed entry node_modules/${dep}`);
 					} else if (localVersions[dep] && installed.version !== localVersions[dep]) {
 						failures.push(
-							`npm-shrinkwrap.json installed version for ${dep} (${String(installed.version)}) does not match package.json (${localVersions[dep]})`,
+							`package-lock.json installed version for ${dep} (${String(installed.version)}) does not match package.json (${localVersions[dep]})`,
 						);
 					}
 				}

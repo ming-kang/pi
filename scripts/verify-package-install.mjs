@@ -103,10 +103,8 @@ function readTarballManifest(tarball) {
 	throw new Error(`${installSpec} has no package/package.json.`);
 }
 
-// npm applies a package's npm-shrinkwrap.json only when it installs that package
-// from a registry, which nests the locked dependencies below the package; a
-// tarball path installs them flat instead. Serve a tarball from a loopback
-// registry for its scope so it installs exactly as users install the release.
+// Serve a tarball from a loopback registry for its scope so verification follows
+// the same registry-install path users take when installing the published release.
 async function serveTarball(tarball) {
 	const bytes = readFileSync(tarball);
 	const manifest = readTarballManifest(bytes);
@@ -122,7 +120,6 @@ async function serveTarball(tarball) {
 					versions: {
 						[manifest.version]: {
 							...manifest,
-							_hasShrinkwrap: true,
 							dist: { tarball: `${origin}/package.tgz`, integrity },
 						},
 					},
@@ -226,7 +223,6 @@ async function verifyInstallation() {
 			"docs/index.md",
 			"examples/sdk/01-minimal.ts",
 			"examples/sdk/README.md",
-			"npm-shrinkwrap.json",
 		];
 		for (const relativePath of requiredFiles) {
 			const requiredPath = join(packageDirectory, ...relativePath.split("/"));

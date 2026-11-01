@@ -28,7 +28,7 @@ function fixture() {
 		},
 	};
 	writeJson(join(root, "package.json"), manifest);
-	writeJson(join(root, "npm-shrinkwrap.json"), lock);
+	writeJson(join(root, "package-lock.json"), lock);
 	writeJson(join(root, "node_modules/example/package.json"), {
 		name: "example", version: "2.0.0", exports: { "./feature": "./feature.js" },
 	});
@@ -62,9 +62,9 @@ describe("installed dependency gate", () => {
 		const { root, lock } = fixture();
 		rmSync(join(root, "node_modules/alias"), { recursive: true });
 		lock.packages["node_modules/example"].version = "1.9.0";
-		writeJson(join(root, "npm-shrinkwrap.json"), lock);
+		writeJson(join(root, "package-lock.json"), lock);
 		const failures = checkInstalledDependencies(root).join("\n");
 		expect(failures).toContain("alias: package is not installed");
-		expect(failures).toContain("shrinkwrap resolves 1.9.0, expected 2.0.0");
+		expect(failures).toContain("package-lock resolves 1.9.0, expected 2.0.0");
 	});
 });

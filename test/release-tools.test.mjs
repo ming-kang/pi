@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { classifyLockfileChanges } from "../scripts/check-lockfile-commit.mjs";
-import { nextVersion, stampChangelog, stampShrinkwrap } from "../scripts/release.mjs";
+import { nextVersion, stampChangelog, stampLockfile } from "../scripts/release.mjs";
 
 const temporaryDirectories = [];
 
@@ -35,7 +35,7 @@ function createReleaseFixture() {
 		repository: { url: "https://github.com/example/pi" },
 	});
 	writeJson(join(root, "maintainers/upstream.json"), { tag: "v1.0.0" });
-	writeJson(join(root, "npm-shrinkwrap.json"), { version: "1.0.0", packages: { "": { version: "1.0.0" } } });
+	writeJson(join(root, "package-lock.json"), { version: "1.0.0", packages: { "": { version: "1.0.0" } } });
 	writeFileSync(join(root, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n\n- Fixed a thing.\n");
 
 	// The release script uses the same npm CLI as its parent. This local fixture
@@ -87,7 +87,7 @@ describe("release confirmation", () => {
 	test("dry-run and a non-interactive release without --yes leave the repository unchanged", () => {
 		const fixture = createReleaseFixture();
 		const head = git(fixture.root, "rev-parse", "HEAD");
-		const releaseFiles = ["CHANGELOG.md", "package.json", "npm-shrinkwrap.json"];
+		const releaseFiles = ["CHANGELOG.md", "package.json", "package-lock.json"];
 		const files = releaseFiles.map((file) => readFileSync(join(fixture.root, file), "utf8"));
 
 		const preview = runRelease(fixture, "--dry-run");
@@ -158,7 +158,7 @@ describe("stampChangelog", () => {
 	});
 });
 
-describe("stampShrinkwrap", () => {
+describe("stampLockfile", () => {
 	const lock = `${JSON.stringify(
 		{
 			name: "@astralyn/pi",
@@ -174,7 +174,7 @@ describe("stampShrinkwrap", () => {
 	)}\n`;
 
 	test("moves both root version copies and leaves every other lockfile entry untouched", () => {
-		const stamped = stampShrinkwrap(lock, "1.3.1");
+		const stamped = stampLockfile(lock, "1.3.1");
 		expect(stamped).toBe(lock.replaceAll('"1.3.0"', '"1.3.1"'));
 		expect(JSON.parse(stamped).packages["node_modules/chalk"]).toEqual({ version: "6.0.0" });
 	});

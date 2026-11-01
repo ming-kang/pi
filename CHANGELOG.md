@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Repository and release automation now use `package-lock.json` with npm 12. Published installations no longer pin transitive dependency resolutions through `npm-shrinkwrap.json`; direct dependencies remain exact and CI continues to install a reproducible tree with `npm ci`.
+
 ### Removed
 
 - The `tasks` tool's `wait` action and its `waitMs` parameter, along with `TasksContext.wait()`/`waitAny()` and their types. Background completions already wake the model automatically, so the model now continues independent work or ends its turn instead of blocking. Steering no longer has wait-only interruption semantics. Saved `tasks wait` results in old sessions render as their saved text. Hosts that must outlast background work use `AgentSession.waitForQuiescence()`.

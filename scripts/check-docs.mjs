@@ -6,7 +6,7 @@ import { dirname, join, posix, relative, resolve, sep } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 const markdownRoots = ["README.md", "CHANGELOG.md", "docs", "examples", "maintainers"];
 const publishedDirectories = ["docs", "examples"];
-const publishedRootFiles = new Set(["CHANGELOG.md", "LICENSE", "README.md", "npm-shrinkwrap.json", "package.json"]);
+const publishedRootFiles = new Set(["CHANGELOG.md", "LICENSE", "README.md", "package.json"]);
 const failures = [];
 
 const toPosix = (path) => path.split(sep).join("/");

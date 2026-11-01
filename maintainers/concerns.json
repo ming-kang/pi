@@ -73,7 +73,7 @@
 				},
 				{
 					"path": "src/package-manager-cli.ts",
-					"rewrite": "The distribution ships a shrinkwrap, so the upstream npm-to-pi.dev migration notice is inapplicable and would replace the installed distribution."
+					"rewrite": "The distribution uses its standalone npm package identity, so the upstream npm-to-pi.dev migration notice is inapplicable and would replace the installed distribution."
 				}
 			],
 			"tests": [

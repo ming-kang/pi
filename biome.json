@@ -35,7 +35,6 @@
 			"!**/node_modules/**/*",
 			"!**/test-sessions.ts",
 			"!test/fixtures/**/*",
-			"!npm-shrinkwrap.json",
 			"!package-lock.json",
 			"!!**/node_modules"
 		]

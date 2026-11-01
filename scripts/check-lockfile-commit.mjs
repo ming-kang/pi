@@ -99,27 +99,27 @@ function main() {
 		.split("\n")
 		.map((line) => line.trim())
 		.filter(Boolean);
-	if (!stagedFiles.includes("npm-shrinkwrap.json")) return 0;
+	if (!stagedFiles.includes("package-lock.json")) return 0;
 
-	const before = readJsonFromGit("HEAD:npm-shrinkwrap.json");
-	const after = readJsonFromGit(":npm-shrinkwrap.json");
+	const before = readJsonFromGit("HEAD:package-lock.json");
+	const after = readJsonFromGit(":package-lock.json");
 	const upstreamTag = readJsonFromGit(":maintainers/upstream.json")?.tag;
 	const result =
 		before?.packages && after?.packages && typeof upstreamTag === "string"
 			? classifyLockfileChanges(before, after, upstreamTag.slice(1))
 			: { routine: false, summary: [] };
 	if (result.routine) {
-		console.error(`npm-shrinkwrap.json: accepted routine change (${result.summary.length} entries).`);
+		console.error(`package-lock.json: accepted routine change (${result.summary.length} entries).`);
 		return 0;
 	}
 
-	console.error("npm-shrinkwrap.json is staged with changes beyond the root version and upstream packages.");
+	console.error("package-lock.json is staged with changes beyond the root version and upstream packages.");
 	console.error("");
 	console.error("Review lockfile changes before committing:");
 	console.error("  - confirm every new/updated package is intentional");
 	console.error("  - confirm npm age gates were active, or record the authorized release-specific exception");
 	console.error("  - review any new lifecycle scripts in the dependency tree");
-	console.error("  - confirm npm-shrinkwrap.json matches package.json and the intended runtime tree");
+	console.error("  - confirm package-lock.json matches package.json and the intended runtime tree");
 	if (result.summary.length > 0) {
 		console.error("");
 		console.error("Detected package changes (including dependency metadata):");

@@ -28,5 +28,5 @@
 
 - **Commit on request:** Commit only when requested by the user or for a release. Stage explicit paths (`git add <path1> <path2>`); review the staged diff before committing. Use Conventional Commits: `<type>[(scope)]: <summary>`.
 - **Forbidden git operations:** Never run `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, or `--no-verify`.
-- **Lockfile changes:** Direct dependencies stay pinned. Staging `npm-shrinkwrap.json` for anything beyond upstream updates requires `PI_ALLOW_LOCKFILE_CHANGE=1`. See [Dependency maintenance](maintainers/dependencies.md).
+- **Lockfile changes:** Direct dependencies stay pinned. Staging `package-lock.json` for anything beyond upstream updates requires `PI_ALLOW_LOCKFILE_CHANGE=1`. See [Dependency maintenance](maintainers/dependencies.md).
 - **Documentation changes:** `README.md` and `docs/**` are published; `maintainers/**` is internal. Register new docs in `docs/docs.json`. Document user-visible changes in `CHANGELOG.md` under `## [Unreleased]`.

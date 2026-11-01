@@ -19,7 +19,7 @@ Follow [AGENTS.md](../AGENTS.md) and the ownership rules in [Architecture](archi
 `npm run diff:upstream -- --check` runs on pre-commit and fails if:
 - An upstream-deviating path lacks a claim (or a claim references an unchanged path).
 - The ledger schema is invalid or a referenced test file is missing.
-- The baseline tree, `@earendil-works/*` dependency pins, and `npm-shrinkwrap.json` disagree.
+- The baseline tree, `@earendil-works/*` dependency pins, and `package-lock.json` disagree.
 - Any conflict markers (`<<<<<<<` / `>>>>>>>`) remain.
 
 ## Keeping deviations small
