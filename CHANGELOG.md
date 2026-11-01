@@ -10,6 +10,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Fixed
 
+- Print and JSON mode now enable managed background execution, so their existing quiescence waits can outlast background work and print the completion turn; RPC mode enables the same execution and delivery path for clients using its quiescence APIs. Ordinary SDK sessions remain opt-in.
 - `tasks read` honours `sinceBytes`, so a read continues from the `next sinceBytes` offset it reported. Previously only `wait` applied the offset and `read` silently ignored it.
 
 ## [1.4.10] - 2026-11-01

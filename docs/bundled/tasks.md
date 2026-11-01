@@ -108,7 +108,7 @@ Background execution belongs to the current session runtime, not a daemon. Paren
 
 The panel is an observer, not a cleanup engine. Admission, bounded history/output retention, completion delivery and headless exit policy are enforced by the core service and hosting mode.
 
-Interactive mode enables Background. Built-in print, JSON, and RPC modes and ordinary SDK sessions leave it disabled and reject `background: true`; normal foreground execution remains available. An SDK embedding can explicitly enable it via `session.bindExtensions({ tasksEnabled: true })`, but must own cancellation, bounded draining, result-driven turns, and shutdown. See [SDK Background execution](../sdk.md#background-execution).
+Interactive mode and built-in print, JSON, and RPC modes enable Background. Ordinary SDK sessions leave it disabled and reject `background: true`; normal foreground execution remains available. An SDK embedding can explicitly enable it via `session.bindExtensions({ tasksEnabled: true })`, but must own cancellation, bounded draining, result-driven turns, and shutdown. See [SDK Background execution](../sdk.md#background-execution).
 
 Managed shell output is collected continuously from startup, including before detach. Background shell output is capped at 20 MiB; crossing the cap fails and stops the command. Foreground output retains its existing uncapped log behavior: detaching a command already over the background budget stops it without deleting the prior bytes. No timeout is supplied by default, and a supplied timeout remains measured from command startup, in seconds, across detach.
 

@@ -164,8 +164,16 @@ describe("runPrintMode with background tasks", () => {
 	const { host, task } = backgroundSessionTest();
 
 	async function setup(responses: Parameters<typeof host>[2]) {
-		const session = await host(true, undefined, responses);
-		await session.bindExtensions({ tasksEnabled: true });
+		let execution: Awaited<ReturnType<typeof task>> | undefined;
+		const session = await host(
+			true,
+			(pi) => {
+				pi.on("session_start", async () => {
+					execution = await task(session);
+				});
+			},
+			responses,
+		);
 		const disposed = vi.fn();
 		const runtimeHost = {
 			session,
@@ -188,16 +196,18 @@ describe("runPrintMode with background tasks", () => {
 			stdout,
 			stderr,
 			disposed,
+			getExecution: () => execution,
 		};
 	}
 
 	it("prints the completion turn of a background task that outlives the prompt", async () => {
-		const { session, runtimeHost, stdout, stderr, disposed } = await setup([
+		const { session, runtimeHost, stdout, stderr, disposed, getExecution } = await setup([
 			fauxAssistantMessage("handed off"),
 			fauxAssistantMessage("worker reported back"),
 		]);
-		const execution = await task(session);
 		const running = runPrintMode(runtimeHost, { mode: "text", initialMessage: "start" });
+		await vi.waitFor(() => expect(getExecution()).toBeDefined());
+		const execution = getExecution()!;
 
 		await vi.waitFor(() =>
 			expect(stderr).toHaveBeenCalledWith(expect.stringContaining("Waiting for 1 background task")),
@@ -213,12 +223,13 @@ describe("runPrintMode with background tasks", () => {
 	});
 
 	it("streams the completion turn and ends with session_quiescent in json mode", async () => {
-		const { session, runtimeHost, stdout } = await setup([
+		const { runtimeHost, stdout, getExecution } = await setup([
 			fauxAssistantMessage("handed off"),
 			fauxAssistantMessage("worker reported back"),
 		]);
-		const execution = await task(session);
 		const running = runPrintMode(runtimeHost, { mode: "json", initialMessage: "start" });
+		await vi.waitFor(() => expect(getExecution()).toBeDefined());
+		const execution = getExecution()!;
 		// The prompt's own turn settled while the task still runs; the process must not exit yet.
 		await vi.waitFor(() => expect(stdout.join("")).toContain('"type":"agent_settled"'));
 		execution.finish();

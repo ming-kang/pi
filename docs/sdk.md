@@ -250,7 +250,7 @@ Both `steer()` and `followUp()` expand file-based prompt templates but error on 
 
 ### Background execution
 
-Background is a session-owned capability, not a daemon or a flag on `createAgentSession()`. Interactive mode enables it. Ordinary SDK sessions and the built-in print, JSON, and RPC hosts leave it disabled and reject native shell or extension calls with `background: true`. Normal foreground tools still work, including standalone `createBashTool()` / `createPowerShellTool()` calls without a session context.
+Background is a session-owned capability, not a daemon or a flag on `createAgentSession()`. Interactive mode and the built-in print, JSON, and RPC hosts enable it. Ordinary SDK sessions leave it disabled and reject native shell or extension calls with `background: true`. Normal foreground tools still work, including standalone `createBashTool()` / `createPowerShellTool()` calls without a session context.
 
 An embedding can opt in with `await session.bindExtensions({ tasksEnabled: true })`. Bind before prompting; this also binds extensions and emits their session-start lifecycle. When using `AgentSessionRuntime`, rebind the replacement session through the runtime's rebind callback. Setting `mode` or providing a UI alone does not enable Background.
 

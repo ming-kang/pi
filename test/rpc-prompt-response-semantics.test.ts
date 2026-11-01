@@ -15,6 +15,7 @@ import { AuthStorage } from "../src/core/auth-storage.ts";
 import type { LoadExtensionsResult } from "../src/core/extensions/index.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
+import tasksExtension from "../src/extensions/tasks/index.ts";
 import { runRpcMode } from "../src/modes/rpc/rpc-mode.ts";
 import { createInMemoryModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
 import { createTestExtensionsResult, createTestResourceLoader } from "./utilities.ts";
@@ -89,6 +90,7 @@ async function createRuntimeHost(options: {
 	extensionsResult?: LoadExtensionsResult;
 }): Promise<{
 	runtimeHost: AgentSessionRuntime;
+	session: AgentSession;
 	cleanup: () => Promise<void>;
 }> {
 	const tempDir = join(tmpdir(), `pi-rpc-prompt-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -146,6 +148,7 @@ async function createRuntimeHost(options: {
 
 	return {
 		runtimeHost,
+		session,
 		cleanup: async () => {
 			try {
 				await session.abort();
@@ -162,16 +165,17 @@ async function createRuntimeHost(options: {
 
 async function startRpcMode(options: Parameters<typeof createRuntimeHost>[0]): Promise<{
 	lineHandler: (line: string) => void;
+	session: AgentSession;
 	cleanup: () => Promise<void>;
 }> {
 	rpcIo.outputLines = [];
 	rpcIo.lineHandler = undefined;
 
-	const { runtimeHost, cleanup } = await createRuntimeHost(options);
+	const { runtimeHost, session, cleanup } = await createRuntimeHost(options);
 	void runRpcMode(runtimeHost);
 	await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
 
-	return { lineHandler: rpcIo.lineHandler!, cleanup };
+	return { lineHandler: rpcIo.lineHandler!, session, cleanup };
 }
 
 describe("RPC prompt response semantics", () => {
@@ -238,6 +242,46 @@ describe("RPC prompt response semantics", () => {
 				});
 			});
 		} finally {
+			await cleanup();
+		}
+	});
+
+	it("enables background tasks and delivers their completion before quiescence", async () => {
+		const { session, cleanup } = await startRpcMode({
+			withAuth: true,
+			responseDelayMs: 0,
+			extensionsResult: await createTestExtensionsResult([tasksExtension]),
+		});
+		let finish!: () => void;
+		const done = new Promise<void>((resolve) => {
+			finish = resolve;
+		});
+
+		try {
+			expect(session.tasks.enabled).toBe(true);
+			const outcome = await session.tasks.execute({
+				kind: "custom",
+				title: "RPC background",
+				toolCallId: "rpc-background",
+				background: true,
+				run: async (control) => {
+					control.accept();
+					await done;
+					return { result: { content: [{ type: "text", text: "done" }], details: undefined } };
+				},
+			});
+			expect(outcome.kind).toBe("background");
+
+			rpcIo.outputLines = [];
+			finish();
+			await vi.waitFor(() => {
+				expect(parseOutputLines(rpcIo.outputLines).map((event) => event.type)).toContain("session_quiescent");
+			});
+			expect(
+				session.messages.some((message) => message.role === "custom" && message.customType === "task-completion"),
+			).toBe(true);
+		} finally {
+			finish();
 			await cleanup();
 		}
 	});
