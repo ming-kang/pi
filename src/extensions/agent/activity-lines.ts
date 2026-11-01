@@ -3,10 +3,11 @@
  * Output both render through `activityLines`, so the two cannot drift apart.
  */
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { StatusMarker } from "../../modes/interactive/components/status-marker.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
 import {
-	activityGlyph,
+	activityMarker,
 	earlierLabel,
 	errorLine,
 	formatActivityDuration,
@@ -15,19 +16,16 @@ import {
 } from "./activity.ts";
 import type { AgentActivity } from "./types.ts";
 
-type ActivityColor = "warning" | "success" | "error" | "muted";
+/** ` · ` before the duration column. */
+const SEPARATOR_WIDTH = 3;
 
-function statusColor(status: AgentActivity["status"]): ActivityColor {
-	switch (status) {
-		case "running":
-			return "warning";
-		case "ok":
-			return "success";
-		case "error":
-			return "error";
-		case "cancelled":
-			return "muted";
-	}
+/** One row's text and marker before styling; widths are measured on these. */
+interface RowParts {
+	activity: AgentActivity;
+	marker: StatusMarker;
+	name: string;
+	target: string;
+	duration: string;
 }
 
 /** One line of tool-call text with no terminal sequences or control characters; the Agent's arguments are untrusted. */
@@ -42,26 +40,42 @@ function shownDuration(activity: AgentActivity, now: number): string {
 	return formatActivityDuration(activity.durationMs);
 }
 
-/** `glyph name target · duration`; a long target gives way before the duration does. */
-function activityRow(activity: AgentActivity, nameWidth: number, width: number, now: number, theme: Theme): string {
-	const separator = theme.fg("dim", " · ");
-	const name = oneLine(activity.name);
-	const target = oneLine(targetOf(activity));
-	const duration = shownDuration(activity, now);
-	const head = `${theme.fg(statusColor(activity.status), activityGlyph(activity.status))} ${theme.fg("toolTitle", name)}`;
+/** `glyph name` with the padding that lines targets up, plus the space before the target. */
+function headWidth(row: RowParts, nameWidth: number): number {
+	return visibleWidth(row.marker.glyph) + 1 + Math.max(nameWidth, visibleWidth(row.name)) + 1;
+}
+
+/**
+ * `glyph name target · duration`, with the durations right-aligned in one column ending at
+ * `tableWidth`. A long target gives way before the duration does.
+ */
+function activityRow(
+	row: RowParts,
+	nameWidth: number,
+	durationWidth: number,
+	tableWidth: number,
+	theme: Theme,
+): string {
+	const { marker, name, target, duration } = row;
 	const padding = " ".repeat(Math.max(0, nameWidth - visibleWidth(name)));
-	const tail = duration ? `${separator}${theme.fg("dim", duration)}` : "";
-	if (!target) return truncateToWidth(head + tail, width, "…");
-	const room = width - visibleWidth(head) - padding.length - 1 - visibleWidth(tail);
+	const head = `${theme.fg(marker.color, marker.glyph)} ${theme.fg("toolTitle", name)}${padding}`;
+	const durationPad = " ".repeat(Math.max(0, durationWidth - visibleWidth(duration)));
+	const tail = duration ? `${theme.fg("dim", " · ")}${durationPad}${theme.fg("dim", duration)}` : "";
+	if (!target && !tail) return truncateToWidth(head.trimEnd(), tableWidth, "…");
+	const room = tableWidth - headWidth(row, nameWidth) - (tail ? SEPARATOR_WIDTH + durationWidth : 0);
 	// Without room for even a clipped target, the whole row is clipped instead.
-	if (room < 2) return truncateToWidth(`${head}${padding} ${theme.fg("muted", target)}${tail}`, width, "…");
-	return `${head}${padding} ${theme.fg("muted", truncateToWidth(target, room, "…"))}${tail}`;
+	if (room < 2) return truncateToWidth(`${head} ${theme.fg("muted", target)}${tail}`, tableWidth, "…");
+	const clipped = truncateToWidth(target, room, "…");
+	// A row without a duration ends at its target instead of trailing blanks.
+	if (!tail) return `${head} ${theme.fg("muted", clipped)}`;
+	return `${head} ${theme.fg("muted", clipped)}${" ".repeat(room - visibleWidth(clipped))}${tail}`;
 }
 
 /**
  * Themed rows for `activities`: an optional `… N earlier tool calls` line, then one row per call
- * with an aligned tool-name column and a failed call's first error line beneath it. Every line fits
- * `width`; a running call shows the time since it started, measured at `now`.
+ * with an aligned tool-name column, durations right-aligned in one column, and a failed call's first
+ * error line beneath it. The table is as wide as its longest row, at most `width`. Measured at
+ * `now`, a running call shows a spinner frame and the time since it started.
  */
 export function activityLines(
 	activities: readonly AgentActivity[],
@@ -72,10 +86,24 @@ export function activityLines(
 ): string[] {
 	if (width <= 0) return [];
 	const nameWidth = nameColumnWidth(activities);
+	const rows: RowParts[] = activities.map((activity) => ({
+		activity,
+		marker: activityMarker(activity.status, now),
+		name: oneLine(activity.name),
+		target: oneLine(targetOf(activity)),
+		duration: shownDuration(activity, now),
+	}));
+	const durationWidth = Math.max(0, ...rows.map((row) => visibleWidth(row.duration)));
+	const tailWidth = durationWidth ? SEPARATOR_WIDTH + durationWidth : 0;
+	const naturalWidth = Math.max(
+		0,
+		...rows.map((row) => headWidth(row, nameWidth) + visibleWidth(row.target) + tailWidth),
+	);
+	const tableWidth = Math.min(width, naturalWidth);
 	const lines = earlier > 0 ? [truncateToWidth(theme.fg("dim", earlierLabel(earlier)), width, "…")] : [];
-	for (const activity of activities) {
-		lines.push(activityRow(activity, nameWidth, width, now, theme));
-		const error = activity.error ? oneLine(errorLine(activity.error)) : "";
+	for (const row of rows) {
+		lines.push(activityRow(row, nameWidth, durationWidth, tableWidth, theme));
+		const error = row.activity.error ? oneLine(errorLine(row.activity.error)) : "";
 		if (error) lines.push(truncateToWidth(`${" ".repeat(3 + nameWidth)}${theme.fg("error", error)}`, width, "…"));
 	}
 	return lines;

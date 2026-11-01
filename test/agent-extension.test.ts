@@ -228,18 +228,20 @@ describe("Agent delegation", () => {
 			harness.session.extensionRunner.createToolContext("running-display", undefined),
 		);
 		const taskId = handoff.details!.taskId;
-		await vi.waitFor(() => expect(harness.session.tasks.get(taskId).display?.text).toMatch(/✗ bash .* · \d+ms\n/u));
+		await vi.waitFor(() => expect(harness.session.tasks.get(taskId).display?.text).toMatch(/× bash .* · \d+ms\n/u));
 		const lines = harness.session.tasks.get(taskId).display!.text.split("\n");
 		expect(lines[0]).toMatch(/^✓ read entry\.ts · \d+ms$/u);
 		expect(lines[1]).toMatch(/^✓ read /u);
 		expect(lines[1]).toContain(outside);
-		expect(lines[2]).toMatch(/^✗ bash echo first line; echo second line; exit 3 · \d+ms$/u);
+		expect(lines[2]).toMatch(/^× bash echo first line; echo second line; exit 3 · \d+ms$/u);
 		expect(lines[3]).toMatch(/^ {7}\S/u);
 		expect(lines[3]).not.toContain("\n");
 		expect(lines).toHaveLength(4);
-		// The styled list carries the same rows, clipped to the width it is given.
+		// The styled list carries the same rows, with durations aligned in one column, clipped to the width it is given.
 		initTheme("dark");
-		expect(harness.session.tasks.presentOutput(taskId, 200, theme)?.map(stripTerminalSequences)).toEqual(lines);
+		const styled = harness.session.tasks.presentOutput(taskId, 200, theme)?.map(stripTerminalSequences) ?? [];
+		expect(new Set(styled.slice(0, 3).map((line) => line.indexOf(" · ")))).toHaveProperty("size", 1);
+		expect(styled.map((line) => line.replace(/ +· +/u, " · "))).toEqual(lines);
 		for (const line of harness.session.tasks.presentOutput(taskId, 30, theme) ?? [])
 			expect(visibleWidth(line)).toBeLessThanOrEqual(30);
 		release();

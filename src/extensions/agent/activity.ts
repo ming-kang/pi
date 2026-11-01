@@ -1,6 +1,8 @@
 /** Compact, bounded formatting of an Agent's tool-call activity, shared by the Transcript and /tasks. */
 import { isAbsolute, relative, sep, win32 } from "node:path";
 import { boundText } from "../../core/tasks/output.ts";
+import type { TaskStatus } from "../../core/tasks/types.ts";
+import { type StatusMarker, statusMarker } from "../../modes/interactive/components/status-marker.ts";
 import { formatDuration } from "../../utils/duration.ts";
 import type { AgentActivity } from "./types.ts";
 
@@ -78,17 +80,23 @@ export function formatActivityDuration(ms: number | undefined): string {
 	return tenths < 60 ? `${tenths.toFixed(1)}s` : formatDuration(ms);
 }
 
+const TASK_STATUS: Record<AgentActivity["status"], TaskStatus> = {
+	running: "running",
+	ok: "completed",
+	error: "failed",
+	cancelled: "cancelled",
+};
+
+/**
+ * A call's glyph and color in the shared task status vocabulary, so a call reads like the task
+ * rows around it in /tasks. Pass `now` to animate a running call as a spinner frame.
+ */
+export function activityMarker(status: AgentActivity["status"], now?: number): StatusMarker {
+	return statusMarker(TASK_STATUS[status], now === undefined ? undefined : { now });
+}
+
 export function activityGlyph(status: AgentActivity["status"]): string {
-	switch (status) {
-		case "running":
-			return "…";
-		case "ok":
-			return "✓";
-		case "error":
-			return "✗";
-		case "cancelled":
-			return "⊘";
-	}
+	return activityMarker(status).glyph;
 }
 
 /** Width of the tool-name column for the calls being shown. */

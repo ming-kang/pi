@@ -112,11 +112,14 @@ describe("Agent transcript renderer", () => {
 		]);
 		expect(render(running, { isPartial: true })).toBe("Agent Inspect boundaries · powershell Get-ChildItem src");
 		const expanded = render(running, { isPartial: true, expanded: true });
-		expect(expanded).toContain("bash     npm run check · 100ms");
+		expect(expanded).toMatch(/bash {5}npm run check +· 100ms/u);
 		expect(expanded).toContain("powershell Get-ChildItem src");
 	});
 
-	it("aligns expanded activity columns, colors each part and shows no error lines", () => {
+	it("aligns expanded activity columns, colors each part in the task status vocabulary and shows error lines", () => {
+		vi.useFakeTimers();
+		// Spinner frame 3 of the running marker.
+		vi.setSystemTime(360);
 		const running = result("running", "progress", undefined, [
 			{ id: "a", name: "read", args: "{}", target: "src/a.ts", status: "ok", durationMs: 4 },
 			{
@@ -133,19 +136,23 @@ describe("Agent transcript renderer", () => {
 		]);
 		const ctx = context(running, { isPartial: true, expanded: true });
 		const rows = agentRenderers.renderResult(running, ctx, theme, ctx).render(100);
+		vi.useRealTimers();
+		// Durations sit right-aligned in one column at the end of the longest row, not the pane edge.
 		expect(rows.map((row) => stripVTControlCharacters(row).trimEnd())).toEqual([
-			"✓ read     src/a.ts · 4ms",
-			"✗ bash     npm test · 1.5s",
-			"… powershell Get-Date",
-			"⊘ write · 1m 5s",
+			"✓ read     src/a.ts   ·   4ms",
+			"× bash     npm test   ·  1.5s",
+			"           first line",
+			"✶ powershell Get-Date",
+			"○ write               · 1m 5s",
 		]);
 		expect(rows[0]).toContain(theme.fg("success", "✓"));
 		expect(rows[0]).toContain(theme.fg("toolTitle", "read"));
 		expect(rows[0]).toContain(theme.fg("muted", "src/a.ts"));
 		expect(rows[0]).toContain(theme.fg("dim", "4ms"));
-		expect(rows[1]).toContain(theme.fg("error", "✗"));
-		expect(rows[2]).toContain(theme.fg("warning", "…"));
-		expect(rows[3]).toContain(theme.fg("muted", "⊘"));
+		expect(rows[1]).toContain(theme.fg("error", "×"));
+		expect(rows[2]).toContain(theme.fg("error", "first line"));
+		expect(rows[3]).toContain(theme.fg("accent", "✶"));
+		expect(rows[4]).toContain(theme.fg("warning", "○"));
 	});
 
 	it("keeps background handoff to one status line", () => {

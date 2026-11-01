@@ -44,7 +44,7 @@ describe("Agent tool-call display", () => {
 		call("read", { path: "README.md" }, { durationMs: 4 });
 		call("bash", { command: "npm test\nnpm run check" }, { durationMs: 1500 });
 		call("grep", { pattern: "needle" });
-		expect(display()).toBe(["✓ read README.md · 4ms", "✓ bash npm test · 1.5s", "… grep needle"].join("\n"));
+		expect(display()).toBe(["✓ read README.md · 4ms", "✓ bash npm test · 1.5s", "› grep needle"].join("\n"));
 		call("powershell", { command: "Get-Date" }, { durationMs: 65_000 });
 		const lines = display()?.split("\n") ?? [];
 		expect(lines[0]).toBe("✓ read     README.md · 4ms");
@@ -71,7 +71,7 @@ describe("Agent tool-call display", () => {
 			{ command: "make" },
 			{ durationMs: 30, error: `\n  \nfirst failure line\nsecond line\n${"x".repeat(900)}` },
 		);
-		expect(display()?.split("\n")).toEqual(["✓ read a.ts · 2ms", "✗ bash make · 30ms", "       first failure line"]);
+		expect(display()?.split("\n")).toEqual(["✓ read a.ts · 2ms", "× bash make · 30ms", "       first failure line"]);
 		call("bash", { command: "again" }, { durationMs: 30, error: "e".repeat(400) });
 		const clipped = display()?.split("\n").at(-1) ?? "";
 		expect(clipped.startsWith("       ")).toBe(true);
@@ -162,10 +162,10 @@ describe("Agent styled tool-call list", () => {
 		const lines = agent.present(80, tagged) ?? [];
 		vi.useRealTimers();
 		expect(lines).toEqual([
-			"<success>✓</> <toolTitle>read</> <muted>README.md</><dim> · </><dim>4ms</>",
-			"<error>✗</> <toolTitle>bash</> <muted>make</><dim> · </><dim>30ms</>",
+			"<success>✓</> <toolTitle>read</> <muted>README.md</><dim> · </>  <dim>4ms</>",
+			"<error>×</> <toolTitle>bash</> <muted>make</>     <dim> · </> <dim>30ms</>",
 			"       <error>first failure</>",
-			"<warning>…</> <toolTitle>grep</> <muted>needle</><dim> · </><dim>12.0s</>",
+			"<accent>✶</> <toolTitle>grep</> <muted>needle</>   <dim> · </><dim>12.0s</>",
 		]);
 	});
 
@@ -188,7 +188,7 @@ describe("Agent styled tool-call list", () => {
 		const lines = (agent.present(40, theme) ?? []).map(stripTerminalSequences);
 		expect(lines[0]).toBe("… 3 earlier tool calls");
 		expect(lines.find((line) => line.startsWith("✓ read"))).toMatch(/^✓ read .+… · 1\.5s$/u);
-		expect(lines.at(-2)).toMatch(/^✗ bash x+… · 7ms$/u);
+		expect(lines.at(-2)).toMatch(/^× bash x+… · {2}7ms$/u);
 		expect(lines.at(-1)).toMatch(/^ {7}e+…$/u);
 	});
 
@@ -201,6 +201,8 @@ describe("Agent styled tool-call list", () => {
 
 	it("renders the Transcript row and the Tasks Output with the same columns", () => {
 		const { agent, call, updates } = progress();
+		vi.useFakeTimers();
+		vi.setSystemTime(10_000);
 		call("read", { path: "a.ts" }, { durationMs: 2 });
 		call("powershell", { command: "Get-Date" }, { durationMs: 65_000 });
 		call("bash", { command: "make" }, { durationMs: 30, error: "boom" });
@@ -212,15 +214,17 @@ describe("Agent styled tool-call list", () => {
 			tagged,
 			{} as never,
 		) as Container;
+		vi.setSystemTime(13_000);
 		expect(component.render(80)).toEqual(agent.present(80, tagged));
+		vi.useRealTimers();
 		// Settled rows stay one line, and the model-facing status is untouched by the styling.
 		expect(updates.at(-1)?.display).toBe(
 			[
 				"✓ read     a.ts · 2ms",
 				"✓ powershell Get-Date · 1m 5s",
-				"✗ bash     make · 30ms",
+				"× bash     make · 30ms",
 				"           boom",
-				"… grep     needle",
+				"› grep     needle",
 			].join("\n"),
 		);
 		expect((result.content[0] as { text: string }).text).toBe("Agent running · 4 tool calls · latest: grep needle");
