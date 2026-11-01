@@ -2,6 +2,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { Keybinding } from "../../../core/keybindings.ts";
 import { runtimeLabel } from "../../../core/tasks/format.ts";
+import { taskReadBytes } from "../../../core/tasks/output.ts";
 import { isTaskTerminal, type TaskSnapshot } from "../../../core/tasks/types.ts";
 import { formatSize } from "../../../core/tools/truncate.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
@@ -163,7 +164,7 @@ export function renderInspectorPane(
 				if (read?.truncated)
 					status += theme.fg(
 						"muted",
-						` · Tail preview: ${formatSize(Buffer.byteLength(read.text))} of ${formatSize(read.totalBytes)}`,
+						` · Tail preview: ${formatSize(taskReadBytes(read))} of ${formatSize(read.totalBytes)}`,
 					);
 				followWidth = reading.followable ? visibleWidth(reading.text) : 0;
 			} else if (position.output.overflows) status = theme.fg("muted", position.output.range);

@@ -30,7 +30,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - **Breaking:** background work, submitted or detached, is admitted only while the `tasks` tool is active, because the model could otherwise start work it cannot read, wait for or stop. When `builtin:tasks` is disabled or the tool is deactivated, `background: true` and every detach path are rejected without starting anything; work admitted earlier keeps running and delivering.
 - **Breaking (extension and SDK API):** a task's `mode` is `background` only once its caller has been released with a background outcome. A detach requested while the executor is still preparing waits for its acceptance, and a task answered inline stays `foreground` everywhere: `tasks list`, the statusline count, the `waitAny` cohort and saved records.
 - **Breaking (extension and SDK API):** a terminal task snapshot's `display` comes only from its completion; the last progress display no longer survives settlement. In `/tasks`, `display` replaces the result as the human view instead of being appended to it.
-- **Breaking (extension and SDK API):** `ctx.tasks.read()`, `tasks read`, and settled `tasks wait` and `waitAny` calls without `mode` read a report (`output: "report"`, such as an Agent's) from its start instead of its end, as its foreground result and completion notification already do. Logs, such as a shell command's output, still read from their end; an explicit `mode` still wins, and `sinceBytes` still takes precedence.
+- **Breaking (extension and SDK API):** `ctx.tasks.read()`, `tasks read`, and settled `tasks wait` and `waitAny` calls without `mode` read a report (`output: "report"`, such as an Agent's) from its start instead of its end, as its foreground result and completion notification already do. Logs, such as a shell command's output, still read from their end. An explicit `mode` selects the direction; `sinceBytes` anchors it, with `head` continuing forward from the offset and `tail` keeping the newest unread window.
 
 ### Removed
 
@@ -40,6 +40,9 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 - A standalone `TaskRuntime` with background enabled no longer keeps every settled background record forever and then rejects all background work once its retention limit is reached.
 - A task moved to the background while its executor was still preparing, and then answered inline, is no longer reported and saved as a background task.
+- Following a report's returned `next sinceBytes` now reads the next forward window instead of skipping to its tail. Continuation offsets use raw source bytes even when output is not valid UTF-8, and expanded `tasks read`/`wait` Transcript rows preserve the same end of the result that was read.
+- Timed-out, interrupted and closed task waits release their runtime subscriptions instead of retaining one Promise reaction per observation until settlement.
+- `/tasks` no longer polls a log that has no attached output file only to discard the published result it reads; the retention-limit error now names task pins and delivery leases instead of removed runtime claims.
 
 ## [1.4.9] - 2026-10-31
 

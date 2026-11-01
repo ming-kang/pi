@@ -33,6 +33,8 @@ export interface TasksWaitDetails {
 	deltaBytes: number;
 	totalBytes: number;
 	deltaTruncated: boolean;
+	/** Actual read direction when output was returned; absent in older persisted results. */
+	mode?: "head" | "tail";
 	outputPath: string;
 	/** Initial waitAny cohort members still running when the wait ended. */
 	running?: number;

@@ -146,7 +146,10 @@ export interface TaskReadOptions {
 	mode?: "head" | "tail";
 	/** Maximum bytes to return, bounded by the runtime. */
 	bytes?: number;
-	/** Only output written after this byte offset; takes precedence over `mode`. */
+	/**
+	 * First unread byte. `head` reads forward from this offset; `tail` returns the newest window
+	 * at or after it. Without it the output kind selects the default end.
+	 */
 	sinceBytes?: number;
 }
 
@@ -158,6 +161,8 @@ export interface TaskRead {
 	totalBytes: number;
 	truncated: boolean;
 	fromByte?: number;
+	/** Raw source-byte end supplied by the runtime; older/custom hosts may omit it. */
+	endByte?: number;
 }
 
 /** Optional host integration for products built on the execution runtime. */

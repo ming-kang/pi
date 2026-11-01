@@ -145,7 +145,7 @@ export class TaskRuntime implements TasksContext {
 			if (this.backgroundActive() >= this.maxBackground) throw this.limitError();
 			if (this.store.retainedCount() >= this.maxRetained) {
 				throw new Error(
-					"Task history retention limit reached; deliver pending notifications or release pinned or claimed records",
+					"Task history retention limit reached; deliver pending notifications or release task pins and delivery leases",
 				);
 			}
 		}
@@ -289,15 +289,14 @@ export class TaskRuntime implements TasksContext {
 		try {
 			const start = Date.now();
 			const interrupt = this.options.waits?.interruptSignal;
-			if (!records.some((record) => record.settled)) {
-				await waitForFirst({
-					settlements: records.map((record) => record.settlement),
-					timeoutMs: options.timeoutMs ?? TASKS_WAIT_DEFAULT_MS,
-					signal,
-					interrupt,
-					closed: this.closing.signal,
-				});
-			}
+			await waitForFirst({
+				hasSettled: () => records.some((record) => record.settled),
+				subscribe: (listener) => this.subscribe(listener),
+				timeoutMs: options.timeoutMs ?? TASKS_WAIT_DEFAULT_MS,
+				signal,
+				interrupt,
+				closed: this.closing.signal,
+			});
 			const waitedMs = Date.now() - start;
 			const settled = records
 				.filter((record) => record.settled)

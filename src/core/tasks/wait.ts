@@ -1,8 +1,10 @@
 import { boundWaitMs } from "./limits.ts";
 
 export interface WaitSources {
-	/** Any one of these settling ends the wait. */
-	settlements: readonly Promise<void>[];
+	/** Whether any observed execution has settled. */
+	hasSettled(): boolean;
+	/** Subscribe to execution state changes; the returned release must remove the listener. */
+	subscribe(listener: () => void): () => void;
 	timeoutMs: number;
 	/** Rejects the wait with the signal's reason. */
 	signal?: AbortSignal;
@@ -16,9 +18,16 @@ export interface WaitSources {
  * A race of settlement, timeout, abort, interrupt and close. Whichever ends it first, the timer
  * and every listener are released, so an observation leaves nothing behind. Only an abort rejects.
  */
-export function waitForFirst({ settlements, timeoutMs, signal, interrupt, closed }: WaitSources): Promise<void> {
+export function waitForFirst({
+	hasSettled,
+	subscribe,
+	timeoutMs,
+	signal,
+	interrupt,
+	closed,
+}: WaitSources): Promise<void> {
 	if (signal?.aborted) return Promise.reject(signal.reason ?? new Error("Wait aborted"));
-	if (interrupt?.aborted || closed.aborted) return Promise.resolve();
+	if (hasSettled() || interrupt?.aborted || closed.aborted) return Promise.resolve();
 	return new Promise<void>((resolve, reject) => {
 		const releases: Array<() => void> = [];
 		let finished = false;
@@ -39,6 +48,12 @@ export function waitForFirst({ settlements, timeoutMs, signal, interrupt, closed
 		on(closed, () => end());
 		const timer = setTimeout(() => end(), boundWaitMs(timeoutMs));
 		releases.push(() => clearTimeout(timer));
-		for (const settlement of settlements) void settlement.then(() => end());
+		releases.push(
+			subscribe(() => {
+				if (hasSettled()) end();
+			}),
+		);
+		// Close the synchronous gap between the first check and subscription.
+		if (hasSettled()) end();
 	});
 }

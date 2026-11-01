@@ -1,7 +1,7 @@
 import { open } from "node:fs/promises";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { finiteLimit } from "../../utils/number.ts";
-import type { TaskFact, TaskInput, TaskReadOptions, TaskText } from "./types.ts";
+import type { TaskFact, TaskInput, TaskRead, TaskReadOptions, TaskText } from "./types.ts";
 
 export const TASK_RESULT_BYTES = 48 * 1024;
 export const TASK_DETAILS_BYTES = 120 * 1024;
@@ -105,27 +105,44 @@ export interface OutputSlice {
 	totalBytes: number;
 	truncated: boolean;
 	fromByte: number;
+	/** Raw source-byte end, independent of UTF-8 decoding or replacement characters. */
+	endByte: number;
+}
+
+/** Raw source-byte range; decoding invalid UTF-8 must never move the continuation offset. */
+export function taskReadRange(slice: Pick<TaskRead, "text" | "fromByte" | "endByte">): { from: number; to: number } {
+	const from = slice.fromByte ?? 0;
+	return { from, to: slice.endByte ?? from + Buffer.byteLength(slice.text) };
+}
+
+export function taskReadBytes(slice: Pick<TaskRead, "text" | "fromByte" | "endByte">): number {
+	const { from, to } = taskReadRange(slice);
+	return to - from;
 }
 
 /**
  * The byte window a read covers in an output of `size` bytes. `floor` is the first byte the
- * caller has not seen yet; anything before it never counts as truncated.
+ * caller has not seen yet. A head read continues forward from it; a tail read keeps the newest
+ * unread window. Anything before the floor never counts as truncated.
  */
 function readWindow(size: number, options: TaskReadOptions): { start: number; length: number; floor: number } {
 	const bytes = boundReadBytes(options.bytes);
 	const since = finiteLimit(options.sinceBytes, 0, Number.MAX_SAFE_INTEGER);
 	const floor = since > size ? 0 : since;
 	const start =
-		options.sinceBytes !== undefined
-			? Math.max(floor, size - bytes)
-			: options.mode === "head"
-				? 0
-				: Math.max(0, size - bytes);
+		options.mode === "head" ? (options.sinceBytes !== undefined ? floor : 0) : Math.max(floor, size - bytes);
 	return { start, length: Math.min(bytes, size - start), floor };
 }
 
-function outputSlice(size: number, floor: number, slice: Buffer, fromByte: number): OutputSlice {
-	return { text: slice.toString("utf8"), totalBytes: size, truncated: slice.length < size - floor, fromByte };
+function outputSlice(size: number, slice: Buffer, fromByte: number, earlierTruncated: boolean): OutputSlice {
+	const endByte = fromByte + slice.byteLength;
+	return {
+		text: slice.toString("utf8"),
+		totalBytes: size,
+		truncated: earlierTruncated || endByte < size,
+		fromByte,
+		endByte,
+	};
 }
 
 /** Positioned, bounded reads only. The executor owns the path and its cleanup. */
@@ -138,7 +155,12 @@ export async function readOutputSlice(path: string, options: TaskReadOptions = {
 		const buffer = Buffer.alloc(Math.min(length + 1, size - start));
 		const { bytesRead } = await file.read(buffer, 0, buffer.length, start);
 		const slice = alignedSlice(buffer.subarray(0, bytesRead), 0, Math.min(length, bytesRead));
-		return outputSlice(size, floor, slice, start + slice.byteOffset - buffer.byteOffset);
+		return outputSlice(
+			size,
+			slice,
+			start + slice.byteOffset - buffer.byteOffset,
+			options.mode !== "head" && start > floor,
+		);
 	} finally {
 		await file.close();
 	}
@@ -148,5 +170,10 @@ export function sliceText(text: string, options: TaskReadOptions = {}): OutputSl
 	const buffer = Buffer.from(text);
 	const { start, length, floor } = readWindow(buffer.length, options);
 	const slice = alignedSlice(buffer, start, start + length);
-	return outputSlice(buffer.length, floor, slice, slice.byteOffset - buffer.byteOffset);
+	return outputSlice(
+		buffer.length,
+		slice,
+		slice.byteOffset - buffer.byteOffset,
+		options.mode !== "head" && start > floor,
+	);
 }

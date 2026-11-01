@@ -55,9 +55,10 @@ export function scheduleWaitRefresh(context: ToolRenderContext<TasksRenderState>
 	state.waitStartedAt = undefined;
 }
 
-/** Keep the END of oversized text — that is where the outcome lives. */
-function capForTranscript(text: string, limit: number): string {
-	return text.length > limit ? `…${text.slice(-limit)}` : text;
+/** Keep the end that was read: a report's summary or a log's outcome. */
+function capForTranscript(text: string, limit: number, mode: "head" | "tail" = "tail"): string {
+	if (text.length <= limit) return text;
+	return mode === "head" ? `${text.slice(0, limit)}…` : `…${text.slice(-limit)}`;
 }
 
 // ── tool call ─────────────────────────────────────────────────────────────
@@ -139,7 +140,7 @@ export function renderTasksResult(
 	const details = result.details;
 	// Results from older tool versions, such as `bg create`, keep their saved text.
 	const summary = details && !context.isError ? resultSummaryLine(details, theme, options.expanded) : undefined;
-	if (summary === undefined) {
+	if (summary === undefined || details === undefined) {
 		const text = result.content.find((part) => part.type === "text")?.text ?? "";
 		return new Text(theme.fg("toolOutput", text.trimEnd()), 0, 0);
 	}
@@ -148,8 +149,11 @@ export function renderTasksResult(
 	container.addChild(new TruncatedText(summary, 1, 0));
 	if (options.expanded) {
 		const text = result.content.find((part) => part.type === "text")?.text ?? "";
+		const mode = details.action === "read" || details.action === "wait" ? details.mode : undefined;
 		container.addChild(new Text("", 0, 0));
-		container.addChild(new Text(theme.fg("toolOutput", capForTranscript(text, RESULT_EXPAND_LIMIT).trimEnd()), 1, 0));
+		container.addChild(
+			new Text(theme.fg("toolOutput", capForTranscript(text, RESULT_EXPAND_LIMIT, mode).trimEnd()), 1, 0),
+		);
 	}
 	return container;
 }

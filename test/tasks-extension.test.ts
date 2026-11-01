@@ -553,7 +553,65 @@ describe("public Background management", () => {
 		const settledLog = await runWait(service, { action: "wait", taskId: log, waitMs: 1 });
 		expect(textOf(settledLog)).toContain("END");
 		expect(textOf(settledLog)).not.toContain("START");
+
+		const continuedReport = await runWait(service, {
+			action: "wait",
+			taskId: report,
+			waitMs: 1,
+			sinceBytes: 1000,
+		});
+		expect(continuedReport.details).toMatchObject({ action: "wait", mode: "head" });
+		expect(textOf(continuedReport)).toContain(" · bytes 1000–33768 of ");
+		expect(textOf(continuedReport)).not.toContain("skipped");
 	});
+	it("continues reports by raw source bytes when a file is not valid UTF-8", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-tasks-binary-offsets-"));
+		const path = join(directory, "report.bin");
+		const source = Buffer.concat([
+			Buffer.from("START\n"),
+			Buffer.from([0x80, 0x81, 0xfe]),
+			Buffer.from("x".repeat(430)),
+		]);
+		const window = 256;
+		await writeFile(path, source);
+		const service = new TaskRuntime({ enabled: true });
+		services.push(service);
+		try {
+			await service.execute({
+				kind: "custom",
+				title: "binary report",
+				output: "report",
+				toolCallId: "binary-report",
+				async run(control) {
+					control.attachOutput(path);
+					control.accept();
+					return { result: { content: [{ type: "text", text: "stored report" }], details: undefined } };
+				},
+			});
+			const id = service.list()[0]!.id;
+			await service.wait(id);
+			const first = await runRead(service, { action: "read", taskId: id, bytes: window });
+			expect(first.details).toMatchObject({ sliceBytes: window, totalBytes: source.length });
+			expect(textOf(first)).toContain(` · bytes 0–${window} of ${source.length} · next sinceBytes ${window}`);
+			const offset = Number(/next sinceBytes (\d+)/.exec(textOf(first))?.[1]);
+			expect(offset).toBe(window);
+
+			const next = await runWait(service, { action: "wait", taskId: id, waitMs: 1, sinceBytes: offset });
+			expect(next.details).toMatchObject({
+				action: "wait",
+				mode: "head",
+				deltaBytes: source.length - window,
+				deltaTruncated: false,
+			});
+			expect(textOf(next)).toContain(
+				` · bytes ${window}–${source.length} of ${source.length} · next sinceBytes ${source.length}`,
+			);
+			expect(textOf(next)).not.toContain("skipped");
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("clamps read size to the retained slice limit", async () => {
 		const h = running();
 		await h.outcome;
@@ -1103,6 +1161,60 @@ describe("renderTasksResult", () => {
 		expect(interrupted.render(200).map(stripTerminalSequences).join("\n")).toContain(
 			"any wait interrupted after 1s · 2 still running",
 		);
+	});
+
+	it("caps expanded output at the same end that was read", () => {
+		const text = `[header]\nSTART-OF-REPORT\n${"x".repeat(4500)}\nEND-OF-REPORT`;
+		const render = (mode: "head" | "tail") =>
+			renderTasksResult(
+				{
+					content: [{ type: "text", text }],
+					details: {
+						action: "read",
+						taskId: "report-1",
+						mode,
+						sliceBytes: 4500,
+						totalBytes: 9000,
+						outputPath: "",
+					},
+				},
+				{ expanded: true, isPartial: false },
+				plainTheme,
+				{ args: { action: "read" }, state: {} } as ToolRenderContext,
+			)
+				.render(500)
+				.join("\n");
+		expect(render("head")).toContain("START-OF-REPORT");
+		expect(render("head")).not.toContain("END-OF-REPORT");
+		expect(render("tail")).toContain("END-OF-REPORT");
+		expect(render("tail")).not.toContain("START-OF-REPORT");
+	});
+
+	it("caps an expanded report wait at its beginning", () => {
+		const text = `[header]\nSTART-OF-REPORT\n${"x".repeat(4500)}\nEND-OF-REPORT`;
+		const component = renderTasksResult(
+			{
+				content: [{ type: "text", text }],
+				details: {
+					action: "wait",
+					outcome: "settled",
+					taskId: "report-1",
+					status: "completed",
+					waitedMs: 0,
+					deltaBytes: 4500,
+					totalBytes: 9000,
+					deltaTruncated: true,
+					mode: "head",
+					outputPath: "",
+				},
+			},
+			{ expanded: true, isPartial: false },
+			plainTheme,
+			{ args: { action: "wait" }, state: {} } as ToolRenderContext,
+		);
+		const rendered = component.render(500).join("\n");
+		expect(rendered).toContain("START-OF-REPORT");
+		expect(rendered).not.toContain("END-OF-REPORT");
 	});
 
 	it("shows the saved text of a result from an older tool version", () => {

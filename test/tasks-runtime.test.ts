@@ -23,6 +23,7 @@ import {
 	type TaskExecution,
 	TaskLookupError,
 } from "../src/core/tasks/types.ts";
+import { waitForFirst } from "../src/core/tasks/wait.ts";
 import { createDeliveryHarness } from "./tasks-delivery-harness.ts";
 
 const result = (text = "done"): AgentToolResult<{ ok: boolean }> => ({
@@ -697,6 +698,17 @@ describe("bounded lifecycle and snapshots", () => {
 });
 
 describe("task wait cohorts", () => {
+	it("releases its execution subscription when the wait window ends", async () => {
+		const release = vi.fn();
+		await waitForFirst({
+			hasSettled: () => false,
+			subscribe: () => release,
+			timeoutMs: 0,
+			closed: new AbortController().signal,
+		});
+		expect(release).toHaveBeenCalledOnce();
+	});
+
 	it("interrupts one or any wait without cancelling execution or consuming completion", async () => {
 		const interrupt = new AbortController();
 		const { runtime: bg, pending } = delivering({ interruptSignal: interrupt.signal });
@@ -911,7 +923,9 @@ describe("owned output leases", () => {
 				}).execution,
 			);
 		}
-		await expect(stalled.execute(job({ background: true }).execution)).rejects.toThrow("retention limit");
+		await expect(stalled.execute(job({ background: true }).execution)).rejects.toThrow(
+			"Task history retention limit reached; deliver pending notifications or release task pins and delivery leases",
+		);
 	});
 
 	it("parent cancellation during detached preflight prevents acceptance and restart", async () => {
@@ -956,7 +970,14 @@ describe("bounded UTF-8 output", () => {
 			await writeFile(path, "a😀中z");
 			expect((await readOutputSlice(path, { mode: "head", bytes: 4 })).text).toBe("a");
 			expect((await readOutputSlice(path, { mode: "tail", bytes: 5 })).text).toBe("中z");
-			expect((await readOutputSlice(path, { sinceBytes: 2, bytes: 20 })).text).toBe("中z");
+			for (const mode of ["head", "tail"] as const) {
+				expect(await readOutputSlice(path, { mode, sinceBytes: 2, bytes: 20 })).toMatchObject({
+					text: "中z",
+					fromByte: 5,
+					endByte: 9,
+					truncated: false,
+				});
+			}
 			expect((await readOutputSlice(path, { sinceBytes: 999, bytes: 20 })).text).toBe("a😀中z");
 			for (let bytes = 0; bytes < 12; bytes++) {
 				expect(boundText("😀中😀", bytes)).not.toContain("�");
@@ -1036,7 +1057,7 @@ describe("default read end", () => {
 		}
 	});
 
-	it("lets an explicit mode override the default and keeps sinceBytes ahead of mode", async () => {
+	it("uses the read direction to continue from an offset", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "pi-default-read-"));
 		try {
 			for (const publish of ["file", "result"] as const) {
@@ -1049,10 +1070,14 @@ describe("default read end", () => {
 						const delta = await bg.read(id, { mode, sinceBytes: size - 10, bytes: 1000 });
 						expect(delta).toMatchObject({ text: document.slice(-10), fromByte: size - 10, truncated: false });
 					}
-					// An offset below the newest window still yields the newest window, whatever the output kind.
-					const newest = await bg.read(id, { sinceBytes: 0, bytes: 1000 });
+					const forward = await bg.read(id, { mode: "head", sinceBytes: 1000, bytes: 1000 });
+					expect(forward).toMatchObject({ text: document.slice(1000, 2000), fromByte: 1000 });
+					const newest = await bg.read(id, { mode: "tail", sinceBytes: 0, bytes: 1000 });
 					expect(newest.fromByte).toBe(size - 1000);
 				}
+				// The default direction belongs to the output kind, including when an offset is present.
+				expect((await report.bg.read(report.id, { sinceBytes: 1000, bytes: 1000 })).fromByte).toBe(1000);
+				expect((await log.bg.read(log.id, { sinceBytes: 0, bytes: 1000 })).fromByte).toBe(size - 1000);
 			}
 		} finally {
 			await rm(dir, { recursive: true, force: true });

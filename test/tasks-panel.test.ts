@@ -81,6 +81,39 @@ describe("task panel views", () => {
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(h.frame().match(/first line|second line/g)).toEqual(["first line", "second line"]);
 	});
+	it("shows published output for a log without a managed file without polling reads", async () => {
+		const h = harness([
+			task("one", { outputPath: undefined, result: { text: "published output", truncated: false } }),
+		]);
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(h.host.read).not.toHaveBeenCalled();
+		expect(h.frame()).toContain("published output");
+		h.tasks[0]!.result = { text: "updated output", truncated: false };
+		h.change();
+		expect(h.frame()).toContain("updated output");
+		expect(h.host.read).not.toHaveBeenCalled();
+	});
+	it("reads a terminal file-less log once for its expiry diagnostic without polling", async () => {
+		const h = harness([
+			task("one", {
+				outputPath: undefined,
+				status: "completed",
+				endedAt: 1000,
+				result: { text: "saved output", truncated: false },
+			}),
+		]);
+		h.host.read.mockImplementationOnce(async () => ({
+			task: h.tasks[0]!,
+			text: "saved output",
+			readError: "Output has expired",
+			totalBytes: 12,
+			truncated: false,
+		}));
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(h.host.read).toHaveBeenCalledOnce();
+		expect(h.frame()).toContain("Log unavailable; showing saved result.");
+		expect(h.frame()).toContain("saved output");
+	});
 	it("pauses tail following while browsing and resumes only on explicit downward navigation", async () => {
 		const h = harness();
 		await vi.advanceTimersByTimeAsync(0);

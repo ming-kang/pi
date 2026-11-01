@@ -3,7 +3,7 @@
 import type { AgentToolResult } from "../../../core/extensions/types.ts";
 import { runtimeLabel } from "../../../core/tasks/format.ts";
 import { clampReadBytes, clampWaitMs, defaultReadMode } from "../../../core/tasks/limits.ts";
-import { boundText } from "../../../core/tasks/output.ts";
+import { boundText, taskReadBytes, taskReadRange } from "../../../core/tasks/output.ts";
 import {
 	isTaskTerminal,
 	TaskLookupError,
@@ -85,11 +85,10 @@ function lookupFailure(background: TasksContext, id: string, error: unknown): Er
 
 /**
  * Where this slice sits in the output, so the next wait can continue from it.
- * A wait whose new output exceeds its budget returns the newest bytes and says what it skipped.
+ * A tail wait whose new output exceeds its budget returns the newest bytes and says what it skipped.
  */
 function rangeText(slice: TaskRead, sinceBytes?: number): string {
-	const from = slice.fromByte ?? 0;
-	const to = from + Buffer.byteLength(slice.text);
+	const { from, to } = taskReadRange(slice);
 	const floor = sinceBytes === undefined || sinceBytes > slice.totalBytes ? 0 : sinceBytes;
 	return [
 		`bytes ${from}–${to} of ${slice.totalBytes}`,
@@ -124,7 +123,7 @@ export async function runRead(background: TasksContext, input: TasksInput): Prom
 			action: "read",
 			taskId: slice.task.id,
 			mode,
-			sliceBytes: Buffer.byteLength(slice.text),
+			sliceBytes: taskReadBytes(slice),
 			totalBytes: slice.totalBytes,
 			outputPath: slice.task.outputPath ?? "",
 			kind: slice.task.kind,
@@ -156,9 +155,10 @@ function waitDetails({ outcome, waitedMs, task, read, running }: WaitView): Task
 		outcome: outcome === "closed" ? "timed_out" : outcome,
 		...(task ? { taskId: task.id, status: task.status, kind: task.kind } : {}),
 		waitedMs,
-		deltaBytes: read ? Buffer.byteLength(read.text) : 0,
+		deltaBytes: read ? taskReadBytes(read) : 0,
 		totalBytes: read?.totalBytes ?? 0,
 		deltaTruncated: read?.truncated ?? false,
+		...(read ? { mode: defaultReadMode(read.task) } : {}),
 		outputPath: task?.outputPath ?? "",
 		...(running ? { running: running.length } : {}),
 	};

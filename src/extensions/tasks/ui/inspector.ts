@@ -3,7 +3,7 @@ import { isTaskTerminal } from "../../../core/tasks/types.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import { cleanTaskText } from "./text.ts";
 import { TaskViewport } from "./viewport.ts";
-import { detailLines, outputLines } from "./views.ts";
+import { detailLines, outputLines, streamsLog } from "./views.ts";
 
 interface ReadingPosition {
 	info: TaskViewport;
@@ -72,8 +72,9 @@ export class TaskInspector {
 	}
 	async refresh(): Promise<void> {
 		const task = this.task;
-		// Only a log streams from its file; any other output is what its executor published.
-		if (this.disposed || !task || task.output !== "log" || this.reading) return;
+		// Only an attached log streams. A terminal file-less log is read once for its expiry diagnostic.
+		const terminalFallback = task?.output === "log" && isTaskTerminal(task.status);
+		if (this.disposed || !task || (!streamsLog(task) && !terminalFallback) || this.reading) return;
 		const position = this.position;
 		if (position.read && (!position.output.follow || isTaskTerminal(position.read.task.status))) return;
 		this.reading = true;
