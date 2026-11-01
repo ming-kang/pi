@@ -1,6 +1,11 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { contentText, type Message } from "@earendil-works/pi-ai";
-import type { CompactionDetails, FileOperations } from "../../core/compaction/index.ts";
+import {
+	type CompactionDetails,
+	computeFileLists,
+	type FileOperations,
+	formatFileOperations,
+} from "../../core/compaction/index.ts";
 import { convertToLlm } from "../../core/messages.ts";
 import { buildSessionProjection, getLatestCompactionEntry, type SessionEntry } from "../../core/session-manager.ts";
 
@@ -119,28 +124,24 @@ export function checkpointSummary(
 	fileOps: FileOperations,
 	entries: SessionEntry[],
 ): { summary: string; details: CompactionDetails } {
-	const read = new Set(fileOps.read);
-	const modified = new Set([...fileOps.written, ...fileOps.edited]);
+	const merged: FileOperations = {
+		read: new Set(fileOps.read),
+		written: new Set(fileOps.written),
+		edited: new Set(fileOps.edited),
+	};
 	const previousDetails: unknown = getLatestCompactionEntry(entries)?.details;
 	if (isPlainObject(previousDetails)) {
 		const { readFiles, modifiedFiles } = previousDetails;
 		if (Array.isArray(readFiles)) {
-			for (const file of readFiles) if (typeof file === "string") read.add(file);
+			for (const file of readFiles) if (typeof file === "string") merged.read.add(file);
 		}
 		if (Array.isArray(modifiedFiles)) {
-			for (const file of modifiedFiles) if (typeof file === "string") modified.add(file);
+			for (const file of modifiedFiles) if (typeof file === "string") merged.edited.add(file);
 		}
 	}
-	const details = {
-		readFiles: [...read].filter((file) => !modified.has(file)).sort(),
-		modifiedFiles: [...modified].sort(),
-	};
-	const sections = [
-		text.replace(/<(read-files|modified-files)>[\s\S]*?<\/\1>/g, "").trim(),
-		details.readFiles.length > 0 ? `<read-files>\n${details.readFiles.join("\n")}\n</read-files>` : "",
-		details.modifiedFiles.length > 0
-			? `<modified-files>\n${details.modifiedFiles.join("\n")}\n</modified-files>`
-			: "",
-	];
-	return { summary: sections.filter(Boolean).join("\n\n"), details };
+	const details = computeFileLists(merged);
+	const body = text.replace(/<(read-files|modified-files)>[\s\S]*?<\/\1>/g, "").trim();
+	const operations = formatFileOperations(details.readFiles, details.modifiedFiles);
+	// The shared formatter prefixes a non-empty operation list; an empty summary body has no leading blank lines.
+	return { summary: body ? body + operations : operations.slice(2), details };
 }

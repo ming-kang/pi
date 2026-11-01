@@ -170,6 +170,15 @@ describe("cached compaction", () => {
 		expect(keptStart(entries, "missing", conversation)).toBeUndefined();
 	});
 
+	it("does not add leading blank lines when the summary body is empty", () => {
+		const result = checkpointSummary(
+			"<read-files>\nold.ts\n</read-files>",
+			{ read: new Set(["new.ts"]), written: new Set(), edited: new Set() },
+			[],
+		);
+		expect(result.summary).toBe("<read-files>\nnew.ts\n</read-files>");
+	});
+
 	it("carries file lists across extension and native compactions without duplicating model tags", () => {
 		const previous = {
 			type: "compaction",
