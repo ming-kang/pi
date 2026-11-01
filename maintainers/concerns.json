@@ -37,8 +37,7 @@
 					"path": "src/config.ts"
 				},
 				{
-					"path": "src/core/extensions/loader.ts",
-					"rewrite": "The standalone package resolves bundled libraries from node_modules only, so upstream's monorepo workspace lookup is removed."
+					"path": "src/core/extensions/loader.ts"
 				},
 				{
 					"path": "src/core/extensions/virtual-modules.ts"
