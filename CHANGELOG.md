@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.4.10] - 2026-11-01
+
 ### Added
 
 - `AgentSession.waitForQuiescence(signal?)`, `AgentSession.isQuiescent` and a `session_quiescent` session event report when no run, compaction, retry, unsettled background task or pending completion turn remains. Failed deliveries do not count, so the wait cannot deadlock on them.
