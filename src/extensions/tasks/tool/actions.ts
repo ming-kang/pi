@@ -164,6 +164,10 @@ function waitDetails({ outcome, waitedMs, task, read, running }: WaitView): Task
 	};
 }
 
+/** Every expired wait ends with this, so a model that waited is told to stop rather than wait again. */
+const WAIT_EXPIRED_NEXT =
+	"Do not wait again: continue independent work or end your turn; each result notifies you automatically.";
+
 function waitText(view: WaitView, sinceBytes?: number): string {
 	const { scope, outcome, task, read, running } = view;
 	const still = stillRunningText(running ?? []);
@@ -181,7 +185,8 @@ function waitText(view: WaitView, sinceBytes?: number): string {
 								? " · wait window expired; execution continues"
 								: ""
 					}`;
-		return `${readText(`[${header} · ${rangeText(read, sinceBytes)}]`, read)}${still}`;
+		const next = scope === "task" && outcome === "timed_out" ? `\n\n${WAIT_EXPIRED_NEXT}` : "";
+		return `${readText(`[${header} · ${rangeText(read, sinceBytes)}]`, read)}${still}${next}`;
 	}
 	if (scope === "task" && task) {
 		return `[${describeTaskLine(task)} · interrupted by steering; execution continues]\nRead the new input before deciding whether to wait again; the task was not stopped.`;
@@ -191,7 +196,7 @@ function waitText(view: WaitView, sinceBytes?: number): string {
 			? "The host closed; execution state is unconfirmed."
 			: outcome === "interrupted"
 				? "New steering input ended this wait early. Read the new input before deciding what to do next; no task was stopped."
-				: "The wait window expired; running tasks continue. Prefer other work over waiting again.";
+				: `The wait window expired; running tasks continue. ${WAIT_EXPIRED_NEXT}`;
 	return `${note}${still}`;
 }
 

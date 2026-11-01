@@ -1056,7 +1056,7 @@ describe("renderTasksCall wait pending line", () => {
 				invalidate: vi.fn(),
 			} as unknown as ToolRenderContext<TasksRenderState>;
 
-			const first = renderTasksCall({ action: "wait", taskId: "bg-3f" }, plainTheme, context);
+			const first = renderTasksCall({ action: "wait", taskId: "bg-3f", waitMs: 20_000 }, plainTheme, context);
 			expect(first.render(200).map(stripTerminalSequences).join("\n")).toMatch(
 				/^tasks wait bg-3f waiting <1s \/ 20s/,
 			);
@@ -1065,7 +1065,7 @@ describe("renderTasksCall wait pending line", () => {
 			// The armed timer invalidates and the next render shows elapsed progress.
 			vi.advanceTimersByTime(1000);
 			expect(context.invalidate).toHaveBeenCalledTimes(1);
-			const second = renderTasksCall({ action: "wait", taskId: "bg-3f" }, plainTheme, context);
+			const second = renderTasksCall({ action: "wait", taskId: "bg-3f", waitMs: 20_000 }, plainTheme, context);
 			expect(second.render(200).map(stripTerminalSequences).join("\n")).toMatch(
 				/^tasks wait bg-3f waiting 1s \/ 20s/,
 			);

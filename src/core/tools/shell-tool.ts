@@ -152,7 +152,7 @@ export function createShellToolDefinition(
 				standalone?.close();
 			}
 			if (outcome.kind === "result") return shellToolResult(outcome);
-			const tail = `Task ID: ${outcome.task.id}. Status: ${outcome.task.status}. Completion arrives automatically as a notification — do not poll or immediately wait on it; continue with other work or hand back to the user. Use ${TASKS_TOOL_NAME} read to inspect output, ${TASKS_TOOL_NAME} wait only when your next step is blocked on a result (one ID or any running task; prefer foreground next time in that case), or ${TASKS_TOOL_NAME} kill to stop it.`;
+			const tail = `Task ID: ${outcome.task.id}. Status: ${outcome.task.status}. Completion arrives and wakes you automatically — do not poll or wait on it; continue with other work, or end your turn and hand back to the user. If you would only wait for the result, prefer foreground next time. Use ${TASKS_TOOL_NAME} read to inspect output or ${TASKS_TOOL_NAME} kill to stop it.`;
 			// Shell execution can become background work in two ways, and the model has to know which
 			// one it got: a submitted background command starts from an empty log, while a detached
 			// one already holds output and keeps its original timeout.

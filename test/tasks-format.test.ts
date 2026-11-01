@@ -26,7 +26,7 @@ describe("task wait limits", () => {
 		expect(clampWaitMs(600_001)).toBe(600_000);
 		expect(clampWaitMs(20_000)).toBe(20_000);
 		expect(clampWaitMs(0)).toBe(1_000);
-		expect(JSON.stringify(tasksSchema)).toContain("default 20s, max 10m");
+		expect(JSON.stringify(tasksSchema)).toContain("default 4m, max 10m");
 	});
 
 	it("keeps the runtime waiting beyond the old one-minute ceiling", async () => {

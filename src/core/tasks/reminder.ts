@@ -35,7 +35,7 @@ export class TaskContextReminder {
 					type: "text",
 					text: [
 						"Context was compacted. These background tasks are still active; do not start duplicates.",
-						`Use ${TASKS_TOOL_NAME} list/read/wait/kill to inspect or control them. Completion arrives automatically.`,
+						`Use ${TASKS_TOOL_NAME} list/read/kill to inspect or stop them. Each completion wakes you automatically; do not wait for it.`,
 						...tasks.map(taskLine),
 					].join("\n"),
 				},
