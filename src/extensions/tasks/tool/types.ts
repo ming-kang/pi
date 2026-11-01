@@ -20,26 +20,6 @@ export interface TasksReadDetails {
 	outputPath: string;
 }
 
-export type TasksWaitOutcome = "settled" | "interrupted" | "timed_out" | "no_tasks";
-
-export interface TasksWaitDetails {
-	kind?: TaskKind;
-	action: "wait";
-	outcome: TasksWaitOutcome;
-	/** Undefined for waitAny with no selected task, or when no tasks were running. */
-	taskId?: string;
-	status?: TaskStatus;
-	waitedMs: number;
-	deltaBytes: number;
-	totalBytes: number;
-	deltaTruncated: boolean;
-	/** Actual read direction when output was returned; absent in older persisted results. */
-	mode?: "head" | "tail";
-	outputPath: string;
-	/** Initial waitAny cohort members still running when the wait ended. */
-	running?: number;
-}
-
 export interface TasksKillDetails {
 	requested?: boolean;
 	status?: TaskStatus;
@@ -58,4 +38,4 @@ export interface TasksListDetails {
 	foregroundOmitted?: number;
 }
 
-export type TasksDetails = TasksReadDetails | TasksKillDetails | TasksListDetails | TasksWaitDetails;
+export type TasksDetails = TasksReadDetails | TasksKillDetails | TasksListDetails;

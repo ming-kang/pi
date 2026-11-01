@@ -32,7 +32,7 @@ interface Delivery {
 
 /**
  * Sole owner of "has this completion reached the model": the pending queue, claims, the in-flight
- * completion, failures, pauses, wait receipts and observation holds. An undelivered completion is
+ * completion, failures and pauses. An undelivered completion is
  * a retention lease on its task, so the runtime keeps the record and its output exactly as long
  * as delivery needs them, and a bare runtime carries no delivery concept at all.
  */
@@ -44,10 +44,7 @@ export class TaskDelivery {
 	private delivery?: Delivery;
 	/** Settlement order. */
 	private readonly completions = new Map<string, Completion>();
-	/** Task IDs under an observation hold or wait receipt, with the number of holders. */
-	private readonly holds = new Map<string, number>();
 	private readonly failures = new Set<string>();
-	private readonly waits = new Map<string, { taskId: string; release(): void }>();
 	private readonly listeners = new Set<() => void>();
 	constructor(options: TaskDeliveryOptions) {
 		this.options = options;
@@ -79,8 +76,7 @@ export class TaskDelivery {
 	/**
 	 * Whether a completion is in flight or will be delivered without further input: queued on the
 	 * current runtime, visible on the branch and not failed. A failed delivery only retries on the
-	 * next input, so it does not count. Held completions count: releasing the hold, or the
-	 * acknowledgement that replaces it, always follows.
+	 * next input, so it does not count.
 	 */
 	hasDeliverableWork(): boolean {
 		if (this.disposed) return false;
@@ -140,36 +136,15 @@ export class TaskDelivery {
 	}
 
 	/**
-	 * Keep `taskIds` out of automatic delivery until the release runs. Holds may precede
-	 * settlement, and releasing one re-evaluates the queue.
-	 */
-	hold(taskIds: readonly string[]): () => void {
-		const ids = [...taskIds];
-		for (const id of ids) this.holds.set(id, (this.holds.get(id) ?? 0) + 1);
-		let released = false;
-		return () => {
-			if (released) return;
-			released = true;
-			for (const id of ids) {
-				const count = (this.holds.get(id) ?? 1) - 1;
-				if (count > 0) this.holds.set(id, count);
-				else this.holds.delete(id);
-			}
-			this.schedule();
-			this.changed();
-		};
-	}
-
-	/**
-	 * Completions that would be delivered next, oldest launch first: on the visible branch, not
-	 * claimed and not held. Failed deliveries stay listed until the next retry.
+	 * Completions that would be delivered next, oldest launch first: on the visible branch and not
+	 * claimed. Failed deliveries stay listed until the next retry.
 	 */
 	pending(): TaskSnapshot[] {
 		const service = this.service;
 		if (service.closed) return [];
 		return service.list().filter((task) => {
 			const completion = this.completions.get(task.id);
-			return completion?.service === service && !completion.claimed && !this.holds.has(task.id);
+			return completion?.service === service && !completion.claimed;
 		});
 	}
 
@@ -247,7 +222,6 @@ export class TaskDelivery {
 
 	/** A queued message that was never emitted remains claimed for the next run. */
 	agentEnded(): void {
-		this.releaseWaits();
 		const delivery = this.delivery;
 		if (delivery?.phase === "started") {
 			delivery.queued?.reject(new Error("the completion message was not persisted"));
@@ -266,34 +240,10 @@ export class TaskDelivery {
 			this.acknowledge(delivery.id);
 			delivery.queued?.resolve();
 		}
-		if (message.role === "toolResult") this.acknowledgeWait(message.toolCallId);
-	}
-
-	/**
-	 * A wait observed a settled background task. Its observation hold is still in place; take over
-	 * the hold until the wait's tool result is persisted, then acknowledge it instead of notifying.
-	 */
-	bindWait(toolCallId: string, taskId: string): void {
-		this.waits.get(toolCallId)?.release();
-		this.waits.set(toolCallId, { taskId, release: this.hold([taskId]) });
-	}
-
-	private acknowledgeWait(toolCallId: string): void {
-		const receipt = this.waits.get(toolCallId);
-		if (!receipt) return;
-		this.waits.delete(toolCallId);
-		this.acknowledge(receipt.taskId);
-		receipt.release();
-	}
-
-	private releaseWaits(): void {
-		for (const receipt of this.waits.values()) receipt.release();
-		this.waits.clear();
 	}
 
 	dispose(): void {
 		this.disposed = true;
-		this.releaseWaits();
 		for (const completion of this.completions.values()) completion.release();
 		this.completions.clear();
 		this.delivery?.queued?.reject(new Error("the session was disposed"));

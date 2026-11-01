@@ -12,6 +12,7 @@ import { createAgentTool } from "../src/extensions/agent/index.ts";
 import tasksExtension from "../src/extensions/tasks/index.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { createHarness, getMessageText, type Harness } from "./suite/harness.ts";
+import { settleTask } from "./tasks-settle.ts";
 
 let harness: Harness;
 /** Background work needs the tasks management tool, so these sessions load the Tasks extension. */
@@ -141,7 +142,7 @@ describe("Agent delegation", () => {
 			expect(handoff.details?.state).toBe("background");
 			const taskId = handoff.details?.taskId;
 			expect(taskId).toBeDefined();
-			const task = (await harness.session.tasks.wait(taskId!)).task;
+			const task = (await settleTask(harness.session.tasks, taskId!)).task;
 			expect(task.status).toBe("completed");
 			expect(task.outputPath).toBeDefined();
 			expect(readFileSync(task.outputPath!, "utf8")).toBe(report);
@@ -189,7 +190,7 @@ describe("Agent delegation", () => {
 		expect(live?.map(stripTerminalSequences)).toEqual([expect.stringMatching(/^✓ read entry\.ts · \d+ms$/u)]);
 		expect(live?.[0]).toContain("\u001b[");
 		release();
-		expect((await harness.session.tasks.wait(taskId)).task.status).toBe("completed");
+		expect((await settleTask(harness.session.tasks, taskId)).task.status).toBe("completed");
 		expect((await harness.session.tasks.read(taskId)).text).toBe("Final report");
 		const settled = harness.session.tasks.get(taskId);
 		expect(settled.display).toBeUndefined();
@@ -245,7 +246,7 @@ describe("Agent delegation", () => {
 		for (const line of harness.session.tasks.presentOutput(taskId, 30, theme) ?? [])
 			expect(visibleWidth(line)).toBeLessThanOrEqual(30);
 		release();
-		await harness.session.tasks.wait(taskId);
+		await settleTask(harness.session.tasks, taskId);
 	});
 
 	it("settles a failed Agent with its diagnostic as the result and no display", async () => {
@@ -263,7 +264,7 @@ describe("Agent delegation", () => {
 			harness.session.extensionRunner.createToolContext("failed-agent", undefined),
 		);
 		const taskId = handoff.details!.taskId;
-		expect((await harness.session.tasks.wait(taskId)).task.status).toBe("failed");
+		expect((await settleTask(harness.session.tasks, taskId)).task.status).toBe("failed");
 		const task = harness.session.tasks.get(taskId);
 		expect(task.display).toBeUndefined();
 		expect(task.result?.text).toContain("Partial findings");
@@ -473,7 +474,7 @@ describe("Agent delegation", () => {
 		expect(getMessageText(handoff)).toContain(task.id);
 		parent.abort();
 		release();
-		expect((await harness.session.tasks.wait(task.id)).task.status).toBe("completed");
+		expect((await settleTask(harness.session.tasks, task.id)).task.status).toBe("completed");
 		expect(harness.faux.state.callCount).toBe(1);
 		resumeNotifications();
 	});
@@ -544,7 +545,7 @@ describe("Agent delegation", () => {
 		expect(harness.session.tasks.get(taskId).status).toBe("queued");
 		releaseFirst();
 		expect(getMessageText(await first)).toBe("First report");
-		expect((await harness.session.tasks.wait(taskId)).task.status).toBe("completed");
+		expect((await settleTask(harness.session.tasks, taskId)).task.status).toBe("completed");
 		expect((await harness.session.tasks.read(taskId)).text).toBe("Queued report");
 	});
 

@@ -2,11 +2,9 @@
 
 import { type Component, Container, Text, TruncatedText } from "@earendil-works/pi-tui";
 import type { AgentToolResult, ToolRenderContext, ToolRenderResultOptions } from "../../../core/extensions/types.ts";
-import { clampWaitMs } from "../../../core/tasks/limits.ts";
 import type { TaskStatus } from "../../../core/tasks/types.ts";
 import { formatSize } from "../../../core/tools/truncate.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
-import { formatDuration } from "../../../utils/duration.ts";
 import type { TasksInput } from "../tool/schema.ts";
 import type { TasksDetails } from "../tool/types.ts";
 import { statusName, statusView } from "./status.ts";
@@ -17,43 +15,6 @@ type TasksRenderInput = Omit<TasksInput, "action"> & { action?: string };
 
 /** Cap for expanded transcript views of tool-result text (already bounded at the source). */
 const RESULT_EXPAND_LIMIT = 4000;
-/** Live pending-wait line refresh cadence; the first settled render clears the timer. */
-const WAIT_REFRESH_MS = 1000;
-
-/** Per-call live-refresh state owned by the shell's render context. */
-export interface TasksRenderState {
-	dispose?: () => void;
-	refreshTimer?: ReturnType<typeof setTimeout>;
-	/** First pending render of a wait call; anchors the elapsed display. */
-	waitStartedAt?: number;
-}
-
-/**
- * Arm a one-shot 1s refresh while a wait call is pending, clear it once
- * settled. The timer fires → context.invalidate() → renderCall re-runs →
- * re-arms, so at most one armed timer exists per tool row. Unref'd: it can
- * never hold the process open.
- */
-export function scheduleWaitRefresh(context: ToolRenderContext<TasksRenderState>, pending: boolean): void {
-	const state = context.state;
-	if (state === undefined) return; // Standalone render without shell state: nothing to schedule.
-	if (pending) {
-		state.dispose = () => scheduleWaitRefresh(context, false);
-		if (state.refreshTimer === undefined) {
-			state.refreshTimer = setTimeout(() => {
-				state.refreshTimer = undefined;
-				context.invalidate();
-			}, WAIT_REFRESH_MS);
-			state.refreshTimer.unref?.();
-		}
-		return;
-	}
-	if (state.refreshTimer !== undefined) {
-		clearTimeout(state.refreshTimer);
-		state.refreshTimer = undefined;
-	}
-	state.waitStartedAt = undefined;
-}
 
 /** Keep the end that was read: a report's summary or a log's outcome. */
 function capForTranscript(text: string, limit: number, mode: "head" | "tail" = "tail"): string {
@@ -63,11 +24,7 @@ function capForTranscript(text: string, limit: number, mode: "head" | "tail" = "
 
 // ── tool call ─────────────────────────────────────────────────────────────
 
-export function renderTasksCall(
-	args: TasksRenderInput,
-	theme: Theme,
-	context: ToolRenderContext<TasksRenderState>,
-): Component {
+export function renderTasksCall(args: TasksRenderInput, theme: Theme, _context: ToolRenderContext): Component {
 	switch (args.action) {
 		case "read": {
 			// The default end depends on the task's output kind, which the call does not carry.
@@ -79,8 +36,6 @@ export function renderTasksCall(
 				0,
 			);
 		}
-		case "wait":
-			return renderWaitCall(args, theme, context);
 		case "kill":
 			return new Text(
 				`${theme.fg("toolTitle", theme.bold("tasks kill "))}${theme.fg("accent", args.taskId ?? "")}`,
@@ -96,49 +51,16 @@ export function renderTasksCall(
 	}
 }
 
-/**
- * Pending wait call: elapsed/wait-window, refreshed once per second by
- * scheduleWaitRefresh until the result settles and takes over the row.
- */
-function renderWaitCall(args: TasksRenderInput, theme: Theme, context: ToolRenderContext<TasksRenderState>): Component {
-	const taskId = typeof args.taskId === "string" ? args.taskId.trim() : "";
-	// isPartial alone means "not settled", which also covers argument streaming
-	// and replayed history rows that never settle; executionStarted narrows it to
-	// a call that is actually running. The live display also needs shell-owned
-	// state; without it (standalone renders) fall back to the static line.
-	const pending = context.executionStarted === true && context.isPartial === true && context.state !== undefined;
-	scheduleWaitRefresh(context, pending);
-	if (!pending) {
-		const ms = args.waitMs !== undefined ? ` ${formatDuration(clampWaitMs(args.waitMs))}` : "";
-		return new Text(
-			`${theme.fg("toolTitle", theme.bold("tasks wait "))}${theme.fg("accent", taskId || "any")}${theme.fg("muted", ms)}`,
-			0,
-			0,
-		);
-	}
-	const state = context.state;
-	if (state.waitStartedAt === undefined) state.waitStartedAt = Date.now();
-	const elapsed = `waiting ${formatDuration(Date.now() - state.waitStartedAt)} / ${formatDuration(clampWaitMs(args.waitMs))}`;
-	return new Text(
-		`${theme.fg("toolTitle", theme.bold("tasks wait "))}${theme.fg("accent", taskId || "any")} ${theme.fg("muted", elapsed)}`,
-		0,
-		0,
-	);
-}
-
 // ── tool result ───────────────────────────────────────────────────────────
 
 export function renderTasksResult(
 	result: AgentToolResult<TasksDetails | undefined>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
-	context: ToolRenderContext<TasksRenderState>,
+	context: ToolRenderContext,
 ): Component {
-	// Results are always settled today; clear defensively so no live-refresh
-	// timer can outlive its row if a host ever streams partial results.
-	if (context.args?.action === "wait" && !options.isPartial) scheduleWaitRefresh(context, false);
 	const details = result.details;
-	// Results from older tool versions, such as `bg create`, keep their saved text.
+	// Results from older tool versions, such as `bg create` or `wait`, keep their saved text.
 	const summary = details && !context.isError ? resultSummaryLine(details, theme, options.expanded) : undefined;
 	if (summary === undefined || details === undefined) {
 		const text = result.content.find((part) => part.type === "text")?.text ?? "";
@@ -149,7 +71,7 @@ export function renderTasksResult(
 	container.addChild(new TruncatedText(summary, 1, 0));
 	if (options.expanded) {
 		const text = result.content.find((part) => part.type === "text")?.text ?? "";
-		const mode = details.action === "read" || details.action === "wait" ? details.mode : undefined;
+		const mode = details.action === "read" ? details.mode : undefined;
 		container.addChild(new Text("", 0, 0));
 		container.addChild(
 			new Text(theme.fg("toolOutput", capForTranscript(text, RESULT_EXPAND_LIMIT, mode).trimEnd()), 1, 0),
@@ -173,22 +95,6 @@ function resultSummaryLine(details: TasksDetails, theme: Theme, expanded: boolea
 					? `${details.mode} ${formatSize(details.sliceBytes)} of ${formatSize(details.totalBytes)}`
 					: formatSize(details.totalBytes);
 			return `${theme.fg("muted", "→ ")}${theme.fg("accent", details.taskId)}${theme.fg("muted", `${details.status ? ` ${statusName(details.status)} ·` : ""} ${size}${details.outputPath ? ` · ${shownPath(details.outputPath)}` : ""}`)}`;
-		}
-		case "wait": {
-			const outcome = details.outcome;
-			if (outcome === "no_tasks") return theme.fg("muted", "→ No background tasks running");
-			const taskId = details.taskId ?? "any";
-			if (outcome === "interrupted") {
-				const running = details.running ? ` · ${details.running} still running` : "";
-				return `${mark("cancelled")} ${theme.fg("accent", taskId)}${theme.fg("muted", ` wait interrupted after ${formatDuration(details.waitedMs)}${running}`)}`;
-			}
-			if (outcome === "timed_out") {
-				const status = details.status ?? "running";
-				const running = details.taskId ? formatSize(details.totalBytes) : `${details.running ?? 0} still running`;
-				return `${mark(status)} ${theme.fg("accent", taskId)}${theme.fg("muted", ` ${statusName(status)} · wait ended after ${formatDuration(details.waitedMs)} · ${running}`)}`;
-			}
-			const status = details.status ?? "completed";
-			return `${mark(status)} ${theme.fg("accent", taskId)}${theme.fg("muted", ` ${statusName(status)} · waited ${formatDuration(details.waitedMs)} · +${formatSize(details.deltaBytes)}`)}`;
 		}
 		case "kill": {
 			const status = details.status ?? (details.requested ? "stopping" : "cancelled");

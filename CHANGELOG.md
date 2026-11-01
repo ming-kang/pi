@@ -4,6 +4,14 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Removed
+
+- The `tasks` tool's `wait` action and its `waitMs` parameter, along with `TasksContext.wait()`/`waitAny()` and their types. Background completions already wake the model automatically, so the model now continues independent work or ends its turn instead of blocking. Steering no longer has wait-only interruption semantics. Saved `tasks wait` results in old sessions render as their saved text. Hosts that must outlast background work use `AgentSession.waitForQuiescence()`.
+
+### Fixed
+
+- `tasks read` honours `sinceBytes`, so a read continues from the `next sinceBytes` offset it reported. Previously only `wait` applied the offset and `read` silently ignored it.
+
 ## [1.4.10] - 2026-11-01
 
 ### Added

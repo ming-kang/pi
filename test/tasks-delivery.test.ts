@@ -7,6 +7,7 @@ import { SessionManager } from "../src/core/session-manager.ts";
 import { TaskSession } from "../src/core/tasks/session.ts";
 import type { TaskControl, TaskExecution } from "../src/core/tasks/types.ts";
 import { createDeliveryHarness } from "./tasks-delivery-harness.ts";
+import { settleTask } from "./tasks-settle.ts";
 
 const result = (text = "done"): AgentToolResult<undefined> => ({
 	content: [{ type: "text", text }],
@@ -57,7 +58,7 @@ afterEach(() => {
 async function settle(harness: ReturnType<typeof delivering>, item = backgroundJob()) {
 	await harness.runtime.execute(item.execution);
 	item.finish();
-	await harness.runtime.wait(item.control.id, { timeoutMs: 1000 });
+	await settleTask(harness.runtime, item.control.id);
 	return item.control.id;
 }
 
@@ -125,22 +126,6 @@ describe("TaskDelivery completion queue", () => {
 		expect(harness.pending()).toEqual([]);
 	});
 
-	it("keeps an observed completion out of delivery until its hold is released", async () => {
-		let open = true;
-		const harness = delivering({ canDeliver: () => open });
-		open = false;
-		const id = await settle(harness);
-		const release = harness.delivery.hold([id]);
-		open = true;
-		harness.delivery.schedule();
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(harness.delivered).toEqual([]);
-		expect(harness.pending()).toEqual([]);
-		release();
-		release();
-		await vi.waitFor(() => expect(harness.delivered).toHaveLength(1));
-	});
-
 	it("retains pending output while delivery waits, and runs its cleanup once the lease is released", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "pi-delivery-lease-"));
 		const path = join(dir, "output.log");
@@ -152,7 +137,7 @@ describe("TaskDelivery completion queue", () => {
 			await harness.runtime.execute(item.execution);
 			item.control.attachOutput(path, cleanup);
 			item.finish();
-			await harness.runtime.wait(item.control.id, { timeoutMs: 1000 });
+			await settleTask(harness.runtime, item.control.id);
 			expect(cleanup).not.toHaveBeenCalled();
 			expect((await harness.runtime.read(item.control.id)).text).toBe("log text");
 			harness.delivery.acknowledge(item.control.id);
@@ -171,7 +156,7 @@ describe("TaskDelivery completion queue", () => {
 		await harness.runtime.execute(item.execution);
 		item.control.attachOutput("owned", cleanup);
 		item.finish();
-		await harness.runtime.wait(item.control.id, { timeoutMs: 1000 });
+		await settleTask(harness.runtime, item.control.id);
 		expect(harness.pending()).toHaveLength(1);
 		await harness.runtime.shutdown();
 		expect(cleanup).toHaveBeenCalledOnce();
@@ -208,7 +193,7 @@ describe("TaskSession settlement and replacement", () => {
 		const item = backgroundJob();
 		await host.service.execute(item.execution);
 		item.finish();
-		await host.service.wait(item.control.id, { timeoutMs: 1000 });
+		await settleTask(host.service, item.control.id);
 		const saved = manager
 			.getEntries()
 			.flatMap((entry) => (entry.type === "custom" && entry.customType === "task-record" ? [entry.data] : []));
@@ -224,7 +209,7 @@ describe("TaskSession settlement and replacement", () => {
 		await host.service.execute(item.execution);
 		item.control.attachOutput("owned", cleanup);
 		item.finish();
-		await host.service.wait(item.control.id, { timeoutMs: 1000 });
+		await settleTask(host.service, item.control.id);
 		expect(host.delivery.pending()).toHaveLength(1);
 		await host.shutdown();
 		host.replaceService();
@@ -254,7 +239,7 @@ describe("TaskSession settlement and replacement", () => {
 		const item = backgroundJob();
 		await host.service.execute(item.execution);
 		item.finish();
-		await host.service.wait(item.control.id, { timeoutMs: 1000 });
+		await settleTask(host.service, item.control.id);
 		expect(host.delivery.pending()).toHaveLength(1);
 		// Leave the branch before the completion was delivered.
 		manager.resetLeaf();

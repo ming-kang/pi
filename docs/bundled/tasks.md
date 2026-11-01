@@ -18,7 +18,7 @@ When nothing is eligible, the key is not consumed: it falls through to other bin
 
 Configure `app.tasks.detach` in `keybindings.json` to change or disable the shortcut. The default `tui.editor.cursorLeft` is now `left`, freeing Ctrl+B. To restore Emacs cursor behavior, disable or rebind detach before assigning Ctrl+B to cursor-left.
 
-Background work, submitted or detached, is admitted only while the `tasks` tool is active: without it the model could start work it cannot read, wait for or stop. If the bundled `builtin:tasks` extension is disabled or the tool is deactivated, `background: true` is rejected with a message saying that no work was started, the detach key and statusline hint disappear, and foreground execution is unaffected. Work admitted earlier keeps running and its completion is still delivered.
+Background work, submitted or detached, is admitted only while the `tasks` tool is active: without it the model could start work it cannot read or stop. If the bundled `builtin:tasks` extension is disabled or the tool is deactivated, `background: true` is rejected with a message saying that no work was started, the detach key and statusline hint disappear, and foreground execution is unaffected. Work admitted earlier keeps running and its completion is still delivered.
 
 Hosts can prohibit background execution with `backgroundAllowed: false`. This restriction survives runtime replacement and does not depend on task kind; foreground execution remains available.
 
@@ -29,31 +29,18 @@ Hosts can prohibit background execution with `backgroundAllowed: false`. This re
 | Action | Parameters | Behavior |
 |---|---|---|
 | `list` | — | Lists active and up to five retained finished records, at most 100 rows; foreground executions are omitted with a count (they deliver inline in the transcript) |
-| `read` | `taskId`, optional `mode`, `bytes` | Reads bounded model-readable output/report while running or after completion; running Agents return a one-line status without Tool calls |
-| `wait` | optional `taskId`, `waitMs`, `sinceBytes` | Waits for one task, or for any task running at call time when `taskId` is omitted |
+| `read` | `taskId`, optional `mode`, `bytes`, `sinceBytes` | Reads bounded model-readable output/report while running or after completion; running Agents return a one-line status without Tool calls |
 | `kill` | `taskId` | Requests cancellation of the selected task |
 
-The tool is the only way the model can follow background work, which is why background needs it (see [Start or detach work](#start-or-detach-work)). Use the execution ID returned by the native tool or `tasks list`. An unknown or stale `taskId` fails with the session's current tasks listed inline (active first, then recent finishes), so the next call can use a real ID without a separate list call; an ambiguous prefix lists exactly the tasks it matched. Only `wait` makes `taskId` optional: omitting it waits for the first terminal result among background tasks that were running when the call started, and returns `no_tasks` immediately when that cohort is empty. Tasks started during the wait are not part of the cohort.
+There is no `wait` action. A background completion is delivered to the model automatically and starts a new turn if the previous one has ended, so the model continues independent work or ends its turn instead of blocking or polling.
+
+The tool is the only way the model can follow background work, which is why background needs it (see [Start or detach work](#start-or-detach-work)). Use the execution ID returned by the native tool or `tasks list`. An unknown or stale `taskId` fails with the session's current tasks listed inline (active first, then recent finishes), so the next call can use a real ID without a separate list call; an ambiguous prefix lists exactly the tasks it matched.
 
 ```json
 { "action": "read", "taskId": "<execution-id>", "bytes": 8192 }
 ```
 
-Reads default to 8KB. Without `mode`, a report such as an Agent's is read from its start and a log such as a command's from its end; `mode` can be `head` or `tail` and always wins. `details.mode`, and with it the Transcript row, names the end actually read, and settled waits follow the same default. `bytes` clamps between 256 bytes and 48KB. A Bash output path is included when available. Tasks without a log return their bounded published result. Executors can separately attach a human-only display: `/tasks` shows it in place of the result, while `tasks read`, settled waits, and completion context always use the result. Only a completion's own display survives settlement. Agent Tool calls use this display channel, so no read-view parameter is needed. Every read and settled wait reports its byte range and where to continue, for example `bytes 92160–100352 of 100352 · next sinceBytes 100352`. Use a returned offset with that task's ID: a head read continues forward from it, while a tail read keeps the newest unread window. Offsets count raw source bytes, so undecodable UTF-8 cannot change the continuation position. `waitAny` does not accept a cross-task offset.
-
-```json
-{ "action": "wait", "taskId": "<execution-id>", "waitMs": 20000, "sinceBytes": 4096 }
-```
-
-Wait for any task already running at call time by omitting the ID:
-
-```json
-{ "action": "wait", "waitMs": 20000 }
-```
-
-`waitMs` defaults to 20 seconds and clamps between 1 second and 10 minutes. A task that reaches a terminal state produces a `settled` outcome; expiry produces `timed_out` and leaves execution running. New steering input produces `interrupted` and ends only the wait, so the new input can proceed without cancelling the task; follow-up input does not interrupt it. A background completion steered into the run can interrupt a wait on another task the same way.
-
-Wait output is limited to 32KB. With `taskId`, `sinceBytes` can anchor the read. A report continues forward from that offset so no unread middle is skipped; for a log, when more than 32KB was written after the offset, the wait returns the newest 32KB and reports how many bytes it skipped. `sinceBytes` is rejected without `taskId` because offsets belong to one task. Interrupted waits do not read output. A settled waitAny reads the winning task and lists initial cohort members still running. Continue independent work instead of sleep-polling or repeatedly reading; wait when the next step genuinely depends on a result.
+Reads default to 8KB. Without `mode`, a report such as an Agent's is read from its start and a log such as a command's from its end; `mode` can be `head` or `tail` and always wins. `details.mode`, and with it the Transcript row, names the end actually read. `bytes` clamps between 256 bytes and 48KB. A Bash output path is included when available. Tasks without a log return their bounded published result. Executors can separately attach a human-only display: `/tasks` shows it in place of the result, while `tasks read` and completion context always use the result. Only a completion's own display survives settlement. Agent Tool calls use this display channel, so no read-view parameter is needed. Every read reports its byte range and where to continue, for example `bytes 92160–100352 of 100352 · next sinceBytes 100352`. Use a returned offset with that task's ID: a head read continues forward from it, while a tail read keeps the newest unread window. Offsets count raw source bytes, so undecodable UTF-8 cannot change the continuation position.
 
 ```json
 { "action": "kill", "taskId": "<execution-id>" }
@@ -61,7 +48,7 @@ Wait output is limited to 32KB. With `taskId`, `sinceBytes` can anchor the read.
 
 A cancellation request is not proof that execution has stopped. The task can remain `stopping` during cleanup. Read its later terminal status for the outcome. Partial, failed, cancelled and timeout outcomes are not displayed as successful completion.
 
-All model-facing management responses, including listings and error messages, are bounded to 50KB and 2,000 lines overall. Reads and settled waits report byte ranges and the next `sinceBytes`; waitAny accepts no cross-task input offset, so use the winning task's ID with its returned offset. Repeated reads do not add usage or restart execution. Completion delivery and usage accounting belong to the host, not panel refreshes.
+All model-facing management responses, including listings and error messages, are bounded to 50KB and 2,000 lines overall. Repeated reads do not add usage or restart execution. Completion delivery and usage accounting belong to the host, not panel refreshes.
 
 ## `/tasks` panel
 

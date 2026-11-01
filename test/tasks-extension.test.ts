@@ -18,17 +18,13 @@ import type {
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import type { TaskControl } from "../src/core/tasks/types.ts";
-import { runKill, runList, runRead, runWait } from "../src/extensions/tasks/tool/actions.ts";
+import { runKill, runList, runRead } from "../src/extensions/tasks/tool/actions.ts";
 import type { tasksSchema } from "../src/extensions/tasks/tool/schema.ts";
 import type { TasksDetails } from "../src/extensions/tasks/tool/types.ts";
-import {
-	renderTasksCall,
-	renderTasksResult,
-	scheduleWaitRefresh,
-	type TasksRenderState,
-} from "../src/extensions/tasks/ui/render.ts";
-import { initTheme, type Theme, theme } from "../src/modes/interactive/theme/theme.ts";
+import { renderTasksCall, renderTasksResult } from "../src/extensions/tasks/ui/render.ts";
+import { initTheme, type Theme } from "../src/modes/interactive/theme/theme.ts";
 import { createDeliveryHarness } from "./tasks-delivery-harness.ts";
+import { settleTask } from "./tasks-settle.ts";
 import { createTasksHarness } from "./test-tasks-ui.ts";
 
 function textOf(result: AgentToolResult<unknown>): string {
@@ -85,7 +81,7 @@ function running(kind: "bash" | "custom" = "bash", options: Parameters<typeof cr
 describe("public Background management", () => {
 	beforeEach(() => initTheme("dark"));
 	it("registers management only, with native presentation", () => {
-		let tool: ToolDefinition<typeof tasksSchema, TasksDetails, TasksRenderState> | undefined;
+		let tool: ToolDefinition<typeof tasksSchema, TasksDetails> | undefined;
 		const pi = {
 			on: vi.fn(),
 			registerTool: (value: typeof tool) => {
@@ -103,7 +99,7 @@ describe("public Background management", () => {
 		expect(() => makeStrictJsonSchema(tool!.parameters)).not.toThrow();
 	});
 	it("lists the session's current tasks when the id is unknown", async () => {
-		let tool: ToolDefinition<typeof tasksSchema, TasksDetails, TasksRenderState> | undefined;
+		let tool: ToolDefinition<typeof tasksSchema, TasksDetails> | undefined;
 		const pi = {
 			on: vi.fn(),
 			registerTool: (value: typeof tool) => {
@@ -133,70 +129,21 @@ describe("public Background management", () => {
 			expect(textOf(runList(h.service))).toContain(kind);
 			expect(textOf(await runRead(h.service, { action: "read", taskId: id }))).toContain("progress");
 			h.finish();
-			await h.service.wait(id, { timeoutMs: 1000 });
-			expect(textOf(await runWait(h.service, { action: "wait", taskId: id }))).toContain("final report");
+			await settleTask(h.service, id);
+			expect(textOf(await runRead(h.service, { action: "read", taskId: id }))).toContain("final report");
 		}
 	});
-	it("marks only terminal wait outcomes, never an expired window or a read", async () => {
+	it("leaves a settled task pending after a read until it is acknowledged", async () => {
 		const h = running();
 		await h.outcome;
 		const id = h.service.list()[0]!.id;
-		const expired = await runWait(h.service, { action: "wait", taskId: id, waitMs: 0 });
-		expect(expired.details.outcome).toBe("timed_out");
-		expect(expired.details).not.toHaveProperty("backgroundTaskId");
 		h.finish();
-		const finished = await runWait(h.service, { action: "wait", taskId: id });
-		expect(finished.details.taskId).toBe(id);
+		await settleTask(h.service, id);
 		expect(h.pending()).toMatchObject([{ id }]);
-		expect((await runRead(h.service, { action: "read", taskId: id })).details).not.toHaveProperty("backgroundTaskId");
-	});
-	it("wait cancellation only cancels the waiter, then final output remains readable", async () => {
-		const h = running("custom");
-		await h.outcome;
-		const id = h.service.list()[0]!.id;
-		const abort = new AbortController();
-		const wait = runWait(h.service, { action: "wait", taskId: id }, abort.signal);
-		abort.abort();
-		await expect(wait).rejects.toThrow();
-		expect(h.control.signal.aborted).toBe(false);
-		h.finish();
-		await h.service.wait(id, { timeoutMs: 1000 });
-		expect(textOf(await runRead(h.service, { action: "read", taskId: id }))).toContain("final report");
-	});
-	it("returns no_tasks immediately for waitAny and rejects a cross-task byte offset", async () => {
-		const service = new TaskRuntime({ enabled: true });
-		services.push(service);
-		const result = await runWait(service, { action: "wait" });
-		expect(result.details).toMatchObject({ outcome: "no_tasks", running: 0 });
-		expect(textOf(result)).toContain("No background tasks are running");
-		await expect(runWait(service, { action: "wait", sinceBytes: 0 })).rejects.toThrow("does not accept 'sinceBytes'");
-	});
-
-	it("returns steering interruption separately from timeout without consuming the task", async () => {
-		const interrupt = new AbortController();
-		const h = running("bash", { interruptSignal: interrupt.signal });
-		const bind = vi.spyOn(h.delivery, "bindWait");
-		await h.outcome;
-		const id = h.service.list()[0]!.id;
-		const waiting = runWait(h.service, { action: "wait", taskId: id }, undefined, "wait-call");
-		interrupt.abort();
-		const result = await waiting;
-		expect(result.details).toMatchObject({ outcome: "interrupted", taskId: id, status: "running" });
-		expect(bind).not.toHaveBeenCalled();
-		expect(h.control.signal.aborted).toBe(false);
-		expect(textOf(result)).toContain("the task was not stopped");
-		h.finish();
-	});
-
-	it("reports a closed host instead of claiming execution continues", async () => {
-		const h = running();
-		await h.outcome;
-		const id = h.service.list()[0]!.id;
-		h.service.close();
-		const text = textOf(await runWait(h.service, { action: "wait", taskId: id, waitMs: 1000 }));
-		expect(text).toContain("host closed");
-		expect(text).not.toContain("execution continues");
-		h.finish();
+		await runRead(h.service, { action: "read", taskId: id });
+		expect(h.pending()).toMatchObject([{ id }]);
+		h.delivery.acknowledge(id);
+		expect(h.pending()).toEqual([]);
 	});
 	it("reports cancellation requested, never falsely stopped, and targets the whole group", async () => {
 		const h = running("custom");
@@ -218,12 +165,11 @@ describe("public Background management", () => {
 			'No task "nope" in this session. No background tasks in this session.',
 		);
 	});
-	it("enriches unknown ids across read, wait, and kill with the same listing", async () => {
+	it("enriches unknown ids across read and kill with the same listing", async () => {
 		const h = running();
 		await h.outcome;
 		const id = h.service.list()[0]!.id;
 		await expect(runRead(h.service, { action: "read", taskId: "nope" })).rejects.toThrow(/Current background tasks:/);
-		await expect(runWait(h.service, { action: "wait", taskId: "nope" })).rejects.toThrow(/Current background tasks:/);
 		expect(() => runKill(h.service, { action: "kill", taskId: "nope" })).toThrow(
 			new RegExp(`No task "nope" in this session[\\s\\S]*${id}`),
 		);
@@ -286,7 +232,7 @@ describe("public Background management", () => {
 			});
 			release();
 			const id = service.list()[index]!.id;
-			await service.wait(id, { timeoutMs: 1000 });
+			await settleTask(service, id);
 			ids.push(id);
 			vi.advanceTimersByTime(1000);
 		}
@@ -374,7 +320,7 @@ describe("public Background management", () => {
 		expect(ids).toHaveLength(2);
 		// Settle before leaving the branch: undelivered completions stay leased,
 		// so trim retains them as invisible records instead of expiring them.
-		await Promise.all(ids.map((id) => service.wait(id, { timeoutMs: 1000 })));
+		await Promise.all(ids.map((id) => settleTask(service, id)));
 		await service.cancelOutsideBranch(new Set());
 		expect(service.list()).toHaveLength(0);
 		const message = await runRead(service, { action: "read", taskId: "bash" }).then(
@@ -409,7 +355,7 @@ describe("public Background management", () => {
 			});
 			release();
 			const id = service.list()[index]!.id;
-			await service.wait(id, { timeoutMs: 1000 });
+			await settleTask(service, id);
 			ids.push(id);
 			vi.advanceTimersByTime(1000);
 		}
@@ -420,7 +366,7 @@ describe("public Background management", () => {
 		for (const id of ids.slice(2)) expect(text).toContain(id);
 		expect(text).toContain("2 more records not shown.");
 	});
-	it("keeps missing-log and terminal diagnostics ahead of a long fallback, including waits with no delta", async () => {
+	it("keeps missing-log and terminal diagnostics ahead of a long fallback", async () => {
 		const service = new TaskRuntime({ enabled: true });
 		services.push(service);
 		await service.execute({
@@ -439,22 +385,17 @@ describe("public Background management", () => {
 			},
 		});
 		const id = service.list()[0]!.id;
-		await service.wait(id);
+		await settleTask(service, id);
 		const slice = await service.read(id, { mode: "tail", bytes: 1024 });
 		expect(slice.readError).toContain("ENOENT");
 		expect(slice.text).toContain("fallback output");
-		for (const result of [
-			await runRead(service, { action: "read", taskId: id, bytes: 50 * 1024 }),
-			await runWait(service, { action: "wait", taskId: id, sinceBytes: slice.totalBytes }),
-		]) {
-			const text = textOf(result);
-			expect(text).toContain("Task error: Command exited with code 42");
-			expect(text).toContain("Output read error:");
-			expect(text).toContain("ENOENT");
-			expect(Buffer.byteLength(text)).toBeLessThanOrEqual(50 * 1024);
-			if (text.includes("fallback output"))
-				expect(text.indexOf("ENOENT")).toBeLessThan(text.indexOf("fallback output"));
-		}
+		const text = textOf(await runRead(service, { action: "read", taskId: id, bytes: 50 * 1024 }));
+		expect(text).toContain("Task error: Command exited with code 42");
+		expect(text).toContain("Output read error:");
+		expect(text).toContain("ENOENT");
+		expect(Buffer.byteLength(text)).toBeLessThanOrEqual(50 * 1024);
+		if (text.includes("fallback output"))
+			expect(text.indexOf("ENOENT")).toBeLessThan(text.indexOf("fallback output"));
 	});
 
 	it("tells the model which byte range it received and where to continue", async () => {
@@ -486,25 +427,16 @@ describe("public Background management", () => {
 			const read = textOf(await runRead(service, { action: "read", taskId: id }));
 			expect(read).toContain(`bytes ${total - 8192}–${total} of ${total}`);
 			expect(read).toContain(`next sinceBytes ${total}`);
-
-			const fromStart = textOf(await runWait(service, { action: "wait", taskId: id, waitMs: 1, sinceBytes: 0 }));
-			expect(fromStart).toContain(`bytes ${total - 32 * 1024}–${total} of ${total}`);
-			expect(fromStart).toContain(`skipped ${total - 32 * 1024} bytes after sinceBytes 0`);
-			expect(fromStart).toContain(`next sinceBytes ${total}`);
-
-			const delta = textOf(
-				await runWait(service, {
-					action: "wait",
-					taskId: id,
-					waitMs: 1,
-					sinceBytes: total - Buffer.byteLength(line),
-				}),
+			const head = textOf(
+				await runRead(service, { action: "read", taskId: id, mode: "head", sinceBytes: 1000, bytes: 1000 }),
 			);
-			expect(delta).toContain(`bytes ${total - Buffer.byteLength(line)}–${total} of ${total}`);
-			expect(delta).not.toContain("skipped");
+			expect(head).toContain(`bytes 1000–2000 of ${total}`);
+			expect(head).toContain("next sinceBytes 2000");
+			const tail = textOf(await runRead(service, { action: "read", taskId: id, sinceBytes: 0, bytes: 8192 }));
+			expect(tail).toContain(`skipped ${total - 8192} bytes after sinceBytes 0`);
 		} finally {
 			finish();
-			await service.wait(id);
+			await settleTask(service, id);
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
@@ -525,7 +457,7 @@ describe("public Background management", () => {
 				},
 			});
 			const id = service.list().find((task) => task.title === output)!.id;
-			await service.wait(id);
+			await settleTask(service, id);
 			return id;
 		};
 		const report = await settle("report");
@@ -546,23 +478,6 @@ describe("public Background management", () => {
 		expect(forced.details.mode).toBe("tail");
 		expect(textOf(forced)).toContain("END");
 		expect(textOf(forced)).not.toContain("START");
-
-		const settledReport = await runWait(service, { action: "wait", taskId: report, waitMs: 1 });
-		expect(textOf(settledReport)).toContain("START");
-		expect(textOf(settledReport)).not.toContain("END");
-		const settledLog = await runWait(service, { action: "wait", taskId: log, waitMs: 1 });
-		expect(textOf(settledLog)).toContain("END");
-		expect(textOf(settledLog)).not.toContain("START");
-
-		const continuedReport = await runWait(service, {
-			action: "wait",
-			taskId: report,
-			waitMs: 1,
-			sinceBytes: 1000,
-		});
-		expect(continuedReport.details).toMatchObject({ action: "wait", mode: "head" });
-		expect(textOf(continuedReport)).toContain(" · bytes 1000–33768 of ");
-		expect(textOf(continuedReport)).not.toContain("skipped");
 	});
 	it("continues reports by raw source bytes when a file is not valid UTF-8", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-tasks-binary-offsets-"));
@@ -589,24 +504,15 @@ describe("public Background management", () => {
 				},
 			});
 			const id = service.list()[0]!.id;
-			await service.wait(id);
+			await settleTask(service, id);
 			const first = await runRead(service, { action: "read", taskId: id, bytes: window });
 			expect(first.details).toMatchObject({ sliceBytes: window, totalBytes: source.length });
 			expect(textOf(first)).toContain(` · bytes 0–${window} of ${source.length} · next sinceBytes ${window}`);
 			const offset = Number(/next sinceBytes (\d+)/.exec(textOf(first))?.[1]);
 			expect(offset).toBe(window);
 
-			const next = await runWait(service, { action: "wait", taskId: id, waitMs: 1, sinceBytes: offset });
-			expect(next.details).toMatchObject({
-				action: "wait",
-				mode: "head",
-				deltaBytes: source.length - window,
-				deltaTruncated: false,
-			});
-			expect(textOf(next)).toContain(
-				` · bytes ${window}–${source.length} of ${source.length} · next sinceBytes ${source.length}`,
-			);
-			expect(textOf(next)).not.toContain("skipped");
+			const next = await service.read(id, { mode: "head", sinceBytes: offset, bytes: window });
+			expect(next).toMatchObject({ fromByte: window, totalBytes: source.length });
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
@@ -639,18 +545,6 @@ describe("public Background management", () => {
 		vi.spyOn(h.service, "list").mockReturnValue(Array.from({ length: 105 }, () => ({ ...original })));
 		expect(textOf(runList(h.service))).toContain("5 more records not shown.");
 		h.finish();
-	});
-	it("releases renderer timers when a pending wait row is disposed", () => {
-		vi.useFakeTimers();
-		const state: TasksRenderState = {};
-		const invalidate = vi.fn();
-		const ctx = { state, invalidate } as unknown as ToolRenderContext<TasksRenderState>;
-		scheduleWaitRefresh(ctx, true);
-		expect(vi.getTimerCount()).toBe(1);
-		state.dispose?.();
-		vi.advanceTimersByTime(2000);
-		expect(invalidate).not.toHaveBeenCalled();
-		expect(vi.getTimerCount()).toBe(0);
 	});
 	it("closes an open /tasks via done on session shutdown without cancelling execution", async () => {
 		const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
@@ -725,7 +619,7 @@ describe("public Background management", () => {
 		expect(updates).toHaveBeenLastCalledWith("background", undefined);
 		const calls = updates.mock.calls.length;
 		h.finish();
-		await h.service.wait(h.service.list()[0]!.id, { timeoutMs: 1000 });
+		await settleTask(h.service, h.service.list()[0]!.id);
 		expect(updates).toHaveBeenCalledTimes(calls);
 	});
 
@@ -878,11 +772,11 @@ describe("public Background management", () => {
 			expect(vi.getTimerCount()).toBe(0);
 			mixed.finish();
 			await mixed.outcome;
-			await service.wait(service.list().find((task) => task.toolCallId === "mixed")!.id, { timeoutMs: 1000 });
+			await settleTask(service, service.list().find((task) => task.toolCallId === "mixed")!.id);
 			expect(updates).toHaveBeenLastCalledWith("background", `1 background task · /tasks to view · ${hint}`);
 			long.finish();
 			await long.outcome;
-			await service.wait(service.list().find((task) => task.toolCallId === "long")!.id, { timeoutMs: 1000 });
+			await settleTask(service, service.list().find((task) => task.toolCallId === "long")!.id);
 			expect(updates).toHaveBeenLastCalledWith("background", hint);
 			service.setEnabled(false);
 			expect(updates).toHaveBeenLastCalledWith("background", undefined);
@@ -973,7 +867,7 @@ describe("public Background management", () => {
 			service.kill(secondId);
 			expect(updates).toHaveBeenLastCalledWith("background", "2 background tasks · /tasks to view");
 			second.finish();
-			await service.wait(secondId, { timeoutMs: 1000 });
+			await settleTask(service, secondId);
 			expect(updates).toHaveBeenLastCalledWith("background", "1 background task · /tasks to view");
 			// Finished records remain available without keeping the statusline visible.
 			background.finish();
@@ -1013,11 +907,10 @@ describe("renderTasksCall", () => {
 	it("renders one line per action with the task id and parameters", () => {
 		const cases: [
 			{
-				action: "read" | "wait" | "kill" | "list";
+				action: "read" | "kill" | "list";
 				taskId?: string;
 				mode?: "head" | "tail";
 				bytes?: number;
-				waitMs?: number;
 			},
 			RegExp,
 		][] = [
@@ -1025,8 +918,6 @@ describe("renderTasksCall", () => {
 			[{ action: "read", taskId: "bg-3f", mode: "head" }, /^tasks read bg-3f head\s*$/],
 			[{ action: "read", taskId: "bg-3f", bytes: 8192 }, /^tasks read bg-3f 8\.0KB\s*$/],
 			[{ action: "read", taskId: "bg-3f" }, /^tasks read bg-3f\s*$/],
-			[{ action: "wait", taskId: "3f", waitMs: 20_000 }, /^tasks wait 3f 20s/],
-			[{ action: "wait" }, /^tasks wait any/],
 			[{ action: "kill", taskId: "bg-3f" }, /^tasks kill bg-3f/],
 			[{ action: "list" }, /^tasks list/],
 		];
@@ -1038,130 +929,11 @@ describe("renderTasksCall", () => {
 	});
 });
 
-describe("renderTasksCall wait pending line", () => {
-	const plainTheme = {
-		fg: (_color: string, text: string) => text,
-		bold: (text: string) => text,
-	} as unknown as Theme;
-
-	it("shows elapsed/window while pending, then settles", () => {
-		vi.useFakeTimers();
-		try {
-			const state: TasksRenderState = {};
-			const context = {
-				expanded: false,
-				executionStarted: true,
-				isPartial: true,
-				state,
-				invalidate: vi.fn(),
-			} as unknown as ToolRenderContext<TasksRenderState>;
-
-			const first = renderTasksCall({ action: "wait", taskId: "bg-3f", waitMs: 20_000 }, plainTheme, context);
-			expect(first.render(200).map(stripTerminalSequences).join("\n")).toMatch(
-				/^tasks wait bg-3f waiting <1s \/ 20s/,
-			);
-			expect(state.refreshTimer).toBeDefined();
-
-			// The armed timer invalidates and the next render shows elapsed progress.
-			vi.advanceTimersByTime(1000);
-			expect(context.invalidate).toHaveBeenCalledTimes(1);
-			const second = renderTasksCall({ action: "wait", taskId: "bg-3f", waitMs: 20_000 }, plainTheme, context);
-			expect(second.render(200).map(stripTerminalSequences).join("\n")).toMatch(
-				/^tasks wait bg-3f waiting 1s \/ 20s/,
-			);
-
-			// Settled: timer cleared, static form returns.
-			const settledContext = {
-				expanded: false,
-				executionStarted: true,
-				isPartial: false,
-				state,
-			} as unknown as ToolRenderContext<TasksRenderState>;
-			const settled = renderTasksCall(
-				{ action: "wait", taskId: "bg-3f", waitMs: 20_000 },
-				plainTheme,
-				settledContext,
-			);
-			expect(settled.render(200).map(stripTerminalSequences).join("\n")).toMatch(/^tasks wait bg-3f 20s/);
-			expect(state.refreshTimer).toBeUndefined();
-		} finally {
-			vi.useRealTimers();
-		}
-	});
-
-	it("stays static until execution starts", () => {
-		const state: TasksRenderState = {};
-		// Arguments are still streaming, or this is a replayed transcript row that
-		// will never settle. Either way there is nothing to count up to yet.
-		const context = {
-			expanded: false,
-			executionStarted: false,
-			isPartial: true,
-			state,
-		} as unknown as ToolRenderContext<TasksRenderState>;
-
-		const line = renderTasksCall({ action: "wait", taskId: "bg-3f" }, plainTheme, context);
-		expect(line.render(200).map(stripTerminalSequences).join("\n")).not.toContain("waiting");
-		expect(state.refreshTimer).toBeUndefined();
-	});
-
-	it("falls back to the static line without shell state", () => {
-		const component = renderTasksCall({ action: "wait", taskId: "bg-3f", waitMs: 5000 }, plainTheme, {
-			expanded: false,
-			isPartial: true,
-		} as ToolRenderContext<TasksRenderState>);
-		expect(component.render(200).map(stripTerminalSequences).join("\n")).toMatch(/^tasks wait bg-3f 5s/);
-	});
-});
-
 describe("renderTasksResult", () => {
 	const plainTheme = {
 		fg: (_color: string, text: string) => text,
 		bold: (text: string) => text,
 	} as unknown as Theme;
-
-	it("renders waitAny and interruption outcomes without inventing a task status", () => {
-		const noTasks = renderTasksResult(
-			{
-				content: [],
-				details: {
-					action: "wait",
-					outcome: "no_tasks",
-					waitedMs: 0,
-					deltaBytes: 0,
-					totalBytes: 0,
-					deltaTruncated: false,
-					outputPath: "",
-					running: 0,
-				},
-			},
-			{ expanded: false, isPartial: false },
-			plainTheme,
-			{ args: { action: "wait" }, state: {} } as ToolRenderContext,
-		);
-		expect(noTasks.render(200).map(stripTerminalSequences).join("\n")).toContain("No background tasks running");
-		const interrupted = renderTasksResult(
-			{
-				content: [],
-				details: {
-					action: "wait",
-					outcome: "interrupted",
-					waitedMs: 1000,
-					deltaBytes: 0,
-					totalBytes: 0,
-					deltaTruncated: false,
-					outputPath: "",
-					running: 2,
-				},
-			},
-			{ expanded: false, isPartial: false },
-			plainTheme,
-			{ args: { action: "wait" }, state: {} } as ToolRenderContext,
-		);
-		expect(interrupted.render(200).map(stripTerminalSequences).join("\n")).toContain(
-			"any wait interrupted after 1s · 2 still running",
-		);
-	});
 
 	it("caps expanded output at the same end that was read", () => {
 		const text = `[header]\nSTART-OF-REPORT\n${"x".repeat(4500)}\nEND-OF-REPORT`;
@@ -1190,31 +962,17 @@ describe("renderTasksResult", () => {
 		expect(render("tail")).not.toContain("START-OF-REPORT");
 	});
 
-	it("caps an expanded report wait at its beginning", () => {
-		const text = `[header]\nSTART-OF-REPORT\n${"x".repeat(4500)}\nEND-OF-REPORT`;
+	it("shows the saved text of a persisted result from the removed wait action", () => {
 		const component = renderTasksResult(
 			{
-				content: [{ type: "text", text }],
-				details: {
-					action: "wait",
-					outcome: "settled",
-					taskId: "report-1",
-					status: "completed",
-					waitedMs: 0,
-					deltaBytes: 4500,
-					totalBytes: 9000,
-					deltaTruncated: true,
-					mode: "head",
-					outputPath: "",
-				},
+				content: [{ type: "text", text: "[bg-3f completed] saved wait report" }],
+				details: { action: "wait", outcome: "settled", taskId: "bg-3f" } as never,
 			},
-			{ expanded: true, isPartial: false },
+			{ expanded: false, isPartial: false },
 			plainTheme,
 			{ args: { action: "wait" }, state: {} } as ToolRenderContext,
 		);
-		const rendered = component.render(500).join("\n");
-		expect(rendered).toContain("START-OF-REPORT");
-		expect(rendered).not.toContain("END-OF-REPORT");
+		expect(component.render(200).map(stripTerminalSequences).join("\n")).toContain("saved wait report");
 	});
 
 	it("shows the saved text of a result from an older tool version", () => {
@@ -1228,33 +986,5 @@ describe("renderTasksResult", () => {
 			{ args: { action: "create" }, state: {} } as ToolRenderContext,
 		);
 		expect(component.render(200).map(stripTerminalSequences).join("\n")).toContain("Started background task bg-3f.");
-	});
-});
-
-describe("management outcome facts", () => {
-	beforeEach(() => initTheme("dark"));
-	it("does not call stopping work running when a wait ends", () => {
-		const result = renderTasksResult(
-			{
-				content: [],
-				details: {
-					action: "wait",
-					taskId: "build",
-					outcome: "timed_out",
-					status: "stopping",
-					waitedMs: 1000,
-					deltaBytes: 0,
-					totalBytes: 0,
-					deltaTruncated: false,
-					outputPath: "",
-				},
-			},
-			{ expanded: false, isPartial: false },
-			theme,
-			{ state: {} } as ToolRenderContext,
-		);
-		const text = result.render(120).map(stripTerminalSequences).join("\n");
-		expect(text).toContain("Stopping");
-		expect(text).not.toContain("still running");
 	});
 });

@@ -523,7 +523,6 @@ export class AgentSession {
 			deliver: (message, waitForPersistence) => {
 				if (this.isStreaming) {
 					this.agent.steer(message);
-					this._tasksHost.interruptWaits();
 					return waitForPersistence();
 				}
 				// An idle delivery starts its own custom-message run, which consumes the
@@ -2554,7 +2553,6 @@ export class AgentSession {
 			content,
 			timestamp: Date.now(),
 		});
-		this._tasksHost.interruptWaits();
 	}
 
 	/**
@@ -2618,7 +2616,6 @@ export class AgentSession {
 				this.agent.followUp(appMessage);
 			} else {
 				this.agent.steer(appMessage);
-				this._tasksHost.interruptWaits();
 			}
 		} else if (options?.triggerTurn) {
 			if (this._isEmittingAgentSettled) {

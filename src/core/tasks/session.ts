@@ -46,7 +46,6 @@ export class TaskSession {
 	private enabled = false;
 	private disposed = false;
 	private generation = 0;
-	private waitInterrupt = new AbortController();
 	private readonly contextReminder = new TaskContextReminder();
 	readonly delivery: TaskDelivery;
 	private readonly quarantine: QuarantinedTaskSettlement[] = [];
@@ -91,13 +90,6 @@ export class TaskSession {
 
 	get service(): TaskRuntime {
 		return this._service;
-	}
-
-	/** End only current task waits; the next wait observes a fresh signal. */
-	interruptWaits(): void {
-		const previous = this.waitInterrupt;
-		this.waitInterrupt = new AbortController();
-		previous.abort();
 	}
 
 	/** The active tools changed: availability of background detaching may have too. */
@@ -177,20 +169,12 @@ export class TaskSession {
 		const generation = ++this.generation;
 		const sessionId = manager.getSessionId();
 		const sessionFile = manager.getSessionFile();
-		const interrupts = () => this.waitInterrupt.signal;
 		const service: TaskRuntime = new TaskRuntime({
 			enabled: this.enabled,
 			backgroundAllowed,
 			canManageBackground: () => this.options.managementActive?.() ?? true,
 			session: {
 				stoppedByTreeNavigation: (targetId): TaskSnapshot[] => this.stoppedByTreeNavigation(targetId, service),
-			},
-			waits: {
-				get interruptSignal() {
-					return interrupts();
-				},
-				hold: (taskIds) => this.delivery.hold(taskIds),
-				bind: (toolCallId, taskId) => this.delivery.bindWait(toolCallId, taskId),
 			},
 			anchor: () => manager.getLeafId(),
 			onCleanupError: (message) => this.warn("task_cleanup", message),
@@ -282,7 +266,6 @@ export class TaskSession {
 	dispose(): void {
 		this.disposed = true;
 		this.contextReminder.reset();
-		this.interruptWaits();
 		this.service.close();
 		this.delivery.dispose();
 		this.changeListeners.clear();

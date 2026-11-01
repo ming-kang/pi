@@ -9,19 +9,17 @@
 
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
-import { TASKS_WAIT_DEFAULT_MS, TASKS_WAIT_MAX_MS } from "../../../core/tasks/limits.ts";
 import { TASK_READ_BYTES, TASK_RESULT_BYTES } from "../../../core/tasks/output.ts";
 import { formatSize } from "../../../core/tools/truncate.ts";
-import { formatDuration } from "../../../utils/duration.ts";
 
 export const tasksSchema = Type.Object({
-	action: StringEnum(["read", "wait", "kill", "list"] as const, {
+	action: StringEnum(["read", "kill", "list"] as const, {
 		description: "Which task operation to perform",
 	}),
-	// — read / wait / kill —
+	// — read / kill —
 	taskId: Type.Optional(
 		Type.String({
-			description: "Task execution id (read/wait/kill). Omit for wait to wait for any task running at call time.",
+			description: "Task execution id (read/kill).",
 		}),
 	),
 	// — read —
@@ -36,16 +34,10 @@ export const tasksSchema = Type.Object({
 			description: `Max bytes to return (read, default ${formatSize(TASK_READ_BYTES)}, max ${formatSize(TASK_RESULT_BYTES)})`,
 		}),
 	),
-	// — wait —
-	waitMs: Type.Optional(
-		Type.Number({
-			description: `Maximum wait window in ms (default ${formatDuration(TASKS_WAIT_DEFAULT_MS)}, max ${formatDuration(TASKS_WAIT_MAX_MS)}). Only the wait ends on timeout; execution continues.`,
-		}),
-	),
 	sinceBytes: Type.Optional(
 		Type.Number({
 			description:
-				"Only return output written after this byte offset — use the 'next sinceBytes' value from a previous read or wait (wait with taskId only)",
+				"Only return output written after this byte offset — use the 'next sinceBytes' value from a previous read (read)",
 		}),
 	),
 });
@@ -75,12 +67,10 @@ export const TASKS_TOOL_DESCRIPTION =
 	"Completion is delivered to you automatically and starts a new turn if yours has ended — never poll; end your turn instead of waiting. " +
 	"list: bounded activity/history listing; find task IDs here. " +
 	"read: bounded model-readable output or report slice (head/tail, by default a report from its start and a log from its end); tool-call activity stays in /tasks. " +
-	"wait: observe one task, or any task running at call time, for up to waitMs; no running tasks returns immediately. New steering input ends only the wait with outcome interrupted; it never stops the task. " +
 	"kill: request cancellation of a whole task. " +
-	"tasks cannot start work; submit background work through its owning tool. A wait ends as settled, interrupted, timed_out, or no_tasks. Timeout or cancellation ends only the wait, never execution. Reads and settled waits report byte ranges; use next sinceBytes only with that task's ID. Output is capped at 50KB per response.";
+	"tasks cannot start work; submit background work through its owning tool. Reads report byte ranges; use next sinceBytes only with that task's ID. Output is capped at 50KB per response.";
 export const TASKS_PROMPT_SNIPPET = "List, read, or stop background tasks; their results arrive automatically";
 export const TASKS_PROMPT_GUIDELINES = [
 	"Start background work through its owning tool with background: true; continue independent work while it runs.",
-	"Ending your turn is the normal way to wait for a background task: when it finishes, its result starts a new turn for you automatically. Do not use tasks wait to get a result; use it only when the user explicitly asks you to block on a task, with taskId for one task or without it for any task running at call time. Never poll with repeated waits or reads.",
-	"A new steering message interrupts only an active tasks wait so you can read the new input; it does not cancel execution. A wait timeout is not a task failure.",
+	"Ending your turn is the way to wait for a background task: when it finishes, its result starts a new turn for you automatically. Never poll with repeated reads or list calls.",
 ];

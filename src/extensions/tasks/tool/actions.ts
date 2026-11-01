@@ -2,7 +2,7 @@
 
 import type { AgentToolResult } from "../../../core/extensions/types.ts";
 import { runtimeLabel } from "../../../core/tasks/format.ts";
-import { clampReadBytes, clampWaitMs, defaultReadMode } from "../../../core/tasks/limits.ts";
+import { clampReadBytes, defaultReadMode } from "../../../core/tasks/limits.ts";
 import { boundText, taskReadBytes, taskReadRange } from "../../../core/tasks/output.ts";
 import {
 	isTaskTerminal,
@@ -10,13 +10,12 @@ import {
 	type TaskRead,
 	type TaskSnapshot,
 	type TasksContext,
-	type TaskWaitOutcome,
 } from "../../../core/tasks/types.ts";
 import { truncateHead } from "../../../core/tools/truncate.ts";
 import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
-import { TASKS_LIST_FINISHED_SHOWN, TASKS_WAIT_DELTA_BYTES } from "./constants.ts";
+import { TASKS_LIST_FINISHED_SHOWN } from "./constants.ts";
 import { clampSinceBytes, requireTaskId, type TasksInput } from "./schema.ts";
-import type { TasksDetails, TasksKillDetails, TasksListDetails, TasksReadDetails, TasksWaitDetails } from "./types.ts";
+import type { TasksDetails, TasksKillDetails, TasksListDetails, TasksReadDetails } from "./types.ts";
 
 export function boundedText(text: string): string {
 	return truncateHead(sanitizeBinaryOutput(text), { maxBytes: 50 * 1024, maxLines: 2000 }).content;
@@ -84,8 +83,8 @@ function lookupFailure(background: TasksContext, id: string, error: unknown): Er
 }
 
 /**
- * Where this slice sits in the output, so the next wait can continue from it.
- * A tail wait whose new output exceeds its budget returns the newest bytes and says what it skipped.
+ * Where this slice sits in the output, so the next read can continue from it.
+ * A tail read whose new output exceeds its budget returns the newest bytes and says what it skipped.
  */
 function rangeText(slice: TaskRead, sinceBytes?: number): string {
 	const { from, to } = taskReadRange(slice);
@@ -116,10 +115,11 @@ function readText(header: string, slice: TaskRead): string {
 export async function runRead(background: TasksContext, input: TasksInput): Promise<AgentToolResult<TasksReadDetails>> {
 	const id = requireTaskId(input);
 	try {
-		const slice = await background.read(id, { mode: input.mode, bytes: clampReadBytes(input.bytes) });
+		const sinceBytes = clampSinceBytes(input.sinceBytes);
+		const slice = await background.read(id, { mode: input.mode, bytes: clampReadBytes(input.bytes), sinceBytes });
 		// The runtime resolved an omitted mode from this same snapshot, so report what it actually used.
 		const mode = input.mode ?? defaultReadMode(slice.task);
-		return result(readText(`[${describeTaskLine(slice.task)} · ${rangeText(slice)}]`, slice), {
+		return result(readText(`[${describeTaskLine(slice.task)} · ${rangeText(slice, sinceBytes)}]`, slice), {
 			action: "read",
 			taskId: slice.task.id,
 			mode,
@@ -133,104 +133,7 @@ export async function runRead(background: TasksContext, input: TasksInput): Prom
 		throw lookupFailure(background, id, error);
 	}
 }
-function stillRunningText(tasks: readonly TaskSnapshot[]): string {
-	return tasks.length > 0 ? `\n\n[still_running]\n${tasks.map((task) => describeTaskLine(task)).join("\n")}` : "";
-}
 
-/** A finished observation of one task, or of the first task in a waitAny cohort to settle. */
-interface WaitView {
-	scope: "task" | "any";
-	outcome: TaskWaitOutcome | "no_tasks";
-	waitedMs: number;
-	task?: TaskSnapshot;
-	read?: TaskRead;
-	/** Present for waitAny: cohort members still running. */
-	running?: readonly TaskSnapshot[];
-}
-
-function waitDetails({ outcome, waitedMs, task, read, running }: WaitView): TasksWaitDetails {
-	return {
-		action: "wait",
-		// A closed host is told apart in the text; the stored outcome keeps its historical values.
-		outcome: outcome === "closed" ? "timed_out" : outcome,
-		...(task ? { taskId: task.id, status: task.status, kind: task.kind } : {}),
-		waitedMs,
-		deltaBytes: read ? taskReadBytes(read) : 0,
-		totalBytes: read?.totalBytes ?? 0,
-		deltaTruncated: read?.truncated ?? false,
-		...(read ? { mode: defaultReadMode(read.task) } : {}),
-		outputPath: task?.outputPath ?? "",
-		...(running ? { running: running.length } : {}),
-	};
-}
-
-/** Every expired wait ends with this, so a model that waited is told to stop rather than wait again. */
-const WAIT_EXPIRED_NEXT =
-	"Do not wait again: continue independent work or end your turn; each result notifies you automatically.";
-
-function waitText(view: WaitView, sinceBytes?: number): string {
-	const { scope, outcome, task, read, running } = view;
-	const still = stillRunningText(running ?? []);
-	if (outcome === "no_tasks") {
-		return "No background tasks are running, so there is nothing to wait for. Finished tasks report back via automatic notification.";
-	}
-	if (read && task) {
-		const header =
-			scope === "any"
-				? `${describeTaskLine(task)} · waitAny settled`
-				: `${describeTaskLine(task)}${
-						outcome === "closed"
-							? " · host closed; execution state unconfirmed"
-							: outcome === "timed_out"
-								? " · wait window expired; execution continues"
-								: ""
-					}`;
-		const next = scope === "task" && outcome === "timed_out" ? `\n\n${WAIT_EXPIRED_NEXT}` : "";
-		return `${readText(`[${header} · ${rangeText(read, sinceBytes)}]`, read)}${still}${next}`;
-	}
-	if (scope === "task" && task) {
-		return `[${describeTaskLine(task)} · interrupted by steering; execution continues]\nRead the new input before deciding whether to wait again; the task was not stopped.`;
-	}
-	const note =
-		outcome === "closed"
-			? "The host closed; execution state is unconfirmed."
-			: outcome === "interrupted"
-				? "New steering input ended this wait early. Read the new input before deciding what to do next; no task was stopped."
-				: `The wait window expired; running tasks continue. ${WAIT_EXPIRED_NEXT}`;
-	return `${note}${still}`;
-}
-
-function waitResult(view: WaitView, sinceBytes?: number): AgentToolResult<TasksWaitDetails> {
-	return result(waitText(view, sinceBytes), waitDetails(view));
-}
-
-export async function runWait(
-	background: TasksContext,
-	input: TasksInput,
-	signal?: AbortSignal,
-	toolCallId?: string,
-): Promise<AgentToolResult<TasksWaitDetails>> {
-	const timeoutMs = clampWaitMs(input.waitMs);
-	if (!input.taskId?.trim()) {
-		if (input.sinceBytes !== undefined)
-			throw new Error("action 'wait' without 'taskId' does not accept 'sinceBytes'; offsets belong to one task.");
-		const any = await background.waitAny({ timeoutMs, signal, toolCallId, read: { bytes: TASKS_WAIT_DELTA_BYTES } });
-		return waitResult({ scope: "any", ...any });
-	}
-	const id = requireTaskId(input);
-	try {
-		const sinceBytes = clampSinceBytes(input.sinceBytes);
-		const one = await background.wait(id, {
-			timeoutMs,
-			signal,
-			toolCallId,
-			read: { bytes: TASKS_WAIT_DELTA_BYTES, sinceBytes },
-		});
-		return waitResult({ scope: "task", ...one }, sinceBytes);
-	} catch (error) {
-		throw lookupFailure(background, id, error);
-	}
-}
 export function runKill(background: TasksContext, input: TasksInput): AgentToolResult<TasksKillDetails> {
 	const id = requireTaskId(input);
 	try {

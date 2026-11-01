@@ -9,8 +9,9 @@ import { OutputAccumulator } from "../src/core/tools/output-accumulator.ts";
 import { createPowerShellToolDefinition } from "../src/core/tools/powershell.ts";
 import { MAX_BACKGROUND_OUTPUT_BYTES } from "../src/core/tools/shell-execution.ts";
 import { createBashToolDefinition } from "../src/core/tools/shell-tool.ts";
-import { runRead, runWait } from "../src/extensions/tasks/tool/actions.ts";
+import { runRead } from "../src/extensions/tasks/tool/actions.ts";
 import { createDeliveryHarness } from "./tasks-delivery-harness.ts";
+import { settleTask } from "./tasks-settle.ts";
 
 const services: TaskRuntime[] = [];
 const paths = new Set<string>();
@@ -81,7 +82,7 @@ describe("native managed shell execution", () => {
 			);
 			child.output("[Output truncated.]\nCommand exited with code 0\n");
 			child.fail("Executor-specific failure");
-			const task = (await background.wait(submitted.details!.background!.taskId)).task;
+			const task = (await settleTask(background, submitted.details!.background!.taskId)).task;
 			expect(task).toMatchObject({
 				title: command,
 				input: { label: "Command", text: command },
@@ -111,7 +112,7 @@ describe("native managed shell execution", () => {
 			);
 		if (outcome.result) {
 			expect(outcome.result.details?.background?.kind).toBe("background");
-			const task = (await background.wait(outcome.result.details!.background!.taskId)).task;
+			const task = (await settleTask(background, outcome.result.details!.background!.taskId)).task;
 			expect(task).toMatchObject({ status: "failed", error: diagnostic });
 		} else expect(outcome.error).toMatchObject({ message: diagnostic });
 		expect(exec).toHaveBeenCalledOnce();
@@ -268,7 +269,7 @@ describe("native managed shell execution", () => {
 		child.output("still running\n");
 		expect((await background.read(id)).text).toBe("still running\n");
 		child.finish();
-		expect((await background.wait(id)).task.status).toBe("completed");
+		expect((await settleTask(background, id)).task.status).toBe("completed");
 		expect(update).toHaveBeenCalledTimes(count);
 	});
 
@@ -285,7 +286,7 @@ describe("native managed shell execution", () => {
 		);
 		expect(text(submittedResult)).toContain("Command handed to background. Task ID:");
 		submitted.finish();
-		await background.wait(submittedResult.details!.background!.taskId);
+		await settleTask(background, submittedResult.details!.background!.taskId);
 
 		const child = execution();
 		const detachTool = createBashToolDefinition(process.cwd(), { operations: child.operations });
@@ -311,7 +312,7 @@ describe("native managed shell execution", () => {
 		expect((await background.read(handoff.details!.background!.taskId)).text).toBe("already built\n");
 		expect(child.options.timeout).toBe(12);
 		child.finish();
-		await background.wait(handoff.details!.background!.taskId);
+		await settleTask(background, handoff.details!.background!.taskId);
 	});
 
 	it.each([createBashToolDefinition, createPowerShellToolDefinition])(
@@ -346,7 +347,7 @@ describe("native managed shell execution", () => {
 			const id = result.details!.background!.taskId;
 			expect((await background.read(id)).text).toBe("héllo €");
 			child.finish();
-			const final = (await background.wait(id)).task;
+			const final = (await settleTask(background, id)).task;
 			expect(text(final.result)).toBe("héllo €");
 			expect(final.status).toBe("completed");
 			expect(final.outputPath).toBe(result.details?.fullOutputPath);
@@ -373,7 +374,7 @@ describe("native managed shell execution", () => {
 		expect(published).toContain("LATEST");
 		expect(Buffer.byteLength(published)).toBeLessThanOrEqual(48 * 1024);
 		child.finish();
-		const final = (await background.wait(id)).task;
+		const final = (await settleTask(background, id)).task;
 		expect(text(final.result)).toContain("LATEST");
 		expect(text(final.result)).toContain("Full output:");
 	});
@@ -457,7 +458,7 @@ describe("native managed shell execution", () => {
 			);
 			child.output("partial output");
 			child.finish(7);
-			const final = (await background.wait(submitted.details!.background!.taskId)).task;
+			const final = (await settleTask(background, submitted.details!.background!.taskId)).task;
 			expect(final.result?.text).toBe("partial output");
 			expect(final.error).toBe("Command exited with code 7");
 			const completion = projectForModel(final);
@@ -486,7 +487,7 @@ describe("native managed shell execution", () => {
 		);
 		const id = result.details!.background!.taskId;
 		background.kill(id);
-		expect((await background.wait(id)).task.status).toBe("cancelled");
+		expect((await settleTask(background, id)).task.status).toBe("cancelled");
 	});
 
 	it("keeps the original timeout deadline across detach", async () => {
@@ -532,7 +533,7 @@ describe("native managed shell execution", () => {
 		);
 		child.output("partial output");
 		child.finish(exitCode);
-		const final = (await background.wait(result.details!.background!.taskId)).task;
+		const final = (await settleTask(background, result.details!.background!.taskId)).task;
 		expect(final.status).toBe("failed");
 		expect(text(final.result)).toContain("partial output");
 		const diagnostic = exitCode === null ? "Command terminated without an exit code" : "Command exited with code 42";
@@ -542,15 +543,6 @@ describe("native managed shell execution", () => {
 		expect(read).toContain(diagnostic);
 		expect(read).toContain("partial output");
 		expect(read.indexOf(diagnostic)).toBeLessThan(read.indexOf("partial output"));
-		expect(
-			text(
-				await runWait(background, {
-					action: "wait",
-					taskId: final.id,
-					sinceBytes: Buffer.byteLength("partial output"),
-				}),
-			),
-		).toContain(diagnostic);
 		expect(pending().map((task) => task.id)).toEqual([final.id]);
 	});
 
@@ -566,7 +558,7 @@ describe("native managed shell execution", () => {
 			context(background),
 		);
 		child.output(Buffer.alloc(MAX_BACKGROUND_OUTPUT_BYTES + 20, 120));
-		const final = (await background.wait(result.details!.background!.taskId)).task;
+		const final = (await settleTask(background, result.details!.background!.taskId)).task;
 		expect(final.status).toBe("failed");
 		expect(child.options.signal?.aborted).toBe(true);
 		expect(statSync(result.details!.fullOutputPath!).size).toBe(MAX_BACKGROUND_OUTPUT_BYTES);
@@ -591,7 +583,7 @@ describe("native managed shell execution", () => {
 		);
 		child.output("raw log\n".repeat(6000));
 		child.fail(`failure reason ${"界".repeat(6000)}`);
-		const final = (await background.wait(result.details!.background!.taskId)).task;
+		const final = (await settleTask(background, result.details!.background!.taskId)).task;
 		expect(final.error).toMatch(/^failure reason /);
 		expect(final.error).not.toContain("raw log");
 		expect(Buffer.byteLength(final.error!)).toBeLessThanOrEqual(4096);
@@ -625,7 +617,7 @@ describe("native managed shell execution", () => {
 		});
 		try {
 			expect(() => child.output("lost output")).not.toThrow();
-			const final = (await background.wait(result.details!.background!.taskId)).task;
+			const final = (await settleTask(background, result.details!.background!.taskId)).task;
 			expect(final.status).toBe("failed");
 			expect(final.error).toContain("disk write failed");
 			expect(child.options.signal?.aborted).toBe(true);
@@ -643,7 +635,7 @@ describe("native managed shell execution", () => {
 		background.detachForeground();
 		const result = await pending;
 		expect(child.options.signal?.aborted).toBe(true);
-		const task = (await background.wait(result.details!.background!.taskId)).task;
+		const task = (await settleTask(background, result.details!.background!.taskId)).task;
 		expect(task.status).toBe("failed");
 		expect(task.error).toContain("20 MiB output limit");
 		expect(statSync(task.outputPath!).size).toBe(MAX_BACKGROUND_OUTPUT_BYTES + 1);
@@ -669,7 +661,7 @@ describe("native managed shell execution", () => {
 		detachOnUpdate = true;
 		child.finish();
 		const submitted = await pending;
-		const task = (await background.wait(submitted.details!.background!.taskId)).task;
+		const task = (await settleTask(background, submitted.details!.background!.taskId)).task;
 		expect(task.status).toBe("failed");
 		expect(task.error).toBe("Background command exceeded the 20 MiB output limit");
 		expect(child.operations.exec).toHaveBeenCalledOnce();
@@ -704,7 +696,7 @@ describe("native managed shell execution", () => {
 		});
 		try {
 			expect(() => child.output("late")).not.toThrow();
-			const final = (await background.wait(result.details!.background!.taskId)).task;
+			const final = (await settleTask(background, result.details!.background!.taskId)).task;
 			expect(final.status).toBe("failed");
 			expect(final.error).toContain("disk failed after reload");
 			expect(getter).toHaveBeenCalledOnce();

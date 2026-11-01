@@ -3,7 +3,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { finiteLimit } from "../../utils/number.ts";
 import { Execution, type ExecutionHost } from "./execution.ts";
-import { defaultReadMode, TASKS_WAIT_DEFAULT_MS } from "./limits.ts";
+import { defaultReadMode } from "./limits.ts";
 import {
 	boundFacts,
 	boundInput,
@@ -29,13 +29,7 @@ import {
 	type TaskSnapshot,
 	type TasksContext,
 	type TaskToolOutcome,
-	type TaskWaitAnyOptions,
-	type TaskWaitAnyResult,
-	type TaskWaitOptions,
-	type TaskWaitOutcome,
-	type TaskWaitResult,
 } from "./types.ts";
-import { waitForFirst } from "./wait.ts";
 
 /** Session-local supervision. Executors own their processes, items and output files. */
 export class TaskRuntime implements TasksContext {
@@ -48,7 +42,6 @@ export class TaskRuntime implements TasksContext {
 	private readonly maxHistory: number;
 	private readonly maxRetained: number;
 	private readonly options: TaskRuntimeOptions;
-	private readonly closing = new AbortController();
 	private configuredEnabled: boolean;
 	private _closed = false;
 
@@ -115,11 +108,6 @@ export class TaskRuntime implements TasksContext {
 	/** Whether new work may move to or start in the background: enabled, and the host can manage it. */
 	private get admitsBackground(): boolean {
 		return this.enabled && (this.options.canManageBackground?.() ?? true);
-	}
-
-	/** Handed-off work that has not settled: the waitAny cohort and the statusline count. */
-	private activeBackground(): TaskRecord[] {
-		return this.store.unsettled().filter((record) => record.task.mode === "background");
 	}
 
 	/**
@@ -277,87 +265,6 @@ export class TaskRuntime implements TasksContext {
 		return task.result?.text || task.error || "No output yet.";
 	}
 
-	/**
-	 * One observation: hold delivery for the observed records, wait, read, then register the
-	 * receipt with the host, and only then release. Nothing the caller does between those steps
-	 * can leak a settled result into an automatic notification or lose it.
-	 */
-	private async observe(
-		records: readonly TaskRecord[],
-		options: TaskWaitOptions,
-		/** Record to read when none settled; a cohort has none. */
-		fallback?: TaskRecord,
-	): Promise<{
-		outcome: TaskWaitOutcome;
-		waitedMs: number;
-		settled?: TaskRecord;
-		running: TaskSnapshot[];
-		read?: TaskRead;
-	}> {
-		const { signal } = options;
-		// Retention pins the records; the host keeps them out of automatic delivery until released.
-		const releases = records.map((record) => this.pin(record));
-		releases.push(this.options.waits?.hold(records.map((record) => record.task.id)) ?? (() => {}));
-		try {
-			const start = Date.now();
-			const interrupt = this.options.waits?.interruptSignal;
-			await waitForFirst({
-				hasSettled: () => records.some((record) => record.settled),
-				subscribe: (listener) => this.subscribe(listener),
-				timeoutMs: options.timeoutMs ?? TASKS_WAIT_DEFAULT_MS,
-				signal,
-				interrupt,
-				closed: this.closing.signal,
-			});
-			const waitedMs = Date.now() - start;
-			const settled = records
-				.filter((record) => record.settled)
-				.sort((left, right) => (left.task.endedAt ?? 0) - (right.task.endedAt ?? 0))[0];
-			const outcome: TaskWaitOutcome = settled
-				? "settled"
-				: this.closed
-					? "closed"
-					: interrupt?.aborted
-						? "interrupted"
-						: "timed_out";
-			const running = records
-				.filter((record) => record.visible && !record.settled)
-				.map((record) => record.snapshot());
-			const observed = settled ?? fallback;
-			const read =
-				options.read && observed && outcome !== "interrupted"
-					? await this.read(observed.task.id, options.read)
-					: undefined;
-			signal?.throwIfAborted();
-			if (settled && settled.task.mode === "background" && options.toolCallId)
-				this.options.waits?.bind(options.toolCallId, settled.task.id);
-			return { outcome, waitedMs, settled, running, read };
-		} finally {
-			for (const release of releases) release();
-		}
-	}
-
-	async wait(id: string, options: TaskWaitOptions = {}): Promise<TaskWaitResult> {
-		if (options.signal?.aborted) throw options.signal.reason ?? new Error("Wait aborted");
-		const record = this.lookup(id);
-		const { outcome, waitedMs, read } = await this.observe([record], options, record);
-		return { outcome, waitedMs, task: record.snapshot(), ...(read ? { read } : {}) };
-	}
-
-	async waitAny(options: TaskWaitAnyOptions = {}): Promise<TaskWaitAnyResult> {
-		if (options.signal?.aborted) throw options.signal.reason ?? new Error("Wait aborted");
-		const records = this.activeBackground().filter((record) => record.visible);
-		if (records.length === 0) return { outcome: "no_tasks", waitedMs: 0, running: [] };
-		const { outcome, waitedMs, settled, running, read } = await this.observe(records, options);
-		return {
-			outcome,
-			waitedMs,
-			running,
-			...(settled ? { task: settled.snapshot() } : {}),
-			...(read ? { read } : {}),
-		};
-	}
-
 	kill(id: string): boolean {
 		return this.cancel(this.lookup(id));
 	}
@@ -395,7 +302,6 @@ export class TaskRuntime implements TasksContext {
 			this.executions.get(record.task.id)?.releaseParent();
 			this.cancel(record);
 		}
-		this.closing.abort();
 		this.options.onClosed?.();
 		this.store.trim();
 	}

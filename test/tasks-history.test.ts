@@ -16,6 +16,7 @@ import { TaskSession } from "../src/core/tasks/session.ts";
 import { selectRestorable } from "../src/core/tasks/store.ts";
 import type { TaskCompletion, TaskControl, TaskExecution, TaskKind, TaskSnapshot } from "../src/core/tasks/types.ts";
 import { createDeliveryHarness } from "./tasks-delivery-harness.ts";
+import { settleTask } from "./tasks-settle.ts";
 
 const result = (text = "done"): AgentToolResult<{ ok: boolean }> => ({
 	content: [{ type: "text", text }],
@@ -187,7 +188,7 @@ describe("terminal history restoration", () => {
 				text: "saved report",
 				readError: expect.stringContaining("expired"),
 			});
-			expect((await bg.wait("bash-new")).task.status).toBe("cancelled");
+			expect((await settleTask(bg, "bash-new")).task.status).toBe("cancelled");
 			expect(onSettled).not.toHaveBeenCalled();
 			expect(observer).not.toHaveBeenCalled();
 			await bg.execute(job({ run: async () => ({ result: result() }) }).execution);
@@ -404,7 +405,7 @@ async function complete(bg: TaskRuntime, kind: TaskKind, background = false, tex
 	const run = launch(bg, kind, background, text);
 	if (background) expect((await run.caller).kind).toBe("background");
 	run.finish();
-	await bg.wait(run.control.id);
+	await settleTask(bg, run.control.id);
 	await run.caller;
 	return run.control.id;
 }
@@ -466,7 +467,7 @@ describe("independent foreground and background histories", () => {
 		expect(bg.detachForeground()).toBe(1);
 		expect((await run.caller).kind).toBe("background");
 		run.finish();
-		await bg.wait(run.control.id);
+		await settleTask(bg, run.control.id);
 		for (let i = 0; i < 100; i++) await complete(bg, "bash");
 		expect(bg.get(run.control.id).mode).toBe("background");
 		expect(cleaned).toBe(false);

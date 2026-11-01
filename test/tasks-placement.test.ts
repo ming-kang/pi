@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import type { TaskCompletion, TaskControl, TaskExecution } from "../src/core/tasks/types.ts";
+import { settleTask } from "./tasks-settle.ts";
 
 const result = (text = "done") => ({ content: [{ type: "text" as const, text }], details: { ok: true } });
 const tick = async () => {
@@ -65,7 +66,7 @@ describe("task placement, display and lanes", () => {
 					result: result("Final report"),
 					...(ending === "given" ? { display: "Tool calls\n✓ done" } : {}),
 				});
-			await bg.wait(item.control.id, { timeoutMs: 1000 });
+			await settleTask(bg, item.control.id);
 			const task = bg.get(item.control.id);
 			if (ending === "given") expect(task.display?.text).toBe("Tool calls\n✓ done");
 			else expect(task.display).toBeUndefined();
@@ -144,12 +145,10 @@ describe("task placement, display and lanes", () => {
 				}).execution,
 			);
 			expect(bg.list()[0]!.mode).toBe("foreground");
-			expect(await bg.waitAny({ timeoutMs: 0 })).toMatchObject({ outcome: "no_tasks" });
 			control.accept();
 			const outcome = await call;
 			expect(outcome).toMatchObject({ kind: "background", reason: "submitted" });
 			expect(bg.list()[0]!.mode).toBe("background");
-			expect(await bg.waitAny({ timeoutMs: 0 })).toMatchObject({ outcome: "timed_out" });
 			gate.resolve({ result: result() });
 			await tick();
 		});
@@ -198,7 +197,7 @@ describe("task placement, display and lanes", () => {
 					return { result: { content: [{ type: "text", text: "ok" }], details: undefined } };
 				},
 			});
-			await runtime.wait(runtime.list().at(-1)!.id, { timeoutMs: 1000 });
+			await settleTask(runtime, runtime.list().at(-1)!.id);
 		}
 		expect(runtime.list().length).toBeLessThanOrEqual(1);
 	});

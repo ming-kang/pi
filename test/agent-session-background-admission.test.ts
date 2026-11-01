@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { TaskControl } from "../src/core/tasks/types.ts";
 import { backgroundSessionTest } from "./background-session-host.ts";
 import { sessionDelivery } from "./tasks-delivery-harness.ts";
+import { settleTask } from "./tasks-settle.ts";
 import { assistantMsg, userMsg } from "./utilities.ts";
 
 describe("session background admission, acknowledgement and tree navigation", () => {
@@ -17,7 +18,7 @@ describe("session background admission, acknowledgement and tree navigation", ()
 		acknowledged.finish();
 		unacknowledged.finish();
 		for (const { id } of [acknowledged, unacknowledged]) {
-			expect((await session.tasks.wait(id, { timeoutMs: 1000 })).outcome).toBe("settled");
+			expect((await settleTask(session.tasks, id)).outcome).toBe("settled");
 		}
 		// Observing alone does not acknowledge delivery.
 		expect(sessionDelivery(session).pending()).toHaveLength(2);

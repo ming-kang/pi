@@ -5,9 +5,7 @@ import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import type { TaskSession } from "../src/core/tasks/session.ts";
 import type { TaskRuntimeOptions, TaskSnapshot } from "../src/core/tasks/types.ts";
 
-interface DeliveryHarnessOptions extends Omit<TaskRuntimeOptions, "waits"> {
-	/** Steering signal for waits; ends management waits only. */
-	interruptSignal?: AbortSignal;
+interface DeliveryHarnessOptions extends TaskRuntimeOptions {
 	/** Whether the host can start a delivery now. Defaults to never, so completions stay pending. */
 	canDeliver?: () => boolean;
 	/** The host's delivery action. Defaults to persisting the message at once. */
@@ -16,11 +14,11 @@ interface DeliveryHarnessOptions extends Omit<TaskRuntimeOptions, "waits"> {
 
 /**
  * A runtime wired to a TaskDelivery the way TaskSession wires them, without a session journal:
- * a handed-off task that settles is enqueued, observations hold their tasks, and a closed
+ * a handed-off task that settles is enqueued, and a closed
  * runtime releases its leases. `pending()` is what the delivery would notify the model about next.
  */
 export function createDeliveryHarness(options: DeliveryHarnessOptions = {}) {
-	const { canDeliver, deliver, onSettled, interruptSignal, ...runtimeOptions } = options;
+	const { canDeliver, deliver, onSettled, ...runtimeOptions } = options;
 	const delivered: CustomMessage[] = [];
 	const warnings: string[] = [];
 	const delivery: TaskDelivery = new TaskDelivery({
@@ -38,11 +36,6 @@ export function createDeliveryHarness(options: DeliveryHarnessOptions = {}) {
 	const runtime: TaskRuntime = new TaskRuntime({
 		enabled: true,
 		...runtimeOptions,
-		waits: {
-			interruptSignal: interruptSignal ?? new AbortController().signal,
-			hold: (taskIds) => delivery.hold(taskIds),
-			bind: (toolCallId, taskId) => delivery.bindWait(toolCallId, taskId),
-		},
 		onSettled: (task, usage) => {
 			try {
 				onSettled?.(task, usage);
