@@ -88,7 +88,7 @@ Each `modelOverrides` key is the ID of a built-in or extension model. Unknown ID
 
 ## Input limits
 
-See [Describe model input and caching](models.md#describe-model-input-and-caching).
+See [Image Input Limits](models.md#image-input-limits).
 
 | Field | Type | Default | Description |
 |---|---|---|---|

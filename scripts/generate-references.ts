@@ -81,7 +81,7 @@ const referenceArtifacts: readonly ReferenceArtifact[] = [
 			},
 			{
 				heading: "Input limits",
-				intro: "See [Describe model input and caching](models.md#describe-model-input-and-caching).",
+				intro: "See [Image Input Limits](models.md#image-input-limits).",
 				schema: ModelInputLimitsSchema,
 			},
 			{

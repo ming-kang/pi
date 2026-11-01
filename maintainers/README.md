@@ -18,5 +18,5 @@ Link to the owning document rather than duplicating rules. Release-specific adop
 
 ## Quick notes
 
-- **Commit hook:** Runs format, checks, and the upstream ledger (`concerns.json`). A missing baseline tree requires fetching the exact upstream tag recorded in `upstream.json`.
+- **Commit hook:** Checks the lockfile acknowledgement and upstream ledger (`concerns.json`), then runs `npm run check`. A missing baseline tree requires fetching the exact upstream tag recorded in `upstream.json`.
 - **TUI debug output:** The hidden `/debug` command writes rendered TUI lines and recent model messages to `~/.pi/agent/pi-debug.log`.
