@@ -44,9 +44,14 @@ export class AgentProgress {
 	private calls = 0;
 	private usage: Usage = emptyUsage();
 	private last?: AssistantMessage;
+	/** What the model-facing status line names; it keeps the path as the Agent wrote it. */
+	private latest = "";
+	/** The Agent's working directory, used to show paths inside it relative. */
+	private readonly cwd?: string;
 
-	constructor(control: TaskControl<AgentToolDetails>) {
+	constructor(control: TaskControl<AgentToolDetails>, cwd?: string) {
 		this.control = control;
+		this.cwd = cwd;
 	}
 
 	handle(event: AgentSessionEvent): void {
@@ -64,11 +69,12 @@ export class AgentProgress {
 				return;
 			case "tool_execution_start":
 				this.calls++;
+				this.latest = [event.toolName, activityTarget(event.toolName, event.args)].filter(Boolean).join(" ");
 				this.activities.push({
 					id: event.toolCallId,
 					name: event.toolName,
 					args: compactArguments(event.args),
-					target: activityTarget(event.toolName, event.args),
+					target: activityTarget(event.toolName, event.args, this.cwd),
 					status: "running",
 				});
 				if (this.activities.length > AGENT_MAX_ACTIVITIES) this.activities.shift();
@@ -131,14 +137,16 @@ export class AgentProgress {
 
 	/** Model-readable progress: the report is the contract, so intermediate text never leaves the worker. */
 	private status(): string {
-		const latest = this.activities.at(-1);
-		if (!latest) return "Agent running; no tool calls yet.";
+		if (!this.latest) return "Agent running; no tool calls yet.";
 		const calls = `${this.calls} tool ${this.calls === 1 ? "call" : "calls"}`;
-		return `Agent running · ${calls} · latest: ${latest.name}${latest.target ? ` ${latest.target}` : ""}`;
+		return `Agent running · ${calls} · latest: ${this.latest}`;
 	}
 
-	/** Human-only Output: compact tool calls, never sent to the model. */
+	/**
+	 * Human-only live Output: the compact tool-call list, never sent to the model. A settled Agent
+	 * publishes no display, so /tasks then shows its report.
+	 */
 	private display(): string {
-		return this.activities.length ? `Tool calls\n${activitiesText(this.activities)}` : "";
+		return this.activities.length ? activitiesText(this.activities, this.calls - this.activities.length) : "";
 	}
 }

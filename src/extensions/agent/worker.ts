@@ -37,7 +37,7 @@ export async function runWorker(
 	request: AgentRequest,
 ): Promise<TaskCompletion<AgentToolDetails>> {
 	const { signal } = control;
-	const progress = new AgentProgress(control);
+	const progress = new AgentProgress(control, request.cwd);
 	let session: AgentSession | undefined;
 	let unsubscribe: (() => void) | undefined;
 	const abort = () => {

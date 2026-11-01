@@ -20,7 +20,11 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
   - Only a log streams from its file. A report always shows what its executor published, so an oversized Agent report renders as Markdown from its beginning instead of as a tail preview, and Details labels its saved file `Full report`.
 - `/tasks` in a narrow terminal: Escape returns from the inspector to the list and closes the panel only from the list. The footer names the action (`Esc back` or `Esc close`) and drops its lowest-priority hints first.
 - `/tasks` notices appear only when an action did not do what was asked, as a toned warning (`!`) or error (`×`) that clears on the next input or after about four seconds. Successful stop and background requests no longer show a message, and a pending stop confirmation marks its target row with `stop?`.
-- A finished Agent's Output in `/tasks` shows only its final report, whatever its outcome; its tool calls no longer follow the report.
+- Agent in `/tasks` and the Transcript:
+  - A finished Agent's Output shows only its final report, whatever its outcome; its tool calls no longer follow the report.
+  - While an Agent runs, Output is a compact list of its tool calls with no heading: one `glyph tool target · duration` row per call with the tool names aligned (up to 8 characters), a `… N earlier tool calls` line for calls no longer retained, and one line holding the first line of a failed call's error. The expanded Transcript row uses the same columns.
+  - Paths inside the Agent's working directory appear relative, with forward slashes; paths outside it stay absolute.
+  - Tool-call durations read `42ms`, `6.2s`, then `1m 5s`.
 - Background completion cards no longer end with "Preview of the saved result.", and a failed shell task's card and model notification state its error once instead of repeating it at the end of the output.
 - Concurrency lanes are namespaced by executor kind, so two executors can no longer share a lane by choosing the same key.
 - **Breaking:** background work, submitted or detached, is admitted only while the `tasks` tool is active, because the model could otherwise start work it cannot read, wait for or stop. When `builtin:tasks` is disabled or the tool is deactivated, `background: true` and every detach path are rejected without starting anything; work admitted earlier keeps running and delivering.

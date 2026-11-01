@@ -2,7 +2,7 @@ import { type Component, Container, TruncatedText, truncateToWidth, visibleWidth
 import type { AgentToolResult, ToolDefinition, ToolRenderContext } from "../../core/extensions/types.ts";
 import { getTextOutput, startToolTimer, toolTimerText } from "../../core/tools/render-utils.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
-import { activityGlyph, clipText, formatActivityDuration, targetOf } from "./activity.ts";
+import { activityGlyph, clipText, formatActivityDuration, nameColumnWidth, paddedName, targetOf } from "./activity.ts";
 import type { AgentActivity, AgentToolDetails } from "./types.ts";
 
 const EXPANDED_ACTIVITIES = 5;
@@ -72,11 +72,13 @@ function activityColor(status: AgentActivity["status"]): "warning" | "success" |
 	}
 }
 
-function renderActivity(activity: AgentActivity, theme: Theme): string {
+/** The same `glyph name target · duration` columns as the /tasks display, in theme colors. */
+function renderActivity(activity: AgentActivity, nameWidth: number, theme: Theme): string {
 	const target = targetOf(activity);
 	const duration = formatActivityDuration(activity.durationMs);
+	const name = paddedName(activity, nameWidth);
 	return [
-		`${theme.fg(activityColor(activity.status), activityGlyph(activity.status))} ${theme.fg("toolTitle", activity.name)}${target ? theme.fg("muted", ` ${target}`) : ""}`,
+		`${theme.fg(activityColor(activity.status), activityGlyph(activity.status))} ${theme.fg("toolTitle", activity.name)}${name.slice(activity.name.length)}${target ? ` ${theme.fg("muted", target)}` : ""}`,
 		...(duration ? [theme.fg("dim", duration)] : []),
 	].join(theme.fg("dim", " · "));
 }
@@ -142,8 +144,10 @@ export const agentRenderers: AgentRenderer = {
 		const details = detailsOf(result);
 		// Only live progress carries activities; settled rows stay one line.
 		if (details?.state !== "running" || !options.expanded) return component;
-		for (const activity of details.activities.slice(-EXPANDED_ACTIVITIES))
-			component.addChild(new TruncatedText(renderActivity(activity, theme), 0, 0));
+		const shown = details.activities.slice(-EXPANDED_ACTIVITIES);
+		const nameWidth = nameColumnWidth(shown);
+		for (const activity of shown)
+			component.addChild(new TruncatedText(renderActivity(activity, nameWidth, theme), 0, 0));
 		return component;
 	},
 };

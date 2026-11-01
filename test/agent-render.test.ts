@@ -112,8 +112,40 @@ describe("Agent transcript renderer", () => {
 		]);
 		expect(render(running, { isPartial: true })).toBe("Agent Inspect boundaries · powershell Get-ChildItem src");
 		const expanded = render(running, { isPartial: true, expanded: true });
-		expect(expanded).toContain("bash npm run check · 100ms");
+		expect(expanded).toContain("bash     npm run check · 100ms");
 		expect(expanded).toContain("powershell Get-ChildItem src");
+	});
+
+	it("aligns expanded activity columns, colors each part and shows no error lines", () => {
+		const running = result("running", "progress", undefined, [
+			{ id: "a", name: "read", args: "{}", target: "src/a.ts", status: "ok", durationMs: 4 },
+			{
+				id: "b",
+				name: "bash",
+				args: "{}",
+				target: "npm test",
+				status: "error",
+				durationMs: 1500,
+				error: "first line\nsecond line",
+			},
+			{ id: "c", name: "powershell", args: "{}", target: "Get-Date", status: "running" },
+			{ id: "d", name: "write", args: "", status: "cancelled", durationMs: 65_000 },
+		]);
+		const ctx = context(running, { isPartial: true, expanded: true });
+		const rows = agentRenderers.renderResult(running, ctx, theme, ctx).render(100);
+		expect(rows.map((row) => stripVTControlCharacters(row).trimEnd())).toEqual([
+			"✓ read     src/a.ts · 4ms",
+			"✗ bash     npm test · 1.5s",
+			"… powershell Get-Date",
+			"⊘ write · 1m 5s",
+		]);
+		expect(rows[0]).toContain(theme.fg("success", "✓"));
+		expect(rows[0]).toContain(theme.fg("toolTitle", "read"));
+		expect(rows[0]).toContain(theme.fg("muted", "src/a.ts"));
+		expect(rows[0]).toContain(theme.fg("dim", "4ms"));
+		expect(rows[1]).toContain(theme.fg("error", "✗"));
+		expect(rows[2]).toContain(theme.fg("warning", "…"));
+		expect(rows[3]).toContain(theme.fg("muted", "⊘"));
 	});
 
 	it("keeps background handoff to one status line", () => {

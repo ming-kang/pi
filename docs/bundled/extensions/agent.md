@@ -53,16 +53,27 @@ The Transcript only describes status and current work. It never includes the Pro
 
 | State | Collapsed | Expanded |
 |---|---|---|
-| Running | One line with the latest tool, a short path or command target, and elapsed time | The same heading plus the latest five activities in `✓/…/✗ tool target · duration` form |
+| Running | One line with the latest tool, a short path or command target, and elapsed time | The same heading plus the latest five tool calls as aligned `glyph tool target · duration` rows |
 | Background handoff | One `Background · /tasks` status line | Identical |
 | Completed | One duration and `/tasks` status line | Identical |
 | Failed or cancelled | One short diagnostic or cancellation line | Identical |
 
-Shell activity shows only the first non-empty command line and retains the actual tool name. The human-only Tasks display holds bounded argument summaries and tool-failure excerpts; successful intermediate tool output is not retained in the parent Tasks record. While running, model-facing `tasks read` returns one status line, such as `Agent running · 3 tool calls · latest: bash npm test`; after settlement it returns the final report. Intermediate assistant text and Tool calls never reach the parent model. To change direction, kill the Agent and delegate again with a better briefing.
+Shell activity shows only the first non-empty command line and retains the actual tool name. Path targets that lie inside the Agent's working directory are shown relative to it, with forward slashes; paths outside it stay absolute. The human-only Tasks display holds bounded argument summaries and one-line tool-failure excerpts; successful intermediate tool output is not retained in the parent Tasks record. While running, model-facing `tasks read` returns one status line, such as `Agent running · 3 tool calls · latest: bash npm test`; after settlement it returns the final report. Intermediate assistant text and Tool calls never reach the parent model. To change direction, kill the Agent and delegate again with a better briefing.
 
 In `/tasks`, each Agent remains an independent row:
 
-- **Output** shows the compact Tool calls while running, written like the expanded Transcript: `✓ read README.md · 4ms`. Once the Agent finishes, whatever its outcome, Output shows only its final report, with Markdown formatting for a completed one. Oversized reports remain available through their managed output file.
+- **Output** shows only what a person needs from the Agent's current state. While it runs, that is its compact tool calls, one per line, with no heading:
+
+  ```text
+  … 12 earlier tool calls
+  ✓ read src/core/tasks/store.ts · 4ms
+  ✓ bash npm test · 6.2s
+  ✗ bash npm run check · 41.0s
+         src/index.ts:12:5 - error TS2322
+  … read README.md
+  ```
+
+  Each call is `glyph tool target · duration`, with the tool-name column padded to the longest shown name (at most 8 characters) so targets line up. The glyph is `✓` for success, `…` for running, `✗` for failure and `⊘` for cancellation. When more than the latest 50 calls happened, the first line counts the earlier ones. A failed call adds one line under its target holding the first non-empty line of its error, clipped to about 160 characters. Durations read `42ms` under a second, `6.2s` under a minute, then `1m 5s`. The Transcript's expanded row uses the same columns without the error lines. The model never sees this list; `tasks read` still returns the one-line status. Once the Agent finishes, whatever its outcome, Output shows only its final report (Markdown for a completed report) or, for a failed or cancelled Agent, its report so far and diagnostic. Oversized reports remain available through their managed output file.
 - **Details** shows the full Prompt, working directory, model, and thinking level.
 
 Use `tasks read`, `tasks wait`, or `tasks kill` with the Task ID. Reading requires no view options: the status line or report is the model projection, while the `/tasks` panel adds the human-only tool-call list while the Agent runs. Selection, scrolling, cancellation, foreground detach, history, and completion delivery are owned by the shared Tasks implementation. Parent cancellation stops foreground-owned work, including cancellation received during startup; detached work continues until it finishes or is killed. Reload, session replacement, and shutdown cancel active Agents.

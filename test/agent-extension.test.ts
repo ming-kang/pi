@@ -152,16 +152,59 @@ describe("Agent delegation", () => {
 			harness.session.extensionRunner.createToolContext("text-projection", undefined),
 		);
 		const taskId = handoff.details!.taskId;
-		await vi.waitFor(() => expect(harness.session.tasks.get(taskId).display?.text).toContain("Tool calls"));
+		await vi.waitFor(() => expect(harness.session.tasks.get(taskId).display?.text).toMatch(/^✓ read entry.ts · /u));
 		const running = await harness.session.tasks.read(taskId);
 		expect(running.text).toBe("Agent running · 1 tool call · latest: read entry.ts");
-		expect(harness.session.tasks.get(taskId).display?.text).toContain("✓ read entry.ts · ");
 		release();
 		expect((await harness.session.tasks.wait(taskId)).task.status).toBe("completed");
 		expect((await harness.session.tasks.read(taskId)).text).toBe("Final report");
 		const settled = harness.session.tasks.get(taskId);
 		expect(settled.display).toBeUndefined();
 		expect(settled.result?.text).toBe("Final report");
+	});
+
+	it("publishes aligned tool calls with relative targets and one-line errors while running", async () => {
+		harness = await createBackgroundHarness({ settings: { compaction: { enabled: false } } });
+		harness.session.pauseTaskNotifications();
+		writeFileSync(join(harness.tempDir, "entry.ts"), "export const answer = 42;\n");
+		const outside = join(process.cwd(), "package.json");
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		harness.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall("read", { path: join(harness.tempDir, "entry.ts") }),
+					fauxToolCall("read", { path: outside }),
+					fauxToolCall("bash", { command: "echo first line; echo second line; exit 3" }),
+				],
+				{ stopReason: "toolUse" },
+			),
+			async () => {
+				await gate;
+				return fauxAssistantMessage("Final report");
+			},
+		]);
+		const handoff = await createAgentTool().execute(
+			"running-display",
+			{ prompt: "Inspect entry.ts", background: true },
+			undefined,
+			undefined,
+			harness.session.extensionRunner.createToolContext("running-display", undefined),
+		);
+		const taskId = handoff.details!.taskId;
+		await vi.waitFor(() => expect(harness.session.tasks.get(taskId).display?.text).toMatch(/✗ bash .* · \d+ms\n/u));
+		const lines = harness.session.tasks.get(taskId).display!.text.split("\n");
+		expect(lines[0]).toMatch(/^✓ read entry\.ts · \d+ms$/u);
+		expect(lines[1]).toMatch(/^✓ read /u);
+		expect(lines[1]).toContain(outside);
+		expect(lines[2]).toMatch(/^✗ bash echo first line; echo second line; exit 3 · \d+ms$/u);
+		expect(lines[3]).toMatch(/^ {7}\S/u);
+		expect(lines[3]).not.toContain("\n");
+		expect(lines).toHaveLength(4);
+		release();
+		await harness.session.tasks.wait(taskId);
 	});
 
 	it("settles a failed Agent with its diagnostic as the result and no display", async () => {
