@@ -995,6 +995,87 @@ describe("bounded UTF-8 output", () => {
 	});
 });
 
+describe("default read end", () => {
+	const document = `START\n${"m".repeat(5000)}\nEND`;
+	const size = Buffer.byteLength(document);
+
+	async function settled(output: "log" | "report" | undefined, publish: "file" | "result", dir: string) {
+		const bg = service({ maxHistory: 4 });
+		const item = job({ ...(output ? { output } : {}) });
+		const call = bg.execute(item.execution);
+		if (publish === "file") {
+			const path = join(dir, `${output ?? "default"}.log`);
+			await writeFile(path, document);
+			item.control.attachOutput(path);
+		}
+		item.completion.resolve({ result: result(document) });
+		await call;
+		return { bg, id: item.control.id };
+	}
+
+	it("reads a report from its start and a log from its end, from an output file and from a published result", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "pi-default-read-"));
+		try {
+			for (const publish of ["file", "result"] as const) {
+				const report = await settled("report", publish, dir);
+				const start = await report.bg.read(report.id, { bytes: 1000 });
+				expect(start.text.startsWith("START\n")).toBe(true);
+				expect(start.text).not.toContain("END");
+				expect(start).toMatchObject({ fromByte: 0, totalBytes: size, truncated: true });
+
+				for (const output of ["log", undefined] as const) {
+					const log = await settled(output, publish, dir);
+					const end = await log.bg.read(log.id, { bytes: 1000 });
+					expect(end.text.endsWith("\nEND")).toBe(true);
+					expect(end.text).not.toContain("START");
+					expect(end.fromByte).toBe(size - 1000);
+				}
+			}
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("lets an explicit mode override the default and keeps sinceBytes ahead of mode", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "pi-default-read-"));
+		try {
+			for (const publish of ["file", "result"] as const) {
+				const report = await settled("report", publish, dir);
+				const log = await settled("log", publish, dir);
+				expect((await report.bg.read(report.id, { mode: "tail", bytes: 1000 })).text.endsWith("\nEND")).toBe(true);
+				expect((await log.bg.read(log.id, { mode: "head", bytes: 1000 })).text.startsWith("START\n")).toBe(true);
+				for (const { bg, id } of [report, log]) {
+					for (const mode of [undefined, "head", "tail"] as const) {
+						const delta = await bg.read(id, { mode, sinceBytes: size - 10, bytes: 1000 });
+						expect(delta).toMatchObject({ text: document.slice(-10), fromByte: size - 10, truncated: false });
+					}
+					// An offset below the newest window still yields the newest window, whatever the output kind.
+					const newest = await bg.read(id, { sinceBytes: 0, bytes: 1000 });
+					expect(newest.fromByte).toBe(size - 1000);
+				}
+			}
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("gives a settled wait the same default as a read", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "pi-default-read-"));
+		try {
+			for (const publish of ["file", "result"] as const) {
+				const report = await settled("report", publish, dir);
+				const log = await settled("log", publish, dir);
+				const first = await report.bg.wait(report.id, { read: { bytes: 1000 } });
+				expect(first.read?.text.startsWith("START\n")).toBe(true);
+				const last = await log.bg.wait(log.id, { read: { bytes: 1000 } });
+				expect(last.read?.text.endsWith("\nEND")).toBe(true);
+			}
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("terminal diagnostics and partial usage", () => {
 	it("keeps terminal and read diagnostics independent of raw log and fallback tail slices", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "pi-background-diagnostics-"));

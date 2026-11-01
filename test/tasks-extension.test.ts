@@ -508,6 +508,52 @@ describe("public Background management", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+	it("reads a report from its start and a log from its end unless the mode says otherwise", async () => {
+		const service = new TaskRuntime({ enabled: true });
+		services.push(service);
+		const document = `START\n${"m".repeat(40 * 1024)}\nEND`;
+		const settle = async (output: "log" | "report") => {
+			await service.execute({
+				kind: "custom",
+				title: output,
+				output,
+				toolCallId: output,
+				background: true,
+				async run(control) {
+					control.accept();
+					return { result: { content: [{ type: "text", text: document }], details: undefined } };
+				},
+			});
+			const id = service.list().find((task) => task.title === output)!.id;
+			await service.wait(id);
+			return id;
+		};
+		const report = await settle("report");
+		const log = await settle("log");
+
+		const fromStart = await runRead(service, { action: "read", taskId: report, bytes: 1000 });
+		expect(fromStart.details.mode).toBe("head");
+		expect(textOf(fromStart)).toContain(" · bytes 0–1000 of ");
+		expect(textOf(fromStart)).toContain("START");
+		expect(textOf(fromStart)).not.toContain("END");
+
+		const fromEnd = await runRead(service, { action: "read", taskId: log, bytes: 1000 });
+		expect(fromEnd.details.mode).toBe("tail");
+		expect(textOf(fromEnd)).toContain("END");
+		expect(textOf(fromEnd)).not.toContain("START");
+
+		const forced = await runRead(service, { action: "read", taskId: report, mode: "tail", bytes: 1000 });
+		expect(forced.details.mode).toBe("tail");
+		expect(textOf(forced)).toContain("END");
+		expect(textOf(forced)).not.toContain("START");
+
+		const settledReport = await runWait(service, { action: "wait", taskId: report, waitMs: 1 });
+		expect(textOf(settledReport)).toContain("START");
+		expect(textOf(settledReport)).not.toContain("END");
+		const settledLog = await runWait(service, { action: "wait", taskId: log, waitMs: 1 });
+		expect(textOf(settledLog)).toContain("END");
+		expect(textOf(settledLog)).not.toContain("START");
+	});
 	it("clamps read size to the retained slice limit", async () => {
 		const h = running();
 		await h.outcome;
@@ -917,7 +963,10 @@ describe("renderTasksCall", () => {
 			},
 			RegExp,
 		][] = [
-			[{ action: "read", taskId: "bg-3f", mode: "tail", bytes: 8192 }, /^tasks read bg-3f tail/],
+			[{ action: "read", taskId: "bg-3f", mode: "tail", bytes: 8192 }, /^tasks read bg-3f tail 8\.0KB\s*$/],
+			[{ action: "read", taskId: "bg-3f", mode: "head" }, /^tasks read bg-3f head\s*$/],
+			[{ action: "read", taskId: "bg-3f", bytes: 8192 }, /^tasks read bg-3f 8\.0KB\s*$/],
+			[{ action: "read", taskId: "bg-3f" }, /^tasks read bg-3f\s*$/],
 			[{ action: "wait", taskId: "3f", waitMs: 20_000 }, /^tasks wait 3f 20s/],
 			[{ action: "wait" }, /^tasks wait any/],
 			[{ action: "kill", taskId: "bg-3f" }, /^tasks kill bg-3f/],

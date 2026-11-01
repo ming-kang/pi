@@ -137,9 +137,12 @@ export type TaskToolOutcome<T> =
 	| { kind: "result"; result: AgentToolResult<T>; status: TaskTerminalStatus; error?: string }
 	| { kind: "background"; task: TaskSnapshot; reason: "submitted" | "detached" };
 
-/** Which slice of a task's output to read. Defaults to the last 8 KiB. */
+/** Which slice of a task's output to read. Defaults to 8 KiB. */
 export interface TaskReadOptions {
-	/** `tail` (default) reads the end of the output, `head` its start. */
+	/**
+	 * `head` reads the start of the output, `tail` its end. Without it a `report` is read from its
+	 * start and a `log` from its end.
+	 */
 	mode?: "head" | "tail";
 	/** Maximum bytes to return, bounded by the runtime. */
 	bytes?: number;

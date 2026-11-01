@@ -1,5 +1,6 @@
 import { finiteLimit } from "../../utils/number.ts";
 import { boundReadBytes } from "./output.ts";
+import type { TaskSnapshot } from "./types.ts";
 
 /**
  * Shared observation-window limits, the one definition used by the runtime and the tasks tool.
@@ -24,4 +25,12 @@ export function clampWaitMs(waitMs: number | undefined): number {
 /** The read size a tool call runs. */
 export function clampReadBytes(bytes: number | undefined): number {
 	return Math.max(TASKS_READ_MIN_BYTES, boundReadBytes(bytes));
+}
+
+/**
+ * The end a read starts from when the caller names none, the one definition every read,
+ * wait and projection shares: a report's beginning is its summary, a log's end is its outcome.
+ */
+export function defaultReadMode(task: Pick<TaskSnapshot, "output">): "head" | "tail" {
+	return task.output === "report" ? "head" : "tail";
 }

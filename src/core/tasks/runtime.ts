@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { finiteLimit } from "../../utils/number.ts";
 import { Execution, type ExecutionHost } from "./execution.ts";
-import { TASKS_WAIT_DEFAULT_MS } from "./limits.ts";
+import { defaultReadMode, TASKS_WAIT_DEFAULT_MS } from "./limits.ts";
 import {
 	boundFacts,
 	boundInput,
@@ -243,18 +243,19 @@ export class TaskRuntime implements TasksContext {
 		const release = this.retain(record.task.id);
 		try {
 			const task = record.snapshot();
+			const window = { ...options, mode: options.mode ?? defaultReadMode(task) };
 			if (task.outputPath) {
 				try {
-					return { task, ...(await readOutputSlice(task.outputPath, options)) };
+					return { task, ...(await readOutputSlice(task.outputPath, window)) };
 				} catch (error) {
 					return {
 						task,
 						readError: boundText(`Output could not be read: ${errorText(error)}`, 4096),
-						...sliceText(this.resultText(task), options),
+						...sliceText(this.resultText(task), window),
 					};
 				}
 			}
-			return { task, readError: record.readError, ...sliceText(this.resultText(task), options) };
+			return { task, readError: record.readError, ...sliceText(this.resultText(task), window) };
 		} finally {
 			release();
 		}

@@ -1259,7 +1259,7 @@ Session-bound `TasksContext` supervises native and extension-owned execution. Fo
 |---|---|
 | `execute<T>(execution)` | Returns `{ kind: "result", result, status, error? }` or `{ kind: "background", task, reason }`, where `reason` is `"submitted"` when the caller asked for `background` and `"detached"` when it was moved while the work ran |
 | `list()` / `get(id)` | Bounded, read-only (frozen) retained snapshots; IDs support unique prefixes |
-| `read(id, options?)` | Bounded head, tail, or byte-offset model-readable output; excludes human-only display text |
+| `read(id, options?)` | Bounded head, tail, or byte-offset model-readable output; excludes human-only display text. `options`: `mode`, `bytes`, `sinceBytes`. Without `mode`, a `report` is read from its start and a `log` from its end; `sinceBytes` takes precedence over `mode`. A `wait` or `waitAny` read follows the same default |
 | `wait(id, options?)` | One observation of one task. `options`: `timeoutMs`, `signal`, `toolCallId`, and `read: { bytes?, sinceBytes? }`. Returns `{ outcome, waitedMs, task, read? }` where `outcome` is `settled`, `timed_out`, `interrupted` (host steering), or `closed` (host shut down; state unconfirmed). Timeout, cancellation, or interruption ends the wait, not execution |
 | `waitAny(options?)` | Observes the first task running at call time to settle, with `timeoutMs`, `signal`, `toolCallId`, and `read: { bytes? }`. Returns `{ outcome, waitedMs, task?, read?, running }`; `outcome` adds `no_tasks` for an empty cohort. Later tasks are excluded |
 | `kill(id)` | Requests cancellation; `stopping` is not a terminal status |
@@ -1273,7 +1273,7 @@ Session-bound `TasksContext` supervises native and extension-owned execution. Fo
 | Field | Contract |
 |---|---|
 | `label` | Human source name for the panel and completion card, such as `Bash` or `Agent`; defaults to `kind` |
-| `output` | `"log"` (default) or `"report"`. A log's outcome is at its end, so a background completion gives the model an 8 KiB tail. A report leads with its conclusion, so it arrives from its beginning, whole when it fits the 48 KiB context budget, as its foreground result would; a completed report renders as Markdown in `/tasks` |
+| `output` | `"log"` (default) or `"report"`. A log's outcome is at its end, so a background completion gives the model an 8 KiB tail, and `read()` returns its end unless `mode` says otherwise. A report leads with its conclusion, so it arrives from its beginning, whole when it fits the 48 KiB context budget, as its foreground result would, and `read()` returns its start unless `mode` says otherwise; a completed report renders as Markdown in `/tasks` |
 | `input` | `{ label, text, truncated, language? }`: what the task was asked to do, such as a command or briefing. Shown in Details and the expanded completion card, highlighted when `language` is set |
 | `facts` | Up to 16 labelled `[label, value]` Details rows, such as `["Directory", cwd]` |
 | `concurrency` | `{ key, limit }`: at most `limit` executions sharing `key` run at once. Lanes belong to one `kind`, so another executor can reuse the key. Later ones wait as `queued` tasks and `run` starts when a slot frees |

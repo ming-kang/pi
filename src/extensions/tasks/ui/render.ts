@@ -69,10 +69,11 @@ export function renderTasksCall(
 ): Component {
 	switch (args.action) {
 		case "read": {
-			const mode = args.mode ?? "tail";
+			// The default end depends on the task's output kind, which the call does not carry.
+			const mode = args.mode ? ` ${args.mode}` : "";
 			const size = args.bytes !== undefined ? ` ${formatSize(args.bytes)}` : "";
 			return new Text(
-				`${theme.fg("toolTitle", theme.bold("tasks read "))}${theme.fg("accent", args.taskId ?? "")}${theme.fg("muted", ` ${mode}${size}`)}`,
+				`${theme.fg("toolTitle", theme.bold("tasks read "))}${theme.fg("accent", args.taskId ?? "")}${theme.fg("muted", `${mode}${size}`)}`,
 				0,
 				0,
 			);

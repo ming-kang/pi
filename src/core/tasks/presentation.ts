@@ -1,6 +1,7 @@
 import type { CustomMessage } from "../messages.ts";
 import { truncateHead, truncateTail } from "../tools/truncate.ts";
 import { TASK_SNAPSHOT_VERSION } from "./codec.ts";
+import { defaultReadMode } from "./limits.ts";
 import { boundTail, boundText, TASK_DETAILS_BYTES, TASK_RESULT_BYTES } from "./output.ts";
 import { TASKS_TOOL_NAME, type TaskSnapshot, type TaskStatus, type TaskText } from "./types.ts";
 
@@ -73,7 +74,7 @@ export function projectForModel(task: TaskSnapshot): string {
 	const lines = MODEL_LINES - prefix.split("\n").length - (guidance ? 3 : 0);
 	const output = task.result?.text ? task.result : { text: "No text result.", truncated: false };
 	const body =
-		task.output === "report"
+		defaultReadMode(task) === "head"
 			? modelHead(output, budget, lines)
 			: modelTail(output, Math.min(MODEL_LOG_BYTES, budget), lines);
 	return prefix + body + suffix;
@@ -87,7 +88,7 @@ function clipped(value: TaskText, maxBytes: number, keep: "head" | "tail"): Task
 /** A self-contained replay snapshot within the details budget; human-only display stays in the session record. */
 export function taskCompletionDetails(task: TaskSnapshot): TaskCompletionDetails {
 	const { display: _display, result, input, ...rest } = task;
-	const keep = task.output === "report" ? "head" : "tail";
+	const keep = defaultReadMode(task);
 	const replayInput = input && { ...input, ...clipped(input, REPLAY_INPUT_BYTES, "head") };
 	for (const outputBytes of REPLAY_OUTPUT_BYTES) {
 		const details: TaskCompletionDetails = {

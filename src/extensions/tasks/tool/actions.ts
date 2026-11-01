@@ -2,7 +2,7 @@
 
 import type { AgentToolResult } from "../../../core/extensions/types.ts";
 import { runtimeLabel } from "../../../core/tasks/format.ts";
-import { clampReadBytes, clampWaitMs } from "../../../core/tasks/limits.ts";
+import { clampReadBytes, clampWaitMs, defaultReadMode } from "../../../core/tasks/limits.ts";
 import { boundText } from "../../../core/tasks/output.ts";
 import {
 	isTaskTerminal,
@@ -117,8 +117,9 @@ function readText(header: string, slice: TaskRead): string {
 export async function runRead(background: TasksContext, input: TasksInput): Promise<AgentToolResult<TasksReadDetails>> {
 	const id = requireTaskId(input);
 	try {
-		const mode = input.mode ?? "tail";
-		const slice = await background.read(id, { mode, bytes: clampReadBytes(input.bytes) });
+		const slice = await background.read(id, { mode: input.mode, bytes: clampReadBytes(input.bytes) });
+		// The runtime resolved an omitted mode from this same snapshot, so report what it actually used.
+		const mode = input.mode ?? defaultReadMode(slice.task);
 		return result(readText(`[${describeTaskLine(slice.task)} · ${rangeText(slice)}]`, slice), {
 			action: "read",
 			taskId: slice.task.id,
