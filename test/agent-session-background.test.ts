@@ -1190,4 +1190,127 @@ describe("session-owned background host", () => {
 		const roles = session.messages.filter((message) => message.role !== "system").map((message) => message.role);
 		expect(roles).toEqual(["user", "assistant", "custom", "assistant"]);
 	});
+	describe("quiescence", () => {
+		function quiescenceLog(session: AgentSession): string[] {
+			const log: string[] = [];
+			session.subscribe((event) => {
+				if (event.type === "agent_settled" || event.type === "session_quiescent") log.push(event.type);
+			});
+			return log;
+		}
+
+		it("waits for the completion turn and reports session_quiescent once, after its agent_settled", async () => {
+			const session = await host();
+			await session.bindExtensions({ tasksEnabled: true });
+			const log = quiescenceLog(session);
+			const execution = await task(session);
+			expect(session.isQuiescent).toBe(false);
+			const quiescent = vi.fn();
+			const waiting = session.waitForQuiescence().then(quiescent);
+
+			// The prompt's own turn settles while the task runs: not quiescent yet.
+			await session.prompt("user request");
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(log).toEqual(["agent_settled"]);
+			expect(quiescent).not.toHaveBeenCalled();
+
+			execution.finish();
+			await waiting;
+			expect(log).toEqual(["agent_settled", "agent_settled", "session_quiescent"]);
+			expect(session.messages.at(-1)).toMatchObject({ role: "assistant" });
+			expect(session.messages.some((message) => message.role === "custom")).toBe(true);
+			expect(session.isQuiescent).toBe(true);
+			await session.waitForQuiescence();
+		});
+
+		it("is not quiescent in the gap between settlement and the scheduled completion turn", async () => {
+			const session = await host();
+			await session.bindExtensions({ tasksEnabled: true });
+			const log = quiescenceLog(session);
+			const resume = session.pauseTaskNotifications();
+			const execution = await task(session);
+			execution.finish();
+			await vi.waitFor(() => expect(session.tasks.get(execution.id).status).toBe("completed"));
+			expect(session.isQuiescent).toBe(false);
+
+			// Resuming only schedules the delivery; nothing has started yet.
+			resume();
+			expect(session.isQuiescent).toBe(false);
+			expect(log).toEqual([]);
+			await session.waitForQuiescence();
+			expect(log).toEqual(["agent_settled", "session_quiescent"]);
+			expect(session.messages.some((message) => message.role === "custom")).toBe(true);
+		});
+
+		it("does not wait for a completion whose delivery failed", async () => {
+			const session = await host();
+			const warning = vi.fn();
+			await session.bindExtensions({ tasksEnabled: true, onError: warning });
+			const log = quiescenceLog(session);
+			const deliver = vi.spyOn(session.agent, "prompt").mockRejectedValueOnce(new Error("persistence failed"));
+			const execution = await task(session);
+			const waiting = session.waitForQuiescence();
+			execution.finish();
+			await waiting;
+			expect(warning).toHaveBeenCalledWith(expect.objectContaining({ event: "task_delivery" }));
+			expect(sessionDelivery(session).pending()).toHaveLength(1);
+			expect(log.filter((type) => type === "session_quiescent")).toHaveLength(1);
+			deliver.mockRestore();
+
+			// An explicit retry makes the completion deliverable again.
+			session.retryTaskNotifications();
+			expect(session.isQuiescent).toBe(false);
+			await session.waitForQuiescence();
+			expect(sessionDelivery(session).pending()).toEqual([]);
+			expect(log.filter((type) => type === "session_quiescent")).toHaveLength(2);
+		});
+
+		it("delivers the cancellation of a killed task before reporting quiescence", async () => {
+			const session = await host();
+			await session.bindExtensions({ tasksEnabled: true });
+			const outcome = await session.tasks.execute({
+				kind: "custom",
+				title: "killable",
+				toolCallId: "killable",
+				background: true,
+				run: async (control) => {
+					control.accept();
+					await new Promise<void>((resolve) => control.signal.addEventListener("abort", () => resolve()));
+					return {
+						result: { content: [{ type: "text", text: "stopped" }], details: undefined },
+						status: "cancelled",
+					};
+				},
+			});
+			if (outcome.kind !== "background") throw new Error("expected handoff");
+			const waiting = session.waitForQuiescence();
+			expect(session.tasks.kill(outcome.task.id)).toBe(true);
+			await waiting;
+			expect(session.tasks.get(outcome.task.id).status).toBe("cancelled");
+			expect(session.messages.some((message) => message.role === "custom")).toBe(true);
+			expect(sessionDelivery(session).pending()).toEqual([]);
+		});
+
+		it("stops waiting when the runtime is replaced, aborted or disposed", async () => {
+			const session = await host();
+			await session.bindExtensions({ tasksEnabled: true });
+			const execution = await task(session);
+			const replaced = session.waitForQuiescence();
+			await session.reload();
+			await replaced;
+			expect(session.messages.some((message) => message.role === "custom")).toBe(false);
+			expect(execution.control.signal.aborted).toBe(true);
+
+			await task(session);
+			const controller = new AbortController();
+			const aborted = session.waitForQuiescence(controller.signal);
+			controller.abort(new Error("stop waiting"));
+			await expect(aborted).rejects.toThrow("stop waiting");
+
+			const disposed = session.waitForQuiescence();
+			session.dispose();
+			await expect(disposed).rejects.toThrow("disposed");
+			await expect(session.waitForQuiescence()).rejects.toThrow("disposed");
+		});
+	});
 });

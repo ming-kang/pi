@@ -178,6 +178,8 @@ See [Pi Packages](packages.md) for package sources and security notes.
 
 Print mode writes errors to stderr. A final assistant response with an `error` or `aborted` stop reason exits nonzero; a response cut off at the model's output token limit (a `length` stop reason) still prints its partial text to stdout, warns on stderr, and also exits nonzero.
 
+Print mode and `--mode json` wait for Background tasks started by a prompt: the process stays alive until every unsettled task has finished and the turn that delivers its result has completed, so the printed response is the one that follows the result. While it waits, one line on stderr names the running tasks. Ctrl+C (`SIGINT`) or `SIGTERM` stops the wait, terminates the work and exits (130 and 143); a second signal exits at once.
+
 In print mode, pi also reads piped stdin and merges it into the initial prompt:
 
 ```bash

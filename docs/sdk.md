@@ -71,6 +71,10 @@ interface AgentSession {
   // Send a prompt and wait for completion
   prompt(text: string, options?: PromptOptions): Promise<void>;
 
+  // Resolve once no run, compaction, retry or Background work remains, including completion turns
+  waitForQuiescence(signal?: AbortSignal): Promise<void>;
+  readonly isQuiescent: boolean;
+
   // Queue messages, optionally with image attachments
   steer(text: string, images?: ImageContent[]): Promise<void>;
   followUp(text: string, images?: ImageContent[]): Promise<void>;
@@ -258,6 +262,7 @@ The host must choose:
 - **Result-driven turns and cost:** automatic completions join the host's prompt queue, so a running turn receives them as steering and an idle session starts a completion turn. Use the nestable `session.pauseTaskNotifications()` to defer delivery; its returned release function is idempotent. Pausing does not stop execution or its costs. Budget worker activity and completion-triggered turns explicitly.
 - **Observation and delivery:** `session.tasks` exposes the [public supervision methods](extensions.md#ctxtasks). `read()`, `wait()`, and `waitAny()` observe; a terminal snapshot alone does not acknowledge model delivery. `waitAny()` covers only tasks running at call time and reports `no_tasks` for an empty cohort. Both return a typed `outcome` (`settled`, `timed_out`, `interrupted`, or `closed`), and steering interrupts only waits, never execution. The built-in `tasks wait` tool passes its tool-call ID as `toolCallId`, so the runtime holds the observed result back from notifications and the host confirms it only after persisting that tool result, even if extensions rewrite its details. A direct SDK waiter that consumes the result outside model history omits `toolCallId` and can explicitly call `session.acknowledgeTaskDelivery(task.id)` after successful consumption, which stops the session from notifying the model about it (an unknown or already delivered ID is ignored). An undelivered completion keeps its task and output retained until it is delivered or acknowledged, or its runtime closes. A timeout or cancelled wait does not stop the execution. Failed notification delivery leaves the result available for inspection; after fixing the host failure, call `session.retryTaskNotifications()` explicitly. Pi does not retry a failed delivery forever on a timer.
 - **Shutdown:** `await runtime.dispose()` handles background shutdown and extension lifecycle when using the runtime API. For a directly owned session, drain Background, abort the main agent, then dispose; synchronous `session.dispose()` alone is not an awaited drain.
+- **Waiting for all work:** `prompt()` resolves when its own run settles, before any Background completion turn. `await session.waitForQuiescence(signal?)` resolves once the session is quiescent: no run, compaction, retry or branch summary, no unsettled Background task, and no completion left to deliver (the `session_quiescent` event marks the same moment, once per transition). It uses no timers and rejects when `signal` aborts or the session is disposed. A completion whose delivery failed does not count, since it retries only on the next input; a Background task that never ends keeps the wait open, so pass a signal when that matters.
 
 A deliberately single-turn embedding can suppress completion-triggered turns and cancel leftover work on exit:
 
@@ -379,6 +384,9 @@ session.subscribe((event) => {
     case "agent_settled":
       // Main agent, retries, compaction, and queued continuations have settled
       // Background executions may still be active
+      break;
+    case "session_quiescent":
+      // Also no unsettled Background task and no completion turn still to come
       break;
     
     // Turn lifecycle (one LLM response + tool calls)

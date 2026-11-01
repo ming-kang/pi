@@ -33,6 +33,7 @@ type AgentSessionEvent =
   | Exclude<AgentEvent, { type: "agent_end" }>
   | { type: "agent_end"; messages: AgentMessage[]; willRetry: boolean }
   | { type: "agent_settled"; aborted: boolean }
+  | { type: "session_quiescent" }
   | { type: "queue_update"; steering: readonly string[]; followUp: readonly string[] }
   | { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
   | { type: "entry_appended"; entry: SessionEntry }
@@ -48,6 +49,8 @@ type AgentSessionEvent =
   | { type: "bash_execution_update"; id?: string; delta: string };
 ```
 ```
+
+`session_quiescent` means nothing more will happen without new input: no run, compaction, retry, or branch summary, no unsettled Background task, and no Background completion waiting to start a turn. It is emitted once each time the session reaches that state, after the `agent_settled` of the last run. In `--mode json` the stream ends with it: print mode waits for quiescence after every prompt, so the turns that Background completions start are part of the stream, and a line on stderr names the tasks it is waiting for.
 
 `queue_update` emits the full pending steering and follow-up queues whenever they change. `compaction_start` and `compaction_end` cover both manual and automatic compaction.
 

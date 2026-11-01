@@ -508,6 +508,59 @@ export class RpcClient {
 	}
 
 	/**
+	 * Wait until the session is quiescent: no run, compaction or retry, no unsettled background
+	 * task, and no background completion still to be delivered. Unlike {@link waitForIdle}, this
+	 * also covers the turns that background task completions start after `agent_settled`.
+	 * Resolves immediately when the session is already quiescent.
+	 */
+	waitForQuiescence(timeout = 60000): Promise<void> {
+		return new Promise((resolve, reject) => {
+			const finish = (error?: Error) => {
+				clearTimeout(timer);
+				unsubscribe();
+				if (error) reject(error);
+				else resolve();
+			};
+			const timer = setTimeout(
+				() => finish(new Error(`Timeout waiting for session to become quiescent. Stderr: ${this.stderr}`)),
+				timeout,
+			);
+			const unsubscribe = this.onEvent((event) => {
+				if (event.type === "session_quiescent") finish();
+			});
+			// Subscribed first, so a transition during the query is not missed.
+			this.getState().then(
+				(state) => {
+					if (state.isQuiescent) finish();
+				},
+				(error: unknown) => finish(error instanceof Error ? error : new Error(String(error))),
+			);
+		});
+	}
+
+	/**
+	 * Collect events until the session is quiescent, including background completion turns.
+	 */
+	collectEventsUntilQuiescent(timeout = 60000): Promise<JsonAgentSessionEvent[]> {
+		return new Promise((resolve, reject) => {
+			const events: JsonAgentSessionEvent[] = [];
+			const timer = setTimeout(() => {
+				unsubscribe();
+				reject(new Error(`Timeout collecting events. Stderr: ${this.stderr}`));
+			}, timeout);
+
+			const unsubscribe = this.onEvent((event) => {
+				events.push(event);
+				if (event.type === "session_quiescent") {
+					clearTimeout(timer);
+					unsubscribe();
+					resolve(events);
+				}
+			});
+		});
+	}
+
+	/**
 	 * Send prompt and wait for completion, returning all events.
 	 */
 	async promptAndWait(message: string, images?: ImageContent[], timeout = 60000): Promise<JsonAgentSessionEvent[]> {

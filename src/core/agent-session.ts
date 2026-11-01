@@ -206,6 +206,12 @@ export type AgentSessionEvent =
 			willRetry: boolean;
 	  }
 	| { type: "agent_settled"; aborted: boolean }
+	/**
+	 * Nothing more will happen without new input: no run, compaction, retry or branch summary, no
+	 * unsettled background task and no completion awaiting delivery. Emitted once per transition
+	 * into that state, after the `agent_settled` of the last run.
+	 */
+	| { type: "session_quiescent" }
 	| {
 			type: "queue_update";
 			steering: readonly string[];
@@ -443,6 +449,10 @@ export class AgentSession {
 	private _isBeforeSettle = false;
 	private _abortDuringBeforeSettle = false;
 	private _isEmittingAgentSettled = false;
+	/** Last observed quiescence; a transition into true emits `session_quiescent` once. */
+	private _quiescent = true;
+	private _quiescenceDisposed = false;
+	private readonly _quiescenceWaiters = new Set<{ resolve(): void; reject(reason: unknown): void }>();
 	private readonly _deferredSettledActions: Array<() => Promise<void>> = [];
 
 	private _resourceLoader: ResourceLoader;
@@ -523,6 +533,7 @@ export class AgentSession {
 			onEntry: (entry) => this._emit({ type: "entry_appended", entry }),
 			onError: (event, error) => this._extensionRunner?.emitError({ extensionPath: "<background>", event, error }),
 		});
+		this._tasksHost.subscribe(() => this._updateQuiescence());
 		this._scopedModels = config.scopedModels ?? [];
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
@@ -1123,6 +1134,78 @@ export class AgentSession {
 		for (const l of this._eventListeners) {
 			l(event);
 		}
+		// Compaction runs outside agent runs, so its start is what leaves quiescence.
+		if (event.type === "compaction_start") this._updateQuiescence();
+	}
+
+	/**
+	 * Whether nothing more will happen without new input. Queued user input only matters during a
+	 * run; left in the queue while idle it waits for the next prompt, and it also blocks automatic
+	 * delivery, so completions that cannot start a turn do not count.
+	 */
+	private _computeQuiescent(): boolean {
+		if (
+			this._isAgentRunActive ||
+			this._isEmittingAgentSettled ||
+			this._deferredSettledActions.length > 0 ||
+			this._pendingCustomMessages.length > 0 ||
+			this.isCompacting ||
+			this.isRetrying
+		) {
+			return false;
+		}
+		if (this._tasksHost.runningBackground().length > 0) return false;
+		const inputBlocksDelivery = this.pendingMessageCount > 0 || this.agent.hasQueuedMessages();
+		return !(this.model !== undefined && !inputBlocksDelivery && this._tasksHost.delivery.hasDeliverableWork());
+	}
+
+	/** Whether the session is quiescent now. See {@link AgentSessionEvent} `session_quiescent`. */
+	get isQuiescent(): boolean {
+		return !this._quiescenceDisposed && this._computeQuiescent();
+	}
+
+	private _updateQuiescence(): void {
+		if (this._quiescenceDisposed) return;
+		const quiescent = this._computeQuiescent();
+		const entered = quiescent && !this._quiescent;
+		this._quiescent = quiescent;
+		if (!quiescent) return;
+		if (entered) this._emit({ type: "session_quiescent" });
+		// A listener may have started new work.
+		if (!this._quiescent) return;
+		for (const waiter of [...this._quiescenceWaiters]) waiter.resolve();
+	}
+
+	/**
+	 * Resolve once the session is quiescent: no run, compaction, retry or branch summary, no
+	 * unsettled background task, and no background completion still to be delivered (a failed
+	 * delivery does not count: it retries only on the next input). Unlike {@link waitForIdle} this
+	 * also waits for the turns that background completions start. Rejects when `signal` aborts or
+	 * the session is disposed.
+	 */
+	waitForQuiescence(signal?: AbortSignal): Promise<void> {
+		if (this._quiescenceDisposed) return Promise.reject(new Error("The session was disposed"));
+		if (signal?.aborted) return Promise.reject(signal.reason);
+		if (this._computeQuiescent()) return Promise.resolve();
+		return new Promise<void>((resolve, reject) => {
+			const waiter = {
+				resolve: () => {
+					cleanup();
+					resolve();
+				},
+				reject: (reason: unknown) => {
+					cleanup();
+					reject(reason);
+				},
+			};
+			const onAbort = () => waiter.reject(signal?.reason);
+			const cleanup = () => {
+				this._quiescenceWaiters.delete(waiter);
+				signal?.removeEventListener("abort", onAbort);
+			};
+			this._quiescenceWaiters.add(waiter);
+			signal?.addEventListener("abort", onAbort, { once: true });
+		});
 	}
 
 	private _emitQueueUpdate(): void {
@@ -1149,6 +1232,7 @@ export class AgentSession {
 	}
 
 	private _resolveIdleWaitIfIdle(): void {
+		this._updateQuiescence();
 		if (!this.isIdle || !this._resolveIdleWait) {
 			return;
 		}
@@ -1523,7 +1607,10 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
+		this._quiescenceDisposed = true;
+		const waiters = [...this._quiescenceWaiters];
 		this._tasksHost.dispose();
+		for (const waiter of waiters) waiter.reject(new Error("The session was disposed"));
 		try {
 			this.abortRetry();
 			this.abortCompaction();
@@ -1997,6 +2084,7 @@ export class AgentSession {
 	private async _startRun(trigger: BeforeAgentStartTrigger, onStarted?: () => void): Promise<void> {
 		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
+		this._updateQuiescence();
 		let messages: AgentMessage[];
 		try {
 			messages = await this._prepareRun(trigger);
@@ -4268,6 +4356,7 @@ export class AgentSession {
 
 		// Set up abort controller for summarization
 		this._branchSummaryAbortController = new AbortController();
+		this._updateQuiescence();
 
 		try {
 			let extensionSummary: { summary: string; details?: unknown; usage?: Usage } | undefined;

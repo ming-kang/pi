@@ -10,7 +10,7 @@ import { TASK_RECORD_TYPE, TASK_SNAPSHOT_VERSION } from "./codec.ts";
 import { TaskDelivery } from "./delivery.ts";
 import { TaskContextReminder } from "./reminder.ts";
 import { TaskRuntime } from "./runtime.ts";
-import type { TaskSnapshot } from "./types.ts";
+import { isTaskTerminal, type TaskSnapshot } from "./types.ts";
 
 interface TaskSessionOptions {
 	manager: SessionManager;
@@ -50,6 +50,7 @@ export class TaskSession {
 	private readonly contextReminder = new TaskContextReminder();
 	readonly delivery: TaskDelivery;
 	private readonly quarantine: QuarantinedTaskSettlement[] = [];
+	private readonly changeListeners = new Set<() => void>();
 
 	constructor(options: TaskSessionOptions) {
 		this.options = options;
@@ -60,6 +61,32 @@ export class TaskSession {
 			warn: (event, message) => this.warn(event, message),
 		});
 		this._service = this.createService();
+		this.delivery.subscribe(() => this.changed());
+	}
+
+	/** Called when background tasks, the runtime itself, or delivery state change. */
+	subscribe(listener: () => void): () => void {
+		this.changeListeners.add(listener);
+		return () => {
+			this.changeListeners.delete(listener);
+		};
+	}
+
+	private changed(): void {
+		for (const listener of [...this.changeListeners]) {
+			try {
+				listener();
+			} catch {
+				// Observers cannot interrupt task supervision or delivery.
+			}
+		}
+	}
+
+	/** Handed-off tasks of the current runtime that have not settled. */
+	runningBackground(): TaskSnapshot[] {
+		const service = this.service;
+		if (this.disposed || service.closed) return [];
+		return service.list().filter((task) => task.mode === "background" && !isTaskTerminal(task.status));
 	}
 
 	get service(): TaskRuntime {
@@ -137,6 +164,7 @@ export class TaskSession {
 		this.service.close();
 		this._service = this.createService();
 		this.delivery.retry();
+		this.changed();
 	}
 
 	/** Acknowledge that a task's completion reached its consumer by other means than automatic delivery. */
@@ -183,7 +211,10 @@ export class TaskSession {
 			},
 		});
 		this.restoreHistory(service);
-		service.subscribe(() => this.delivery.schedule());
+		service.subscribe(() => {
+			this.delivery.schedule();
+			this.changed();
+		});
 		return service;
 	}
 
@@ -253,5 +284,6 @@ export class TaskSession {
 		this.interruptWaits();
 		this.service.close();
 		this.delivery.dispose();
+		this.changeListeners.clear();
 	}
 }

@@ -48,6 +48,7 @@ export class TaskDelivery {
 	private readonly holds = new Map<string, number>();
 	private readonly failures = new Set<string>();
 	private readonly waits = new Map<string, { taskId: string; release(): void }>();
+	private readonly listeners = new Set<() => void>();
 	constructor(options: TaskDeliveryOptions) {
 		this.options = options;
 	}
@@ -57,6 +58,42 @@ export class TaskDelivery {
 	private warn(event: string, message: string): void {
 		this.options.warn(event, message);
 	}
+	/** Called whenever what `hasDeliverableWork()` reads may have changed. */
+	subscribe(listener: () => void): () => void {
+		this.listeners.add(listener);
+		return () => {
+			this.listeners.delete(listener);
+		};
+	}
+
+	private changed(): void {
+		for (const listener of [...this.listeners]) {
+			try {
+				listener();
+			} catch {
+				// Observers cannot interrupt delivery.
+			}
+		}
+	}
+
+	/**
+	 * Whether a completion is in flight or will be delivered without further input: queued on the
+	 * current runtime, visible on the branch and not failed. A failed delivery only retries on the
+	 * next input, so it does not count. Held completions count: releasing the hold, or the
+	 * acknowledgement that replaces it, always follows.
+	 */
+	hasDeliverableWork(): boolean {
+		if (this.disposed) return false;
+		const service = this.service;
+		if (service.closed) return false;
+		if (this.delivery) return true;
+		if (!service.enabled || this.completions.size === 0) return false;
+		return service.list().some((task) => {
+			const completion = this.completions.get(task.id);
+			return completion?.service === service && !this.failures.has(task.id);
+		});
+	}
+
 	/** Nestable across asynchronous preflight and service replacement. */
 	pause(): () => void {
 		this.pauses++;
@@ -72,6 +109,7 @@ export class TaskDelivery {
 	retry(): void {
 		this.failures.clear();
 		this.schedule();
+		this.changed();
 	}
 
 	/** A handed-off task settled on `service`; it awaits automatic delivery under a retention lease. */
@@ -79,6 +117,7 @@ export class TaskDelivery {
 		if (this.disposed || service.closed || this.completions.has(taskId)) return;
 		this.completions.set(taskId, { service, release: service.retain(taskId), claimed: false });
 		this.schedule();
+		this.changed();
 	}
 
 	/** The model has the result (or the host consumed it): stop waiting to deliver and release the lease. */
@@ -87,6 +126,7 @@ export class TaskDelivery {
 		if (!completion) return;
 		this.completions.delete(taskId);
 		completion.release();
+		this.changed();
 	}
 
 	/** Release every lease held for a runtime that closed or was replaced, so its output cleanup can run. */
@@ -96,6 +136,7 @@ export class TaskDelivery {
 			this.completions.delete(id);
 			completion.release();
 		}
+		this.changed();
 	}
 
 	/**
@@ -115,6 +156,7 @@ export class TaskDelivery {
 				else this.holds.delete(id);
 			}
 			this.schedule();
+			this.changed();
 		};
 	}
 
@@ -193,6 +235,7 @@ export class TaskDelivery {
 			this.delivery = undefined;
 			if (this.canDeliver(this.service) && this.pending().some((task) => !this.failures.has(task.id)))
 				this.schedule();
+			this.changed();
 		}
 	}
 
@@ -256,5 +299,7 @@ export class TaskDelivery {
 		this.delivery?.queued?.reject(new Error("the session was disposed"));
 		if (this.timer) clearTimeout(this.timer);
 		this.timer = undefined;
+		this.changed();
+		this.listeners.clear();
 	}
 }

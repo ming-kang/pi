@@ -201,6 +201,7 @@ Response:
     "thinkingLevel": "medium",
     "isStreaming": false,
     "isCompacting": false,
+    "isQuiescent": true,
     "steeringMode": "all",
     "followUpMode": "one-at-a-time",
     "sessionFile": "/path/to/session.jsonl",
@@ -212,6 +213,8 @@ Response:
   }
 }
 ```
+
+`isQuiescent` is true when no run, compaction, retry, unsettled Background task, or pending Background completion turn remains (see [session_quiescent](#session_quiescent)).
 
 The `model` field is a full [Model](#model) object when one is selected, otherwise it is omitted. The `sessionFile` and `sessionName` fields are also omitted when unavailable; `sessionName` is the display name set via `set_session_name`.
 
@@ -895,6 +898,7 @@ Events are streamed to stdout as JSON lines during agent operation. Events do no
 | `agent_start` | Agent begins processing |
 | `agent_end` | One low-level agent run completes (may still be followed by retry, compaction, or queued continuations) |
 | `agent_settled` | Agent run is fully settled; no automatic retry, compaction retry, or queued continuation remains |
+| `session_quiescent` | Nothing more will happen without new input, including Background tasks and the turns their completions start |
 | `turn_start` | New turn begins |
 | `turn_end` | Turn completes (includes assistant message and tool results) |
 | `message_start` | Message begins |
@@ -946,6 +950,16 @@ Emitted after the full session-level run settles. At this point Pi will not cont
 ```json
 {"type": "agent_settled", "aborted": false}
 ```
+
+### session_quiescent
+
+Emitted when nothing more will happen without new input: no run, compaction, retry, or branch summary is active, no Background task is unsettled, and no Background completion is waiting to start a turn. A Background completion starts a new run after `agent_settled`, so a client that needs "all work done" waits for this event instead. It is emitted once per transition into that state, after the `agent_settled` of the last run. A completion whose delivery failed does not count, because it is retried only on the next input.
+
+```json
+{"type": "session_quiescent"}
+```
+
+`RpcClient.waitForQuiescence(timeout?)` resolves on this event, or at once when `get_state` reports `isQuiescent`; `collectEventsUntilQuiescent(timeout?)` collects events until it. `waitForIdle()` and `collectEvents()` still resolve on the first `agent_settled`. Closing stdin shuts the process down immediately, without waiting for Background work.
 
 ### turn_start / turn_end
 

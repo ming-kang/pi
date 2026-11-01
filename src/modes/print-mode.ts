@@ -9,6 +9,7 @@
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
 import { flushRawStdout, waitForRawStdoutBackpressure, writeRawStdout } from "../core/output-guard.ts";
+import { isTaskTerminal, type TaskSnapshot } from "../core/tasks/types.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
 import { toJsonEvent } from "./json-event.ts";
 
@@ -26,6 +27,22 @@ export interface PrintModeOptions {
 	initialImages?: ImageContent[];
 }
 
+const WAIT_NOTICE_TASKS = 5;
+const WAIT_NOTICE_TITLE_CHARS = 60;
+
+/** One bounded stderr line naming the background work a quiescence wait is about to outlast. */
+function backgroundWaitNotice(tasks: readonly TaskSnapshot[]): string {
+	const describe = (task: TaskSnapshot) => {
+		const title = task.title.replace(/\s+/g, " ").trim();
+		const clipped =
+			title.length > WAIT_NOTICE_TITLE_CHARS ? `${title.slice(0, WAIT_NOTICE_TITLE_CHARS - 1)}…` : title;
+		return `${task.id} ${task.label} ${clipped}`.trimEnd();
+	};
+	const shown = tasks.slice(0, WAIT_NOTICE_TASKS).map(describe);
+	const more = tasks.length > shown.length ? `, +${tasks.length - shown.length} more` : "";
+	return `Waiting for ${tasks.length} background task${tasks.length === 1 ? "" : "s"}: ${shown.join(", ")}${more}`;
+}
+
 /**
  * Run in print (single-shot) mode.
  * Sends prompts to the agent and outputs the result.
@@ -37,6 +54,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	let unsubscribe: (() => void) | undefined;
 	let unsubscribeBackpressure: (() => void) | undefined;
 	let disposed = false;
+	let shuttingDown = false;
 	const signalCleanupHandlers: Array<() => void> = [];
 
 	const disposeRuntime = async (): Promise<void> => {
@@ -48,16 +66,20 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	};
 
 	const registerSignalHandlers = (): void => {
-		const signals: NodeJS.Signals[] = ["SIGTERM"];
+		const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM"];
 		if (process.platform !== "win32") {
 			signals.push("SIGHUP");
 		}
 
 		for (const signal of signals) {
+			const exitCode = signal === "SIGINT" ? 130 : signal === "SIGHUP" ? 129 : 143;
 			const handler = () => {
+				// A second signal while shutting down stops waiting for disposal.
+				if (shuttingDown) process.exit(exitCode);
+				shuttingDown = true;
 				killTrackedDetachedChildren();
 				void disposeRuntime().finally(() => {
-					process.exit(signal === "SIGHUP" ? 129 : 143);
+					process.exit(exitCode);
 				});
 			};
 			process.on(signal, handler);
@@ -118,6 +140,16 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 				: undefined;
 	};
 
+	/**
+	 * Background tasks deliver their completion in a turn of their own, so a prompt is only done
+	 * once the session is quiescent. Disposing the runtime earlier would kill the work.
+	 */
+	const waitForQuiescence = async (): Promise<void> => {
+		const running = session.tasks.list().filter((task) => task.mode === "background" && !isTaskTerminal(task.status));
+		if (running.length > 0) console.error(backgroundWaitNotice(running));
+		await session.waitForQuiescence();
+	};
+
 	try {
 		if (mode === "json") {
 			const header = session.sessionManager.getHeader();
@@ -130,10 +162,12 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 
 		if (initialMessage) {
 			await session.prompt(initialMessage, { images: initialImages });
+			await waitForQuiescence();
 		}
 
 		for (const message of messages) {
 			await session.prompt(message);
+			await waitForQuiescence();
 		}
 
 		if (mode === "text") {
@@ -161,6 +195,8 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 
 		return exitCode;
 	} catch (error: unknown) {
+		// A signal disposed the session under the wait; the signal handler owns the exit.
+		if (shuttingDown) return 1;
 		console.error(error instanceof Error ? error.message : String(error));
 		return 1;
 	} finally {

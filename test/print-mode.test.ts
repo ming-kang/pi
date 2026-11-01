@@ -1,7 +1,9 @@
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionShutdownEvent } from "../src/index.ts";
 import { runPrintMode } from "../src/modes/print-mode.ts";
+import { backgroundSessionTest } from "./background-session-host.ts";
 
 type EmitEvent = SessionShutdownEvent;
 
@@ -17,6 +19,8 @@ type FakeSession = {
 	extensionRunner: FakeExtensionRunner;
 	bindExtensions: ReturnType<typeof vi.fn>;
 	subscribe: ReturnType<typeof vi.fn>;
+	tasks: { list: () => unknown[] };
+	waitForQuiescence: ReturnType<typeof vi.fn>;
 	prompt: ReturnType<typeof vi.fn>;
 	reload: ReturnType<typeof vi.fn>;
 };
@@ -70,6 +74,8 @@ function createRuntimeHost(assistantMessage: AssistantMessage): FakeRuntimeHost 
 		extensionRunner,
 		bindExtensions: vi.fn(async () => {}),
 		subscribe: vi.fn(() => () => {}),
+		tasks: { list: () => [] },
+		waitForQuiescence: vi.fn(async () => {}),
 		prompt: vi.fn(async () => {}),
 		reload: vi.fn(async () => {}),
 	};
@@ -151,5 +157,81 @@ describe("runPrintMode", () => {
 
 		expect(exitCode).toBe(1);
 		expect(errorSpy).toHaveBeenCalled();
+	});
+});
+
+describe("runPrintMode with background tasks", () => {
+	const { host, task } = backgroundSessionTest();
+
+	async function setup(responses: Parameters<typeof host>[2]) {
+		const session = await host(true, undefined, responses);
+		await session.bindExtensions({ tasksEnabled: true });
+		const disposed = vi.fn();
+		const runtimeHost = {
+			session,
+			setRebindSession: vi.fn(),
+			dispose: vi.fn(async () => {
+				disposed();
+				session.dispose();
+			}),
+		};
+		const stdout: string[] = [];
+		vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string, callback?: () => void) => {
+			stdout.push(String(chunk));
+			if (typeof callback === "function") callback();
+			return true;
+		}) as typeof process.stdout.write);
+		const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+		return {
+			session,
+			runtimeHost: runtimeHost as unknown as Parameters<typeof runPrintMode>[0],
+			stdout,
+			stderr,
+			disposed,
+		};
+	}
+
+	it("prints the completion turn of a background task that outlives the prompt", async () => {
+		const { session, runtimeHost, stdout, stderr, disposed } = await setup([
+			fauxAssistantMessage("handed off"),
+			fauxAssistantMessage("worker reported back"),
+		]);
+		const execution = await task(session);
+		const running = runPrintMode(runtimeHost, { mode: "text", initialMessage: "start" });
+
+		await vi.waitFor(() =>
+			expect(stderr).toHaveBeenCalledWith(expect.stringContaining("Waiting for 1 background task")),
+		);
+		expect(stderr).toHaveBeenCalledWith(expect.stringContaining(execution.id));
+		expect(disposed).not.toHaveBeenCalled();
+		expect(stdout.join("")).toBe("");
+		execution.finish();
+
+		expect(await running).toBe(0);
+		expect(stdout.join("")).toBe("worker reported back\n");
+		expect(session.tasks.get(execution.id).status).toBe("completed");
+	});
+
+	it("streams the completion turn and ends with session_quiescent in json mode", async () => {
+		const { session, runtimeHost, stdout } = await setup([
+			fauxAssistantMessage("handed off"),
+			fauxAssistantMessage("worker reported back"),
+		]);
+		const execution = await task(session);
+		const running = runPrintMode(runtimeHost, { mode: "json", initialMessage: "start" });
+		// The prompt's own turn settled while the task still runs; the process must not exit yet.
+		await vi.waitFor(() => expect(stdout.join("")).toContain('"type":"agent_settled"'));
+		execution.finish();
+
+		expect(await running).toBe(0);
+		const events = stdout
+			.join("")
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line) as { type: string });
+		const types = events.map((event) => event.type);
+		expect(types.filter((type) => type === "agent_settled")).toHaveLength(2);
+		expect(types.at(-1)).toBe("session_quiescent");
+		expect(types.filter((type) => type === "session_quiescent")).toHaveLength(1);
 	});
 });

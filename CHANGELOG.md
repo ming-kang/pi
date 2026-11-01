@@ -6,11 +6,14 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Added
 
+- `AgentSession.waitForQuiescence(signal?)`, `AgentSession.isQuiescent` and a `session_quiescent` session event report when no run, compaction, retry, unsettled background task or pending completion turn remains. Failed deliveries do not count, so the wait cannot deadlock on them.
+- RPC: `get_state` reports `isQuiescent`, and `RpcClient.waitForQuiescence()` and `collectEventsUntilQuiescent()` wait for background completion turns that `waitForIdle()` and `collectEvents()` miss.
 - `AgentSession.acknowledgeTaskDelivery(id)` tells the session that a direct SDK waiter consumed a background result, so the model is not notified about it again.
 - Background outcomes of `TasksContext.execute()` carry `reason: "submitted" | "detached"`, so executors no longer re-derive how their caller was released.
 
 ### Changed
 
+- Print mode and `--mode json` wait for background tasks and the turns that deliver their results before printing the final response and exiting, instead of ending the process (and killing the work) after the prompt's own turn. A stderr line names the tasks being waited for. Ctrl+C (`SIGINT`) now cleans up like `SIGTERM` and exits 130; a second signal exits immediately.
 - `/tasks` panel:
   - On wide terminals the list takes 40% of the width (34–60 columns). Pane titles and the reading or scroll state live in the borders.
   - The inspector opens with the selected task's full title in bold and a `Label · Status · Mode · runtime` line, separated from the content by a rule.

@@ -167,6 +167,15 @@
 				},
 				{
 					"path": "src/modes/interactive/components/custom-message.ts"
+				},
+				{
+					"path": "src/modes/print-mode.ts"
+				},
+				{
+					"path": "src/modes/rpc/rpc-client.ts"
+				},
+				{
+					"path": "src/modes/rpc/rpc-types.ts"
 				}
 			],
 			"tests": [
@@ -189,7 +198,9 @@
 				"test/tasks-extension.test.ts",
 				"test/interactive-mode-tree-tasks.test.ts",
 				"test/tasks-panel.test.ts",
-				"test/suite/tasks-panel.test.ts"
+				"test/suite/tasks-panel.test.ts",
+				"test/print-mode.test.ts",
+				"test/rpc-client-quiescence.test.ts"
 			]
 		},
 		{
