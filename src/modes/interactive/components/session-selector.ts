@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { unlink } from "node:fs/promises";
+import { rm, unlink } from "node:fs/promises";
 import * as os from "node:os";
 import {
 	type Component,
@@ -14,7 +14,12 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { KeybindingsManager } from "../../../core/keybindings.ts";
-import type { SessionInfo, SessionListProgress } from "../../../core/session-manager.ts";
+import {
+	getSessionArtifactDir,
+	listSessionOwnedPaths,
+	type SessionInfo,
+	type SessionListProgress,
+} from "../../../core/session-manager.ts";
 import { canonicalizePath as _canonicalizePath } from "../../../utils/paths.ts";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
@@ -649,13 +654,17 @@ class SessionList implements Component, Focusable {
 type SessionsLoader = (onProgress?: SessionListProgress, signal?: AbortSignal) => Promise<SessionInfo[]>;
 
 /**
- * Delete a session file, trying the `trash` CLI first, then falling back to unlink
+ * Delete a session file with everything it owns (its artifacts directory and late-task sidecar),
+ * trying the `trash` CLI first, then falling back to permanent removal. Success means the session
+ * file is gone; `error` on a successful result names owned files that could not be removed.
  */
-async function deleteSessionFile(
+export async function deleteSessionFile(
 	sessionPath: string,
 ): Promise<{ ok: boolean; method: "trash" | "unlink"; error?: string }> {
-	// Try `trash` first (if installed)
-	const trashArgs = sessionPath.startsWith("-") ? ["--", sessionPath] : [sessionPath];
+	// Try `trash` first (if installed), with every owned path in one invocation
+	const owned = listSessionOwnedPaths(sessionPath);
+	const targets = owned.length ? owned : [sessionPath];
+	const trashArgs = targets.some((path) => path.startsWith("-")) ? ["--", ...targets] : targets;
 	const trashResult = spawnSync("trash", trashArgs, { encoding: "utf-8" });
 
 	const getTrashErrorHint = (): string | null => {
@@ -671,21 +680,34 @@ async function deleteSessionFile(
 		return `trash: ${parts.join(" · ").slice(0, 200)}`;
 	};
 
-	// If trash reports success, or the file is gone afterwards, treat it as successful
-	if (trashResult.status === 0 || !existsSync(sessionPath)) {
+	// If trash reports success, or everything is gone afterwards, treat it as successful
+	const remaining = listSessionOwnedPaths(sessionPath);
+	if (trashResult.status === 0 || (!existsSync(sessionPath) && remaining.length === 0)) {
 		return { ok: true, method: "trash" };
 	}
 
-	// Fallback to permanent deletion
-	try {
-		await unlink(sessionPath);
-		return { ok: true, method: "unlink" };
-	} catch (err) {
-		const unlinkError = err instanceof Error ? err.message : String(err);
-		const trashErrorHint = getTrashErrorHint();
-		const error = trashErrorHint ? `${unlinkError} (${trashErrorHint})` : unlinkError;
-		return { ok: false, method: "unlink", error };
+	// Fallback to permanent deletion of whatever is left; the session file goes last
+	const artifactDir = getSessionArtifactDir(sessionPath);
+	const failures: string[] = [];
+	const order = remaining.filter((path) => path !== sessionPath);
+	if (remaining.includes(sessionPath)) order.push(sessionPath);
+	for (const path of order) {
+		try {
+			if (path === artifactDir) await rm(path, { recursive: true, force: true });
+			else await unlink(path);
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+			failures.push(err instanceof Error ? err.message : String(err));
+		}
 	}
+	const unlinkError = failures.join("; ");
+	if (!existsSync(sessionPath)) {
+		return { ok: true, method: "unlink", ...(unlinkError ? { error: unlinkError } : {}) };
+	}
+	const trashErrorHint = getTrashErrorHint();
+	const reason = unlinkError || "Session file could not be removed";
+	const error = trashErrorHint ? `${reason} (${trashErrorHint})` : reason;
+	return { ok: false, method: "unlink", error };
 }
 
 /**
@@ -855,7 +877,12 @@ export class SessionSelectorComponent extends Container implements Focusable {
 				this.sessionList.setSessions(sessions, showCwd);
 
 				const msg = result.method === "trash" ? "Session moved to trash" : "Session deleted";
-				this.header.setStatusMessage({ type: "info", message: msg }, 2000);
+				if (result.error) {
+					this.header.setStatusMessage(
+						{ type: "error", message: `${msg}, but cleanup failed: ${result.error}` },
+						3000,
+					);
+				} else this.header.setStatusMessage({ type: "info", message: msg }, 2000);
 				await this.refreshSessionsAfterMutation();
 			} else {
 				const errorMessage = result.error ?? "Unknown error";

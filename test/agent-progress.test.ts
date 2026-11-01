@@ -97,10 +97,10 @@ describe("Agent tool-call display", () => {
 	it("publishes no display when the Agent completes", () => {
 		const { agent, call } = progress();
 		call("read", { path: "a.ts" }, { durationMs: 1 });
-		const completion = agent.complete("completed", undefined, "The report");
+		const completion = agent.complete("completed", undefined, { text: "The report" });
 		expect(completion.display).toBeUndefined();
 		expect(completion.result.content).toEqual([{ type: "text", text: "The report" }]);
-		expect(agent.complete("failed", "boom", "Error: boom").display).toBeUndefined();
+		expect(agent.complete("failed", "boom", { text: "Error: boom" }).display).toBeUndefined();
 	});
 });
 

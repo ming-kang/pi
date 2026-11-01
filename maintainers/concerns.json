@@ -677,6 +677,23 @@
 			"tests": [
 				"test/assistant-message.test.ts"
 			]
+		},
+		{
+			"id": "session-artifacts",
+			"why": "A saved session owns an artifacts directory beside its file for files such as Agent reports and transcripts, and deleting the session removes everything it owns.",
+			"paths": [
+				{
+					"path": "src/core/session-manager.ts"
+				},
+				{
+					"path": "src/modes/interactive/components/session-selector.ts",
+					"rewrite": "Session deletion passes the session file, its artifacts directory and its late-task sidecar to one trash invocation, then falls back to removing whatever remains."
+				}
+			],
+			"tests": [
+				"test/session-manager/artifacts.test.ts",
+				"test/agent-extension.test.ts"
+			]
 		}
 	]
 }

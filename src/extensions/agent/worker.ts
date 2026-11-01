@@ -5,6 +5,7 @@ import { createIsolatedSession } from "../../core/isolated-session.ts";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
 import type { TaskCompletion, TaskControl } from "../../core/tasks/types.ts";
 import { clipText } from "./activity.ts";
+import { type AgentArtifacts, prepareArtifacts } from "./artifacts.ts";
 import { AgentProgress, finalAssistantText } from "./progress.ts";
 import { finalReport } from "./report.ts";
 import type { AgentToolDetails } from "./types.ts";
@@ -18,6 +19,10 @@ export interface AgentRequest {
 	thinking: ThinkingLevel;
 	modelRuntime: ModelRuntime;
 	projectTrusted: boolean;
+	/** The launching session's artifacts directory; without one (unsaved session) nothing is kept. */
+	sessionArtifactDir?: string;
+	/** The launching session file, recorded as the transcript's parent. */
+	parentSession?: string;
 }
 
 function workerPrompt(base: string | undefined): string {
@@ -40,11 +45,13 @@ export async function runWorker(
 	const progress = new AgentProgress(control, request.cwd);
 	let session: AgentSession | undefined;
 	let unsubscribe: (() => void) | undefined;
+	let artifacts: AgentArtifacts | undefined;
 	const abort = () => {
 		void session?.abort().catch(() => {});
 	};
 	signal.addEventListener("abort", abort, { once: true });
 	try {
+		artifacts = await prepareArtifacts(request.sessionArtifactDir, control.id, request.parentSession);
 		session = await createIsolatedSession({
 			cwd: request.cwd,
 			model: request.model,
@@ -53,6 +60,7 @@ export async function runWorker(
 			projectTrusted: request.projectTrusted,
 			systemPrompt: workerPrompt,
 			tools: WORKER_TOOLS,
+			transcript: artifacts && { path: artifacts.transcriptPath, parentSession: artifacts.parentSession },
 			signal,
 		});
 		const worker = session;
@@ -66,7 +74,8 @@ export async function runWorker(
 		signal.throwIfAborted();
 		await worker.prompt(request.prompt, { expandPromptTemplates: false });
 		const { status, error } = progress.outcome();
-		return progress.complete(status, error, await finalReport(control, finalAssistantText(worker.messages), error));
+		const report = await finalReport(control, finalAssistantText(worker.messages), error, artifacts);
+		return progress.complete(status, error, report, artifacts);
 	} catch (error) {
 		const status = signal.aborted ? "cancelled" : "failed";
 		const reason =
@@ -74,7 +83,7 @@ export async function runWorker(
 				? "Agent cancelled."
 				: clipText(error instanceof Error ? error.message : String(error), 4096);
 		const report = session ? finalAssistantText(session.messages) : "";
-		return progress.complete(status, reason, await finalReport(control, report, reason));
+		return progress.complete(status, reason, await finalReport(control, report, reason, artifacts), artifacts);
 	} finally {
 		signal.removeEventListener("abort", abort);
 		unsubscribe?.();

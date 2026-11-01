@@ -20,7 +20,7 @@ Background Agents, whether requested with `background: true` or detached with **
 
 Issue parallel `Agent` calls for independent work. Each call is a separate Transcript row and Task, including its own completion notification; there is no aggregate batch view. At most four Agents run at once in a session; additional calls wait as queued Tasks and start when a slot frees. A queued background call returns its Task ID immediately, and **Ctrl+B** can move a queued foreground call to the background before it starts. Parallel tasks must not perform overlapping writes.
 
-Agents use the parent's working directory and share its canonical model/authentication runtime. Their isolated in-memory sessions have `read`, `bash`, `edit`, and `write`, with shell commands covering file discovery and search. They load applicable repository instructions and do not load extensions, skills, prompt templates, or themes. They cannot recursively delegate or start managed background work. The full child conversation is not persisted separately.
+Agents use the parent's working directory and share its canonical model/authentication runtime. Their isolated sessions have `read`, `bash`, `edit`, and `write`, with shell commands covering file discovery and search. They load applicable repository instructions and do not load extensions, skills, prompt templates, or themes. They cannot recursively delegate or start managed background work. In a saved session, each Agent also keeps its complete report and its child transcript beside the session (see [Saved reports and transcripts](#saved-reports-and-transcripts)); an unsaved session keeps neither.
 
 Resource discovery preserves the parent's project-trust decision. Declining trust skips project `.pi/SYSTEM.md` and `.pi/APPEND_SYSTEM.md` while still loading repository context files such as `AGENTS.md`. Execution uses an isolated snapshot of global settings and trusted project overrides, including request and shell settings; cache warming is disabled for Agents.
 
@@ -74,8 +74,27 @@ In `/tasks`, each Agent remains an independent row:
   ```
 
   Each call is `glyph tool target · duration`, with the tool-name column padded to the longest shown name (at most 8 characters) so targets line up. The glyph is `✓` for success, `…` for running, `✗` for failure and `⊘` for cancellation. When more than the latest 50 calls happened, the first line counts the earlier ones. A failed call adds one line under its target holding the first non-empty line of its error, clipped to about 160 characters. Durations read `42ms` under a second, `6.2s` under a minute, then `1m 5s`. The Transcript's expanded row uses the same columns without the error lines. The model never sees this list; `tasks read` still returns the one-line status. Once the Agent finishes, whatever its outcome, Output shows only its final report (Markdown for a completed report) or, for a failed or cancelled Agent, its report so far and diagnostic. Oversized reports remain available through their managed output file.
-- **Details** shows the full Prompt, working directory, model, and thinking level.
+- **Details** shows the full Prompt, working directory, model, and thinking level. Once the Agent settles, it also shows `Tool calls` (every call, for example `23 · 2 failed`), `Edited` (see below) and, in a saved session, the `Report` and `Transcript` paths.
 
 Use `tasks read`, `tasks wait`, or `tasks kill` with the Task ID. Reading requires no view options: the status line or report is the model projection, while the `/tasks` panel adds the human-only tool-call list while the Agent runs. Selection, scrolling, cancellation, foreground detach, history, and completion delivery are owned by the shared Tasks implementation. Parent cancellation stops foreground-owned work, including cancellation received during startup; detached work continues until it finishes or is killed. Reload, session replacement, and shutdown cancel active Agents.
 
-Inline reports are bounded to 24 KiB. Longer reports are written in full to a managed temporary Markdown file, and the tool result includes a bash-style `Full output: <path>` notice. Use `read` on that path or `tasks read` for retained output; a failure to save the file falls back to a bounded report without changing the Agent's outcome. Activity history is limited to the latest 50 tool calls, and published task results use the shared Tasks limits. A background completion delivers the report from its beginning, whole when it fits the notification budget, so the parent reads the same report a foreground call would have returned. Inline report previews, Details, usage, and completion state restore through the parent session branch. Managed output files follow the Tasks lifecycle and never survive restart; live execution never resumes either.
+Inline reports are bounded to 24 KiB. In a saved session, a longer report is read from its saved `report.md` (below), and the tool result includes a bash-style `Full output: <path>` notice naming it. In an unsaved session, the full text goes to a managed temporary Markdown file instead, named the same way. Use `read` on that path or `tasks read` for retained output; a failure to save the file falls back to a bounded report without changing the Agent's outcome. Activity history is limited to the latest 50 tool calls, and published task results use the shared Tasks limits. A background completion delivers the report from its beginning, whole when it fits the notification budget, so the parent reads the same report a foreground call would have returned. Inline report previews, Details, usage, and completion state restore through the parent session branch. Temporary output files follow the Tasks lifecycle and never survive restart; saved reports and transcripts do survive, but live execution never resumes.
+
+### Saved reports and transcripts
+
+When the main session is saved, an Agent keeps these files in `<session-name>/agents/<task-id>/`, where `<session-name>/` is the artifacts directory beside the session's `.jsonl` file:
+
+- `report.md` holds the complete final report, whatever its size. Tasks retention and shutdown never delete it, so the `Full output:` path in a saved transcript stays valid after `pi -c`.
+- `transcript.jsonl` is the Agent's conversation as an ordinary Pi session file whose header `parentSession` is the main session file. It is a record only: it is never listed in `/resume` or continued by `pi -c`, and an Agent never resumes. It exists once the Agent has started its conversation.
+
+Deleting the session from `/resume` deletes these files with it. Forks and clones do not copy them. Sessions that are not saved (`--no-session`) keep neither file.
+
+A settled Agent's Details also carry:
+
+| Row | Meaning |
+| --- | --- |
+| `Tool calls` | Every call the Agent made, with failures: `23` or `23 · 2 failed`. Not limited to the latest 50 listed. |
+| `Edited` | Files the Agent changed with `edit` or `write` calls that succeeded (not through `bash`), once each in first-edit order, relative to the working directory when inside it: `src/a.ts, README.md +3 more`. Omitted when none. |
+| `Report`, `Transcript` | Paths of the saved files. |
+
+When the Agent edited files, the report returned to the model ends with one more line, `Edited (edit/write): a.ts, b.ts +N more`, after any truncation notice and bounded to 1 KiB. A failed or cancelled Agent reports the same rows and line.

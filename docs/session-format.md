@@ -10,11 +10,15 @@ Sessions are stored as JSONL (JSON Lines) files. Each line is a JSON object with
 
 Pi resolves the working directory to an absolute path, removes one leading `/` or `\`, replaces every `/`, `\`, and `:` with `-`, then wraps the result in `--`. For example, `/path/to/project` is stored under `--path-to-project--`; `C:\Users\me\project` is stored under `--C--Users-me-project--`. By default the session ID is a UUID; callers can supply their own through the SDK or `--session-id`.
 
+## Session Artifacts
+
+A session file `<name>.jsonl` owns an artifacts directory `<name>/` beside it, created on demand by whatever writes there. The bundled `Agent` extension keeps each Agent's complete report and transcript in `<name>/agents/<task-id>/` (see [Agent](bundled/extensions/agent.md)). The directory holds nested session files, but session discovery reads only `.jsonl` files directly inside the session directory, so they never appear in `/resume` or `pi -c`. Forking or cloning a session does not copy artifacts: they belong to the session that created them. Sessions that are not persisted (`--no-session`) have no artifacts directory.
+
 ## Deleting Sessions
 
-Sessions can be removed by deleting their `.jsonl` files under `~/.pi/agent/sessions/`.
+A session consists of its `.jsonl` file, its artifacts directory, and the `<name>.jsonl.tasks-late.jsonl` sidecar when present. To remove a session by hand, delete all three under `~/.pi/agent/sessions/`.
 
-Pi also supports deleting sessions interactively from `/resume` (select a session and press `Ctrl+D`, then confirm). When available, pi uses the `trash` CLI to avoid permanent deletion.
+Pi also supports deleting sessions interactively from `/resume` (select a session and press `Ctrl+D`, then confirm). It removes the session file, its artifacts directory and its sidecar together. When available, pi uses the `trash` CLI, passing every path in one invocation, to avoid permanent deletion; otherwise it deletes them permanently. The deletion succeeds when the session file is gone, and files that could not be removed are reported.
 
 ## Session Version
 
@@ -385,7 +389,7 @@ A completion is acknowledged only after its message is persisted. A terminal `ta
 
 Session-wide statistics aggregate the ledger across all entries; the bundled Statusline uses the active branch. Accrued retries, failures, cancellations and worker compaction count when usage is reported. No usage is invented for a provider that does not expose it, and worker billing does not occupy the parent's context window. See [SDK session statistics](sdk.md#session-statistics).
 
-**Late settlement quarantine:** an executor that ignores cancellation and settles after its runtime or launch branch is retired cannot append to the replacement session or move its active leaf. The originating session retains the latest 32 bounded quarantine records in memory. For persisted sessions it also appends audit JSONL to `<session-file>.tasks-late.jsonl`, with `{ version: 1, sessionId, generation, task, usage? }`. A sidecar write failure is reported and leaves only the bounded in-memory record. This sidecar is separate from the session tree and active totals; it is not automatically reconciled, replayed or used to resume execution. Preserve it if you need to audit late provider costs, and manage its disk retention separately from the session file.
+**Late settlement quarantine:** an executor that ignores cancellation and settles after its runtime or launch branch is retired cannot append to the replacement session or move its active leaf. The originating session retains the latest 32 bounded quarantine records in memory. For persisted sessions it also appends audit JSONL to `<session-file>.tasks-late.jsonl`, with `{ version: 1, sessionId, generation, task, usage? }`. A sidecar write failure is reported and leaves only the bounded in-memory record. This sidecar is separate from the session tree and active totals; it is not automatically reconciled, replayed or used to resume execution. Preserve it if you need to audit late provider costs. Deleting the session from `/resume` also removes its sidecar.
 
 ### CustomMessageEntry
 
@@ -516,6 +520,7 @@ Import `SessionManager` and its session types from `@astralyn/pi` as shown above
 
 - `SessionManager.create(cwd: string, sessionDir?: string, options?: NewSessionOptions): SessionManager` — create a persisted session.
 - `SessionManager.open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager` — open a session file. `cwdOverride` takes precedence over the header's `cwd`.
+- `SessionManager.createAt(path: string, cwd: string, options?: NewSessionOptions): SessionManager` — create a persisted session at an exact file path, creating its directory. As for any session, the file appears once it holds a conversation.
 - `SessionManager.continueRecent(cwd: string, sessionDir?: string): SessionManager` — open the most recent session or create one.
 - `SessionManager.inMemory(cwd?: string, options?: NewSessionOptions, entries?: FileEntry[]): SessionManager` — create a non-persisted session, optionally initialized from entries.
 - `SessionManager.forkFrom(sourcePath: string, targetCwd: string, sessionDir?: string, options?: NewSessionOptions): SessionManager` — fork into another working directory.
@@ -567,6 +572,7 @@ All of these return the appended entry ID:
 - `getEntries(): SessionEntry[]` and `getHeader(): SessionHeader | null`
 - `getSessionName(): string | undefined`
 - `getCwd(): string`, `getSessionDir(): string`, `getSessionId(): string`, and `getSessionFile(): string | undefined`
+- `getArtifactDir(): string | undefined` — the directory the session file owns (`<name>/` for `<name>.jsonl`), or `undefined` when the session is not persisted. It is not created for you; create it before writing. Also available on `ctx.sessionManager` in extensions.
 - `usesDefaultSessionDir(): boolean` and `isPersisted(): boolean`
 
 ## Virtual selections and nested calls

@@ -72,6 +72,9 @@ export function createAgentTool(
 			const { model, thinking } = resolveAgentConfiguration(ctx);
 			const auth = await ctx.modelRuntime.getAuth(model, { signal });
 			if (!auth) throw new Error(`No authentication for Agent model ${model.provider}/${model.id}`);
+			// Captured now: a background Agent may outlive the session that launched it.
+			const sessionArtifactDir = ctx.sessionManager.getArtifactDir();
+			const parentSession = ctx.sessionManager.getSessionFile();
 			const outcome = await ctx.tasks.execute<AgentToolDetails>({
 				kind: "agent",
 				label: "Agent",
@@ -96,6 +99,8 @@ export function createAgentTool(
 						thinking,
 						modelRuntime: ctx.modelRuntime,
 						projectTrusted: ctx.isProjectTrusted(),
+						sessionArtifactDir,
+						parentSession,
 					}),
 			});
 			if (outcome.kind === "result") return outcome.result;

@@ -300,6 +300,27 @@ describe("task panel views", () => {
 			expect(h.frame()).not.toMatch(/Log\s+\/tmp/);
 		});
 
+		it("shows a report path once when a Details fact already names it", async () => {
+			const h = harness(
+				[
+					tall({
+						outputPath: "/tmp/agent-full.md",
+						facts: [["Report", "/tmp/agent-full.md"]],
+						result: { text: paragraphs(4), truncated: true },
+					}),
+				],
+				{ width: 120 },
+			);
+			await vi.advanceTimersByTimeAsync(2000);
+			h.menu.handleInput("\t");
+			h.menu.handleInput("f");
+			await vi.advanceTimersByTimeAsync(2000);
+			h.menu.handleInput("\x1b[C");
+			expect(h.frame()).toMatch(/Report\s+\/tmp\/agent-full\.md/);
+			expect(h.frame()).not.toContain("Full report");
+			expect(h.frame().match(/agent-full\.md/g)).toHaveLength(1);
+		});
+
 		it("shows the scroll range of an overflowing report in the bottom border", () => {
 			const h = harness([tall()], { width: 120 });
 			expect(bottom(h)).toMatch(/ 1–\d+\/\d+ ─┘$/);

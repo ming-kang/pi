@@ -28,7 +28,10 @@ export function detailLines(task: TaskSnapshot, theme: Theme, width: number): st
 	if (!input) rows.push(["Title", cleanTaskText(task.title)]);
 	else if (inputLines.length <= 1) rows.push([input.label, inputLines[0] ?? ""]);
 	for (const [label, value] of task.facts ?? []) rows.push([cleanTaskText(label), cleanTaskText(value)]);
-	if (task.outputPath) rows.push([task.output === "log" ? "Log" : "Full report", cleanTaskText(task.outputPath)]);
+	// A fact that already names the output file would repeat it.
+	const shownAsFact = task.facts?.some(([, value]) => value === task.outputPath);
+	if (task.outputPath && !shownAsFact)
+		rows.push([task.output === "log" ? "Log" : "Full report", cleanTaskText(task.outputPath)]);
 	const labelWidth = Math.max(9, ...rows.map(([label]) => visibleWidth(label))) + 1;
 	// Values wrap inside their own column, so continuation lines hang under the first value line.
 	const valueWidth = Math.max(1, width - labelWidth);

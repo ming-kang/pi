@@ -248,6 +248,7 @@ export type ReadonlySessionManager = Pick<
 	| "getSessionDir"
 	| "getSessionId"
 	| "getSessionFile"
+	| "getArtifactDir"
 	| "getLeafId"
 	| "getLeafEntry"
 	| "getEntry"
@@ -260,6 +261,26 @@ export type ReadonlySessionManager = Pick<
 	| "getTree"
 	| "getSessionName"
 >;
+
+/**
+ * The directory a session file owns for files produced alongside it: `<dir>/<name>/` for
+ * `<dir>/<name>.jsonl`. It is never listed as a session. Writers create it on demand.
+ */
+export function getSessionArtifactDir(sessionFile: string): string {
+	return sessionFile.endsWith(".jsonl") ? sessionFile.slice(0, -".jsonl".length) : `${sessionFile}.artifacts`;
+}
+
+/** The diagnostic sidecar for background task settlements that arrive after their session was retired. */
+export function getTasksLateSidecarPath(sessionFile: string): string {
+	return `${sessionFile}.tasks-late.jsonl`;
+}
+
+/** Everything a session file owns that currently exists: the file, its artifacts directory and its late-task sidecar. */
+export function listSessionOwnedPaths(sessionFile: string): string[] {
+	return [sessionFile, getSessionArtifactDir(sessionFile), getTasksLateSidecarPath(sessionFile)].filter((path) =>
+		existsSync(path),
+	);
+}
 
 function createSessionId(): string {
 	return uuidv7();
@@ -1157,6 +1178,11 @@ export class SessionManager {
 		return this.sessionFile;
 	}
 
+	/** The artifacts directory of the persisted session file, or undefined when the session is not persisted. */
+	getArtifactDir(): string | undefined {
+		return this.persist && this.sessionFile ? getSessionArtifactDir(this.sessionFile) : undefined;
+	}
+
 	/**
 	 * A new session file is created only once the session contains a user or assistant message.
 	 * Setup entries alone (model, thinking level, system prompt) stay in memory so opening and
@@ -1783,6 +1809,17 @@ export class SessionManager {
 		// If no sessionDir provided, derive from file's parent directory
 		const dir = sessionDir ? normalizePath(sessionDir) : resolve(resolvedPath, "..");
 		return new SessionManager(cwd, dir, resolvedPath, true, undefined, preloadedFileEntries);
+	}
+
+	/**
+	 * Create a new persisted session at an exact file path, creating its directory. The file appears once
+	 * the session holds a conversation, as for any session.
+	 */
+	static createAt(path: string, cwd: string, options?: NewSessionOptions): SessionManager {
+		const file = resolvePath(path);
+		const manager = new SessionManager(cwd, resolve(file, ".."), undefined, true, options);
+		manager.sessionFile = file;
+		return manager;
 	}
 
 	/**

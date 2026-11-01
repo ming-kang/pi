@@ -48,7 +48,7 @@ In the picker you can:
 - rename with Ctrl+R
 - delete with Ctrl+D, then confirm
 
-When available, pi uses the `trash` CLI for deletion instead of permanently removing files.
+Deleting a session also removes its artifacts directory (such as saved Agent reports and transcripts) and its late-task sidecar. When available, pi uses the `trash` CLI for deletion instead of permanently removing files.
 
 ## Naming Sessions
 

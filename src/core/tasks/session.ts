@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import type { AgentMessage, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
 import type { CustomMessage } from "../messages.ts";
-import type { SessionEntry, SessionManager } from "../session-manager.ts";
+import { getTasksLateSidecarPath, type SessionEntry, type SessionManager } from "../session-manager.ts";
 import { truncateHead } from "../tools/truncate.ts";
 import { getTaskUsageRecord } from "../usage-totals.ts";
 import { TASK_RECORD_TYPE, TASK_SNAPSHOT_VERSION } from "./codec.ts";
@@ -239,8 +239,9 @@ export class TaskSession {
 		if (sessionFile) {
 			try {
 				mkdirSync(dirname(sessionFile), { recursive: true });
-				appendFileSync(`${sessionFile}.tasks-late.jsonl`, `${JSON.stringify({ version: 1, ...record })}\n`);
-				persistence = `Saved diagnostic sidecar: ${sessionFile}.tasks-late.jsonl (not included in normal session totals).`;
+				const sidecar = getTasksLateSidecarPath(sessionFile);
+				appendFileSync(sidecar, `${JSON.stringify({ version: 1, ...record })}\n`);
+				persistence = `Saved diagnostic sidecar: ${sidecar} (not included in normal session totals).`;
 			} catch {
 				persistence = `Sidecar write failed. ${persistence}`;
 			}

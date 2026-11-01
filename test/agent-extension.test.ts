@@ -1,8 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sdk from "../src/core/sdk.ts";
+import { loadEntriesFromFile, SessionManager } from "../src/core/session-manager.ts";
 import { TASK_RECORD_TYPE } from "../src/core/tasks/codec.ts";
 import { projectForModel } from "../src/core/tasks/presentation.ts";
 import { createAgentTool } from "../src/extensions/agent/index.ts";
@@ -16,10 +18,31 @@ async function createBackgroundHarness(options: Parameters<typeof createHarness>
 	await created.session.bindExtensions({ tasksEnabled: true });
 	return created;
 }
+const sessionRoots: string[] = [];
 afterEach(() => {
 	harness?.cleanup();
 	vi.restoreAllMocks();
+	for (const root of sessionRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+
+/** A harness whose main session is saved to disk, so Agents keep artifacts beside it. */
+async function createSavedHarness(options: Parameters<typeof createHarness>[0] = {}) {
+	const root = mkdtempSync(join(tmpdir(), "pi-agent-saved-"));
+	sessionRoots.push(root);
+	const sessionManager = SessionManager.create(root, join(root, "sessions"));
+	sessionManager.appendMessage({ role: "user", content: "Start", timestamp: 1 });
+	return createHarness({ settings: { compaction: { enabled: false } }, ...options, sessionManager });
+}
+
+function runAgent(id: string, prompt = "Do the work") {
+	return createAgentTool().execute(
+		id,
+		{ prompt },
+		undefined,
+		undefined,
+		harness.session.extensionRunner.createToolContext(id, undefined),
+	);
+}
 
 describe("Agent delegation", () => {
 	it("uses an isolated coding session and returns its report with usage and Tasks details", async () => {
@@ -62,6 +85,9 @@ describe("Agent delegation", () => {
 		expect(task.display).toBeUndefined();
 		expect(task.result?.text).toContain("entry.ts:1 exports");
 		expect(task.outputPath).toBeUndefined();
+		// An unsaved session keeps no artifacts: counts only, no report or transcript rows.
+		expect(task.facts?.map(([label]) => label)).toEqual(["Model", "Thinking", "Directory", "Tool calls"]);
+		expect(task.facts).toContainEqual(["Tool calls", "1"]);
 		expect((await harness.session.tasks.read(task.id)).text).toContain("## Report");
 		const records = harness.sessionManager
 			.getEntries()
@@ -227,6 +253,7 @@ describe("Agent delegation", () => {
 		expect(task.display).toBeUndefined();
 		expect(task.result?.text).toContain("Partial findings");
 		expect(task.result?.text).toContain("Model unavailable");
+		expect(task.facts).toContainEqual(["Tool calls", "1"]);
 	});
 
 	it("honors declined project trust without dropping repository instructions", async () => {
@@ -399,6 +426,7 @@ describe("Agent delegation", () => {
 		const task = harness.session.tasks.list()[0]!;
 		expect(task.status).toBe("cancelled");
 		expect(task.result?.text).toContain("Found entry.ts");
+		expect(task.facts).toContainEqual(["Tool calls", "1"]);
 	});
 
 	it("continues the same Agent after foreground handoff and parent cancellation", async () => {
@@ -514,5 +542,142 @@ describe("Agent delegation", () => {
 		).rejects.toThrow(/model/i);
 		expect(harness.faux.state.callCount).toBe(0);
 		expect(harness.session.tasks.list()).toEqual([]);
+	});
+});
+
+describe("Agent artifacts in a saved session", () => {
+	const writeCall = (path: string, content = "export {};\n") => fauxToolCall("write", { path, content });
+	const taskFact = (label: string) => harness.session.tasks.list()[0]?.facts?.find(([name]) => name === label)?.[1];
+
+	it("keeps the report and a linked transcript, and reports calls and edited files", async () => {
+		harness = await createSavedHarness();
+		const mainFile = harness.sessionManager.getSessionFile()!;
+		harness.setResponses([
+			fauxAssistantMessage(
+				[writeCall("a.ts", "export const a = 1;\n"), fauxToolCall("bash", { command: "echo x > bash-made.txt" })],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage(fauxToolCall("edit", { path: "a.ts", edits: [{ oldText: "a = 1", newText: "a = 2" }] }), {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage(writeCall("./a.ts", "export const a = 3;\n"), { stopReason: "toolUse" }),
+			fauxAssistantMessage(
+				[
+					writeCall("sub/b.ts"),
+					fauxToolCall("read", { path: "missing.ts" }),
+					fauxToolCall("edit", { path: "c.ts", edits: [{ oldText: "x", newText: "y" }] }),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("Done: changed a.ts and sub/b.ts."),
+		]);
+		const result = await runAgent("saved");
+		const task = harness.session.tasks.list()[0]!;
+		const dir = join(harness.sessionManager.getArtifactDir()!, "agents", task.id);
+		expect(harness.sessionManager.getArtifactDir()).toBe(mainFile.replace(/\.jsonl$/u, ""));
+		// Edited covers edit/write only, once per file, in first-edit order; the model sees it after the report.
+		expect(getMessageText(result)).toBe("Done: changed a.ts and sub/b.ts.\n\nEdited (edit/write): a.ts, sub/b.ts");
+		expect(readFileSync(join(dir, "report.md"), "utf8")).toBe("Done: changed a.ts and sub/b.ts.");
+		expect(task.outputPath).toBeUndefined();
+		expect(taskFact("Tool calls")).toBe("7 · 2 failed");
+		expect(taskFact("Edited")).toBe("a.ts, sub/b.ts");
+		expect(taskFact("Report")).toBe(join(dir, "report.md"));
+		expect(taskFact("Transcript")).toBe(join(dir, "transcript.jsonl"));
+
+		const entries = loadEntriesFromFile(join(dir, "transcript.jsonl"));
+		expect(entries[0]).toMatchObject({ type: "session", parentSession: mainFile });
+		expect(entries.some((entry) => entry.type === "message" && entry.message.role === "assistant")).toBe(true);
+		expect(SessionManager.open(join(dir, "transcript.jsonl")).getEntries().length).toBeGreaterThan(2);
+
+		// The facts live in the saved snapshot, so a continued session still shows them.
+		const resumed = await createHarness({ sessionManager: SessionManager.open(mainFile) });
+		try {
+			const restored = resumed.session.tasks.get(task.id);
+			expect(restored.facts).toEqual(task.facts);
+			expect(existsSync(taskFact("Report")!)).toBe(true);
+		} finally {
+			resumed.cleanup();
+		}
+	});
+
+	it("never lists a nested transcript as a session or continues into it", async () => {
+		harness = await createSavedHarness();
+		const mainFile = harness.sessionManager.getSessionFile()!;
+		harness.setResponses([fauxAssistantMessage("Report")]);
+		await runAgent("listing");
+		const transcript = taskFact("Transcript")!;
+		expect(existsSync(transcript)).toBe(true);
+		const sessionDir = harness.sessionManager.getSessionDir();
+		const listed = await SessionManager.list(harness.sessionManager.getCwd(), sessionDir);
+		expect(listed.map((info) => info.path)).toEqual([mainFile]);
+		expect(SessionManager.continueRecent(harness.sessionManager.getCwd(), sessionDir).getSessionFile()).toBe(
+			mainFile,
+		);
+	});
+
+	it("keeps an oversized report where the session can find it, and appends Edited after truncation", async () => {
+		harness = await createSavedHarness();
+		const report = `START\n${"x".repeat(30 * 1024)}\nEND`;
+		harness.setResponses([
+			fauxAssistantMessage(writeCall("a.ts"), { stopReason: "toolUse" }),
+			fauxAssistantMessage(report),
+		]);
+		const result = await runAgent("oversized");
+		const task = harness.session.tasks.list()[0]!;
+		const reportPath = join(harness.sessionManager.getArtifactDir()!, "agents", task.id, "report.md");
+		const text = getMessageText(result);
+		expect(text).toContain(`[Agent output truncated. Full output: ${reportPath}]`);
+		expect(text.endsWith("\n\nEdited (edit/write): a.ts")).toBe(true);
+		expect(text.indexOf("Edited (edit/write)")).toBeGreaterThan(text.indexOf("Full output"));
+		expect(readFileSync(reportPath, "utf8")).toBe(report);
+		expect(task.outputPath).toBe(reportPath);
+		expect((await harness.session.tasks.read(task.id, { mode: "tail", bytes: 16 })).text).toContain("END");
+
+		// Tasks retention and runtime shutdown never delete a session's report.
+		for (let index = 0; index < 33; index++) {
+			harness.setResponses([fauxAssistantMessage(`Small ${index}`)]);
+			await runAgent(`filler-${index}`);
+		}
+		expect(harness.session.tasks.list().some((item) => item.id === task.id)).toBe(false);
+		expect(existsSync(reportPath)).toBe(true);
+		harness.session.dispose();
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(existsSync(reportPath)).toBe(true);
+	}, 60_000);
+
+	it("counts every call and edit beyond the retained activity list, within bounded rows", async () => {
+		harness = await createSavedHarness();
+		const names = Array.from({ length: 60 }, (_, index) => `file-with-a-rather-long-name-${index}.ts`);
+		harness.setResponses([
+			fauxAssistantMessage(
+				names.map((name) => writeCall(name)),
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("Done"),
+		]);
+		const result = await runAgent("many");
+		expect(taskFact("Tool calls")).toBe("60");
+		const fact = taskFact("Edited")!;
+		expect(fact.startsWith(`${names[0]}, ${names[1]}`)).toBe(true);
+		expect(fact).toMatch(/ \+\d+ more$/u);
+		expect(Buffer.byteLength(fact)).toBeLessThanOrEqual(1024);
+		const line = getMessageText(result).split("\n\n").at(-1)!;
+		expect(line.startsWith("Edited (edit/write): file-with-a-rather-long-name-0.ts")).toBe(true);
+		expect(line).toMatch(/ \+\d+ more$/u);
+		expect(Buffer.byteLength(line)).toBeLessThanOrEqual(1024);
+	});
+
+	it("gives a failed Agent the same facts", async () => {
+		harness = await createSavedHarness();
+		harness.setResponses([
+			fauxAssistantMessage(writeCall("a.ts"), { stopReason: "toolUse" }),
+			fauxAssistantMessage("Partial", { stopReason: "error", errorMessage: "Model unavailable" }),
+		]);
+		const result = await runAgent("failing");
+		expect(result.details?.state).toBe("failed");
+		expect(getMessageText(result)).toContain("Edited (edit/write): a.ts");
+		expect(taskFact("Edited")).toBe("a.ts");
+		expect(existsSync(taskFact("Report")!)).toBe(true);
+		expect(existsSync(taskFact("Transcript")!)).toBe(true);
 	});
 });

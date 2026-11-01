@@ -19,13 +19,15 @@ export interface IsolatedSessionOptions {
 	/** Builds the system prompt from the base prompt Pi would otherwise use. */
 	systemPrompt: (base: string | undefined) => string;
 	tools: string[];
+	/** Persist the transcript as a session file at `path`, linked to `parentSession`; in memory when omitted. */
+	transcript?: { path: string; parentSession?: string };
 	signal?: AbortSignal;
 }
 
 /**
  * A self-contained child session for delegated work: no extensions, skills, prompt templates
- * or themes, a detached settings snapshot without cache warming, an in-memory transcript, and
- * no background tasks. Cancellation rejects, and a session created as cancellation wins is disposed.
+ * or themes, a detached settings snapshot without cache warming, a transcript that is in memory unless
+ * a path is given, and no background tasks. Cancellation rejects, and a session created as cancellation wins is disposed.
  */
 export async function createIsolatedSession(options: IsolatedSessionOptions): Promise<AgentSession> {
 	const { signal } = options;
@@ -64,7 +66,11 @@ export async function createIsolatedSession(options: IsolatedSessionOptions): Pr
 		backgroundAllowed: false,
 		resourceLoader,
 		settingsManager,
-		sessionManager: SessionManager.inMemory(options.cwd),
+		sessionManager: options.transcript
+			? SessionManager.createAt(options.transcript.path, options.cwd, {
+					parentSession: options.transcript.parentSession,
+				})
+			: SessionManager.inMemory(options.cwd),
 		tools: options.tools,
 	});
 	if (signal?.aborted) {
