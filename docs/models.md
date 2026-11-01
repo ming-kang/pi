@@ -153,18 +153,7 @@ At provider level, `api` is the default for entries in that provider's `models` 
 
 Each key in `providers` is the provider ID used by `/model`, `--provider`, saved credentials, and model references.
 
-| Field | Description |
-| --- | --- |
-| `name` | Optional display name for the provider. Defaults to its ID. |
-| `baseUrl` | Default endpoint for this provider's models. A new provider normally needs this for its first custom model; a model may override it. |
-| `api` | Default [API tag](#api-tags) for entries in `models`. |
-| `apiKey` | Optional fallback API-key value; see [Value Resolution](#value-resolution) and [credential resolution](providers.md#resolution-order). |
-| `oauth` | Dynamic OAuth provider type. `"radius"` is the only supported value and requires a Radius gateway `baseUrl`; see [Providers: Radius](providers.md#radius). |
-| `headers` | Request headers for every model on the provider; see [Custom Headers](#custom-headers). |
-| `authHeader` | Adds `Authorization: Bearer <resolved apiKey>` after resolving authentication. |
-| `compat` | Compatibility defaults merged into the provider's models; see [Compatibility Options](#compatibility-options). |
-| `models` | Custom model definitions. On a built-in provider they are added or replaced by `id`; other catalog models remain. |
-| `modelOverrides` | Partial changes for matching final models, including built-in and extension-registered models; see [Per-model Overrides](#per-model-overrides). |
+See [Provider fields](models-configuration.md#providers) for the complete field reference and defaults. `oauth: "radius"` selects the Radius OAuth flow and requires a gateway `baseUrl`; see [Providers: Radius](providers.md#radius).
 
 A custom model needs an effective `baseUrl` and `api`. For a new provider, put both on the provider (the usual approach) or on its first model. On a built-in provider, a model that replaces an existing ID can fall back to that catalog model's endpoint and API. `contextWindow` and `maxTokens`, when supplied in a `models` entry, must be positive.
 
@@ -236,24 +225,7 @@ Provider headers apply to every request. A configured model header overrides the
 
 A `models` entry supplies a complete custom model definition with useful defaults. A model matching a built-in ID replaces that catalog entry rather than partially modifying it; use [`modelOverrides`](#per-model-overrides) for partial changes.
 
-| Field | Required | Default | Description |
-| --- | --- | --- | --- |
-| `id` | Yes | — | Model identifier sent to the API. |
-| `name` | No | `id` | Human-readable label. It is searchable by `--model` patterns and shown as model detail text. |
-| `api` | No | Provider `api` | [API tag](#api-tags) for this model. |
-| `baseUrl` | No | Provider `baseUrl` | Endpoint override for this model. |
-| `reasoning` | No | `false` | Whether the model supports Pi thinking levels. |
-| `thinkingLevelMap` | No | omitted | Maps Pi thinking levels to provider values and declares unsupported levels; see below. |
-| `input` | No | `["text"]` | Supported input kinds: `text` and `image`. |
-| `inputLimits` | No | omitted | Request limits and image preprocessing for this model; see [Image Input Limits](#image-input-limits). |
-| `contextWindow` | No | `128000` | Context window in tokens. |
-| `maxTokens` | No | `16384` | Maximum generated tokens. |
-| `samplingParamsByThinkingLevel` | No | omitted | Per-level sampling overrides; see [Configure sampling by thinking level](#configure-sampling-by-thinking-level). |
-| `samplingParams` | No | omitted | Free-form sampling parameters merged verbatim into every request body; see [Sampling Parameters](#sampling-parameters). |
-| `cost` | No | all rates `0` | Per-million-token rates and optional request-wide price tiers. |
-| `promptCache` | No | omitted | Best-effort prompt cache lifetime in seconds per retention tier; see [Prompt Cache Lifetimes](#prompt-cache-lifetimes). |
-| `headers` | No | omitted | Model-specific request headers; see [Custom Headers](#custom-headers). |
-| `compat` | No | provider `compat` | Compatibility refinements merged with provider defaults. |
+See [Model fields](models-configuration.md#models) for the complete field reference, including defaults and nested cost and input-limit shapes.
 
 `/model`, `--list-models`, and the footer show a model's `id`; `name` does not replace it. The model selector and `--model` pattern matching also search `name`.
 
@@ -506,20 +478,7 @@ Set `compat` on a provider for defaults or on a `models`/`modelOverrides` entry 
 
 For `api: "anthropic-messages"`, use these options for Anthropic-compatible endpoints:
 
-| Field | Description |
-| --- | --- |
-| `supportsEagerToolInputStreaming` | Accepts per-tool `eager_input_streaming`. Default: `true`. When `false`, Pi omits it and sends the legacy `fine-grained-tool-streaming-2025-05-14` beta header for tool-enabled requests. |
-| `supportsLongCacheRetention` | Accepts `cache_control.ttl: "1h"` for long cache retention. Default: `true`. |
-| `sendSessionAffinityHeaders` | Sends `x-session-affinity` from the session ID when caching is enabled. Default: `false`; built-in model metadata can enable it for providers that need it. |
-| `supportsCacheControlOnTools` | Accepts Anthropic `cache_control` on tool definitions. Default: `true`. |
-| `supportsTemperature` | Accepts non-default `temperature`. Default: `true`; set `false` for endpoints such as Claude Opus 4.7+ that reject it. |
-| `forceAdaptiveThinking` | Uses adaptive thinking (`thinking.type: "adaptive"` and `output_config.effort`) regardless of model ID. Default: `false`. |
-| `allowEmptySignature` | Replays an empty thinking signature as `signature: ""` instead of converting the thinking block to text. Default: `false`. |
-| `supportsStrictTools` | Accepts strict JSON-schema tool definitions. Default: `false`; capable built-in Anthropic models set it in their metadata. |
-| `supportsMidConvoEffort` | Accepts effort-only system messages and thinking binding controls. Default: `false`. |
-| `supportsMidConvoSystemMessages` | Accepts system-role messages inside the conversation. When `false`, later system messages fold into the top-level system prompt. Default: `false`. |
-| `supportsMidConvoToolChanges` | Accepts mid-conversation `tool_addition` and `tool_removal` blocks. Requires `supportsMidConvoSystemMessages`. Default: `false`. |
-| `allowedFallbackModels` | Models Anthropic accepts in `fallbacks` for server-side refusal fallback, with local pricing metadata for returned fallback responses. Omit `fallbacks` when empty. |
+See [Anthropic Messages compatibility fields](models-configuration.md#anthropic-messages) for the complete field reference and defaults.
 
 For example, a proxy that lacks eager streaming but supports long cache retention and adaptive thinking can use:
 
@@ -554,36 +513,9 @@ For example, a proxy that lacks eager streaming but supports long cache retentio
 
 For `api: "openai-completions"`, Pi auto-detects many defaults from the provider ID and base URL. Set an option only when the endpoint differs from that behavior.
 
-| Field | Description |
-| --- | --- |
-| `supportsStore` | Accepts `store: false`. Default: URL-detected. |
-| `supportsDeveloperRole` | Uses `developer` rather than `system` for reasoning models. Default: URL-detected. |
-| `supportsReasoningEffort` | Accepts `reasoning_effort` when the selected thinking format uses it. Default: URL-detected. |
-| `supportsUsageInStreaming` | Accepts `stream_options: { "include_usage": true }`. Default: `true`. |
-| `supportsFinishReason` | Whether streamed responses include `finish_reason`. When `false`, Pi infers `stop` or `toolUse` when the stream ends. Default: `true`. |
-| `maxTokensField` | Selects `max_completion_tokens` or `max_tokens`. Default: URL-detected. |
-| `requiresToolResultName` | Requires `name` on tool-result messages. Default: URL-detected. |
-| `requiresAssistantAfterToolResult` | Requires an assistant message before a user message following tool results. Default: URL-detected. |
-| `requiresThinkingAsText` | Replays thinking blocks as text delimited by `<thinking>`. Default: URL-detected. |
-| `requiresReasoningContentOnAssistantMessages` | Includes empty `reasoning_content` on replayed assistant messages when reasoning is enabled. Default: URL-detected. |
-| `thinkingFormat` | One of `openai`, `openrouter`, `deepseek`, `together`, `zai`, `qwen`, `chat-template`, `qwen-chat-template`, `string-thinking`, or `ant-ling`. Default: `openai` unless URL detection selects a known provider format. |
-| `chatTemplateKwargs` | `chat_template_kwargs` for `thinkingFormat: "chat-template"`. Values may be strings, numbers, booleans, `null`, or `{ "$var": "thinking.enabled" | "thinking.effort" | "thinking.budget", "omitWhenOff"?: true }`. |
-| `chatTemplateArgs` | `chat_template_args` for `thinkingFormat: "baseten"`. Values may be strings, numbers, booleans, `null`, or `{ "$var": "thinking.enabled" | "thinking.effort" | "thinking.budget", "omitWhenOff"?: true }`. |
-| `thinkingTokenBudgetField` | Top-level request field used to cap reasoning tokens from `thinkingBudgets`, clamped so at least 1024 tokens remain for the answer. Use `thinking_token_budget` for vLLM, `thinking_budget` for Qwen/DashScope/SGLang, or `thinking_budget_tokens` for llama.cpp. Off by default. |
-| `supportsThinkingTokenBudget` | Alias for `thinkingTokenBudgetField: "thinking_token_budget"` (vLLM). Prefer `thinkingTokenBudgetField`. Default: `false`. |
-| `zaiToolStream` | Sends top-level `tool_stream: true` when tools are present. Default: `false`; use only for Z.AI-compatible endpoints that require it. |
-| `cacheControlFormat` | `anthropic` applies Anthropic-style `cache_control` markers to the system prompt, last tool definition, and final text content when caching is enabled. |
-| `sendSessionAffinityHeaders` | Sends session-affinity headers from the session ID when caching is enabled. Default: `false`. |
-| `sessionAffinityFormat` | `openai` sends `session_id`, `x-client-request-id`, and `x-session-affinity`; `openai-nosession` omits `session_id`; `openrouter` sends `x-session-id`. It does not change `prompt_cache_key`. Default: URL-detected. |
-| `supportsStrictMode` | Accepts strict JSON-schema function tools. Default: URL-detected. |
-| `supportsOpenAIGrammarTools` | Emits OpenAI Lark/regex grammar tools. When `false`, grammar-constrained tools fall back to normal function tools. Default: `false`. |
-| `supportsMidConvoSystemMessages` | Accepts system or developer messages after the conversation has started. When `false`, later system messages fold into the leading system message. Default: `false`. |
-| `supportsMidConvoToolAdditions` | Accepts tools introduced by mid-conversation system messages. Requires `supportsMidConvoSystemMessages`. Default: `false`. |
-| `supportsLongCacheRetention` | Accepts long prompt-cache retention: `prompt_cache_retention: "24h"`, or `cache_control.ttl: "1h"` with `cacheControlFormat: "anthropic"`. Default: `true` except URL-detected incompatible endpoints. |
-| `openRouterRouting` | OpenRouter routing preferences sent unchanged in the request `provider` field. |
-| `vercelGatewayRouting` | Vercel AI Gateway routing preferences (`only`, `order`) sent as `providerOptions.gateway`. |
+See [OpenAI Chat Completions compatibility fields](models-configuration.md#openai-completions) for the complete field reference and defaults.
 
-Thinking formats use these request shapes: `openai` sends `reasoning_effort`; `openrouter` sends `reasoning: { effort }`; `deepseek` sends `thinking: { type }` and, when enabled, `reasoning_effort`; `together` sends `reasoning: { enabled }` and optionally `reasoning_effort`; `zai` sends `thinking: { type }`; `qwen` sends `enable_thinking`; `qwen-chat-template` sends `chat_template_kwargs.enable_thinking` and `preserve_thinking`; `string-thinking` sends top-level `thinking` as a string; and `ant-ling` sends `reasoning: { effort }` only for a non-null mapped effort. `chat-template` sends the configured `chatTemplateKwargs`.
+Thinking formats use these request shapes: `openai` sends `reasoning_effort`; `openrouter` sends `reasoning: { effort }`; `deepseek` sends `thinking: { type }` and, when enabled, `reasoning_effort`; `together` sends `reasoning: { enabled }` and optionally `reasoning_effort`; `baseten` sends the configured `chatTemplateArgs` and optionally `reasoning_effort`; `zai` sends `thinking: { type }`; `qwen` sends `enable_thinking`; `qwen-chat-template` sends `chat_template_kwargs.enable_thinking` and `preserve_thinking`; `string-thinking` sends top-level `thinking` as a string; and `ant-ling` sends `reasoning: { effort }` only for a non-null mapped effort. `chat-template` sends the configured `chatTemplateKwargs`.
 
 `thinkingTokenBudgetField` is independent of `thinkingFormat`. Do not enable it on the generated Qwen catalog: those models already send `reasoning_effort`, and DashScope rejects `thinking_budget` together with `reasoning_effort`.
 
@@ -686,17 +618,7 @@ Vercel AI Gateway example:
 
 ### OpenAI Responses
 
-For `api: "openai-responses"`, the compatible fields are `supportsDeveloperRole`, `sessionAffinityFormat`, `supportsLongCacheRetention`, `supportsStrictMode`, `supportsOpenAIGrammarTools`, `supportsToolSearch`, and `supportsExplicitPromptCacheMode`.
-
-| Field | Description |
-| --- | --- |
-| `supportsDeveloperRole` | Uses `developer` rather than `system` for reasoning models. Default: `true`. |
-| `sessionAffinityFormat` | `openai` sends `session_id` and `x-client-request-id`; `openai-nosession` omits `session_id`; `openrouter` sends `x-session-id`. It does not change `prompt_cache_key`. |
-| `supportsLongCacheRetention` | Accepts long cache retention: `prompt_cache_options.ttl: "30m"` when `supportsExplicitPromptCacheMode` is enabled (including GPT-5.6+ Responses models), otherwise `prompt_cache_retention: "24h"`. Default: `true`. |
-| `supportsStrictMode` | Accepts strict JSON-schema function tools. Default: `false`. |
-| `supportsOpenAIGrammarTools` | Emits OpenAI Lark/regex grammar tools. Default: `false`. |
-| `supportsToolSearch` | Supports client-executed deferred tool search. Default: `false`. |
-| `supportsExplicitPromptCacheMode` | Accepts `prompt_cache_options: { mode: "explicit" }` when cache retention is `none`, which disables implicit prompt caching; long cache retention uses `{ ttl: "30m" }` when `supportsLongCacheRetention` is also enabled. Default: `false`. |
+For `api: "openai-responses"`, see [Responses compatibility fields](models-configuration.md#openai-responses) for the complete field reference and defaults.
 
 The public Pi AI model type also exposes the Responses compatibility shape for `azure-openai-responses` and `openai-codex-responses`. The Azure transport uses `supportsDeveloperRole`, `supportsStrictMode`, and `supportsOpenAIGrammarTools`; the Codex transport uses `supportsStrictMode`, `supportsOpenAIGrammarTools`, and `supportsToolSearch`. Other Responses options do not alter those transports.
 
