@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.4.11] - 2026-11-01
+
 ### Changed
 
 - Repository and release automation now use `package-lock.json` with npm 12. Published installations no longer pin transitive dependency resolutions through `npm-shrinkwrap.json`; direct dependencies remain exact and CI continues to install a reproducible tree with `npm ci`.
