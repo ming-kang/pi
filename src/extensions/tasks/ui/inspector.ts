@@ -8,12 +8,19 @@ import { detailLines, outputLines } from "./views.ts";
 interface ReadingPosition {
 	info: TaskViewport;
 	output: TaskViewport;
+	/** Whether Output last followed the tail; a change of kind restarts its viewport. */
+	tails?: boolean;
 	read?: TaskRead;
 }
 interface InspectorOptions {
 	host: Pick<TasksContext, "read" | "retain">;
 	theme: Theme;
 	requestRender(): void;
+}
+
+/** Output follows the tail while it is a log or still live; a settled report reads from its first line. */
+function tailsOutput(task: TaskSnapshot): boolean {
+	return task.output === "log" || !isTaskTerminal(task.status);
 }
 
 /** Owns the selected task's bounded reads. Reading never acknowledges completion delivery. */
@@ -26,7 +33,7 @@ export class TaskInspector {
 	private disposed = false;
 	/** Snapshots are immutable, so identity tells when the lines must be rebuilt. */
 	private outputCache?: { task: TaskSnapshot; read?: TaskRead; width: number; lines: string[] };
-	private detailCache?: { task: TaskSnapshot; status: string; lines: string[] };
+	private detailCache?: { task: TaskSnapshot; width: number; lines: string[] };
 	constructor(options: InspectorOptions) {
 		this.options = options;
 	}
@@ -48,6 +55,13 @@ export class TaskInspector {
 			previous?.();
 		}
 		this.task = task;
+		if (!task) return;
+		const position = this.position;
+		const tails = tailsOutput(task);
+		if (position.tails !== tails) {
+			position.tails = tails;
+			position.output.retarget(tails);
+		}
 	}
 	prune(ids: ReadonlySet<string>): void {
 		for (const id of this.positions.keys()) if (!ids.has(id)) this.positions.delete(id);
@@ -58,7 +72,8 @@ export class TaskInspector {
 	}
 	async refresh(): Promise<void> {
 		const task = this.task;
-		if (this.disposed || !task || this.reading) return;
+		// Only a log streams from its file; any other output is what its executor published.
+		if (this.disposed || !task || task.output !== "log" || this.reading) return;
 		const position = this.position;
 		if (position.read && (!position.output.follow || isTaskTerminal(position.read.task.status))) return;
 		this.reading = true;
@@ -91,13 +106,12 @@ export class TaskInspector {
 			this.outputCache = { task, read, width, lines: outputLines(task, read, this.options.theme, width) };
 		return this.outputCache!.lines;
 	}
-	/** `status` carries the runtime, so Details rebuild at most once per displayed tick. */
-	details(status: string): string[] {
+	details(width: number): string[] {
 		const task = this.task;
 		if (!task) return [];
 		const cache = this.detailCache;
-		if (cache?.task !== task || cache.status !== status)
-			this.detailCache = { task, status, lines: detailLines(task, status, this.options.theme) };
+		if (cache?.task !== task || cache.width !== width)
+			this.detailCache = { task, width, lines: detailLines(task, this.options.theme, width) };
 		return this.detailCache!.lines;
 	}
 	dispose(): void {

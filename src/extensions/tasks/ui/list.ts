@@ -14,15 +14,18 @@ interface ListRow {
 /** Spinner, ✓ and the error × are unique; every other status also needs its name. */
 const SELF_EVIDENT = new Set<TaskStatus>(["running", "completed", "failed"]);
 
-/** Right-aligned row metadata: the status name when the glyph is ambiguous, a disambiguating ID, and runtime. */
-function rowMeta(task: TaskSnapshot, duplicate: boolean): string {
-	return [
-		SELF_EVIDENT.has(task.status) ? "" : statusName(task.status),
-		duplicate ? task.id.slice(-8) : "",
-		runtimeLabel(task),
-	]
-		.filter(Boolean)
-		.join(" · ");
+/**
+ * Right-aligned row metadata: a pending stop question, the status name when the glyph is
+ * ambiguous, a disambiguating ID, and runtime.
+ */
+function rowMeta(task: TaskSnapshot, duplicate: boolean, stopTarget: boolean, theme: Theme): string {
+	const parts = [
+		stopTarget ? theme.fg("warning", "stop?") : "",
+		SELF_EVIDENT.has(task.status) ? "" : theme.fg("muted", statusName(task.status)),
+		duplicate ? theme.fg("muted", task.id.slice(-8)) : "",
+		theme.fg("muted", runtimeLabel(task)),
+	];
+	return parts.filter(Boolean).join(theme.fg("muted", " · "));
 }
 
 /** Keeps list scrolling independent of selection, with an identity anchor on reordering. */
@@ -39,7 +42,8 @@ export class TaskList {
 	scroll(delta: number): void {
 		this.start = Math.max(0, Math.min(Math.max(0, this.rows.length - this.height), this.start + delta));
 	}
-	render(selection: TaskSelection, theme: Theme, width: number, height: number): ListRow[] {
+	/** `stopTargetId` marks the row a pending stop question is about. */
+	render(selection: TaskSelection, theme: Theme, width: number, height: number, stopTargetId?: string): ListRow[] {
 		const rows: ListRow[] = [];
 		const labels = selection.rows.map((task) => cleanTaskText(task.label));
 		const labelWidth = Math.max(0, ...labels.map((label) => visibleWidth(label)));
@@ -57,13 +61,13 @@ export class TaskList {
 			const marker = statusView(task.status, { now: Date.now() });
 			const label = labels[index]!;
 			const duplicate = titles.some((title, other) => other !== index && title === titles[index]);
-			const meta = rowMeta(task, duplicate);
+			const meta = rowMeta(task, duplicate, task.id === stopTargetId, theme);
 			// Labels form an aligned source column so titles start together.
 			const source = labelWidth ? `${label}${" ".repeat(labelWidth - visibleWidth(label))} ` : "";
 			const head = visibleWidth(marker.glyph) + 1 + visibleWidth(source);
 			const title = truncateToWidth(titles[index]!, Math.max(1, width - head - visibleWidth(meta) - 1), "…");
 			const gap = Math.max(1, width - head - visibleWidth(title) - visibleWidth(meta));
-			const text = `${theme.fg(marker.color, marker.glyph)} ${theme.fg("dim", source)}${theme.fg("text", title)}${" ".repeat(gap)}${theme.fg("muted", meta)}`;
+			const text = `${theme.fg(marker.color, marker.glyph)} ${theme.fg("dim", source)}${theme.fg("text", title)}${" ".repeat(gap)}${meta}`;
 			const padded = truncateToWidth(text, width, "…", true);
 			// The system theme has no panel backgrounds until the terminal reports its colors.
 			rows.push({
@@ -76,7 +80,7 @@ export class TaskList {
 			});
 		}
 		if (!rows.length)
-			rows.push({ text: theme.fg("muted", selection.query ? "No matching tasks." : "No retained tasks.") });
+			rows.push({ text: theme.fg("muted", selection.all.length ? "No matching tasks." : "No retained tasks.") });
 		const sameSelection = this.selectedId === selection.state.selectedId;
 		const selectedWasVisible =
 			sameSelection &&
@@ -103,12 +107,13 @@ export class TaskList {
 		this.reveal = false;
 		return rows.slice(this.start, this.start + height);
 	}
+	/** The visible task span, such as `1-12 of 40`; empty while every row fits. */
 	get range(): string {
 		if (this.rows.length <= this.height) return "";
 		const ids = this.rows.flatMap((row) => (row.taskId ? [row.taskId] : []));
 		const visible = this.rows
 			.slice(this.start, this.start + this.height)
 			.flatMap((row) => (row.taskId ? [row.taskId] : []));
-		return `Tasks ${ids.indexOf(visible[0]!) + 1}-${ids.indexOf(visible.at(-1)!) + 1} of ${ids.length}`;
+		return `${ids.indexOf(visible[0]!) + 1}-${ids.indexOf(visible.at(-1)!) + 1} of ${ids.length}`;
 	}
 }

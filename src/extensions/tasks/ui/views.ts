@@ -1,5 +1,5 @@
 /** The inspector's Details and Output content, computed once per task snapshot and output read. */
-import { Markdown, visibleWidth } from "@earendil-works/pi-tui";
+import { Markdown, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { isTaskTerminal, type TaskRead, type TaskSnapshot } from "../../../core/tasks/types.ts";
 import { getMarkdownTheme, highlightCode, type Theme } from "../../../modes/interactive/theme/theme.ts";
 import { cleanTaskText } from "./text.ts";
@@ -7,10 +7,11 @@ import { cleanTaskText } from "./text.ts";
 type DetailRow = [label: string, value: string, tone?: "warning"];
 
 /**
- * Details: source, identity and status first, then the executor's input and facts as aligned
- * rows, then a multi-line input block. `status` changes with runtime, so the caller supplies it.
+ * Details: identity first, then the executor's input and facts as aligned rows whose values wrap
+ * within their own column to `width`, then a multi-line input block. The source, status and
+ * runtime are in the inspector header.
  */
-export function detailLines(task: TaskSnapshot, status: string, theme: Theme): string[] {
+export function detailLines(task: TaskSnapshot, theme: Theme, width: number): string[] {
 	const input = task.input && {
 		...task.input,
 		label: cleanTaskText(task.input.label),
@@ -21,25 +22,30 @@ export function detailLines(task: TaskSnapshot, status: string, theme: Theme): s
 			? highlightCode(input.text, input.language)
 			: input.text.split("\n")
 		: [];
-	const rows: DetailRow[] = [
-		["Source", cleanTaskText(task.label)],
-		["Task ID", task.id],
-		["Status", status],
-	];
+	const rows: DetailRow[] = [["Task ID", task.id]];
 	if (task.error) rows.push(["Error", cleanTaskText(task.error).replace(/\n/g, " "), "warning"]);
-	// Without an input, the title is the only description of the work.
+	// Without an input, the title is the only complete description of the work.
 	if (!input) rows.push(["Title", cleanTaskText(task.title)]);
 	else if (inputLines.length <= 1) rows.push([input.label, inputLines[0] ?? ""]);
 	for (const [label, value] of task.facts ?? []) rows.push([cleanTaskText(label), cleanTaskText(value)]);
-	if (task.outputPath) rows.push(["Log", cleanTaskText(task.outputPath)]);
-	const width = Math.max(9, ...rows.map(([label]) => visibleWidth(label))) + 1;
-	const lines = rows.map(
-		([label, value, tone]) =>
-			label + " ".repeat(width - visibleWidth(label)) + (tone ? theme.fg(tone, value) : value),
+	if (task.outputPath) rows.push([task.output === "log" ? "Log" : "Full report", cleanTaskText(task.outputPath)]);
+	const labelWidth = Math.max(9, ...rows.map(([label]) => visibleWidth(label))) + 1;
+	// Values wrap inside their own column, so continuation lines hang under the first value line.
+	const valueWidth = Math.max(1, width - labelWidth);
+	const lines = rows.flatMap(([label, value, tone]) =>
+		wrapTextWithAnsi(value, valueWidth).map((line, index) => {
+			const lead = index ? " ".repeat(labelWidth) : label + " ".repeat(labelWidth - visibleWidth(label));
+			return lead + (tone ? theme.fg(tone, line) : line);
+		}),
 	);
 	if (input && inputLines.length > 1) lines.push("", theme.fg("accent", input.label), ...inputLines);
 	if (input?.truncated) lines.push(theme.fg("warning", `[Saved ${input.label.toLowerCase()} truncated.]`));
 	return lines;
+}
+
+/** Whether Output streams from a file; any other task shows what its executor published. */
+export function streamsLog(task: TaskSnapshot): boolean {
+	return task.output === "log" && task.outputPath !== undefined;
 }
 
 /**
@@ -54,7 +60,7 @@ export function outputLines(task: TaskSnapshot, read: TaskRead | undefined, them
 			: isTaskTerminal(task.status)
 				? "No saved output."
 				: "No output yet.";
-	const fromLog = task.outputPath !== undefined && read !== undefined && !read.readError;
+	const fromLog = streamsLog(task) && read !== undefined && !read.readError;
 	const human = task.display?.text ? task.display : undefined;
 	const published = human ?? task.result;
 	const text = cleanTaskText((fromLog ? read.text : published?.text) || empty);

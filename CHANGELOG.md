@@ -11,6 +11,15 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Changed
 
+- `/tasks` panel:
+  - On wide terminals the list takes 40% of the width (34–60 columns). Pane titles and the reading or scroll state live in the borders.
+  - The inspector opens with the selected task's full title in bold and a `Label · Status · Mode · runtime` line, separated from the content by a rule.
+  - Details starts at the task ID instead of repeating source and status, and long values wrap within their column.
+  - Output shows an executor's human-readable display in place of its model-facing result when it has one.
+  - A settled report opens at its first line instead of its end, keeps the position you scroll to, and shows its scroll range in the bottom border when it overflows.
+  - Only a log streams from its file. A report always shows what its executor published, so an oversized Agent report renders as Markdown from its beginning instead of as a tail preview, and Details labels its saved file `Full report`.
+- `/tasks` in a narrow terminal: Escape returns from the inspector to the list and closes the panel only from the list. The footer names the action (`Esc back` or `Esc close`) and drops its lowest-priority hints first.
+- `/tasks` notices appear only when an action did not do what was asked, as a toned warning (`!`) or error (`×`) that clears on the next input or after about four seconds. Successful stop and background requests no longer show a message, and a pending stop confirmation marks its target row with `stop?`.
 - A finished Agent's Output in `/tasks` shows only its final report, whatever its outcome; its tool calls no longer follow the report.
 - Background completion cards no longer end with "Preview of the saved result.", and a failed shell task's card and model notification state its error once instead of repeating it at the end of the output.
 - Concurrency lanes are namespaced by executor kind, so two executors can no longer share a lane by choosing the same key.

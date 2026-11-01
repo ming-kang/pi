@@ -8,15 +8,29 @@ interface Entry {
 
 /** Independent scroll state for each region, with a source-line anchor for resize. */
 export class TaskViewport {
-	follow: boolean;
+	/** Whether the content tails: scrolling to its end resumes following, and it starts following. */
+	private tailing: boolean;
+	private following: boolean;
 	private scroll = 0;
 	private anchor?: { line: number; column: number };
 	private entries: Entry[] = [];
 	private wrapped?: { lines: string[]; width: number };
 	private height = 1;
 	private start = 0;
-	constructor(follow = false) {
-		this.follow = follow;
+	constructor(tails = false) {
+		this.tailing = tails;
+		this.following = tails;
+	}
+	/** Whether the view is pinned to the end of the content. */
+	get follow(): boolean {
+		return this.following;
+	}
+	/** Starts over for content of a different kind: the top, or the tail when it tails. */
+	retarget(tails: boolean): void {
+		this.tailing = tails;
+		this.following = tails;
+		this.scroll = 0;
+		this.anchor = undefined;
 	}
 	layout(lines: string[], width: number, height: number): string[] {
 		this.height = Math.max(1, height);
@@ -46,23 +60,27 @@ export class TaskViewport {
 					offset++;
 			}
 		}
-		this.start = this.follow ? this.max : Math.min(offset, this.max);
+		this.start = this.following ? this.max : Math.min(offset, this.max);
 		return this.entries.slice(this.start, this.start + this.height).map((entry) => entry.text);
 	}
 	private get max(): number {
 		return Math.max(0, this.entries.length - this.height);
 	}
-	move(direction: number, page: boolean, tail: boolean): void {
+	move(direction: number, page: boolean): void {
 		this.scroll = Math.max(0, Math.min(this.max, this.start + direction * (page ? this.height : 1)));
 		const entry = this.entries[this.scroll];
 		this.anchor = entry ? { line: entry.line, column: entry.column } : undefined;
-		this.follow = tail && direction > 0 && this.scroll === this.max;
+		this.following = this.tailing && direction > 0 && this.scroll === this.max;
 	}
-	jump(bottom: boolean, tail: boolean): void {
+	jump(bottom: boolean): void {
 		this.scroll = bottom ? this.max : 0;
 		const entry = this.entries[this.scroll];
 		this.anchor = entry ? { line: entry.line, column: entry.column } : undefined;
-		this.follow = bottom && tail;
+		this.following = bottom && this.tailing;
+	}
+	/** Whether the laid-out content is taller than the viewport. */
+	get overflows(): boolean {
+		return this.entries.length > this.height;
 	}
 	get range(): string {
 		return `${this.entries.length ? this.start + 1 : 0}–${Math.min(this.start + this.height, this.entries.length)}/${this.entries.length}`;
