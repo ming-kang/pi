@@ -10,7 +10,7 @@ import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
-import { ToolExecutionComponent } from "../src/modes/interactive/tool-view/tool-execution.ts";
+import { ToolExecutionComponent } from "./suite/tool-execution.ts";
 
 const examplesDir = join(import.meta.dirname, "../examples/extensions");
 

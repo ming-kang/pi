@@ -16,7 +16,7 @@ import { createReadToolDefinition } from "../src/core/tools/read.ts";
 import { formatReadLineRange } from "../src/core/tools/render-utils.ts";
 import { TreeSelectorComponent } from "../src/modes/interactive/components/tree-selector.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
-import { ToolExecutionComponent } from "../src/modes/interactive/tool-view/tool-execution.ts";
+import { ToolExecutionComponent } from "./suite/tool-execution.ts";
 
 interface HtmlViewer {
 	formatReadLineRange: typeof formatReadLineRange;

@@ -2,8 +2,8 @@ import { Container, type TUI } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../../../src/modes/interactive/theme/theme.ts";
-import { ToolExecutionComponent } from "../../../src/modes/interactive/tool-view/tool-execution.ts";
 import { stripAnsi } from "../../../src/utils/ansi.ts";
+import { ToolExecutionComponent } from "../tool-execution.ts";
 
 type UpdateThinkingBlockVisibility = (this: { chatContainer: Container; ui: TUI }) => void;
 

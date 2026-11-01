@@ -4,8 +4,8 @@ import type { BashOperations } from "../src/core/tools/bash.ts";
 import { createPowerShellToolDefinition } from "../src/core/tools/powershell.ts";
 import { createBashToolDefinition } from "../src/core/tools/shell-tool.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
-import { ToolExecutionComponent } from "../src/modes/interactive/tool-view/tool-execution.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
+import { ToolExecutionComponent } from "./suite/tool-execution.ts";
 
 function createRenderer(command: unknown, timeout?: number): ToolExecutionComponent {
 	const operations: BashOperations = {

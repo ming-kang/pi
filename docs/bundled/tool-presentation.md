@@ -39,7 +39,7 @@ The `Ctrl+B` background hint is not part of a tool row. Once a foreground manage
 
 The look is defined in one place, `src/modes/interactive/tool-view/style.ts`: the marker and rail glyphs, their colors, the spacing between blocks, and which tools fold their result. `FramedComponent` in the same file hangs a component's lines off the marker or the rail and derives the gutter width from the glyphs.
 
-The upstream `components/tool-execution.ts` owns one call's lifecycle: pending, success and error states, expansion, image placement and Kitty conversion, and renderer disposal. The bundled `tool-presentation` extension attaches a TUI-only shell through the existing tool renderer resolver; `tool-view/shell.ts` maps the visual policy to that shell. The old `tool-view/tool-execution.ts` path is only a compatibility adapter for direct source imports, not a second lifecycle implementation.
+The upstream `components/tool-execution.ts` owns one call's lifecycle: pending, success and error states, expansion, image placement and Kitty conversion, and renderer disposal. The bundled `tool-presentation` extension attaches a TUI-only shell through the existing tool renderer resolver; `tool-view/shell.ts` maps the visual policy to that shell. Direct constructors can attach the same shell with `withToolShell()` from `tool-view/shell.ts`; there is no second lifecycle implementation.
 
 `tool-view/chat.ts` owns the chat container that measures tool blocks for spacing and disposes rows when the chat clears. It reads each row's gap policy: upstream rows keep one blank line, while the distribution shell uses the compact policy above. Extension tools and built-in tools use the same shell unless they explicitly own a self shell.
 

@@ -10,10 +10,10 @@ import { withBuiltInRenderers } from "../src/core/tools/renderers/index.ts";
 import { createBashToolDefinition } from "../src/core/tools/shell-tool.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
-import { ToolExecutionComponent } from "../src/modes/interactive/tool-view/tool-execution.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 import * as imageConvert from "../src/utils/image-convert.ts";
 import { createFakeTui } from "./suite/fake-tui.ts";
+import { ToolExecutionComponent } from "./suite/tool-execution.ts";
 
 function createBaseToolDefinition(name = "custom_tool"): ToolDefinition {
 	return {

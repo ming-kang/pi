@@ -11,8 +11,8 @@ import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { PendingToolMap, ToolChatContainer } from "../src/modes/interactive/tool-view/chat.ts";
 import { withToolShell } from "../src/modes/interactive/tool-view/shell.ts";
 import { FramedComponent, gutterWidth, toolStyle } from "../src/modes/interactive/tool-view/style.ts";
-import { ToolExecutionComponent } from "../src/modes/interactive/tool-view/tool-execution.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
+import { ToolExecutionComponent } from "./suite/tool-execution.ts";
 
 function fakeTui(requestRender: () => void = () => {}): TUI {
 	return { requestRender } as unknown as TUI;

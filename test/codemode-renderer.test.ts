@@ -6,7 +6,7 @@ import type { ToolRenderContext } from "../src/core/extensions/types.ts";
 import { codemodeRenderers } from "../src/extensions/codemode/renderer.ts";
 import type { CodemodeToolDetails } from "../src/extensions/codemode/tool.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
-import { ToolExecutionComponent } from "../src/modes/interactive/tool-view/tool-execution.ts";
+import { ToolExecutionComponent } from "./suite/tool-execution.ts";
 
 function render(
 	result: AgentToolResult<CodemodeToolDetails | undefined>,
