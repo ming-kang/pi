@@ -5,7 +5,7 @@ import { KeybindingsManager } from "../../src/core/keybindings.ts";
 import type { TaskSnapshot } from "../../src/core/tasks/types.ts";
 import { TasksMenu } from "../../src/extensions/tasks/ui/manager.ts";
 import type { TasksPanelState } from "../../src/extensions/tasks/ui/model.ts";
-import { theme } from "../../src/modes/interactive/theme/theme.ts";
+import { type Theme, theme } from "../../src/modes/interactive/theme/theme.ts";
 
 const menus: TasksMenu[] = [];
 /** Disposes every menu a harness built; call from afterEach. */
@@ -55,6 +55,7 @@ export function harness(
 			return t?.mode === "foreground" && t.status === "running";
 		}),
 		detach: vi.fn(() => true),
+		presentOutput: vi.fn((_id: string, _width: number, _theme: Theme): string[] | undefined => undefined),
 		retain: vi.fn(() => release),
 		subscribe: (fn: () => void) => {
 			listener = fn;

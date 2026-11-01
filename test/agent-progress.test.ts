@@ -1,9 +1,12 @@
 import { isAbsolute, join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { type Container, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { describe, expect, it, vi } from "vitest";
 import type { TaskControl, TaskUpdate } from "../src/core/tasks/types.ts";
 import { activityTarget, formatActivityDuration, relativeToCwd } from "../src/extensions/agent/activity.ts";
 import { AgentProgress } from "../src/extensions/agent/progress.ts";
+import { agentRenderers } from "../src/extensions/agent/render.ts";
 import { AGENT_MAX_ACTIVITIES, type AgentToolDetails } from "../src/extensions/agent/types.ts";
+import { initTheme, type Theme, theme } from "../src/modes/interactive/theme/theme.ts";
 
 const cwd = resolve("/work/project");
 const win = process.platform === "win32";
@@ -137,5 +140,89 @@ describe("Agent activity durations", () => {
 		const text = [0, 4, 999.4, 999.6, 1000, 1500, 59_940, 59_960, 65_000, 3_600_000].map(formatActivityDuration);
 		expect(text).toEqual(["0ms", "4ms", "999ms", "1.0s", "1.0s", "1.5s", "59.9s", "1m", "1m 5s", "1h"]);
 		expect(formatActivityDuration(undefined)).toBe("");
+	});
+});
+
+/** Tags every styled span with its color, so tests can read both the text and its styling. */
+const tagged = {
+	fg: (color: string, text: string) => `<${color}>${text}</>`,
+	bold: (text: string) => text,
+} as unknown as Theme;
+const plain = (line: string) => line.replace(/<[a-zA-Z]*>|<\/>/gu, "");
+
+describe("Agent styled tool-call list", () => {
+	it("colors glyph, name, target and duration, and keeps the plain columns", () => {
+		const { agent, call } = progress();
+		vi.useFakeTimers();
+		vi.setSystemTime(10_000);
+		call("read", { path: "README.md" }, { durationMs: 4 });
+		call("bash", { command: "make" }, { durationMs: 30, error: "first failure\nsecond" });
+		call("grep", { pattern: "needle" });
+		vi.setSystemTime(22_000);
+		const lines = agent.present(80, tagged) ?? [];
+		vi.useRealTimers();
+		expect(lines).toEqual([
+			"<success>✓</> <toolTitle>read</> <muted>README.md</><dim> · </><dim>4ms</>",
+			"<error>✗</> <toolTitle>bash</> <muted>make</><dim> · </><dim>30ms</>",
+			"       <error>first failure</>",
+			"<warning>…</> <toolTitle>grep</> <muted>needle</><dim> · </><dim>12.0s</>",
+		]);
+	});
+
+	it("shows nothing to present before the first call", () => {
+		expect(progress().agent.present(80, tagged)).toBeUndefined();
+	});
+
+	it("counts earlier calls and never exceeds the width, clipping the target before the duration", () => {
+		const { agent, call } = progress();
+		for (let index = 0; index < AGENT_MAX_ACTIVITIES + 2; index++)
+			call("read", { path: `${"deep/".repeat(20)}file${index}.ts` }, { durationMs: 1500 });
+		call("bash", { command: "x".repeat(300) }, { durationMs: 7, error: "e".repeat(300) });
+		// The real theme paints with escape codes, which take no columns.
+		initTheme("dark");
+		for (const width of [1, 5, 12, 24, 40, 80]) {
+			const lines = agent.present(width, theme) ?? [];
+			expect(lines.length).toBeGreaterThan(0);
+			for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		}
+		const lines = (agent.present(40, theme) ?? []).map(stripTerminalSequences);
+		expect(lines[0]).toBe("… 3 earlier tool calls");
+		expect(lines.find((line) => line.startsWith("✓ read"))).toMatch(/^✓ read .+… · 1\.5s$/u);
+		expect(lines.at(-2)).toMatch(/^✗ bash x+… · 7ms$/u);
+		expect(lines.at(-1)).toMatch(/^ {7}e+…$/u);
+	});
+
+	it("strips terminal sequences an Agent put into its arguments", () => {
+		const { agent, call } = progress();
+		call("bash", { command: "echo \u001b[31mred\u001b[0m \u001b]0;title\u0007done" }, { durationMs: 1 });
+		const [row] = (agent.present(80, tagged) ?? []).map(plain);
+		expect(row).toBe("✓ bash echo red done · 1ms");
+	});
+
+	it("renders the Transcript row and the Tasks Output with the same columns", () => {
+		const { agent, call, updates } = progress();
+		call("read", { path: "a.ts" }, { durationMs: 2 });
+		call("powershell", { command: "Get-Date" }, { durationMs: 65_000 });
+		call("bash", { command: "make" }, { durationMs: 30, error: "boom" });
+		call("grep", { pattern: "needle" });
+		const result = updates.at(-1)!.result;
+		const component = agentRenderers.renderResult(
+			result,
+			{ expanded: true, isPartial: true },
+			tagged,
+			{} as never,
+		) as Container;
+		expect(component.render(80)).toEqual(agent.present(80, tagged));
+		// Settled rows stay one line, and the model-facing status is untouched by the styling.
+		expect(updates.at(-1)?.display).toBe(
+			[
+				"✓ read     a.ts · 2ms",
+				"✓ powershell Get-Date · 1m 5s",
+				"✗ bash     make · 30ms",
+				"           boom",
+				"… grep     needle",
+			].join("\n"),
+		);
+		expect((result.content[0] as { text: string }).text).toBe("Agent running · 4 tool calls · latest: grep needle");
 	});
 });

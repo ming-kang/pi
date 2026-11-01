@@ -24,6 +24,7 @@ import {
 	TaskLookupError,
 } from "../src/core/tasks/types.ts";
 import { waitForFirst } from "../src/core/tasks/wait.ts";
+import type { Theme } from "../src/modes/interactive/theme/theme.ts";
 import { createDeliveryHarness } from "./tasks-delivery-harness.ts";
 
 const result = (text = "done"): AgentToolResult<{ ok: boolean }> => ({
@@ -1435,5 +1436,47 @@ describe("concurrency lanes", () => {
 		await vi.waitFor(() => expect(moved.run).toHaveBeenCalledOnce());
 		moved.completion.resolve({ result: result() });
 		expect((await bg.wait(movedTask!.id)).task.status).toBe("completed");
+	});
+});
+
+describe("live Output presenters", () => {
+	/** The runtime only passes the theme through to the executor. */
+	const paint = { name: "opaque" } as unknown as Theme;
+
+	it("renders a running task through its executor and drops the presenter at settlement", async () => {
+		const bg = service();
+		const present = vi.fn((width: number) => [`live at ${width}`]);
+		const running = job({ background: true, present });
+		const outcome = await bg.execute(running.execution);
+		if (outcome.kind !== "background") throw new Error("Expected handoff");
+		const id = outcome.task.id;
+		expect(bg.presentOutput(id, 40, paint)).toEqual(["live at 40"]);
+		expect(present).toHaveBeenCalledWith(40, paint);
+		// The presenter never leaks into what observers share.
+		expect(Object.keys(bg.get(id))).not.toContain("present");
+		running.completion.resolve({ result: result() });
+		expect((await bg.wait(id)).task.status).toBe("completed");
+		expect(bg.presentOutput(id, 40, paint)).toBeUndefined();
+		expect(present).toHaveBeenCalledOnce();
+	});
+
+	it("has nothing to present for unknown, presenter-less or throwing executors", async () => {
+		const bg = service();
+		const plain = job({ background: true });
+		const broken = job({
+			background: true,
+			present: () => {
+				throw new Error("presenter bug");
+			},
+		});
+		const outcomes = [await bg.execute(plain.execution), await bg.execute(broken.execution)];
+		const [plainId, brokenId] = outcomes.map((outcome) => (outcome.kind === "background" ? outcome.task.id : ""));
+		expect(bg.presentOutput("nope", 40, paint)).toBeUndefined();
+		expect(bg.presentOutput(plainId!, 40, paint)).toBeUndefined();
+		expect(bg.presentOutput(brokenId!, 40, paint)).toBeUndefined();
+		plain.completion.resolve({ result: result() });
+		broken.completion.resolve({ result: result() });
+		await bg.wait(plainId!);
+		await bg.wait(brokenId!);
 	});
 });

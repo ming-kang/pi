@@ -1,9 +1,10 @@
-import { type Component, Container, TruncatedText, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, Container, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AgentToolResult, ToolDefinition, ToolRenderContext } from "../../core/extensions/types.ts";
 import { getTextOutput, startToolTimer, toolTimerText } from "../../core/tools/render-utils.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
-import { activityGlyph, clipText, formatActivityDuration, nameColumnWidth, paddedName, targetOf } from "./activity.ts";
-import type { AgentActivity, AgentToolDetails } from "./types.ts";
+import { clipText, targetOf } from "./activity.ts";
+import { activityLines } from "./activity-lines.ts";
+import type { AgentToolDetails } from "./types.ts";
 
 const EXPANDED_ACTIVITIES = 5;
 
@@ -57,30 +58,6 @@ class AgentCallComponent implements Component {
 	}
 
 	invalidate(): void {}
-}
-
-function activityColor(status: AgentActivity["status"]): "warning" | "success" | "error" | "muted" {
-	switch (status) {
-		case "running":
-			return "warning";
-		case "ok":
-			return "success";
-		case "error":
-			return "error";
-		case "cancelled":
-			return "muted";
-	}
-}
-
-/** The same `glyph name target · duration` columns as the /tasks display, in theme colors. */
-function renderActivity(activity: AgentActivity, nameWidth: number, theme: Theme): string {
-	const target = targetOf(activity);
-	const duration = formatActivityDuration(activity.durationMs);
-	const name = paddedName(activity, nameWidth);
-	return [
-		`${theme.fg(activityColor(activity.status), activityGlyph(activity.status))} ${theme.fg("toolTitle", activity.name)}${name.slice(activity.name.length)}${target ? ` ${theme.fg("muted", target)}` : ""}`,
-		...(duration ? [theme.fg("dim", duration)] : []),
-	].join(theme.fg("dim", " · "));
 }
 
 function detailsOf(result: AgentToolResult<AgentToolDetails> | undefined): AgentToolDetails | undefined {
@@ -145,9 +122,10 @@ export const agentRenderers: AgentRenderer = {
 		// Only live progress carries activities; settled rows stay one line.
 		if (details?.state !== "running" || !options.expanded) return component;
 		const shown = details.activities.slice(-EXPANDED_ACTIVITIES);
-		const nameWidth = nameColumnWidth(shown);
-		for (const activity of shown)
-			component.addChild(new TruncatedText(renderActivity(activity, nameWidth, theme), 0, 0));
+		component.addChild({
+			render: (width) => activityLines(shown, 0, width, theme),
+			invalidate() {},
+		});
 		return component;
 	},
 };

@@ -13,7 +13,7 @@ interface ReadingPosition {
 	read?: TaskRead;
 }
 interface InspectorOptions {
-	host: Pick<TasksContext, "read" | "retain">;
+	host: Pick<TasksContext, "read" | "retain" | "presentOutput">;
 	theme: Theme;
 	requestRender(): void;
 }
@@ -101,6 +101,11 @@ export class TaskInspector {
 	output(width: number): string[] {
 		const task = this.task;
 		if (!task) return [];
+		// A live presentation changes with time, not with the snapshot, so it is never cached.
+		const live = isTaskTerminal(task.status)
+			? undefined
+			: this.options.host.presentOutput(task.id, width, this.options.theme);
+		if (live) return outputLines(task, undefined, this.options.theme, width, live);
 		const read = this.position.read;
 		const cache = this.outputCache;
 		if (cache?.task !== task || cache.read !== read || cache.width !== width)

@@ -117,9 +117,14 @@ export function activityText(activity: AgentActivity, nameWidth = nameColumnWidt
 	return error ? `${line}\n${" ".repeat(3 + nameWidth)}${error}` : line;
 }
 
-/** The /tasks display: a count of calls no longer retained, then one aligned row per call. */
+/** The line standing for calls no longer retained. */
+export function earlierLabel(earlier: number): string {
+	return `… ${earlier} earlier tool ${earlier === 1 ? "call" : "calls"}`;
+}
+
+/** The plain /tasks display: a count of calls no longer retained, then one aligned row per call. */
 export function activitiesText(activities: readonly AgentActivity[], earlier = 0): string {
 	const width = nameColumnWidth(activities);
 	const rows = activities.map((activity) => activityText(activity, width));
-	return (earlier > 0 ? [`… ${earlier} earlier tool ${earlier === 1 ? "call" : "calls"}`, ...rows] : rows).join("\n");
+	return (earlier > 0 ? [earlierLabel(earlier), ...rows] : rows).join("\n");
 }

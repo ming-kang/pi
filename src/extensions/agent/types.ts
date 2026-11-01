@@ -21,6 +21,8 @@ export interface AgentActivity {
 	/** Short display label derived from the original arguments; args remains the full bounded form. */
 	target?: string;
 	status: AgentActivityStatus;
+	/** Epoch milliseconds when the call began, so a running call can show its elapsed time. */
+	startedAt?: number;
 	durationMs?: number;
 	error?: string;
 }

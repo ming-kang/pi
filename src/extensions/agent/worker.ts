@@ -23,6 +23,8 @@ export interface AgentRequest {
 	sessionArtifactDir?: string;
 	/** The launching session file, recorded as the transcript's parent. */
 	parentSession?: string;
+	/** Receives the run's progress as soon as it exists, so a caller can render it live. */
+	onProgress?: (progress: AgentProgress) => void;
 }
 
 function workerPrompt(base: string | undefined): string {
@@ -43,6 +45,7 @@ export async function runWorker(
 ): Promise<TaskCompletion<AgentToolDetails>> {
 	const { signal } = control;
 	const progress = new AgentProgress(control, request.cwd);
+	request.onProgress?.(progress);
 	let session: AgentSession | undefined;
 	let unsubscribe: (() => void) | undefined;
 	let artifacts: AgentArtifacts | undefined;

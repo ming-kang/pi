@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai/compat";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sdk from "../src/core/sdk.ts";
 import { loadEntriesFromFile, SessionManager } from "../src/core/session-manager.ts";
@@ -9,6 +10,7 @@ import { TASK_RECORD_TYPE } from "../src/core/tasks/codec.ts";
 import { projectForModel } from "../src/core/tasks/presentation.ts";
 import { createAgentTool } from "../src/extensions/agent/index.ts";
 import tasksExtension from "../src/extensions/tasks/index.ts";
+import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { createHarness, getMessageText, type Harness } from "./suite/harness.ts";
 
 let harness: Harness;
@@ -181,12 +183,18 @@ describe("Agent delegation", () => {
 		await vi.waitFor(() => expect(harness.session.tasks.get(taskId).display?.text).toMatch(/^✓ read entry.ts · /u));
 		const running = await harness.session.tasks.read(taskId);
 		expect(running.text).toBe("Agent running · 1 tool call · latest: read entry.ts");
+		// The panel gets the same call styled and fitted, from the live execution.
+		initTheme("dark");
+		const live = harness.session.tasks.presentOutput(taskId, 60, theme);
+		expect(live?.map(stripTerminalSequences)).toEqual([expect.stringMatching(/^✓ read entry\.ts · \d+ms$/u)]);
+		expect(live?.[0]).toContain("\u001b[");
 		release();
 		expect((await harness.session.tasks.wait(taskId)).task.status).toBe("completed");
 		expect((await harness.session.tasks.read(taskId)).text).toBe("Final report");
 		const settled = harness.session.tasks.get(taskId);
 		expect(settled.display).toBeUndefined();
 		expect(settled.result?.text).toBe("Final report");
+		expect(harness.session.tasks.presentOutput(taskId, 60, theme)).toBeUndefined();
 	});
 
 	it("publishes aligned tool calls with relative targets and one-line errors while running", async () => {
@@ -229,6 +237,11 @@ describe("Agent delegation", () => {
 		expect(lines[3]).toMatch(/^ {7}\S/u);
 		expect(lines[3]).not.toContain("\n");
 		expect(lines).toHaveLength(4);
+		// The styled list carries the same rows, clipped to the width it is given.
+		initTheme("dark");
+		expect(harness.session.tasks.presentOutput(taskId, 200, theme)?.map(stripTerminalSequences)).toEqual(lines);
+		for (const line of harness.session.tasks.presentOutput(taskId, 30, theme) ?? [])
+			expect(visibleWidth(line)).toBeLessThanOrEqual(30);
 		release();
 		await harness.session.tasks.wait(taskId);
 	});

@@ -1,5 +1,5 @@
 /** The inspector's Details and Output content, computed once per task snapshot and output read. */
-import { Markdown, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { isTaskTerminal, type TaskRead, type TaskSnapshot } from "../../../core/tasks/types.ts";
 import { getMarkdownTheme, highlightCode, type Theme } from "../../../modes/interactive/theme/theme.ts";
 import { cleanTaskText } from "./text.ts";
@@ -54,9 +54,18 @@ export function streamsLog(task: TaskSnapshot): boolean {
 /**
  * Output: a log streams from its file through bounded reads. Any other task shows what its
  * executor published, current with every snapshot: the human `display` when there is one,
- * otherwise the model-facing result.
+ * otherwise the model-facing result. A running task whose executor renders its own Output passes
+ * those `live` lines: they come from trusted extension code, so they are shown as they are, only
+ * clipped to the width.
  */
-export function outputLines(task: TaskSnapshot, read: TaskRead | undefined, theme: Theme, width: number): string[] {
+export function outputLines(
+	task: TaskSnapshot,
+	read: TaskRead | undefined,
+	theme: Theme,
+	width: number,
+	live?: readonly string[],
+): string[] {
+	if (live && !isTaskTerminal(task.status)) return live.map((line) => truncateToWidth(line, Math.max(1, width)));
 	const empty =
 		task.status === "completed"
 			? "Completed with no output."

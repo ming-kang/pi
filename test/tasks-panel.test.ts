@@ -1,6 +1,9 @@
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { KeybindingsManager } from "../src/core/keybindings.ts";
+import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import type { TaskSnapshot } from "../src/core/tasks/types.ts";
+import { TasksMenu } from "../src/extensions/tasks/ui/manager.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { backgroundTask, disposeMenus, harness, mouse, task } from "./fixtures/tasks-panel-harness.ts";
 
@@ -342,6 +345,59 @@ describe("task panel views", () => {
 		expect(h.frame()).toContain("✓ read src/index.ts · 2ms");
 		expect(h.frame()).not.toContain("Agent running");
 		expect(h.frame()).not.toContain("latest:");
+	});
+	describe("live presenter", () => {
+		const live = (overrides: Partial<TaskSnapshot> = {}) =>
+			report({
+				status: "running",
+				endedAt: undefined,
+				result: { text: "Agent running · 1 tool call", truncated: false },
+				display: { text: "plain fallback", truncated: false },
+				...overrides,
+			});
+
+		it("shows the executor's own lines for a running task, at the content width", () => {
+			const h = harness([live()], { width: 100 });
+			h.host.presentOutput.mockImplementation((_id, width, paint) => [
+				`${paint.fg("success", "✓ ")}presented`,
+				`w=${width}`,
+			]);
+			expect(h.frame()).toContain("✓ presented");
+			expect(h.frame()).not.toContain("plain fallback");
+			const [, width] = h.host.presentOutput.mock.calls.at(-1) ?? [];
+			expect(width).toBeGreaterThan(40);
+			expect(width).toBeLessThan(100);
+			expect(h.frame()).toContain(`w=${width}`);
+		});
+
+		it("falls back to the published display without a presenter, and never asks for a settled task", () => {
+			const plain = harness([live()]);
+			expect(plain.frame()).toContain("plain fallback");
+			expect(plain.host.presentOutput).toHaveBeenCalled();
+			const settled = harness([live({ status: "completed", endedAt: 1000 })]);
+			settled.host.presentOutput.mockReturnValue(["should not show"]);
+			expect(settled.frame()).not.toContain("should not show");
+			expect(settled.host.presentOutput).not.toHaveBeenCalled();
+		});
+
+		it("never lets an over-wide line break the panel", () => {
+			const h = harness([live()], { width: 90 });
+			h.host.presentOutput.mockReturnValue(["x".repeat(400), theme.fg("muted", "y".repeat(400))]);
+			const lines = h.menu.render(90);
+			expect(lines.length).toBeGreaterThan(0);
+			for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(90);
+		});
+
+		it("repaints a time-dependent presentation instead of reusing a cached one", async () => {
+			const h = harness([live()]);
+			let seconds = 1;
+			h.host.presentOutput.mockImplementation(() => [`elapsed ${seconds}s`]);
+			expect(h.frame()).toContain("elapsed 1s");
+			seconds = 2;
+			expect(h.frame()).toContain("elapsed 2s");
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(h.tui.requestRender).toHaveBeenCalled();
+		});
 	});
 	it("follows whichever text it shows when announcing truncation", () => {
 		const shown = harness([
@@ -915,5 +971,51 @@ describe("task panel interaction", () => {
 		h.menu.handleInput("k");
 		h.menu.handleInput("\r");
 		expect(h.host.kill).toHaveBeenCalledWith("new");
+	});
+});
+
+describe("task panel with a real runtime", () => {
+	beforeEach(() => initTheme("dark"));
+	afterEach(() => disposeMenus());
+
+	it("falls back to the published display when the executor's presenter throws", async () => {
+		const runtime = new TaskRuntime({ enabled: true });
+		const finish = Promise.withResolvers<{ result: { content: []; details: undefined } }>();
+		const outcome = await runtime.execute({
+			kind: "agent",
+			label: "Agent",
+			title: "Throwing presenter",
+			output: "report",
+			toolCallId: "call",
+			background: true,
+			present: () => {
+				throw new Error("presenter bug");
+			},
+			run: (control) => {
+				control.accept();
+				control.publish({
+					result: { content: [{ type: "text", text: "model status" }], details: undefined },
+					display: "published display",
+				});
+				return finish.promise;
+			},
+		});
+		expect(outcome.kind).toBe("background");
+		const tui = { requestRender: vi.fn(), terminal: { rows: 30, columns: 120 } };
+		const menu = new TasksMenu({
+			host: runtime,
+			tui,
+			theme,
+			keybindings: new KeybindingsManager(),
+			onClose: vi.fn(),
+		});
+		try {
+			const frame = menu.render(120).map(stripTerminalSequences).join("\n");
+			expect(frame).toContain("published display");
+		} finally {
+			menu.dispose();
+			finish.resolve({ result: { content: [], details: undefined } });
+			runtime.close();
+		}
 	});
 });

@@ -1,4 +1,5 @@
-import { isTaskTerminal, type TaskSnapshot } from "./types.ts";
+import type { Theme } from "../../modes/interactive/theme/theme.ts";
+import { isTaskTerminal, type TaskPresenter, type TaskSnapshot } from "./types.ts";
 
 export const EXPIRED_OUTPUT = "Output has expired: the managed log was released; showing the stored result.";
 
@@ -31,6 +32,7 @@ export class TaskRecord {
 	private pins = 0;
 	private cleanup?: OutputCleanup;
 	private expiredReason?: string;
+	private presenter?: TaskPresenter;
 
 	constructor(task: TaskSnapshot) {
 		this.working = task;
@@ -53,8 +55,26 @@ export class TaskRecord {
 		return isTaskTerminal(this.working.status);
 	}
 
+	/** The executor's live Output renderer; held in memory for a running task only. */
+	setPresenter(presenter: TaskPresenter | undefined): void {
+		this.presenter = presenter;
+	}
+
+	/** Live Output while running; `undefined` once settled, without a presenter, or if the presenter throws. */
+	present(width: number, theme: Theme): string[] | undefined {
+		if (this.settled || !this.presenter) return undefined;
+		try {
+			const lines = this.presenter(width, theme);
+			return Array.isArray(lines) ? lines : undefined;
+		} catch {
+			// An executor bug must not break the panel; it falls back to the default view.
+			return undefined;
+		}
+	}
+
 	/** Called once, after the terminal snapshot is final. */
 	settle(): void {
+		this.presenter = undefined;
 		this.resolveSettlement();
 	}
 
