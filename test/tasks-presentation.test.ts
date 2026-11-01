@@ -292,6 +292,8 @@ describe("structured background completion cards", () => {
 			expect(expanded).toContain(item);
 		for (const line of expanded.split("\n").slice(1)) expect(line.startsWith("│")).toBe(true);
 		expect(expanded).not.toContain("[task-completion]");
+		expect(expanded).not.toContain("Preview of the saved result");
+		expect(expanded.trimEnd().endsWith(`Task ID: ${taskId}`)).toBe(true);
 	});
 
 	it("expands and collapses through the native mouse region without modifying the saved message", () => {

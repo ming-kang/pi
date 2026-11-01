@@ -17,6 +17,8 @@ interface TaskSessionOptions {
 	backgroundAllowed?: boolean;
 	/** The main session owns input queues, preflight and idle state. */
 	canDeliver(): boolean;
+	/** Whether the model-facing management tool is active, which new background work requires. Omitted: no gate. */
+	managementActive?(): boolean;
 	/**
 	 * Start a completion turn, or enqueue the message and return waitForPersistence().
 	 * The host owns input routing; this adapter owns the queued delivery's lifetime.
@@ -33,7 +35,11 @@ export interface QuarantinedTaskSettlement {
 	usage?: Usage;
 }
 
-/** Session persistence and completion delivery; execution supervision stays in TaskRuntime. */
+/**
+ * Session persistence and completion delivery; execution supervision stays in TaskRuntime.
+ * A handed-off task that settles on the current service is persisted here and then enqueued in
+ * TaskDelivery, which keeps it retained until the model has seen it.
+ */
 export class TaskSession {
 	private readonly options: TaskSessionOptions;
 	private _service: TaskRuntime;
@@ -65,6 +71,11 @@ export class TaskSession {
 		const previous = this.waitInterrupt;
 		this.waitInterrupt = new AbortController();
 		previous.abort();
+	}
+
+	/** The active tools changed: availability of background detaching may have too. */
+	toolsChanged(): void {
+		this.service.refresh();
 	}
 
 	noteCompaction(): void {
@@ -112,12 +123,25 @@ export class TaskSession {
 		return new Set(leafId === null ? [] : this.options.manager.getBranch(leafId).map((entry) => entry.id));
 	}
 
+	/**
+	 * Close the current service, release the retention its undelivered completions hold, and
+	 * drain its executors within the grace period. Lifecycle operations pair this with replaceService().
+	 */
+	shutdown(graceMs?: number): Promise<void> {
+		return this.service.shutdown(graceMs);
+	}
+
 	/** Called after the old service's bounded shutdown, while lifecycle delivery is paused. */
 	replaceService(): void {
 		this.contextReminder.reset();
 		this.service.close();
 		this._service = this.createService();
 		this.delivery.retry();
+	}
+
+	/** Acknowledge that a task's completion reached its consumer by other means than automatic delivery. */
+	acknowledgeDelivery(taskId: string): void {
+		this.delivery.acknowledge(taskId);
 	}
 
 	private createService(): TaskRuntime {
@@ -129,6 +153,7 @@ export class TaskSession {
 		const service: TaskRuntime = new TaskRuntime({
 			enabled: this.enabled,
 			backgroundAllowed,
+			canManageBackground: () => this.options.managementActive?.() ?? true,
 			session: {
 				stoppedByTreeNavigation: (targetId): TaskSnapshot[] => this.stoppedByTreeNavigation(targetId, service),
 			},
@@ -136,19 +161,25 @@ export class TaskSession {
 				get interruptSignal() {
 					return interrupts();
 				},
-				bind: (toolCallId, taskId) => this.delivery.bindWait(service, toolCallId, taskId),
+				hold: (taskIds) => this.delivery.hold(taskIds),
+				bind: (toolCallId, taskId) => this.delivery.bindWait(toolCallId, taskId),
 			},
 			anchor: () => manager.getLeafId(),
 			onCleanupError: (message) => this.warn("task_cleanup", message),
+			onClosed: () => this.delivery.discard(service),
 			onSettled: (task, usage) => {
+				const current = !this.disposed && this.service === service;
 				const onBranch =
 					manager.getSessionId() === sessionId &&
 					(task.anchorId === null || manager.getBranch().some((entry) => entry.id === task.anchorId));
-				if (this.disposed || this.service !== service || !onBranch) {
-					this.quarantineSettlement({ sessionId, generation, task, usage }, sessionFile);
-					return;
+				try {
+					if (current && onBranch) this.persistSettlement(task, usage);
+					else this.quarantineSettlement({ sessionId, generation, task, usage }, sessionFile);
+				} finally {
+					// Delivery still follows a failed write, which the runtime reports. A completion hidden on
+					// another branch waits for its branch; a replaced service delivers nothing.
+					if (current && task.mode === "background") this.delivery.enqueue(service, task.id);
 				}
-				this.persistSettlement(task, usage);
 			},
 		});
 		this.restoreHistory(service);

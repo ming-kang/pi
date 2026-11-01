@@ -4,7 +4,7 @@ import type { MessageRenderOptions } from "../../../core/extensions/types.ts";
 import type { CustomMessage } from "../../../core/messages.ts";
 import { readVersionedTask } from "../../../core/tasks/codec.ts";
 import { runtimeLabel } from "../../../core/tasks/format.ts";
-import type { TaskFact, TaskStatus } from "../../../core/tasks/types.ts";
+import { TASKS_TOOL_NAME, type TaskFact, type TaskStatus } from "../../../core/tasks/types.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import { FramedComponent } from "../../../modes/interactive/tool-view/style.ts";
 import { statusName, statusView } from "./status.ts";
@@ -172,13 +172,12 @@ class CompletionCard implements Component {
 			if (id) {
 				lines.push("", ...wrapTextWithAnsi(`Task ID: ${id}`, inner).map((line) => theme.fg("dim", line)));
 			}
-			lines.push(theme.fg("dim", "Preview of the saved result."));
 		}
 		const bounded =
 			lines.length > CARD_ROWS
 				? [
 						...lines.slice(0, CARD_ROWS - 1),
-						theme.fg("dim", "… card shortened; use tasks read for retained output"),
+						theme.fg("dim", `… card shortened; use ${TASKS_TOOL_NAME} read for retained output`),
 					]
 				: lines;
 		return bounded.map((line) => " ".repeat(padding) + truncateToWidth(line, inner, "…") + " ".repeat(padding));

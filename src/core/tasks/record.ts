@@ -1,10 +1,6 @@
-import type { TaskSnapshot } from "./types.ts";
+import { isTaskTerminal, type TaskSnapshot } from "./types.ts";
 
-/**
- * none: running, or answered inline by its tool call; pending: a settled handoff
- * awaiting automatic delivery; claimed: handed to the host; delivered: acknowledged.
- */
-export type TaskDeliveryState = "none" | "pending" | "claimed" | "delivered";
+export const EXPIRED_OUTPUT = "Output has expired: the managed log was released; showing the stored result.";
 
 function freeze<T>(value: T): T {
 	if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
@@ -14,38 +10,52 @@ function freeze<T>(value: T): T {
 	return value;
 }
 
+type OutputCleanup = () => void | Promise<void>;
+
 /**
- * The runtime's state for one task: its working snapshot, retention counters and delivery
- * state. The working snapshot changes only through `update()`, which also drops the frozen
- * copy that readers share, so a mutation can never leave a stale snapshot behind.
+ * The runtime's state for one task: its working snapshot, whether it is on the selected branch,
+ * the pins that keep it retained, and the managed output it owns. Whether a completion reached
+ * the model is a session concern held outside the runtime as a pin. Every lifecycle fact changes
+ * through a named method here; the working snapshot changes only through `update()`, which also
+ * drops the frozen copy that readers share, so a mutation can never leave a stale snapshot behind.
  */
 export class TaskRecord {
 	/** Read-only view of the working copy; change it with update(). */
 	readonly task: Readonly<TaskSnapshot>;
-	settled = false;
-	/** Whether the launch anchor is on the selected branch. */
-	visible = true;
-	pins = 0;
-	deliveryHolds = 0;
-	cleanup?: () => void | Promise<void>;
-	readError?: string;
-	readonly waiters = new Set<() => void>();
+	/** Settles once the task is terminal and its final snapshot is stored. Never rejects. */
+	readonly settlement: Promise<void>;
 	private readonly working: TaskSnapshot;
 	private frozen?: TaskSnapshot;
-	private state: TaskDeliveryState = "none";
+	private resolveSettlement!: () => void;
+	private onBranch = true;
+	private pins = 0;
+	private cleanup?: OutputCleanup;
+	private expiredReason?: string;
 
 	constructor(task: TaskSnapshot) {
 		this.working = task;
 		this.task = task;
+		this.settlement = new Promise<void>((resolve) => {
+			this.resolveSettlement = resolve;
+		});
 	}
 
 	/** A terminal record rebuilt from persisted history: nothing is left to run or deliver. */
 	static restored(task: TaskSnapshot, readError: string | undefined): TaskRecord {
 		const record = new TaskRecord(task);
-		record.settled = true;
-		record.state = "delivered";
-		record.readError = readError;
+		record.expiredReason = readError;
+		record.settle();
 		return record;
+	}
+
+	/** Terminal: nothing is left to run. Derived from the status so it can never disagree with it. */
+	get settled(): boolean {
+		return isTaskTerminal(this.working.status);
+	}
+
+	/** Called once, after the terminal snapshot is final. */
+	settle(): void {
+		this.resolveSettlement();
 	}
 
 	update(mutate: (task: TaskSnapshot) => void): void {
@@ -62,40 +72,57 @@ export class TaskRecord {
 		return this.frozen;
 	}
 
-	get delivery(): TaskDeliveryState {
-		return this.state;
+	/** Whether the launch anchor is on the selected branch. */
+	get visible(): boolean {
+		return this.onBranch;
 	}
 
-	/** A settled handoff the host has not yet been told about. */
-	queueDelivery(): void {
-		this.state = "pending";
+	setVisible(visible: boolean): void {
+		this.onBranch = visible;
 	}
 
-	/** The result was answered inline, or the host acknowledged its delivery. */
-	acknowledge(): void {
-		this.state = "delivered";
+	/** Keep the record, and its output, retained until the returned release runs. Idempotent. */
+	pin(): () => void {
+		this.pins++;
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			this.pins--;
+		};
 	}
 
-	/** Only explicit result-delivery holds and active waits delay an automatic completion. */
-	get deliverable(): boolean {
-		return this.visible && this.state === "pending" && this.waiters.size === 0 && this.deliveryHolds === 0;
-	}
-
-	claim(): boolean {
-		if (!this.deliverable) return false;
-		this.state = "claimed";
-		return true;
-	}
-
-	/** Return a claimed record to pending after a failed delivery. */
-	unclaim(): boolean {
-		if (this.state !== "claimed") return false;
-		this.state = "pending";
-		return true;
-	}
-
-	/** Delivered, unpinned and unwatched: bounded history that retention may evict. */
+	/** Settled and unpinned: bounded history that retention may evict. */
 	get inHistory(): boolean {
-		return this.settled && this.state === "delivered" && !this.pins && !this.waiters.size;
+		return this.settled && this.pins === 0;
+	}
+
+	/** Why the output could not be read from a log: it expired, or was never kept. */
+	get readError(): string | undefined {
+		return this.expiredReason;
+	}
+
+	/** Register the one output file this task owns; `cleanup` deletes it when retention lets go. */
+	attachOutput(path: string, cleanup?: OutputCleanup): void {
+		if (this.cleanup) throw new Error("Managed output is already registered");
+		this.cleanup = cleanup;
+		this.update((task) => {
+			task.outputPath = path;
+		});
+	}
+
+	/**
+	 * Release the managed output once nothing retains it. Returns the owner's cleanup to run, if
+	 * any; the snapshot keeps its final bounded text, so an expired file is never needed again.
+	 */
+	expireOutput(): OutputCleanup | undefined {
+		if (!this.settled || this.pins > 0 || !this.cleanup) return undefined;
+		const cleanup = this.cleanup;
+		this.cleanup = undefined;
+		this.update((task) => {
+			task.outputPath = undefined;
+		});
+		this.expiredReason = EXPIRED_OUTPUT;
+		return cleanup;
 	}
 }

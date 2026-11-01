@@ -13,7 +13,9 @@ import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { getTaskUsageRecord } from "../src/core/usage-totals.ts";
+import tasksExtension from "../src/extensions/tasks/index.ts";
 import type { ExtensionFactory } from "../src/index.ts";
+import { sessionDelivery } from "./tasks-delivery-harness.ts";
 
 describe("AgentSessionRuntime background lifecycle", () => {
 	const cleanups: Array<() => Promise<void> | void> = [];
@@ -61,7 +63,8 @@ describe("AgentSessionRuntime background lifecycle", () => {
 			modelRuntime,
 			model: faux.getModel(),
 			resourceLoaderOptions: {
-				extensionFactories: [extensionFactory],
+				// Background work needs the tasks management tool, which this extension provides.
+				extensionFactories: [tasksExtension, extensionFactory],
 				noSkills: true,
 				noPromptTemplates: true,
 				noThemes: true,
@@ -213,7 +216,7 @@ describe("AgentSessionRuntime background lifecycle", () => {
 		expect(ledger).toHaveLength(1);
 		expect(ledger[0]).toMatchObject({ taskId: outcome.task.id, usage: { input: 7 } });
 		expect(runtimeHost.session.tasks.list()).toMatchObject([{ id: outcome.task.id, status: "cancelled" }]);
-		expect(runtimeHost.session.tasks.pendingNotifications()).toEqual([]);
+		expect(sessionDelivery(runtimeHost.session).pending()).toEqual([]);
 	});
 
 	it("persists late ignored-abort accounting beside the source, never into a replacement session", async () => {

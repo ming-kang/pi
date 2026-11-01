@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { boundText } from "./output.ts";
 import type { TaskRuntime } from "./runtime.ts";
-import { isTaskTerminal, type TaskSnapshot } from "./types.ts";
+import { isTaskTerminal, TASKS_TOOL_NAME, type TaskSnapshot } from "./types.ts";
 
 function taskLine(task: TaskSnapshot): string {
 	const title = boundText(task.title.replace(/\s+/gu, " ").trim(), 240);
@@ -35,7 +35,7 @@ export class TaskContextReminder {
 					type: "text",
 					text: [
 						"Context was compacted. These background tasks are still active; do not start duplicates.",
-						"Use tasks list/read/wait/kill to inspect or control them. Completion arrives automatically.",
+						`Use ${TASKS_TOOL_NAME} list/read/wait/kill to inspect or control them. Completion arrives automatically.`,
 						...tasks.map(taskLine),
 					].join("\n"),
 				},

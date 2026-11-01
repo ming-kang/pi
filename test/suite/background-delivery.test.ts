@@ -2,6 +2,8 @@ import { fauxAssistantMessage, type Usage } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../../src/core/agent-session.ts";
+import tasksExtension from "../../src/extensions/tasks/index.ts";
+import { sessionDelivery } from "../tasks-delivery-harness.ts";
 import { createHarness, type Harness } from "./harness.ts";
 
 const usage: Usage = {
@@ -46,6 +48,8 @@ describe("background completion delivery across an interrupted queue", () => {
 		harness = await createHarness({
 			settings: { compaction: { enabled: false } },
 			extensionFactories: [
+				// Background work needs the tasks management tool.
+				tasksExtension,
 				(pi) => {
 					pi.registerTool({
 						name: "hold",
@@ -105,7 +109,11 @@ describe("background completion delivery across an interrupted queue", () => {
 			releaseTool();
 			await prompting;
 			await vi.waitFor(() => expect(notices()).toHaveLength(1));
-			expect(session.tasks.pendingNotifications().map((task) => task.id)).toEqual([first.id]);
+			expect(
+				sessionDelivery(session)
+					.pending()
+					.map((task) => task.id),
+			).toEqual([first.id]);
 			expect(
 				sessionManager
 					.getEntries()
@@ -118,7 +126,7 @@ describe("background completion delivery across an interrupted queue", () => {
 			expect(messages.map((entry) => entry.customType)).toEqual(["rewritten-notice", "rewritten-notice", "aside"]);
 			expect(String(messages[0].content)).toContain(second.id);
 			expect(String(messages[1].content)).toContain(first.id);
-			expect(session.tasks.pendingNotifications()).toEqual([]);
+			expect(sessionDelivery(session).pending()).toEqual([]);
 			const ledger = sessionManager
 				.getEntries()
 				.flatMap((entry) => (entry.type === "custom" && entry.customType === "task-record" ? [entry.data] : []));

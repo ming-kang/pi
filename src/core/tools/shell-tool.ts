@@ -1,7 +1,7 @@
 import { type Static, Type } from "typebox";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { TaskRuntime } from "../tasks/runtime.ts";
-import type { TaskCompletion, TaskControl, TaskToolOutcome } from "../tasks/types.ts";
+import { TASKS_TOOL_NAME, type TaskCompletion, type TaskControl, type TaskToolOutcome } from "../tasks/types.ts";
 import {
 	type BashOperations,
 	type BashToolOptions,
@@ -57,17 +57,25 @@ export type BashRenderState = {
 	dispose?: () => void;
 };
 
-/** Translate terminal shell failures to the native foreground tool contract once. */
+/**
+ * Translate terminal shell failures to the native foreground tool contract once. A task result
+ * holds the command's output only; the foreground text is that output followed by the failure.
+ */
 function shellToolResult(completion: TaskCompletion<BashToolDetails | undefined>) {
 	const status = completion.status;
-	if (completion.result.structuredContent) return completion.result;
+	const output = completion.result.content
+		.filter((part) => part.type === "text")
+		.map((part) => part.text)
+		.join("\n");
+	const withError = (error: string) => (output ? `${output}\n\n${error}` : error);
+	if (completion.result.structuredContent) {
+		if (!completion.result.isError || !completion.error) return completion.result;
+		return { ...completion.result, content: [{ type: "text" as const, text: withError(completion.error) }] };
+	}
 	if (status === "failed" || status === "timeout" || status === "cancelled") {
-		const text = completion.result.content
-			.filter((part) => part.type === "text")
-			.map((part) => part.text)
-			.join("\n");
-		const message = completion.error ? text || completion.error : `${text ? `${text}\n\n` : ""}Command ${status}`;
-		throw new Error(message);
+		throw new Error(
+			completion.error ? withError(completion.error) : `${output ? `${output}\n\n` : ""}Command ${status}`,
+		);
 	}
 	return completion.result;
 }
@@ -84,7 +92,7 @@ export function createShellToolDefinition(
 	return {
 		name: config.name,
 		label: config.label,
-		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr, truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a temp file. Optionally provide a timeout in seconds (no default). Choose the mode per call: foreground (default) blocks until the command exits — use it when your next step needs the output; background: true returns immediately with a task ID — use it for long-running work (builds, servers, watchers, big test suites) or when you have independent work to continue. A handoff is not completion: the result arrives later as an automatic completion notification; meanwhile use tasks read to inspect output, tasks wait with an ID for one task or without one for any running task, and tasks kill to stop it. Steering interrupts only a wait, never execution. Background output is limited to 20 MiB; an expired tasks wait window never stops the command.`,
+		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr, truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first); the full output is saved to a temp file. Optionally provide a timeout in seconds (no default). Choose the mode per call: foreground (default) blocks until the command exits — use it when your next step needs the output; background: true returns immediately with a task ID — use it for long-running work (builds, servers, watchers, big test suites) or when you have independent work to continue. A handoff is not completion: the result arrives later as an automatic completion notification; meanwhile use ${TASKS_TOOL_NAME} read to inspect output, ${TASKS_TOOL_NAME} wait with an ID for one task or without one for any running task, and ${TASKS_TOOL_NAME} kill to stop it. Steering interrupts only a wait, never execution. Background output is limited to 20 MiB; an expired ${TASKS_TOOL_NAME} wait window never stops the command.`,
 		promptSnippet: config.promptSnippet,
 		promptGuidelines: exposeSessionEnvironment && config.promptGuidelines ? [...config.promptGuidelines] : undefined,
 		parameters: bashSchema,
@@ -144,14 +152,14 @@ export function createShellToolDefinition(
 				standalone?.close();
 			}
 			if (outcome.kind === "result") return shellToolResult(outcome);
-			const tail = `Task ID: ${outcome.task.id}. Status: ${outcome.task.status}. Completion arrives automatically as a notification — do not poll or immediately wait on it; continue with other work or hand back to the user. Use tasks read to inspect output, tasks wait only when your next step is blocked on a result (one ID or any running task; prefer foreground next time in that case), or tasks kill to stop it.`;
+			const tail = `Task ID: ${outcome.task.id}. Status: ${outcome.task.status}. Completion arrives automatically as a notification — do not poll or immediately wait on it; continue with other work or hand back to the user. Use ${TASKS_TOOL_NAME} read to inspect output, ${TASKS_TOOL_NAME} wait only when your next step is blocked on a result (one ID or any running task; prefer foreground next time in that case), or ${TASKS_TOOL_NAME} kill to stop it.`;
 			// Shell execution can become background work in two ways, and the model has to know which
 			// one it got: a submitted background command starts from an empty log, while a detached
 			// one already holds output and keeps its original timeout.
 			const handoff =
-				background === true
+				outcome.reason === "submitted"
 					? `Command handed to background. ${tail}`
-					: `Command moved to the background while it was running, by the user. The execution continues unchanged — no restart, and a supplied timeout is still measured from command startup. Output produced so far is already in the log, so tasks read now returns partial output, not a fresh start. ${tail}`;
+					: `Command moved to the background while it was running, by the user. The execution continues unchanged — no restart, and a supplied timeout is still measured from command startup. Output produced so far is already in the log, so ${TASKS_TOOL_NAME} read now returns partial output, not a fresh start. ${tail}`;
 			return {
 				structuredContent: { task_id: outcome.task.id, status: outcome.task.status },
 				content: [

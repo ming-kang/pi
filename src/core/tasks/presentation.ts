@@ -2,7 +2,7 @@ import type { CustomMessage } from "../messages.ts";
 import { truncateHead, truncateTail } from "../tools/truncate.ts";
 import { TASK_SNAPSHOT_VERSION } from "./codec.ts";
 import { boundTail, boundText, TASK_DETAILS_BYTES, TASK_RESULT_BYTES } from "./output.ts";
-import type { TaskSnapshot, TaskStatus, TaskText } from "./types.ts";
+import { TASKS_TOOL_NAME, type TaskSnapshot, type TaskStatus, type TaskText } from "./types.ts";
 
 /** Automatic model turns get only a small readable log tail; reports arrive whole. */
 const MODEL_LOG_BYTES = 8 * 1024;
@@ -19,8 +19,8 @@ export interface TaskCompletionDetails {
 const singleLine = (value: string) => value.replace(/\s+/gu, " ").trim();
 const bytes = (value: string) => Buffer.byteLength(value);
 
-const OMISSION = "\n[Saved output truncated; use tasks read for retained task details.]";
-const EARLIER_OMISSION = "[Earlier output truncated; use tasks read for retained task details.]\n";
+const OMISSION = `\n[Saved output truncated; use ${TASKS_TOOL_NAME} read for retained task details.]`;
+const EARLIER_OMISSION = `[Earlier output truncated; use ${TASKS_TOOL_NAME} read for retained task details.]\n`;
 
 /** A report keeps its beginning, where its summary is. */
 function modelHead(value: TaskText, maxBytes: number, lines: number): string {

@@ -17,7 +17,7 @@ import type {
 } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
-import type { TaskControl, TaskRuntimeOptions } from "../src/core/tasks/types.ts";
+import type { TaskControl } from "../src/core/tasks/types.ts";
 import { runKill, runList, runRead, runWait } from "../src/extensions/tasks/tool/actions.ts";
 import type { tasksSchema } from "../src/extensions/tasks/tool/schema.ts";
 import type { TasksDetails } from "../src/extensions/tasks/tool/types.ts";
@@ -28,6 +28,7 @@ import {
 	type TasksRenderState,
 } from "../src/extensions/tasks/ui/render.ts";
 import { initTheme, type Theme, theme } from "../src/modes/interactive/theme/theme.ts";
+import { createDeliveryHarness } from "./tasks-delivery-harness.ts";
 import { createTasksHarness } from "./test-tasks-ui.ts";
 
 function textOf(result: AgentToolResult<unknown>): string {
@@ -49,8 +50,8 @@ afterEach(async () => {
 	for (const service of services.splice(0)) await service.shutdown();
 	vi.useRealTimers();
 });
-function running(kind: "bash" | "custom" = "bash", options: TaskRuntimeOptions = {}) {
-	const service = new TaskRuntime({ enabled: true, ...options });
+function running(kind: "bash" | "custom" = "bash", options: Parameters<typeof createDeliveryHarness>[0] = {}) {
+	const { runtime: service, pending, delivery } = createDeliveryHarness({ enabled: true, ...options });
 	services.push(service);
 	let finish!: () => void;
 	let control!: TaskControl<undefined>;
@@ -72,6 +73,8 @@ function running(kind: "bash" | "custom" = "bash", options: TaskRuntimeOptions =
 	});
 	return {
 		service,
+		pending,
+		delivery,
 		outcome,
 		finish,
 		get control() {
@@ -144,7 +147,7 @@ describe("public Background management", () => {
 		h.finish();
 		const finished = await runWait(h.service, { action: "wait", taskId: id });
 		expect(finished.details.taskId).toBe(id);
-		expect(h.service.pendingNotifications()).toMatchObject([{ id }]);
+		expect(h.pending()).toMatchObject([{ id }]);
 		expect((await runRead(h.service, { action: "read", taskId: id })).details).not.toHaveProperty("backgroundTaskId");
 	});
 	it("wait cancellation only cancels the waiter, then final output remains readable", async () => {
@@ -171,8 +174,8 @@ describe("public Background management", () => {
 
 	it("returns steering interruption separately from timeout without consuming the task", async () => {
 		const interrupt = new AbortController();
-		const bind = vi.fn();
-		const h = running("bash", { waits: { interruptSignal: interrupt.signal, bind } });
+		const h = running("bash", { interruptSignal: interrupt.signal });
+		const bind = vi.spyOn(h.delivery, "bindWait");
 		await h.outcome;
 		const id = h.service.list()[0]!.id;
 		const waiting = runWait(h.service, { action: "wait", taskId: id }, undefined, "wait-call");
@@ -266,6 +269,10 @@ describe("public Background management", () => {
 		services.push(service);
 		const ids: string[] = [];
 		for (let index = 0; index < 12; index++) {
+			let release!: () => void;
+			const gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
 			await service.execute({
 				kind: "bash",
 				title: `task ${index + 1}`,
@@ -273,9 +280,11 @@ describe("public Background management", () => {
 				background: true,
 				async run(control) {
 					control.accept();
+					await gate;
 					return { result: { content: [{ type: "text", text: "done" }], details: undefined } };
 				},
 			});
+			release();
 			const id = service.list()[index]!.id;
 			await service.wait(id, { timeoutMs: 1000 });
 			ids.push(id);
@@ -325,6 +334,7 @@ describe("public Background management", () => {
 			background: true,
 			async run(control) {
 				control.accept();
+				await gate;
 				return { result: { content: [{ type: "text", text: "done" }], details: undefined } };
 			},
 		});
@@ -342,7 +352,7 @@ describe("public Background management", () => {
 		await foreground;
 	});
 	it("lists exactly the matched tasks for an ambiguous prefix even outside the current branch", async () => {
-		const service = new TaskRuntime({ enabled: true, anchor: () => "anchor" });
+		const { runtime: service } = createDeliveryHarness({ anchor: () => "anchor" });
 		services.push(service);
 		const gates: Array<() => void> = [];
 		const start = (title: string) =>
@@ -362,7 +372,7 @@ describe("public Background management", () => {
 		for (const release of gates) release();
 		const ids = service.list().map((task) => task.id);
 		expect(ids).toHaveLength(2);
-		// Settle before leaving the branch: handed-off tasks keep delivery pending,
+		// Settle before leaving the branch: undelivered completions stay leased,
 		// so trim retains them as invisible records instead of expiring them.
 		await Promise.all(ids.map((id) => service.wait(id, { timeoutMs: 1000 })));
 		await service.cancelOutsideBranch(new Set());
@@ -382,6 +392,10 @@ describe("public Background management", () => {
 		services.push(service);
 		const ids: string[] = [];
 		for (let index = 0; index < 7; index++) {
+			let release!: () => void;
+			const gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
 			await service.execute({
 				kind: "bash",
 				title: `task ${index + 1}`,
@@ -389,9 +403,11 @@ describe("public Background management", () => {
 				background: true,
 				async run(control) {
 					control.accept();
+					await gate;
 					return { result: { content: [{ type: "text", text: "done" }], details: undefined } };
 				},
 			});
+			release();
 			const id = service.list()[index]!.id;
 			await service.wait(id, { timeoutMs: 1000 });
 			ids.push(id);

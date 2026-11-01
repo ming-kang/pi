@@ -121,7 +121,6 @@ export class AgentProgress {
 			status,
 			error,
 			usage: this.usage,
-			display: this.display(),
 			result: {
 				content: [{ type: "text", text: report }],
 				details: { version: 2, state: status, taskId: this.control.id, ...(error ? { error } : {}) },

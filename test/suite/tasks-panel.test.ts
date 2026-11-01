@@ -3,6 +3,7 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../../src/core/keybindings.ts";
 import { isTaskTerminal } from "../../src/core/tasks/types.ts";
+import tasksExtension from "../../src/extensions/tasks/index.ts";
 import { TasksMenu } from "../../src/extensions/tasks/ui/manager.ts";
 import type { TasksPanelState } from "../../src/extensions/tasks/ui/model.ts";
 import { initTheme, theme } from "../../src/modes/interactive/theme/theme.ts";
@@ -11,7 +12,11 @@ import { createHarness } from "./harness.ts";
 
 it("inspects concurrent shell/report work through detach, stop, completion, reload and branch return", async () => {
 	initTheme("dark");
-	const harness = await createHarness({ settings: { compaction: { enabled: false } } });
+	const harness = await createHarness({
+		settings: { compaction: { enabled: false } },
+		// Background work needs the tasks management tool.
+		extensionFactories: [tasksExtension],
+	});
 	const { session, sessionManager } = harness;
 	harness.setResponses(Array.from({ length: 12 }, () => fauxAssistantMessage("Task result received.")));
 	await session.bindExtensions({ tasksEnabled: true });

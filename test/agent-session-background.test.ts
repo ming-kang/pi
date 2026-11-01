@@ -1,106 +1,17 @@
 import { join } from "node:path";
-import { Agent, type StreamFn } from "@earendil-works/pi-agent-core";
-import {
-	type AssistantMessage,
-	createAssistantMessageEventStream,
-	fauxAssistantMessage,
-	registerFauxProvider,
-	streamSimple,
-	type Usage,
-} from "@earendil-works/pi-ai/compat";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { createAssistantMessageEventStream, fauxAssistantMessage, streamSimple } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentSession } from "../src/core/agent-session.ts";
-import { AuthStorage } from "../src/core/auth-storage.ts";
-import type { ExtensionFactory } from "../src/core/extensions/types.ts";
+import { describe, expect, it, vi } from "vitest";
+import type { AgentSession } from "../src/core/agent-session.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import { SettingsManager } from "../src/core/settings-manager.ts";
 import { TASK_RECORD_TYPE } from "../src/core/tasks/codec.ts";
-import type { TaskControl } from "../src/core/tasks/types.ts";
-import tasksExtension from "../src/extensions/tasks/index.ts";
-import { createInMemoryModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
-import { createTestExtensionsResult, createTestResourceLoader, userMsg } from "./utilities.ts";
-
-const usage: Usage = {
-	input: 10,
-	output: 20,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 30,
-	cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 0.3 },
-};
+import { backgroundSessionTest, usage } from "./background-session-host.ts";
+import { sessionDelivery } from "./tasks-delivery-harness.ts";
+import { userMsg } from "./utilities.ts";
 
 describe("session-owned background host", () => {
-	const cleanups: (() => void)[] = [];
-	afterEach(() => {
-		while (cleanups.length) cleanups.pop()?.();
-	});
-
-	async function host(
-		backgroundAllowed = true,
-		factory?: ExtensionFactory,
-		responses?: AssistantMessage[],
-		manager = SessionManager.inMemory(),
-		streamFn: StreamFn = streamSimple,
-	) {
-		const faux = registerFauxProvider();
-		faux.setResponses(responses ?? [fauxAssistantMessage("noticed"), fauxAssistantMessage("user first")]);
-		cleanups.push(() => faux.unregister());
-		const auth = AuthStorage.inMemory();
-		await auth.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "test" }));
-		const modelRuntime = getModelRuntime(await createInMemoryModelRegistry(auth));
-		const model = faux.getModel();
-		modelRuntime.registerProvider(model.provider, {
-			api: model.api,
-			baseUrl: model.baseUrl,
-			models: [model],
-		});
-		const session = new AgentSession({
-			agent: new Agent({
-				initialState: { model: faux.getModel(), tools: [] },
-				getApiKey: () => "test",
-				streamFn,
-			}),
-			sessionManager: manager,
-			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
-			cwd: process.cwd(),
-			modelRuntime,
-			backgroundAllowed,
-			resourceLoader: createTestResourceLoader({
-				extensionsResult: await createTestExtensionsResult(factory ? [tasksExtension, factory] : [tasksExtension]),
-			}),
-		});
-		cleanups.push(() => session.dispose());
-		return session;
-	}
-
-	async function task(session: AgentSession) {
-		let finish!: () => void;
-		let control!: TaskControl<undefined>;
-		const done = new Promise<void>((resolve) => {
-			finish = resolve;
-		});
-		const outcome = await session.tasks.execute({
-			kind: "custom",
-			title: "group",
-			toolCallId: "call",
-			background: true,
-			run: async (ctx) => {
-				control = ctx;
-				ctx.accept();
-				await done;
-				return {
-					result: {
-						content: [{ type: "text", text: `result ${"界".repeat(30_000)}` }],
-						details: undefined,
-						usage,
-					},
-				};
-			},
-		});
-		if (outcome.kind !== "background") throw new Error("expected handoff");
-		return { id: outcome.task.id, finish, control };
-	}
+	const { host, task } = backgroundSessionTest();
 
 	it("is disabled unbound and a host prohibition survives binding, direct enable and reload", async () => {
 		const session = await host();
@@ -170,7 +81,7 @@ describe("session-owned background host", () => {
 			},
 		});
 		expect(Buffer.byteLength(String(notification.content))).toBeLessThanOrEqual(48 * 1024);
-		expect(session.tasks.pendingNotifications()).toHaveLength(0);
+		expect(sessionDelivery(session).pending()).toHaveLength(0);
 		await session.tasks.read(execution.id);
 		await session.tasks.wait(execution.id, { timeoutMs: 0 });
 		expect(
@@ -217,7 +128,7 @@ describe("session-owned background host", () => {
 				});
 				marker = session.tasks.list().find((task) => task.mode === "foreground")!.id;
 			}
-			const delivered = vi.spyOn(session.tasks, "markDelivered");
+			const delivered = vi.spyOn(sessionDelivery(session), "acknowledge");
 			await session.prompt("marker");
 			expect(delivered).not.toHaveBeenCalled();
 			execution.finish();
@@ -264,7 +175,7 @@ describe("session-owned background host", () => {
 				await readGate;
 				return read(...args);
 			});
-			const delivered = vi.spyOn(session.tasks, "markDelivered");
+			const delivered = vi.spyOn(sessionDelivery(session), "acknowledge");
 			const append = session.sessionManager.appendMessage.bind(session.sessionManager);
 			vi.spyOn(session.sessionManager, "appendMessage").mockImplementation((message) => {
 				if (message.role === "toolResult") expect(delivered).not.toHaveBeenCalled();
@@ -291,7 +202,7 @@ describe("session-owned background host", () => {
 				else expect(result?.role === "toolResult" && result.details).toEqual({});
 			}
 			expect(delivered).toHaveBeenCalledExactlyOnceWith(id);
-			expect(session.tasks.pendingNotifications()).toEqual([]);
+			expect(sessionDelivery(session).pending()).toEqual([]);
 		},
 	);
 
@@ -306,7 +217,7 @@ describe("session-owned background host", () => {
 		await session.reload();
 		await session.reload();
 		expect(session.tasks.list()).toMatchObject([{ id: execution.id, status: "completed" }]);
-		expect(session.tasks.pendingNotifications()).toEqual([]);
+		expect(sessionDelivery(session).pending()).toEqual([]);
 		expect(session.sessionManager.getEntries()).toEqual(before);
 		expect(session.getSessionStats().tokens.total).toBe(30);
 		resume();
@@ -315,7 +226,7 @@ describe("session-owned background host", () => {
 		const restored = await host(true, undefined, undefined, session.sessionManager);
 		expect(restored.tasks.list()).toMatchObject([{ id: execution.id, status: "completed" }]);
 		expect(restored.getSessionStats().tokens.total).toBe(30);
-		expect(restored.tasks.pendingNotifications()).toEqual([]);
+		expect(sessionDelivery(restored).pending()).toEqual([]);
 	});
 
 	it("restores only valid current-branch envelopes and merges tree history without duplicate IDs", async () => {
@@ -341,7 +252,7 @@ describe("session-owned background host", () => {
 		session.sessionManager.appendMessage(userMsg("later"));
 		await session.navigateTree(resultLeaf);
 		expect(session.tasks.list()).toHaveLength(1);
-		expect(session.tasks.pendingNotifications()).toEqual([]);
+		expect(sessionDelivery(session).pending()).toEqual([]);
 		expect(session.getSessionStats().tokens.total).toBe(30);
 	});
 
@@ -419,7 +330,7 @@ describe("session-owned background host", () => {
 		}
 		await session.reload();
 		expect(session.tasks.list()).toHaveLength(32);
-		expect(session.tasks.pendingNotifications()).toEqual([]);
+		expect(sessionDelivery(session).pending()).toEqual([]);
 		expect(session.getSessionStats().tokens.total).toBe(30);
 	});
 
@@ -553,7 +464,7 @@ describe("session-owned background host", () => {
 		const session = await host();
 		const warning = vi.fn();
 		await session.bindExtensions({ tasksEnabled: true, onError: warning });
-		const pending = vi.spyOn(session.tasks, "pendingNotifications").mockImplementation(() => {
+		const pending = vi.spyOn(sessionDelivery(session), "pending").mockImplementation(() => {
 			throw new Error("observer escaped");
 		});
 		session.retryTaskNotifications();
@@ -658,7 +569,7 @@ describe("session-owned background host", () => {
 		expect(roles.indexOf("custom")).toBeGreaterThan(roles.indexOf("toolResult"));
 		// Steering keeps the completion inside the run that was already active: no new turn.
 		expect(runs).toBe(1);
-		expect(session.tasks.pendingNotifications()).toEqual([]);
+		expect(sessionDelivery(session).pending()).toEqual([]);
 	});
 
 	it("keeps a completion claimed while it waits in the steering queue for the next run", async () => {
@@ -699,13 +610,13 @@ describe("session-owned background host", () => {
 		await session.abort();
 		await prompting;
 		expect(session.messages.some((message) => message.role === "custom")).toBe(false);
-		expect(session.tasks.pendingNotifications()).toEqual([]);
+		expect(sessionDelivery(session).pending()).toEqual([]);
 		await session.prompt("next");
 		await session.waitForIdle();
 		const roles = session.messages.map((message) => message.role);
 		expect(roles.filter((role) => role === "custom")).toHaveLength(1);
 		expect(roles.indexOf("custom")).toBeGreaterThan(roles.lastIndexOf("user"));
-		expect(session.tasks.pendingNotifications()).toEqual([]);
+		expect(sessionDelivery(session).pending()).toEqual([]);
 	});
 
 	it("releases a completion the run emitted but never persisted", async () => {
@@ -755,12 +666,12 @@ describe("session-owned background host", () => {
 		// deliver it: the claim is released instead of waiting for a message that never lands.
 		await prompting;
 		await vi.waitFor(() => expect(warning).toHaveBeenCalledWith(expect.objectContaining({ event: "task_delivery" })));
-		expect(session.tasks.pendingNotifications()).toHaveLength(1);
+		expect(sessionDelivery(session).pending()).toHaveLength(1);
 		persist.mockRestore();
 		session.retryTaskNotifications();
-		const delivered = vi.spyOn(session.tasks, "markDelivered");
+		const delivered = vi.spyOn(sessionDelivery(session), "acknowledge");
 		await vi.waitFor(() => expect(delivered).toHaveBeenCalledWith(execution.id));
-		expect(session.tasks.pendingNotifications()).toEqual([]);
+		expect(sessionDelivery(session).pending()).toEqual([]);
 		expect(session.sessionManager.getEntries().filter((entry) => entry.type === "custom_message")).toHaveLength(1);
 	});
 
@@ -784,12 +695,12 @@ describe("session-owned background host", () => {
 			session.tasks.setEnabled(true);
 			await new Promise((resolve) => setTimeout(resolve, 20));
 			expect(deliver).toHaveBeenCalledOnce();
-			expect(session.tasks.pendingNotifications()).toHaveLength(1);
+			expect(sessionDelivery(session).pending()).toHaveLength(1);
 			deliver.mockRestore();
 			session.retryTaskNotifications();
 			await vi.waitFor(() => expect(session.messages.some((message) => message.role === "custom")).toBe(true));
 			await session.waitForIdle();
-			expect(session.tasks.pendingNotifications()).toHaveLength(0);
+			expect(sessionDelivery(session).pending()).toHaveLength(0);
 		},
 	);
 
@@ -801,12 +712,12 @@ describe("session-owned background host", () => {
 		const execution = await task(session);
 		execution.finish();
 		await vi.waitFor(() => expect(warning).toHaveBeenCalledWith(expect.objectContaining({ event: "task_delivery" })));
-		expect(session.tasks.pendingNotifications()).toHaveLength(1);
+		expect(sessionDelivery(session).pending()).toHaveLength(1);
 		deliver.mockRestore();
 		await session.prompt("next");
 		await vi.waitFor(() => expect(session.messages.some((message) => message.role === "custom")).toBe(true));
 		await session.waitForIdle();
-		expect(session.tasks.pendingNotifications()).toEqual([]);
+		expect(sessionDelivery(session).pending()).toEqual([]);
 	});
 
 	it("keeps a completion pending without a model instead of failure-marking it", async () => {
@@ -820,14 +731,14 @@ describe("session-owned background host", () => {
 			const execution = await task(session);
 			execution.finish();
 			await new Promise((resolve) => setTimeout(resolve, 20));
-			expect(session.tasks.pendingNotifications()).toHaveLength(1);
+			expect(sessionDelivery(session).pending()).toHaveLength(1);
 			expect(prompting).not.toHaveBeenCalled();
 			expect(warning).not.toHaveBeenCalledWith(expect.objectContaining({ event: "task_delivery" }));
 			session.agent.state.model = model;
 			session.retryTaskNotifications();
 			await vi.waitFor(() => expect(session.messages.some((message) => message.role === "custom")).toBe(true));
 			await session.waitForIdle();
-			expect(session.tasks.pendingNotifications()).toEqual([]);
+			expect(sessionDelivery(session).pending()).toEqual([]);
 		} finally {
 			session.agent.state.model = model;
 		}
@@ -851,7 +762,7 @@ describe("session-owned background host", () => {
 			.map((entry) => (entry.type === "custom_message" ? entry.customType : undefined))
 			.filter((customType) => customType !== undefined);
 		expect(customTypes).toEqual(["task-completion", "aside"]);
-		expect(session.tasks.pendingNotifications()).toEqual([]);
+		expect(sessionDelivery(session).pending()).toEqual([]);
 	});
 
 	it("retains nextTurn context when a completion turn fails before persistence", async () => {
@@ -897,7 +808,7 @@ describe("session-owned background host", () => {
 		execution.finish();
 		await vi.waitFor(() => expect(persist.mock.calls.some(([type]) => type === "second-aside")).toBe(true));
 		await session.waitForIdle();
-		expect(session.tasks.pendingNotifications()).toEqual([]);
+		expect(sessionDelivery(session).pending()).toEqual([]);
 		persist.mockRestore();
 		await session.prompt("continue");
 		expect(
@@ -915,12 +826,12 @@ describe("session-owned background host", () => {
 			});
 		});
 		await session.bindExtensions({ tasksEnabled: true });
-		const delivered = vi.spyOn(session.tasks, "markDelivered");
+		const delivered = vi.spyOn(sessionDelivery(session), "acknowledge");
 		const execution = await task(session);
 		execution.finish();
 		await vi.waitFor(() => expect(delivered).toHaveBeenCalledWith(execution.id));
 		await session.waitForIdle();
-		expect(session.tasks.pendingNotifications()).toEqual([]);
+		expect(sessionDelivery(session).pending()).toEqual([]);
 	});
 
 	it("acknowledges a persisted notification even when extensions replace its metadata", async () => {
@@ -935,7 +846,7 @@ describe("session-owned background host", () => {
 		execution.finish();
 		await vi.waitFor(() => expect(session.messages.some((message) => message.role === "custom")).toBe(true));
 		await session.waitForIdle();
-		expect(session.tasks.pendingNotifications()).toHaveLength(0);
+		expect(sessionDelivery(session).pending()).toHaveLength(0);
 		session.retryTaskNotifications();
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(session.sessionManager.getEntries().filter((entry) => entry.type === "custom_message")).toHaveLength(1);
@@ -978,7 +889,7 @@ describe("session-owned background host", () => {
 		await session.reload();
 		expect(ledgerAtShutdown).toBe(true);
 		expect(session.tasks.list()).toMatchObject([{ status: "cancelled" }]);
-		expect(session.tasks.pendingNotifications()).toEqual([]);
+		expect(sessionDelivery(session).pending()).toEqual([]);
 		expect(session.getSessionStats().tokens.total).toBe(30);
 		expect(session.messages).toHaveLength(0);
 	});

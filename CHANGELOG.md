@@ -4,6 +4,29 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- `AgentSession.acknowledgeTaskDelivery(id)` tells the session that a direct SDK waiter consumed a background result, so the model is not notified about it again.
+- Background outcomes of `TasksContext.execute()` carry `reason: "submitted" | "detached"`, so executors no longer re-derive how their caller was released.
+
+### Changed
+
+- A finished Agent's Output in `/tasks` shows only its final report, whatever its outcome; its tool calls no longer follow the report.
+- Background completion cards no longer end with "Preview of the saved result.", and a failed shell task's card and model notification state its error once instead of repeating it at the end of the output.
+- Concurrency lanes are namespaced by executor kind, so two executors can no longer share a lane by choosing the same key.
+- **Breaking:** background work, submitted or detached, is admitted only while the `tasks` tool is active, because the model could otherwise start work it cannot read, wait for or stop. When `builtin:tasks` is disabled or the tool is deactivated, `background: true` and every detach path are rejected without starting anything; work admitted earlier keeps running and delivering.
+- **Breaking (extension and SDK API):** a task's `mode` is `background` only once its caller has been released with a background outcome. A detach requested while the executor is still preparing waits for its acceptance, and a task answered inline stays `foreground` everywhere: `tasks list`, the statusline count, the `waitAny` cohort and saved records.
+- **Breaking (extension and SDK API):** a terminal task snapshot's `display` comes only from its completion; the last progress display no longer survives settlement. In `/tasks`, `display` replaces the result as the human view instead of being appended to it.
+
+### Removed
+
+- **Breaking (SDK):** `session.tasks.markDelivered()` and the other delivery-ledger methods of `TaskRuntime` (`pendingNotifications()`, `claimNotification()`, `releaseNotification()`, `holdDelivery()`) are removed, along with `TaskDeliveryLedger`. Completion delivery is owned by the session; use `session.acknowledgeTaskDelivery(id)` after consuming a result directly.
+
+### Fixed
+
+- A standalone `TaskRuntime` with background enabled no longer keeps every settled background record forever and then rejects all background work once its retention limit is reached.
+- A task moved to the background while its executor was still preparing, and then answered inline, is no longer reported and saved as a background task.
+
 ## [1.4.9] - 2026-10-31
 
 ### Added

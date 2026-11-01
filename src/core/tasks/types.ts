@@ -3,6 +3,11 @@ import type { Usage } from "@earendil-works/pi-ai/compat";
 
 /** An executor-owned machine source: the task ID prefix, never a dispatch key for the runtime. */
 export type TaskKind = string;
+/**
+ * Where the task actually runs. `background` exactly when its caller was released with a
+ * background outcome; a caller that is waiting, or was asked to leave but is still held while
+ * the executor prepares, is `foreground`.
+ */
 export type TaskMode = "foreground" | "background";
 export const TASK_TERMINAL_STATUSES = ["completed", "partial", "failed", "cancelled", "timeout"] as const;
 export type TaskTerminalStatus = (typeof TASK_TERMINAL_STATUSES)[number];
@@ -51,7 +56,11 @@ export interface TaskSnapshot {
 	outputPath?: string;
 	/** Bounded model-readable result text. */
 	result?: TaskText;
-	/** Additional human-only Output text; model-facing reads use the result instead. */
+	/**
+	 * The executor's human-only view. In /tasks it replaces the result as what a person reads;
+	 * model-facing reads always use `result`. A terminal snapshot has one only if the completion
+	 * supplied it: the last progress display does not survive settlement.
+	 */
 	display?: TaskText;
 	error?: string;
 }
@@ -59,7 +68,7 @@ export interface TaskSnapshot {
 export interface TaskUpdate<T> {
 	/** Model-readable progress; also forwarded to a foreground caller's onUpdate. */
 	result: AgentToolResult<T>;
-	/** Additional human-only Output text. */
+	/** The live human-only view while running; replaces the result in /tasks and ends at settlement. */
 	display?: string;
 	/** Cumulative usage so far, settled once if the execution ends without a final usage. */
 	usage?: Usage;
@@ -69,7 +78,10 @@ export interface TaskCompletion<T> {
 	result: AgentToolResult<T>;
 	/** Defaults to completed, or cancelled when the task was already cancelled. */
 	status?: TaskTerminalStatus;
-	/** Additional human-only Output text, excluded from tasks read and completion context. */
+	/**
+	 * The terminal human-only view. In /tasks it replaces the result as what a person reads; model-facing
+	 * reads and completion context always use `result`. Without it, the terminal snapshot has no display.
+	 */
 	display?: string;
 	/** Terminal diagnostic, stored independently of log slices and bounded to 4096 bytes. */
 	error?: string;
@@ -82,7 +94,9 @@ export interface TaskCompletion<T> {
 export interface TaskControl<T> {
 	readonly id: string;
 	readonly signal: AbortSignal;
+	/** Actual placement: `background` only once the caller was released. */
 	readonly mode: TaskMode;
+	/** Called once the caller is released and the mode becomes `background`. */
 	onModeChange(listener: (mode: TaskMode) => void): () => void;
 	/** The executor's own preflight passed; from now on the caller may be handed off to the background. */
 	accept(): void;
@@ -105,8 +119,9 @@ export interface TaskExecution<T> {
 	toolCallId: string;
 	background?: boolean;
 	/**
-	 * At most `limit` executions sharing `key` run at once. Later ones wait as queued tasks
-	 * whose `run` starts when a slot frees; a queued task can be handed off or cancelled.
+	 * At most `limit` executions sharing `key` run at once; lanes belong to one `kind`, so another
+	 * executor may reuse the key. Later ones wait as queued tasks whose `run` starts when a slot
+	 * frees; a queued task can be handed off or cancelled.
 	 */
 	concurrency?: { key: string; limit: number };
 	signal?: AbortSignal;
@@ -114,9 +129,13 @@ export interface TaskExecution<T> {
 	run(control: TaskControl<T>): Promise<TaskCompletion<T>>;
 }
 
+/**
+ * How a tool call ends. A `background` outcome says why the caller was released: `submitted`
+ * when it asked for background, `detached` when it was moved while the work ran.
+ */
 export type TaskToolOutcome<T> =
 	| { kind: "result"; result: AgentToolResult<T>; status: TaskTerminalStatus; error?: string }
-	| { kind: "background"; task: TaskSnapshot };
+	| { kind: "background"; task: TaskSnapshot; reason: "submitted" | "detached" };
 
 /** Which slice of a task's output to read. Defaults to the last 8 KiB. */
 export interface TaskReadOptions {
@@ -197,31 +216,15 @@ export interface TaskWaitHost {
 	/** Current steering signal. Aborting it ends management waits only, never execution. */
 	readonly interruptSignal: AbortSignal;
 	/**
+	 * Keep `taskIds` out of automatic delivery until the returned release runs. The runtime holds
+	 * the observed records for the whole observation: before waiting, until after `bind`.
+	 */
+	hold(taskIds: readonly string[]): () => void;
+	/**
 	 * A wait observed a settled background task and its `toolCallId` is known. Called while the
-	 * runtime still holds delivery; the host takes over until that tool result persists.
+	 * observation hold is still in place; the host takes over until that tool result persists.
 	 */
 	bind(toolCallId: string, taskId: string): void;
-}
-
-/**
- * What TaskDelivery consumes from the runtime. The runtime keeps only the per-record facts that
- * retention and admission need (a settled handoff is undelivered, claimed or delivered, and a
- * record under a hold is never a candidate); pausing, failure tracking, the in-flight delivery
- * and wait receipts belong to TaskDelivery.
- */
-export interface TaskDeliveryLedger {
-	readonly enabled: boolean;
-	list(): TaskSnapshot[];
-	/** Settled handoffs eligible for automatic delivery: visible, unclaimed, unobserved and unheld. */
-	pendingNotifications(): TaskSnapshot[];
-	/** Take a pending notification; false when it is no longer a candidate. */
-	claimNotification(id: string): boolean;
-	/** Return a claimed notification to pending after a failed delivery. */
-	releaseNotification(id: string): void;
-	/** Acknowledge a persisted delivery or wait result. */
-	markDelivered(id: string): void;
-	/** Keep a record out of automatic delivery, and its output retained, until released. */
-	holdDelivery(id: string): () => void;
 }
 
 /** Session-bound public capability. Captured instances close on runtime replacement. */
@@ -277,7 +280,23 @@ export interface TaskRuntimeOptions {
 	onCleanupError?: (message: string) => void;
 	/** Synchronous persistence before terminal observers or notifications. */
 	onSettled?: (task: TaskSnapshot, usage: Usage | undefined) => void;
+	/**
+	 * Whether the host can supervise new background work, such as its management tool being
+	 * active. Gates admission and detaching only; work already admitted is unaffected.
+	 */
+	canManageBackground?: () => boolean;
+	/** The runtime closed: a host holding retention pins for it must release them so output cleanup runs. */
+	onClosed?: () => void;
 }
+
+/**
+ * The model-facing management tool, owned by the bundled `builtin:tasks` extension. Background
+ * work is admitted only while it is active, so the model can always read, wait for and stop what
+ * it starts. Model-facing copy names it through this constant.
+ */
+export const TASKS_TOOL_NAME = "tasks";
+
+export const TASK_MANAGEMENT_REJECTION = `Background execution needs the ${TASKS_TOOL_NAME} tool to read, wait for and stop the work, and it is not active. Activate the ${TASKS_TOOL_NAME} tool or run in the foreground. No work was started.`;
 
 export const TASK_BACKGROUND_REJECTION =
 	"Background execution is not permitted in this host. Run with background: false or omit background. No work was started.";

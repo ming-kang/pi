@@ -1,20 +1,53 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { readVersionedTask } from "./codec.ts";
 import { errorText, resultText } from "./output.ts";
-import { TaskRecord } from "./record.ts";
+import { EXPIRED_OUTPUT, TaskRecord } from "./record.ts";
 import type { TaskSnapshot } from "./types.ts";
 
-export const EXPIRED_OUTPUT = "Output has expired: the managed log was released; showing the stored result.";
+const isForeground = (task: TaskSnapshot) => task.mode === "foreground";
 
-function oldestTask(tasks: Iterable<TaskSnapshot>): TaskSnapshot | undefined {
-	let oldest: TaskSnapshot | undefined;
-	for (const task of tasks) {
-		if (!oldest || task.endedAt! < oldest.endedAt!) oldest = task;
-	}
-	return oldest;
+export interface RestoreLimits {
+	/** Room left in the foreground history. */
+	foreground: number;
+	/** Room left in the background history. */
+	background: number;
+	/** Room left overall, which protected runtime records can shrink below both histories. */
+	total: number;
 }
 
-const isForeground = (task: TaskSnapshot) => task.mode === "foreground";
+/**
+ * Which saved terminal snapshots to rehydrate, as a pure function of input order and limits:
+ * the newest `endedAt` per ID (a later input wins ties), then the newest few of each history
+ * within its room, then the total room, dropping the oldest foreground records before any
+ * background one because the transcript already shows foreground output. Returned oldest first.
+ */
+export function selectRestorable(tasks: readonly TaskSnapshot[], limits: RestoreLimits): TaskSnapshot[] {
+	const newest = new Map<string, TaskSnapshot>();
+	for (const task of tasks) {
+		const previous = newest.get(task.id);
+		if (previous && previous.endedAt! > task.endedAt!) continue;
+		// Re-inserting keeps arrival order meaningful for ties: the later input is the newer one.
+		newest.delete(task.id);
+		newest.set(task.id, task);
+	}
+	// A stable sort keeps arrival order among equal times, so the oldest is the first of its ties.
+	const oldestFirst = [...newest.values()].sort((left, right) => left.endedAt! - right.endedAt!);
+	const newestOf = (group: TaskSnapshot[], room: number) => group.slice(Math.max(0, group.length - room));
+	const keep = new Set([
+		...newestOf(oldestFirst.filter(isForeground), limits.foreground),
+		...newestOf(
+			oldestFirst.filter((task) => !isForeground(task)),
+			limits.background,
+		),
+	]);
+	const kept = oldestFirst.filter((task) => keep.has(task));
+	const dropped = Math.max(0, kept.length - limits.total);
+	if (dropped === 0) return kept;
+	const doomed = new Set(
+		[...kept.filter(isForeground), ...kept.filter((task) => !isForeground(task))].slice(0, dropped),
+	);
+	return kept.filter((task) => !doomed.has(task));
+}
 
 /** Retained snapshots and output leases. This store never owns executable handles. */
 export class TaskStore {
@@ -68,11 +101,6 @@ export class TaskStore {
 		return this.all().filter((record) => record.visible);
 	}
 
-	/** Settled handoffs eligible for automatic delivery. */
-	deliverable(): TaskRecord[] {
-		return this.all().filter((record) => record.deliverable);
-	}
-
 	/** Records plus output cleanups still running; admission bounds this. */
 	retainedCount(): number {
 		return this.records.size + this.cleanups.size;
@@ -101,33 +129,23 @@ export class TaskStore {
 			0,
 			Math.min(foregroundCapacity + backgroundCapacity, this.maxRetained - this.retainedCount()),
 		);
-		const newest = new Map<string, TaskSnapshot>();
+		const saved: TaskSnapshot[] = [];
 		for (const value of records) {
 			const task = readVersionedTask(value);
 			if (!task) continue;
 			const existing = this.records.get(task.id);
 			if (existing) {
-				if (existing.settled) existing.visible = true;
+				if (existing.settled) existing.setVisible(true);
 				continue;
 			}
-			if (capacity === 0) continue;
-			const previous = newest.get(task.id);
-			if (previous && previous.endedAt! > task.endedAt!) continue;
-			newest.delete(task.id);
-			const inline = isForeground(task);
-			const limit = inline ? foregroundCapacity : backgroundCapacity;
-			if (limit === 0) continue;
-			newest.set(task.id, task);
-			const group = [...newest.values()].filter((candidate) => isForeground(candidate) === inline);
-			if (group.length > limit) newest.delete(oldestTask(group)!.id);
-			if (newest.size > capacity) {
-				// Protected runtime records can leave less room than both histories allow.
-				// Restore background results before foreground ones, which the transcript shows.
-				const inlineTasks = [...newest.values()].filter(isForeground);
-				newest.delete(oldestTask(inlineTasks.length ? inlineTasks : newest.values())!.id);
-			}
+			saved.push(task);
 		}
-		for (const task of [...newest.values()].sort((a, b) => a.endedAt! - b.endedAt!)) {
+		const selected = selectRestorable(saved, {
+			foreground: foregroundCapacity,
+			background: backgroundCapacity,
+			total: capacity,
+		});
+		for (const task of selected) {
 			const content = toolResults.get(task.toolCallId);
 			if (!task.result && content) task.result = resultText({ content, details: undefined });
 			// Logs never outlive the runtime that wrote them.
@@ -138,14 +156,8 @@ export class TaskStore {
 	}
 
 	private cleanupOutput(record: TaskRecord): void {
-		if (!record.settled || record.pins || record.waiters.size || !record.cleanup) return;
-		const cleanup = record.cleanup;
-		record.cleanup = undefined;
-		// Snapshots retain final bounded text; expired files are never needed to render history.
-		record.update((task) => {
-			task.outputPath = undefined;
-		});
-		record.readError = EXPIRED_OUTPUT;
+		const cleanup = record.expireOutput();
+		if (!cleanup) return;
 		const pending = Promise.resolve()
 			.then(cleanup)
 			.catch((error: unknown) => {
@@ -159,7 +171,7 @@ export class TaskStore {
 		this.cleanups.add(pending);
 	}
 
-	/** Pending delivery, active reads and pins have their own bounded retention allowance. */
+	/** Settled, unpinned records: the bounded history. Pins (reads, the panel, undelivered completions) have their own allowance. */
 	private historyRecords(): TaskRecord[] {
 		return this.all().filter((record) => record.inHistory);
 	}
@@ -169,10 +181,10 @@ export class TaskStore {
 			for (const record of this.records.values()) this.cleanupOutput(record);
 			return;
 		}
-		// Undelivered notifications and claims are never evicted. Admission bounds all retention.
+		// Pinned records, such as undelivered completions, are never evicted. Admission bounds all retention.
 		const history = this.historyRecords();
-		// Delivered history can be restored from branch snapshots; hidden rows must
-		// not occupy the current branch's history budget. Pending results stay owned.
+		// History can be restored from branch snapshots; hidden rows must not occupy the
+		// current branch's history budget. Pinned results stay owned.
 		const expired = history.filter((record) => !record.visible);
 		for (const inline of [false, true]) {
 			const group = history.filter((record) => record.visible && isForeground(record.task) === inline);

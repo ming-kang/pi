@@ -1,4 +1,5 @@
 import type { ToolDefinition } from "../../core/extensions/types.ts";
+import { TASKS_TOOL_NAME } from "../../core/tasks/types.ts";
 import { boundedText, runKill, runList, runRead, runWait } from "./tool/actions.ts";
 import { TASKS_PROMPT_GUIDELINES, TASKS_PROMPT_SNIPPET, TASKS_TOOL_DESCRIPTION, tasksSchema } from "./tool/schema.ts";
 import type { TasksDetails } from "./tool/types.ts";
@@ -6,8 +7,8 @@ import { renderTasksCall, renderTasksResult, type TasksRenderState } from "./ui/
 
 export function createTasksToolDefinition(): ToolDefinition<typeof tasksSchema, TasksDetails, TasksRenderState> {
 	return {
-		name: "tasks",
-		label: "tasks",
+		name: TASKS_TOOL_NAME,
+		label: TASKS_TOOL_NAME,
 		description: TASKS_TOOL_DESCRIPTION,
 		promptSnippet: TASKS_PROMPT_SNIPPET,
 		promptGuidelines: TASKS_PROMPT_GUIDELINES,

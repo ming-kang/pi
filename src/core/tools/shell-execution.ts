@@ -217,7 +217,8 @@ export async function runShellCommand(
 							...(failure ? { isError: true } : {}),
 						}
 					: {}),
-				content: [{ type: "text", text: failure ? `${text ? `${text}\n\n` : ""}${failure.error}` : text }],
+				// The command's output only: its failure is the completion's `error`, composed where a result is shown.
+				content: [{ type: "text", text }],
 				details,
 			},
 		};

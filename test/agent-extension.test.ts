@@ -6,9 +6,16 @@ import * as sdk from "../src/core/sdk.ts";
 import { TASK_RECORD_TYPE } from "../src/core/tasks/codec.ts";
 import { projectForModel } from "../src/core/tasks/presentation.ts";
 import { createAgentTool } from "../src/extensions/agent/index.ts";
+import tasksExtension from "../src/extensions/tasks/index.ts";
 import { createHarness, getMessageText, type Harness } from "./suite/harness.ts";
 
 let harness: Harness;
+/** Background work needs the tasks management tool, so these sessions load the Tasks extension. */
+async function createBackgroundHarness(options: Parameters<typeof createHarness>[0] = {}) {
+	const created = await createHarness({ ...options, extensionFactories: [tasksExtension] });
+	await created.session.bindExtensions({ tasksEnabled: true });
+	return created;
+}
 afterEach(() => {
 	harness?.cleanup();
 	vi.restoreAllMocks();
@@ -51,8 +58,9 @@ describe("Agent delegation", () => {
 			input: { label: "Prompt", text: "Inspect entry.ts and report the export" },
 		});
 		expect(task.facts).toContainEqual(["Model", `${harness.models[0]!.provider}/${harness.models[0]!.id}`]);
-		expect(task.display?.text).toContain("Tool calls");
-		expect(task.display?.text).toContain("✓ read entry.ts · ");
+		// A settled Agent publishes no display, so /tasks shows its report alone.
+		expect(task.display).toBeUndefined();
+		expect(task.result?.text).toContain("entry.ts:1 exports");
 		expect(task.outputPath).toBeUndefined();
 		expect((await harness.session.tasks.read(task.id)).text).toContain("## Report");
 		const records = harness.sessionManager
@@ -90,8 +98,7 @@ describe("Agent delegation", () => {
 	});
 
 	it("keeps an oversized background report available after handoff", async () => {
-		harness = await createHarness({ settings: { compaction: { enabled: false } } });
-		await harness.session.bindExtensions({ tasksEnabled: true });
+		harness = await createBackgroundHarness({ settings: { compaction: { enabled: false } } });
 		const resumeNotifications = harness.session.pauseTaskNotifications();
 		try {
 			const report = `BACKGROUND\n${"x".repeat(26 * 1024)}`;
@@ -118,8 +125,7 @@ describe("Agent delegation", () => {
 	});
 
 	it("reads a one-line status while running and keeps tool activity for the human Output view", async () => {
-		harness = await createHarness({ settings: { compaction: { enabled: false } } });
-		await harness.session.bindExtensions({ tasksEnabled: true });
+		harness = await createBackgroundHarness({ settings: { compaction: { enabled: false } } });
 		harness.session.pauseTaskNotifications();
 		writeFileSync(join(harness.tempDir, "entry.ts"), "export const answer = 42;\n");
 		let release!: () => void;
@@ -153,7 +159,31 @@ describe("Agent delegation", () => {
 		release();
 		expect((await harness.session.tasks.wait(taskId)).task.status).toBe("completed");
 		expect((await harness.session.tasks.read(taskId)).text).toBe("Final report");
-		expect(harness.session.tasks.get(taskId).display?.text).toContain("Tool calls");
+		const settled = harness.session.tasks.get(taskId);
+		expect(settled.display).toBeUndefined();
+		expect(settled.result?.text).toBe("Final report");
+	});
+
+	it("settles a failed Agent with its diagnostic as the result and no display", async () => {
+		harness = await createBackgroundHarness({ settings: { compaction: { enabled: false } } });
+		harness.session.pauseTaskNotifications();
+		harness.setResponses([
+			fauxAssistantMessage(fauxToolCall("bash", { command: "echo working" }), { stopReason: "toolUse" }),
+			fauxAssistantMessage("Partial findings", { stopReason: "error", errorMessage: "Model unavailable" }),
+		]);
+		const handoff = await createAgentTool().execute(
+			"failed-agent",
+			{ prompt: "Inspect entry.ts", background: true },
+			undefined,
+			undefined,
+			harness.session.extensionRunner.createToolContext("failed-agent", undefined),
+		);
+		const taskId = handoff.details!.taskId;
+		expect((await harness.session.tasks.wait(taskId)).task.status).toBe("failed");
+		const task = harness.session.tasks.get(taskId);
+		expect(task.display).toBeUndefined();
+		expect(task.result?.text).toContain("Partial findings");
+		expect(task.result?.text).toContain("Model unavailable");
 	});
 
 	it("honors declined project trust without dropping repository instructions", async () => {
@@ -266,6 +296,7 @@ describe("Agent delegation", () => {
 			);
 			expect(result.details?.state).toBe("cancelled");
 			expect(harness.session.tasks.list()[0]?.status).toBe("cancelled");
+			expect(harness.session.tasks.list()[0]?.display).toBeUndefined();
 			expect(harness.faux.state.callCount).toBe(0);
 			expect(existsSync(join(harness.tempDir, "cancelled.txt"))).toBe(false);
 		},
@@ -328,8 +359,7 @@ describe("Agent delegation", () => {
 	});
 
 	it("continues the same Agent after foreground handoff and parent cancellation", async () => {
-		harness = await createHarness();
-		await harness.session.bindExtensions({ tasksEnabled: true });
+		harness = await createBackgroundHarness();
 		const resumeNotifications = harness.session.pauseTaskNotifications();
 		let release!: () => void;
 		const gate = new Promise<void>((resolve) => {
@@ -401,8 +431,7 @@ describe("Agent delegation", () => {
 	});
 
 	it("returns a queued background Agent immediately and starts it when a slot frees", async () => {
-		harness = await createHarness({ settings: { compaction: { enabled: false } } });
-		await harness.session.bindExtensions({ tasksEnabled: true });
+		harness = await createBackgroundHarness({ settings: { compaction: { enabled: false } } });
 		harness.session.pauseTaskNotifications();
 		let releaseFirst!: () => void;
 		harness.setResponses([
@@ -434,8 +463,7 @@ describe("Agent delegation", () => {
 	});
 
 	it("fails an unavailable configured model before accepting background work", async () => {
-		harness = await createHarness();
-		await harness.session.bindExtensions({ tasksEnabled: true });
+		harness = await createBackgroundHarness();
 		const ctx = harness.session.extensionRunner.createToolContext("invalid", undefined);
 		await ctx.setExtensionSettings("agent", { model: "missing/model" });
 		await expect(

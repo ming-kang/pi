@@ -43,8 +43,9 @@ export function detailLines(task: TaskSnapshot, status: string, theme: Theme): s
 }
 
 /**
- * Output: a log streams from its file through bounded reads; any other task shows its
- * published result, current with every snapshot, followed by its human-only display.
+ * Output: a log streams from its file through bounded reads. Any other task shows what its
+ * executor published, current with every snapshot: the human `display` when there is one,
+ * otherwise the model-facing result.
  */
 export function outputLines(task: TaskSnapshot, read: TaskRead | undefined, theme: Theme, width: number): string[] {
 	const empty =
@@ -53,26 +54,19 @@ export function outputLines(task: TaskSnapshot, read: TaskRead | undefined, them
 			: isTaskTerminal(task.status)
 				? "No saved output."
 				: "No output yet.";
-	const fromLog = task.outputPath !== undefined && read !== undefined;
-	const text = cleanTaskText((fromLog ? read.text : task.result?.text) || empty);
-	// Logs and live progress keep their plain rendering; only a settled report is Markdown.
-	const output =
-		task.output === "report" && task.status === "completed"
-			? new Markdown(text, 0, 0, getMarkdownTheme(), {
-					color: (line) => theme.fg("toolOutput", line),
-				}).render(Math.max(1, width))
-			: text.split("\n").map((line) => theme.fg("toolOutput", line));
+	const fromLog = task.outputPath !== undefined && read !== undefined && !read.readError;
+	const human = task.display?.text ? task.display : undefined;
+	const published = human ?? task.result;
+	const text = cleanTaskText((fromLog ? read.text : published?.text) || empty);
+	// Logs and live progress keep their plain rendering; only a settled report's result is Markdown.
+	const markdown = !fromLog && !human && task.output === "report" && task.status === "completed";
+	const output = markdown
+		? new Markdown(text, 0, 0, getMarkdownTheme(), {
+				color: (line) => theme.fg("toolOutput", line),
+			}).render(Math.max(1, width))
+		: text.split("\n").map((line) => theme.fg("toolOutput", line));
 	if (read?.readError) output.unshift(theme.fg("warning", "Log unavailable; showing saved result."));
-	if (task.display?.text) {
-		if (output.length) output.push("");
-		output.push(
-			...cleanTaskText(task.display.text)
-				.split("\n")
-				.map((line) => theme.fg("toolOutput", line)),
-		);
-	}
-	if (task.display?.truncated) output.push(theme.fg("warning", "Additional output truncated."));
-	if ((!fromLog || read.readError) && task.result?.truncated)
-		output.push(theme.fg("warning", "Saved result truncated."));
+	if (!fromLog && published?.truncated)
+		output.push(theme.fg("warning", human ? "Output truncated." : "Saved result truncated."));
 	return output;
 }

@@ -1,6 +1,7 @@
 import { readFileSync, rmSync, statSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionToolContext } from "../src/core/extensions/types.ts";
+import { projectForModel } from "../src/core/tasks/presentation.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import { TASK_BACKGROUND_REJECTION } from "../src/core/tasks/types.ts";
 import type { BashOperations } from "../src/core/tools/bash.ts";
@@ -9,6 +10,7 @@ import { createPowerShellToolDefinition } from "../src/core/tools/powershell.ts"
 import { MAX_BACKGROUND_OUTPUT_BYTES } from "../src/core/tools/shell-execution.ts";
 import { createBashToolDefinition } from "../src/core/tools/shell-tool.ts";
 import { runRead, runWait } from "../src/extensions/tasks/tool/actions.ts";
+import { createDeliveryHarness } from "./tasks-delivery-harness.ts";
 
 const services: TaskRuntime[] = [];
 const paths = new Set<string>();
@@ -88,7 +90,7 @@ describe("native managed shell execution", () => {
 				error: "Executor-specific failure",
 			});
 			expect(task.result).toEqual({
-				text: "[Output truncated.]\nCommand exited with code 0\n\n\nExecutor-specific failure",
+				text: "[Output truncated.]\nCommand exited with code 0\n",
 				truncated: false,
 			});
 		},
@@ -153,7 +155,8 @@ describe("native managed shell execution", () => {
 		}
 		expect(background.list()[0]?.status).toBe(status);
 		expect(background.detachForeground()).toBe(0);
-		expect(background.pendingNotifications()).toEqual([]);
+		// Answered inline, so it never became background work.
+		expect(background.list().filter((task) => task.mode === "background")).toEqual([]);
 		expect(exec).toHaveBeenCalledOnce();
 	});
 
@@ -179,7 +182,7 @@ describe("native managed shell execution", () => {
 			structuredContent: { output: "partial output", exit_code: 7 },
 		});
 		expect(background.list()[0]?.error).toBe("Command exited with code 7");
-		expect(background.pendingNotifications()).toEqual([]);
+		expect(background.list().filter((task) => task.mode === "background")).toEqual([]);
 	});
 
 	it.each([createBashToolDefinition, createPowerShellToolDefinition])(
@@ -406,6 +409,65 @@ describe("native managed shell execution", () => {
 		expect(child.operations.exec).not.toHaveBeenCalled();
 	});
 
+	describe("failure text is composed at the foreground boundary", () => {
+		it.each([
+			["partial output", "partial output\n\nCommand aborted"],
+			["", "Command aborted"],
+		])("throws output %j and the diagnostic once, while the task keeps them apart", async (output, message) => {
+			const background = host();
+			const child = execution();
+			const parent = new AbortController();
+			const tool = createBashToolDefinition(process.cwd(), { operations: child.operations });
+			const pending = tool.execute("call", { command: "work" }, parent.signal, undefined, context(background));
+			if (output) child.output(output);
+			parent.abort();
+			await expect(pending).rejects.toMatchObject({ message });
+			const task = background.list()[0]!;
+			expect(task.error).toBe("Command aborted");
+			expect(task.result?.text ?? "").toBe(output);
+		});
+
+		it("keeps a structured failure's text and the task result separate", async () => {
+			const background = host();
+			const child = execution();
+			const tool = createBashToolDefinition(process.cwd(), { operations: child.operations });
+			const pending = tool.execute("call", { command: "work" }, undefined, undefined, context(background));
+			child.output("partial output");
+			child.finish(7);
+			await expect(pending).resolves.toMatchObject({
+				isError: true,
+				content: [{ type: "text", text: "partial output\n\nCommand exited with code 7" }],
+				structuredContent: { output: "partial output", exit_code: 7 },
+			});
+			const task = background.list()[0]!;
+			expect(task.error).toBe("Command exited with code 7");
+			expect(task.result?.text).toBe("partial output");
+		});
+
+		it("states a failed background command's error once in the model's completion", async () => {
+			const background = host();
+			const child = execution();
+			const tool = createBashToolDefinition(process.cwd(), { operations: child.operations });
+			const submitted = await tool.execute(
+				"call",
+				{ command: "work", background: true },
+				undefined,
+				undefined,
+				context(background),
+			);
+			child.output("partial output");
+			child.finish(7);
+			const final = (await background.wait(submitted.details!.background!.taskId)).task;
+			expect(final.result?.text).toBe("partial output");
+			expect(final.error).toBe("Command exited with code 7");
+			const completion = projectForModel(final);
+			expect(completion.split("Command exited with code 7")).toHaveLength(2);
+			expect(completion).toContain("Error: Command exited with code 7");
+			expect(completion).toContain("Exit: 7");
+			expect(completion).toContain("partial output");
+		});
+	});
+
 	it("foreground abort throws the final output; background kill settles cancellation", async () => {
 		const background = host();
 		const child = execution();
@@ -452,12 +514,13 @@ describe("native managed shell execution", () => {
 		expect(task.status).toBe("timeout");
 		expect(task.error).toBe("Command timed out after 12 seconds");
 		expect(text(await runRead(background, { action: "read", taskId: task.id }))).toContain(task.error);
-		expect(text(task.result)).toContain("timed out after 12 seconds");
+		expect(task.result?.text).toBe("");
 		expect(exec).toHaveBeenCalledTimes(1);
 	});
 
 	it.each([42, null])("does not report exit %s as a managed success", async (exitCode) => {
-		const background = host();
+		const { runtime: background, pending } = createDeliveryHarness({ enabled: true });
+		services.push(background);
 		const child = execution();
 		const tool = createBashToolDefinition(process.cwd(), { operations: child.operations });
 		const result = await tool.execute(
@@ -488,7 +551,7 @@ describe("native managed shell execution", () => {
 				}),
 			),
 		).toContain(diagnostic);
-		expect(background.pendingNotifications().map((task) => task.id)).toEqual([final.id]);
+		expect(pending().map((task) => task.id)).toEqual([final.id]);
 	});
 
 	it("caps background disk output and aborts with a failure rather than a false cancellation", async () => {
@@ -564,7 +627,7 @@ describe("native managed shell execution", () => {
 			expect(() => child.output("lost output")).not.toThrow();
 			const final = (await background.wait(result.details!.background!.taskId)).task;
 			expect(final.status).toBe("failed");
-			expect(text(final.result)).toContain("disk write failed");
+			expect(final.error).toContain("disk write failed");
 			expect(child.options.signal?.aborted).toBe(true);
 		} finally {
 			append.mockRestore();
@@ -582,7 +645,7 @@ describe("native managed shell execution", () => {
 		expect(child.options.signal?.aborted).toBe(true);
 		const task = (await background.wait(result.details!.background!.taskId)).task;
 		expect(task.status).toBe("failed");
-		expect(text(task.result)).toContain("20 MiB output limit");
+		expect(task.error).toContain("20 MiB output limit");
 		expect(statSync(task.outputPath!).size).toBe(MAX_BACKGROUND_OUTPUT_BYTES + 1);
 	});
 
@@ -643,7 +706,7 @@ describe("native managed shell execution", () => {
 			expect(() => child.output("late")).not.toThrow();
 			const final = (await background.wait(result.details!.background!.taskId)).task;
 			expect(final.status).toBe("failed");
-			expect(text(final.result)).toContain("disk failed after reload");
+			expect(final.error).toContain("disk failed after reload");
 			expect(getter).toHaveBeenCalledOnce();
 		} finally {
 			append.mockRestore();

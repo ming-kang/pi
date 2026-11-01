@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import type { AgentToolResult, ToolDefinition } from "../../core/extensions/types.ts";
 import { defineTool } from "../../core/extensions/types.ts";
-import type { TaskSnapshot } from "../../core/tasks/types.ts";
+import { TASKS_TOOL_NAME, type TaskSnapshot } from "../../core/tasks/types.ts";
 import { clipText } from "./activity.ts";
 import { agentRenderers } from "./render.ts";
 import { resolveAgentConfiguration } from "./settings.ts";
@@ -35,7 +35,7 @@ function handoffResult(task: TaskSnapshot, byUser: boolean): AgentToolResult<Age
 		content: [
 			{
 				type: "text",
-				text: `${moved}${queued} The report will be delivered automatically. Use tasks read/wait/kill to inspect, wait or stop.`,
+				text: `${moved}${queued} The report will be delivered automatically. Use ${TASKS_TOOL_NAME} read/wait/kill to inspect, wait or stop.`,
 			},
 		],
 		details: { version: 2, state: "background", taskId: task.id, byUser },
@@ -95,7 +95,7 @@ export function createAgentTool(
 					}),
 			});
 			if (outcome.kind === "result") return outcome.result;
-			return handoffResult(outcome.task, params.background !== true);
+			return handoffResult(outcome.task, outcome.reason === "detached");
 		},
 		...agentRenderers,
 	});

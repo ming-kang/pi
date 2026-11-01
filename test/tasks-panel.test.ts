@@ -255,7 +255,7 @@ describe("task panel views", () => {
 		expect(h.frame()).not.toContain("Title     Inspect boundaries");
 	});
 
-	it("renders a completed Agent report and human-only activity in Output", async () => {
+	it("renders a completed Agent report as Markdown", async () => {
 		const h = harness([
 			task("agent-markdown", {
 				kind: "agent",
@@ -268,7 +268,6 @@ describe("task panel views", () => {
 				// Report tasks have no log; Output renders the published result directly.
 				outputPath: undefined,
 				result: { text: "## Report\n\n**Bold** and `src/index.ts`.\n\n- first item", truncated: false },
-				display: { text: "Tool calls\n✓ read src/index.ts · 2ms", truncated: false },
 			}),
 		]);
 		expect(h.frame()).toContain("Report");
@@ -278,9 +277,46 @@ describe("task panel views", () => {
 		expect(h.frame()).not.toContain("**Bold**");
 		expect(h.frame()).not.toContain("`src/index.ts`");
 		expect(h.menu.render(140).join("\n")).toContain(theme.fg("mdCode", "src/index.ts"));
+		expect(h.host.read).not.toHaveBeenCalled();
+	});
+	it("shows the executor's display instead of the model-facing result", () => {
+		const h = harness([
+			task("agent-running", {
+				kind: "agent",
+				label: "Agent",
+				output: "report",
+				title: "Inspect Markdown",
+				outputPath: undefined,
+				result: { text: "Agent running · 1 tool call · latest: read src/index.ts", truncated: false },
+				display: { text: "Tool calls\n✓ read src/index.ts · 2ms", truncated: false },
+			}),
+		]);
 		expect(h.frame()).toContain("Tool calls");
 		expect(h.frame()).toContain("✓ read src/index.ts · 2ms");
-		expect(h.host.read).not.toHaveBeenCalled();
+		expect(h.frame()).not.toContain("Agent running");
+		expect(h.frame()).not.toContain("latest:");
+	});
+	it("follows whichever text it shows when announcing truncation", () => {
+		const report = (id: string, overrides: Partial<TaskSnapshot>) =>
+			task(id, {
+				kind: "agent",
+				label: "Agent",
+				output: "report",
+				status: "completed",
+				endedAt: 1000,
+				outputPath: undefined,
+				...overrides,
+			});
+		const shown = harness([
+			report("shown", {
+				display: { text: "Tool calls", truncated: true },
+				result: { text: "report", truncated: true },
+			}),
+		]);
+		expect(shown.frame()).toContain("Output truncated.");
+		expect(shown.frame()).not.toContain("Saved result truncated.");
+		const result = harness([report("result", { result: { text: "report", truncated: true } })]);
+		expect(result.frame()).toContain("Saved result truncated.");
 	});
 
 	it("shows a published result as soon as it changes, without waiting for a poll", () => {

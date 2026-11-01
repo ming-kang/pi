@@ -23,6 +23,7 @@ import {
 	type TaskExecution,
 	TaskLookupError,
 } from "../src/core/tasks/types.ts";
+import { createDeliveryHarness } from "./tasks-delivery-harness.ts";
 
 const result = (text = "done"): AgentToolResult<{ ok: boolean }> => ({
 	content: [{ type: "text", text }],
@@ -70,7 +71,15 @@ function service(options: ConstructorParameters<typeof TaskRuntime>[0] = {}) {
 	services.push(instance);
 	return instance;
 }
+const harnesses: ReturnType<typeof createDeliveryHarness>[] = [];
+/** A runtime wired to TaskDelivery like a session host, so a test can ask what would be notified next. */
+function delivering(options: Parameters<typeof createDeliveryHarness>[0] = {}) {
+	const harness = createDeliveryHarness(options);
+	harnesses.push(harness);
+	return harness;
+}
 afterEach(() => {
+	for (const harness of harnesses.splice(0)) harness.dispose();
 	for (const instance of services.splice(0)) instance.close();
 	vi.useRealTimers();
 });
@@ -87,7 +96,7 @@ function lookupError(run: () => unknown): TaskLookupError {
 
 describe("TaskRuntime execution ownership", () => {
 	it("atomically detaches every silent foreground invocation exactly once", async () => {
-		const bg = service();
+		const { runtime: bg, pending } = delivering();
 		const parent = new AbortController();
 		const update = vi.fn();
 		const jobs = [job({ signal: parent.signal, onUpdate: update }), job({ kind: "report", signal: parent.signal })];
@@ -111,7 +120,7 @@ describe("TaskRuntime execution ownership", () => {
 			item.completion.resolve({ result: result() });
 		}
 		await tick();
-		expect(bg.pendingNotifications()).toHaveLength(2);
+		expect(pending()).toHaveLength(2);
 	});
 
 	it("separates human display from model reads", async () => {
@@ -154,7 +163,7 @@ describe("TaskRuntime execution ownership", () => {
 	});
 
 	it.each([false, true])("preserves synchronous preflight exceptions, background=%s", async (background) => {
-		const bg = service();
+		const { runtime: bg, pending } = delivering();
 		const error = new Error("whole batch rejected");
 		await expect(
 			bg.execute(
@@ -167,22 +176,22 @@ describe("TaskRuntime execution ownership", () => {
 			),
 		).rejects.toBe(error);
 		expect(bg.list()[0]).toMatchObject({ status: "failed", error: error.message });
-		expect(bg.pendingNotifications()).toEqual([]);
+		expect(pending()).toEqual([]);
 	});
 
 	it("preserves async preflight failure after a detach request", async () => {
-		const bg = service();
+		const { runtime: bg, pending } = delivering();
 		const gate = deferred<TaskCompletion<{ ok: boolean }>>();
 		const call = bg.execute(job({ run: () => gate.promise }).execution);
 		const rejected = expect(call).rejects.toThrow("preflight");
 		bg.detachForeground();
 		gate.reject(new Error("preflight"));
 		await rejected;
-		expect(bg.pendingNotifications()).toEqual([]);
+		expect(pending()).toEqual([]);
 	});
 
 	it("does not require acceptance to return a foreground result and never mistakes progress for completion", async () => {
-		const bg = service();
+		const { runtime: bg, pending } = delivering();
 		const item = job();
 		const call = bg.execute(item.execution);
 		item.control.publish({ result: result("apparently done") });
@@ -196,13 +205,13 @@ describe("TaskRuntime execution ownership", () => {
 		});
 		expect(bg.get(item.control.id).status).toBe("partial");
 		expect(bg.detachForeground()).toBe(0);
-		expect(bg.pendingNotifications()).toEqual([]);
+		expect(pending()).toEqual([]);
 		const direct = await bg.execute(job({ run: async () => ({ result: result() }) }).execution);
 		expect(direct.kind).toBe("result");
 	});
 
 	it("prefers an immediately available completion over initial handoff", async () => {
-		const bg = service();
+		const { runtime: bg, pending } = delivering();
 		const outcome = await bg.execute(
 			job({
 				background: true,
@@ -213,7 +222,7 @@ describe("TaskRuntime execution ownership", () => {
 			}).execution,
 		);
 		expect(outcome.kind).toBe("result");
-		expect(bg.pendingNotifications()).toEqual([]);
+		expect(pending()).toEqual([]);
 	});
 
 	describe("an accepted execution that already has its final result", () => {
@@ -234,14 +243,15 @@ describe("TaskRuntime execution ownership", () => {
 		};
 
 		it.each(Object.entries(shapes))("answers a background-requested caller when run %s", async (_name, run) => {
-			const background = service();
+			const { runtime: background, pending } = delivering();
 			const outcome = await background.execute(job({ background: true, run }).execution);
 			expect(outcome.kind).toBe("result");
-			expect(background.pendingNotifications()).toEqual([]);
+			expect(background.list()[0]!.mode).toBe("foreground");
+			expect(pending()).toEqual([]);
 		});
 
 		it("answers a detach-requested caller when run accepts and returns at once", async () => {
-			const detached = service();
+			const { runtime: detached, pending } = delivering();
 			const gate = deferred<void>();
 			const call = detached.execute(
 				job({
@@ -255,22 +265,23 @@ describe("TaskRuntime execution ownership", () => {
 			expect(detached.detachForeground()).toBe(1);
 			gate.resolve();
 			expect((await call).kind).toBe("result");
-			expect(detached.pendingNotifications()).toEqual([]);
+			expect(detached.list()[0]!.mode).toBe("foreground");
+			expect(pending()).toEqual([]);
 		});
 
 		it("hands off an accepted execution that keeps running", async () => {
-			const background = service();
+			const { runtime: background, pending } = delivering();
 			const item = job({ background: true });
 			const outcome = await background.execute(item.execution);
 			expect(outcome.kind).toBe("background");
 			expect(background.get(item.control.id).mode).toBe("background");
 			item.completion.resolve({ result: result() });
 			await tick();
-			expect(background.pendingNotifications()).toHaveLength(1);
+			expect(pending()).toHaveLength(1);
 		});
 
 		it("hands off an accepted execution that still awaits I/O before its result", async () => {
-			const background = service();
+			const { runtime: background } = delivering();
 			const outcome = await background.execute(
 				job({
 					background: true,
@@ -320,12 +331,12 @@ describe("TaskRuntime execution ownership", () => {
 	});
 
 	it("records useful background exceptions without a second caller rejection", async () => {
-		const bg = service();
+		const { runtime: bg, pending } = delivering();
 		const item = job({ background: true });
 		expect((await bg.execute(item.execution)).kind).toBe("background");
 		item.completion.reject(new Error("worker exploded"));
 		await tick();
-		expect(bg.pendingNotifications()[0]).toMatchObject({ status: "failed", error: "worker exploded" });
+		expect(pending()[0]).toMatchObject({ status: "failed", error: "worker exploded" });
 		expect((await bg.read(item.control.id)).text).toContain("worker exploded");
 	});
 
@@ -376,11 +387,12 @@ describe("delivery and accounting", () => {
 			totalTokens: 3,
 			cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, total: 3 },
 		};
-		let bg!: TaskRuntime;
+		let harness!: ReturnType<typeof delivering>;
 		const onSettled = vi.fn(() => {
-			expect(bg.pendingNotifications()).toEqual([]);
+			expect(harness.pending()).toEqual([]);
 		});
-		bg = service({ onSettled });
+		harness = delivering({ onSettled });
+		const bg = harness.runtime;
 		const item = job();
 		const call = bg.execute(item.execution);
 		item.control.publish({ result: result(), usage });
@@ -397,7 +409,7 @@ describe("delivery and accounting", () => {
 	});
 
 	it("makes accounting persistence errors visible without unhandled rejections", async () => {
-		const bg = service({
+		const { runtime: bg, pending } = delivering({
 			onSettled: () => {
 				throw new Error("disk full");
 			},
@@ -406,54 +418,33 @@ describe("delivery and accounting", () => {
 		await bg.execute(item.execution);
 		item.completion.resolve({ result: result("report") });
 		await tick();
-		expect(bg.pendingNotifications()[0]?.error).toContain("Usage settlement failed: disk full");
+		expect(pending()[0]?.error).toContain("Usage settlement failed: disk full");
 		expect((await bg.read(item.control.id)).text).toContain("disk full");
 	});
 
-	it("supports claims, release and delivered states", async () => {
-		const bg = service();
-		const item = job({ background: true });
-		await bg.execute(item.execution);
-		item.completion.resolve({ result: result() });
-		await tick();
-		expect(bg.get(item.control.id).status).toBe("completed");
-		expect(bg.pendingNotifications()).toHaveLength(1);
-		expect(bg.claimNotification(item.control.id)).toBe(true);
-		expect(bg.claimNotification(item.control.id)).toBe(false);
-		expect(bg.pendingNotifications()).toEqual([]);
-		bg.releaseNotification(item.control.id);
-		expect(bg.pendingNotifications()).toHaveLength(1);
-		bg.markDelivered(item.control.id);
-		bg.releaseNotification(item.control.id);
-		expect(bg.pendingNotifications()).toEqual([]);
-	});
-
-	it("active wait observes completion without persisted acknowledgement and cleans resources", async () => {
+	it("active wait observes completion without acknowledging it, releases its hold and cleans resources", async () => {
 		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-		const bg = service();
+		const { runtime: bg, pending, delivered } = delivering({ canDeliver: () => true });
 		const item = job({ background: true });
 		await bg.execute(item.execution);
 		const parent = new AbortController();
 		const waiting = bg.wait(item.control.id, { timeoutMs: 60_000, signal: parent.signal });
-		const candidates: number[] = [];
-		bg.subscribe(() => {
-			candidates.push(bg.pendingNotifications().length);
-		});
 		item.completion.resolve({ result: result() });
 		expect((await waiting).task.status).toBe("completed");
-		expect(candidates).toContain(1);
-		expect(bg.pendingNotifications()).toHaveLength(1);
-		bg.markDelivered(item.control.id);
-		expect(bg.pendingNotifications()).toEqual([]);
-		expect(vi.getTimerCount()).toBe(0);
 		expect(getEventListeners(parent.signal, "abort")).toHaveLength(0);
+		// Observing is not acknowledging: the end of the wait lets the completion be delivered.
+		expect(pending()).toHaveLength(1);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(delivered).toHaveLength(1);
+		expect(pending()).toEqual([]);
+		expect(vi.getTimerCount()).toBe(0);
 	});
 
 	it.each(["abort", "timeout"] as const)(
 		"wait %s leaves execution alive and later notification pending",
 		async (mode) => {
 			vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-			const bg = service();
+			const { runtime: bg, pending } = delivering();
 			const item = job({ background: true });
 			await bg.execute(item.execution);
 			const parent = new AbortController();
@@ -467,26 +458,28 @@ describe("delivery and accounting", () => {
 				expect((await waiting).task.status).toBe("running");
 			}
 			expect(item.control.signal.aborted).toBe(false);
+			// Releasing the observation hold only asks delivery to look again; the wait owns no timer.
+			await vi.advanceTimersByTimeAsync(1);
 			expect(vi.getTimerCount()).toBe(0);
 			expect(getEventListeners(parent.signal, "abort")).toHaveLength(0);
 			item.completion.resolve({ result: result() });
 			await tick();
-			expect(bg.pendingNotifications()).toHaveLength(1);
+			expect(pending()).toHaveLength(1);
 		},
 	);
 
 	it("wait and read on terminal leave delivery pending until persisted acknowledgement", async () => {
-		const bg = service();
+		const { runtime: bg, pending, delivery } = delivering();
 		const item = job({ background: true });
 		await bg.execute(item.execution);
 		item.completion.resolve({ result: result() });
 		await tick();
 		await bg.read(item.control.id);
-		expect(bg.pendingNotifications()).toHaveLength(1);
+		expect(pending()).toHaveLength(1);
 		await bg.wait(item.control.id);
-		expect(bg.pendingNotifications()).toHaveLength(1);
-		bg.markDelivered(item.control.id);
-		expect(bg.pendingNotifications()).toEqual([]);
+		expect(pending()).toHaveLength(1);
+		delivery.acknowledge(item.control.id);
+		expect(pending()).toEqual([]);
 	});
 });
 
@@ -502,11 +495,16 @@ describe("bounded lifecycle and snapshots", () => {
 	});
 
 	it("retains every pending notification with bounded admission, never silent eviction", async () => {
-		const bg = service();
+		const { runtime: bg, pending, delivery } = delivering();
 		for (let i = 0; i < 40; i++) await bg.execute(job({ run: async () => ({ result: result() }) }).execution);
 		expect(bg.list()).toHaveLength(32);
-		for (let i = 0; i < 32; i++)
-			await bg.execute(job({ background: true, run: async () => ({ result: result() }) }).execution);
+		for (let i = 0; i < 32; i++) {
+			const item = job({ background: true });
+			await bg.execute(item.execution);
+			item.completion.resolve({ result: result() });
+			await tick();
+			delivery.acknowledge(item.control.id);
+		}
 		expect(bg.list()).toHaveLength(64);
 		for (let i = 0; i < 40; i++) {
 			const item = job({ background: true });
@@ -515,17 +513,12 @@ describe("bounded lifecycle and snapshots", () => {
 			await tick();
 		}
 		expect(bg.list()).toHaveLength(104);
-		const pending = bg.pendingNotifications();
-		expect(pending).toHaveLength(40);
+		const undelivered = pending();
+		expect(undelivered).toHaveLength(40);
 		const rejected = job({ background: true });
 		await expect(bg.execute(rejected.execution)).rejects.toThrow("retention limit");
 		expect(rejected.run).not.toHaveBeenCalled();
-		for (const task of pending) {
-			expect(bg.claimNotification(task.id)).toBe(true);
-			bg.releaseNotification(task.id);
-		}
-		expect(bg.pendingNotifications().map((task) => task.id)).toEqual(pending.map((task) => task.id));
-		for (const task of pending) bg.markDelivered(task.id);
+		for (const task of undelivered) delivery.acknowledge(task.id);
 		expect(bg.list()).toHaveLength(64);
 		await bg.execute(job({ run: async () => ({ result: result() }) }).execution);
 	});
@@ -580,12 +573,11 @@ describe("bounded lifecycle and snapshots", () => {
 	});
 
 	it("prefix matching still sees records outside the current branch, so the error names them", async () => {
-		const bg = service({ anchor: () => "anchor" });
+		const { runtime: bg } = delivering({ anchor: () => "anchor" });
 		const first = job({ background: true });
 		const second = job({ background: true });
-		// Hand off before settling: an already-available result wins over the
-		// handoff and marks delivery delivered, and trim expires delivered
-		// records once they leave the branch.
+		// Hand off before settling: an already-available result wins over the handoff and is
+		// answered inline. Undelivered completions are leased, so they stay retained while hidden.
 		const calls = [bg.execute(first.execution), bg.execute(second.execution)];
 		await Promise.all(calls);
 		first.completion.resolve({ result: result() });
@@ -626,7 +618,7 @@ describe("bounded lifecycle and snapshots", () => {
 
 	it("closes synchronously, wakes waiters and bounds shutdown for an uncooperative executor", async () => {
 		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-		const bg = service();
+		const { runtime: bg, pending } = delivering();
 		const item = job({ background: true });
 		await bg.execute(item.execution);
 		const waiter = bg.wait(item.control.id, { timeoutMs: 60_000 });
@@ -636,19 +628,19 @@ describe("bounded lifecycle and snapshots", () => {
 		expect(bg.enabled).toBe(false);
 		expect(item.control.signal.aborted).toBe(true);
 		expect((await waiter).task.status).toBe("stopping");
-		expect(bg.pendingNotifications()).toEqual([]);
+		expect(pending()).toEqual([]);
 		await vi.advanceTimersByTimeAsync(25);
 		await shutdown;
 		expect(vi.getTimerCount()).toBe(0);
 		item.completion.resolve({ result: result() });
 		await tick();
 		expect(listener).not.toHaveBeenCalled();
-		expect(bg.pendingNotifications()).toEqual([]);
+		expect(pending()).toEqual([]);
 	});
 
 	it("cancels and suppresses only records outside the ancestor path, including old terminal results", async () => {
 		let anchor: string | null = "keep";
-		const bg = service({ anchor: () => anchor });
+		const { runtime: bg, pending } = delivering({ anchor: () => anchor });
 		const kept = job({ background: true });
 		await bg.execute(kept.execution);
 		anchor = null;
@@ -666,15 +658,15 @@ describe("bounded lifecycle and snapshots", () => {
 		expect(left.control.signal.aborted).toBe(true);
 		expect(kept.control.signal.aborted).toBe(false);
 		expect(unanchored.control.signal.aborted).toBe(false);
-		expect(bg.pendingNotifications()).toEqual([]);
+		expect(pending()).toEqual([]);
 		kept.completion.resolve({ result: result() });
 		unanchored.completion.resolve({ result: result() });
 		await tick();
-		expect(bg.pendingNotifications()).toHaveLength(2);
+		expect(pending()).toHaveLength(2);
 	});
 
 	it("retains every undelivered completion while its branch is hidden", async () => {
-		const bg = service({ maxHistory: 1, maxBackground: 1, anchor: () => "A" });
+		const { runtime: bg, pending } = delivering({ maxHistory: 1, maxBackground: 1, anchor: () => "A" });
 		const ids: string[] = [];
 		for (let index = 0; index < 3; index++) {
 			const item = job({ background: true });
@@ -686,28 +678,28 @@ describe("bounded lifecycle and snapshots", () => {
 		await bg.cancelOutsideBranch(new Set(["B"]));
 		expect(bg.list()).toEqual([]);
 		await bg.cancelOutsideBranch(new Set(["A"]));
-		expect(bg.pendingNotifications().map((task) => task.id)).toEqual(ids);
+		expect(pending().map((task) => task.id)).toEqual(ids);
 	});
 
 	it("revives an undelivered completion when its branch becomes current again", async () => {
 		const anchor: string | null = "A";
-		const bg = service({ anchor: () => anchor });
+		const { runtime: bg, pending } = delivering({ anchor: () => anchor });
 		const work = job({ background: true });
 		await bg.execute(work.execution);
 		work.completion.resolve({ result: result() });
 		await tick();
-		expect(bg.pendingNotifications().map((task) => task.id)).toEqual([work.control.id]);
+		expect(pending().map((task) => task.id)).toEqual([work.control.id]);
 		await bg.cancelOutsideBranch(new Set(["B"]));
-		expect(bg.pendingNotifications()).toEqual([]);
+		expect(pending()).toEqual([]);
 		await bg.cancelOutsideBranch(new Set(["A"]));
-		expect(bg.pendingNotifications().map((task) => task.id)).toEqual([work.control.id]);
+		expect(pending().map((task) => task.id)).toEqual([work.control.id]);
 	});
 });
 
 describe("task wait cohorts", () => {
 	it("interrupts one or any wait without cancelling execution or consuming completion", async () => {
 		const interrupt = new AbortController();
-		const bg = service({ waits: { interruptSignal: interrupt.signal, bind: vi.fn() } });
+		const { runtime: bg, pending } = delivering({ interruptSignal: interrupt.signal });
 		const item = job({ background: true });
 		await bg.execute(item.execution);
 		const one = bg.wait(item.control.id, { timeoutMs: 60_000 });
@@ -720,11 +712,11 @@ describe("task wait cohorts", () => {
 		expect(item.control.signal.aborted).toBe(false);
 		item.completion.resolve({ result: result("finished later") });
 		await tick();
-		expect(bg.pendingNotifications()).toHaveLength(1);
+		expect(pending()).toHaveLength(1);
 	});
 
 	it("waitAny observes only the initial cohort and returns its first settlement", async () => {
-		const bg = service();
+		const { runtime: bg, pending } = delivering();
 		const first = job({ background: true, title: "first" });
 		await bg.execute(first.execution);
 		let observed = false;
@@ -740,8 +732,7 @@ describe("task wait cohorts", () => {
 		first.completion.resolve({ result: result("first") });
 		expect((await waiting).task?.id).toBe(first.control.id);
 		expect(
-			bg
-				.pendingNotifications()
+			pending()
 				.map((task) => task.id)
 				.sort(),
 		).toEqual([first.control.id, late.control.id].sort());
@@ -751,7 +742,7 @@ describe("task wait cohorts", () => {
 describe("handoff and cleanup races", () => {
 	it("completion wins if settled first; detach wins if handed off first, with one accounting event", async () => {
 		const accounting = vi.fn();
-		const bg = service({ onSettled: accounting });
+		const { runtime: bg, pending } = delivering({ onSettled: accounting });
 		const first = job();
 		const foreground = bg.execute(first.execution);
 		first.completion.resolve({ result: result() });
@@ -765,11 +756,11 @@ describe("handoff and cleanup races", () => {
 		expect((await detached).kind).toBe("background");
 		await tick();
 		expect(accounting).toHaveBeenCalledTimes(2);
-		expect(bg.pendingNotifications().map((task) => task.id)).toEqual([second.control.id]);
+		expect(pending().map((task) => task.id)).toEqual([second.control.id]);
 	});
 
 	it("does not hand off cancelled or closed preflight even if accepted afterward", async () => {
-		const bg = service();
+		const { runtime: bg, pending } = delivering();
 		const parent = new AbortController();
 		const gate = deferred<TaskCompletion<{ ok: boolean }>>();
 		let control!: TaskControl<{ ok: boolean }>;
@@ -790,25 +781,25 @@ describe("handoff and cleanup races", () => {
 		gate.reject(new Error("cancelled preflight"));
 		await rejected;
 		expect(control.signal.aborted).toBe(true);
-		expect(bg.pendingNotifications()).toEqual([]);
+		expect(pending()).toEqual([]);
 	});
 
 	it("checks background accounting before exposing candidates even during callback reentry", async () => {
-		let bg!: TaskRuntime;
+		let harness!: ReturnType<typeof delivering>;
 		const settled = vi.fn(() => {
-			expect(bg.pendingNotifications()).toEqual([]);
+			expect(harness.pending()).toEqual([]);
 		});
-		bg = service({ onSettled: settled });
+		harness = delivering({ onSettled: settled });
 		const item = job({ background: true });
-		await bg.execute(item.execution);
+		await harness.runtime.execute(item.execution);
 		item.completion.resolve({ result: result() });
 		await tick();
 		expect(settled).toHaveBeenCalledOnce();
-		expect(bg.pendingNotifications()).toHaveLength(1);
+		expect(harness.pending()).toHaveLength(1);
 	});
 
 	it("pre-aborted wait installs no listener and does not consume pending delivery", async () => {
-		const bg = service();
+		const { runtime: bg, pending } = delivering();
 		const item = job({ background: true });
 		await bg.execute(item.execution);
 		item.completion.resolve({ result: result() });
@@ -819,23 +810,7 @@ describe("handoff and cleanup races", () => {
 			"wait cancelled",
 		);
 		expect(getEventListeners(abort.signal, "abort")).toHaveLength(0);
-		expect(bg.pendingNotifications()).toHaveLength(1);
-	});
-
-	it("bounds claimed history instead of letting stalled delivery grow records indefinitely", async () => {
-		const bg = service({ maxBackground: 1, maxHistory: 1 });
-		for (let i = 0; i < 4; i++) {
-			const item = job({ background: true });
-			await bg.execute(item.execution);
-			item.completion.resolve({ result: result() });
-			await tick();
-			expect(bg.claimNotification(item.control.id)).toBe(true);
-		}
-		await expect(bg.execute(job({ background: true }).execution)).rejects.toThrow("retention limit");
-		expect(bg.list()).toHaveLength(4);
-		for (const task of bg.list()) bg.markDelivered(task.id);
-		expect(bg.list()).toHaveLength(1);
-		await bg.execute(job({ run: async () => ({ result: result() }) }).execution);
+		expect(pending()).toHaveLength(1);
 	});
 });
 
@@ -1151,7 +1126,7 @@ describe("foreground and background admission", () => {
 
 describe("watchers and mode changes", () => {
 	it("retains a watched result without suppressing its completion notification", async () => {
-		const bg = service({ maxHistory: 0 });
+		const { runtime: bg, pending, delivery } = delivering({ maxHistory: 0 });
 		const item = job();
 		const call = bg.execute(item.execution);
 		const release = bg.retain(item.control.id);
@@ -1159,8 +1134,8 @@ describe("watchers and mode changes", () => {
 		await call;
 		item.completion.resolve({ result: result() });
 		await bg.wait(item.control.id);
-		expect(bg.pendingNotifications()).toMatchObject([{ id: item.control.id }]);
-		bg.markDelivered(item.control.id);
+		expect(pending()).toMatchObject([{ id: item.control.id }]);
+		delivery.acknowledge(item.control.id);
 		expect(bg.get(item.control.id).status).toBe("completed");
 		release();
 		expect(bg.list()).toEqual([]);
@@ -1219,11 +1194,11 @@ describe("task result persistence receipts", () => {
 		item.completion.resolve({ result: result("report") });
 		const observed = await host.service.wait(id, { toolCallId: "wait", read: { bytes: 1024 } });
 		expect(observed).toMatchObject({ outcome: "settled", read: { text: "report" } });
-		expect(host.service.pendingNotifications()).toHaveLength(0);
+		expect(host.delivery.pending()).toHaveLength(0);
 		host.delivery.messagePersisted(waitResult("other", { backgroundTaskId: id }));
-		expect(host.service.pendingNotifications()).toHaveLength(0);
+		expect(host.delivery.pending()).toHaveLength(0);
 		host.delivery.messagePersisted(waitResult("wait"));
-		expect(host.service.pendingNotifications()).toHaveLength(0);
+		expect(host.delivery.pending()).toHaveLength(0);
 		host.dispose();
 	});
 
@@ -1231,13 +1206,13 @@ describe("task result persistence receipts", () => {
 		const host = sessionHost();
 		const { item, id } = await background(host);
 		const candidates: number[] = [];
-		host.service.subscribe(() => candidates.push(host.service.pendingNotifications().length));
+		host.service.subscribe(() => candidates.push(host.delivery.pending().length));
 		const waiting = host.service.wait(id, { toolCallId: "wait", timeoutMs: 60_000 });
 		item.completion.resolve({ result: result("report") });
 		expect((await waiting).outcome).toBe("settled");
 		expect(Math.max(0, ...candidates)).toBe(0);
 		host.delivery.agentEnded();
-		expect(host.service.pendingNotifications()).toHaveLength(1);
+		expect(host.delivery.pending()).toHaveLength(1);
 		host.dispose();
 	});
 
@@ -1246,17 +1221,16 @@ describe("task result persistence receipts", () => {
 		const { item, id } = await background(host);
 		item.completion.resolve({ result: result("report") });
 		await host.service.wait(id);
-		expect(host.service.pendingNotifications()).toHaveLength(1);
+		expect(host.delivery.pending()).toHaveLength(1);
 		await host.service.wait(id, { toolCallId: "wait" }).then(() => host.delivery.agentEnded());
-		expect(host.service.pendingNotifications()).toHaveLength(1);
+		expect(host.delivery.pending()).toHaveLength(1);
 		host.dispose();
 
 		const bg = service();
 		const standalone = job({ background: true });
 		await bg.execute(standalone.execution);
 		standalone.completion.resolve({ result: result("report") });
-		await bg.wait(standalone.control.id, { toolCallId: "wait" });
-		expect(bg.pendingNotifications()).toHaveLength(1);
+		expect((await bg.wait(standalone.control.id, { toolCallId: "wait" })).outcome).toBe("settled");
 	});
 
 	it("binds only the waitAny winner and releases the rest of the cohort", async () => {
@@ -1271,9 +1245,9 @@ describe("task result persistence receipts", () => {
 		expect(observed.outcome).toBe("settled");
 		const chosen = observed.task!.id;
 		const remaining = chosen === winner.id ? other.id : winner.id;
-		expect(host.service.pendingNotifications().map((task) => task.id)).toEqual([remaining]);
+		expect(host.delivery.pending().map((task) => task.id)).toEqual([remaining]);
 		host.delivery.messagePersisted(waitResult("wait"));
-		expect(host.service.pendingNotifications().map((task) => task.id)).toEqual([remaining]);
+		expect(host.delivery.pending().map((task) => task.id)).toEqual([remaining]);
 		host.dispose();
 	});
 
@@ -1286,7 +1260,7 @@ describe("task result persistence receipts", () => {
 		const waiting = host.service.wait(id, { toolCallId: "wait", signal: abort.signal, read: { bytes: 1024 } });
 		abort.abort(new Error("stop waiting"));
 		await expect(waiting).rejects.toThrow("stop waiting");
-		expect(host.service.pendingNotifications()).toHaveLength(1);
+		expect(host.delivery.pending()).toHaveLength(1);
 		host.dispose();
 	});
 
@@ -1305,7 +1279,7 @@ describe("task result persistence receipts", () => {
 		const { item } = await background(host);
 		item.completion.resolve({ result: result("report") });
 		await new Promise((resolve) => setTimeout(resolve, 5));
-		expect(host.service.pendingNotifications()).toHaveLength(1);
+		expect(host.delivery.pending()).toHaveLength(1);
 		first();
 		first();
 		await new Promise((resolve) => setTimeout(resolve, 5));

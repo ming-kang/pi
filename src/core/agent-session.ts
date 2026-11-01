@@ -148,6 +148,7 @@ import {
 } from "./system-prompt.ts";
 import type { TaskRuntime } from "./tasks/runtime.ts";
 import { type QuarantinedTaskSettlement, TaskSession } from "./tasks/session.ts";
+import { TASKS_TOOL_NAME } from "./tasks/types.ts";
 import type { BashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createLocalBashOperations } from "./tools/shell-operations.ts";
@@ -508,6 +509,7 @@ export class AgentSession {
 				// turn, so it still waits for the queues to drain.
 				return this.isStreaming || (this.pendingMessageCount === 0 && !this.agent.hasQueuedMessages());
 			},
+			managementActive: () => this.getActiveToolNames().includes(TASKS_TOOL_NAME),
 			deliver: (message, waitForPersistence) => {
 				if (this.isStreaming) {
 					this.agent.steer(message);
@@ -578,6 +580,14 @@ export class AgentSession {
 	/** Explicit retry after a host delivery failure; never spins on a timer by itself. */
 	retryTaskNotifications(): void {
 		this._tasksHost.delivery.retry();
+	}
+
+	/**
+	 * Tell the session a background task's completion reached its consumer outside automatic
+	 * delivery, such as a direct SDK waiter that read the result. It stops waiting to notify the model.
+	 */
+	acknowledgeTaskDelivery(taskId: string): void {
+		this._tasksHost.acknowledgeDelivery(taskId);
 	}
 
 	/**
@@ -1740,6 +1750,7 @@ export class AgentSession {
 		}
 		this._hiddenDeclarations = hidden;
 		this.agent.state.tools = declared;
+		this._tasksHost.toolsChanged();
 		return declared;
 	}
 
@@ -3896,8 +3907,7 @@ export class AgentSession {
 	private async _reloadBody(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
 		const oldRunner = this._extensionRunner;
 		const previousFlagValues = oldRunner.getFlagValues();
-		this.tasks.close();
-		await Promise.all([this.tasks.shutdown(), this.abort()]);
+		await Promise.all([this._tasksHost.shutdown(), this.abort()]);
 		await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" });
 		oldRunner.invalidate();
 		const getDefaultTools = () =>
