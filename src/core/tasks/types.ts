@@ -1,6 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
 
 /** An executor-owned machine source: the task ID prefix, never a dispatch key for the runtime. */
 export type TaskKind = string;
@@ -108,15 +107,6 @@ export interface TaskControl<T> {
 	cancel(): void;
 }
 
-/**
- * Renders a live task's human Output in the Tasks panel: styled, already fitted lines of at most
- * `width` columns, or `undefined` to use the default view (the published `display`, else the
- * result). Called on every repaint while the task runs, so it must be cheap and synchronous.
- * It lives in memory with the running task: never persisted, absent from snapshots, and dropped
- * at settlement. The returned text is trusted extension output, not task text.
- */
-export type TaskPresenter = (width: number, theme: Theme) => string[] | undefined;
-
 export interface TaskExecution<T> {
 	kind: TaskKind;
 	/** Human source name; defaults to `kind`. */
@@ -136,8 +126,6 @@ export interface TaskExecution<T> {
 	concurrency?: { key: string; limit: number };
 	signal?: AbortSignal;
 	onUpdate?: (result: AgentToolResult<T>) => void;
-	/** Renders the running task's Output in /tasks; see {@link TaskPresenter}. Dropped at settlement. */
-	present?: TaskPresenter;
 	run(control: TaskControl<T>): Promise<TaskCompletion<T>>;
 }
 
@@ -193,11 +181,6 @@ export interface TasksContext {
 	list(): TaskSnapshot[];
 	get(id: string): TaskSnapshot;
 	read(id: string, options?: TaskReadOptions): Promise<TaskRead>;
-	/**
-	 * The running task's live Output from its executor's `present`, or `undefined` for an unknown,
-	 * settled or presenter-less task, or when the presenter throws; callers then use the default view.
-	 */
-	presentOutput(id: string, width: number, theme: Theme): string[] | undefined;
 	kill(id: string): boolean;
 	/**
 	 * Move running foreground executions to the background while background slots remain;

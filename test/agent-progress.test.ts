@@ -3,6 +3,7 @@ import { type Container, stripTerminalSequences, visibleWidth } from "@earendil-
 import { describe, expect, it, vi } from "vitest";
 import type { TaskControl, TaskUpdate } from "../src/core/tasks/types.ts";
 import { activityTarget, formatActivityDuration, relativeToCwd } from "../src/extensions/agent/activity.ts";
+import { activityLines } from "../src/extensions/agent/activity-lines.ts";
 import { AgentProgress } from "../src/extensions/agent/progress.ts";
 import { agentRenderers } from "../src/extensions/agent/render.ts";
 import { AGENT_MAX_ACTIVITIES, type AgentToolDetails } from "../src/extensions/agent/types.ts";
@@ -149,17 +150,22 @@ const tagged = {
 	bold: (text: string) => text,
 } as unknown as Theme;
 const plain = (line: string) => line.replace(/<[a-zA-Z]*>|<\/>/gu, "");
+/** The retained calls of the latest published progress, as the Transcript row receives them. */
+function published(updates: TaskUpdate<AgentToolDetails>[]) {
+	const details = updates.at(-1)?.result.details;
+	return details?.state === "running" ? details.activities : [];
+}
 
 describe("Agent styled tool-call list", () => {
 	it("colors glyph, name, target and duration, and keeps the plain columns", () => {
-		const { agent, call } = progress();
+		const { call, updates } = progress();
 		vi.useFakeTimers();
 		vi.setSystemTime(10_000);
 		call("read", { path: "README.md" }, { durationMs: 4 });
 		call("bash", { command: "make" }, { durationMs: 30, error: "first failure\nsecond" });
 		call("grep", { pattern: "needle" });
 		vi.setSystemTime(22_000);
-		const lines = agent.present(80, tagged) ?? [];
+		const lines = activityLines(published(updates), 80, tagged);
 		vi.useRealTimers();
 		expect(lines).toEqual([
 			"<success>✓</> <toolTitle>read</> <muted>README.md</><dim> · </>  <dim>4ms</>",
@@ -169,38 +175,34 @@ describe("Agent styled tool-call list", () => {
 		]);
 	});
 
-	it("shows nothing to present before the first call", () => {
-		expect(progress().agent.present(80, tagged)).toBeUndefined();
-	});
-
-	it("counts earlier calls and never exceeds the width, clipping the target before the duration", () => {
-		const { agent, call } = progress();
+	it("never exceeds the width, clipping the target before the duration", () => {
+		const { call, updates } = progress();
 		for (let index = 0; index < AGENT_MAX_ACTIVITIES + 2; index++)
 			call("read", { path: `${"deep/".repeat(20)}file${index}.ts` }, { durationMs: 1500 });
 		call("bash", { command: "x".repeat(300) }, { durationMs: 7, error: "e".repeat(300) });
 		// The real theme paints with escape codes, which take no columns.
 		initTheme("dark");
+		const activities = published(updates);
 		for (const width of [1, 5, 12, 24, 40, 80]) {
-			const lines = agent.present(width, theme) ?? [];
+			const lines = activityLines(activities, width, theme);
 			expect(lines.length).toBeGreaterThan(0);
 			for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 		}
-		const lines = (agent.present(40, theme) ?? []).map(stripTerminalSequences);
-		expect(lines[0]).toBe("… 3 earlier tool calls");
+		const lines = activityLines(activities, 40, theme).map(stripTerminalSequences);
 		expect(lines.find((line) => line.startsWith("✓ read"))).toMatch(/^✓ read .+… · 1\.5s$/u);
 		expect(lines.at(-2)).toMatch(/^× bash x+… · {2}7ms$/u);
 		expect(lines.at(-1)).toMatch(/^ {7}e+…$/u);
 	});
 
 	it("strips terminal sequences an Agent put into its arguments", () => {
-		const { agent, call } = progress();
+		const { call, updates } = progress();
 		call("bash", { command: "echo \u001b[31mred\u001b[0m \u001b]0;title\u0007done" }, { durationMs: 1 });
-		const [row] = (agent.present(80, tagged) ?? []).map(plain);
+		const [row] = activityLines(published(updates), 80, tagged).map(plain);
 		expect(row).toBe("✓ bash echo red done · 1ms");
 	});
 
-	it("renders the Transcript row and the Tasks Output with the same columns", () => {
-		const { agent, call, updates } = progress();
+	it("renders the Transcript row's calls styled and publishes the plain display for /tasks", () => {
+		const { call, updates } = progress();
 		vi.useFakeTimers();
 		vi.setSystemTime(10_000);
 		call("read", { path: "a.ts" }, { durationMs: 2 });
@@ -215,7 +217,7 @@ describe("Agent styled tool-call list", () => {
 			{} as never,
 		) as Container;
 		vi.setSystemTime(13_000);
-		expect(component.render(80)).toEqual(agent.present(80, tagged));
+		expect(component.render(80)).toEqual(activityLines(published(updates), 80, tagged));
 		vi.useRealTimers();
 		// Settled rows stay one line, and the model-facing status is untouched by the styling.
 		expect(updates.at(-1)?.display).toBe(

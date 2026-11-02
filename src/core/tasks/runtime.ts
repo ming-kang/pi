@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { finiteLimit } from "../../utils/number.ts";
 import { Execution, type ExecutionHost } from "./execution.ts";
 import { defaultReadMode } from "./limits.ts";
@@ -160,7 +159,6 @@ export class TaskRuntime implements TasksContext {
 			startedAt: Date.now(),
 		};
 		const record = new TaskRecord(task);
-		record.setPresenter(execution.present);
 		const active = new Execution(this.host, record, execution);
 		this.store.add(record);
 		this.executions.set(task.id, active as Execution<unknown>);
@@ -249,16 +247,6 @@ export class TaskRuntime implements TasksContext {
 		} finally {
 			release();
 		}
-	}
-
-	presentOutput(id: string, width: number, theme: Theme): string[] | undefined {
-		let record: TaskRecord;
-		try {
-			record = this.lookup(id);
-		} catch {
-			return undefined;
-		}
-		return record.present(width, theme);
 	}
 
 	private resultText(task: TaskSnapshot): string {

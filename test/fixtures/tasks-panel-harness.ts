@@ -55,7 +55,6 @@ export function harness(
 			return t?.mode === "foreground" && t.status === "running";
 		}),
 		detach: vi.fn(() => true),
-		presentOutput: vi.fn((_id: string, _width: number, _theme: Theme): string[] | undefined => undefined),
 		retain: vi.fn(() => release),
 		subscribe: (fn: () => void) => {
 			listener = fn;

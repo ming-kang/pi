@@ -1,19 +1,9 @@
-/**
- * The themed tool-call list of a running Agent. The Transcript's expanded row and the /tasks
- * Output both render through `activityLines`, so the two cannot drift apart.
- */
+/** The themed tool-call list of a running Agent's expanded Transcript row. */
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { StatusMarker } from "../../modes/interactive/components/status-marker.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
-import {
-	activityMarker,
-	earlierLabel,
-	errorLine,
-	formatActivityDuration,
-	nameColumnWidth,
-	targetOf,
-} from "./activity.ts";
+import { activityMarker, errorLine, formatActivityDuration, nameColumnWidth, targetOf } from "./activity.ts";
 import type { AgentActivity } from "./types.ts";
 
 /** ` · ` before the duration column. */
@@ -72,14 +62,12 @@ function activityRow(
 }
 
 /**
- * Themed rows for `activities`: an optional `… N earlier tool calls` line, then one row per call
- * with an aligned tool-name column, durations right-aligned in one column, and a failed call's first
+ * Themed rows for `activities`: one row per call with an aligned tool-name column, durations right-aligned in one column, and a failed call's first
  * error line beneath it. The table is as wide as its longest row, at most `width`. Measured at
  * `now`, a running call shows a spinner frame and the time since it started.
  */
 export function activityLines(
 	activities: readonly AgentActivity[],
-	earlier: number,
 	width: number,
 	theme: Theme,
 	now = Date.now(),
@@ -100,7 +88,7 @@ export function activityLines(
 		...rows.map((row) => headWidth(row, nameWidth) + visibleWidth(row.target) + tailWidth),
 	);
 	const tableWidth = Math.min(width, naturalWidth);
-	const lines = earlier > 0 ? [truncateToWidth(theme.fg("dim", earlierLabel(earlier)), width, "…")] : [];
+	const lines: string[] = [];
 	for (const row of rows) {
 		lines.push(activityRow(row, nameWidth, durationWidth, tableWidth, theme));
 		const error = row.activity.error ? oneLine(errorLine(row.activity.error)) : "";

@@ -21,7 +21,7 @@ import { TaskViewport } from "./viewport.ts";
 
 export type TasksManagerHost = Pick<
 	TasksContext,
-	"list" | "read" | "kill" | "subscribe" | "retain" | "canDetach" | "detach" | "presentOutput"
+	"list" | "read" | "kill" | "subscribe" | "retain" | "canDetach" | "detach"
 >;
 export interface TasksMenuOptions {
 	tui: { requestRender(): void; terminal: { rows: number; columns: number } };

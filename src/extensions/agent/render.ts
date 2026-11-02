@@ -123,7 +123,7 @@ export const agentRenderers: AgentRenderer = {
 		if (details?.state !== "running" || !options.expanded) return component;
 		const shown = details.activities.slice(-EXPANDED_ACTIVITIES);
 		component.addChild({
-			render: (width) => activityLines(shown, 0, width, theme),
+			render: (width) => activityLines(shown, width, theme),
 			invalidate() {},
 		});
 		return component;

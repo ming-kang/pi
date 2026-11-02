@@ -5,9 +5,7 @@ import { TASK_FACT_BYTES } from "../../core/tasks/output.ts";
 import type { TaskCompletion, TaskControl, TaskFact, TaskTerminalStatus } from "../../core/tasks/types.ts";
 import { resolveToCwd } from "../../core/tools/path-utils.ts";
 import { combineUsage, emptyUsage } from "../../core/usage-totals.ts";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { activitiesText, activityTarget, clipText, compactArguments, relativeToCwd } from "./activity.ts";
-import { activityLines } from "./activity-lines.ts";
 import { type AgentArtifacts, fitList, savedTranscript } from "./artifacts.ts";
 import type { FinalReport } from "./report.ts";
 import { AGENT_MAX_ACTIVITIES, type AgentActivity, type AgentToolDetails } from "./types.ts";
@@ -134,12 +132,6 @@ export class AgentProgress {
 			display: this.display(),
 			usage: this.usage,
 		});
-	}
-
-	/** The themed live tool-call list for /tasks Output; `undefined` before the first call, so the default view shows. */
-	present(width: number, theme: Theme): string[] | undefined {
-		if (!this.activities.length) return undefined;
-		return activityLines(this.activities, this.calls - this.activities.length, width, theme);
 	}
 
 	/** Classify a finished run from its last assistant message. */

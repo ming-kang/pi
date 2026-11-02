@@ -3,7 +3,6 @@ import type { AgentToolResult, ToolDefinition } from "../../core/extensions/type
 import { defineTool } from "../../core/extensions/types.ts";
 import { TASKS_TOOL_NAME, type TaskSnapshot } from "../../core/tasks/types.ts";
 import { clipText } from "./activity.ts";
-import type { AgentProgress } from "./progress.ts";
 import { agentRenderers } from "./render.ts";
 import { resolveAgentConfiguration } from "./settings.ts";
 import { AGENT_CONCURRENCY, AGENT_PROMPT_BYTES, type AgentToolDetails } from "./types.ts";
@@ -76,8 +75,6 @@ export function createAgentTool(
 			// Captured now: a background Agent may outlive the session that launched it.
 			const sessionArtifactDir = ctx.sessionManager.getArtifactDir();
 			const parentSession = ctx.sessionManager.getSessionFile();
-			// The live view reads the run's own progress, which exists only once the run starts.
-			let progress: AgentProgress | undefined;
 			const outcome = await ctx.tasks.execute<AgentToolDetails>({
 				kind: "agent",
 				label: "Agent",
@@ -94,7 +91,6 @@ export function createAgentTool(
 				background: params.background,
 				signal,
 				onUpdate,
-				present: (width, theme) => progress?.present(width, theme),
 				run: (control) =>
 					runWorker(control, {
 						prompt: params.prompt,
@@ -105,9 +101,6 @@ export function createAgentTool(
 						projectTrusted: ctx.isProjectTrusted(),
 						sessionArtifactDir,
 						parentSession,
-						onProgress: (created) => {
-							progress = created;
-						},
 					}),
 			});
 			if (outcome.kind === "result") return outcome.result;

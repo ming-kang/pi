@@ -7,6 +7,11 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 ### Changed
 
 - Background completion notifications are notifications only: the executor's label, outcome, duration, short ID, title and any error. Expanding one no longer repeats the input, facts, output and log path, so a background Agent's notification matches its settled foreground result; those details remain in `/tasks`. Saved messages from older formats show their first few lines.
+- A running Agent's `/tasks` Output shows its published plain tool-call list instead of a separately styled one; the styled list remains in the Transcript's expanded row.
+
+### Removed
+
+- `TaskExecution.present` and `TasksContext.presentOutput()`. Task executors declare data rather than UI: `/tasks` shows a running task's published `display`, and the Tasks API no longer depends on the interactive theme.
 
 ## [1.4.11] - 2026-11-01
 

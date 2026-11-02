@@ -126,7 +126,7 @@ export function activityText(activity: AgentActivity, nameWidth = nameColumnWidt
 }
 
 /** The line standing for calls no longer retained. */
-export function earlierLabel(earlier: number): string {
+function earlierLabel(earlier: number): string {
 	return `… ${earlier} earlier tool ${earlier === 1 ? "call" : "calls"}`;
 }
 
