@@ -25,7 +25,6 @@ import {
 	type NormalizedBuildSystemPromptOptions,
 	normalizeBuildSystemPromptOptions,
 } from "../system-prompt.ts";
-import { TaskRuntime } from "../tasks/runtime.ts";
 import type { TasksContext } from "../tasks/types.ts";
 import type { VirtualModelDefinition } from "../virtual-models.ts";
 import type {
@@ -374,8 +373,9 @@ export class ExtensionRunner {
 	private setExtensionSettings: ExtensionContext["setExtensionSettings"] = async () => {
 		throw new Error("Extension settings are not available in this host");
 	};
-	private readonly unboundTasks = new TaskRuntime();
-	private getTasks: () => TasksContext = () => this.unboundTasks;
+	private getTasks: () => TasksContext = () => {
+		throw new Error("Tasks are not available in this host");
+	};
 	private extensions: Extension[];
 	private runtime: ExtensionRuntime;
 	private uiContext: ExtensionUIContext;
@@ -460,9 +460,9 @@ export class ExtensionRunner {
 		this.runtime.setThinkingLevel = actions.setThinkingLevel;
 		this.runtime.createContext = () => this.createContext();
 
-		this.getTasks = contextActions.getTasks ?? (() => this.unboundTasks);
-		if (contextActions.getExtensionSettings) this.getExtensionSettings = contextActions.getExtensionSettings;
-		if (contextActions.setExtensionSettings) this.setExtensionSettings = contextActions.setExtensionSettings;
+		this.getTasks = contextActions.getTasks;
+		this.getExtensionSettings = contextActions.getExtensionSettings;
+		this.setExtensionSettings = contextActions.setExtensionSettings;
 
 		// Context actions (required)
 		this.getModel = contextActions.getModel;
@@ -474,7 +474,7 @@ export class ExtensionRunner {
 		this.hasPendingMessagesFn = contextActions.hasPendingMessages;
 		this.shutdownHandler = contextActions.shutdown;
 		this.getContextUsageFn = contextActions.getContextUsage;
-		if (contextActions.getContextSnapshot) this.getContextSnapshotFn = contextActions.getContextSnapshot;
+		this.getContextSnapshotFn = contextActions.getContextSnapshot;
 		this.compactFn = contextActions.compact;
 		this.getSystemPromptFn = contextActions.getSystemPrompt;
 		this.getSystemPromptOptionsFn =
@@ -752,7 +752,6 @@ export class ExtensionRunner {
 		message = "This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 	): void {
 		if (!this.staleMessage) {
-			this.unboundTasks.close();
 			this.staleMessage = message;
 			this.runtime.invalidate(message);
 		}

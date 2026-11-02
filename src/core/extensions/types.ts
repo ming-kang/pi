@@ -2282,9 +2282,9 @@ export interface ExtensionActions {
  * Required by all modes.
  */
 export interface ExtensionContextActions {
-	getExtensionSettings?: ExtensionContext["getExtensionSettings"];
-	setExtensionSettings?: ExtensionContext["setExtensionSettings"];
-	getTasks?: () => TasksContext;
+	getExtensionSettings: ExtensionContext["getExtensionSettings"];
+	setExtensionSettings: ExtensionContext["setExtensionSettings"];
+	getTasks: () => TasksContext;
 	getModel: () => Model<any> | undefined;
 	getScopedModels: () => readonly ScopedModel[];
 	isIdle: () => boolean;
@@ -2294,7 +2294,7 @@ export interface ExtensionContextActions {
 	hasPendingMessages: () => boolean;
 	shutdown: () => void;
 	getContextUsage: () => ContextUsage | undefined;
-	getContextSnapshot?: () => Promise<ContextSnapshot>;
+	getContextSnapshot: () => Promise<ContextSnapshot>;
 	compact: (options?: CompactOptions) => void;
 	getSystemPrompt: () => string;
 	getSystemPromptOptions?: () => BuildSystemPromptOptions;

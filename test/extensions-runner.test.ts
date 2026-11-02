@@ -109,6 +109,14 @@ describe("ExtensionRunner", () => {
 		compact: () => {},
 		getSystemPrompt: () => "",
 		getScopedModels: () => [],
+		getExtensionSettings: () => ({}),
+		setExtensionSettings: async () => {},
+		getTasks: () => {
+			throw new Error("These tests do not run tasks");
+		},
+		getContextSnapshot: async () => {
+			throw new Error("These tests do not capture context");
+		},
 	};
 
 	describe("scopedModels", () => {
