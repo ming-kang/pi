@@ -131,7 +131,7 @@ describe("cached compaction", () => {
 				customType: "cached-compaction",
 				data,
 			};
-			const lines = renderCachedCompactionEntry(entry, { expanded }, theme)!.render(120);
+			const lines = renderCachedCompactionEntry(entry, { expanded, outputPad: 1 }, theme)!.render(120);
 			return lines.map((line) => stripAnsi(line).trimEnd());
 		};
 		const automatic = {

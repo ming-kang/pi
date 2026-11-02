@@ -34,7 +34,11 @@ function promptBreakdown(card: CachedCompactionCard): string | undefined {
 }
 
 /** A footnote to the native compaction summary above it, expanding with it. */
-export const renderCachedCompactionEntry: EntryRenderer<CachedCompactionCard> = (entry, { expanded }, theme) => {
+export const renderCachedCompactionEntry: EntryRenderer<CachedCompactionCard> = (
+	entry,
+	{ expanded, outputPad },
+	theme,
+) => {
 	const card = entry.data;
 	if (!card) return undefined;
 	const dim = (text: string) => theme.fg("dim", text);
@@ -52,5 +56,5 @@ export const renderCachedCompactionEntry: EntryRenderer<CachedCompactionCard> = 
 		if (breakdown) lines.push(dim(breakdown));
 		lines.push(dim(`Output ↓${formatTokens(card.output)}`));
 	}
-	return new Text(lines.join("\n"), 1, 0);
+	return new Text(lines.join("\n"), outputPad, 0);
 };

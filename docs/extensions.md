@@ -1941,6 +1941,8 @@ pi.registerEntryRenderer("status-card", (entry, { expanded }, theme) => {
 pi.appendEntry("status-card", { title: "Indexed files", count: 17 });
 ```
 
+`options.expanded` follows the transcript's expand toggle. `options.outputPad` is the horizontal padding from the `outputPad` setting; inset unboxed content by it to line up with the rest of the transcript.
+
 ### pi.registerShortcut(shortcut, options)
 
 Register a keyboard shortcut. See [keybindings.md](keybindings.md) for the shortcut format and built-in keybindings.
@@ -2813,7 +2815,6 @@ Extensions can interact with users via `ctx.ui` methods and customize how messag
 - Status indicators (setStatus)
 - Working message, visibility, and indicator during streaming (`setWorkingMessage`, `setWorkingVisible`, `setWorkingIndicator`)
 - Widgets above/below editor (setWidget)
-- Ephemeral transcript notes (addTranscriptNote)
 - Autocomplete providers layered on top of built-in slash/path completion (addAutocompleteProvider)
 - Custom footers (setFooter)
 
@@ -2985,9 +2986,6 @@ ctx.ui.setWidget("my-widget", ["Line 1", "Line 2"]);
 ctx.ui.setWidget("my-widget", ["Line 1", "Line 2"], { placement: "belowEditor" });
 ctx.ui.setWidget("my-widget", (tui, theme) => new Text(theme.fg("accent", "Custom"), 0, 0));
 ctx.ui.setWidget("my-widget", undefined);  // Clear
-
-// Ephemeral note after a session entry; not persisted or sent to the model
-ctx.ui.addTranscriptNote("my-note", "Worked for 8s", { afterEntryId: ctx.sessionManager.getLeafId()! });
 
 // Custom footer (replaces built-in footer entirely)
 ctx.ui.setFooter((_tui, theme, footerData) => ({

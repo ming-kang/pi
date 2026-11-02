@@ -759,18 +759,21 @@ The factory's component is disposed when that widget key is replaced or cleared.
 
 **Examples:** [widget-placement.ts](../examples/extensions/widget-placement.ts)
 
-### Pattern 5b: Ephemeral Transcript Notes
+### Pattern 5b: Transcript Annotations
 
-Use `addTranscriptNote()` for a short display-only annotation tied to an existing session entry. Pi renders it in `dim` after that entry, including when compaction or branch navigation rebuilds the transcript. Notes are not persisted, are never sent to the model, and are cleared with the current extension UI runtime. Reusing a key is a no-op, which makes event retries safe.
+For a short display-only line in the transcript, such as how long a run took, append a custom entry and render it. The entry is saved where it was appended and never sent to the model, so the line reappears in place whenever Pi rebuilds the transcript, such as on resume or after branch navigation.
 
 ```typescript
-const afterEntryId = ctx.sessionManager.getLeafId();
-if (afterEntryId) {
-  ctx.ui.addTranscriptNote("run-summary", "Worked for 8s", { afterEntryId });
-}
+pi.registerEntryRenderer<{ seconds: number }>("run-time", (entry, { outputPad }, theme) =>
+  new Text(theme.fg("dim", `Worked for ${entry.data?.seconds}s`), outputPad, 0),
+);
+
+pi.on("agent_settled", () => {
+  pi.appendEntry("run-time", { seconds: 8 });
+});
 ```
 
-This is intended for settled annotations. It is not a replacement for widgets, footers, streaming components, or durable custom entries.
+Use widgets, footers or streaming components for content that changes while it is shown.
 
 ### Pattern 6: Custom Footer
 

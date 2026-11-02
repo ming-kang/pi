@@ -50,7 +50,7 @@ export class CustomEntryComponent extends Container {
 
 		let component: Component | undefined;
 		try {
-			component = this.renderer(this.entry, { expanded: this._expanded }, theme);
+			component = this.renderer(this.entry, { expanded: this._expanded, outputPad: this.outputPad }, theme);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			const box = new Box(this.outputPad, 1, (text) => theme.bg("customMessageBg", text));

@@ -113,7 +113,6 @@ export type {
 	ExtensionRuntime,
 	ExtensionShortcut,
 	ExtensionToolContext,
-	ExtensionTranscriptNoteOptions,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionVirtualModel,

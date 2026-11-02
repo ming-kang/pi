@@ -87,7 +87,7 @@ describe("InteractiveMode compaction events", () => {
 				usage: previousUsage,
 			},
 		];
-		const fakeThis = { renderSessionItems: vi.fn(), extensionTranscriptNotes: new Map() };
+		const fakeThis = { renderSessionItems: vi.fn() };
 		const renderSessionEntries = Reflect.get(InteractiveMode.prototype, "renderSessionEntries") as (
 			this: typeof fakeThis,
 			entries: SessionEntry[],

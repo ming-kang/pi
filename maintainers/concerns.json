@@ -173,6 +173,9 @@
 					"path": "src/modes/rpc/rpc-client.ts"
 				},
 				{
+					"path": "src/modes/rpc/rpc-mode.ts"
+				},
+				{
 					"path": "src/modes/rpc/rpc-types.ts"
 				}
 			],
@@ -552,33 +555,19 @@
 		},
 		{
 			"id": "run-summary",
-			"why": "A bundled extension times continuous runs and displays ephemeral, entry-anchored transcript notes without persisting UI-only status.",
+			"why": "A bundled extension times continuous runs and renders each as a dim custom entry. Entry renderers receive outputPad, as message renderers do, so such lines follow the transcript padding.",
 			"paths": [
-				{
-					"path": "src/core/extensions/index.ts"
-				},
-				{
-					"path": "src/core/extensions/runner.ts"
-				},
 				{
 					"path": "src/core/extensions/types.ts"
 				},
 				{
-					"path": "src/index.ts"
-				},
-				{
-					"path": "src/modes/interactive/interactive-mode.ts",
-					"rewrite": "The interactive host owns runtime-scoped transcript notes and reinserts them after their session anchors during transcript rebuilds."
-				},
-				{
-					"path": "src/modes/rpc/rpc-mode.ts"
+					"path": "src/modes/interactive/components/custom-entry.ts"
 				}
 			],
 			"tests": [
 				"test/run-summary.test.ts",
 				"test/built-in-extensions.test.ts",
-				"test/interactive-mode-compaction.test.ts",
-				"test/suite/regressions/4167-thinking-toggle-pending-tool-render.test.ts"
+				"test/cached-compaction.test.ts"
 			]
 		},
 		{

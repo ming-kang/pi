@@ -130,12 +130,6 @@ export interface ExtensionWidgetOptions {
 	placement?: WidgetPlacement;
 }
 
-/** Placement for an ephemeral note in the interactive transcript. */
-export interface ExtensionTranscriptNoteOptions {
-	/** Render immediately after this session entry. Notes survive transcript rebuilds for the current UI runtime. */
-	afterEntryId: string;
-}
-
 /** Raw terminal input listener for extensions. */
 export type TerminalInputHandler = (data: string) => { consume?: boolean; data?: string } | undefined;
 
@@ -206,12 +200,6 @@ export interface ExtensionUIContext {
 		content: ((tui: TUI, theme: Theme) => Component & { dispose?(): void }) | undefined,
 		options?: ExtensionWidgetOptions,
 	): void;
-
-	/**
-	 * Add a dim, display-only note after a session entry in the interactive transcript.
-	 * The note is not persisted or sent to the model. Reusing a key is a no-op.
-	 */
-	addTranscriptNote(key: string, text: string, options: ExtensionTranscriptNoteOptions): void;
 
 	/** Set a custom footer component, or undefined to restore the built-in footer.
 	 *
@@ -1621,6 +1609,8 @@ export type MarkdownTransformer = (markdown: string, context: MarkdownTransformC
 
 export interface EntryRenderOptions {
 	expanded: boolean;
+	/** Horizontal padding configured by the outputPad setting. */
+	outputPad: number;
 }
 
 export type MessageRenderer<T = unknown> = (

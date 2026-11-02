@@ -6,6 +6,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Added
 
+- Entry renderers receive `outputPad`, the horizontal padding from the `outputPad` setting, as message renderers already do. The run summary and cached-compaction lines follow it instead of a fixed padding of 1.
 - `AgentSession.shutdownTasks(graceMs?)` closes task admission, aborts the main agent and drains task executors in one call, and `AgentSession.withTaskNotificationsPaused(operation)` holds completion delivery for the duration of an async operation.
 
 ### Changed
@@ -19,6 +20,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Removed
 
+- `ctx.ui.addTranscriptNote()` and `ExtensionTranscriptNoteOptions`. Append a custom entry with `pi.appendEntry()` and render it with `pi.registerEntryRenderer()` instead: the line is saved in place and needs no replay on resume or branch navigation. The run summary works this way.
 - `TaskRuntimeOptions.backgroundAllowed`. A standalone `TaskRuntime` that must not run background work stays disabled (`enabled: false`); `createAgentSession({ backgroundAllowed: false })` is unchanged.
 - `TaskExecution.present` and `TasksContext.presentOutput()`. Task executors declare data rather than UI: `/tasks` shows a running task's published `display`, and the Tasks API no longer depends on the interactive theme.
 
