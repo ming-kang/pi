@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
 import type { CustomMessage } from "../src/core/messages.ts";
 import { TaskDelivery } from "../src/core/tasks/delivery.ts";
@@ -65,4 +66,16 @@ export function createDeliveryHarness(options: DeliveryHarnessOptions = {}) {
  */
 export function sessionDelivery(session: AgentSession): TaskDelivery {
 	return (session as unknown as { _tasksHost: TaskSession })._tasksHost.delivery;
+}
+
+/** The concrete runtime behind `session.tasks`; hosts get only its TasksContext, the session owns its lifecycle. */
+export function sessionRuntime(session: AgentSession): TaskRuntime {
+	return (session as unknown as { _tasksHost: TaskSession })._tasksHost.service;
+}
+
+/** The session's current runtime drains without a grace period, as if its executors ignored abort. */
+export function skipShutdownGrace(session: AgentSession): void {
+	const runtime = sessionRuntime(session);
+	const shutdown = runtime.shutdown.bind(runtime);
+	vi.spyOn(runtime, "shutdown").mockImplementation(() => shutdown(0));
 }

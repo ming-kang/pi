@@ -198,7 +198,6 @@ export interface TasksContext {
 
 export interface TaskRuntimeOptions {
 	enabled?: boolean;
-	backgroundAllowed?: boolean;
 	/** Branch-impact queries for a durable host; standalone runtimes omit it. */
 	session?: TasksSessionContext;
 	anchor?: () => string | null;
@@ -229,7 +228,7 @@ export const TASKS_TOOL_NAME = "tasks";
 export const TASK_MANAGEMENT_REJECTION = `Background execution needs the ${TASKS_TOOL_NAME} tool to read and stop the work, and it is not active. Activate the ${TASKS_TOOL_NAME} tool or run in the foreground. No work was started.`;
 
 export const TASK_BACKGROUND_REJECTION =
-	"Background execution is not permitted in this host. Run with background: false or omit background. No work was started.";
+	"Background execution is not available in this host. Run with background: false or omit background. No work was started.";
 
 export function isTaskTerminal(status: TaskStatus): status is TaskTerminalStatus {
 	return (TASK_TERMINAL_STATUSES as readonly string[]).includes(status);

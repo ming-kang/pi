@@ -104,7 +104,7 @@ it("inspects concurrent shell/report work through detach, stop, completion, relo
 	} finally {
 		menu?.dispose();
 		await scenario.cleanup();
-		await session.tasks.shutdown();
+		await session.shutdownTasks();
 		harness.cleanup();
 	}
 });

@@ -165,10 +165,9 @@ export class AgentSessionRuntime {
 	}
 
 	private async teardownCurrent(reason: SessionShutdownEvent["reason"], targetSessionFile?: string): Promise<void> {
-		this.session.tasks.close();
-		// Stop the main loop immediately too, while bounded worker cleanup runs.
-		// Both must finish before extension shutdown and runtime invalidation.
-		await Promise.all([this.session.tasks.shutdown(), this.session.abort()]);
+		// Settle any active response first so the aborted turn (including tool
+		// results) is persisted to the outgoing session before it is replaced.
+		await this.session.shutdownTasks();
 		await emitSessionShutdownEvent(this.session.extensionRunner, {
 			type: "session_shutdown",
 			reason,
@@ -194,19 +193,6 @@ export class AgentSessionRuntime {
 		}
 	}
 
-	/**
-	 * Hold the outgoing session's background delivery across a replacement. The
-	 * pause belongs to the session current at entry, not the replacement.
-	 */
-	private async withTasksPaused<T>(operation: () => Promise<T>): Promise<T> {
-		const resumeBackground = this.session.pauseTaskNotifications();
-		try {
-			return await operation();
-		} finally {
-			resumeBackground();
-		}
-	}
-
 	async switchSession(
 		sessionPath: string,
 		options?: {
@@ -215,7 +201,7 @@ export class AgentSessionRuntime {
 			projectTrustContextFactory?: (cwd: string) => ProjectTrustContext;
 		},
 	): Promise<{ cancelled: boolean }> {
-		return this.withTasksPaused(() => this.switchSessionBody(sessionPath, options));
+		return this.session.withTaskNotificationsPaused(() => this.switchSessionBody(sessionPath, options));
 	}
 
 	private async switchSessionBody(
@@ -255,7 +241,7 @@ export class AgentSessionRuntime {
 		setup?: (sessionManager: SessionManager) => Promise<void>;
 		withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
 	}): Promise<{ cancelled: boolean }> {
-		return this.withTasksPaused(() => this.newSessionBody(options));
+		return this.session.withTaskNotificationsPaused(() => this.newSessionBody(options));
 	}
 
 	private async newSessionBody(options?: {
@@ -298,7 +284,7 @@ export class AgentSessionRuntime {
 		entryId: string,
 		options?: { position?: "before" | "at"; withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
 	): Promise<{ cancelled: boolean; selectedText?: string }> {
-		return this.withTasksPaused(() => this.forkBody(entryId, options));
+		return this.session.withTaskNotificationsPaused(() => this.forkBody(entryId, options));
 	}
 
 	private async forkBody(
@@ -357,8 +343,7 @@ export class AgentSessionRuntime {
 			// Validate and honor vetoes before closing admission, but settle owned
 			// usage before reading the source file for the fork.
 			const forkingCurrentLeaf = targetLeafId === this.session.sessionManager.getLeafId();
-			this.session.tasks.close();
-			await Promise.all([this.session.tasks.shutdown(), this.session.abort()]);
+			await this.session.shutdownTasks();
 			if (forkingCurrentLeaf) targetLeafId = this.session.sessionManager.getLeafId()!;
 			const sessionManager = SessionManager.open(currentSessionFile, sessionDir);
 			const forkedSessionPath = sessionManager.createBranchedSession(targetLeafId);
@@ -407,7 +392,7 @@ export class AgentSessionRuntime {
 	 * @throws {MissingSessionCwdError} When the imported session cwd cannot be resolved and no override is provided.
 	 */
 	async importFromJsonl(inputPath: string, cwdOverride?: string): Promise<{ cancelled: boolean }> {
-		return this.withTasksPaused(() => this.importFromJsonlBody(inputPath, cwdOverride));
+		return this.session.withTaskNotificationsPaused(() => this.importFromJsonlBody(inputPath, cwdOverride));
 	}
 
 	private async importFromJsonlBody(inputPath: string, cwdOverride?: string): Promise<{ cancelled: boolean }> {
@@ -457,8 +442,7 @@ export class AgentSessionRuntime {
 	}
 
 	async dispose(): Promise<void> {
-		this.session.tasks.close();
-		await Promise.all([this.session.tasks.shutdown(), this.session.abort()]);
+		await this.session.shutdownTasks();
 		await emitSessionShutdownEvent(this.session.extensionRunner, {
 			type: "session_shutdown",
 			reason: "quit",

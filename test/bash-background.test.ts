@@ -197,7 +197,7 @@ describe("native managed shell execution", () => {
 			const tool = factory(process.cwd(), { operations: { exec }, spawnHook });
 			await expect(
 				tool.execute("call", { command: "noop", background: true }, undefined, undefined, undefined as never),
-			).rejects.toThrow("No command was started");
+			).rejects.toThrow(TASK_BACKGROUND_REJECTION);
 			await expect(
 				tool.execute(
 					"call",
@@ -206,15 +206,6 @@ describe("native managed shell execution", () => {
 					undefined,
 					context(host({ enabled: false })),
 				),
-			).rejects.toThrow("not available");
-			await expect(
-				tool.execute(
-					"call",
-					{ command: "noop", background: true },
-					undefined,
-					undefined,
-					context(host({ enabled: true, backgroundAllowed: false })),
-				),
 			).rejects.toThrow(TASK_BACKGROUND_REJECTION);
 			expect(spawnHook).not.toHaveBeenCalled();
 			expect(exec).not.toHaveBeenCalled();
@@ -222,7 +213,7 @@ describe("native managed shell execution", () => {
 	);
 
 	it("worker foreground commands use the shared task runtime", async () => {
-		const background = host({ enabled: true, backgroundAllowed: false });
+		const background = host({ enabled: false });
 		const tool = createBashToolDefinition(process.cwd(), {
 			operations: {
 				exec: async (_command, _cwd, { onData }) => {

@@ -4,7 +4,14 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- `AgentSession.shutdownTasks(graceMs?)` closes task admission, aborts the main agent and drains task executors in one call, and `AgentSession.withTaskNotificationsPaused(operation)` holds completion delivery for the duration of an async operation.
+
 ### Changed
+
+- `AgentSession.tasks` is typed as the public `TasksContext`, the same capability extensions get as `ctx.tasks`. Use `session.shutdownTasks()` instead of `session.tasks.shutdown()`; a host can no longer enable background execution directly, only through `bindExtensions({ tasksEnabled })`.
+- Every background request a host does not allow is rejected with the same message: "Background execution is not available in this host. Run with background: false or omit background. No work was started."
 
 - Tool renderers register row cleanup with `context.onDispose(cleanup)`. The shell no longer calls `context.state.dispose()`; a renderer that set it registers the same cleanup with `onDispose` instead. A cleanup that throws no longer interrupts disposal of the row or of the rows cleared after it.
 - Background completion notifications are notifications only: the executor's label, outcome, duration, short ID, title and any error. Expanding one no longer repeats the input, facts, output and log path, so a background Agent's notification matches its settled foreground result; those details remain in `/tasks`. Saved messages from older formats show their first few lines.
@@ -12,6 +19,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Removed
 
+- `TaskRuntimeOptions.backgroundAllowed`. A standalone `TaskRuntime` that must not run background work stays disabled (`enabled: false`); `createAgentSession({ backgroundAllowed: false })` is unchanged.
 - `TaskExecution.present` and `TasksContext.presentOutput()`. Task executors declare data rather than UI: `/tasks` shows a running task's published `display`, and the Tasks API no longer depends on the interactive theme.
 
 ### Fixed

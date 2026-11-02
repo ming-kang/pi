@@ -297,18 +297,14 @@ describe("TaskRuntime execution ownership", () => {
 		});
 	});
 
-	it("starts no executor for pre-aborted, disabled, closed or worker admission", async () => {
+	it("starts no executor for pre-aborted, disabled or closed admission", async () => {
 		const parent = new AbortController();
 		parent.abort(new Error("already cancelled"));
 		const item = job({ signal: parent.signal });
 		await expect(service().execute(item.execution)).rejects.toThrow("already cancelled");
 		await expect(service({ enabled: false }).execute(job({ background: true }).execution)).rejects.toThrow(
-			"not available",
+			TASK_BACKGROUND_REJECTION,
 		);
-		const worker = service({ backgroundAllowed: false });
-		worker.setEnabled(true);
-		expect(worker.enabled).toBe(false);
-		await expect(worker.execute({ ...item.execution, background: true })).rejects.toThrow(TASK_BACKGROUND_REJECTION);
 		const closed = service();
 		closed.close();
 		closed.setEnabled(true);

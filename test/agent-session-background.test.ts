@@ -6,14 +6,15 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { TASK_RECORD_TYPE } from "../src/core/tasks/codec.ts";
+import { TASK_BACKGROUND_REJECTION } from "../src/core/tasks/types.ts";
 import { backgroundSessionTest, usage } from "./background-session-host.ts";
-import { sessionDelivery } from "./tasks-delivery-harness.ts";
+import { sessionDelivery, sessionRuntime, skipShutdownGrace } from "./tasks-delivery-harness.ts";
 import { userMsg } from "./utilities.ts";
 
 describe("session-owned background host", () => {
 	const { host, task } = backgroundSessionTest();
 
-	it("is disabled unbound and a host prohibition survives binding, direct enable and reload", async () => {
+	it("is disabled unbound and a host prohibition survives binding and reload", async () => {
 		const session = await host();
 		const ctx = session.extensionRunner.createContext();
 		expect(ctx.tasks).toBe(session.tasks);
@@ -22,15 +23,13 @@ describe("session-owned background host", () => {
 		expect(ctx.tasks.enabled).toBe(true);
 		const worker = await host(false);
 		await worker.bindExtensions({ tasksEnabled: true });
-		worker.tasks.setEnabled(true);
 		expect(worker.tasks.enabled).toBe(false);
 		const run = vi.fn();
 		await expect(
 			worker.tasks.execute({ kind: "bash", title: "no", toolCallId: "no", background: true, run }),
-		).rejects.toThrow("not permitted in this host");
+		).rejects.toThrow(TASK_BACKGROUND_REJECTION);
 		expect(run).not.toHaveBeenCalled();
 		await worker.reload();
-		worker.tasks.setEnabled(true);
 		expect(worker.tasks.enabled).toBe(false);
 		const foreground = await worker.tasks.execute({
 			kind: "custom",
@@ -248,9 +247,7 @@ describe("session-owned background host", () => {
 		const session = await host();
 		await session.bindExtensions({ tasksEnabled: true });
 		const execution = await task(session);
-		const service = session.tasks;
-		const shutdown = service.shutdown.bind(service);
-		vi.spyOn(service, "shutdown").mockImplementation(() => shutdown(0));
+		skipShutdownGrace(session);
 		await session.reload();
 		const leaf = session.sessionManager.appendMessage(userMsg("new generation"));
 		const count = session.sessionManager.getEntries().length;
@@ -302,9 +299,7 @@ describe("session-owned background host", () => {
 		let lastId = "";
 		for (let batch = 0; batch < 5; batch++) {
 			const executions = await Promise.all(Array.from({ length: batch === 4 ? 1 : 8 }, () => task(session)));
-			const service = session.tasks;
-			const shutdown = service.shutdown.bind(service);
-			vi.spyOn(service, "shutdown").mockImplementation(() => shutdown(0));
+			skipShutdownGrace(session);
 			await session.reload();
 			for (const execution of executions) execution.finish();
 			await vi.waitFor(() => expect(warning).toHaveBeenCalledTimes(Math.min((batch + 1) * 8, 33)));
@@ -366,7 +361,7 @@ describe("session-owned background host", () => {
 				return { result: { content: [], details: undefined } };
 			},
 		});
-		await session.tasks.shutdown();
+		await session.shutdownTasks();
 		const cleanup = warning.mock.calls.find(([error]) => error.event === "task_cleanup")?.[0];
 		expect(cleanup).toBeDefined();
 		expect(Buffer.byteLength(cleanup.error)).toBeLessThanOrEqual(4096);
@@ -577,7 +572,7 @@ describe("session-owned background host", () => {
 			await vi.waitFor(() =>
 				expect(warning).toHaveBeenCalledWith(expect.objectContaining({ event: "task_delivery" })),
 			);
-			session.tasks.setEnabled(true);
+			sessionRuntime(session).refresh();
 			await new Promise((resolve) => setTimeout(resolve, 20));
 			expect(deliver).toHaveBeenCalledOnce();
 			expect(sessionDelivery(session).pending()).toHaveLength(1);
@@ -803,7 +798,7 @@ describe("session-owned background host", () => {
 		await session.bindExtensions({ tasksEnabled: true });
 		const root = session.sessionManager.appendMessage(userMsg("root"));
 		const execution = await task(session);
-		const cancel = vi.spyOn(session.tasks, "cancelOutsideBranch").mockImplementation(async (ancestors) => {
+		const cancel = vi.spyOn(sessionRuntime(session), "cancelOutsideBranch").mockImplementation(async (ancestors) => {
 			expect(ancestors.size).toBe(0);
 			expect(session.sessionManager.getLeafId()).toBe(root);
 		});

@@ -116,7 +116,9 @@ interface AgentSession {
 
   // Background host controls (see Background execution below)
   pauseTaskNotifications(): () => void;
+  withTaskNotificationsPaused<T>(operation: () => Promise<T>): Promise<T>;
   retryTaskNotifications(): void;
+  shutdownTasks(graceMs?: number): Promise<void>;
   getSessionStats(): SessionStats;
 
   // Cleanup (does not await Background draining)
@@ -258,10 +260,10 @@ Background work is admitted only while the `tasks` management tool is active in 
 
 The host must choose:
 
-- **Lifetime and cancellation:** a settled main-agent turn is not the end of background work. `session.abort()` cancels foreground-owned work, not detached work. Use `session.tasks.kill(id)` for a whole execution, or `await session.tasks.shutdown(graceMs?)` to close admission, cancel all owned work and drain within a bounded grace period (default 2 seconds, maximum 60 seconds). A non-cooperating executor can outlive that grace period.
-- **Result-driven turns and cost:** automatic completions join the host's prompt queue, so a running turn receives them as steering and an idle session starts a completion turn. Use the nestable `session.pauseTaskNotifications()` to defer delivery; its returned release function is idempotent. Pausing does not stop execution or its costs. Budget worker activity and completion-triggered turns explicitly.
+- **Lifetime and cancellation:** a settled main-agent turn is not the end of background work. `session.abort()` cancels foreground-owned work, not detached work. Use `session.tasks.kill(id)` for a whole execution, or `await session.shutdownTasks(graceMs?)` to close admission, abort the main agent, cancel all owned work and drain within a bounded grace period (default 2 seconds, maximum 60 seconds). A non-cooperating executor can outlive that grace period.
+- **Result-driven turns and cost:** automatic completions join the host's prompt queue, so a running turn receives them as steering and an idle session starts a completion turn. Use the nestable `session.pauseTaskNotifications()` to defer delivery; its returned release function is idempotent. `session.withTaskNotificationsPaused(operation)` holds a pause for the duration of an async operation. Pausing does not stop execution or its costs. Budget worker activity and completion-triggered turns explicitly.
 - **Observation and delivery:** `session.tasks` exposes the [public supervision methods](extensions.md#ctxtasks). `list()`, `get()` and `read()` observe; a terminal snapshot alone does not acknowledge model delivery, and there is no blocking wait: subscribe with `session.tasks.subscribe()` or use `waitForQuiescence()` below. A direct SDK consumer that handles a result outside model history can call `session.acknowledgeTaskDelivery(task.id)` after successful consumption, which stops the session from notifying the model about it (an unknown or already delivered ID is ignored). An undelivered completion keeps its task and output retained until it is delivered or acknowledged, or its runtime closes. Failed notification delivery leaves the result available for inspection; after fixing the host failure, call `session.retryTaskNotifications()` explicitly. Pi does not retry a failed delivery forever on a timer.
-- **Shutdown:** `await runtime.dispose()` handles background shutdown and extension lifecycle when using the runtime API. For a directly owned session, drain Background, abort the main agent, then dispose; synchronous `session.dispose()` alone is not an awaited drain.
+- **Shutdown:** `await runtime.dispose()` handles background shutdown and extension lifecycle when using the runtime API. For a directly owned session, `await session.shutdownTasks()`, then dispose; synchronous `session.dispose()` alone is not an awaited drain.
 - **Waiting for all work:** `prompt()` resolves when its own run settles, before any Background completion turn. `await session.waitForQuiescence(signal?)` resolves once the session is quiescent: no run, compaction, retry or branch summary, no unsettled Background task, and no completion left to deliver (the `session_quiescent` event marks the same moment, once per transition). It uses no timers and rejects when `signal` aborts or the session is disposed. A completion whose delivery failed does not count, since it retries only on the next input; a Background task that never ends keeps the wait open, so pass a signal when that matters.
 
 A deliberately single-turn embedding can suppress completion-triggered turns and cancel leftover work on exit:
@@ -279,7 +281,7 @@ try {
   // Snapshot only: some executions may still be running.
   console.log(session.tasks.list());
 } finally {
-  await Promise.all([session.tasks.shutdown(), session.abort()]);
+  await session.shutdownTasks();
   session.dispose();
   resumeNotifications();
 }
@@ -289,7 +291,7 @@ For a longer-lived embedding, keep the host alive, subscribe to snapshots and ch
 
 Automatic completion messages carry `{ version: 3, task }` in `details`: the bounded terminal snapshot with its input, facts, diagnostics, up to 40 KiB of output and explicit truncation flags. This snapshot is self-contained for transcript replay and is not sent to the model. `content` is separately bounded prose: a log contributes an 8 KiB tail, while a report arrives from its beginning, whole when it fits the 48 KiB budget. After compaction, one request-local reminder lists still-active background tasks to prevent duplicate work; it is not persisted and does not start a turn. Each settlement appends one version-3 `task-record` holding the terminal snapshot and its usage, with no migration of earlier result records. See [Background records](session-format.md#background-records).
 
-`backgroundAllowed: false` on `createAgentSession()` is a host capability ceiling, independent of task kind. It prevents enabling background execution through `bindExtensions` or direct runtime activation, including after reload. Requests for `background: true` are rejected before startup; foreground execution remains available. Omitting this option permits host opt-in but does not enable background execution by itself. This capability restriction is not an OS sandbox.
+`backgroundAllowed: false` on `createAgentSession()` is a host capability ceiling, independent of task kind. It prevents enabling background execution through `bindExtensions`, including after reload. Requests for `background: true` are rejected before startup; foreground execution remains available. Omitting this option permits host opt-in but does not enable background execution by itself. This capability restriction is not an OS sandbox.
 
 Reload, replacement/fork, shutdown and branch navigation enforce the [Background lifetime rules](bundled/tasks.md#lifetime). Saved terminal branch history is observational only: no live processes/workers resume, and restoration does not replay accounting or completion events. Managed logs expire with their runtime records; save anything needed before eviction or shutdown.
 

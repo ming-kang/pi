@@ -108,7 +108,7 @@
 			"paths": [
 				{
 					"path": "src/core/agent-session.ts",
-					"rewrite": "TaskSession owns result and usage persistence and the task service lifecycle (shutdown and replacement); TaskDelivery owns the retention-lease completion queue, pausing, queued completion and tool-call receipts. Lifecycle pauses wrap upstream-shaped Body methods, AgentSession adds acknowledgeTaskDelivery and supplies the management-tool admission predicate, and TasksContext.session exposes only the tree-navigation query used by the management extension."
+					"rewrite": "TaskSession owns result and usage persistence and the task service lifecycle (shutdown and replacement); TaskDelivery owns the retention-lease completion queue, pausing, queued completion and tool-call receipts. Lifecycle pauses wrap upstream-shaped Body methods through withTaskNotificationsPaused, which the runtime host reuses; shutdownTasks is the one teardown path for reload, replacement and disposal. AgentSession adds acknowledgeTaskDelivery and supplies the management-tool admission predicate, and TasksContext.session exposes only the tree-navigation query used by the management extension."
 				},
 				{
 					"path": "src/core/agent-session-runtime.ts"

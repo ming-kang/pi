@@ -91,7 +91,7 @@ export class TaskRuntime implements TasksContext {
 	}
 
 	get enabled(): boolean {
-		return this.configuredEnabled && !this.closed && this.options.backgroundAllowed !== false;
+		return this.configuredEnabled && !this.closed;
 	}
 
 	setEnabled(enabled: boolean): void {
@@ -125,10 +125,9 @@ export class TaskRuntime implements TasksContext {
 
 	async execute<T>(execution: TaskExecution<T>): Promise<TaskToolOutcome<T>> {
 		// Admission and registration happen synchronously, before invoking user code or awaiting anything.
-		if (execution.background && this.options.backgroundAllowed === false) throw new Error(TASK_BACKGROUND_REJECTION);
 		if (this.closed) throw new Error("Task service is closed");
 		if (execution.background) {
-			if (!this.enabled) throw new Error("Background execution is not available in this host");
+			if (!this.enabled) throw new Error(TASK_BACKGROUND_REJECTION);
 			if (!this.admitsBackground) throw new Error(TASK_MANAGEMENT_REJECTION);
 			if (this.backgroundActive() >= this.maxBackground) throw this.limitError();
 			if (this.store.retainedCount() >= this.maxRetained) {

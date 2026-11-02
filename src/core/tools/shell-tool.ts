@@ -5,7 +5,12 @@
  */
 import { type Static, Type } from "typebox";
 import type { ToolDefinition } from "../extensions/types.ts";
-import { TASKS_TOOL_NAME, type TaskCompletion, type TaskToolOutcome } from "../tasks/types.ts";
+import {
+	TASK_BACKGROUND_REJECTION,
+	TASKS_TOOL_NAME,
+	type TaskCompletion,
+	type TaskToolOutcome,
+} from "../tasks/types.ts";
 import {
 	type BashOperations,
 	type BashRenderState,
@@ -86,8 +91,7 @@ export function createShellToolDefinition(
 		async execute(toolCallId, { command, timeout, background }: BashToolInput, parentSignal, onUpdate, ctx) {
 			const tasks = ctx?.tasks;
 			if (!tasks) {
-				if (background)
-					throw new Error("Background execution is not available in this host. No command was started.");
+				if (background) throw new Error(TASK_BACKGROUND_REJECTION);
 				return native.execute(toolCallId, { command, timeout }, parentSignal, onUpdate, ctx);
 			}
 			if (tasks.closed) throw new Error("Task service is closed");

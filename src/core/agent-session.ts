@@ -146,9 +146,8 @@ import {
 	type NormalizedBuildSystemPromptOptions,
 	normalizeBuildSystemPromptOptions,
 } from "./system-prompt.ts";
-import type { TaskRuntime } from "./tasks/runtime.ts";
 import { type QuarantinedTaskSettlement, TaskSession } from "./tasks/session.ts";
-import { TASKS_TOOL_NAME } from "./tasks/types.ts";
+import { TASKS_TOOL_NAME, type TasksContext } from "./tasks/types.ts";
 import type { BashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createLocalBashOperations } from "./tools/shell-operations.ts";
@@ -580,7 +579,7 @@ export class AgentSession {
 		if (this._usesDefaultTools) this._restoreToolsFromTranscript(this._defaultToolModifiers);
 	}
 
-	get tasks(): TaskRuntime {
+	get tasks(): TasksContext {
 		return this._tasksHost.service;
 	}
 
@@ -607,16 +606,21 @@ export class AgentSession {
 	}
 
 	/**
-	 * Run a lifecycle operation with delivery paused across its asynchronous gaps.
+	 * Hold this session's completion delivery across an async operation, even one that replaces the session.
 	 * Lifecycle methods are thin shells over upstream bodies so those keep upstream's shape.
 	 */
-	private async _withTasksPaused<T>(operation: () => Promise<T>): Promise<T> {
+	async withTaskNotificationsPaused<T>(operation: () => Promise<T>): Promise<T> {
 		const resumeBackground = this.pauseTaskNotifications();
 		try {
 			return await operation();
 		} finally {
 			resumeBackground();
 		}
+	}
+
+	/** Close task admission, abort the run and drain executors within `graceMs`, persisting their usage. */
+	async shutdownTasks(graceMs?: number): Promise<void> {
+		await Promise.all([this._tasksHost.shutdown(graceMs), this.abort()]);
 	}
 
 	get modelRuntime(): ModelRuntime {
@@ -1268,7 +1272,7 @@ export class AgentSession {
 	 * so a deferred prompt never races a delivery for the same idle gap.
 	 */
 	private async _emitAgentSettled(): Promise<void> {
-		return this._withTasksPaused(() => this._emitAgentSettledBody());
+		return this.withTaskNotificationsPaused(() => this._emitAgentSettledBody());
 	}
 
 	private async _emitAgentSettledBody(): Promise<void> {
@@ -3094,7 +3098,7 @@ export class AgentSession {
 	 * @param customInstructions Optional instructions for the compaction summary
 	 */
 	async compact(customInstructions?: string): Promise<CompactionResult> {
-		return this._withTasksPaused(() => this._compactBody(customInstructions));
+		return this.withTaskNotificationsPaused(() => this._compactBody(customInstructions));
 	}
 
 	private async _compactBody(customInstructions?: string): Promise<CompactionResult> {
@@ -3430,7 +3434,7 @@ export class AgentSession {
 	 * @returns Whether the post-run loop should call `agent.continue()`
 	 */
 	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
-		return this._withTasksPaused(() => this._runAutoCompactionBody(reason, willRetry));
+		return this.withTaskNotificationsPaused(() => this._runAutoCompactionBody(reason, willRetry));
 	}
 
 	private async _runAutoCompactionBody(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
@@ -3596,7 +3600,7 @@ export class AgentSession {
 	}
 
 	async bindExtensions(bindings: ExtensionBindings): Promise<void> {
-		return this._withTasksPaused(() => this._bindExtensionsBody(bindings));
+		return this.withTaskNotificationsPaused(() => this._bindExtensionsBody(bindings));
 	}
 
 	private async _bindExtensionsBody(bindings: ExtensionBindings): Promise<void> {
@@ -4010,13 +4014,13 @@ export class AgentSession {
 	}
 
 	async reload(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
-		return this._withTasksPaused(() => this._reloadBody(options));
+		return this.withTaskNotificationsPaused(() => this._reloadBody(options));
 	}
 
 	private async _reloadBody(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
 		const oldRunner = this._extensionRunner;
 		const previousFlagValues = oldRunner.getFlagValues();
-		await Promise.all([this._tasksHost.shutdown(), this.abort()]);
+		await this.shutdownTasks();
 		await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" });
 		oldRunner.invalidate();
 		const getDefaultTools = () =>

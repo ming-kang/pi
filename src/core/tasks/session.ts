@@ -13,6 +13,7 @@ import { isTaskTerminal, type TaskSnapshot } from "./types.ts";
 
 interface TaskSessionOptions {
 	manager: SessionManager;
+	/** Host capability ceiling: false keeps background execution off, whatever the bindings ask for. */
 	backgroundAllowed?: boolean;
 	/** The main session owns input queues, preflight and idle state. */
 	canDeliver(): boolean;
@@ -164,13 +165,12 @@ export class TaskSession {
 	}
 
 	private createService(): TaskRuntime {
-		const { manager, backgroundAllowed } = this.options;
+		const { manager } = this.options;
 		const generation = ++this.generation;
 		const sessionId = manager.getSessionId();
 		const sessionFile = manager.getSessionFile();
 		const service: TaskRuntime = new TaskRuntime({
 			enabled: this.enabled,
-			backgroundAllowed,
 			canManageBackground: () => this.options.managementActive?.() ?? true,
 			session: {
 				stoppedByTreeNavigation: (targetId): TaskSnapshot[] => this.stoppedByTreeNavigation(targetId, service),

@@ -15,7 +15,7 @@ import { SessionManager } from "../src/core/session-manager.ts";
 import { readTaskUsage } from "../src/core/tasks/codec.ts";
 import tasksExtension from "../src/extensions/tasks/index.ts";
 import type { ExtensionFactory } from "../src/index.ts";
-import { sessionDelivery } from "./tasks-delivery-harness.ts";
+import { sessionDelivery, skipShutdownGrace } from "./tasks-delivery-harness.ts";
 
 describe("AgentSessionRuntime background lifecycle", () => {
 	const cleanups: Array<() => Promise<void> | void> = [];
@@ -247,8 +247,7 @@ describe("AgentSessionRuntime background lifecycle", () => {
 			},
 		});
 		if (outcome.kind !== "background") throw new Error("expected handoff");
-		const shutdown = old.tasks.shutdown.bind(old.tasks);
-		vi.spyOn(old.tasks, "shutdown").mockImplementation(() => shutdown(0));
+		skipShutdownGrace(old);
 		await runtimeHost.newSession();
 		const original = readFileSync(source, "utf8");
 		const replacementEntries = runtimeHost.session.sessionManager.getEntries();

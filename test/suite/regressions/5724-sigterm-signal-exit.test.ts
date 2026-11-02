@@ -10,7 +10,6 @@ import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode
 
 type ShutdownThis = {
 	isShuttingDown: boolean;
-	session: { tasks: { close: () => void } };
 	unregisterSignalHandlers: () => void;
 	runtimeHost: { dispose: () => Promise<void> };
 	ui: { terminal: { drainInput: (ms: number) => Promise<void> } };
@@ -59,13 +58,6 @@ describe("InteractiveMode SIGTERM shutdown with signal-exit (#5724)", () => {
 		const dispose = deferred();
 		const context: ShutdownThis = {
 			isShuttingDown: false,
-			session: {
-				tasks: {
-					close: vi.fn(() => {
-						order.push("background:close");
-					}),
-				},
-			},
 			unregisterSignalHandlers: vi.fn(() => {
 				order.push("unregister");
 			}),
@@ -91,12 +83,12 @@ describe("InteractiveMode SIGTERM shutdown with signal-exit (#5724)", () => {
 		const shutdownPromise = callShutdown(context, { fromSignal: true });
 		await Promise.resolve();
 
-		expect(order).toEqual(["background:close", "dispose"]);
+		expect(order).toEqual(["dispose"]);
 		expect(context.unregisterSignalHandlers).not.toHaveBeenCalled();
 
 		dispose.resolve();
 		await shutdownPromise;
 
-		expect(order).toEqual(["background:close", "dispose", "drainInput", "stop"]);
+		expect(order).toEqual(["dispose", "drainInput", "stop"]);
 	});
 });
