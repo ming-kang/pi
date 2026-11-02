@@ -1,15 +1,15 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai/compat";
-import { getAgentDir } from "../config.ts";
-import { raceWithAbortSignal } from "../utils/abort.ts";
-import type { AgentSession } from "./agent-session.ts";
-import type { ModelRuntime } from "./model-runtime.ts";
-import { DefaultResourceLoader } from "./resource-loader.ts";
-import { createAgentSession } from "./sdk.ts";
-import { SessionManager } from "./session-manager.ts";
-import { SettingsManager } from "./settings-manager.ts";
+import { getAgentDir } from "../../config.ts";
+import type { AgentSession } from "../../core/agent-session.ts";
+import type { ModelRuntime } from "../../core/model-runtime.ts";
+import { DefaultResourceLoader } from "../../core/resource-loader.ts";
+import { createAgentSession } from "../../core/sdk.ts";
+import { SessionManager } from "../../core/session-manager.ts";
+import { SettingsManager } from "../../core/settings-manager.ts";
+import { raceWithAbortSignal } from "../../utils/abort.ts";
 
-export interface IsolatedSessionOptions {
+export interface WorkerSessionOptions {
 	cwd: string;
 	model: Model<any>;
 	thinkingLevel: ThinkingLevel;
@@ -25,11 +25,11 @@ export interface IsolatedSessionOptions {
 }
 
 /**
- * A self-contained child session for delegated work: no extensions, skills, prompt templates
+ * A self-contained child session for one Agent worker: no extensions, skills, prompt templates
  * or themes, a detached settings snapshot without cache warming, a transcript that is in memory unless
  * a path is given, and no background tasks. Cancellation rejects, and a session created as cancellation wins is disposed.
  */
-export async function createIsolatedSession(options: IsolatedSessionOptions): Promise<AgentSession> {
+export async function createWorkerSession(options: WorkerSessionOptions): Promise<AgentSession> {
 	const { signal } = options;
 	signal?.throwIfAborted();
 	const agentDir = getAgentDir();

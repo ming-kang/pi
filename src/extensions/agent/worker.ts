@@ -1,7 +1,6 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai/compat";
 import type { AgentSession } from "../../core/agent-session.ts";
-import { createIsolatedSession } from "../../core/isolated-session.ts";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
 import type { TaskCompletion, TaskControl } from "../../core/tasks/types.ts";
 import { clipText } from "./activity.ts";
@@ -9,6 +8,7 @@ import { type AgentArtifacts, prepareArtifacts } from "./artifacts.ts";
 import { AgentProgress, finalAssistantText } from "./progress.ts";
 import { finalReport } from "./report.ts";
 import type { AgentToolDetails } from "./types.ts";
+import { createWorkerSession } from "./worker-session.ts";
 
 const WORKER_TOOLS = ["read", "bash", "edit", "write"];
 
@@ -52,7 +52,7 @@ export async function runWorker(
 	signal.addEventListener("abort", abort, { once: true });
 	try {
 		artifacts = await prepareArtifacts(request.sessionArtifactDir, control.id, request.parentSession);
-		session = await createIsolatedSession({
+		session = await createWorkerSession({
 			cwd: request.cwd,
 			model: request.model,
 			thinkingLevel: request.thinking,
