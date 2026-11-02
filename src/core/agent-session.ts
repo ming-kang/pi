@@ -120,6 +120,7 @@ import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { NestedToolCallRunner } from "./nested-tool-calls.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
+import { QuiescenceLatch } from "./quiescence.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import { exportSessionToJsonl } from "./session-export.ts";
 import {
@@ -448,17 +449,16 @@ export class AgentSession {
 	private _isBeforeSettle = false;
 	private _abortDuringBeforeSettle = false;
 	private _isEmittingAgentSettled = false;
-	/** Last observed quiescence; a transition into true emits `session_quiescent` once. */
-	private _quiescent = true;
-	private _quiescenceDisposed = false;
-	private _quiescenceCheckScheduled = false;
-	private readonly _quiescenceWaiters = new Set<{ resolve(): void; reject(reason: unknown): void }>();
 	private readonly _deferredSettledActions: Array<() => Promise<void>> = [];
 	/**
-	 * Deferred settled actions taken from the queue and still running. A deferred prompt's input
-	 * preflight is asynchronous and comes before its run marks the session busy.
+	 * Settled emissions in progress, with the actions they defer. A deferred prompt's input preflight
+	 * is asynchronous and comes before its run marks the session busy.
 	 */
-	private _runningSettledActions = 0;
+	private _settling = 0;
+	private readonly _quiescence = new QuiescenceLatch(
+		() => this._isBusy(),
+		() => this._emit({ type: "session_quiescent" }),
+	);
 
 	private _resourceLoader: ResourceLoader;
 	private _customTools: ToolDefinition[];
@@ -537,7 +537,7 @@ export class AgentSession {
 			onEntry: (entry) => this._emit({ type: "entry_appended", entry }),
 			onError: (event, error) => this._extensionRunner?.emitError({ extensionPath: "<background>", event, error }),
 		});
-		this._tasksHost.subscribe(() => this._updateQuiescence());
+		this._tasksHost.subscribe(() => this._quiescence.poke());
 		this._scopedModels = config.scopedModels ?? [];
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
@@ -1144,61 +1144,27 @@ export class AgentSession {
 			l(event);
 		}
 		// Any event may follow a change quiescence reads, such as queued input or a compaction
-		// starting outside a run; the session_quiescent that the check emits does not.
-		if (event.type !== "session_quiescent") this._scheduleQuiescenceCheck();
+		// starting outside a run.
+		this._quiescence.poke();
 	}
 
 	/**
-	 * Re-evaluate quiescence once the emitting transition has finished. Events are emitted midway
-	 * through synchronous transitions, such as a task settlement that journals its record before its
-	 * completion is enqueued, where an immediate evaluation would report a moment of false quiescence.
+	 * Whether more will happen without new input. Queued user input only matters during a run; left
+	 * in the queue while idle it waits for the next prompt and holds back automatic delivery.
 	 */
-	private _scheduleQuiescenceCheck(): void {
-		if (this._quiescenceCheckScheduled) return;
-		this._quiescenceCheckScheduled = true;
-		queueMicrotask(() => {
-			this._quiescenceCheckScheduled = false;
-			this._updateQuiescence();
-		});
-	}
-
-	/**
-	 * Whether nothing more will happen without new input. Queued user input only matters during a
-	 * run; left in the queue while idle it waits for the next prompt, and it also blocks automatic
-	 * delivery, so completions that cannot start a turn do not count.
-	 */
-	private _computeQuiescent(): boolean {
-		if (
-			this._isAgentRunActive ||
-			this._isEmittingAgentSettled ||
-			this._deferredSettledActions.length > 0 ||
-			this._runningSettledActions > 0 ||
+	private _isBusy(): boolean {
+		return (
+			!this.isIdle ||
+			this._settling > 0 ||
+			this.isRetrying ||
 			this._pendingCustomMessages.length > 0 ||
-			this.isCompacting ||
-			this.isRetrying
-		) {
-			return false;
-		}
-		if (this._tasksHost.runningBackground().length > 0) return false;
-		const inputBlocksDelivery = this.pendingMessageCount > 0 || this.agent.hasQueuedMessages();
-		return !(this.model !== undefined && !inputBlocksDelivery && this._tasksHost.delivery.hasDeliverableWork());
+			!this._tasksHost.isQuiet()
+		);
 	}
 
 	/** Whether the session is quiescent now. See {@link AgentSessionEvent} `session_quiescent`. */
 	get isQuiescent(): boolean {
-		return !this._quiescenceDisposed && this._computeQuiescent();
-	}
-
-	private _updateQuiescence(): void {
-		if (this._quiescenceDisposed) return;
-		const quiescent = this._computeQuiescent();
-		const entered = quiescent && !this._quiescent;
-		this._quiescent = quiescent;
-		if (!quiescent) return;
-		if (entered) this._emit({ type: "session_quiescent" });
-		// A listener may have started new work.
-		if (!this._quiescent) return;
-		for (const waiter of [...this._quiescenceWaiters]) waiter.resolve();
+		return this._quiescence.isQuiescent;
 	}
 
 	/**
@@ -1209,28 +1175,7 @@ export class AgentSession {
 	 * the session is disposed.
 	 */
 	waitForQuiescence(signal?: AbortSignal): Promise<void> {
-		if (this._quiescenceDisposed) return Promise.reject(new Error("The session was disposed"));
-		if (signal?.aborted) return Promise.reject(signal.reason);
-		if (this._computeQuiescent()) return Promise.resolve();
-		return new Promise<void>((resolve, reject) => {
-			const waiter = {
-				resolve: () => {
-					cleanup();
-					resolve();
-				},
-				reject: (reason: unknown) => {
-					cleanup();
-					reject(reason);
-				},
-			};
-			const onAbort = () => waiter.reject(signal?.reason);
-			const cleanup = () => {
-				this._quiescenceWaiters.delete(waiter);
-				signal?.removeEventListener("abort", onAbort);
-			};
-			this._quiescenceWaiters.add(waiter);
-			signal?.addEventListener("abort", onAbort, { once: true });
-		});
+		return this._quiescence.wait(signal);
 	}
 
 	private _emitQueueUpdate(): void {
@@ -1257,7 +1202,7 @@ export class AgentSession {
 	}
 
 	private _resolveIdleWaitIfIdle(): void {
-		this._updateQuiescence();
+		this._quiescence.poke();
 		if (!this.isIdle || !this._resolveIdleWait) {
 			return;
 		}
@@ -1272,7 +1217,13 @@ export class AgentSession {
 	 * so a deferred prompt never races a delivery for the same idle gap.
 	 */
 	private async _emitAgentSettled(): Promise<void> {
-		return this.withTaskNotificationsPaused(() => this._emitAgentSettledBody());
+		this._settling++;
+		try {
+			await this.withTaskNotificationsPaused(() => this._emitAgentSettledBody());
+		} finally {
+			this._settling--;
+			this._quiescence.poke();
+		}
 	}
 
 	private async _emitAgentSettledBody(): Promise<void> {
@@ -1289,11 +1240,9 @@ export class AgentSession {
 
 		const deferred = this._deferredSettledActions.splice(0);
 		if (deferred.length > 0) {
-			this._runningSettledActions++;
 			try {
 				for (const action of deferred) await action();
 			} finally {
-				this._runningSettledActions--;
 				this._resolveIdleWaitIfIdle();
 			}
 			return;
@@ -1315,14 +1264,7 @@ export class AgentSession {
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = async (event: AgentEvent): Promise<void> => {
-		if (event.type === "message_start") this._tasksHost.delivery.messageStarted(event.message);
-		if (
-			event.type === "message_end" &&
-			event.message.role === "assistant" &&
-			event.message.stopReason !== "error" &&
-			event.message.stopReason !== "aborted"
-		)
-			this._tasksHost.noteAssistantCompleted();
+		this._tasksHost.observe(event);
 		// An abort requested while the run was starting, e.g. during before_agent_start, stops it
 		// here. agent_start is awaited before the first request.
 		if (event.type === "agent_start" && this._agentRunAbortRequested) this.agent.abort();
@@ -1418,7 +1360,6 @@ export class AgentSession {
 		if (event.type === "turn_end") {
 			this._flushPendingCustomMessages();
 		}
-		if (event.type === "agent_end") this._tasksHost.delivery.agentEnded();
 	};
 
 	private _willRetryAfterAgentEnd(event: Extract<AgentEvent, { type: "agent_end" }>): boolean {
@@ -1634,10 +1575,8 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
-		this._quiescenceDisposed = true;
-		const waiters = [...this._quiescenceWaiters];
+		this._quiescence.dispose();
 		this._tasksHost.dispose();
-		for (const waiter of waiters) waiter.reject(new Error("The session was disposed"));
 		try {
 			this.abortRetry();
 			this.abortCompaction();
@@ -2111,7 +2050,7 @@ export class AgentSession {
 	private async _startRun(trigger: BeforeAgentStartTrigger, onStarted?: () => void): Promise<void> {
 		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
-		this._updateQuiescence();
+		this._quiescence.poke();
 		let messages: AgentMessage[];
 		try {
 			messages = await this._prepareRun(trigger);
@@ -4381,7 +4320,7 @@ export class AgentSession {
 
 		// Set up abort controller for summarization
 		this._branchSummaryAbortController = new AbortController();
-		this._updateQuiescence();
+		this._quiescence.poke();
 
 		try {
 			let extensionSummary: { summary: string; details?: unknown; usage?: Usage } | undefined;

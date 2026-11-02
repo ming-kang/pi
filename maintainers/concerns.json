@@ -108,7 +108,7 @@
 			"paths": [
 				{
 					"path": "src/core/agent-session.ts",
-					"rewrite": "TaskSession owns result and usage persistence and the task service lifecycle (shutdown and replacement); TaskDelivery owns the retention-lease completion queue, pausing, queued completion and tool-call receipts. Lifecycle pauses wrap upstream-shaped Body methods through withTaskNotificationsPaused, which the runtime host reuses; shutdownTasks is the one teardown path for reload, replacement and disposal. AgentSession adds acknowledgeTaskDelivery and supplies the management-tool admission predicate, and TasksContext.session exposes only the tree-navigation query used by the management extension."
+					"rewrite": "TaskSession owns result and usage persistence and the task service lifecycle (shutdown and replacement); TaskDelivery owns the retention-lease completion queue, pausing, queued completion and tool-call receipts. Lifecycle pauses wrap upstream-shaped Body methods through withTaskNotificationsPaused, which the runtime host reuses; shutdownTasks is the one teardown path for reload, replacement and disposal. QuiescenceLatch reports session_quiescent from one busy predicate that reads TaskSession.isQuiet(), and TaskSession.observe follows agent events. AgentSession adds acknowledgeTaskDelivery and supplies the management-tool admission predicate, and TasksContext.session exposes only the tree-navigation query used by the management extension."
 				},
 				{
 					"path": "src/core/agent-session-runtime.ts"
@@ -198,6 +198,7 @@
 				"test/tasks-panel.test.ts",
 				"test/suite/tasks-panel.test.ts",
 				"test/print-mode.test.ts",
+				"test/quiescence.test.ts",
 				"test/rpc-client-quiescence.test.ts"
 			]
 		},

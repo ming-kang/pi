@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { AgentMessage, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentEvent, AgentMessage, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
 import type { CustomMessage } from "../messages.ts";
 import { getTasksLateSidecarPath, type SessionEntry, type SessionManager } from "../session-manager.ts";
@@ -88,8 +88,31 @@ export class TaskSession {
 		return service.list().filter((task) => task.mode === "background" && !isTaskTerminal(task.status));
 	}
 
+	/**
+	 * No unsettled background task and no completion that could be delivered now. Consulted while
+	 * the main session is idle, where an undeliverable completion waits for the next input.
+	 */
+	isQuiet(): boolean {
+		return (
+			this.runningBackground().length === 0 && !(this.options.canDeliver() && this.delivery.hasDeliverableWork())
+		);
+	}
+
 	get service(): TaskRuntime {
 		return this._service;
+	}
+
+	/** Follow the main agent: delivery tracks its completion message, the context reminder its finished replies. */
+	observe(event: AgentEvent): void {
+		if (event.type === "message_start") this.delivery.messageStarted(event.message);
+		else if (event.type === "agent_end") this.delivery.agentEnded();
+		else if (
+			event.type === "message_end" &&
+			event.message.role === "assistant" &&
+			event.message.stopReason !== "error" &&
+			event.message.stopReason !== "aborted"
+		)
+			this.contextReminder.assistantCompleted();
 	}
 
 	/** The active tools changed: availability of background detaching may have too. */
@@ -103,10 +126,6 @@ export class TaskSession {
 
 	projectContextReminder(messages: AgentMessage[]): AgentMessage[] {
 		return this.contextReminder.project(this.service, messages);
-	}
-
-	noteAssistantCompleted(): void {
-		this.contextReminder.assistantCompleted();
 	}
 
 	get quarantinedSettlements(): readonly QuarantinedTaskSettlement[] {
