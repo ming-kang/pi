@@ -138,6 +138,7 @@ import {
 	DEFAULT_TOOL_NAMES,
 	type SettingsManager,
 } from "./settings-manager.ts";
+import { slashCommandName } from "./slash-command-name.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { BUILTIN_PATH_PREFIX, createSyntheticSourceInfo, isSyntheticPath, type SourceInfo } from "./source-info.ts";
 import {
@@ -2291,11 +2292,9 @@ export class AgentSession {
 	}
 
 	private _isExtensionCommandPrompt(text: string, options?: PromptOptions): boolean {
-		if (!(options?.expandPromptTemplates ?? true) || !text.startsWith("/")) return false;
-		const spaceIndex = text.indexOf(" ");
-		return (
-			this._extensionRunner.getCommand(spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex)) !== undefined
-		);
+		if (!(options?.expandPromptTemplates ?? true)) return false;
+		const name = slashCommandName(text);
+		return name !== undefined && this._extensionRunner.getCommand(name) !== undefined;
 	}
 
 	private async _promptBody(text: string, options?: PromptOptions): Promise<void> {

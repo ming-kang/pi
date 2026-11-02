@@ -120,6 +120,8 @@ describe("interactive editor submit interception", () => {
 			expect(host.editorHost.classify(command)).toBe("command");
 		}
 		expect(host.editorHost.classify("/unknown is part of my question")).toBe("prompt");
+		// Dispatch splits a command from its arguments at a space, so a newline does not end its name.
+		expect(host.editorHost.classify("/model\nexample")).toBe("prompt");
 		expect(host.editorHost.classify("!echo hello")).toBe("bash");
 		expect(host.editorHost.classify("!!echo hello")).toBe("bash");
 		host.addHandler((event) => (event.kind === "prompt" ? { handled: true } : undefined));

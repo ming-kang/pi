@@ -125,7 +125,7 @@ export class TaskSession {
 	}
 
 	projectContextReminder(messages: AgentMessage[]): AgentMessage[] {
-		return this.contextReminder.project(this.service, messages);
+		return this.contextReminder.project(messages, () => this.runningBackground());
 	}
 
 	get quarantinedSettlements(): readonly QuarantinedTaskSettlement[] {

@@ -4,6 +4,7 @@ import type {
 	EditorSubmitHandler,
 	TerminalInputHandler,
 } from "../../core/extensions/index.ts";
+import { slashCommandName } from "../../core/slash-command-name.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 
 /** Optional capabilities of the native and custom editors. */
@@ -72,8 +73,8 @@ export class InteractiveEditorHost implements EditorHost {
 
 	classify(text: string): EditorSubmitEvent["kind"] {
 		if (text.startsWith("!")) return "bash";
-		if (!text.startsWith("/")) return "prompt";
-		const name = text.slice(1).split(/\s/, 1)[0];
+		const name = slashCommandName(text);
+		if (name === undefined) return "prompt";
 		return BUILTIN_SLASH_COMMANDS.some((command) => command.name === name) ||
 			HIDDEN_BUILTIN_COMMANDS.includes(name) ||
 			this.options.isSessionCommand(name)

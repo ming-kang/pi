@@ -1,7 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { boundText } from "./output.ts";
-import type { TaskRuntime } from "./runtime.ts";
-import { isTaskTerminal, TASKS_TOOL_NAME, type TaskSnapshot } from "./types.ts";
+import { TASKS_TOOL_NAME, type TaskSnapshot } from "./types.ts";
 
 function taskLine(task: TaskSnapshot): string {
 	const title = boundText(task.title.replace(/\s+/gu, " ").trim(), 240);
@@ -21,9 +20,10 @@ export class TaskContextReminder {
 		this.projected = false;
 	}
 
-	project(service: TaskRuntime, messages: AgentMessage[]): AgentMessage[] {
+	/** `runningBackground` is read only while a reminder is pending. */
+	project(messages: AgentMessage[], runningBackground: () => TaskSnapshot[]): AgentMessage[] {
 		if (!this.pending) return messages;
-		const tasks = service.list().filter((task) => task.mode === "background" && !isTaskTerminal(task.status));
+		const tasks = runningBackground();
 		if (tasks.length === 0) {
 			this.reset();
 			return messages;

@@ -26,6 +26,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Fixed
 
+- An editor submit handler sees `kind: "command"` only for input Pi dispatches as a command. A slash name followed by a newline or tab, such as `/model\nexample`, is classified as a prompt, matching how it is submitted.
 - `AgentSession.waitForQuiescence()` and the `session_quiescent` event now also resolve when input queued with `steer()` or `followUp()` on an idle session holds back a pending background completion. `isQuiescent` already reported `true`, but waiters stayed pending until some later event.
 
 ## [1.4.11] - 2026-11-01
