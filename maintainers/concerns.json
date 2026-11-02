@@ -603,7 +603,7 @@
 				},
 				{
 					"path": "src/modes/interactive/components/config-selector.ts",
-					"rewrite": "Skill rows use a separate tri-state projection whose invocation reads and writes go through the shared skill invocation policy, while other resources retain boolean overrides. Project package entries match by package identity for every resource type."
+					"rewrite": "Skill rows delegate to SkillRows (config-selector-skills.ts), a tri-state projection whose invocation reads and writes go through the shared skill invocation policy, while other resources retain boolean overrides. Project package entries match by package identity for every resource type, and both package writers share collapsePackageEntry."
 				},
 				{
 					"path": "schemas/settings.schema.json"
