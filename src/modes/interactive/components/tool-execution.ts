@@ -198,20 +198,28 @@ export class ToolExecutionComponent extends Container {
 
 	private createCallFallback(): Component {
 		const shell = this.getShell();
-		if (shell?.renderCall) return shell.renderCall(this.args, theme, this.getRenderContext(undefined));
+		try {
+			if (shell?.renderCall) return shell.renderCall(this.args, theme, this.getRenderContext(undefined));
+		} catch {
+			// A failed presentation still shows the call as text.
+		}
 		return new Text(formatToolCallWithArgs(this.toolName, this.args, theme, this.expanded), 0, 0);
 	}
 
 	private createResultFallback(): Component | undefined {
 		const shell = this.getShell();
-		if (shell?.renderResult && this.result) {
-			const { content, details } = this.result;
-			return shell.renderResult(
-				{ content: content as AgentToolResult<unknown>["content"], details },
-				{ expanded: this.expanded, isPartial: this.isPartial },
-				theme,
-				this.getRenderContext(undefined),
-			);
+		try {
+			if (shell?.renderResult && this.result) {
+				const { content, details } = this.result;
+				return shell.renderResult(
+					{ content: content as AgentToolResult<unknown>["content"], details },
+					{ expanded: this.expanded, isPartial: this.isPartial },
+					theme,
+					this.getRenderContext(undefined),
+				);
+			}
+		} catch {
+			// A failed presentation still shows the output as text.
 		}
 		const output = this.getTextOutput();
 		if (!output) {

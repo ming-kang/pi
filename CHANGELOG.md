@@ -13,7 +13,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 - `AgentSession.tasks` is typed as the public `TasksContext`, the same capability extensions get as `ctx.tasks`. Use `session.shutdownTasks()` instead of `session.tasks.shutdown()`; a host can no longer enable background execution directly, only through `bindExtensions({ tasksEnabled })`.
 - Every background request a host does not allow is rejected with the same message: "Background execution is not available in this host. Run with background: false or omit background. No work was started."
-
+- `ExtensionContextActions.getTasks`, `getExtensionSettings`, `setExtensionSettings` and `getContextSnapshot` are required. A host that binds an `ExtensionRunner` itself must supply them; `AgentSession` already does.
 - Tool renderers register row cleanup with `context.onDispose(cleanup)`. The shell no longer calls `context.state.dispose()`; a renderer that set it registers the same cleanup with `onDispose` instead. A cleanup that throws no longer interrupts disposal of the row or of the rows cleared after it.
 - Background completion notifications are notifications only: the executor's label, outcome, duration, short ID, title and any error. Expanding one no longer repeats the input, facts, output and log path, so a background Agent's notification matches its settled foreground result; those details remain in `/tasks`. Saved messages from older formats show their first few lines.
 - A running Agent's `/tasks` Output shows its published plain tool-call list instead of a separately styled one; the styled list remains in the Transcript's expanded row.

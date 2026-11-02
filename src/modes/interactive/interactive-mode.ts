@@ -4287,10 +4287,13 @@ export class InteractiveMode {
 		// the final frame while the process is exiting.
 		// Drain any in-flight Kitty key release events before stopping.
 		// This prevents escape sequences from leaking to the parent shell over slow SSH.
+		// Close task admission first, so no completion turn starts while the terminal drains.
+		const stoppingTasks = this.session.shutdownTasks();
 		this.themeController.disableAutoSync();
 		await this.ui.terminal.drainInput(1000);
 
 		this.stop();
+		await stoppingTasks;
 		await this.runtimeHost.dispose();
 
 		const resumeCommand = formatResumeCommand(this.sessionManager);

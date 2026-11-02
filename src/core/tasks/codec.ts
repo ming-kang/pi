@@ -194,17 +194,16 @@ function taskUsage(value: unknown): Usage {
 /** The usage a `task-record` entry, or a released `task-usage` entry, settles for its task. */
 export function readTaskUsage(entry: SessionEntry): TaskUsageRecord | undefined {
 	if (entry.type !== "custom") return undefined;
+	if (entry.customType !== TASK_RECORD_TYPE && entry.customType !== LEGACY_TASK_USAGE_TYPE) return undefined;
 	try {
 		const data = plainObject(entry.data);
 		let taskId: unknown;
 		if (entry.customType === TASK_RECORD_TYPE) {
 			if (field(data, "version") !== TASK_SNAPSHOT_VERSION) return undefined;
 			taskId = field(plainObject(field(data, "task")), "id");
-		} else if (entry.customType === LEGACY_TASK_USAGE_TYPE) {
+		} else {
 			if (field(data, "version") !== 1) return undefined;
 			taskId = field(data, "taskId");
-		} else {
-			return undefined;
 		}
 		if (typeof taskId !== "string" || !taskId.trim()) return undefined;
 		return { taskId, usage: taskUsage(field(data, "usage")) };

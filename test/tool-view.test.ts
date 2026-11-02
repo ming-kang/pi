@@ -441,6 +441,33 @@ describe("tool shell boundaries", () => {
 		expect(selfOutput).not.toContain("●");
 	});
 
+	test("shows the call and output as text when the shell's own presentation fails", () => {
+		const definition: ToolRenderers = {
+			shell: {
+				frame: (component) => component,
+				renderCall: () => {
+					throw new Error("broken call presentation");
+				},
+				renderResult: () => {
+					throw new Error("broken result presentation");
+				},
+			},
+		};
+		const component = new NativeToolExecutionComponent(
+			"custom",
+			"failing-shell",
+			{ query: "needle" },
+			{},
+			definition,
+			fakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(textResult("found the needle"), false);
+		const output = stripAnsi(component.render(80).join("\n"));
+		expect(output).toContain("custom");
+		expect(output).toContain("found the needle");
+	});
+
 	test("does not expose the TUI shell to HTML export", () => {
 		const definition: ToolRenderers = {
 			renderCall: () => new Text("call", 0, 0),

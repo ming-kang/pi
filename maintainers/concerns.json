@@ -202,6 +202,7 @@
 				"test/suite/tasks-panel.test.ts",
 				"test/print-mode.test.ts",
 				"test/quiescence.test.ts",
+				"test/suite/regressions/5080-signal-shutdown-extension-cleanup.test.ts",
 				"test/rpc-client-quiescence.test.ts"
 			]
 		},
