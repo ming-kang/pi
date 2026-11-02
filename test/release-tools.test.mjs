@@ -102,6 +102,23 @@ describe("release confirmation", () => {
 		expect(git(fixture.root, "status", "--porcelain")).toBe("");
 		expect(releaseFiles.map((file) => readFileSync(join(fixture.root, file), "utf8"))).toEqual(files);
 	});
+
+	test("a confirmed release pushes its commit to main and leaves tagging to CI", () => {
+		const fixture = createReleaseFixture();
+
+		const release = runRelease(fixture, "--yes");
+		expect(release.status, release.stderr).toBe(0);
+
+		expect(git(fixture.root, "log", "-1", "--format=%s")).toBe("chore: release 1.0.1");
+		expect(git(fixture.root, "status", "--porcelain")).toBe("");
+		expect(git(fixture.root, "ls-remote", "origin", "refs/heads/main").split("\t")[0]).toBe(
+			git(fixture.root, "rev-parse", "HEAD"),
+		);
+		expect(git(fixture.root, "ls-remote", "--tags", "origin")).toBe("");
+		expect(git(fixture.root, "tag", "--list")).toBe("");
+		expect(JSON.parse(readFileSync(join(fixture.root, "package-lock.json"), "utf8")).version).toBe("1.0.1");
+		expect(readFileSync(join(fixture.root, "CHANGELOG.md"), "utf8")).toMatch(/## \[1\.0\.1\] - \d{4}-\d{2}-\d{2}\n\n- Fixed a thing\./);
+	});
 });
 
 describe("nextVersion", () => {

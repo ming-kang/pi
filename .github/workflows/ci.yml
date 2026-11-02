@@ -1,8 +1,7 @@
 name: CI
 
+# Pushes to main run this through publish-npm.yml, which publishes after it passes.
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
   workflow_call:

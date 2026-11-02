@@ -1,82 +1,69 @@
-name: Publish npm
-run-name: Publish ${{ github.ref_name }}
+name: CI and publish
+
+# Every push to main runs CI here. When CI passes and package.json names a version that npm
+# does not have yet, the tarball CI verified is published and its commit is tagged pi-v<version>.
+# npm trusted publishing is bound to this file name, so keep it.
 
 on:
   push:
-    tags: ["pi-v*"]
+    branches: [main]
 
 permissions:
   contents: read
 
+# Queue instead of cancelling, so a newer push never interrupts a publication.
 concurrency:
   group: publish-npm
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Verify release tag
+  plan:
+    name: Check for an unpublished version
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.release.outputs.version }}
-      already_published: ${{ steps.release.outputs.already_published }}
+      version: ${{ steps.plan.outputs.version }}
+      publish: ${{ steps.plan.outputs.publish }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify tag, version, and main ancestry
-        id: release
+      - name: Compare package.json with npm
+        id: plan
         run: |
-          version="${GITHUB_REF_NAME#pi-v}"
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
-            echo "Tag $GITHUB_REF_NAME points at $GITHUB_SHA, which is not on main." >&2
-            exit 1
-          }
+          version="$(node -p "require('./package.json').version")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if npm view "@astralyn/pi@$version" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           RELEASE_VERSION="$version" node --input-type=module <<'NODE'
           import { readFileSync } from "node:fs";
 
           const version = process.env.RELEASE_VERSION;
           if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
-            throw new Error(`Expected a stable numeric version tag such as pi-v1.0.0, got ${version}.`);
+            throw new Error(`Only stable major.minor.patch versions are published, got ${version}.`);
           }
-          const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-          const lockfile = JSON.parse(readFileSync("package-lock.json", "utf8"));
-          if (packageJson.name !== "@astralyn/pi") {
-            throw new Error(`Expected the root package to be @astralyn/pi, got ${packageJson.name}.`);
-          }
-          if (packageJson.version !== version || lockfile.version !== version) {
-            throw new Error(
-              `Tag version ${version} must match package.json (${packageJson.version}) and package-lock.json (${lockfile.version}).`,
-            );
-          }
-          const releaseHeading = `## [${version}] - `;
-          const headingCount = readFileSync("CHANGELOG.md", "utf8")
+          const headings = readFileSync("CHANGELOG.md", "utf8")
             .split("\n")
-            .filter((line) => line.startsWith(releaseHeading)).length;
-          if (headingCount !== 1) {
-            throw new Error(`Expected exactly one CHANGELOG.md release heading for ${version}, found ${headingCount}.`);
+            .filter((line) => line.startsWith(`## [${version}] - `));
+          if (headings.length !== 1) {
+            throw new Error(`Expected one CHANGELOG.md heading for ${version}, found ${headings.length}. Use npm run release.`);
           }
           NODE
 
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          if npm view "@astralyn/pi@$version" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
-            echo "::notice::@astralyn/pi@$version is already published; publication will be skipped."
-            echo "already_published=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "already_published=false" >> "$GITHUB_OUTPUT"
-          fi
+          echo "::notice::@astralyn/pi@$version is not on npm yet and publishes once CI passes."
+          echo "publish=true" >> "$GITHUB_OUTPUT"
 
   ci:
-    needs: release
     uses: ./.github/workflows/ci.yml
 
   publish:
     name: Publish verified artifact
-    needs: [release, ci]
-    if: needs.release.outputs.already_published != 'true'
+    needs: [plan, ci]
+    if: needs.plan.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -97,4 +84,17 @@ jobs:
           path: package
 
       - name: Publish
-        run: npm publish "./package/astralyn-pi-${{ needs.release.outputs.version }}.tgz" --access public --provenance --registry=https://registry.npmjs.org
+        run: npm publish "./package/astralyn-pi-${{ needs.plan.outputs.version }}.tgz" --access public --provenance --registry=https://registry.npmjs.org
+
+  tag:
+    name: Tag the published commit
+    needs: [plan, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create pi-v${{ needs.plan.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: pi-v${{ needs.plan.outputs.version }}
+        run: gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$TAG" -f "sha=$GITHUB_SHA" --silent

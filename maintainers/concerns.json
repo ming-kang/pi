@@ -198,6 +198,7 @@
 				"test/tasks-usage.test.ts",
 				"test/tasks-extension.test.ts",
 				"test/interactive-mode-tree-tasks.test.ts",
+				"test/interactive-mode-background.test.ts",
 				"test/tasks-panel.test.ts",
 				"test/suite/tasks-panel.test.ts",
 				"test/print-mode.test.ts",

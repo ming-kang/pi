@@ -9,11 +9,10 @@ import { fileURLToPath } from "node:url";
 const usage = `Usage: npm run release -- [<version>] [--dry-run] [--yes]
 
   (default)  validate and confirm the release, stamp CHANGELOG [Unreleased], bump the version,
-             commit, tag pi-v<version>, and push main and the tag together atomically;
-             the tag's workflow verifies and publishes
+             commit, and push main; CI on main publishes the version once it passes
   <version>  release this version instead of the next one in upstream's major.minor line
   --dry-run  print the version and changelog section without asking or changing anything
-  --yes      create and push the release without asking`;
+  --yes      commit and push the release without asking`;
 
 const PACKAGE_NAME = "@astralyn/pi";
 const UNRELEASED = "## [Unreleased]";
@@ -113,8 +112,7 @@ function requireCleanMain() {
 
 async function confirm(question, yes) {
 	if (yes) return true;
-	if (!process.stdin.isTTY)
-		throw new Error("Pass --yes to create and push a release without an interactive confirmation.");
+	if (!process.stdin.isTTY) throw new Error("Pass --yes to release without an interactive confirmation.");
 	const readline = createInterface({ input: process.stdin, output: process.stdout });
 	try {
 		return /^y(es)?$/i.test((await readline.question(`${question} [y/N] `)).trim());
@@ -123,14 +121,12 @@ async function confirm(question, yes) {
 	}
 }
 
-// gh resolves its default repository from the remotes, which here include
-// upstream, so name this distribution's repository explicitly.
-function printWatch(tag) {
+function printNextSteps(version) {
 	const { repository } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 	const repo = new URL(repository.url).pathname.replace(/^\//, "").replace(/\.git$/, "");
-	console.log(`\nThe tag runs the Publish npm workflow: full CI, then publication of the verified tarball.`);
-	console.log(`  gh run list --repo ${repo} --workflow publish-npm.yml --branch ${tag} --limit 1`);
-	console.log(`  gh run watch <run-id> --repo ${repo} --exit-status`);
+	console.log(`\nPushed the ${version} release. CI on main publishes it and tags pi-v${version} once it passes:`);
+	console.log(`  https://github.com/${repo}/actions/workflows/publish-npm.yml`);
+	console.log("If CI fails, nothing is published: fix main and push, and the next passing run publishes it.");
 }
 
 async function release(requested, { dryRun, yes }) {
@@ -139,28 +135,21 @@ async function release(requested, { dryRun, yes }) {
 	const upstreamTag = JSON.parse(readFileSync(join(root, "maintainers", "upstream.json"), "utf8")).tag;
 	const version = requested ?? nextVersion(packageJson.version, upstreamTag);
 	parseVersion(version);
-	const tag = `pi-v${version}`;
 
 	const changelogPath = join(root, "CHANGELOG.md");
 	const lockfilePath = join(root, "package-lock.json");
 	const date = new Date().toISOString().slice(0, 10);
 	const changelog = stampChangelog(readFileSync(changelogPath, "utf8"), version, date);
 	if (isPublished(version)) throw new Error(`${PACKAGE_NAME}@${version} is already on npm.`);
-	if (git("tag", "--list", tag) || git("ls-remote", "--tags", "origin", `refs/tags/${tag}`)) {
-		throw new Error(`Tag ${tag} already exists.`);
-	}
 
 	if (dryRun) {
 		const section = changelog.split(`## [${version}]`)[1].split("\n## ")[0];
-		console.log(`Would release ${PACKAGE_NAME}@${version} (upstream ${upstreamTag}) as ${tag}:\n`);
+		console.log(`Would release ${PACKAGE_NAME}@${version} (upstream ${upstreamTag}):\n`);
 		console.log(`## [${version}]${section.trimEnd()}`);
 		return;
 	}
 
-	const push = ["push", "--atomic", "origin", "main", `refs/tags/${tag}`];
-	if (
-		!(await confirm(`Create release commit and ${tag}, then push both to origin, which publishes ${version}?`, yes))
-	) {
+	if (!(await confirm(`Commit the ${version} release and push main? CI publishes it once it passes.`, yes))) {
 		console.log("Release cancelled; no changes made.");
 		return;
 	}
@@ -170,17 +159,15 @@ async function release(requested, { dryRun, yes }) {
 	writeFileSync(lockfilePath, stampLockfile(readFileSync(lockfilePath, "utf8"), version));
 	run("git", ["add", "--", "CHANGELOG.md", "package.json", "package-lock.json"]);
 	run("git", ["commit", "-m", `chore: release ${version}`]);
-	run("git", ["tag", "-a", tag, "-m", `${PACKAGE_NAME} ${version}`]);
-
 	try {
-		run("git", push);
+		run("git", ["push", "origin", "main"]);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		throw new Error(
-			`${message}\nThe release commit and ${tag} remain local. Fix the push problem, then retry with:\n  git ${push.join(" ")}`,
+			`${message}\nThe release commit remains local. Fix the push problem, then run: git push origin main`,
 		);
 	}
-	printWatch(tag);
+	printNextSteps(version);
 }
 
 async function main(args) {
