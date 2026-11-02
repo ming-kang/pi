@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-02
+
 ### Added
 
 - Entry renderers receive `outputPad`, the horizontal padding from the `outputPad` setting, as message renderers already do. The run summary and cached-compaction lines follow it instead of a fixed padding of 1.
