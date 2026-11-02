@@ -74,7 +74,12 @@ describe("Background detach key", () => {
 		const calls: string[] = [];
 		const context = {
 			isShuttingDown: false,
-			session: { tasks: { close: () => calls.push("close") } },
+			session: {
+				shutdownTasks: () => {
+					calls.push("tasks:shutdown");
+					return new Promise<void>(() => {});
+				},
+			},
 			themeController: { disableAutoSync: () => calls.push("theme") },
 			ui: {
 				terminal: {
@@ -87,7 +92,7 @@ describe("Background detach key", () => {
 		};
 		const prototype = InteractiveMode.prototype as unknown as { shutdown(this: typeof context): Promise<void> };
 		void prototype.shutdown.call(context);
-		expect(calls).toEqual(["close", "theme", "drain"]);
+		expect(calls).toEqual(["tasks:shutdown", "theme", "drain"]);
 		expect(context.isShuttingDown).toBe(true);
 	});
 

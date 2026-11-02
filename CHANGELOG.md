@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Fixed
+
+- 1.5.0 was tagged but never published to npm because its release checks failed. This release ships the 1.5.0 changes below.
+
 ## [1.5.0] - 2026-11-02
 
 ### Added
