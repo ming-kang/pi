@@ -14,7 +14,7 @@ import {
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
-import { OutputAccumulator } from "./output-accumulator.ts";
+import { OutputAccumulator, type OutputAccumulatorOptions } from "./output-accumulator.ts";
 import { BASH_UPDATE_THROTTLE_MS, createShellRenderers } from "./renderers/bash.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult } from "./truncate.ts";
@@ -37,7 +37,7 @@ export function resolveTimeoutMs(timeout: number | undefined): number | undefine
 	return timeoutMs;
 }
 
-const bashSchema = Type.Object({
+export const bashSchema = Type.Object({
 	command: Type.String({ description: "Shell command to execute" }),
 	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
 });
@@ -53,7 +53,7 @@ export type BashToolInput = Static<typeof bashSchema>;
  * Result for programmatic callers such as codemode scripts. A non-zero exit code is an error result for the model, but scripts still resolve to this value.
  * `output` is not limited like the model-facing output: callers decide how much of it reaches the model.
  */
-const bashOutputSchema = Type.Object({
+export const bashOutputSchema = Type.Object({
 	output: Type.String({ description: "Combined stdout and stderr, possibly truncated" }),
 	truncated: Type.Boolean(),
 	full_output_path: Type.Optional(Type.String({ description: "Full output, when truncated" })),
@@ -183,7 +183,7 @@ export interface BashSpawnContext {
 
 export type BashSpawnHook = (context: BashSpawnContext) => BashSpawnContext;
 
-export function resolveSpawnContext(
+function resolveSpawnContext(
 	command: string,
 	cwd: string,
 	spawnHook: BashSpawnHook | undefined,
@@ -238,6 +238,8 @@ export interface ShellToolConfig {
 	promptSnippet: string;
 	promptGuidelines?: readonly string[];
 	tempFilePrefix: string;
+	/** Creates each call's output accumulator, for hosts that own where output is kept. */
+	createOutput?: (options: OutputAccumulatorOptions) => OutputAccumulator;
 }
 
 export function createShellToolDefinition(
@@ -273,7 +275,8 @@ export function createShellToolDefinition(
 				exposeSessionEnvironment,
 				ctx,
 			);
-			const output = new OutputAccumulator({ tempFilePrefix: config.tempFilePrefix });
+			const outputOptions = { tempFilePrefix: config.tempFilePrefix };
+			const output = config.createOutput?.(outputOptions) ?? new OutputAccumulator(outputOptions);
 			let acceptingOutput = true;
 			let updateTimer: NodeJS.Timeout | undefined;
 			let updateDirty = false;
@@ -349,7 +352,7 @@ export function createShellToolDefinition(
 					} else if (truncation.truncatedBy === "lines") {
 						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${snapshot.fullOutputPath}]`;
 					} else {
-						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Full output: ${snapshot.fullOutputPath}]`;
+						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(truncation.maxBytes)} limit). Full output: ${snapshot.fullOutputPath}]`;
 					}
 				}
 				return { text, details };

@@ -2,10 +2,9 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ExtensionToolContext } from "../../src/core/extensions/types.ts";
 import type { TasksContext } from "../../src/core/tasks/types.ts";
-import { createLocalBashOperations } from "../../src/core/tools/shell-operations.ts";
-import { runShellCommand } from "../../src/core/tools/shell-execution.ts";
-import type { BashToolDetails } from "../../src/core/tools/shell-tool.ts";
+import { createBashToolDefinition } from "../../src/core/tools/shell-tool.ts";
 
 export async function startTasksScenario(tasks: TasksContext, cwd: string) {
 	const directory = await mkdtemp(join(tmpdir(), "pi-tasks-scenario-"));
@@ -14,18 +13,16 @@ export async function startTasksScenario(tasks: TasksContext, cwd: string) {
 	const ids: string[] = [];
 	const outcomes: Promise<unknown>[] = [];
 	const errors: string[] = [];
+	// The production managed shell, run in the scenario directory with the project path in its environment.
+	const bash = createBashToolDefinition(directory, { exposeSessionEnvironment: false, spawnHook: (spawn) => ({ ...spawn, env: { ...spawn.env, TASK_SCENARIO_PROJECT: cwd } }) });
+	const context = { tasks, cwd: directory } as unknown as ExtensionToolContext;
 	const launch = async (name: string, background: boolean, exitCode: number) => {
 		const path = join(directory, `${name}.sh`);
 		await writeFile(path, `for i in $(seq 90); do echo "${name} output $i"; done\nwhile [ ! -f ${shellGate} ]; do sleep 0.2; done\necho "${name} final output"\nexit ${exitCode}\n`);
-		let id = "";
-		const command = `bash ${name}.sh`;
-		const caller = tasks.execute<BashToolDetails | undefined>({
-			kind: "bash", label: "Bash", title: name, input: { label: "Command", text: command, truncated: false, language: "bash" }, facts: [["Directory", directory]], toolCallId: `fixture-${name}`, background,
-			run(control) {
-				id = control.id;
-				return runShellCommand({ operations: createLocalBashOperations(), context: { command, cwd: directory, env: { ...process.env, TASK_SCENARIO_PROJECT: cwd } }, tempFilePrefix: "pi-tasks-scenario", timeout: 600, control, taskLog: true });
-			},
-		});
+		const toolCallId = `fixture-${name}`;
+		const caller = bash.execute(toolCallId, { command: `bash ${name}.sh`, timeout: 600, background }, undefined, undefined, context);
+		// The task is registered before the tool's first await.
+		const id = tasks.list().find((task) => task.toolCallId === toolCallId)?.id ?? "";
 		outcomes.push(caller.catch(error => errors.push(String(error))));
 		ids.push(id);
 		if (background) await caller;

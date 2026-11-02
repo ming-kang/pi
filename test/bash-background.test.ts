@@ -4,7 +4,10 @@ import type { ExtensionToolContext } from "../src/core/extensions/types.ts";
 import { projectForModel } from "../src/core/tasks/presentation.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import { TASK_BACKGROUND_REJECTION } from "../src/core/tasks/types.ts";
-import type { BashOperations } from "../src/core/tools/bash.ts";
+import {
+	type BashOperations,
+	createBashToolDefinition as createNativeBashToolDefinition,
+} from "../src/core/tools/bash.ts";
 import { OutputAccumulator } from "../src/core/tools/output-accumulator.ts";
 import { createPowerShellToolDefinition } from "../src/core/tools/powershell.ts";
 import { MAX_BACKGROUND_OUTPUT_BYTES } from "../src/core/tools/shell-execution.ts";
@@ -722,6 +725,88 @@ describe("native managed shell execution", () => {
 			"closed",
 		);
 		expect(child.operations.exec).toHaveBeenCalledOnce();
+	});
+
+	describe("a managed foreground command answers as the native shell body", () => {
+		const lines = Array.from({ length: 2500 }, (_, index) => `line ${index}`).join("\n");
+		it.each([
+			["success", "ok\n", 0, undefined],
+			["silent success", "", 0, undefined],
+			["exit code", "partial output", 7, undefined],
+			["silent exit code", "", 7, undefined],
+			["signal", "partial output", null, undefined],
+			["abort", "partial output", 0, "aborted"],
+			["timeout", "partial output", 0, "timeout:3"],
+			["operations error", "", 0, "spawn failed"],
+			["truncated", lines, 0, undefined],
+			["truncated exit code", lines, 2, undefined],
+		] as const)("%s", async (_name, output, exitCode, error) => {
+			const operations: BashOperations = {
+				exec: async (_command, _cwd, { onData }) => {
+					if (output) onData(Buffer.from(output));
+					if (error) throw new Error(error);
+					return { exitCode };
+				},
+			};
+			const answer = (
+				call: Promise<{
+					content: Array<{ type: string; text?: string }>;
+					isError?: boolean;
+					structuredContent?: unknown;
+				}>,
+			) =>
+				call.then(
+					(result) => {
+						const {
+							wall_time_seconds: _time,
+							full_output_path: path,
+							...structured
+						} = (result.structuredContent ?? {}) as Record<string, unknown>;
+						return { text: text(result), isError: result.isError, structured, path: path !== undefined };
+					},
+					(thrown: Error) => ({ error: thrown.message }),
+				);
+			// Output files differ by name only.
+			const withoutPaths = (value: object) =>
+				JSON.parse(JSON.stringify(value).replace(/Full output: [^\]"]+/g, "Full output: <path>"));
+			const native = await answer(
+				createNativeBashToolDefinition(process.cwd(), { operations }).execute(
+					"native",
+					{ command: "work" },
+					undefined,
+					undefined,
+					undefined as never,
+				),
+			);
+			const managed = await answer(
+				createBashToolDefinition(process.cwd(), { operations }).execute(
+					"managed",
+					{ command: "work" },
+					undefined,
+					undefined,
+					context(host()),
+				),
+			);
+			expect(withoutPaths(managed)).toEqual(withoutPaths(native));
+		});
+
+		it("keeps output the native body drops when its operations fail outright", async () => {
+			// The native body rethrows a raw operations error alone; the task already holds the output.
+			const operations: BashOperations = {
+				exec: async (_command, _cwd, { onData }) => {
+					onData(Buffer.from("partial output"));
+					throw new Error("spawn failed");
+				},
+			};
+			const call = createBashToolDefinition(process.cwd(), { operations }).execute(
+				"managed",
+				{ command: "work" },
+				undefined,
+				undefined,
+				context(host()),
+			);
+			await expect(call).rejects.toThrow("partial output\n\nspawn failed");
+		});
 	});
 
 	it("managed accumulator preserves split UTF-8 in one continuously readable exclusive file", async () => {
