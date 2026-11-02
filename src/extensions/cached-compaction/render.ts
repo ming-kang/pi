@@ -1,9 +1,9 @@
 import { Text } from "@earendil-works/pi-tui";
 import type { EntryRenderer } from "../../core/extensions/types.ts";
-import { cacheHitPercent } from "../../core/usage-totals.ts";
 import { formatTokens } from "../../modes/interactive/components/footer.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { formatDuration } from "../../utils/duration.ts";
+import { cacheHitPercent } from "../../utils/usage.ts";
 
 export interface CachedCompactionCard {
 	reason: "manual" | "threshold";

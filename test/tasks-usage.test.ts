@@ -1,8 +1,8 @@
 import type { Usage } from "@earendil-works/pi-ai/compat";
 import { describe, expect, it } from "vitest";
 import { SessionManager } from "../src/core/session-manager.ts";
-import { TASK_RECORD_TYPE } from "../src/core/tasks/codec.ts";
-import { getAccountedUsages, getTaskUsageRecord, getUsageCostBreakdown } from "../src/core/usage-totals.ts";
+import { readTaskUsage, TASK_RECORD_TYPE } from "../src/core/tasks/codec.ts";
+import { getAccountedUsages, getUsageCostBreakdown } from "../src/core/usage-totals.ts";
 
 const usage: Usage = {
 	input: 10,
@@ -23,7 +23,7 @@ const record = (id: string, value: unknown = usage, version = 3) => ({ version, 
 describe("background usage accounting", () => {
 	it("accepts a JSON round-trip including optional provider usage", () => {
 		const data = record("group-1", { ...usage, reasoning: 5, cacheWrite1h: 10 });
-		expect(getTaskUsageRecord(ledger(JSON.parse(JSON.stringify(data))))).toEqual({
+		expect(readTaskUsage(ledger(JSON.parse(JSON.stringify(data))))).toEqual({
 			taskId: "group-1",
 			usage: data.usage,
 		});
@@ -37,7 +37,7 @@ describe("background usage accounting", () => {
 		record("task", { ...usage, input: -1 }),
 		record("task", { ...usage, cost: { ...usage.cost, total: Number.NaN } }),
 	])("ignores malformed records: %j", (data) => {
-		expect(getTaskUsageRecord(ledger(data))).toBeUndefined();
+		expect(readTaskUsage(ledger(data))).toBeUndefined();
 	});
 
 	it("keeps billing usage that released sessions settled in separate entries", () => {

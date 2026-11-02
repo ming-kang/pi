@@ -9,7 +9,8 @@ import type { AssistantMessage, Message, Models, Usage } from "@earendil-works/p
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import type { ContextSnapshot } from "../../core/extensions/index.ts";
-import { cacheHitPercent, combineUsage, emptyUsage } from "../../core/usage-totals.ts";
+import { combineUsage } from "../../core/usage-totals.ts";
+import { cacheHitPercent, emptyUsage } from "../../utils/usage.ts";
 import {
 	MAX_DISPLAY_CHARS,
 	MAX_MODEL_STEPS,

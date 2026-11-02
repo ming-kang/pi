@@ -12,7 +12,7 @@ import {
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import { getTaskUsageRecord } from "../src/core/usage-totals.ts";
+import { readTaskUsage } from "../src/core/tasks/codec.ts";
 import tasksExtension from "../src/extensions/tasks/index.ts";
 import type { ExtensionFactory } from "../src/index.ts";
 import { sessionDelivery } from "./tasks-delivery-harness.ts";
@@ -212,7 +212,7 @@ describe("AgentSessionRuntime background lifecycle", () => {
 		veto = false;
 		await runtimeHost.fork(leaf, { position: "at" });
 		expect(signal.aborted).toBe(true);
-		const ledger = runtimeHost.session.sessionManager.getEntries().map(getTaskUsageRecord).filter(Boolean);
+		const ledger = runtimeHost.session.sessionManager.getEntries().map(readTaskUsage).filter(Boolean);
 		expect(ledger).toHaveLength(1);
 		expect(ledger[0]).toMatchObject({ taskId: outcome.task.id, usage: { input: 7 } });
 		expect(runtimeHost.session.tasks.list()).toMatchObject([{ id: outcome.task.id, status: "cancelled" }]);

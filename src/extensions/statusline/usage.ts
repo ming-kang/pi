@@ -1,11 +1,6 @@
 import type { ReadonlySessionManager } from "../../core/session-manager.ts";
-import {
-	addUsageToTotals,
-	cacheHitPercent,
-	createUsageTotals,
-	getAccountedUsages,
-	type UsageTotals,
-} from "../../core/usage-totals.ts";
+import { addUsageToTotals, createUsageTotals, getAccountedUsages, type UsageTotals } from "../../core/usage-totals.ts";
+import { cacheHitPercent } from "../../utils/usage.ts";
 
 export interface UsageSummary extends UsageTotals {
 	latestCacheHitPercent: number | undefined;

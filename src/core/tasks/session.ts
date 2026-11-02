@@ -5,8 +5,7 @@ import type { Usage } from "@earendil-works/pi-ai/compat";
 import type { CustomMessage } from "../messages.ts";
 import { getTasksLateSidecarPath, type SessionEntry, type SessionManager } from "../session-manager.ts";
 import { truncateHead } from "../tools/truncate.ts";
-import { getTaskUsageRecord } from "../usage-totals.ts";
-import { TASK_RECORD_TYPE, TASK_SNAPSHOT_VERSION } from "./codec.ts";
+import { readTaskUsage, TASK_RECORD_TYPE, TASK_SNAPSHOT_VERSION } from "./codec.ts";
 import { TaskDelivery } from "./delivery.ts";
 import { TaskContextReminder } from "./reminder.ts";
 import { TaskRuntime } from "./runtime.ts";
@@ -239,7 +238,7 @@ export class TaskSession {
 	/** One entry per settlement: the bounded terminal snapshot and its first usage settlement. */
 	private persistSettlement(task: TaskSnapshot, usage: Usage | undefined): void {
 		const manager = this.options.manager;
-		const accounted = usage && manager.getEntries().some((entry) => getTaskUsageRecord(entry)?.taskId === task.id);
+		const accounted = usage && manager.getEntries().some((entry) => readTaskUsage(entry)?.taskId === task.id);
 		// A foreground result is the tool result the transcript already saves; restoration reads it from there.
 		const { result: _result, ...metadata } = task;
 		const saved = task.mode === "foreground" ? metadata : task;

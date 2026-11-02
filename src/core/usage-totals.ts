@@ -1,6 +1,6 @@
 import type { Usage } from "@earendil-works/pi-ai/compat";
 import type { SessionEntry } from "./session-manager.ts";
-import { TASK_RECORD_TYPE, TASK_SNAPSHOT_VERSION } from "./tasks/codec.ts";
+import { readTaskUsage } from "./tasks/codec.ts";
 
 export interface UsageTotals {
 	input: number;
@@ -52,123 +52,40 @@ export function combineUsage(first: Usage, second: Usage): Usage {
 	};
 }
 
-export function emptyUsage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
-
-/** Share of one request's prompt served from cache, or undefined when it reported no cache activity. */
-export function cacheHitPercent({
-	input,
-	cacheRead,
-	cacheWrite,
-}: Pick<Usage, "input" | "cacheRead" | "cacheWrite">): number | undefined {
-	const promptTokens = input + cacheRead + cacheWrite;
-	return (cacheRead > 0 || cacheWrite > 0) && promptTokens > 0 ? (cacheRead / promptTokens) * 100 : undefined;
-}
-
 export interface UsageCostBreakdownEntry {
 	key: string;
 	cost: number;
 	tokens: number;
 }
 
-export interface TaskUsageRecord {
-	taskId: string;
-	usage: Usage;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isUsageValue(value: unknown): value is number {
-	return typeof value === "number" && Number.isFinite(value) && value >= 0;
-}
-
-/** Released sessions settled usage in separate entries; their billing still counts. */
-const LEGACY_TASK_USAGE_TYPE = "task-usage";
-
-function settledTaskId(entry: SessionEntry): unknown {
-	if (entry.type !== "custom" || !isRecord(entry.data)) return undefined;
-	const data = entry.data;
-	if (entry.customType === TASK_RECORD_TYPE)
-		return data.version === TASK_SNAPSHOT_VERSION && isRecord(data.task) ? data.task.id : undefined;
-	if (entry.customType === LEGACY_TASK_USAGE_TYPE) return data.version === 1 ? data.taskId : undefined;
-	return undefined;
-}
-
-/** Validate a task record's usage settlement and return only its serializable accounting fields. */
-export function getTaskUsageRecord(entry: SessionEntry): TaskUsageRecord | undefined {
-	const taskId = settledTaskId(entry);
-	if (typeof taskId !== "string" || !taskId.trim() || entry.type !== "custom") return undefined;
-	const data = entry.data as Record<string, unknown>;
-	const usage = data.usage;
-	if (!isRecord(usage) || !isRecord(usage.cost)) return undefined;
-	const { input, output, cacheRead, cacheWrite, totalTokens, reasoning, cacheWrite1h } = usage;
-	const cost = usage.cost;
-	if (
-		!isUsageValue(input) ||
-		!isUsageValue(output) ||
-		!isUsageValue(cacheRead) ||
-		!isUsageValue(cacheWrite) ||
-		!isUsageValue(totalTokens) ||
-		!isUsageValue(cost.input) ||
-		!isUsageValue(cost.output) ||
-		!isUsageValue(cost.cacheRead) ||
-		!isUsageValue(cost.cacheWrite) ||
-		!isUsageValue(cost.total) ||
-		(reasoning !== undefined && !isUsageValue(reasoning)) ||
-		(cacheWrite1h !== undefined && !isUsageValue(cacheWrite1h))
-	)
-		return undefined;
-	return {
-		taskId,
-		usage: {
-			input,
-			output,
-			cacheRead,
-			cacheWrite,
-			totalTokens,
-			...(reasoning === undefined ? {} : { reasoning }),
-			...(cacheWrite1h === undefined ? {} : { cacheWrite1h }),
-			cost: {
-				input: cost.input,
-				output: cost.output,
-				cacheRead: cost.cacheRead,
-				cacheWrite: cost.cacheWrite,
-				total: cost.total,
-			},
-		},
-	};
-}
-
+/** Usage that counts toward totals: legacy entries plus the first valid settlement per task. */
 function* accountedUsageEntries(entries: readonly SessionEntry[]): Generator<{ key: string; usage: Usage }> {
-	const backgroundTasks = new Set<string>();
+	const settledTasks = new Set<string>();
 	for (const entry of entries) {
+		let key: string | undefined;
+		let usage: Usage | undefined;
 		if (entry.type === "message" && entry.message.role === "assistant") {
-			yield {
-				key: `${entry.message.provider}/${entry.message.responseModel ?? entry.message.model}`,
-				usage: entry.message.usage,
-			};
+			key = `${entry.message.provider}/${entry.message.responseModel ?? entry.message.model}`;
+			usage = entry.message.usage;
 		} else if (entry.type === "usage") {
-			yield { key: `${entry.provider}/${entry.model}`, usage: entry.usage };
+			key = `${entry.provider}/${entry.model}`;
+			usage = entry.usage;
 		} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.usage) {
-			yield { key: "Tools/summaries", usage: entry.message.usage };
+			key = "Tools/summaries";
+			usage = entry.message.usage;
 		} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
-			yield { key: "Tools/summaries", usage: entry.usage };
+			key = "Tools/summaries";
+			usage = entry.usage;
 		} else {
-			const record = getTaskUsageRecord(entry);
-			if (!record || backgroundTasks.has(record.taskId)) continue;
-			backgroundTasks.add(record.taskId);
-			yield { key: "Tools/summaries", usage: record.usage };
+			const settlement = readTaskUsage(entry);
+			if (settlement && !settledTasks.has(settlement.taskId)) {
+				settledTasks.add(settlement.taskId);
+				key = "Tools/summaries";
+				usage = settlement.usage;
+			}
 		}
+		if (!key || !usage) continue;
+		yield { key, usage };
 	}
 }
 

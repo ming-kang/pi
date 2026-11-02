@@ -144,8 +144,7 @@
 					"path": "src/core/tools/powershell.ts"
 				},
 				{
-					"path": "src/core/usage-totals.ts",
-					"rewrite": "Task usage settlements, in task-record entries or released task-usage entries, count once per task, which turns upstream's accounting loop into a shared generator."
+					"path": "src/core/usage-totals.ts"
 				},
 				{
 					"path": "src/index.ts"

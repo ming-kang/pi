@@ -1,7 +1,10 @@
 /**
  * The one reader for persisted task snapshots: session `task-record` entries and
- * `task-completion` message details share this format and these bounds.
+ * `task-completion` message details share this format and these bounds. It also reads the
+ * usage settlement those entries carry for session totals.
  */
+import type { Usage } from "@earendil-works/pi-ai/compat";
+import type { SessionEntry } from "../session-manager.ts";
 import {
 	boundText,
 	TASK_ERROR_BYTES,
@@ -26,6 +29,14 @@ import {
 export const TASK_RECORD_TYPE = "task-record";
 /** Shared by `task-record` entries and `task-completion` details. */
 export const TASK_SNAPSHOT_VERSION = 3;
+/** Released sessions settled usage in separate entries; their billing still counts. */
+const LEGACY_TASK_USAGE_TYPE = "task-usage";
+
+/** One task's usage settlement, as session totals account for it. */
+export interface TaskUsageRecord {
+	taskId: string;
+	usage: Usage;
+}
 
 /** Read persisted data properties only; never invoke getters or custom serialization. */
 export function plainObject(value: unknown): Record<string, unknown> {
@@ -146,6 +157,57 @@ export function readVersionedTask(value: unknown): TaskSnapshot | undefined {
 	try {
 		const source = plainObject(value);
 		return field(source, "version") === TASK_SNAPSHOT_VERSION ? readPersistedTask(field(source, "task")) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function usageValue(value: unknown): number {
+	if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error("Expected usage value");
+	return value;
+}
+
+/** Only the serializable accounting fields, so a settlement never carries provider extras into totals. */
+function taskUsage(value: unknown): Usage {
+	const source = plainObject(value);
+	const cost = plainObject(field(source, "cost"));
+	const reasoning = optional(source, "reasoning", usageValue);
+	const cacheWrite1h = optional(source, "cacheWrite1h", usageValue);
+	return {
+		input: usageValue(field(source, "input")),
+		output: usageValue(field(source, "output")),
+		cacheRead: usageValue(field(source, "cacheRead")),
+		cacheWrite: usageValue(field(source, "cacheWrite")),
+		totalTokens: usageValue(field(source, "totalTokens")),
+		...(reasoning === undefined ? {} : { reasoning }),
+		...(cacheWrite1h === undefined ? {} : { cacheWrite1h }),
+		cost: {
+			input: usageValue(field(cost, "input")),
+			output: usageValue(field(cost, "output")),
+			cacheRead: usageValue(field(cost, "cacheRead")),
+			cacheWrite: usageValue(field(cost, "cacheWrite")),
+			total: usageValue(field(cost, "total")),
+		},
+	};
+}
+
+/** The usage a `task-record` entry, or a released `task-usage` entry, settles for its task. */
+export function readTaskUsage(entry: SessionEntry): TaskUsageRecord | undefined {
+	if (entry.type !== "custom") return undefined;
+	try {
+		const data = plainObject(entry.data);
+		let taskId: unknown;
+		if (entry.customType === TASK_RECORD_TYPE) {
+			if (field(data, "version") !== TASK_SNAPSHOT_VERSION) return undefined;
+			taskId = field(plainObject(field(data, "task")), "id");
+		} else if (entry.customType === LEGACY_TASK_USAGE_TYPE) {
+			if (field(data, "version") !== 1) return undefined;
+			taskId = field(data, "taskId");
+		} else {
+			return undefined;
+		}
+		if (typeof taskId !== "string" || !taskId.trim()) return undefined;
+		return { taskId, usage: taskUsage(field(data, "usage")) };
 	} catch {
 		return undefined;
 	}
