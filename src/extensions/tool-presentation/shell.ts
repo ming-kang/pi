@@ -4,11 +4,11 @@ import type {
 	ToolExecutionShell,
 	ToolRenderContext,
 	ToolRenderers,
-} from "../../../core/extensions/types.ts";
-import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
-import { createAllToolRenderers } from "../../../core/tools/renderers/index.ts";
+} from "../../core/extensions/types.ts";
+import { getTextOutput as getRenderedTextOutput } from "../../core/tools/render-utils.ts";
+import { createAllToolRenderers } from "../../core/tools/renderers/index.ts";
+import { FramedComponent, toolMarkerColor, toolStatus, toolStyle } from "../../modes/interactive/tool-view/style.ts";
 import { createCallFallback, FallbackResultComponent } from "./fallback.ts";
-import { FramedComponent, toolMarkerColor, toolStatus, toolStyle } from "./style.ts";
 
 export type ToolDefinitionLike = ToolRenderers | ToolDefinition<any, any, any>;
 

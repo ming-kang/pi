@@ -1,11 +1,11 @@
 /** Generic call and result presentation for a tool that supplies no renderer. */
 
 import { type Component, Text, truncateToWidth } from "@earendil-works/pi-tui";
-import { formatToolCallWithArgs } from "../../../core/tools/render-utils.ts";
-import { keyHint } from "../components/keybinding-hints.ts";
-import { truncateToVisualLines } from "../components/visual-truncate.ts";
-import { theme } from "../theme/theme.ts";
-import { toolStyle } from "./style.ts";
+import { formatToolCallWithArgs } from "../../core/tools/render-utils.ts";
+import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
+import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.ts";
+import { theme } from "../../modes/interactive/theme/theme.ts";
+import { toolStyle } from "../../modes/interactive/tool-view/style.ts";
 
 /** One-line `key=value` summary of a call's arguments, bounded by `toolStyle.fallbackArgsWidth`. */
 export function formatFallbackArgs(args: unknown): string {

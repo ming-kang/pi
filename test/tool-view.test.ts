@@ -6,10 +6,10 @@ import type { ToolDefinition, ToolRenderers } from "../src/core/extensions/types
 import { createReadToolDefinition } from "../src/core/tools/read.ts";
 import { withBuiltInRenderers } from "../src/core/tools/renderers/index.ts";
 import { createBashToolDefinition } from "../src/core/tools/shell-tool.ts";
+import { withToolShell } from "../src/extensions/tool-presentation/shell.ts";
 import { ToolExecutionComponent as NativeToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { PendingToolMap, ToolChatContainer } from "../src/modes/interactive/tool-view/chat.ts";
-import { withToolShell } from "../src/modes/interactive/tool-view/shell.ts";
 import { FramedComponent, gutterWidth, toolStyle } from "../src/modes/interactive/tool-view/style.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 import { ToolExecutionComponent } from "./suite/tool-execution.ts";

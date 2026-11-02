@@ -131,11 +131,11 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private getCallRenderer(): ToolDefinition<any, any>["renderCall"] | undefined {
-		return this.toolDefinition?.renderCall ?? this.getShell()?.renderCall;
+		return this.toolDefinition?.renderCall;
 	}
 
 	private getResultRenderer(): ToolDefinition<any, any>["renderResult"] | undefined {
-		return this.toolDefinition?.renderResult ?? this.getShell()?.renderResult;
+		return this.toolDefinition?.renderResult;
 	}
 
 	private hasRendererDefinition(): boolean {
@@ -198,20 +198,19 @@ export class ToolExecutionComponent extends Container {
 
 	private createCallFallback(): Component {
 		const shell = this.getShell();
-		if (shell?.renderCall) {
-			return shell.renderCall(this.args, theme, this.getRenderContext(this.callRendererComponent));
-		}
+		if (shell?.renderCall) return shell.renderCall(this.args, theme, this.getRenderContext(undefined));
 		return new Text(formatToolCallWithArgs(this.toolName, this.args, theme, this.expanded), 0, 0);
 	}
 
 	private createResultFallback(): Component | undefined {
 		const shell = this.getShell();
 		if (shell?.renderResult && this.result) {
+			const { content, details } = this.result;
 			return shell.renderResult(
-				{ content: this.result.content as any, details: this.result.details },
+				{ content: content as AgentToolResult<unknown>["content"], details },
 				{ expanded: this.expanded, isPartial: this.isPartial },
 				theme,
-				this.getRenderContext(this.resultRendererComponent),
+				this.getRenderContext(undefined),
 			);
 		}
 		const output = this.getTextOutput();

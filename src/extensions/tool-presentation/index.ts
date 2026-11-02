@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "../../core/extensions/types.ts";
-import { withToolShell } from "../../modes/interactive/tool-view/shell.ts";
+import { withToolShell } from "./shell.ts";
 
 /**
  * Distribution tool chrome. Only TUI shell metadata is attached here: renderer functions,

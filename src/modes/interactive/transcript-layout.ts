@@ -32,12 +32,16 @@ export class TranscriptLayoutContainer extends Container {
 	override render(width: number): string[] {
 		const lines: string[] = [];
 		const children: TranscriptLayoutChild[] = [];
-		for (const component of this.children) {
-			const childLines = component.render(width);
+		for (const [component, childLines] of this.renderChildren(width)) {
 			children.push({ component, row: lines.length, height: childLines.length });
 			for (const line of childLines) lines.push(line);
 		}
 		this.renderedLayout = { width, children };
 		return lines;
+	}
+
+	/** Every child with its lines, rendered once and in order, so a subclass can space a child by those before it. */
+	protected renderChildren(width: number): Array<[Component, string[]]> {
+		return this.children.map((component) => [component, component.render(width)]);
 	}
 }

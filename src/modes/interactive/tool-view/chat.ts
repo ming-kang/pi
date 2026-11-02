@@ -17,30 +17,33 @@ function disposeAll(components: Iterable<unknown>): void {
  * next tool. Clearing the chat disposes its tool rows, so renderer timers never outlive them.
  */
 export class ToolChatContainer extends TranscriptLayoutContainer {
-	override render(width: number): string[] {
-		let previous: Component | undefined;
-		let previousHeight = 0;
+	protected override renderChildren(width: number): Array<[Component, string[]]> {
+		const rendered: Array<[Component, string[]]> = [];
+		// Content rows of the previous visible tool row; undefined after any other child.
+		let previousToolRows: number | undefined;
 		for (const child of this.children) {
-			if (child instanceof ToolExecutionComponent) {
-				// Measure at this width without external spacing, including wrapped titles and images.
-				child.setLeadingGap(0);
-				const lines = child.render(width);
-				const start = lines.findIndex((line) => stripAnsi(line).trim().length > 0);
-				if (start === -1) continue;
-				const { afterTool, afterMultilineTool, afterOther } = child.getToolRowGap();
-				child.setLeadingGap(
-					previous instanceof ToolExecutionComponent
-						? previousHeight > 1
-							? afterMultilineTool
-							: afterTool
-						: afterOther,
-				);
-				previousHeight = lines.length - start;
+			if (!(child instanceof ToolExecutionComponent)) {
+				previousToolRows = undefined;
+				rendered.push([child, child.render(width)]);
+				continue;
 			}
-			previous = child;
+			const { afterTool, afterMultilineTool, afterOther } = child.getToolRowGap();
+			child.setLeadingGap(
+				previousToolRows === undefined ? afterOther : previousToolRows > 1 ? afterMultilineTool : afterTool,
+			);
+			let lines = child.render(width);
+			// Wrapped titles and images count, leading blank lines do not.
+			const start = lines.findIndex((line) => stripAnsi(line).trim().length > 0);
+			if (start === -1) {
+				// A row that shows nothing takes no gap and leaves the previous row in place.
+				child.setLeadingGap(0);
+				lines = child.render(width);
+			} else {
+				previousToolRows = lines.length - start;
+			}
+			rendered.push([child, lines]);
 		}
-		// Record child rows after the final tool spacing is known.
-		return super.render(width);
+		return rendered;
 	}
 
 	override clear(): void {

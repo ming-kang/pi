@@ -1,9 +1,9 @@
 import type { TUI } from "@earendil-works/pi-tui";
+import { type ToolDefinitionLike, withToolShell } from "../../src/extensions/tool-presentation/shell.ts";
 import {
 	ToolExecutionComponent as NativeToolExecutionComponent,
 	type ToolExecutionOptions,
 } from "../../src/modes/interactive/components/tool-execution.ts";
-import { type ToolDefinitionLike, withToolShell } from "../../src/modes/interactive/tool-view/shell.ts";
 
 export type { ToolExecutionOptions };
 
