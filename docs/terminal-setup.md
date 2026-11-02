@@ -37,7 +37,7 @@ This is an iTerm2-wide workaround and may also change native trackpad scrolling.
 
 ## Apple Terminal
 
-Pi enables enhanced key reporting when available. If Terminal.app still sends plain Return for `Shift+Enter`, pi uses a local macOS modifier fallback to treat that Return as `Shift+Enter`.
+Pi enables enhanced key reporting when available. If Terminal.app still sends plain Return or `ESC` + Return for `Shift+Enter`, pi uses a local macOS modifier fallback to treat it as `Shift+Enter`. `ESC` + Return without Shift held remains `Alt+Enter`.
 
 This fallback only works when pi runs on the same Mac as Terminal.app. It cannot detect the local keyboard over remote SSH.
 
@@ -140,7 +140,7 @@ Pi uses Windows-style keybindings when running natively on Windows or in WSL:
 - `Ctrl+Z` undoes editing on native Windows; WSL uses `Alt+Z` so `Ctrl+Z` can suspend pi.
 - `Ctrl+Q` queues a follow-up message and `Alt+Q` restores queued messages.
 
-Add to `settings.json` (Ctrl+Shift+, or Settings → Open JSON file) to forward `Shift+Enter` for inserting a new line:
+When pi runs natively on Windows, it checks the local Shift key state and treats plain Return or `ESC` + Return as `Shift+Enter` while Shift is held. This fallback does not work in WSL or over SSH. If `Shift+Enter` still submits, add to `settings.json` (Ctrl+Shift+, or Settings → Open JSON file) to forward it explicitly:
 
 ```json
 {

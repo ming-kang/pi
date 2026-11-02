@@ -15,6 +15,7 @@ import type { TaskSnapshot, TaskTerminalStatus } from "../src/core/tasks/types.t
 import { renderTaskCompletion } from "../src/extensions/tasks/ui/completion-render.ts";
 import { detailLines, outputLines } from "../src/extensions/tasks/ui/views.ts";
 import { CustomMessageComponent } from "../src/modes/interactive/components/custom-message.ts";
+import { keyHint, keyText } from "../src/modes/interactive/components/keybinding-hints.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 
 function task(overrides: Partial<TaskSnapshot> = {}): TaskSnapshot {
@@ -235,7 +236,7 @@ function shell(output = "build finished", status: TaskTerminalStatus = "complete
 }
 const saved = (value: CustomMessage<unknown>) => (value.details as TaskCompletionDetails).task;
 function render(value: CustomMessage<unknown>, expanded = false, width = 120, outputPad = 1) {
-	const lines = renderTaskCompletion(value, { expanded, outputPad }, theme).render(width);
+	const lines = renderTaskCompletion(value, { expanded, outputPad, keyText, keyHint }, theme).render(width);
 	expect(lines.length).toBeLessThanOrEqual(128);
 	for (const line of lines) {
 		expect(visibleWidth(line)).toBeLessThanOrEqual(width);
@@ -263,7 +264,7 @@ describe("background completion notices", () => {
 	});
 	it("uses native dot/title/rail chrome and announces the outcome without details", () => {
 		const value = shell();
-		const lines = renderTaskCompletion(value, { expanded: false, outputPad: 1 }, theme).render(100);
+		const lines = renderTaskCompletion(value, { expanded: false, outputPad: 1, keyText, keyHint }, theme).render(100);
 		expect(lines[0]).toContain(theme.fg("success", "●"));
 		expect(lines[0]).toContain(theme.fg("toolTitle", theme.bold("Bash")));
 		const notice = render(value);

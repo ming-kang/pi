@@ -9,6 +9,7 @@ Pi packages bundle extensions, skills, prompt templates, and themes so you can s
 - [Install and Manage](#install-and-manage)
 - [Package Sources](#package-sources)
 - [Creating a Pi Package](#creating-a-pi-package)
+- [Show a changelog](#show-a-changelog)
 - [Package Structure](#package-structure)
 - [Dependencies](#dependencies)
 - [Package Filtering](#package-filtering)
@@ -42,12 +43,16 @@ These commands manage pi packages and `pi update` can update the pi CLI installa
 
 By default, `install` and `remove` write to user settings (`~/.pi/agent/settings.json`). Use `-l` to write to project settings (`.pi/settings.json`) instead. Project settings can be shared with your team, and pi installs any missing packages automatically on startup after the project is trusted.
 
-To try a package without installing it, use `--extension` or `-e`. This installs to a temporary directory for the current run only:
+If a configured package fails to install at startup, for example because npm cannot reach the registry, pi warns about it, skips that package's resources, and keeps running. It tries again on the next start or `/reload`. `pi install` and `pi update --extensions` still report the failure and exit non-zero.
+
+To try a package without installing it, use `--extension` or `-e`. It is not added to settings:
 
 ```bash
 pi -e npm:@foo/bar
 pi -e git:github.com/user/repo
 ```
+
+Pi caches `-e` packages under `~/.pi/agent/tmp/extensions/` and checks them on every start and `/reload`. An npm package is reinstalled when the registry has a newer version that matches the specification; an exact version such as `@1.2.3` is not checked. A git package is fetched and reset to the remote branch or ref; a commit hash that is already checked out is not fetched. If the check fails or offline mode is on, pi loads the cached copy.
 
 ## Package Sources
 
@@ -153,6 +158,26 @@ The [package gallery](https://pi.dev/packages) displays packages tagged with `pi
 - **image**: PNG, JPEG, GIF, or WebP. Displayed as a static preview.
 
 If both are set, video takes precedence.
+
+## Show a changelog
+
+After a package update, pi can show what changed. On the next fresh launch, pi reads the package changelog and shows entries newer than the last seen version under "Extension Updates", the same way it shows its own changelog. The first time pi sees a package, it records the version without showing anything.
+
+This applies to packages that load at least one extension. Packages that only provide skills, prompt templates, or themes do not show a changelog.
+
+By default pi reads `CHANGELOG.md` from the package root. Point `pi.changelogPath` at another file inside the package, or set it to `""` to disable the changelog:
+
+```json
+{
+  "name": "my-package",
+  "version": "1.2.0",
+  "pi": {
+    "changelogPath": "./docs/CHANGELOG.md"
+  }
+}
+```
+
+Use version headings such as `## [1.2.0]` or `## 1.2.0 - 2026-01-01`. Entries are matched against the `version` field in `package.json`, so a git package only shows a changelog when that field increases. The `collapseChangelog` setting condenses the section to one line per package, such as `Updated my-package to v1.2.0.` `/changelog` does not show package changelogs; read the package's changelog file or repository for details.
 
 ## Package Structure
 

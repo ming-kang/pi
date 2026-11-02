@@ -84,8 +84,10 @@ describe("wrapToolDefinition validation hints", () => {
 		} catch (error) {
 			const message = (error as Error).message;
 			expect(message).toContain('Validation failed for tool "batch":');
+			// The hint names the field with the same path as the validator's own report.
+			expect(message).toContain("- tasks.0.prompt_extra:");
 			expect(message).toContain(
-				"Hint: tasks[0].prompt_extra is not a field; fields at tasks[0]: agent, prompt, description, cwd",
+				"Hint: tasks.0.prompt_extra is not a field; fields at tasks.0: agent, prompt, description, cwd",
 			);
 		}
 	});

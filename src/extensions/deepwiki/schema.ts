@@ -1,5 +1,5 @@
-import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
+import { StringEnum } from "../../core/extensions/pi-ai-extension-view.ts";
 
 import { normalizePageRef } from "./contents.ts";
 

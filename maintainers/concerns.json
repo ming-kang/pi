@@ -501,22 +501,6 @@
 			]
 		},
 		{
-			"id": "windows-path-identity",
-			"why": "Path comparisons survive Windows drive-letter case, because realpathSync keeps the caller's spelling.",
-			"paths": [
-				{
-					"path": "src/core/resource-loader.ts"
-				},
-				{
-					"path": "src/core/trust-manager.ts"
-				}
-			],
-			"tests": [
-				"test/resource-loader.test.ts",
-				"test/trust-manager-windows.test.ts"
-			]
-		},
-		{
 			"id": "windows-find-glob",
 			"why": "Path-segment globs in find work on Windows, where fd matches no slash-containing pattern.",
 			"paths": [
@@ -572,6 +556,20 @@
 			]
 		},
 		{
+			"id": "account-home-skills-trust",
+			"why": "Project trust treats the operating-system account's ~/.agents/skills as the user's own when HOME points elsewhere, such as under MSYS.",
+			"watch": "Upstream excludes the account home's .agents/skills from project trust, not only HOME's.",
+			"paths": [
+				{
+					"path": "src/core/trust-manager.ts"
+				}
+			],
+			"tests": [
+				"test/trust-manager-account-home.test.ts",
+				"test/trust-manager.test.ts"
+			]
+		},
+		{
 			"id": "skill-invocation-overrides",
 			"why": "Skill resources support explicit model-and-user or user-only invocation policies independently of resource loading in pi config and layered settings.",
 			"paths": [
@@ -579,8 +577,7 @@
 					"path": "src/core/package-manager.ts"
 				},
 				{
-					"path": "src/core/resource-loader.ts",
-					"rewrite": "The shared skill invocation policy is applied to every loaded skill, including --skill and extension skills, before skillsOverride, leaving prompt and command consumers unchanged."
+					"path": "src/core/resource-loader.ts"
 				},
 				{
 					"path": "src/core/settings-manager.ts"
@@ -652,11 +649,7 @@
 			"why": "Thinking presentation separates active and settled collapsed states while retaining expandable reasoning and a Text-based rolling preview.",
 			"paths": [
 				{
-					"path": "src/modes/interactive/components/assistant-message.ts",
-					"rewrite": "Thinking blocks use expanded, active, and settled views; active blocks compose Text into a rolling preview and settled blocks use Thoughts."
-				},
-				{
-					"path": "src/modes/interactive/interactive-mode.ts"
+					"path": "src/modes/interactive/components/assistant-message.ts"
 				},
 				{
 					"path": "src/core/extensions/types.ts"

@@ -19,10 +19,6 @@ const SETTLED_THINKING_LABEL = "Thoughts";
 const THINKING_PREVIEW_LINES = 3;
 const THINKING_PREVIEW_INDENT = 2;
 
-export const DEFAULT_ACTIVE_THINKING_LABEL = "Thinking...";
-
-type ThinkingView = "expanded" | "active" | "settled";
-
 function isVisibleAssistantBlock(block: AssistantMessage["content"][number]): boolean {
 	return (
 		(block.type === "text" && block.text.trim().length > 0) ||
@@ -56,41 +52,22 @@ class ThinkingRollingPreview implements Component {
 	}
 }
 
-interface ThinkingComponentOptions {
-	view: ThinkingView;
-	text: string;
-	activeLabel: string;
-	outputPad: number;
-	markdownTheme: MarkdownTheme;
-	isStreaming: boolean;
-	markdownTransformers: readonly MarkdownTransformer[];
+/** Collapsed thinking: the label over a rolling preview while the run streams, then a settled label. */
+function createCollapsedThinking(active: boolean, text: string, label: string, outputPad: number): Component {
+	if (!active) return createThinkingLabel(SETTLED_THINKING_LABEL, outputPad);
+	const container = new Container();
+	container.addChild(createThinkingLabel(label, outputPad));
+	container.addChild(new ThinkingRollingPreview(text, outputPad + THINKING_PREVIEW_INDENT));
+	return container;
 }
 
-function createThinkingComponent(options: ThinkingComponentOptions): Component {
-	if (options.view === "active") {
-		const container = new Container();
-		container.addChild(createThinkingLabel(options.activeLabel, options.outputPad));
-		container.addChild(new ThinkingRollingPreview(options.text, options.outputPad + THINKING_PREVIEW_INDENT));
-		return container;
-	}
-
-	if (options.view === "settled") {
-		return createThinkingLabel(SETTLED_THINKING_LABEL, options.outputPad);
-	}
-
-	return new Markdown(
-		options.text,
-		options.outputPad,
-		0,
-		options.markdownTheme,
-		{
-			color: (text: string) => theme.fg("thinkingText", text),
-			italic: true,
-		},
-		{
-			transform: createMarkdownTransform("assistant-thinking", options.isStreaming, options.markdownTransformers),
-		},
-	);
+/**
+ * A Markdown block of the last update. The next update reuses it at the same position for the same kind of content, so
+ * a streamed answer keeps the blocks it already rendered, also once the stream ends.
+ */
+interface MarkdownSlot {
+	kind: "text" | "thinking";
+	markdown: Markdown;
 }
 
 /**
@@ -100,29 +77,36 @@ export class AssistantMessageComponent extends Container {
 	private contentContainer: Container;
 	private hideThinkingBlock: boolean;
 	private markdownTheme: MarkdownTheme;
-	private activeThinkingLabel: string;
+	private hiddenThinkingLabel: string;
 	private outputPad: number;
 	private markdownTransformers: readonly MarkdownTransformer[];
 	private lastMessage?: AssistantMessage;
 	private hasToolCalls = false;
 	private isStreaming = false;
+	private messageId?: string;
+	private timestamp?: string;
 	private thinkingVisibilityOverrides = new Map<number, boolean>();
+	private markdownSlots: MarkdownSlot[] = [];
 
 	constructor(
 		message?: AssistantMessage,
 		hideThinkingBlock = false,
 		markdownTheme: MarkdownTheme = getMarkdownTheme(),
-		activeThinkingLabel = DEFAULT_ACTIVE_THINKING_LABEL,
+		hiddenThinkingLabel = "Thinking...",
 		outputPad = 1,
 		markdownTransformers: readonly MarkdownTransformer[] = [],
+		messageId?: string,
+		timestamp?: string,
 	) {
 		super();
 
 		this.hideThinkingBlock = hideThinkingBlock;
 		this.markdownTheme = markdownTheme;
-		this.activeThinkingLabel = activeThinkingLabel;
+		this.hiddenThinkingLabel = hiddenThinkingLabel;
 		this.outputPad = outputPad;
 		this.markdownTransformers = markdownTransformers;
+		this.messageId = messageId;
+		this.timestamp = timestamp;
 
 		// Container for text/thinking content
 		this.contentContainer = new Container();
@@ -149,7 +133,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	setHiddenThinkingLabel(label: string): void {
-		this.activeThinkingLabel = label;
+		this.hiddenThinkingLabel = label;
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
@@ -157,6 +141,8 @@ export class AssistantMessageComponent extends Container {
 
 	setOutputPad(padding: number): void {
 		this.outputPad = padding;
+		// Markdown takes its padding at construction.
+		this.markdownSlots = [];
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
@@ -179,12 +165,27 @@ export class AssistantMessageComponent extends Container {
 
 		// Clear content container
 		this.contentContainer.clear();
+		const previousSlots = this.markdownSlots;
+		this.markdownSlots = [];
+		const markdownBlock = (kind: MarkdownSlot["kind"], text: string, create: () => Markdown): Markdown => {
+			const slot = previousSlots[this.markdownSlots.length];
+			const markdown = slot?.kind === kind ? slot.markdown : create();
+			markdown.setText(text);
+			this.markdownSlots.push({ kind, markdown });
+			return markdown;
+		};
 
-		const hasVisibleContent = message.content.some(isVisibleAssistantBlock);
-
-		if (hasVisibleContent) {
-			this.contentContainer.addChild(new Spacer(1));
-		}
+		// Spacers are added lazily, right before the next visible content block. This puts a blank
+		// line before the first visible block and after each visible thinking run that is followed
+		// by more visible content, while hidden thinking runs without a label contribute nothing.
+		let needsSpacer = true;
+		const addVisibleChild = (child: Component) => {
+			if (needsSpacer) {
+				this.contentContainer.addChild(new Spacer(1));
+				needsSpacer = false;
+			}
+			this.contentContainer.addChild(child);
+		};
 
 		// Render content in order
 		let thinkingRunIndex = 0;
@@ -193,10 +194,22 @@ export class AssistantMessageComponent extends Container {
 			if (content.type === "text" && content.text.trim()) {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
-				this.contentContainer.addChild(
-					new Markdown(content.text.trim(), this.outputPad, 0, this.markdownTheme, undefined, {
-						transform: createMarkdownTransform("assistant", this.isStreaming, this.markdownTransformers),
-					}),
+				const text = content.text.trim();
+				addVisibleChild(
+					markdownBlock(
+						"text",
+						text,
+						() =>
+							new Markdown(text, this.outputPad, 0, this.markdownTheme, undefined, {
+								transform: createMarkdownTransform(
+									"assistant",
+									() => this.isStreaming,
+									this.markdownTransformers,
+									this.messageId,
+									this.timestamp,
+								),
+							}),
+					),
 				);
 			} else if (content.type === "thinking") {
 				const thinkingBlocks: string[] = [];
@@ -217,24 +230,46 @@ export class AssistantMessageComponent extends Container {
 				}
 
 				// After i--, i points at the last block in this thinking run.
-				const remaining = message.content.slice(i + 1);
-				const hasVisibleContentAfter = remaining.some(isVisibleAssistantBlock);
-				const hasToolCallAfter = remaining.some((block) => block.type === "toolCall");
-				const isActiveThinking = this.isStreaming && !hasVisibleContentAfter && !hasToolCallAfter;
+				const isActiveThinking =
+					this.isStreaming &&
+					!message.content
+						.slice(i + 1)
+						.some((block) => isVisibleAssistantBlock(block) || block.type === "toolCall");
 
 				const runIndex = thinkingRunIndex++;
 				const hidden = this.thinkingVisibilityOverrides.get(runIndex) ?? this.hideThinkingBlock;
-				const view: ThinkingView = !hidden ? "expanded" : isActiveThinking ? "active" : "settled";
-				const thinkingComponent = createThinkingComponent({
-					view,
-					text: thinkingBlocks.join("\n\n"),
-					activeLabel: this.activeThinkingLabel,
-					outputPad: this.outputPad,
-					markdownTheme: this.markdownTheme,
-					isStreaming: this.isStreaming,
-					markdownTransformers: this.markdownTransformers,
-				});
-				this.contentContainer.addChild(
+				// A hidden run with an empty label renders nothing, including no spacing.
+				if (hidden && !this.hiddenThinkingLabel.trim()) {
+					continue;
+				}
+				const thinking = thinkingBlocks.join("\n\n");
+				const thinkingComponent = hidden
+					? createCollapsedThinking(isActiveThinking, thinking, this.hiddenThinkingLabel, this.outputPad)
+					: markdownBlock(
+							"thinking",
+							thinking,
+							() =>
+								new Markdown(
+									thinking,
+									this.outputPad,
+									0,
+									this.markdownTheme,
+									{
+										color: (text: string) => theme.fg("thinkingText", text),
+										italic: true,
+									},
+									{
+										transform: createMarkdownTransform(
+											"assistant-thinking",
+											() => this.isStreaming,
+											this.markdownTransformers,
+											this.messageId,
+											this.timestamp,
+										),
+									},
+								),
+						);
+				addVisibleChild(
 					new MouseRegion(thinkingComponent, (event) => {
 						if (event.type !== "click" || event.button !== "left") return undefined;
 						this.thinkingVisibilityOverrides.set(runIndex, !hidden);
@@ -242,9 +277,9 @@ export class AssistantMessageComponent extends Container {
 						return { handled: true };
 					}),
 				);
-				if (hasVisibleContentAfter) {
-					this.contentContainer.addChild(new Spacer(1));
-				}
+				// Add spacing only when another visible assistant content block follows.
+				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
+				needsSpacer = true;
 			}
 		}
 

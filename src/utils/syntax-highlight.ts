@@ -152,3 +152,11 @@ export function supportsLanguage(name: string): boolean {
 
 /** Every grammar loads statically with this module; kept so upstream callers stay unchanged. */
 export async function loadAllHighlightLanguages(): Promise<void> {}
+
+/**
+ * Number of registered grammars. It grows when the deferred grammars load, which can change the highlighting of
+ * code that embeds another language, such as HTML in a JavaScript template literal.
+ */
+export function getHighlightLanguageCount(): number {
+	return hljs.listLanguages().length;
+}

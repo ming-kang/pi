@@ -5,6 +5,7 @@ import type { CustomEntry, SessionEntry } from "../src/core/session-manager.ts";
 import cachedCompactionExtension from "../src/extensions/cached-compaction/index.ts";
 import { type CachedCompactionCard, renderCachedCompactionEntry } from "../src/extensions/cached-compaction/render.ts";
 import { checkpointSummary, keptStart } from "../src/extensions/cached-compaction/summary.ts";
+import { keyHint, keyText } from "../src/modes/interactive/components/keybinding-hints.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 import { btwDone, btwResponse } from "./helpers/btw.ts";
@@ -131,7 +132,9 @@ describe("cached compaction", () => {
 				customType: "cached-compaction",
 				data,
 			};
-			const lines = renderCachedCompactionEntry(entry, { expanded, outputPad: 1 }, theme)!.render(120);
+			const lines = renderCachedCompactionEntry(entry, { expanded, outputPad: 1, keyText, keyHint }, theme)!.render(
+				120,
+			);
 			return lines.map((line) => stripAnsi(line).trimEnd());
 		};
 		const automatic = {

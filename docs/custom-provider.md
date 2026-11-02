@@ -252,7 +252,7 @@ Return credentials with `refresh`, `access`, and `expires` (a millisecond timest
 `OAuthLoginCallbacks` provides these UI-neutral operations:
 
 - `onAuth({ url, instructions? })` opens/displays an authorization URL.
-- `onDeviceCode({ userCode, verificationUri, intervalSeconds?, expiresInSeconds? })` displays a device flow code.
+- `onDeviceCode({ userCode, verificationUri, intervalSeconds?, expiresInSeconds? })` displays a device flow code. Pressing Enter (`tui.select.confirm`) opens the verification URL and copies the code; pass `openBrowserOnConfirm: false` or `copyCodeOnConfirm: false` to turn either action off.
 - `onPrompt({ message, placeholder?, allowEmpty? })` asks for text and resolves to the entered string.
 - `onSelect({ message, options: [{ id, label }] })` resolves to an option ID or `undefined`.
 - `onManualCodeInput?.()` optionally requests a manually pasted code.

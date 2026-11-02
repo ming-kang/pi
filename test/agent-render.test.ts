@@ -6,6 +6,7 @@ import type { ToolRenderContext } from "../src/core/extensions/types.ts";
 import { activityTarget } from "../src/extensions/agent/activity.ts";
 import { agentRenderers } from "../src/extensions/agent/render.ts";
 import type { AgentActivity, AgentToolDetails } from "../src/extensions/agent/types.ts";
+import { keyHint, keyText } from "../src/modes/interactive/components/keybinding-hints.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 
 type RenderContext = ToolRenderContext<Record<string, unknown>, unknown, AgentToolDetails>;
@@ -28,6 +29,8 @@ function context(result?: AgentToolResult<AgentToolDetails>, overrides: Partial<
 		isError: result?.isError ?? false,
 		durationMs: overrides.isPartial ? undefined : 6520,
 		outputPad: 1,
+		keyText,
+		keyHint,
 		...overrides,
 	};
 }

@@ -15,6 +15,16 @@ pi --session <path|id> # Use a specific session file or partial session ID
 pi --fork <path|id>    # Fork a session file or partial session ID into a new session
 ```
 
+Each session records the working directory it was created in and never changes it. Pi runs a session in its working directory, so tools, `@path` references, project configuration, and context files resolve from there.
+
+| Entry point | Working directory |
+|---|---|
+| `-c`, `--continue` | The current directory |
+| `-r`, `--resume`, `/resume`, `--session`, `/import` | The session's working directory, which can differ from the current directory |
+| `--fork`, or a `--session` ID from another directory that you choose to fork | The current directory, in a new session |
+
+If a session's working directory no longer exists, interactive mode offers to run the session in the current directory instead. Pi does not store that choice, so it asks again the next time you open the session. Other modes exit with an error.
+
 Use `/session` in interactive mode to see the current session file, session ID, message count, tokens, and cost.
 
 For the JSONL file format and SessionManager API, see [Session Format](session-format.md).

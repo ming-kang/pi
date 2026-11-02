@@ -126,7 +126,7 @@ interface AssistantMessage {
   api: Api;
   provider: ProviderId;
   model: string;
-  responseModel?: string;
+  responseModel?: string;  // Concrete model the provider reported, when it reports one; may equal `model`
   responseId?: string;
   providerThinkingLevel?: string;
   thinkingLevel?: ModelThinkingLevel;

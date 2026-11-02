@@ -61,3 +61,9 @@ This affects the default keybindings (`Enter` to submit, `Shift+Enter` for newli
 - A terminal emulator that supports extended keys (Ghostty, Kitty, iTerm2, WezTerm, Windows Terminal)
 
 With tmux 3.2 through 3.4, omit `extended-keys-format csi-u`; Pi still supports tmux's default xterm `modifyOtherKeys` format.
+
+## Known issues
+
+| Issue | Affects | Remedy |
+|---|---|---|
+| Text such as `c0c/0c0c/0c0c` appears in the editor at startup ([tmux#4749](https://github.com/tmux/tmux/issues/4749)) | tmux 3.6 | Upgrade tmux. Changing pi's theme does not help. |

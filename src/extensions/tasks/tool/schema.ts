@@ -7,8 +7,8 @@
  * inside actions.ts, not here.
  */
 
-import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
+import { StringEnum } from "../../../core/extensions/pi-ai-extension-view.ts";
 import { TASK_READ_BYTES, TASK_RESULT_BYTES } from "../../../core/tasks/output.ts";
 import { formatSize } from "../../../core/tools/truncate.ts";
 

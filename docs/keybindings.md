@@ -90,7 +90,7 @@ These actions apply when interactive mode uses `--tui-mode fullscreen` and targe
 
 Hold Alt while scrolling the mouse wheel for five-times-faster scrolling. Hovering over autocomplete or settings lists keeps their selection and scroll position unchanged; click an item to select it.
 
-Fullscreen transcript bindings take precedence over editor bindings using the same key. `pageUp` and `pageDown` therefore control the transcript in fullscreen mode while their `ctrl` variants keep controlling the editor; `home` and `end` always control the editor, while `ctrl+home` and `ctrl+end` control the transcript in fullscreen mode. Outside fullscreen mode, all of these keys control the editor.
+Fullscreen transcript bindings take precedence over editor bindings using the same key. `pageUp` and `pageDown` therefore control the transcript in fullscreen mode while their `ctrl` variants keep controlling the editor; `home` and `end` always control the editor, while `ctrl+home` and `ctrl+end` control the transcript in fullscreen mode. Outside fullscreen mode, all of these keys control the editor. While an overlay or a scrollable list such as autocomplete, `/settings`, or the model selector has focus, the scrolling and prompt-jump actions go to it instead of the transcript, so `tui.select.pageUp` and `tui.select.pageDown` move the list selection. Transcript search actions keep working.
 
 | Key | Default mode | Fullscreen mode |
 |-----|--------------|-----------------|

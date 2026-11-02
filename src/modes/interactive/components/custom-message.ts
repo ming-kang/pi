@@ -4,6 +4,7 @@ import { Box, Container, Markdown, type MarkdownTheme, MouseRegion, Spacer, Text
 import type { MessageRenderer } from "../../../core/extensions/types.ts";
 import type { CustomMessage } from "../../../core/messages.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { keyHint, keyText } from "./keybinding-hints.ts";
 import { isPlainPrimaryClick } from "./primary-click.ts";
 
 /**
@@ -71,7 +72,7 @@ export class CustomMessageComponent extends Container {
 			try {
 				const component = this.customRenderer(
 					this.message,
-					{ expanded: this._expanded, outputPad: this.outputPad },
+					{ expanded: this._expanded, outputPad: this.outputPad, keyText, keyHint },
 					theme,
 				);
 				if (component) {

@@ -8,6 +8,16 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 - Entry renderers receive `outputPad`, the horizontal padding from the `outputPad` setting, as message renderers already do. The run summary and cached-compaction lines follow it instead of a fixed padding of 1.
 - `AgentSession.shutdownTasks(graceMs?)` closes task admission, aborts the main agent and drains task executors in one call, and `AgentSession.withTaskNotificationsPaused(operation)` holds completion delivery for the duration of an async operation.
+- Adopted upstream v1.5.0:
+  - Extension packages can show their changelog after an update: on the next fresh launch Pi shows entries newer than the last seen version under "Extension Updates", read from `pi.changelogPath` or the package's `CHANGELOG.md`. `collapseChangelog` condenses them to one line per package. See [Show a changelog](docs/packages.md#show-a-changelog).
+  - `pi update` can update Pi through a wrapper or another package manager: set `PI_SELF_UPDATE_COMMAND` or the global `selfUpdateCommand` setting, with `{packageName}`, `{version}` and `{installSpec}` filled from the newer npm release. See [Custom update command](docs/usage.md#custom-update-command).
+  - GPT-6.1 Terra through OpenAI, Azure OpenAI Responses and OpenAI Codex, with tool search, mid-conversation thinking-level changes and thinking `off`; Codex offers a 500K context window.
+  - `pi.exec()` accepts `maxBuffer` (stdout and stderr combined, default 256 MiB), and its result reports `truncated` when output exceeded it.
+  - Tool render contexts and message and entry renderer options provide `keyText()` and `keyHint()`, which format the user's configured keybindings even when an extension resolves its own copy of the package.
+  - `MarkdownTransformContext` carries the persisted session-entry `messageId` and ISO `timestamp` when rendering saved entries.
+  - Inline `ctx.ui.custom()` components accept `blocked` to report that Pi is waiting for the user. See [TUI components](docs/tui.md).
+  - Device-code login opens the verification page and copies the code on Enter; providers can turn either off with `openBrowserOnConfirm: false` or `copyCodeOnConfirm: false`.
+  - `Usage.cost.totalFromProvider` distinguishes billed totals from catalog estimates, and pi-messages providers such as Radius record a concrete `responseModel`.
 
 ### Changed
 
@@ -17,17 +27,53 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - Tool renderers register row cleanup with `context.onDispose(cleanup)`. The shell no longer calls `context.state.dispose()`; a renderer that set it registers the same cleanup with `onDispose` instead. A cleanup that throws no longer interrupts disposal of the row or of the rows cleared after it.
 - Background completion notifications are notifications only: the executor's label, outcome, duration, short ID, title and any error. Expanding one no longer repeats the input, facts, output and log path, so a background Agent's notification matches its settled foreground result; those details remain in `/tasks`. Saved messages from older formats show their first few lines.
 - A running Agent's `/tasks` Output shows its published plain tool-call list instead of a separately styled one; the styled list remains in the Transcript's expanded row.
+- **Breaking (extension API):** adopted upstream v1.5.0's tool argument validation on `@earendil-works/pi-schema`. TypeBox features outside JSON Schema (`Type.Refine()`, `Type.BigInt()`, `Type.Undefined()`, codecs, `Format.Set()` formats) no longer apply to tool arguments; plain JSON Schema tools, including MCP tools, get the same coercion as TypeBox tools. Validation failures list pi-schema's messages (`- path: missing`, `- limit: expected number, got string`), still followed by this distribution's field hints and bounded argument echo. See [Tool parameter schemas and TypeBox](docs/extensions.md#tool-parameter-schemas-and-typebox).
+- Adopted upstream v1.5.0:
+  - Extensions keep importing `Type`, `Static` and `TSchema` from `@earendil-works/pi-ai`, which Pi maps to pi-ai's compat entry plus its own TypeBox; `StringEnum` there stays a TypeBox schema. Built-in tool factories return `TypeBoxAgentTool`.
+  - MCP OAuth sign-in uses Pi's Client ID Metadata Document when the authorization server supports it and registers a client otherwise. `oauth.clientRegistration` defaults to `auto`; `pi mcp add --oauth-client-registration` sets it. See [MCP](docs/mcp.md#authenticate-with-oauth).
+  - `/model` and `/scoped-models` show a model's name next to its ID when the name adds words the ID lacks.
+  - The default OpenAI model is `gpt-6.1-sol`, and the built-in catalog moves to models.dev v2: realtime and image-only models are no longer offered as chat models.
+  - Large streamed tool calls are parsed once per delta, and tool rows and streamed answers reuse highlighting and rendered Markdown instead of repeating the work on every update.
+  - Windows path comparisons are case-insensitive throughout, replacing this distribution's narrower fix for project trust and context files.
+  - Updated `minimatch` to 11.0.3 against amplified glob patterns, `undici` to 8.12.3 and the Gondolin extension example to 0.14.0 for security advisories.
 
 ### Removed
 
 - `ctx.ui.addTranscriptNote()` and `ExtensionTranscriptNoteOptions`. Append a custom entry with `pi.appendEntry()` and render it with `pi.registerEntryRenderer()` instead: the line is saved in place and needs no replay on resume or branch navigation. The run summary works this way.
 - `TaskRuntimeOptions.backgroundAllowed`. A standalone `TaskRuntime` that must not run background work stays disabled (`enabled: false`); `createAgentSession({ backgroundAllowed: false })` is unchanged.
 - `TaskExecution.present` and `TasksContext.presentOutput()`. Task executors declare data rather than UI: `/tasks` shows a running task's published `display`, and the Tasks API no longer depends on the interactive theme.
+- Adopted upstream v1.5.0: the native OS `sandbox/` extension example and its dependency. Use the [Gondolin example](examples/extensions/gondolin/) or the [containerization guide](docs/containerization.md).
 
 ### Fixed
 
 - An editor submit handler sees `kind: "command"` only for input Pi dispatches as a command. A slash name followed by a newline or tab, such as `/model\nexample`, is classified as a prompt, matching how it is submitted.
 - `AgentSession.waitForQuiescence()` and the `session_quiescent` event now also resolve when input queued with `steer()` or `followUp()` on an idle session holds back a pending background completion. `isQuiescent` already reported `true`, but waiters stayed pending until some later event.
+- Collapsed thinking with an empty hidden-thinking label renders nothing, including no blank rows before answers and tool calls (adapted from upstream v1.5.0's fix for hidden thinking).
+- Adopted upstream v1.5.0 fixes:
+  - Fixed a saved "Do not trust" decision being ignored for projects without trust-requiring resources; a saved decision in `trust.json` now takes precedence over auto-trust.
+  - Fixed Windows paths differing only in casing loading `~/.agents/skills` twice, re-asking for saved project trust, hiding sessions from `--continue` and `/resume`, and stopping `pi remove` from matching local packages.
+  - Fixed `pi.exec()` crashing on output larger than a string can hold, corrupting UTF-8 split across chunks, returning empty stderr when spawning failed, and never returning when a command ignored SIGTERM.
+  - Fixed `Shift+Enter` queueing a follow-up in Apple Terminal setups that send `ESC` + Return, and Kitty-protocol F1–F12 shortcuts not being recognized.
+  - Fixed the working status (OSC 7501) disappearing in Rex and iTerm2 during regular-mode runs.
+  - Fixed compaction, branch summaries and bug-report summaries in SDK sessions passing a stored OAuth token as an explicit API key, and `/tree` branch summaries ignoring the thinking level, failed replies and context edits.
+  - Fixed a redundant system prompt update when an extension reordered the same active tools.
+  - Fixed failed session writes leaving entries in memory that were absent from disk, and slow session forking on filesystems where opening files is expensive.
+  - Fixed a configured package that fails to install crashing startup; Pi now warns, skips it and retries on the next start or `/reload`. `pi -e` npm and git packages are refreshed instead of staying on their first download.
+  - Fixed `pi install` and `pi remove` nesting `package-lock.json` entries through a symlinked agent directory, and printing npm audit and funding advice.
+  - Fixed `pi update` on Windows stopping when another session held a git extension's files open, and `pi update --extensions` reporting success when npm's stale metadata left a package at its old version.
+  - Fixed MCP sign-in accepting non-HTTP OAuth metadata URLs, `pi mcp login -l` and `logout -l` rejecting `-l`, and login dialogs opening non-web URLs or printing control characters.
+  - Fixed `tool_search` and codemode `searchTools()` ranking tools below ones that only mention their name, and finding nothing for non-ASCII queries.
+  - Fixed `/model` and `/resume` search matching scattered letters, and `tui.select.pageUp`/`pageDown` being ignored in autocomplete and selectors.
+  - Fixed HTML export showing a blank page for very large sessions and omitting system messages.
+  - Fixed aborting a bash command on macOS sometimes running the next command in a list, and tool output showing parameters of `ESC[<`, `ESC[=` and `ESC[>` control sequences as text.
+  - Fixed the external editor failing silently; Pi reports the exit code or launch failure and keeps the prompt.
+  - Fixed image paste, copy and browser sign-in failing silently from deep WSL directories, and startup from a deleted working directory crashing.
+  - Fixed resized photos being sent as multi-megabyte PNGs when JPEG was smaller.
+  - Fixed skill validation warnings being labeled `[Skill conflicts]`, the model-scope notice staying in the shell after fullscreen exits, and replacing an extension editor while a dialog was open hiding the dialog.
+  - Fixed `grep` context lines offset by lone carriage returns, `--model <provider>/<id>` for provider IDs containing slashes, and automatic `fd`/`rg` downloads fetching x86-64 binaries on unsupported architectures.
+  - Fixed codemode tool descriptions inlining entire union and multi-line types.
+  - Fixed rendering of deeply nested blockquotes, display math wider than the content area, styled words at the wrap width, bare URLs followed by CJK text, Kitty images in padded boxes, fullscreen double-click selection, and terminal titles with control characters.
+  - Fixed provider issues: OpenRouter cost totals and `~anthropic/claude-*-latest` thinking, OpenCode Zen and Go endpoints, Zhipu usage-limit retries, LiteLLM context overflow detection, Gemini `const` schemas, Claude system-message ordering and capped effort levels, Kimi K3.1 Pro settings, OpenCode DeepSeek V4.1 Flash cache retention, GPT-5.4/5.5 after tool calls from another model, Bedrock strict-tool limits, Orca terminal detection, and faux-provider cache-write accounting.
 
 ## [1.4.11] - 2026-11-01
 

@@ -44,7 +44,7 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/thinking` | Switch thinking level; Ctrl+S in the picker saves the startup default |
 | `/scoped-models` | Enable/disable models for Ctrl+P cycling |
 | `/settings` | Theme, message delivery, transport, and other preferences |
-| `/resume` | Pick from previous sessions |
+| `/resume` | Resume another session |
 | `/new` | Start a new session |
 | `/name <name>` | Set session display name |
 | `/session` | Show session file, ID, messages, tokens, and cost |
@@ -55,7 +55,7 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/compact [prompt]` | Manually compact context, optionally with custom instructions |
 | `/copy` | Copy last assistant message to clipboard |
 | `/export [file]` | Export session to HTML or JSONL |
-| `/import <file>` | Import and resume a session from a JSONL file |
+| `/import <file>` | Import a JSONL session, preserving its ID and working directory |
 | `/share` | Upload as private GitHub gist with shareable HTML link |
 | `/bug [description]` | Report a bug to the Pi developers; see [Sessions](sessions.md#reporting-bugs) |
 | `/reload` | Reload keybindings, extensions, skills, prompts, themes, and context files |
@@ -163,6 +163,16 @@ To uninstall pi itself, see [Quickstart](quickstart.md#uninstall). `pi config` a
 
 See [Pi Packages](packages.md) for package sources and security notes.
 
+#### Custom update command
+
+If a wrapper or another package manager provides Pi, set `PI_SELF_UPDATE_COMMAND` so `pi update` runs its update command:
+
+```sh
+export PI_SELF_UPDATE_COMMAND="mise use -g npm:{packageName}@{version}"
+```
+
+`pi update` runs it only when the npm registry has a newer release, replacing `{packageName}`, `{version}`, and `{installSpec}` (`{packageName}@{version}`) with that release. The value is split on spaces. For arguments with spaces, use the `selfUpdateCommand` setting in `~/.pi/agent/settings.json` instead, an argv array such as `["nix", "profile", "upgrade", "pi"]`.
+
 ### Modes
 
 | Flag | Description |
@@ -201,10 +211,10 @@ cat README.md | pi -p "Summarize this text"
 
 | Option | Description |
 |--------|-------------|
-| `-c`, `--continue` | Continue the most recent session |
-| `-r`, `--resume` | Browse and select a session |
-| `--session <path\|id>` | Use a specific session file or partial UUID |
-| `--fork <path\|id>` | Fork a session file or partial UUID into a new session |
+| `-c`, `--continue` | Continue the most recent session for the current directory |
+| `-r`, `--resume` | Browse and select a session; it resumes in its own working directory. Press Tab to include sessions from other directories |
+| `--session <path\|id>` | Use a specific session file or partial UUID and resume it in its working directory. A match stored only for another directory is offered as a fork into the current directory |
+| `--fork <path\|id>` | Fork a session file or partial UUID into a new session in the current directory |
 | `--session-dir <dir>` | Custom session storage directory |
 | `--no-session` | Ephemeral mode; do not save |
 | `--name <name>`, `-n <name>` | Set session display name at startup |
@@ -365,11 +375,11 @@ These commands work outside a session, so agents can run them through `bash`. Se
 | Command | Description |
 |---|---|
 | `pi mcp add <server> [options] -- <command> [args...]` | Add or replace a stdio server in `mcp.json`; `--env KEY=VALUE` (repeatable) and `--cwd <dir>` set its environment and working directory. Arguments after the command are passed to it |
-| `pi mcp add <server> [options] --url <url>` | Add or replace a streamable HTTP server; `--header KEY=VALUE` (repeatable), `--bearer-token-env-var <NAME>` (sends `Authorization: Bearer ${NAME}`), `--oauth-client-id`, `--oauth-client-secret`, `--oauth-callback-port`, and `--oauth-client-name` configure authentication |
+| `pi mcp add <server> [options] --url <url>` | Add or replace a streamable HTTP server; `--header KEY=VALUE` (repeatable), `--bearer-token-env-var <NAME>` (sends `Authorization: Bearer ${NAME}`), `--oauth-client-id`, `--oauth-client-secret`, `--oauth-callback-port`, `--oauth-client-name`, and `--oauth-client-registration` (`auto`, `cimd`, or `dcr`) configure authentication |
 | `pi mcp remove <server>` | Remove a server from `mcp.json`; stored OAuth credentials are kept |
 | `pi mcp list [--json]` | Connect to every enabled server and print its state, tools, and errors; exit with `1` when a config entry is invalid or an enabled server is not connected |
-| `pi mcp login <server> [--timeout <seconds>]` | Sign in to an OAuth server: open the authorization page and wait for the browser (default 300 seconds); a terminal also accepts the pasted redirect URL |
-| `pi mcp logout <server>` | Delete the stored OAuth credentials of a server |
+| `pi mcp login <server> [-l] [--timeout <seconds>]` | Sign in to an OAuth server: open the authorization page and wait for the browser (default 300 seconds); a terminal also accepts the pasted redirect URL. `-l` requires the server to be defined in the project's `.pi/mcp.json` |
+| `pi mcp logout <server> [-l]` | Delete the stored OAuth credentials of a server |
 
 `add` and `remove` change `~/.pi/agent/mcp.json`, or `.pi/mcp.json` in the current directory with `--local` (`-l`). `add` also takes `--exposure <mode>` (see [Exposure](mcp.md#control-tool-exposure)) and `--description <text>` and does not connect; run `pi mcp list` to check the server.
 

@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME } from "../config.ts";
-import { findPathKeys, userAgentsSkillsDirMatcher } from "../utils/path-identity.ts";
-import { canonicalizePath, resolvePath } from "../utils/paths.ts";
+import { canonicalizePath, pathsEqual, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
 
 export type ProjectTrustDecision = boolean | null;
@@ -42,12 +42,29 @@ function normalizeCwd(cwd: string): string {
 	return canonicalizePath(resolvePath(cwd));
 }
 
+/** Trust file keys naming `path`. Usually one; several on Windows when saved with different casing. */
+function findTrustFileKeys(data: TrustFile, path: string): string[] {
+	return Object.keys(data).filter((key) => pathsEqual(key, path));
+}
+
+/** The account's home from the operating system; HOME can point elsewhere, for example under MSYS. */
+function getAccountHomeDir(): string {
+	try {
+		return userInfo().homedir;
+	} catch {
+		// Some restricted runtimes cannot query the operating-system account database.
+		return homedir();
+	}
+}
+
 function findNearestTrustEntry(data: TrustFile, cwd: string): ProjectTrustStoreEntry | null {
 	let currentDir = normalizeCwd(cwd);
 	while (true) {
-		const value = data[findPathKeys(data, currentDir)[0] ?? currentDir];
-		if (value === true || value === false) {
-			return { path: currentDir, decision: value };
+		for (const key of findTrustFileKeys(data, currentDir)) {
+			const value = data[key];
+			if (value === true || value === false) {
+				return { path: key, decision: value };
+			}
 		}
 
 		const parentDir = dirname(currentDir);
@@ -184,7 +201,9 @@ function withTrustFileLock<T>(path: string, fn: () => T): T {
  * trusted user resource and is ignored here, even when cwd is $HOME.
  */
 export function hasTrustRequiringProjectResources(cwd: string): boolean {
-	const isUserAgentsSkillsDir = userAgentsSkillsDirMatcher();
+	const homeDir = canonicalizePath(resolvePath(process.env.HOME || homedir()));
+	const userAgentsSkillsDir = join(homeDir, ".agents", "skills");
+	const accountAgentsSkillsDir = join(canonicalizePath(getAccountHomeDir()), ".agents", "skills");
 	let currentDir = canonicalizePath(resolvePath(cwd));
 
 	const configDir = join(currentDir, CONFIG_DIR_NAME);
@@ -194,7 +213,11 @@ export function hasTrustRequiringProjectResources(cwd: string): boolean {
 
 	while (true) {
 		const agentsSkillsDir = join(currentDir, ".agents", "skills");
-		if (!isUserAgentsSkillsDir(agentsSkillsDir) && existsSync(agentsSkillsDir)) {
+		if (
+			!pathsEqual(agentsSkillsDir, userAgentsSkillsDir) &&
+			!pathsEqual(agentsSkillsDir, accountAgentsSkillsDir) &&
+			existsSync(agentsSkillsDir)
+		) {
 			return true;
 		}
 
@@ -233,10 +256,10 @@ export class ProjectTrustStore {
 			const data = readTrustFile(this.trustPath);
 			for (const { path, decision } of decisions) {
 				const key = normalizeCwd(path);
-				for (const alias of findPathKeys(data, key)) if (alias !== key) delete data[alias];
-				if (decision === null) {
-					delete data[key];
-				} else {
+				for (const existingKey of findTrustFileKeys(data, key)) {
+					delete data[existingKey];
+				}
+				if (decision !== null) {
 					data[key] = decision;
 				}
 			}

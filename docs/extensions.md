@@ -143,7 +143,7 @@ To share extensions via npm or git as pi packages, see [packages.md](packages.md
 |---------|---------|
 | `@astralyn/pi` | Extension types (`ExtensionAPI`, `ExtensionContext`, events) |
 | `typebox` | Schema definitions for tool parameters |
-| `@earendil-works/pi-ai` | AI utilities (`StringEnum` for Google-compatible enums) |
+| `@earendil-works/pi-ai` | AI utilities (`StringEnum` for Google-compatible enums). Inside pi it also exports TypeBox's `Type`, `Static` and `TSchema`, which the published package no longer re-exports; import them from `typebox` in new code |
 | `@earendil-works/pi-agent-core` | Agent-core types for advanced integrations |
 | `@earendil-works/pi-tui` | TUI components for custom rendering |
 
@@ -152,6 +152,18 @@ npm dependencies work too. Add a `package.json` next to your extension (or in a 
 For distributed pi packages installed with `pi install` (npm or git), runtime deps must be in `dependencies`. Package installation uses production installs (`npm install --omit=dev`) by default, so `devDependencies` are not available at runtime; when `npmCommand` is configured, git packages use plain `install` for compatibility with wrappers.
 
 Node.js built-ins (`node:fs`, `node:path`, etc.) are also available.
+
+### Tool parameter schemas and TypeBox
+
+Pi validates tool arguments as JSON Schema with `@earendil-works/pi-schema`, whatever built the schema; TypeBox schemas are JSON Schema and work unchanged. Before validation, loosely typed arguments are coerced: numeric strings to numbers, `"true"` to `true`, a single value to a one-item array, `null` in an optional property dropped. TypeBox features outside JSON Schema do not apply to tool arguments:
+
+- `Type.Refine()` refinements are not run. Check such constraints in `execute()`.
+- `Type.BigInt()`, `Type.Undefined()` and `Type.Void()` reject every argument, since JSON has no such values. Codecs (`Type.Codec()`) do not decode: `execute()` receives the JSON value.
+- Formats registered with TypeBox's `Format.Set()` are not checked. The standard formats are, plus `url` and `json-pointer-uri-fragment`.
+- Property names are matched as names, not as regular expressions, and `additionalProperties` applies only to properties the object does not declare.
+- A `$ref` that names nothing rejects only arguments at its place.
+
+Validation errors the model sees use pi-schema's messages, such as `- path: missing` or `- limit: expected number, got string`, followed by field hints that name the legal fields and a bounded echo of the received arguments.
 
 ## Writing an Extension
 
@@ -1909,6 +1921,7 @@ The transformer receives the Markdown string and a context with:
 - `messageType` — `"user"`, `"assistant"`, or `"assistant-thinking"`
 - `isStreaming` — `true` for partial assistant updates; `false` for user, finalized assistant, and restored messages
 - `availableWidth` — exact terminal columns available for the transformed Markdown content
+- `messageId`, `timestamp` — session-entry ID and ISO timestamp when rendering from persisted session entries; `undefined` for live messages
 
 Return the transformed Markdown:
 
@@ -1975,12 +1988,14 @@ if (profile) {
 
 ### pi.exec(command, args, options?)
 
-Execute a shell command.
+Execute a command without a shell.
 
 ```typescript
 const result = await pi.exec("git", ["status"], { signal, timeout: 5000 });
-// result.stdout, result.stderr, result.code, result.killed
+// result.stdout, result.stderr, result.code, result.killed, result.truncated
 ```
+
+Options: `signal` and `timeout` terminate the command, `cwd` sets the working directory, and `maxBuffer` limits stdout and stderr combined (default 256 MiB). When output exceeds `maxBuffer`, pi terminates the command and returns the output up to the limit with `truncated: true`, `killed: true`, and a nonzero `code`. `killed` is true whenever pi terminated the command: timeout, abort, or `maxBuffer`. A command that ignores SIGTERM gets SIGKILL after 5 seconds.
 
 ### pi.getActiveTools() / pi.getAllTools() / pi.setActiveTools(names)
 
@@ -2596,6 +2611,7 @@ pi.registerTool({
 - `durationMs` - how long the tool's execution took, from the final result; `undefined` while it runs, when it did not run, or for results stored before durations were recorded
 - `outputPad` - horizontal padding from the `outputPad` setting; renderers with `renderShell: "self"` apply it themselves
 - `result` - the current partial or final result, if one has arrived
+- `keyText()`, `keyHint()` - format the user's configured keybindings, see [Keybinding Hints](#keybinding-hints)
 
 Use `context.state` for cross-slot shared state. Keep slot-local caches on the returned component instance when you want to reuse and mutate the same component across renders.
 
@@ -2646,24 +2662,24 @@ If a slot intentionally has no visible content, return an empty `Component` such
 
 #### Keybinding Hints
 
-Use `keyHint()` to display keybinding hints that respect the active keybinding configuration:
+Use `keyHint()` and `keyText()` from the render context to display keybinding hints that respect the user's keybinding configuration:
 
 ```typescript
-import { keyHint } from "@astralyn/pi";
-
 renderResult(result, { expanded }, theme, context) {
   let text = theme.fg("success", "✓ Done");
   if (!expanded) {
-    text += ` (${keyHint("app.tools.expand", "to expand")})`;
+    text += ` (${context.keyHint("app.tools.expand", "to expand")})`;
   }
   return new Text(text, 0, 0);
 }
 ```
 
-Available functions:
-- `keyHint(keybinding, description)` - Formats a configured keybinding id such as `"app.tools.expand"` or `"tui.select.confirm"`
-- `keyText(keybinding)` - Returns the raw configured key text for a keybinding id
-- `rawKeyHint(key, description)` - Format a raw key string
+The same functions are available as `options.keyHint()`/`options.keyText()` in message and entry renderers:
+
+- `keyHint(keybinding, description)` - Formats a configured keybinding id such as `"app.tools.expand"` or `"tui.select.confirm"`, followed by the description
+- `keyText(keybinding)` - Returns the raw configured key text for a keybinding id, or `""` if the id has no keys
+
+In renderers, use these instead of importing `keyHint()` or `keyText()` from `@astralyn/pi`. An extension can resolve its own copy of the package, for example from its own `node_modules`, and that copy does not see pi's configured keybindings: `app.*` ids then format as `""`. `rawKeyHint(key, description)` formats a literal key string and is safe to import.
 
 Use namespaced keybinding ids:
 - Coding-agent ids use the `app.*` namespace, for example `app.tools.expand`, `app.editor.external`, `app.session.rename`
@@ -3242,6 +3258,8 @@ pi.registerMessageRenderer("my-extension", (message, options, theme) => {
 
   if (expanded && message.details) {
     text += "\n" + theme.fg("dim", JSON.stringify(message.details, null, 2));
+  } else if (message.details) {
+    text += ` (${options.keyHint("app.tools.expand", "to expand")})`;
   }
 
   return new Text(text, outputPad, 0);
