@@ -988,6 +988,34 @@ describe("session-owned background host", () => {
 			expect(session.messages.some((message) => message.role === "custom")).toBe(true);
 		});
 
+		it("stays busy while a prompt deferred by an agent_settled handler runs its preflight", async () => {
+			let sent = false;
+			const session = await host(
+				true,
+				(pi) => {
+					pi.on("agent_settled", () => {
+						if (sent) return;
+						sent = true;
+						pi.sendUserMessage("deferred follow-up");
+					});
+				},
+				[fauxAssistantMessage("first"), fauxAssistantMessage("second")],
+			);
+			await session.bindExtensions({ tasksEnabled: true });
+			const log: string[] = [];
+			let repliesWhenQuiescent: number | undefined;
+			session.subscribe((event) => {
+				if (event.type === "agent_start" || event.type === "agent_settled") log.push(event.type);
+				if (event.type !== "session_quiescent") return;
+				log.push(event.type);
+				repliesWhenQuiescent ??= session.messages.filter((message) => message.role === "assistant").length;
+			});
+			await session.prompt("start");
+			await session.waitForQuiescence();
+			expect(log).toEqual(["agent_start", "agent_settled", "agent_start", "agent_settled", "session_quiescent"]);
+			expect(repliesWhenQuiescent).toBe(2);
+		});
+
 		it("becomes quiescent when idle input queued over a pending completion blocks its delivery", async () => {
 			const session = await host();
 			await session.bindExtensions({ tasksEnabled: true });

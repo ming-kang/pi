@@ -455,6 +455,11 @@ export class AgentSession {
 	private _quiescenceCheckScheduled = false;
 	private readonly _quiescenceWaiters = new Set<{ resolve(): void; reject(reason: unknown): void }>();
 	private readonly _deferredSettledActions: Array<() => Promise<void>> = [];
+	/**
+	 * Deferred settled actions taken from the queue and still running. A deferred prompt's input
+	 * preflight is asynchronous and comes before its run marks the session busy.
+	 */
+	private _runningSettledActions = 0;
 
 	private _resourceLoader: ResourceLoader;
 	private _customTools: ToolDefinition[];
@@ -1163,6 +1168,7 @@ export class AgentSession {
 			this._isAgentRunActive ||
 			this._isEmittingAgentSettled ||
 			this._deferredSettledActions.length > 0 ||
+			this._runningSettledActions > 0 ||
 			this._pendingCustomMessages.length > 0 ||
 			this.isCompacting ||
 			this.isRetrying
@@ -1279,9 +1285,11 @@ export class AgentSession {
 
 		const deferred = this._deferredSettledActions.splice(0);
 		if (deferred.length > 0) {
+			this._runningSettledActions++;
 			try {
 				for (const action of deferred) await action();
 			} finally {
+				this._runningSettledActions--;
 				this._resolveIdleWaitIfIdle();
 			}
 			return;
