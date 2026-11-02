@@ -10,10 +10,10 @@ import { type Component, Container, Spacer, Text, truncateToWidth, visibleWidth 
 import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { VisualLinePreview } from "../../../modes/interactive/components/visual-truncate.ts";
 import { highlightCode, theme } from "../../../modes/interactive/theme/theme.ts";
-import type { ToolDefinition, ToolRenderContext, ToolRenderResultOptions } from "../../extensions/types.ts";
+import type { ToolDefinition, ToolRenderResultOptions } from "../../extensions/types.ts";
 import type { ShellToolConfig } from "../bash.ts";
 import { getTextOutput, invalidArgText, startToolTimer, str, toolTimerText } from "../render-utils.ts";
-import type { BashToolDetails, ShellRenderState } from "../shell-tool.ts";
+import type { BashToolDetails } from "../shell-tool.ts";
 import { DEFAULT_MAX_BYTES, formatSize } from "../truncate.ts";
 
 const BASH_PREVIEW_LINES = 5;
@@ -62,32 +62,6 @@ class BashCallRenderComponent implements Component {
 		if (this.expanded || fullLines.length <= 1) return fullLines;
 		return [formatTruncatedShellCall(this.command, this.timeout, width, this.config)];
 	}
-}
-
-const shellTimerHooked = Symbol("shellTimerHooked");
-type ShellTimerState = Partial<ShellRenderState> & {
-	[shellTimerHooked]?: true;
-};
-
-/**
- * Start the row's clock and hook disposal once. Either slot can initialize timing, since
- * extensions may replace the other slot; upstream's timer state outlives a replaced slot, but
- * its refresh interval must still end when the row is disposed mid-run.
- */
-function ensureShellTimer(context: ToolRenderContext<ShellTimerState>): void {
-	startToolTimer(context);
-	const state = context.state;
-	if (state[shellTimerHooked]) return;
-	state[shellTimerHooked] = true;
-	const previousDispose = state.dispose;
-	state.dispose = () => {
-		try {
-			previousDispose?.call(state);
-		} finally {
-			clearInterval(state.interval);
-			state.interval = undefined;
-		}
-	};
 }
 
 function formatShellPrompt(prompt: string): string {
@@ -219,14 +193,15 @@ export function createShellRenderers(
 ): Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> {
 	return {
 		renderCall(args, _theme, context) {
-			ensureShellTimer(context);
+			startToolTimer(context);
 			const component =
 				(context.lastComponent as BashCallRenderComponent | undefined) ?? new BashCallRenderComponent(config);
 			component.update(args as { command?: string; timeout?: number } | undefined, context.expanded);
 			return component;
 		},
 		renderResult(result, options, _theme, context) {
-			ensureShellTimer(context);
+			// Either slot may start the clock: an extension can replace the other one.
+			startToolTimer(context);
 			const timerText = toolTimerText(context, options.isPartial);
 			const component = (context.lastComponent as Container | undefined) ?? new Container();
 			const submitted = (context.args as { background?: boolean } | undefined)?.background === true;

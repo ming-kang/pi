@@ -30,6 +30,15 @@ import { keyHint } from "./keybinding-hints.ts";
 const FALLBACK_PREVIEW_LINES = 10;
 const DEFAULT_TOOL_ROW_GAP: ToolRowGap = { afterTool: 1, afterMultilineTool: 1, afterOther: 1 };
 
+/** A renderer's cleanup cannot keep its row, or the rows disposed after it, alive. */
+function runCleanup(cleanup: () => void): void {
+	try {
+		cleanup();
+	} catch {
+		// Renderer failures already fall back silently; cleanup follows the same rule.
+	}
+}
+
 export interface ToolExecutionOptions {
 	showImages?: boolean;
 	imageWidthCells?: number;
@@ -73,6 +82,7 @@ export class ToolExecutionComponent extends Container {
 	};
 	private hideComponent = false;
 	private disposed = false;
+	private readonly disposers: Array<() => void> = [];
 
 	constructor(
 		toolName: string,
@@ -156,6 +166,10 @@ export class ToolExecutionComponent extends Container {
 				if (this.disposed) return;
 				this.invalidate();
 				this.ui.requestRender();
+			},
+			onDispose: (cleanup) => {
+				if (this.disposed) runCleanup(cleanup);
+				else this.disposers.push(cleanup);
 			},
 			lastComponent,
 			state: this.rendererState,
@@ -474,6 +488,6 @@ export class ToolExecutionComponent extends Container {
 	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
-		(this.rendererState as { dispose?: () => void }).dispose?.();
+		for (const cleanup of this.disposers.splice(0)) runCleanup(cleanup);
 	}
 }

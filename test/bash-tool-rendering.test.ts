@@ -186,7 +186,7 @@ describe("bash tool call rendering", () => {
 		},
 	);
 
-	test.each([false, true])("cleans up shell timing alongside an extension disposer (throws=%s)", (throws) => {
+	test.each([false, true])("cleans up shell timing alongside an extension cleanup (throws=%s)", (throws) => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
 		const tool = createBashToolDefinition(process.cwd(), { operations: { exec: async () => ({ exitCode: 0 }) } });
@@ -196,7 +196,7 @@ describe("bash tool call rendering", () => {
 		const definition: typeof tool = {
 			...tool,
 			renderCall(args, theme, context) {
-				context.state.dispose ??= cleanup;
+				if (!context.lastComponent) context.onDispose(cleanup);
 				return tool.renderCall!(args, theme, context);
 			},
 		};
@@ -214,8 +214,7 @@ describe("bash tool call rendering", () => {
 		vi.advanceTimersByTime(2000);
 		component.invalidate();
 		expect(renderCall(component, 80)).toContain("Elapsed 2.0s");
-		if (throws) expect(() => component.dispose()).toThrow("extension cleanup failed");
-		else component.dispose();
+		component.dispose();
 		component.dispose();
 		expect(cleanup).toHaveBeenCalledOnce();
 		expect(vi.getTimerCount()).toBe(0);

@@ -18,6 +18,7 @@ function render(
 		args: { code: "" },
 		toolCallId: "call",
 		invalidate: () => {},
+		onDispose: () => {},
 		lastComponent: undefined,
 		state: {},
 		cwd: "/",

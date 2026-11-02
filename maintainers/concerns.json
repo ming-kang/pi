@@ -282,8 +282,7 @@
 					"rewrite": "Built-in renderer semantics remain distribution-owned; the separate TUI shell supplies marker and rail framing rather than a background Box."
 				},
 				{
-					"path": "src/core/tools/render-utils.ts",
-					"rewrite": "The shared row clock owns idempotent disposal and stops repainting on settlement or handoff, including late renders of disposed rows."
+					"path": "src/core/tools/render-utils.ts"
 				},
 				{
 					"path": "src/core/extensions/index.ts"
@@ -299,7 +298,7 @@
 				},
 				{
 					"path": "src/modes/interactive/components/tool-execution.ts",
-					"rewrite": "The upstream lifecycle remains in place; the local additions only consume optional TUI shell metadata, expose row spacing, preserve result context, and dispose renderer state."
+					"rewrite": "The upstream lifecycle remains in place; the local additions only consume optional TUI shell metadata, expose row spacing, preserve result context, and run renderer cleanups registered with onDispose."
 				},
 				{
 					"path": "src/modes/interactive/interactive-mode.ts",

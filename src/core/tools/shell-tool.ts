@@ -47,9 +47,6 @@ export interface BashToolDetails extends NativeBashToolDetails {
 	background?: { kind: "background"; taskId: string };
 }
 
-/** The native row state; like every tool row's state, it may expose `dispose()` for the row's cleanup. */
-export type ShellRenderState = BashRenderState & { dispose?: () => void };
-
 const BACKGROUND_GUIDANCE = `Choose the mode per call: foreground (default) blocks until the command exits — use it when your next step needs the output; background: true returns immediately with a task ID — use it for long-running work (builds, servers, watchers, big test suites) or when you have independent work to continue. A handoff is not completion: the result arrives later as an automatic completion notification; meanwhile use ${TASKS_TOOL_NAME} read to inspect output and ${TASKS_TOOL_NAME} kill to stop it. Background output is limited to 20 MiB.`;
 
 /**
@@ -79,7 +76,7 @@ export function createShellToolDefinition(
 	cwd: string,
 	config: ShellToolConfig,
 	options: BashToolOptions & { operations: BashOperations },
-): ToolDefinition<typeof bashSchema, BashToolDetails | undefined, ShellRenderState> {
+): ToolDefinition<typeof bashSchema, BashToolDetails | undefined, BashRenderState> {
 	const native = createNativeShellToolDefinition(cwd, config, options);
 	return {
 		...native,

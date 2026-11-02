@@ -2564,7 +2564,7 @@ By default, tool output is wrapped in the active call/result shell, which owns t
 
 Set `renderShell: "self"` when the tool should render its own shell instead of using the native shell. This is useful for tools that need complete control over framing or background behavior, for example large previews that must stay visually stable after the tool settles.
 
-For live progress UI (elapsed time, retry countdowns), schedule repaints from the renderer itself: store a timer handle in `context.state`, arm a `setTimeout` that calls `context.invalidate()` only while the current view contains changing text, and clear it on the first static or settled render. Set `context.state.dispose` to the same idempotent cleanup function when a timer may still be armed; the shell invokes it when the row is disposed.
+For live progress UI (elapsed time, retry countdowns), schedule repaints from the renderer itself: store a timer handle in `context.state`, arm a `setTimeout` that calls `context.invalidate()` only while the current view contains changing text, and clear it on the first static or settled render. When you arm a timer, register its cleanup with `context.onDispose(cleanup)`: the shell runs it once when the row is disposed, or immediately if the row already was. Register when you create the resource rather than on every render.
 
 Derive displayed time from an absolute timestamp or deadline (`Date.now()`), not by decrementing a counter on every refresh. A refresh is only a repaint opportunity; event-loop stalls and machine sleep must not extend a wall-clock timeout.
 
@@ -2586,7 +2586,8 @@ pi.registerTool({
 
 `renderCall` and `renderResult` each receive a `context` object with:
 - `args` - the current tool call arguments
-- `state` - shared row-local state across `renderCall` and `renderResult`; an optional `dispose()` cleanup is called when the row is disposed
+- `state` - shared row-local state across `renderCall` and `renderResult`
+- `onDispose(cleanup)` - run `cleanup` once when the row is disposed, such as clearing a refresh timer; a cleanup that throws does not affect the row or its siblings
 - `lastComponent` - the previously returned component for that slot, if any
 - `invalidate()` - request a rerender of this tool row
 - `toolCallId`, `cwd`, `executionStarted`, `argsComplete`, `isPartial`, `expanded`, `showImages`, `isError`

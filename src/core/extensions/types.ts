@@ -504,12 +504,14 @@ export interface ToolRenderContext<TState = any, TArgs = any, TDetails = unknown
 	toolCallId: string;
 	/** Invalidate just this tool execution component for redraw. */
 	invalidate: () => void;
+	/**
+	 * Run `cleanup` once when this tool row is disposed, or at once if it already was, such as
+	 * clearing a refresh timer. Register when creating the resource, not on every render.
+	 */
+	onDispose(cleanup: () => void): void;
 	/** Previously returned component for this render slot, if any. */
 	lastComponent: Component | undefined;
-	/**
-	 * Shared renderer state for this tool row. Initialized by tool-execution.ts.
-	 * If the state exposes `dispose()`, the shell calls it when the row is disposed.
-	 */
+	/** Shared renderer state for this tool row. Initialized by tool-execution.ts. */
 	state: TState;
 	/** Working directory for this tool execution. */
 	cwd: string;

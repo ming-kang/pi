@@ -83,6 +83,8 @@ export function createToolHtmlRenderer(deps: ToolHtmlRendererDeps): ToolHtmlRend
 			args: renderedArgs.get(toolCallId),
 			toolCallId,
 			invalidate: () => {},
+			// A static export never disposes rows, and its settled renders arm no timers.
+			onDispose: () => {},
 			lastComponent,
 			state: getState(toolCallId),
 			cwd,

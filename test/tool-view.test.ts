@@ -350,15 +350,17 @@ describe("chat lifecycle", () => {
 			parameters: Type.Any(),
 			execute: async () => ({ content: [], details: {} }),
 			renderResult: (_result, _options, _theme, context) => {
-				const state: { timer?: ReturnType<typeof setTimeout>; dispose?: () => void } = context.state;
-				state.timer ??= setTimeout(() => {
-					state.timer = undefined;
-					context.invalidate();
-				}, 1000);
-				state.dispose = () => {
-					if (state.timer) clearTimeout(state.timer);
-					state.timer = undefined;
-				};
+				const state: { timer?: ReturnType<typeof setTimeout> } = context.state;
+				if (!state.timer) {
+					state.timer = setTimeout(() => {
+						state.timer = undefined;
+						context.invalidate();
+					}, 1000);
+					context.onDispose(() => {
+						clearTimeout(state.timer);
+						state.timer = undefined;
+					});
+				}
 				return new Text("live", 0, 0);
 			},
 		};

@@ -8,10 +8,7 @@ import { agentRenderers } from "../src/extensions/agent/render.ts";
 import type { AgentActivity, AgentToolDetails } from "../src/extensions/agent/types.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 
-interface RenderState {
-	dispose?: () => void;
-}
-type RenderContext = ToolRenderContext<RenderState, unknown, AgentToolDetails>;
+type RenderContext = ToolRenderContext<Record<string, unknown>, unknown, AgentToolDetails>;
 
 function context(result?: AgentToolResult<AgentToolDetails>, overrides: Partial<RenderContext> = {}): RenderContext {
 	return {
@@ -19,6 +16,7 @@ function context(result?: AgentToolResult<AgentToolDetails>, overrides: Partial<
 		result,
 		toolCallId: "call",
 		invalidate: () => {},
+		onDispose: () => {},
 		lastComponent: undefined,
 		state: {},
 		cwd: "/",
@@ -251,17 +249,17 @@ describe("Agent transcript renderer", () => {
 			expect(vi.getTimerCount()).toBe(0);
 		});
 
-		it("disposes live timing once, preserves other cleanup and cannot rearm after disposal", () => {
+		it("stops live timing when the row is disposed and cannot rearm afterwards", () => {
 			const invalidate = vi.fn();
-			const previousDispose = vi.fn();
-			const state: RenderState = { dispose: previousDispose };
-			const ctx = context(result("running"), { state, executionStarted: true, isPartial: true, invalidate });
+			const cleanups: Array<() => void> = [];
+			let disposed = false;
+			const onDispose = (cleanup: () => void) => (disposed ? cleanup() : cleanups.push(cleanup));
+			const ctx = context(result("running"), { executionStarted: true, isPartial: true, invalidate, onDispose });
 			call(ctx).render(100);
 			vi.advanceTimersByTime(1000);
 			expect(invalidate).toHaveBeenCalled();
-			state.dispose?.();
-			state.dispose?.();
-			expect(previousDispose).toHaveBeenCalledOnce();
+			disposed = true;
+			for (const cleanup of cleanups) cleanup();
 			expect(vi.getTimerCount()).toBe(0);
 			invalidate.mockClear();
 			call(ctx).render(100);
