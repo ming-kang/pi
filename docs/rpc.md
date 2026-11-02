@@ -959,7 +959,7 @@ Emitted when nothing more will happen without new input: no run, compaction, ret
 {"type": "session_quiescent"}
 ```
 
-`RpcClient.waitForQuiescence(timeout?)` resolves on this event, or at once when `get_state` reports `isQuiescent`; `collectEventsUntilQuiescent(timeout?)` collects events until it. `waitForIdle()` and `collectEvents()` still resolve on the first `agent_settled`. Closing stdin shuts the process down immediately, without waiting for Background work.
+`RpcClient.waitForQuiescence(timeout?)` resolves on this event, or at once when `get_state` reports `isQuiescent`. `collectEventsUntilQuiescent(timeout?)` collects events until the next one: start it before the prompt it should cover, since it does not resolve early when the session is quiescent before that prompt begins. `waitForIdle()` and `collectEvents()` still resolve on the first `agent_settled`. Closing stdin shuts the process down immediately, without waiting for Background work.
 
 ### turn_start / turn_end
 

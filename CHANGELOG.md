@@ -13,6 +13,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 - `TaskExecution.present` and `TasksContext.presentOutput()`. Task executors declare data rather than UI: `/tasks` shows a running task's published `display`, and the Tasks API no longer depends on the interactive theme.
 
+### Fixed
+
+- `AgentSession.waitForQuiescence()` and the `session_quiescent` event now also resolve when input queued with `steer()` or `followUp()` on an idle session holds back a pending background completion. `isQuiescent` already reported `true`, but waiters stayed pending until some later event.
+
 ## [1.4.11] - 2026-11-01
 
 ### Changed

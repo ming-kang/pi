@@ -452,6 +452,7 @@ export class AgentSession {
 	/** Last observed quiescence; a transition into true emits `session_quiescent` once. */
 	private _quiescent = true;
 	private _quiescenceDisposed = false;
+	private _quiescenceCheckScheduled = false;
 	private readonly _quiescenceWaiters = new Set<{ resolve(): void; reject(reason: unknown): void }>();
 	private readonly _deferredSettledActions: Array<() => Promise<void>> = [];
 
@@ -1133,8 +1134,23 @@ export class AgentSession {
 		for (const l of this._eventListeners) {
 			l(event);
 		}
-		// Compaction runs outside agent runs, so its start is what leaves quiescence.
-		if (event.type === "compaction_start") this._updateQuiescence();
+		// Any event may follow a change quiescence reads, such as queued input or a compaction
+		// starting outside a run; the session_quiescent that the check emits does not.
+		if (event.type !== "session_quiescent") this._scheduleQuiescenceCheck();
+	}
+
+	/**
+	 * Re-evaluate quiescence once the emitting transition has finished. Events are emitted midway
+	 * through synchronous transitions, such as a task settlement that journals its record before its
+	 * completion is enqueued, where an immediate evaluation would report a moment of false quiescence.
+	 */
+	private _scheduleQuiescenceCheck(): void {
+		if (this._quiescenceCheckScheduled) return;
+		this._quiescenceCheckScheduled = true;
+		queueMicrotask(() => {
+			this._quiescenceCheckScheduled = false;
+			this._updateQuiescence();
+		});
 	}
 
 	/**

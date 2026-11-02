@@ -513,21 +513,43 @@ export class RpcClient {
 	 * also covers the turns that background task completions start after `agent_settled`.
 	 * Resolves immediately when the session is already quiescent.
 	 */
-	waitForQuiescence(timeout = 60000): Promise<void> {
+	async waitForQuiescence(timeout = 60000): Promise<void> {
+		await this.untilQuiescent(timeout, true, "Timeout waiting for session to become quiescent");
+	}
+
+	/**
+	 * Collect events until the next `session_quiescent`, including background completion turns.
+	 * Start it before the work it should cover, as {@link promptAndWait} does with
+	 * {@link collectEvents}: it never resolves early because the session is quiescent before that
+	 * work begins, so with nothing pending it waits until `timeout`.
+	 */
+	collectEventsUntilQuiescent(timeout = 60000): Promise<JsonAgentSessionEvent[]> {
+		return this.untilQuiescent(timeout, false, "Timeout collecting events");
+	}
+
+	/**
+	 * Collect events until the next `session_quiescent`. With `ifAlreadyQuiescent`, also resolve as
+	 * soon as `get_state` reports that the session is quiescent already.
+	 */
+	private untilQuiescent(
+		timeout: number,
+		ifAlreadyQuiescent: boolean,
+		timeoutMessage: string,
+	): Promise<JsonAgentSessionEvent[]> {
 		return new Promise((resolve, reject) => {
+			const events: JsonAgentSessionEvent[] = [];
 			const finish = (error?: Error) => {
 				clearTimeout(timer);
 				unsubscribe();
 				if (error) reject(error);
-				else resolve();
+				else resolve(events);
 			};
-			const timer = setTimeout(
-				() => finish(new Error(`Timeout waiting for session to become quiescent. Stderr: ${this.stderr}`)),
-				timeout,
-			);
+			const timer = setTimeout(() => finish(new Error(`${timeoutMessage}. Stderr: ${this.stderr}`)), timeout);
 			const unsubscribe = this.onEvent((event) => {
+				events.push(event);
 				if (event.type === "session_quiescent") finish();
 			});
+			if (!ifAlreadyQuiescent) return;
 			// Subscribed first, so a transition during the query is not missed.
 			this.getState().then(
 				(state) => {
@@ -535,28 +557,6 @@ export class RpcClient {
 				},
 				(error: unknown) => finish(error instanceof Error ? error : new Error(String(error))),
 			);
-		});
-	}
-
-	/**
-	 * Collect events until the session is quiescent, including background completion turns.
-	 */
-	collectEventsUntilQuiescent(timeout = 60000): Promise<JsonAgentSessionEvent[]> {
-		return new Promise((resolve, reject) => {
-			const events: JsonAgentSessionEvent[] = [];
-			const timer = setTimeout(() => {
-				unsubscribe();
-				reject(new Error(`Timeout collecting events. Stderr: ${this.stderr}`));
-			}, timeout);
-
-			const unsubscribe = this.onEvent((event) => {
-				events.push(event);
-				if (event.type === "session_quiescent") {
-					clearTimeout(timer);
-					unsubscribe();
-					resolve(events);
-				}
-			});
 		});
 	}
 

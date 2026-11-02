@@ -988,6 +988,28 @@ describe("session-owned background host", () => {
 			expect(session.messages.some((message) => message.role === "custom")).toBe(true);
 		});
 
+		it("becomes quiescent when idle input queued over a pending completion blocks its delivery", async () => {
+			const session = await host();
+			await session.bindExtensions({ tasksEnabled: true });
+			const log = quiescenceLog(session);
+			const resume = session.pauseTaskNotifications();
+			const execution = await task(session);
+			execution.finish();
+			await vi.waitFor(() => expect(session.tasks.get(execution.id).status).toBe("completed"));
+			const quiescent = vi.fn();
+			const waiting = session.waitForQuiescence().then(quiescent);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(quiescent).not.toHaveBeenCalled();
+
+			// Input left in the queue while idle waits for the next prompt and holds the completion back.
+			await session.followUp("after the completion");
+			expect(session.isQuiescent).toBe(true);
+			await waiting;
+			expect(log).toEqual(["session_quiescent"]);
+			expect(session.messages.some((message) => message.role === "custom")).toBe(false);
+			resume();
+		});
+
 		it("does not wait for a completion whose delivery failed", async () => {
 			const session = await host();
 			const warning = vi.fn();

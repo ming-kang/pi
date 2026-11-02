@@ -71,6 +71,15 @@ describe("RpcClient quiescence", () => {
 		]);
 	});
 
+	test("collectEventsUntilQuiescent started before a prompt waits for that prompt's quiescence", async () => {
+		// The session is quiescent until the prompt arrives; the collection covers the prompt's work.
+		const client = createClient({ quiescent: true, events: [settled, quiescent] });
+		await client.start();
+		const events = client.collectEventsUntilQuiescent(5000);
+		await client.prompt("go");
+		expect((await events).map((event) => event.type)).toEqual(["agent_settled", "session_quiescent"]);
+	});
+
 	test("waitForQuiescence times out with the stderr context", async () => {
 		const client = createClient({ quiescent: false, events: [] });
 		await client.start();
