@@ -356,7 +356,7 @@ Terminal history is restored only from the selected branch's valid version-3 rec
 
 These `custom` entries do not enter model context. Automatic terminal delivery creates a `custom_message` with `customType: "task-completion"`, `display: true`, and `{ version: 3, task }` in `details`. The session formats `content` from the same snapshot, with a total limit of 48 KiB and 2,000 lines. A `log` task contributes only an 8 KiB output tail to the automatic model turn; a `report` task contributes its beginning, whole when it fits. Only `content` is sent to the model.
 
-Completion details are bounded to 120 KiB of serialized JSON including escaping. `task` is the terminal snapshot without `display`. Its `input` is clipped to 8 KiB, and its `result` keeps the end of a log or the beginning of a report, up to 40 KiB for replay and expanded rendering. The smaller model-facing projection does not change these stored fields. Source flags survive further clipping. The renderer sanitizes terminal control sequences and applies separate display row limits.
+Completion details are bounded to 120 KiB of serialized JSON including escaping. `task` is the terminal snapshot without `display`. Its `input` is clipped to 8 KiB, and its `result` keeps the end of a log or the beginning of a report, up to 40 KiB for replay. The smaller model-facing projection does not change these stored fields. Source flags survive further clipping. The renderer sanitizes terminal control sequences and applies separate display row limits.
 
 A shell completion's `details` can look like this:
 

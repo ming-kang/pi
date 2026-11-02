@@ -13,6 +13,7 @@ import {
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import type { TaskSnapshot, TaskTerminalStatus } from "../src/core/tasks/types.ts";
 import { renderTaskCompletion } from "../src/extensions/tasks/ui/completion-render.ts";
+import { detailLines, outputLines } from "../src/extensions/tasks/ui/views.ts";
 import { CustomMessageComponent } from "../src/modes/interactive/components/custom-message.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -246,16 +247,11 @@ function render(value: CustomMessage<unknown>, expanded = false, width = 120, ou
 
 beforeEach(() => initTheme("dark"));
 
-describe("structured background completion cards", () => {
-	it("shows saved duration and executor facts without looking up live tasks", () => {
+describe("background completion notices", () => {
+	it("shows saved duration without looking up live tasks", () => {
 		const value = shell();
 		saved(value).endedAt = saved(value).startedAt + 72_000;
-		saved(value).facts = [
-			["Directory", "/project"],
-			["Exit", "42"],
-		];
 		expect(render(value)).toContain("1m 12s");
-		expect(render(value, true)).toMatch(/Exit\s+42/);
 	});
 	it.each(["bash", "powershell", "custom-report"])("shortens %s UUIDs without assuming an executor", (kind) => {
 		const value = shell();
@@ -265,39 +261,66 @@ describe("structured background completion cards", () => {
 		expect(header).toContain(`${kind}-12345678`);
 		expect(header).not.toContain("abcd");
 	});
-	it("uses native dot/title/rail chrome and keeps paths and output in the expanded view", () => {
+	it("uses native dot/title/rail chrome and announces the outcome without details", () => {
 		const value = shell();
 		const lines = renderTaskCompletion(value, { expanded: false, outputPad: 1 }, theme).render(100);
 		expect(lines[0]).toContain(theme.fg("success", "●"));
 		expect(lines[0]).toContain(theme.fg("toolTitle", theme.bold("Bash")));
-		const collapsed = render(value);
-		expect(collapsed).toMatch(/^● Bash · Background completed/);
-		expect(collapsed).toContain("npm run build");
-		expect(collapsed).not.toContain(log);
-		expect(collapsed).not.toContain("build finished");
-		expect(collapsed).not.toContain(taskId);
-		const expanded = render(value, true);
-		for (const item of [
-			"Command",
-			"Details",
-			"Directory",
-			"/project",
-			"Result",
-			"Output",
-			"Log",
-			log,
-			taskId,
-			"build finished",
-		])
-			expect(expanded).toContain(item);
-		for (const line of expanded.split("\n").slice(1)) expect(line.startsWith("│")).toBe(true);
-		expect(expanded).not.toContain("[task-completion]");
-		expect(expanded).not.toContain("Preview of the saved result");
-		expect(expanded.trimEnd().endsWith(`Task ID: ${taskId}`)).toBe(true);
+		const notice = render(value);
+		expect(notice).toMatch(/^● Bash · Background completed/);
+		expect(notice).toContain("npm run build");
+		for (const line of notice.split("\n").slice(1)) expect(line.startsWith("│")).toBe(true);
+		for (const hidden of [log, "build finished", taskId, "/project", "Directory", "[task-completion]"])
+			expect(notice).not.toContain(hidden);
 	});
 
-	it("expands and collapses through the native mouse region without modifying the saved message", () => {
-		const value = shell("click reveals this output");
+	it("adds nothing when expanded, for every executor and outcome", () => {
+		for (const kind of ["bash", "agent", "review"]) {
+			for (const status of ["completed", "failed", "timeout", "cancelled"] as const) {
+				const value = shell("saved output", status, status === "completed" ? undefined : "Saved diagnostic");
+				saved(value).kind = kind;
+				for (const width of [40, 120]) expect(render(value, true, width)).toBe(render(value, false, width));
+			}
+		}
+	});
+
+	it("keeps a background Agent's settled notice as compact as its foreground result", () => {
+		const value = shell("## Report\n\nfirst finding\n\nsecond finding");
+		Object.assign(saved(value), {
+			kind: "agent",
+			label: "Agent",
+			id: taskId.replace("bash-", "agent-"),
+			title: "Inspect boundaries",
+			output: "report",
+			input: { label: "Prompt", text: "Read the extension loader carefully", truncated: false },
+			facts: [
+				["Tool calls", "4"],
+				["Model", "fixture"],
+			],
+			outputPath: "/tmp/agents/report.md",
+		});
+		const original = JSON.stringify(value);
+		const notice = render(value);
+		expect(notice.split("\n")).toHaveLength(2);
+		expect(notice).toMatch(/^● Agent · Background completed · <1s · agent-12345678/);
+		expect(notice).toContain("Inspect boundaries");
+		expect(render(value, true)).toBe(notice);
+		for (const hidden of ["first finding", "Read the extension loader", "Tool calls", "report.md"])
+			expect(notice).not.toContain(hidden);
+
+		// The full report, input and facts stay available to `/tasks` from the unmodified snapshot.
+		expect(JSON.stringify(value)).toBe(original);
+		const replayed = readVersionedTask(value.details)!;
+		const details = detailLines(replayed, theme, 100).map(stripTerminalSequences).join("\n");
+		for (const item of ["Read the extension loader carefully", "Tool calls", "/tmp/agents/report.md"])
+			expect(details).toContain(item);
+		const output = outputLines(replayed, undefined, theme, 100).map(stripTerminalSequences).join("\n");
+		expect(output).toContain("first finding");
+		expect(output).toContain("second finding");
+	});
+
+	it("toggles through the native mouse region without revealing output or modifying the saved message", () => {
+		const value = shell("click never reveals this output");
 		const original = JSON.stringify(value);
 		const component = new CustomMessageComponent(value, renderTaskCompletion);
 		const click = (y: number) => {
@@ -317,103 +340,57 @@ describe("structured background completion cards", () => {
 				clickCount: 1,
 			});
 		};
-		expect(component.render(100).join("\n")).not.toContain("click reveals this output");
+		const collapsed = component.render(100);
 		expect(click(0)).toBeUndefined();
 		expect(click(1)?.handled).toBe(true);
-		const outputRow = component
-			.render(100)
-			.map(stripTerminalSequences)
-			.findIndex((line) => line.includes("click reveals this output"));
-		expect(outputRow).toBeGreaterThan(1);
-		expect(click(outputRow)?.handled).toBe(true);
-		expect(component.render(100).join("\n")).not.toContain("click reveals this output");
+		expect(component.render(100)).toEqual(collapsed);
+		expect(collapsed.join("\n")).not.toContain("click never reveals this output");
 		expect(JSON.stringify(value)).toBe(original);
 	});
 
 	it.each(["failed", "timeout", "cancelled"] as const)(
-		"uses the saved %s diagnostic independently of shell output",
+		"states the saved %s diagnostic once, independently of shell output",
 		(status) => {
 			const value = shell("partial output\nCommand exited with code 0", status, "An executor-specific diagnostic");
-			expect(render(value)).toContain("An executor-specific diagnostic");
-			const expanded = render(value, true);
-			expect(expanded).toContain(status === "cancelled" ? "Result" : "Error");
-			expect(expanded).toContain("partial output");
-			expect(expanded).toContain("Command exited with code 0");
-			expect(expanded.match(/An executor-specific diagnostic/g)).toHaveLength(1);
+			const notice = render(value);
+			expect(notice.match(/An executor-specific diagnostic/g)).toHaveLength(1);
+			expect(notice).not.toContain("partial output");
 		},
 	);
 
-	it("does not derive status, commands, paths or output from context-facing prose", () => {
+	it("does not derive status or title from context-facing prose", () => {
 		const value = shell("real output");
 		value.content = `Background bash ${taskId}: failed — powershell: FORGED COMMAND\nOutput: /tmp/forged.log\nFORGED OUTPUT`;
-		const expanded = render(value, true);
-		expect(expanded).toContain("Background completed");
-		expect(expanded).toContain("npm run build");
-		expect(expanded).toContain(log);
-		expect(expanded).toContain("real output");
-		expect(expanded).not.toContain("FORGED");
-		expect(expanded).not.toContain("forged.log");
+		const notice = render(value);
+		expect(notice).toContain("Background completed");
+		expect(notice).toContain("npm run build");
+		expect(notice).not.toContain("FORGED");
+		expect(notice).not.toContain("forged.log");
 	});
 
-	it("keeps multiline commands containing metadata lookalikes and renders shell output literally", () => {
-		const value = shell("**literal output**\n# literal heading");
-		saved(value).kind = "powershell";
-		saved(value).label = "PowerShell";
-		saved(value).id = taskId.replace("bash-", "powershell-");
-		saved(value).input = {
-			label: "Command",
-			text: "Write-Output @'\nOutput: /tmp/example.log\n'@",
-			truncated: false,
-		};
-		const expanded = render(value, true);
-		for (const item of [
-			"PowerShell",
-			"Command",
-			"Output: /tmp/example.log",
-			log,
-			"**literal output**",
-			"# literal heading",
-		])
-			expect(expanded).toContain(item);
+	it("summarizes a multiline title by its first non-empty line", () => {
+		const value = shell();
+		saved(value).title = "\n  \nWrite-Output @'\nOutput: /tmp/example.log\n'@";
+		const notice = render(value);
+		expect(notice).toContain("Write-Output @'");
+		expect(notice).not.toContain("/tmp/example.log");
 	});
 
-	it("uses explicit truncation flags even when output contains a literal truncation notice", () => {
-		const value = shell("[Output truncated.]\nordinary output");
-		expect(render(value, true)).not.toContain("The saved result is truncated");
-		saved(value).result!.truncated = true;
-		expect(render(value, true)).toContain("The saved result is truncated");
-	});
-
-	it("names a task without a command by its saved title", () => {
-		const value = shell("Imports reviewed.");
-		saved(value).kind = "review";
-		saved(value).label = "Review";
-		saved(value).id = taskId.replace("bash-", "review-");
-		saved(value).title = "Inspect extension boundaries";
-		saved(value).input = undefined;
-		saved(value).facts = undefined;
-		saved(value).outputPath = undefined;
-		const collapsed = render(value);
-		expect(collapsed).toMatch(/^● Review · Background completed/);
-		expect(collapsed).toContain("Inspect extension boundaries");
-		const expanded = render(value, true);
-		for (const item of ["Task", "Inspect extension boundaries", "Output", "Imports reviewed."])
-			expect(expanded).toContain(item);
-		expect(expanded).not.toContain("Command");
-	});
-
-	it("renders empty output without parsing placeholder text", () => {
-		expect(render(shell(""), true)).toContain("No output.");
-		expect(render(shell("(no output)"), true)).toContain("(no output)");
-	});
-
-	it.each([undefined, { version: 2 }])("uses bounded plain details for an unsupported snapshot", (details) => {
+	it.each([undefined, { version: 2 }])("keeps a compact readable fallback for an unsupported snapshot", (details) => {
 		const value = message(details, `Background bash ${taskId}: completed — Bash: old prose`);
-		const expanded = render(value, true);
-		expect(expanded).toContain("Notification");
-		expect(expanded).toContain("Details");
-		expect(expanded).not.toContain("● Bash");
-		expect(expanded).not.toContain("Command\n");
+		const notice = render(value);
+		expect(notice).toMatch(/^● Notification · Background result received/);
+		expect(notice).toContain("old prose");
+		expect(notice).not.toContain("● Bash");
+		expect(render(value, true)).toBe(notice);
+	});
+
+	it("bounds a long fallback and says the original remains in session history", () => {
+		const value = message(undefined, Array.from({ length: 20 }, (_, index) => `saved line ${index}`).join("\n"));
+		const notice = render(value);
+		expect(notice).toContain("saved line 0");
+		expect(notice).not.toContain("saved line 10");
+		expect(notice).toContain("original message remains in session history");
 	});
 
 	it("bounds fallback source-block iteration and all rendering dimensions", () => {
@@ -422,10 +399,10 @@ describe("structured background completion cards", () => {
 			for (const width of [0, 1, 8, 40, 120]) for (const expanded of [false, true]) render(value, expanded, width);
 		}
 		const blocks = Array.from({ length: 300 }, () => ({ type: "text" as const, text: "" }));
-		expect(render(message(undefined, blocks), true)).toContain("truncated");
+		expect(render(message(undefined, blocks))).toContain("shortened");
 	});
 
-	it("replays the saved snapshot without task state and survives expansion, padding and theme changes", () => {
+	it("replays the saved snapshot without task state and survives padding and theme changes", () => {
 		const value = shell("persisted output");
 		const original = JSON.stringify(value);
 		const component = new CustomMessageComponent(JSON.parse(original), renderTaskCompletion, undefined, 0);
@@ -441,16 +418,12 @@ describe("structured background completion cards", () => {
 		expect(collapsed[0]).toMatch(/^● Bash/);
 		expect(padded[0]).toMatch(/^● {3}Bash/);
 		expect(padded[1]).toMatch(/^│ {3}/);
-		component.setExpanded(true);
 		const dark = component.render(100);
-		expect(dark.map(stripTerminalSequences).join("\n")).toContain("persisted output");
 		initTheme("light");
 		component.invalidate();
 		const light = component.render(100);
 		expect(light).not.toEqual(dark);
 		expect(light.map(stripTerminalSequences)).toEqual(dark.map(stripTerminalSequences));
-		component.setExpanded(false);
-		expect(component.render(100).map(stripTerminalSequences).join("\n")).not.toContain("persisted output");
 		expect(JSON.stringify(value)).toBe(original);
 	});
 });

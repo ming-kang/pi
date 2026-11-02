@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Background completion notifications are notifications only: the executor's label, outcome, duration, short ID, title and any error. Expanding one no longer repeats the input, facts, output and log path, so a background Agent's notification matches its settled foreground result; those details remain in `/tasks`. Saved messages from older formats show their first few lines.
+
 ## [1.4.11] - 2026-11-01
 
 ### Changed

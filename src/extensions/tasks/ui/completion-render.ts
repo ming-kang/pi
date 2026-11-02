@@ -1,18 +1,23 @@
-/** Human-facing completion cards. The persisted context message remains untouched. */
+/**
+ * Human-facing completion notices. A notice only announces that background work
+ * settled; input, facts and output stay in `/tasks`, so expansion adds nothing.
+ * The persisted context message remains untouched.
+ */
 import { type Component, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { MessageRenderOptions } from "../../../core/extensions/types.ts";
 import type { CustomMessage } from "../../../core/messages.ts";
 import { readVersionedTask } from "../../../core/tasks/codec.ts";
 import { runtimeLabel } from "../../../core/tasks/format.ts";
-import { TASKS_TOOL_NAME, type TaskFact, type TaskStatus } from "../../../core/tasks/types.ts";
+import type { TaskStatus } from "../../../core/tasks/types.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import { FramedComponent } from "../../../modes/interactive/tool-view/style.ts";
 import { statusName, statusView } from "./status.ts";
 import { cleanTaskText } from "./text.ts";
 
 const SOURCE_LIMIT = 64 * 1024;
-const CARD_ROWS = 128;
-const OUTPUT_ROWS = 20;
+/** Display rows kept from a message whose details cannot be interpreted. */
+const SAVED_ROWS = 4;
+
 /** A persisted task completion, or the saved text of a message that is unreadable or from an older format. */
 type CompletionView =
 	| {
@@ -22,14 +27,7 @@ type CompletionView =
 			duration: string;
 			status: TaskStatus;
 			id: string;
-			input?: { label: string; text: string };
-			facts: TaskFact[];
-			path?: string;
 			diagnostic?: string;
-			output: string;
-			/** A report previews its beginning; a log previews its end. */
-			report: boolean;
-			truncated: boolean;
 	  }
 	| { kind: "saved"; body: string; truncated: boolean };
 
@@ -76,13 +74,7 @@ function completionView(message: CustomMessage<unknown>): CompletionView {
 		duration: runtimeLabel(task),
 		status: task.status,
 		id: cleanTaskText(task.id),
-		input: task.input && { label: cleanTaskText(task.input.label), text: cleanTaskText(task.input.text) },
-		facts: (task.facts ?? []).map(([label, value]) => [cleanTaskText(label), cleanTaskText(value)]),
-		path: task.outputPath === undefined ? undefined : cleanTaskText(task.outputPath),
 		diagnostic: task.error === undefined ? undefined : cleanTaskText(task.error),
-		output: cleanTaskText(task.result?.text ?? ""),
-		report: task.output === "report",
-		truncated: task.result?.truncated === true || task.input?.truncated === true,
 	};
 }
 
@@ -90,7 +82,7 @@ function shortId(id: string): string {
 	return id.replace(/^(.+)-([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, "$1-$2");
 }
 
-class CompletionCard implements Component {
+class CompletionNotice implements Component {
 	private readonly view: CompletionView;
 	private readonly options: MessageRenderOptions;
 	private readonly theme: Theme;
@@ -115,72 +107,29 @@ class CompletionCard implements Component {
 		if (!Number.isFinite(width) || width < 1) return [];
 		const view = this.view;
 		const theme = this.theme;
-		const options = this.options;
 		// The native dot/rail replaces the default one-cell custom-message inset.
 		// Additional configured padding stays inside the chrome, never shifting the dot.
-		const padding = Math.min(Math.max(0, Math.floor(options.outputPad || 0) - 1), Math.floor((width - 1) / 2));
+		const padding = Math.min(Math.max(0, Math.floor(this.options.outputPad || 0) - 1), Math.floor((width - 1) / 2));
 		const inner = width - padding * 2;
-		const indent = inner >= 3 ? "  " : "";
-		const bodyWidth = Math.max(1, inner - indent.length);
 		const lines: string[] = [];
-		const status = view.kind === "task" ? statusName(view.status) : "Result received";
-		const label = view.kind === "task" ? view.label : "Notification";
-		const duration = view.kind === "task" && view.duration ? ` · ${view.duration}` : "";
-		const id = view.kind === "task" ? view.id : "";
-		lines.push(
-			`${theme.fg("toolTitle", theme.bold(label))}${theme.fg("muted", ` · Background ${status.toLowerCase()}${duration}`)}${id ? theme.fg("dim", ` · ${shortId(id)}`) : ""}`,
-		);
-		if (!options.expanded) {
-			if (view.kind === "task") {
-				const summary = view.title.split("\n").find((line) => line.trim()) ?? view.title;
-				if (summary) lines.push(theme.fg("toolOutput", summary));
-				if (view.diagnostic) lines.push(theme.fg(statusView(view.status).color, view.diagnostic));
-			}
+		if (view.kind === "task") {
+			const duration = view.duration ? ` · ${view.duration}` : "";
+			lines.push(
+				`${theme.fg("toolTitle", theme.bold(view.label))}${theme.fg("muted", ` · Background ${statusName(view.status).toLowerCase()}${duration}`)}${theme.fg("dim", ` · ${shortId(view.id)}`)}`,
+			);
+			const summary = view.title.split("\n").find((line) => line.trim()) ?? view.title;
+			if (summary) lines.push(theme.fg("toolOutput", summary));
+			if (view.diagnostic) lines.push(theme.fg(statusView(view.status).color, view.diagnostic));
 		} else {
-			if (view.truncated) {
-				lines.push(theme.fg("warning", "The saved result is truncated; this is not the complete original output."));
-			}
-			const section = (title: string, text: string, limit: number, tail = false, error = false) => {
-				lines.push("", theme.fg("muted", theme.bold(title)));
-				const rendered = wrapTextWithAnsi(text, bodyWidth).map((line) =>
-					theme.fg(error ? "error" : "toolOutput", line),
-				);
-				const omitted = Math.max(0, rendered.length - limit);
-				const selected = tail ? rendered.slice(-limit) : rendered.slice(0, limit);
-				if (tail && omitted) lines.push(theme.fg("dim", `${indent}… ${omitted} earlier display lines omitted`));
-				for (const line of selected) lines.push(indent + line);
-				if (!tail && omitted) lines.push(theme.fg("dim", `${indent}… ${omitted} more display lines omitted`));
-			};
-			if (view.kind === "saved") section("Details", view.body || "No text result.", 36);
-			else {
-				if (view.input) section(view.input.label, view.input.text, 8);
-				else if (view.title) section("Task", view.title, 4);
-				if (view.facts.length) {
-					const width = Math.max(...view.facts.map(([label]) => label.length)) + 1;
-					section("Details", view.facts.map(([label, value]) => `${label.padEnd(width)}${value}`).join("\n"), 8);
-				}
-				section(
-					view.status === "failed" || view.status === "timeout" ? "Error" : "Result",
-					view.diagnostic ?? status,
-					4,
-					false,
-					view.status === "failed",
-				);
-				section("Output", !view.output.trim() ? "No output." : view.output, OUTPUT_ROWS, !view.report);
-				if (view.path) section("Log", view.path, 4);
-			}
-			if (id) {
-				lines.push("", ...wrapTextWithAnsi(`Task ID: ${id}`, inner).map((line) => theme.fg("dim", line)));
-			}
+			lines.push(
+				`${theme.fg("toolTitle", theme.bold("Notification"))}${theme.fg("muted", " · Background result received")}`,
+			);
+			const body = wrapTextWithAnsi(view.body, inner).filter((line) => line.trim());
+			for (const line of body.slice(0, SAVED_ROWS)) lines.push(theme.fg("toolOutput", line));
+			if (body.length > SAVED_ROWS || view.truncated)
+				lines.push(theme.fg("dim", "… saved text shortened; the original message remains in session history"));
 		}
-		const bounded =
-			lines.length > CARD_ROWS
-				? [
-						...lines.slice(0, CARD_ROWS - 1),
-						theme.fg("dim", `… card shortened; use ${TASKS_TOOL_NAME} read for retained output`),
-					]
-				: lines;
-		return bounded.map((line) => " ".repeat(padding) + truncateToWidth(line, inner, "…") + " ".repeat(padding));
+		return lines.map((line) => " ".repeat(padding) + truncateToWidth(line, inner, "…") + " ".repeat(padding));
 	}
 }
 
@@ -200,5 +149,5 @@ export function renderTaskCompletion(
 			truncated: false,
 		};
 	}
-	return new CompletionCard(view, options, theme);
+	return new CompletionNotice(view, options, theme);
 }
