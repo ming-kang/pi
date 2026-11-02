@@ -26,6 +26,25 @@ export interface TaskText {
 	truncated: boolean;
 }
 
+/** One live unit of work in a human display; UI derives its marker, elapsed time and layout. */
+export interface TaskActivity {
+	name: string;
+	target?: string;
+	status: "running" | "ok" | "error" | "cancelled";
+	startedAt?: number;
+	durationMs?: number;
+	error?: string;
+}
+
+/**
+ * Human-only output with an optional structured live view. `text` remains the portable fallback;
+ * activities let an interactive renderer style and lay out the same content without executor UI callbacks.
+ */
+export interface TaskDisplay extends TaskText {
+	activities?: TaskActivity[];
+	earlierActivities?: number;
+}
+
 /** What the task was asked to do, such as a shell command or a delegated briefing. */
 export interface TaskInput extends TaskText {
 	/** Human label for the input, such as "Command" or "Prompt". */
@@ -61,7 +80,7 @@ export interface TaskSnapshot {
 	 * model-facing reads always use `result`. A terminal snapshot has one only if the completion
 	 * supplied it: the last progress display does not survive settlement.
 	 */
-	display?: TaskText;
+	display?: TaskDisplay;
 	error?: string;
 }
 
@@ -69,7 +88,7 @@ export interface TaskUpdate<T> {
 	/** Model-readable progress; also forwarded to a foreground caller's onUpdate. */
 	result: AgentToolResult<T>;
 	/** The live human-only view while running; replaces the result in /tasks and ends at settlement. */
-	display?: string;
+	display?: string | TaskDisplay;
 	/** Cumulative usage so far, settled once if the execution ends without a final usage. */
 	usage?: Usage;
 }

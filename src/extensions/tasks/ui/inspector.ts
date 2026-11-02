@@ -103,7 +103,9 @@ export class TaskInspector {
 		if (!task) return [];
 		const read = this.position.read;
 		const cache = this.outputCache;
-		if (cache?.task !== task || cache.read !== read || cache.width !== width)
+		// Activity markers and elapsed time advance between snapshot updates, so live rows repaint uncached.
+		const live = !isTaskTerminal(task.status) && !!task.display?.activities?.length;
+		if (live || cache?.task !== task || cache.read !== read || cache.width !== width)
 			this.outputCache = { task, read, width, lines: outputLines(task, read, this.options.theme, width) };
 		return this.outputCache!.lines;
 	}

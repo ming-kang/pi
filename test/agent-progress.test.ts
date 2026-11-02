@@ -1,8 +1,9 @@
 import { isAbsolute, join, resolve } from "node:path";
 import { type Container, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
+import { formatTaskActivityDuration } from "../src/core/tasks/activity.ts";
 import type { TaskControl, TaskUpdate } from "../src/core/tasks/types.ts";
-import { activityTarget, formatActivityDuration, relativeToCwd } from "../src/extensions/agent/activity.ts";
+import { activityTarget, relativeToCwd } from "../src/extensions/agent/activity.ts";
 import { activityLines } from "../src/extensions/agent/activity-lines.ts";
 import { AgentProgress } from "../src/extensions/agent/progress.ts";
 import { agentRenderers } from "../src/extensions/agent/render.ts";
@@ -34,9 +35,13 @@ function progress(workdir: string | undefined = cwd) {
 			result: { content: [{ type: "text", text: end.error ?? "ok" }] },
 		} as never);
 	};
-	const display = () => updates.at(-1)?.display;
+	const displayUpdate = () => updates.at(-1)?.display;
+	const display = () => {
+		const value = displayUpdate();
+		return typeof value === "string" ? value : value?.text;
+	};
 	const status = () => (updates.at(-1)?.result.content[0] as { text: string }).text;
-	return { agent, call, display, status, updates };
+	return { agent, call, display, displayUpdate, status, updates };
 }
 
 describe("Agent tool-call display", () => {
@@ -98,6 +103,17 @@ describe("Agent tool-call display", () => {
 		expect(status()).toBe(`Agent running · 4 tool calls · latest: write ${inside}`);
 	});
 
+	it("publishes structured activities with a plain-text fallback", () => {
+		const { call, displayUpdate } = progress();
+		call("read", { path: "a.ts" }, { durationMs: 2 });
+		expect(displayUpdate()).toMatchObject({
+			text: "✓ read a.ts · 2ms",
+			truncated: false,
+			earlierActivities: 0,
+			activities: [{ name: "read", target: "a.ts", status: "ok", durationMs: 2 }],
+		});
+	});
+
 	it("publishes no display when the Agent completes", () => {
 		const { agent, call } = progress();
 		call("read", { path: "a.ts" }, { durationMs: 1 });
@@ -138,9 +154,9 @@ describe("Agent activity targets", () => {
 
 describe("Agent activity durations", () => {
 	it("uses milliseconds, tenths of a second, then the shared duration form", () => {
-		const text = [0, 4, 999.4, 999.6, 1000, 1500, 59_940, 59_960, 65_000, 3_600_000].map(formatActivityDuration);
+		const text = [0, 4, 999.4, 999.6, 1000, 1500, 59_940, 59_960, 65_000, 3_600_000].map(formatTaskActivityDuration);
 		expect(text).toEqual(["0ms", "4ms", "999ms", "1.0s", "1.0s", "1.5s", "59.9s", "1m", "1m 5s", "1h"]);
-		expect(formatActivityDuration(undefined)).toBe("");
+		expect(formatTaskActivityDuration(undefined)).toBe("");
 	});
 });
 
@@ -201,8 +217,8 @@ describe("Agent styled tool-call list", () => {
 		expect(row).toBe("✓ bash echo red done · 1ms");
 	});
 
-	it("renders the Transcript row's calls styled and publishes the plain display for /tasks", () => {
-		const { call, updates } = progress();
+	it("renders the Transcript row's calls styled and publishes structured data with a plain fallback", () => {
+		const { call, display, updates } = progress();
 		vi.useFakeTimers();
 		vi.setSystemTime(10_000);
 		call("read", { path: "a.ts" }, { durationMs: 2 });
@@ -220,7 +236,7 @@ describe("Agent styled tool-call list", () => {
 		expect(component.render(80)).toEqual(activityLines(published(updates), 80, tagged));
 		vi.useRealTimers();
 		// Settled rows stay one line, and the model-facing status is untouched by the styling.
-		expect(updates.at(-1)?.display).toBe(
+		expect(display()).toBe(
 			[
 				"✓ read     a.ts · 2ms",
 				"✓ powershell Get-Date · 1m 5s",

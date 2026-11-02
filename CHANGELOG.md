@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Fixed
+
+- Restored themed Agent tool-call rows in `/tasks`: structured live activity data now shares one renderer with the Transcript, including running elapsed time and omitted-call counts, while the bounded plain-text display remains the fallback. The core Tasks API still stores data only and has no Theme or presenter callback dependency.
+
 ## [1.5.0] - 2026-11-02
 
 ### Added

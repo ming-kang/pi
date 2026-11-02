@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
 import {
 	boundFacts,
+	boundTaskDisplay,
 	boundTaskText,
 	boundText,
 	errorText,
@@ -278,7 +279,7 @@ export class Execution<T> {
 		if (this.phase === "settled" || this.host.closed) return;
 		this.record.update((task) => {
 			task.result = resultText(update.result);
-			if (update.display !== undefined) task.display = boundTaskText(update.display);
+			if (update.display !== undefined) task.display = boundTaskDisplay(update.display);
 		});
 		if (update.usage !== undefined) this.usage = structuredClone(update.usage);
 		if (this.placement === "caller") {

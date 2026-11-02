@@ -1,7 +1,7 @@
 import { open } from "node:fs/promises";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { finiteLimit } from "../../utils/number.ts";
-import type { TaskFact, TaskInput, TaskRead, TaskReadOptions, TaskText } from "./types.ts";
+import type { TaskActivity, TaskDisplay, TaskFact, TaskInput, TaskRead, TaskReadOptions, TaskText } from "./types.ts";
 
 export const TASK_RESULT_BYTES = 48 * 1024;
 export const TASK_DETAILS_BYTES = 120 * 1024;
@@ -12,6 +12,7 @@ export const TASK_TITLE_BYTES = 1024;
 export const TASK_LABEL_BYTES = 256;
 export const TASK_FACTS = 16;
 export const TASK_FACT_BYTES = 1024;
+export const TASK_ACTIVITIES = 50;
 export const TASK_ERROR_BYTES = 4096;
 export const TASK_PATH_BYTES = 8192;
 
@@ -56,6 +57,40 @@ export function boundText(text: string, bytes = TASK_RESULT_BYTES): string {
 export function boundTaskText(text: string, bytes = TASK_RESULT_BYTES): TaskText {
 	const bounded = boundText(text, bytes);
 	return { text: bounded, truncated: bounded !== text };
+}
+
+function activityTime(value: number | undefined): number | undefined {
+	return value !== undefined && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function boundActivity(activity: TaskActivity): TaskActivity {
+	const target = activity.target === undefined ? undefined : boundText(activity.target, TASK_FACT_BYTES);
+	const error = activity.error === undefined ? undefined : boundText(activity.error, TASK_FACT_BYTES);
+	const startedAt = activityTime(activity.startedAt);
+	const durationMs = activityTime(activity.durationMs);
+	return {
+		name: boundText(activity.name, TASK_LABEL_BYTES),
+		status: activity.status,
+		...(target === undefined ? {} : { target }),
+		...(startedAt === undefined ? {} : { startedAt }),
+		...(durationMs === undefined ? {} : { durationMs }),
+		...(error === undefined ? {} : { error }),
+	};
+}
+
+/** Keep live display structured data bounded and detached; its plain text remains the portable fallback. */
+export function boundTaskDisplay(display: string | TaskDisplay): TaskDisplay {
+	if (typeof display === "string") return boundTaskText(display);
+	const text = boundTaskText(display.text);
+	const activities = display.activities?.slice(-TASK_ACTIVITIES).map(boundActivity);
+	const omitted = display.activities ? display.activities.length - (activities?.length ?? 0) : 0;
+	const earlierActivities = finiteLimit((display.earlierActivities ?? 0) + omitted, 0, Number.MAX_SAFE_INTEGER);
+	return {
+		...text,
+		truncated: display.truncated || text.truncated,
+		...(activities ? { activities } : {}),
+		...(display.earlierActivities !== undefined || omitted ? { earlierActivities } : {}),
+	};
 }
 
 export function boundInput(input: TaskInput): TaskInput {

@@ -131,6 +131,36 @@ describe("TaskRuntime execution ownership", () => {
 		item.control.publish({ result: result("Public progress"), display: "Tool calls\n✓ read entry.ts" });
 		expect((await bg.read(item.control.id)).text).toBe("Public progress");
 		expect(bg.get(item.control.id).display).toEqual({ text: "Tool calls\n✓ read entry.ts", truncated: false });
+		item.control.publish({
+			result: result("Structured progress"),
+			display: {
+				text: "✓ read entry.ts · 2ms",
+				truncated: false,
+				earlierActivities: 2,
+				activities: [{ name: "read", target: "entry.ts", status: "ok", durationMs: 2 }],
+			},
+		});
+		expect((await bg.read(item.control.id)).text).toBe("Structured progress");
+		expect(bg.get(item.control.id).display).toEqual({
+			text: "✓ read entry.ts · 2ms",
+			truncated: false,
+			earlierActivities: 2,
+			activities: [{ name: "read", target: "entry.ts", status: "ok", durationMs: 2 }],
+		});
+		item.control.publish({
+			result: result("Bounded progress"),
+			display: {
+				text: "portable fallback",
+				truncated: false,
+				earlierActivities: 2,
+				activities: Array.from({ length: 55 }, (_, index) => ({ name: `read-${index}`, status: "ok" as const })),
+			},
+		});
+		const bounded = bg.get(item.control.id).display;
+		expect(bounded?.activities).toHaveLength(50);
+		expect(bounded?.earlierActivities).toBe(7);
+		expect(bounded?.activities?.[0]?.name).toBe("read-5");
+		expect(bounded?.text).toBe("portable fallback");
 		item.completion.resolve({ result: result("Final report"), display: "Tool calls\n✓ done" });
 		expect((await call).kind).toBe("background");
 		expect((await bg.read(item.control.id)).text).toBe("Final report");

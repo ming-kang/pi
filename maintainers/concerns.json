@@ -184,6 +184,7 @@
 				"test/agent-session-background-lifecycle.test.ts",
 				"test/agent-session-background-admission.test.ts",
 				"test/agent-extension.test.ts",
+				"test/agent-progress.test.ts",
 				"test/agent-session-stats.test.ts",
 				"test/bash-background.test.ts",
 				"test/footer-width.test.ts",

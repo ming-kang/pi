@@ -346,6 +346,37 @@ describe("task panel views", () => {
 		expect(h.frame()).not.toContain("Agent running");
 		expect(h.frame()).not.toContain("latest:");
 	});
+	it("renders structured live activities with theme, timing and a settled text fallback", () => {
+		const live = report({
+			status: "running",
+			endedAt: undefined,
+			display: {
+				text: "plain fallback",
+				truncated: false,
+				earlierActivities: 3,
+				activities: [
+					{ name: "read", target: "a.ts", status: "ok", durationMs: 2 },
+					{ name: "grep", target: "needle", status: "running", startedAt: 0 },
+				],
+			},
+		});
+		const h = harness([live], { width: 100 });
+		expect(h.frame()).toContain("… 3 earlier tool calls");
+		expect(h.frame()).toMatch(/grep needle.*1\.0s/u);
+		expect(h.frame()).not.toContain("plain fallback");
+		const painted = h.menu.render(100).join("\n");
+		expect(painted).toContain(theme.fg("success", "✓"));
+		expect(painted).toContain(theme.fg("toolTitle", "read"));
+		expect(painted).toContain(theme.fg("muted", "a.ts"));
+		vi.setSystemTime(2200);
+		expect(h.frame()).toMatch(/grep needle.*2\.2s/u);
+
+		Object.assign(h.tasks[0]!, { status: "completed", endedAt: 2200 });
+		h.change();
+		expect(h.frame()).toContain("plain fallback");
+		expect(h.frame()).not.toContain("… 3 earlier tool calls");
+	});
+
 	it("follows whichever text it shows when announcing truncation", () => {
 		const shown = harness([
 			report({

@@ -1,6 +1,7 @@
 /** The inspector's Details and Output content, computed once per task snapshot and output read. */
 import { Markdown, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { isTaskTerminal, type TaskRead, type TaskSnapshot } from "../../../core/tasks/types.ts";
+import { taskActivityLines } from "../../../modes/interactive/components/task-activity-list.ts";
 import { getMarkdownTheme, highlightCode, type Theme } from "../../../modes/interactive/theme/theme.ts";
 import { cleanTaskText } from "./text.ts";
 
@@ -54,7 +55,8 @@ export function streamsLog(task: TaskSnapshot): boolean {
 /**
  * Output: a log streams from its file through bounded reads. Any other task shows what its
  * executor published, current with every snapshot: the human `display` when there is one,
- * otherwise the model-facing result.
+ * otherwise the model-facing result. Structured live activities share the interactive renderer;
+ * their bounded text remains the fallback for other hosts and settled snapshots.
  */
 export function outputLines(task: TaskSnapshot, read: TaskRead | undefined, theme: Theme, width: number): string[] {
 	const empty =
@@ -64,16 +66,20 @@ export function outputLines(task: TaskSnapshot, read: TaskRead | undefined, them
 				? "No saved output."
 				: "No output yet.";
 	const fromLog = streamsLog(task) && read !== undefined && !read.readError;
-	const human = task.display?.text ? task.display : undefined;
+	const human = task.display?.text || task.display?.activities?.length ? task.display : undefined;
 	const published = human ?? task.result;
 	const text = cleanTaskText((fromLog ? read.text : published?.text) || empty);
-	// Logs and live progress keep their plain rendering; only a settled report's result is Markdown.
+	const activities =
+		!fromLog && !isTaskTerminal(task.status) && human?.activities?.length ? human.activities : undefined;
+	// Logs and plain live progress keep their plain rendering; only a settled report's result is Markdown.
 	const markdown = !fromLog && !human && task.output === "report" && task.status === "completed";
-	const output = markdown
-		? new Markdown(text, 0, 0, getMarkdownTheme(), {
-				color: (line) => theme.fg("toolOutput", line),
-			}).render(Math.max(1, width))
-		: text.split("\n").map((line) => theme.fg("toolOutput", line));
+	const output = activities
+		? taskActivityLines(activities, Math.max(1, width), theme, human?.earlierActivities ?? 0)
+		: markdown
+			? new Markdown(text, 0, 0, getMarkdownTheme(), {
+					color: (line) => theme.fg("toolOutput", line),
+				}).render(Math.max(1, width))
+			: text.split("\n").map((line) => theme.fg("toolOutput", line));
 	if (read?.readError) output.unshift(theme.fg("warning", "Log unavailable; showing saved result."));
 	if (!fromLog && published?.truncated)
 		output.push(theme.fg("warning", human ? "Output truncated." : "Saved result truncated."));

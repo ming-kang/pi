@@ -1,5 +1,5 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { TaskTerminalStatus } from "../../core/tasks/types.ts";
+import type { TaskActivity, TaskTerminalStatus } from "../../core/tasks/types.ts";
 
 export const AGENT_SETTINGS_NAMESPACE = "agent";
 export const AGENT_PROMPT_BYTES = 16 * 1024;
@@ -12,19 +12,11 @@ export interface AgentSettings {
 	thinking?: ThinkingLevel;
 }
 
-export type AgentActivityStatus = "running" | "ok" | "error" | "cancelled";
+export type AgentActivityStatus = TaskActivity["status"];
 
-export interface AgentActivity {
+export interface AgentActivity extends TaskActivity {
 	id: string;
-	name: string;
 	args: string;
-	/** Short display label derived from the original arguments; args remains the full bounded form. */
-	target?: string;
-	status: AgentActivityStatus;
-	/** Epoch milliseconds when the call began, so a running call can show its elapsed time. */
-	startedAt?: number;
-	durationMs?: number;
-	error?: string;
 }
 
 /**

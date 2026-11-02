@@ -1,12 +1,13 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Usage } from "@earendil-works/pi-ai/compat";
 import type { AgentSessionEvent } from "../../core/agent-session.ts";
+import { taskActivitiesText } from "../../core/tasks/activity.ts";
 import { TASK_FACT_BYTES } from "../../core/tasks/output.ts";
-import type { TaskCompletion, TaskControl, TaskFact, TaskTerminalStatus } from "../../core/tasks/types.ts";
+import type { TaskCompletion, TaskControl, TaskDisplay, TaskFact, TaskTerminalStatus } from "../../core/tasks/types.ts";
 import { resolveToCwd } from "../../core/tools/path-utils.ts";
 import { combineUsage } from "../../core/usage-totals.ts";
 import { emptyUsage } from "../../utils/usage.ts";
-import { activitiesText, activityTarget, clipText, compactArguments, relativeToCwd } from "./activity.ts";
+import { activityTarget, clipText, compactArguments, relativeToCwd } from "./activity.ts";
 import { type AgentArtifacts, fitList, savedTranscript } from "./artifacts.ts";
 import type { FinalReport } from "./report.ts";
 import { AGENT_MAX_ACTIVITIES, type AgentActivity, type AgentToolDetails } from "./types.ts";
@@ -211,7 +212,13 @@ export class AgentProgress {
 	 * Human-only live Output: the compact tool-call list, never sent to the model. A settled Agent
 	 * publishes no display, so /tasks then shows its report.
 	 */
-	private display(): string {
-		return this.activities.length ? activitiesText(this.activities, this.calls - this.activities.length) : "";
+	private display(): TaskDisplay {
+		const earlierActivities = this.calls - this.activities.length;
+		return {
+			text: taskActivitiesText(this.activities, earlierActivities),
+			truncated: false,
+			activities: this.activities,
+			earlierActivities,
+		};
 	}
 }
