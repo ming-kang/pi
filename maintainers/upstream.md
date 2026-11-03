@@ -82,5 +82,7 @@ Document adoption decisions (adopt, adapt, defer), retired concerns, and conflic
 git switch main
 git merge --ff-only sync/upstream-v<version>
 git branch -d sync/upstream-v<version>
+git push origin main
+# Wait for CI on main to pass, then:
 npm run release
 ```

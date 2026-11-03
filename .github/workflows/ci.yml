@@ -1,13 +1,15 @@
 name: CI
 
-# Pushes to main run this through publish-npm.yml, which publishes after it passes.
+# Pushes to main run this through publish-npm.yml, which publishes a release commit after it passes.
 on:
   pull_request:
     branches: [main]
   workflow_call:
 
+# A newer push cancels a pull request's stale run, but every main commit keeps its own group:
+# each gets a result, and a later push can never cancel a release commit's CI.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
 
 jobs:

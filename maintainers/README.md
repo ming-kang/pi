@@ -10,7 +10,7 @@ Repository-only guidance excluded from npm. Start with [AGENTS.md](../AGENTS.md)
 | [Architecture](architecture.md) | Dependency scope, capability placement, subsystem ownership, and durable reasons for local behavior. |
 | [Dependency maintenance](dependencies.md) | Installation, consistency checks, age exceptions, and lockfile acknowledgements. |
 | [Upstream synchronization](upstream.md) | Baseline, ledger maintenance (`concerns.json`), and the `npm run sync` runbook. |
-| [Release](release.md) | Distribution versioning, `npm run release`, publication from CI on `main`, and failure recovery. |
+| [Release](release.md) | Distribution versioning, CI on `main`, `npm run release`, publication of release commits, and failure recovery. |
 | [Interactive testing](interactive-testing.md) | Driving the real interactive CLI with `tui-test` to verify terminal UI changes. |
 | [Development](../docs/development.md) | Running, building, and testing a checkout. |
 
