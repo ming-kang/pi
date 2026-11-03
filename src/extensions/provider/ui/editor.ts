@@ -174,11 +174,10 @@ export class ProviderEditorScreen implements Component, Focusable {
 		this.disposed = true;
 		for (const pane of this.stack) pane.dispose?.();
 		this.stack = [];
-		// A new provider without a setting (nothing, or only an API type or name) reaches no
-		// request and was never written; leaving the editor drops it.
-		if (!hasProviderSettings(this.options.store.getProvider(this.options.providerId))) {
-			this.options.store.discardProviderDraft(this.options.providerId);
-		}
+		// A draft not worth writing (an untouched built-in, or a new provider holding only
+		// an API type or name) was never saved; leaving the editor drops it.
+		const { store, providerId } = this.options;
+		if (!hasProviderSettings(providerId, store.getProvider(providerId))) store.discardProviderDraft(providerId);
 	}
 
 	render(width: number): string[] {

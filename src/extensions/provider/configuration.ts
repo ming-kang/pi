@@ -1,19 +1,25 @@
 /** Provider defaults and draft completeness shared by the editor and persistence layer. */
 
 import type { ModelsJsonModel, ModelsJsonProvider } from "../../core/model-config.ts";
-import { builtinDefaults } from "./catalog.ts";
+import { builtinDefaults, isBuiltinProviderId } from "./catalog.ts";
 
-export function hasProviderSettings(provider: ModelsJsonProvider | undefined): boolean {
+/**
+ * Whether a provider entry is worth writing to models.json. Any key on a
+ * built-in's entry customizes a working provider; a new custom provider waits
+ * until it can reach a request, since an API type or name alone cannot.
+ */
+export function hasProviderSettings(providerId: string, provider: ModelsJsonProvider | undefined): boolean {
+	if (!provider) return false;
+	if (isBuiltinProviderId(providerId)) return Object.keys(provider).length > 0;
 	return Boolean(
-		provider &&
-			(provider.baseUrl ||
-				provider.apiKey ||
-				provider.headers ||
-				provider.compat ||
-				provider.oauth ||
-				provider.authHeader !== undefined ||
-				provider.models?.length ||
-				Object.keys(provider.modelOverrides ?? {}).length),
+		provider.baseUrl ||
+			provider.apiKey ||
+			provider.headers ||
+			provider.compat ||
+			provider.oauth ||
+			provider.authHeader !== undefined ||
+			provider.models?.length ||
+			Object.keys(provider.modelOverrides ?? {}).length,
 	);
 }
 

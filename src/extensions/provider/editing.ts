@@ -63,7 +63,7 @@ export class ProviderEdits {
 	private changed(): void {
 		if (
 			!this.store.isDraftProvider(this.providerId) ||
-			hasProviderSettings(this.store.getProvider(this.providerId))
+			hasProviderSettings(this.providerId, this.store.getProvider(this.providerId))
 		) {
 			this.refresher.touch(this.providerId);
 		}

@@ -1233,6 +1233,22 @@ describe("advanced fields", () => {
 		screen.dispose();
 	});
 
+	test("a built-in provider's name alone is saved and kept on leaving", async () => {
+		store.ensureProviderView("openai"); // how the app opens a built-in without a models.json entry
+		const { screen } = editor("openai");
+		screen.handleInput("\x1b[C");
+		screen.handleInput("\x1b[A"); // Advanced, the last row
+		screen.handleInput("\r");
+		expect(render(screen)).toContain("Authentication / Advanced");
+		screen.handleInput(paste("My OpenAI"));
+		screen.handleInput("\r");
+		expect(render(screen)).toContain("Saving…");
+		await store.flush();
+		expect(diskProvider("openai")).toEqual({ name: "My OpenAI" });
+		screen.dispose();
+		expect(store.getProvider("openai")).toEqual({ name: "My OpenAI" });
+	});
+
 	test("token counts accept k and m suffixes and digit separators", () => {
 		expect(parseTokenCount("500k")).toBe(500_000);
 		expect(parseTokenCount("1.5M")).toBe(1_500_000);

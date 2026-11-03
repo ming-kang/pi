@@ -200,7 +200,7 @@ export class ModelsJsonStore {
 			Object.hasOwn(saved.providers, op.providerId) ||
 			!provider ||
 			Object.keys(provider).length === 0 ||
-			hasProviderSettings(provider)
+			hasProviderSettings(op.providerId, provider)
 		);
 	}
 
