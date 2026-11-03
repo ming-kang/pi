@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-11-03
+
 ### Added
 
 - `/provider` now edits built-in providers. The list shows the configured built-ins and finds the rest by search, `/provider <id>` completes built-in ids, and a built-in opens with its catalog values shown dimmed. `Built-in models` lists the provider's catalog and opens a model's page over the list; the page writes only what changes to its `modelOverrides` entry, and an overridden model also gets a row under `MODELS`. `Reset to built-in` clears one model and `Reset provider` the whole entry. See [Built-in providers](docs/bundled/extensions/provider.md#built-in-providers).
