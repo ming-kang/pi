@@ -231,7 +231,8 @@
 			"tests": [
 				"test/context-snapshot.test.ts",
 				"test/sdk-stream-options.test.ts"
-			]
+			],
+			"watch": "Upstream extensions can capture the next model input and request settings without writing to the session."
 		},
 		{
 			"id": "compaction-trigger-percent",
@@ -255,7 +256,8 @@
 				"test/compaction-settings.test.ts",
 				"test/settings-manager-compaction.test.ts",
 				"test/suite/compaction-budget.test.ts"
-			]
+			],
+			"watch": "Upstream compaction settings accept a trigger as a percentage of the context window."
 		},
 		{
 			"id": "cached-compaction",
@@ -272,7 +274,8 @@
 				"test/compaction.test.ts",
 				"test/cached-compaction.test.ts",
 				"test/interactive-mode-compaction.test.ts"
-			]
+			],
+			"watch": "Upstream compaction keeps file details from extension-provided checkpoints and renders entries appended during session_compact after the live summary."
 		},
 		{
 			"id": "tool-presentation",
@@ -363,7 +366,8 @@
 				"test/model-selector.test.ts",
 				"test/thinking-selector.test.ts",
 				"test/agent-settings.test.ts"
-			]
+			],
+			"watch": "Upstream selectors hide unavailable actions and show configured keys, and custom messages expand on click."
 		},
 		{
 			"id": "tool-validation-hints",
@@ -375,7 +379,8 @@
 			],
 			"tests": [
 				"test/tool-definition-wrapper.test.ts"
-			]
+			],
+			"watch": "Upstream tool argument errors echo bounded arguments with per-field hints."
 		},
 		{
 			"id": "extension-editor-host",
@@ -398,7 +403,8 @@
 				"test/interactive-editor-submit.test.ts",
 				"test/btw-extension.test.ts",
 				"test/interactive-tui.test.ts"
-			]
+			],
+			"watch": "Upstream extensions can intercept main-editor submits, read its cursor, and handle editor-scoped input."
 		},
 		{
 			"id": "extension-context",
@@ -423,7 +429,8 @@
 			],
 			"tests": [
 				"test/extensions-runner-distribution.test.ts"
-			]
+			],
+			"watch": "Upstream extension contexts expose the session's ModelRuntime and throw a detectable error once stale."
 		},
 		{
 			"id": "extension-settings",
@@ -452,7 +459,8 @@
 				"test/extension-settings.test.ts",
 				"test/agent-settings.test.ts",
 				"test/agent-extension.test.ts"
-			]
+			],
+			"watch": "Upstream extension contexts persist per-extension settings namespaces."
 		},
 		{
 			"id": "provider-editor-support",
@@ -465,7 +473,8 @@
 			"tests": [
 				"test/provider-compat-fields.test.ts",
 				"test/model-registry.test.ts"
-			]
+			],
+			"watch": "Upstream ModelRuntime exposes the models.json path it loads."
 		},
 		{
 			"id": "keybindings",
@@ -492,7 +501,8 @@
 				"test/config-schemas.test.ts",
 				"test/keybindings.test.ts",
 				"test/extensions-runner-distribution.test.ts"
-			]
+			],
+			"watch": "Upstream extensions can register configurable keybindings, editor-global reservations, and keyboard-help sections."
 		},
 		{
 			"id": "windows-find-glob",
@@ -518,7 +528,8 @@
 			],
 			"tests": [
 				"test/external-editor.test.ts"
-			]
+			],
+			"watch": "Upstream launches the external editor without a shell and keeps a quoted command or TEMP path with spaces as one argument."
 		},
 		{
 			"id": "auth-min-expiry",
@@ -530,7 +541,8 @@
 			],
 			"tests": [
 				"test/auth-min-expiry.test.ts"
-			]
+			],
+			"watch": "Upstream parses uppercase `--min-expiry` units such as `30M` as minutes rather than hours."
 		},
 		{
 			"id": "run-summary",
@@ -547,7 +559,8 @@
 				"test/run-summary.test.ts",
 				"test/built-in-extensions.test.ts",
 				"test/cached-compaction.test.ts"
-			]
+			],
+			"watch": "Upstream passes outputPad to entry renderers."
 		},
 		{
 			"id": "account-home-skills-trust",
@@ -595,7 +608,8 @@
 				"test/resource-loader.test.ts",
 				"test/package-command-paths.test.ts",
 				"test/config-schemas.test.ts"
-			]
+			],
+			"watch": "Upstream settings and pi config can override a skill's invocation policy independently of loading it."
 		},
 		{
 			"id": "fullscreen-sticky-user-message",

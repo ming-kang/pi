@@ -527,10 +527,8 @@ export function measureModified(sourceTree, staged, git) {
 	for (const [path, { additions, deletions }] of numstat) {
 		const surface = additions + deletions;
 		const whitespaceFree = semantic.get(path);
-		const reindent = Math.max(
-			0,
-			surface - (whitespaceFree ? whitespaceFree.additions + whitespaceFree.deletions : 0),
-		);
+		const semanticSurface = whitespaceFree ? whitespaceFree.additions + whitespaceFree.deletions : 0;
+		const reindent = Math.max(0, surface - semanticSurface);
 		const patch = patches.get(path) ?? { hunks: 0 };
 		measured.set(path, {
 			path,
@@ -539,6 +537,8 @@ export function measureModified(sourceTree, staged, git) {
 			reindent,
 			hunks: patch.hunks,
 			form: classifyForm(path, { deletions, reindent }),
+			// Mode-only changes have no surface; whitespace-only ones carry nothing worth keeping.
+			whitespaceOnly: surface > 0 && semanticSurface === 0,
 		});
 	}
 	return measured;
@@ -971,6 +971,7 @@ export function runDiffUpstream({
 	const ledgerScope = [...modified, ...dropped];
 	const unregistered = ledgerScope.filter((entry) => findClaims(claims, entry.path).length === 0);
 	const stale = claims.filter((claim) => !ledgerScope.some((entry) => pathMatches(claim.path, entry.path)));
+	const whitespaceOnly = [...measured.values()].filter((metrics) => metrics.whitespaceOnly).map(({ path }) => path);
 	const notes = ledgerFailures.length === 0 ? rewriteNotes(claims, measured) : [];
 	const concernCount = new Set(claims.map((claim) => claim.concern)).size;
 
@@ -987,13 +988,17 @@ export function runDiffUpstream({
 				`  - stale claim (no matching worktree deviation): ${claim.path} in concern "${claim.concern}"`,
 			);
 		}
+		for (const path of whitespaceOnly) {
+			writeLine(stderr, `  - ${path} differs from upstream only in whitespace; restore the upstream file`);
+		}
 		for (const note of notes) writeLine(stderr, `note: ${note}`);
 		const summary = summarizeSurface(measured);
 		writeLine(
 			stdout,
 			`Verified ${entries.length} ${staged ? "staged" : "worktree"} differences against ${manifest.tag}: ${modified.length} modified upstream (M/T), ${additions.length} distribution-local additions (A), ${dropped.length} dropped upstream (D), ${concernCount} registered concerns, rewrite surface ${summary.rewrite.surface} lines.`,
 		);
-		return ledgerFailures.length > 0 || unregistered.length > 0 || stale.length > 0 ? 1 : 0;
+		const failed = ledgerFailures.length + unregistered.length + stale.length + whitespaceOnly.length;
+		return failed > 0 ? 1 : 0;
 	}
 
 	for (const f of ledgerFailures) writeLine(stderr, `warning: ${f}`);
@@ -1039,6 +1044,12 @@ export function runDiffUpstream({
 		for (const claim of stale) {
 			writeLine(stdout, `  ${claim.path} in concern "${claim.concern}"`);
 		}
+	}
+
+	if (whitespaceOnly.length > 0) {
+		writeLine(stdout, "");
+		writeLine(stdout, "Whitespace-only deviations (restore the upstream file):");
+		for (const path of whitespaceOnly) writeLine(stdout, `  ${path}`);
 	}
 
 	if (notes.length > 0) {

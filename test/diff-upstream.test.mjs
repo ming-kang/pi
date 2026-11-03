@@ -731,6 +731,21 @@ describe("diff-upstream concern ledger", () => {
 		expect(covered.code, covered.stderr).toBe(0);
 	});
 
+	test("a claimed path that differs only in whitespace fails the check until restored", () => {
+		const repo = createTestRepo();
+		writeFileSync(join(repo.root, "src", "app.ts"), appSource.replaceAll("\t", "    "));
+		writeLedger(repo.root, [concern("formatting", ["src/app.ts"])]);
+
+		const check = invoke(repo.root, ["--check"]);
+		expect(check.code).toBe(1);
+		expect(check.stderr).toContain("src/app.ts differs from upstream only in whitespace; restore the upstream file");
+		expect(invoke(repo.root).stdout).toContain("Whitespace-only deviations");
+
+		writeFileSync(join(repo.root, "src", "app.ts"), appSource.replaceAll("\t", "    ").replace("0", "zero"));
+		const changed = invoke(repo.root, ["--check"]);
+		expect(changed.code, changed.stderr).toBe(0);
+	});
+
 	test("folds directory-covered paths into one annotated report line", () => {
 		const repo = createTestRepo();
 		writeFileSync(join(repo.root, "sub", "a.txt"), "changed\n");
