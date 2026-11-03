@@ -6,7 +6,7 @@ import { THINKING_VARIABLES, validateChatTemplateKwarg } from "../compat-fields.
 import { truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
 import { moveSelection } from "./controls.ts";
-import type { EditorPane, ModelHandle, PaneHost } from "./pane.ts";
+import type { CompatFields, EditorPane, PaneHost } from "./pane.ts";
 import {
 	renderInfoLine,
 	renderKeyValueLine,
@@ -15,7 +15,7 @@ import {
 	ValueEditor,
 } from "./value-row.ts";
 
-function compatObject(handle: ModelHandle): Record<string, unknown> {
+function compatObject(handle: CompatFields): Record<string, unknown> {
 	const compat = handle.read().compat;
 	return typeof compat === "object" && compat !== null && !Array.isArray(compat)
 		? (compat as Record<string, unknown>)
@@ -49,9 +49,9 @@ export class DictPane implements EditorPane {
 	private focused = false;
 
 	private readonly host: PaneHost;
-	private readonly model: ModelHandle;
+	private readonly model: CompatFields;
 	private readonly dictKey: string;
-	constructor(host: PaneHost, model: ModelHandle, dictKey: string) {
+	constructor(host: PaneHost, model: CompatFields, dictKey: string) {
 		this.host = host;
 		this.model = model;
 		this.dictKey = dictKey;
@@ -95,7 +95,7 @@ export class DictPane implements EditorPane {
 			);
 		}
 		lines.push(
-			renderPlainLine(theme, "+ Add Entry", {
+			renderPlainLine(theme, "+ Add entry", {
 				active: this.index === entries.length && this.mode.type === "list",
 				paneFocused: this.focused,
 				width,
@@ -274,7 +274,7 @@ export class DictPane implements EditorPane {
 		if (kb.matches(data, "tui.select.confirm") || kb.matches(data, "app.list.toggle")) {
 			const entry = this.entries()[this.index];
 			if (!entry) {
-				// + Add Entry: key first, then the value flow.
+				// + Add entry: key first, then the value flow.
 				const editor = new ValueEditor({
 					onCommit: (raw) => {
 						const key = raw.trim();
@@ -428,7 +428,7 @@ export class DictPane implements EditorPane {
 				].join("  ");
 			default:
 				return [
-					rawKeyHint("↑↓", "move"),
+					rawKeyHint("↑↓", "navigate"),
 					keyHint("tui.select.confirm", "choose"),
 					keyHint("tui.select.cancel", "cancel"),
 				].join("  ");

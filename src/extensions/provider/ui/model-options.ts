@@ -3,7 +3,7 @@
 import "../keybindings.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { builtinDefaults } from "../catalog.ts";
-import { API_TYPES, INPUT_TYPES, type InputType, truncate } from "../constants.ts";
+import { API_TYPES, apiTypeLabel, INPUT_TYPES, type InputType, truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
 import { ChoicePane, InlineEdit, moveSelection } from "./controls.ts";
 import type { EditorPane, ModelHandle, PaneHost, ProviderPaneHost } from "./pane.ts";
@@ -143,17 +143,26 @@ export class CostPane implements EditorPane {
 		return { input: cost.input, output: cost.output, cacheRead: cost.cacheRead, cacheWrite: cost.cacheWrite };
 	}
 
+	/** On a built-in model, rates come from the catalog unless the override sets them. */
+	private inherits(): boolean {
+		return this.model.base() !== undefined;
+	}
+
 	render(width: number): string[] {
 		const theme = this.host.theme;
 		const cost = this.cost();
+		const own = this.model.own().cost;
+		const inherits = this.inherits();
 		const lines: string[] = [];
 		for (const [rowIndex, rate] of COST_RATES.entries()) {
 			const value = cost?.[rate];
+			const overridden = inherits && own?.[rate] !== undefined;
 			lines.push(
 				renderKeyValueLine(theme, {
 					keyLabel: rate,
 					valueText: value === undefined ? "0 (default)" : `$${value} / M tokens`,
-					unset: value === undefined,
+					unset: inherits ? !overridden : value === undefined,
+					note: overridden ? "· overridden" : undefined,
 					active: rowIndex === this.index,
 					paneFocused: this.focused,
 					editing: this.edit.editor(rate),
@@ -163,9 +172,10 @@ export class CostPane implements EditorPane {
 		}
 		const tiers = this.model.read().cost?.tiers;
 		if (tiers && tiers.length > 0) {
-			lines.push(renderInfoLine(theme, `tiers: ${tiers.length} (read-only; kept as-is)`, width));
+			lines.push(renderInfoLine(theme, `tiers: ${tiers.length} (edit under Advanced)`, width));
 		}
 		if (this.edit.error) lines.push(theme.fg("error", truncate(this.edit.error, Math.max(10, width - 2))));
+		if (inherits) lines.push(renderInfoLine(theme, "Dim rates are built in; empty restores them.", width));
 		return lines;
 	}
 
@@ -207,6 +217,11 @@ export class CostPane implements EditorPane {
 
 	private commit(rate: CostRate, raw: string): string | undefined {
 		const value = raw.trim();
+		// An override holds only the rates it changes, so clearing one hands it back to the catalog.
+		if (value === "" && this.inherits()) {
+			this.model.setField(["cost", rate], DELETE);
+			return undefined;
+		}
 		const parsed = value === "" ? 0 : Number(value);
 		if (!Number.isFinite(parsed) || parsed < 0) {
 			return "cost rates must be finite non-negative numbers.";
@@ -238,7 +253,7 @@ export class CostPane implements EditorPane {
 }
 
 // -------------------------------------------------------------------------
-// Model-Specific API
+// Model-specific API
 // -------------------------------------------------------------------------
 
 /**
@@ -247,7 +262,7 @@ export class CostPane implements EditorPane {
  * value) writes an override, clearing it returns to inheritance.
  */
 export class ModelSpecificApiPane implements EditorPane {
-	readonly crumb = "Model-Specific API";
+	readonly crumb = "Model-specific API";
 	private readonly rows = ["baseUrl", "apiType"] as const;
 	private index = 0;
 	private readonly edit: InlineEdit<"baseUrl">;
@@ -355,11 +370,9 @@ export class ModelSpecificApiPane implements EditorPane {
 	hints(): string {
 		if (this.edit.editing)
 			return [keyHint("tui.input.submit", "save"), keyHint("tui.select.cancel", "cancel")].join("  ");
-		return [
-			rawKeyHint("type", "overwrite"),
-			keyHint("tui.select.confirm", "edit / open"),
-			keyHint("tui.select.cancel", "back"),
-		].join("  ");
+		const back = keyHint("tui.select.cancel", "back");
+		if (this.rows[this.index] === "apiType") return [keyHint("tui.select.confirm", "open"), back].join("  ");
+		return [rawKeyHint("type", "overwrite"), keyHint("tui.select.confirm", "edit"), back].join("  ");
 	}
 }
 
@@ -382,7 +395,11 @@ export function createModelApiPane(host: ProviderPaneHost, model: ModelHandle): 
 			const values: (string | undefined)[] = [undefined, ...API_TYPES];
 			const current = model.read().api;
 			if (current && !values.includes(current)) values.push(current);
-			return values.map((value) => ({ value, label: value ?? label, dim: value === undefined }));
+			return values.map((value) => ({
+				value,
+				label: value === undefined ? label : apiTypeLabel(value),
+				dim: value === undefined,
+			}));
 		},
 		choose: (value) => {
 			if (value === undefined && !fallback()) return "Nothing to inherit — pick an API.";

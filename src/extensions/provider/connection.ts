@@ -28,7 +28,7 @@ export async function fetchProviderModels(
 		if (unsaved) return { ok: false, error: `Save the provider changes before fetching: ${unsaved}` };
 		const provider = store.getProvider(providerId);
 		const settings = effectiveModelSettings(providerId, provider);
-		if (!settings.baseUrl) return { ok: false, error: "Set a baseUrl under API Auth first." };
+		if (!settings.baseUrl) return { ok: false, error: "Set a baseUrl under Authentication first." };
 		const sync = await refresher.refreshNow(providerId, deadline);
 		deadline.throwIfAborted();
 		if (!sync.ok) return { ok: false, error: `The provider did not reload: ${sync.errors.join("; ")}` };
@@ -73,7 +73,8 @@ export async function importProviderModels(
 	const unsaved = store.getPendingError(providerId);
 	if (unsaved) return unsaved;
 	const settings = effectiveModelSettings(providerId, store.getProvider(providerId));
-	if (!settings.api || !settings.baseUrl) return "Set baseUrl and API Type under API Auth before importing models.";
+	if (!settings.api || !settings.baseUrl)
+		return "Set baseUrl and API Type under Authentication before importing models.";
 	const existing = new Set(store.getModels(providerId).map((model) => model.id));
 	const fresh = models.filter((model) => {
 		if (existing.has(model.id)) return false;

@@ -7,7 +7,7 @@
  * old value, Esc restores.
  */
 
-import { decodeKittyPrintable, Input, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { decodeKittyPrintable, Input, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 
 export const CURSOR = "›";
@@ -24,8 +24,15 @@ export class ValueEditor {
 		onCommit: (value: string) => void;
 		/** Esc pressed; the pane discards the in-progress value. */
 		onCancel: () => void;
+		/** Shown dim while the value is empty, e.g. the expected shape. */
+		placeholder?: string;
+		placeholderStyle?: (text: string) => string;
 	}) {
-		this.input = new Input({ prompt: "" });
+		this.input = new Input({
+			prompt: "",
+			placeholder: callbacks.placeholder,
+			placeholderStyle: callbacks.placeholderStyle,
+		});
 		this.input.onSubmit = callbacks.onCommit;
 		this.input.onEscape = callbacks.onCancel;
 	}
@@ -134,6 +141,17 @@ export function renderPlainLine(theme: Theme, text: string, opts: PlainLineOptio
 /** Dim informational line without a cursor slot. */
 export function renderInfoLine(theme: Theme, text: string, width: number): string {
 	return truncateToWidth(theme.fg("dim", text), width);
+}
+
+const MAX_ERROR_LINES = 4;
+
+/** Error text wrapped rather than cut, so status codes and server messages at the end stay readable. */
+export function renderErrorLines(theme: Theme, message: string, width: number): string[] {
+	const lines = wrapTextWithAnsi(message, Math.max(10, width - 2));
+	const shown = lines.slice(0, MAX_ERROR_LINES - 1);
+	const rest = lines.slice(MAX_ERROR_LINES - 1).join(" ");
+	if (rest) shown.push(truncateToWidth(rest, Math.max(10, width - 2)));
+	return shown.map((line) => theme.fg("error", line));
 }
 
 export interface ScrollWindowInfo {

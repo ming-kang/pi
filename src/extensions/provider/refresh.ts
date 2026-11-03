@@ -3,7 +3,7 @@
  *
  * Saves hit disk immediately; runtime refreshes are deferred: normal field
  * edits mark the provider as touched and flush when the session closes, while
- * Fetch Models refreshes the current provider right before auth resolution
+ * Fetch models refreshes the current provider right before auth resolution
  * and right after importing. Save failures and refresh failures are reported
  * separately so a successful write is never misreported.
  */

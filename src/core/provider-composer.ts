@@ -176,7 +176,7 @@ function mergeSamplingParamsByThinkingLevel(
 	return merged;
 }
 
-function applyModelOverride(model: Model<Api>, override: ModelsJsonModelOverride): Model<Api> {
+export function applyModelOverride(model: Model<Api>, override: ModelsJsonModelOverride): Model<Api> {
 	return {
 		...model,
 		name: override.name ?? model.name,

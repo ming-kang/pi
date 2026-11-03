@@ -13,7 +13,7 @@ import { truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
 import { moveSelection } from "./controls.ts";
 import { DictPane } from "./dictionary.ts";
-import type { EditorPane, ModelHandle, PaneHost, ProviderPaneHost } from "./pane.ts";
+import type { CompatFields, EditorPane, PaneHost, ProviderPaneHost } from "./pane.ts";
 import {
 	renderInfoLine,
 	renderKeyValueLine,
@@ -22,7 +22,7 @@ import {
 	ValueEditor,
 } from "./value-row.ts";
 
-function compatObject(handle: ModelHandle): Record<string, unknown> {
+function compatObject(handle: CompatFields): Record<string, unknown> {
 	const compat = handle.read().compat;
 	return typeof compat === "object" && compat !== null && !Array.isArray(compat)
 		? (compat as Record<string, unknown>)
@@ -48,8 +48,8 @@ export class CompatPane implements EditorPane {
 	private focused = false;
 
 	private readonly host: ProviderPaneHost;
-	private readonly model: ModelHandle;
-	constructor(host: ProviderPaneHost, model: ModelHandle) {
+	private readonly model: CompatFields;
+	constructor(host: ProviderPaneHost, model: CompatFields) {
 		this.host = host;
 		this.model = model;
 	}
@@ -62,7 +62,7 @@ export class CompatPane implements EditorPane {
 		return this.host.effectiveApi(this.model.read());
 	}
 
-	/** Entry rows plus the trailing "+ Add Entry" action. */
+	/** Entry rows plus the trailing "+ Add entry" action. */
 	private rowCount(): number {
 		return this.entries().length + 1;
 	}
@@ -118,7 +118,7 @@ export class CompatPane implements EditorPane {
 			);
 		}
 		lines.push(
-			renderPlainLine(theme, "+ Add Entry", {
+			renderPlainLine(theme, "+ Add entry", {
 				active: this.index === entries.length && this.mode.type === "list",
 				paneFocused: this.focused,
 				width,
@@ -345,7 +345,7 @@ export class CompatPane implements EditorPane {
 			return [keyHint("tui.input.submit", "save"), keyHint("tui.select.cancel", "cancel")].join("  ");
 		if (this.mode.type === "chooseValue")
 			return [
-				rawKeyHint("↑↓", "move"),
+				rawKeyHint("↑↓", "navigate"),
 				keyHint("tui.select.confirm", "set"),
 				keyHint("tui.select.cancel", "cancel"),
 			].join("  ");
@@ -464,7 +464,7 @@ export class CompatKeyPickerPane implements EditorPane {
 	hints(): string {
 		return [
 			rawKeyHint("type", "filter"),
-			rawKeyHint("↑↓", "move"),
+			rawKeyHint("↑↓", "navigate"),
 			keyHint("tui.select.confirm", "choose"),
 			keyHint("tui.select.cancel", "back"),
 		].join("  ");

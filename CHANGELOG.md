@@ -4,10 +4,30 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- `/provider` now edits built-in providers. The list shows the configured built-ins and finds the rest by search, `/provider <id>` completes built-in ids, and a built-in opens with its catalog values shown dimmed. `Built-in models` lists the provider's catalog and opens a model's page over the list; the page writes only what changes to its `modelOverrides` entry, and an overridden model also gets a row under `MODELS`. `Reset to built-in` clears one model and `Reset provider` the whole entry. See [Built-in providers](docs/bundled/extensions/provider.md#built-in-providers).
+- `/provider` has `Advanced` pages for the models.json fields without a dedicated row: provider `name`, `headers`, `authHeader`, and provider-level `compat`, and model `headers`, `samplingParams`, `samplingParamsByThinkingLevel`, `promptCache`, `inputLimits`, and `cost.tiers`. Values are one-line JSON checked against the models.json schema, and on built-in models they write `modelOverrides`. See [Advanced fields](docs/bundled/extensions/provider.md#advanced-fields).
+- `/provider` adds a provider in one Enter: Enter on a search with no match creates that id and opens it on the API Type picker with `openai-completions` highlighted, and Enter there opens `baseUrl` for editing, then moves on to `apiKey`, each showing its expected shape as a placeholder. API pickers describe the common protocols, and a new provider left with only an API type or name is not kept. See [Adding a provider](docs/bundled/extensions/provider.md#adding-a-provider).
+- `/provider` lists only custom providers and configured built-ins, each built-in noting its credential source (`API key`, `OAuth`, `env DEEPSEEK_API_KEY`, ...). The other built-ins move to a dim `More built-in providers` row with its own search, and a main-list search still reaches them. See [Usage](docs/bundled/extensions/provider.md#usage).
+- `/provider` renames the API Auth page to Authentication. On a built-in provider it leads with the credential Pi uses, masked (`API key ••••abcd · saved by /login`, `OAuth · <account> · expires <time>`, `from env DEEPSEEK_API_KEY`), takes a typed or pasted key and saves it as `/login` does, and offers `Log out` while `auth.json` holds a credential. Footer hints now name each row's action. See [Built-in providers](docs/bundled/extensions/provider.md#built-in-providers).
+- `/provider` token fields accept `500k`, `1.5m`, and `500,000`.
+- Added `ModelRuntime.describeCredential()`, a non-secret summary of a provider's stored or session credential: the last four characters of a long API key, or an OAuth login's expiry and account.
+
 ### Changed
 
 - **Breaking (keybindings):** the Question dialog pages its details with `tui.editor.pageUp` / `tui.editor.pageDown` (Page Up / Page Down). Like upstream v1.5.0's focused lists, it receives those keys in fullscreen mode while it shows choices, so the transcript no longer needs its own paging actions. `app.question.pageUp` / `app.question.pageDown` and their Alt+Up / Alt+Down defaults are removed; move custom bindings to the editor actions.
 - Built-in extensions load in upstream's order (`llama.cpp`, `codemode`, `tool-search`, `mcp`) followed by this distribution's, so tools and commands list in that order.
+- `/provider` saves models.json edits in place, keeping comments, trailing commas, key order, and untouched formatting instead of rewriting the file as two-space JSON. Clearing a value removes its key and any parents it empties.
+- `/provider` thinking levels offer exactly `Custom: <value>`, `Default`, and `Hidden` with the current one marked, and Custom edits its effort in place instead of opening another screen.
+- `/provider` shows a model's four cost rates inline (`cost: 10 / 50 / 1 / 12.5`, `-` when unset) instead of input and output only; the sub-pane names each rate.
+
+### Fixed
+
+- `/provider` wraps long errors, such as a failed model fetch, instead of cutting off the status and server message, and the connection page drops its environment-key note as soon as an `apiKey` is set there.
+- `/provider` rejects new provider ids containing spaces or starting with `/`, so a slash command typed into the open panel no longer creates a provider. An inner `/` is allowed, since `provider/model` references now match the longest known provider id.
+- `/provider` no longer shows `Saving…` in the title for a new provider that is not written until it has a `baseUrl`.
+- `/provider`'s Fetch models status no longer reads "1 models".
 
 ## [1.5.1] - 2026-11-02
 

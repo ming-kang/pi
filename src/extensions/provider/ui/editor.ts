@@ -12,22 +12,23 @@ import "../keybindings.ts";
 import { type Component, type Focusable, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { KeybindingsManager } from "../../../core/keybindings.ts";
 import type { ModelsJsonModel } from "../../../core/model-config.ts";
-import type { ModelRegistry } from "../../../core/model-registry.ts";
 import type { ModelRuntime } from "../../../core/model-runtime.ts";
 import { DynamicBorder } from "../../../modes/interactive/components/dynamic-border.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
-import { isBuiltinProviderId } from "../catalog.ts";
+import { builtinModelFields, builtinModelIds, isBuiltinProviderId } from "../catalog.ts";
 import { effectiveModelSettings, hasProviderSettings } from "../configuration.ts";
 import { fetchProviderModels, importProviderModels } from "../connection.ts";
 import { type DraftModelHandle, ProviderEdits } from "../editing.ts";
 import type { RefreshCoordinator } from "../refresh.ts";
 import type { ModelsJsonStore } from "../store.ts";
+import { BuiltinModelsPane } from "./builtin-models.ts";
+import type { CredentialRuntime } from "./credential.ts";
 import { ConfirmPane, InfoPane } from "./dialogs.ts";
 import { FetchModelsPane } from "./fetch-models.ts";
 import { ModelFieldsPane } from "./model-fields.ts";
 import type { EditorHost, EditorPane, ModelHandle } from "./pane.ts";
-import { ApiAuthPane } from "./provider-fields.ts";
+import { AuthenticationPane, createProviderApiPane } from "./provider-fields.ts";
 import { CURSOR, truncateMiddle, windowLines } from "./value-row.ts";
 
 export interface ProviderEditorOptions {
@@ -36,18 +37,19 @@ export interface ProviderEditorOptions {
 	providerId: string;
 	/** Session model at /provider open time; protects it and its provider from delete/rename. */
 	currentModel?: { provider: string; id: string };
-	registry: Pick<ModelRegistry, "getProviderAuthStatus">;
-	runtime: Pick<ModelRuntime, "getAuth" | "getProviderAuthStatus">;
+	runtime: CredentialRuntime & Pick<ModelRuntime, "getAuth">;
 	notify: (message: string, type: "info" | "warning" | "error") => void;
 }
 
 export type ProviderEditorResult = "back" | "deleted";
 
 type LeftItem =
-	| { kind: "apiAuth" }
+	| { kind: "authentication" }
 	| { kind: "fetch" }
 	| { kind: "section"; label: "SETUP" | "MODELS" | "MANAGE" }
 	| { kind: "model"; modelId: string }
+	| { kind: "override"; modelId: string }
+	| { kind: "builtinModels" }
 	| { kind: "draft" }
 	| { kind: "addModel" }
 	| { kind: "deleteProvider" };
@@ -70,12 +72,33 @@ function leftItemKey(item: LeftItem | undefined): string {
 	switch (item.kind) {
 		case "model":
 			return `model:${item.modelId}`;
+		case "override":
+			return `override:${item.modelId}`;
 		case "section":
 			return `section:${item.label}`;
 		default:
 			return item.kind;
 	}
 }
+
+/** Removing a custom provider deletes its definition; removing a built-in's entry only resets it. */
+const REMOVAL = {
+	custom: {
+		label: "Delete provider",
+		verb: "delete",
+		confirm: (id: string) => `Delete provider "${id}" from models.json? Stored credentials in auth.json are kept.`,
+		info: ["Press Enter to delete this provider from models.json."],
+	},
+	builtin: {
+		label: "Reset provider",
+		verb: "reset",
+		confirm: (id: string) => `Remove ${id} from models.json? Built-in models and credentials stay.`,
+		info: [
+			"Press Enter to remove this provider's models.json entry.",
+			"Built-in models, endpoints, and stored credentials stay.",
+		],
+	},
+} as const;
 
 export class ProviderEditorScreen implements Component, Focusable {
 	private readonly tui: TUI;
@@ -92,6 +115,13 @@ export class ProviderEditorScreen implements Component, Focusable {
 	private draft: DraftModelHandle | undefined;
 	private readonly edits: ProviderEdits;
 	private fetchStatus: string | undefined;
+	/** Built-in providers list the catalog behind Built-in models; custom ones discover through Fetch models. */
+	private readonly builtin: boolean;
+	/** The built-in catalog's model ids; empty for custom providers. */
+	private readonly catalogIds: readonly string[];
+	private readonly removal: (typeof REMOVAL)[keyof typeof REMOVAL];
+	/** Created by this visit (not yet in models.json); abandoned leftovers are dropped on the way out. */
+	private readonly fresh: boolean;
 	private disposed = false;
 	private _focused = false;
 	private cache: { width: number; lines: string[] } | undefined;
@@ -108,11 +138,25 @@ export class ProviderEditorScreen implements Component, Focusable {
 		this.keybindings = keybindings;
 		this.done = done;
 		this.options = options;
+		this.builtin = isBuiltinProviderId(options.providerId);
+		this.catalogIds = this.builtin ? builtinModelIds(options.providerId) : [];
+		this.removal = REMOVAL[this.builtin ? "builtin" : "custom"];
 		this.edits = new ProviderEdits(options.store, options.providerId, options.refresher, () => this.refresh());
 		this.host = this.createHost();
 		this.rebuildLeftItems();
 		this.leftIndex = this.selectableIndex(0);
 		this.resetRightStack();
+		this.fresh = !this.builtin && options.store.isDraftProvider(options.providerId);
+		if (this.fresh && Object.keys(options.store.getProvider(options.providerId) ?? {}).length === 0)
+			this.startSetup();
+	}
+
+	/** Every new provider starts the same way: the API picker (OpenAI-compatible suggested), then baseUrl, then apiKey. */
+	private startSetup(): void {
+		for (const pane of this.stack) pane.dispose?.();
+		const auth = new AuthenticationPane(this.host, this.options.runtime);
+		this.focusPane = "right";
+		this.stack = [auth, createProviderApiPane(this.host, "openai-completions", () => auth.beginSetup())];
 	}
 
 	// ------------------------------------------------------------------
@@ -179,7 +223,15 @@ export class ProviderEditorScreen implements Component, Focusable {
 			this.activateLeftItem("activate");
 			return;
 		}
-		if (kb.matches(data, "tui.select.cancel")) this.done("back");
+		if (kb.matches(data, "tui.select.cancel")) this.leave();
+	}
+
+	/** Back to the list; a new provider holding only an API type or name reaches no request, so it is not kept. */
+	private leave(): void {
+		const provider = this.options.store.getProvider(this.options.providerId);
+		if (this.fresh && provider && Object.keys(provider).length > 0 && !hasProviderSettings(provider))
+			this.edits.removeProvider();
+		this.done("back");
 	}
 
 	/** Rebuild from the store view after a save merged external changes. */
@@ -194,7 +246,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 				? nextIndex
 				: this.selectableIndex(Math.min(this.leftIndex, Math.max(0, this.leftItems.length - 1)));
 		// If the selected model vanished externally, rebuild the right column.
-		if (nextIndex < 0 && selected?.kind === "model") {
+		if (nextIndex < 0 && (selected?.kind === "model" || selected?.kind === "override")) {
 			this.resetRightStack();
 		}
 		this.refresh();
@@ -205,14 +257,19 @@ export class ProviderEditorScreen implements Component, Focusable {
 	// ------------------------------------------------------------------
 
 	private rebuildLeftItems(): void {
-		const items: LeftItem[] = [
-			{ kind: "section", label: "SETUP" },
-			{ kind: "apiAuth" },
-			{ kind: "fetch" },
-			{ kind: "section", label: "MODELS" },
-		];
+		const items: LeftItem[] = [{ kind: "section", label: "SETUP" }, { kind: "authentication" }];
+		if (!this.builtin) items.push({ kind: "fetch" });
+		items.push({ kind: "section", label: "MODELS" });
 		for (const model of this.options.store.getModels(this.options.providerId)) {
 			items.push({ kind: "model", modelId: model.id });
+		}
+		if (this.builtin) {
+			// Only customized catalog models get a row; the full catalog stays behind Built-in models.
+			const overrides = this.options.store.getProvider(this.options.providerId)?.modelOverrides ?? {};
+			for (const modelId of this.catalogIds) {
+				if (Object.hasOwn(overrides, modelId)) items.push({ kind: "override", modelId });
+			}
+			items.push({ kind: "builtinModels" });
 		}
 		if (this.draft) items.push({ kind: "draft" });
 		items.push({ kind: "section", label: "MANAGE" }, { kind: "addModel" }, { kind: "deleteProvider" });
@@ -246,8 +303,10 @@ export class ProviderEditorScreen implements Component, Focusable {
 		const item = this.leftItems[this.leftIndex];
 		if (!item) return;
 		switch (item.kind) {
-			case "apiAuth":
+			case "authentication":
 			case "model":
+			case "override":
+			case "builtinModels":
 			case "draft":
 				this.focusPane = "right";
 				this.topPane()?.setFocused(this._focused);
@@ -290,24 +349,29 @@ export class ProviderEditorScreen implements Component, Focusable {
 					this.refresh();
 					return;
 				}
-				if (this.options.currentModel?.provider === this.options.providerId) {
+				const current = this.options.currentModel;
+				// Resetting a built-in provider keeps its catalog models; only models.json-defined ones disappear.
+				const currentLost =
+					current?.provider === this.options.providerId &&
+					(!this.builtin || this.options.store.getModel(current.provider, current.id) !== undefined);
+				if (currentLost) {
 					this.host.notify(
-						"The current model's provider cannot be deleted; switch models with /model first.",
+						`The current model is defined here, so the provider cannot be ${this.removal.verb}; switch models with /model first.`,
 						"error",
 					);
 					return;
 				}
-				const builtin = isBuiltinProviderId(this.options.providerId);
-				this.host.confirm(
-					`Delete provider "${this.options.providerId}" from models.json?` +
-						(builtin ? " The built-in catalog remains and its models may reappear." : "") +
-						" Stored credentials in auth.json are kept.",
-					"Delete provider",
-					() => {
-						this.edits.removeProvider();
-						this.done("deleted");
-					},
-				);
+				if (
+					this.builtin &&
+					Object.keys(this.options.store.getProvider(this.options.providerId) ?? {}).length === 0
+				) {
+					this.host.notify(`${this.options.providerId} has no customizations to reset.`, "info");
+					return;
+				}
+				this.host.confirm(this.removal.confirm(this.options.providerId), this.removal.label, () => {
+					this.edits.removeProvider();
+					this.done("deleted");
+				});
 				return;
 			}
 			default:
@@ -346,20 +410,30 @@ export class ProviderEditorScreen implements Component, Focusable {
 		let text: string;
 		let note: string | undefined;
 		switch (item.kind) {
-			case "apiAuth":
-				text = "API Auth";
+			case "authentication":
+				text = "Authentication";
 				break;
 			case "fetch":
-				text = "Fetch Models";
+				text = "Fetch models";
 				note = this.fetchStatus;
 				break;
 			case "model": {
 				const model = store.getModel(this.options.providerId, item.modelId);
 				text = model ? modelDisplayName(model) : item.modelId;
+				if (this.builtin) note = this.catalogIds.includes(item.modelId) ? "· replaced" : "· custom";
 				break;
 			}
+			case "override": {
+				const own = store.getProvider(this.options.providerId)?.modelOverrides?.[item.modelId];
+				text = builtinModelFields(this.options.providerId, item.modelId, own)?.name ?? item.modelId;
+				break;
+			}
+			case "builtinModels":
+				text = "Built-in models";
+				note = `· ${this.catalogIds.length}`;
+				break;
 			case "draft": {
-				text = this.draft?.read().name ?? this.draft?.read().id ?? "New Model";
+				text = this.draft?.read().name ?? this.draft?.read().id ?? "New model";
 				note = "· draft";
 				break;
 			}
@@ -367,7 +441,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 				text = "+ Add model";
 				break;
 			case "deleteProvider":
-				text = "Delete provider";
+				text = this.removal.label;
 				break;
 			default:
 				text = "";
@@ -386,7 +460,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 		const { text: label, note, dim } = this.leftItemContent(item);
 		let text = label;
 		// Long model names keep head and tail (the distinctive parts) instead of a hard cut.
-		if (item.kind === "model" || item.kind === "draft") {
+		if (item.kind === "model" || item.kind === "override" || item.kind === "draft") {
 			const budget = Math.max(8, width - 2 - (note ? visibleWidth(note) + 1 : 0));
 			text = truncateMiddle(text, budget);
 		}
@@ -434,12 +508,16 @@ export class ProviderEditorScreen implements Component, Focusable {
 
 	private createBasePane(item: LeftItem | undefined): EditorPane {
 		switch (item?.kind) {
-			case "apiAuth":
-				return new ApiAuthPane(this.host, this.options.registry);
+			case "authentication":
+				return new AuthenticationPane(this.host, this.options.runtime);
 			case "fetch":
 				return new FetchModelsPane(this.host);
 			case "model":
 				return new ModelFieldsPane(this.host, this.persistedHandle(item.modelId));
+			case "override":
+				return new ModelFieldsPane(this.host, this.edits.override(item.modelId));
+			case "builtinModels":
+				return new BuiltinModelsPane(this.host);
 			case "draft":
 				return new ModelFieldsPane(this.host, this.draft!);
 			case "addModel":
@@ -447,14 +525,13 @@ export class ProviderEditorScreen implements Component, Focusable {
 					this.host,
 					[
 						"Press Enter to create a model.",
-						"A draft is kept in memory until its id is set; Esc on the draft discards it.",
+						"The draft is saved once its id is set.",
+						"Esc on the draft discards it.",
 					],
 					() => this.activateLeftItem("activate"),
 				);
 			case "deleteProvider":
-				return new InfoPane(this.host, ["Press Enter to delete this provider from models.json."], () =>
-					this.activateLeftItem("activate"),
-				);
+				return new InfoPane(this.host, [...this.removal.info], () => this.activateLeftItem("activate"));
 			default:
 				return new InfoPane(this.host, []);
 		}
@@ -505,6 +582,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 				if (!this.disposed) this.syncFromStore();
 				return error;
 			},
+			openOverride: (modelId) => this.pushPane(new ModelFieldsPane(this.host, this.edits.override(modelId))),
 			confirm: (message, actionLabel, action) =>
 				this.pushPane(new ConfirmPane(this.host, message, actionLabel, action)),
 			onModelRemoved: () => {
@@ -598,17 +676,23 @@ export class ProviderEditorScreen implements Component, Focusable {
 		const item = this.leftItems[this.leftIndex];
 		let base = "";
 		switch (item?.kind) {
-			case "apiAuth":
-				base = "Connection";
+			case "authentication":
+				base = "Authentication";
 				break;
 			case "fetch":
-				base = "Discover models";
+				base = "Fetch models";
 				break;
 			case "model": {
 				const model = this.options.store.getModel(this.options.providerId, item.modelId);
 				base = model ? modelDisplayName(model) : item.modelId;
 				break;
 			}
+			case "override":
+				base = this.leftItemContent(item).text;
+				break;
+			case "builtinModels":
+				base = "Built-in models";
+				break;
 			case "draft":
 				base = "New model";
 				break;
@@ -616,11 +700,14 @@ export class ProviderEditorScreen implements Component, Focusable {
 				base = "Add model";
 				break;
 			case "deleteProvider":
-				base = "Delete provider";
+				base = this.removal.label;
 				break;
 		}
-		const crumb = this.stack.length > 1 ? this.topPane()?.crumb : undefined;
-		const title = crumb ? [base, crumb].filter(Boolean).join(" / ") : base;
+		// Pushed pages with a heading stay named under the sub-panes above them: "Built-in models / GPT-5 / cost".
+		const pushed = this.stack.slice(1);
+		const headings = pushed.map((pane) => pane.heading);
+		const top = pushed.at(-1);
+		const title = [base, ...headings, top?.heading ? undefined : top?.crumb].filter(Boolean).join(" / ");
 		return truncateToWidth(this.theme.fg("text", this.theme.bold(title)), width);
 	}
 
@@ -641,7 +728,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 		const theme = this.theme;
 		const title = theme.fg("accent", theme.bold(` Providers / ${this.options.providerId}`));
 		const status =
-			this.options.store.pendingCount === 0 ? "" : this.options.store.saveFailed ? "Save failed" : "Saving…";
+			this.options.store.writableCount === 0 ? "" : this.options.store.saveFailed ? "Save failed" : "Saving…";
 		if (!status) return truncateToWidth(title, width);
 		const styledStatus = theme.fg(this.options.store.saveFailed ? "error" : "dim", status);
 		const statusWidth = visibleWidth(status);
@@ -650,23 +737,36 @@ export class ProviderEditorScreen implements Component, Focusable {
 		return padTo(left, width - statusWidth) + styledStatus;
 	}
 
+	/** Default arrow bindings read as ← / →, like Pi core's ↑↓; a rebound key shows its own name. */
+	private arrowHint(binding: "app.provider.switchPaneLeft" | "app.provider.switchPaneRight", label: string): string {
+		const keys = this.keybindings.getKeys(binding);
+		const glyph = binding === "app.provider.switchPaneLeft" ? "←" : "→";
+		const arrow = binding === "app.provider.switchPaneLeft" ? "left" : "right";
+		return keys.length === 1 && keys[0] === arrow ? rawKeyHint(glyph, label) : keyHint(binding, label);
+	}
+
 	private renderFooter(width: number): string[] {
 		if (this.focusPane === "right") {
-			const paneHints = this.topPane()?.hints() ?? "";
+			const pane = this.topPane();
+			const paneHints = pane?.hints() ?? "";
+			// ← moves the text cursor while a field is open, so the way-back hint waits until it closes.
+			if (pane?.isEditing?.()) return [truncateToWidth(paneHints, width)];
 			if (width < DOUBLE_PANE_MIN_WIDTH) {
 				// Esc already returns to navigation here; only add the arrow hint when it fits whole.
-				const arrowHint = keyHint("app.provider.switchPaneLeft", "nav");
+				const arrowHint = this.arrowHint("app.provider.switchPaneLeft", "nav");
 				const combined = [paneHints, arrowHint].filter(Boolean).join("  ");
 				return [truncateToWidth(visibleWidth(combined) <= width ? combined : paneHints, width)];
 			}
 			// The editor owns the way-back hint so every wide-layout pane footer is consistent.
-			const hints = [paneHints, keyHint("app.provider.switchPaneLeft", "focus left")].filter(Boolean).join("  ");
+			const hints = [paneHints, this.arrowHint("app.provider.switchPaneLeft", "back to list")]
+				.filter(Boolean)
+				.join("  ");
 			return [truncateToWidth(hints, width)];
 		}
 		const hints = [
-			rawKeyHint("↑↓", "move"),
+			rawKeyHint("↑↓", "navigate"),
 			keyHint("tui.select.confirm", this.leftActivateLabel()),
-			keyHint("app.provider.switchPaneRight", "focus right"),
+			this.arrowHint("app.provider.switchPaneRight", "details"),
 			keyHint("tui.select.cancel", "back"),
 		].join("  ");
 		return [truncateToWidth(hints, width)];
@@ -680,7 +780,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 			case "addModel":
 				return "create";
 			case "deleteProvider":
-				return "delete";
+				return this.removal.verb;
 			default:
 				return "open";
 		}

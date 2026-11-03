@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { builtinModelFields, builtinModelIds } from "../src/extensions/provider/catalog.ts";
 import { ProviderEdits } from "../src/extensions/provider/editing.ts";
 import { RefreshCoordinator } from "../src/extensions/provider/refresh.ts";
 import { DELETE, ModelsJsonStore } from "../src/extensions/provider/store.ts";
@@ -91,4 +92,33 @@ test("batch edits and provider deletion both participate in runtime refresh", as
 	await store.flush();
 	expect(store.getProvider("custom")).toBeUndefined();
 	expect(refresher.touchedProviders).toEqual(["custom"]);
+});
+
+test("built-in model overrides write only the changed fields and prune themselves away", async () => {
+	const modelId = builtinModelIds("deepseek")[0]!;
+	const catalog = builtinModelFields("deepseek", modelId)!;
+	const builtin = new ProviderEdits(store, "deepseek", refresher, vi.fn());
+	const model = builtin.override(modelId);
+	expect(model.read()).toEqual(catalog);
+	model.setField(["maxTokens"], 4096);
+	model.setField(["compat", "supportsDeveloperRole"], false);
+	expect(model.read().maxTokens).toBe(4096);
+	expect(model.read().contextWindow).toBe(catalog.contextWindow);
+	await store.flush();
+	const saved = JSON.parse(await readFile(store.path, "utf8")).providers.deepseek;
+	expect(saved).toEqual({
+		modelOverrides: { [modelId]: { maxTokens: 4096, compat: { supportsDeveloperRole: false } } },
+	});
+	expect(refresher.touchedProviders).toEqual(["deepseek"]);
+
+	model.setField(["compat", "supportsDeveloperRole"], DELETE);
+	await store.flush();
+	expect(JSON.parse(await readFile(store.path, "utf8")).providers.deepseek).toEqual({
+		modelOverrides: { [modelId]: { maxTokens: 4096 } },
+	});
+	model.reset();
+	await store.flush();
+	// An entry that customizes nothing is removed instead of lingering as `"deepseek": {}`.
+	expect(JSON.parse(await readFile(store.path, "utf8")).providers.deepseek).toBeUndefined();
+	expect(model.read()).toEqual(catalog);
 });

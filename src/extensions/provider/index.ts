@@ -1,6 +1,7 @@
 /** /provider edits the current runtime's models.json through a native TUI. */
 
 import type { ExtensionAPI } from "../../core/extensions/types.ts";
+import { builtinProviderIds, isBuiltinProviderId } from "./catalog.ts";
 import {
 	COMMAND_DESCRIPTION,
 	COMMAND_NAME,
@@ -24,15 +25,20 @@ export default function providerExtension(pi: ExtensionAPI): void {
 			const load = await ModelsJsonStore.load(modelsPath);
 			if (!load.ok) return null;
 			const query = prefix.trim().toLowerCase();
-			const items = load.store
-				.getProviderIds()
+			const configured = load.store.getProviderIds();
+			const items = [...new Set([...configured, ...builtinProviderIds()])]
 				.filter((id) => id.toLowerCase().startsWith(query))
 				.map((id) => {
 					const count = load.store.getModels(id).length;
+					const builtin = isBuiltinProviderId(id);
 					return {
 						value: id,
 						label: id,
-						description: `${String(count)} ${plural(count, "model")}`,
+						description: builtin
+							? configured.includes(id)
+								? "built-in · customized"
+								: "built-in"
+							: `${String(count)} ${plural(count, "model")}`,
 					};
 				});
 			return items.length ? items : null;

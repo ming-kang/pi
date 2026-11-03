@@ -477,6 +477,34 @@
 			"watch": "Upstream ModelRuntime exposes the models.json path it loads."
 		},
 		{
+			"id": "provider-override-preview",
+			"why": "The /provider editor previews unsaved built-in modelOverrides through the runtime's own merge.",
+			"paths": [
+				{
+					"path": "src/core/provider-composer.ts"
+				}
+			],
+			"tests": [
+				"test/provider-editing.test.ts",
+				"test/provider-ui.test.ts"
+			],
+			"watch": "Upstream exports the modelOverrides merge (applyModelOverride) for callers outside provider composition."
+		},
+		{
+			"id": "provider-credential-summary",
+			"why": "The /provider Authentication page shows which credential a built-in provider uses without reading the secret.",
+			"paths": [
+				{
+					"path": "src/core/model-runtime.ts"
+				}
+			],
+			"tests": [
+				"test/credential-summary.test.ts",
+				"test/provider-ui.test.ts"
+			],
+			"watch": "Upstream ModelRuntime exposes a non-secret summary of a provider's stored or session credential."
+		},
+		{
 			"id": "keybindings",
 			"why": "Extensions register configurable keybindings, editor-global reservations, and keyboard-help sections through shared core registries.",
 			"paths": [

@@ -70,6 +70,7 @@ import {
 import { getAgentDir } from "../config.ts";
 import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
+import { type CredentialSummary, summarizeCredential } from "./credential-summary.ts";
 import { ModelConfig } from "./model-config.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
 import {
@@ -647,6 +648,15 @@ export class ModelRuntime implements Models {
 
 	listCredentials(options?: AuthOperationOptions): Promise<readonly CredentialInfo[]> {
 		return this.credentials.list(options);
+	}
+
+	/** Non-secret summary of the session or stored credential, for settings UIs. */
+	async describeCredential(
+		providerId: string,
+		options?: AuthOperationOptions,
+	): Promise<CredentialSummary | undefined> {
+		const credential = await this.credentials.read(providerId, options);
+		return credential ? summarizeCredential(credential) : undefined;
 	}
 
 	getProviderAuthStatus(providerId: string): AuthStatus {

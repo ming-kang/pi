@@ -1,5 +1,5 @@
 /**
- * Built-in model catalog index and reference matching for Use Built-in Data.
+ * Built-in model catalog index and reference matching for Use built-in data.
  *
  * The index is built lazily on first use from pi-ai's raw builtin catalog
  * (never from the runtime's user-modified getAll()). Matching is grouped by
@@ -9,7 +9,8 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { type BuiltinProvider, getBuiltinModels, getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
-import type { ModelsJsonModel } from "../../core/model-config.ts";
+import type { ModelsJsonModel, ModelsJsonModelOverride } from "../../core/model-config.ts";
+import { applyModelOverride } from "../../core/provider-composer.ts";
 import { MAX_CANDIDATES, plural } from "./constants.ts";
 
 export interface CatalogEntry {
@@ -27,6 +28,10 @@ export function builtinCatalogIndex(): readonly CatalogEntry[] {
 	}
 	indexCache = entries;
 	return entries;
+}
+
+export function builtinProviderIds(): readonly string[] {
+	return getBuiltinProviders();
 }
 
 /** True when models.json with this provider id overlays a built-in catalog. */
@@ -223,10 +228,10 @@ export function computeFieldChanges(
 			checked: false,
 			applicable: sameApi,
 			currentText: current.thinkingLevelMap
-				? `${Object.keys(current.thinkingLevelMap).length} ${plural(Object.keys(current.thinkingLevelMap).length, "mapping")}`
+				? `${Object.keys(current.thinkingLevelMap).length} ${plural(Object.keys(current.thinkingLevelMap).length, "level")}`
 				: "not set",
 			// Cross-api maps are view-only; the preview pane annotates that.
-			referenceText: `${details.length} ${plural(details.length, "mapping")}`,
+			referenceText: `${details.length} ${plural(details.length, "level")}`,
 			referenceDetails: details,
 		});
 	}
@@ -280,4 +285,43 @@ export function computeFieldChanges(
 		});
 	}
 	return changes;
+}
+
+/** Built-in catalog model ids for a provider, in catalog order; empty for custom providers. */
+export function builtinModelIds(providerId: string): string[] {
+	return isBuiltinProviderId(providerId) ? getBuiltinModels(providerId).map((model) => model.id) : [];
+}
+
+/**
+ * The catalog model as models.json fields, optionally with a `modelOverrides`
+ * entry applied through the runtime's own merge. Undefined when the id is not
+ * in the provider's catalog.
+ */
+export function builtinModelFields(
+	providerId: string,
+	modelId: string,
+	override: ModelsJsonModelOverride = {},
+): ModelsJsonModel | undefined {
+	if (!isBuiltinProviderId(providerId)) return undefined;
+	const catalog = getBuiltinModels(providerId).find((entry) => entry.id === modelId);
+	if (!catalog) return undefined;
+	const model = applyModelOverride(catalog, override);
+	return structuredClone({
+		id: model.id,
+		name: model.name,
+		api: model.api,
+		baseUrl: model.baseUrl,
+		reasoning: model.reasoning,
+		thinkingLevelMap: model.thinkingLevelMap,
+		input: model.input,
+		cost: model.cost,
+		contextWindow: model.contextWindow,
+		maxTokens: model.maxTokens,
+		compat: model.compat,
+		headers: model.headers,
+		inputLimits: model.inputLimits,
+		promptCache: model.promptCache,
+		samplingParams: model.samplingParams,
+		samplingParamsByThinkingLevel: model.samplingParamsByThinkingLevel,
+	}) as ModelsJsonModel;
 }

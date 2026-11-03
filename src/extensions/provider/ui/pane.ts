@@ -6,16 +6,19 @@ import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ProviderEdits, ProviderView } from "../editing.ts";
 import type { ProbeModel, ProbeResult } from "../probe.ts";
 
-export type { ModelHandle } from "../editing.ts";
+export type { CompatFields, FieldsHandle, ModelHandle } from "../editing.ts";
 
 export interface EditorPane {
 	/** Drill-down label shown at the top of the right column while this sub-pane is open, e.g. "cost". */
 	readonly crumb?: string;
+	/** Names a pushed pane that is a page of its own, kept in the title while sub-panes open above it. */
+	readonly heading?: string;
 	/**
 	 * Scroll position for the editor's fixed-height right column. `top` and
 	 * `bottom` count pinned render() lines that never scroll (filter inputs,
 	 * status/error lines); `cursor` is the render() line index the window
 	 * keeps visible. Omitted: no scrolling, content is expected to fit.
+	 * Called right after render(), so it may report what that render produced.
 	 */
 	scrollWindow?(): { top?: number; bottom?: number; cursor?: number };
 	/** Body lines for the right column. */
@@ -65,9 +68,9 @@ export interface ModelFieldsHost extends ProviderPaneHost {
 	onModelRemoved(modelId: string): void;
 }
 
-/** The Fetch Models pane. */
+/** The Fetch models pane. */
 export interface FetchModelsHost extends ProviderPaneHost {
-	/** Last Fetch Models outcome shown next to the left-column action row. */
+	/** Last Fetch models outcome shown next to the left-column action row. */
 	setFetchStatus(status: string | undefined): void;
 	/** Refresh the provider, resolve auth canonically, and GET {baseUrl}/models. */
 	runFetch(signal: AbortSignal): Promise<ProbeResult>;
@@ -75,5 +78,13 @@ export interface FetchModelsHost extends ProviderPaneHost {
 	importModels(models: readonly ProbeModel[], signal: AbortSignal): Promise<string | undefined>;
 }
 
+/** The Built-in models pane of a built-in provider. */
+export interface BuiltinModelsHost extends PaneHost {
+	readonly store: ProviderView;
+	readonly providerId: string;
+	/** Push the catalog model's page, which edits its modelOverrides entry, over this list. */
+	openOverride(modelId: string): void;
+}
+
 /** Everything the editor screen provides. Each pane declares only the part it uses. */
-export type EditorHost = ModelFieldsHost & FetchModelsHost;
+export type EditorHost = ModelFieldsHost & FetchModelsHost & BuiltinModelsHost;

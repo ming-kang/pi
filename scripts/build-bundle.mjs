@@ -81,6 +81,9 @@ const httpsProxyAgentNamedExportPlugin = {
 function commonBuildOptions() {
 	return {
 		absWorkingDir: repoRoot,
+		// jsonc-parser's `main` is UMD, whose factory-scoped require() calls esbuild cannot
+		// follow ("Dynamic require of ./impl/format"); bundle its ESM build instead.
+		alias: { "jsonc-parser": "jsonc-parser/lib/esm/main.js" },
 		banner,
 		bundle: true,
 		define: { PI_BUNDLED_NODE: "true" },

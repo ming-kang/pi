@@ -12,8 +12,9 @@
  * saves keep the ops pending; closing offers retry or explicit discard.
  * Whole-snapshot blind overwrites are never performed.
  *
- * Comments and custom formatting are normalized to two-space JSON on save;
- * unknown fields anywhere in the document are preserved verbatim.
+ * Saves edit the file's text in place (see jsonc-edit.ts), so comments,
+ * trailing commas, key order, and formatting outside the changed fields
+ * survive; a new file is written as two-space JSON.
  */
 
 import { randomUUID } from "node:crypto";
@@ -27,9 +28,10 @@ import { normalizePath } from "../../utils/paths.ts";
 import { stripBom } from "../../utils/text.ts";
 import { hasProviderSettings } from "./configuration.ts";
 import { formatError } from "./constants.ts";
-import { DELETE, setPath } from "./json-fields.ts";
+import { DELETE, isPlainObject, jsonEquals, setPath } from "./json-fields.ts";
+import { editJsonText } from "./jsonc-edit.ts";
 
-export { DELETE, type DeleteMarker } from "./json-fields.ts";
+export { DELETE, type DeleteMarker, jsonEquals } from "./json-fields.ts";
 
 export interface ModelsJsonDocument {
 	providers: Record<string, ModelsJsonProvider>;
@@ -84,27 +86,6 @@ interface DiskRead {
 	exists: boolean;
 	doc: ModelsJsonDocument;
 	rawText?: string;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Canonical comparison for JSON values, insensitive to object key order. */
-export function jsonEquals(a: unknown, b: unknown): boolean {
-	if (a === b) return true;
-	if (Array.isArray(a) && Array.isArray(b)) {
-		return a.length === b.length && a.every((entry, index) => jsonEquals(entry, b[index]));
-	}
-	if (isPlainObject(a) && isPlainObject(b)) {
-		const aKeys = Object.keys(a).sort();
-		const bKeys = Object.keys(b).sort();
-		return (
-			aKeys.length === bKeys.length &&
-			aKeys.every((key, index) => key === bKeys[index] && jsonEquals(a[key], b[key]))
-		);
-	}
-	return false;
 }
 
 function cloneValue(value: unknown): unknown {
@@ -206,6 +187,21 @@ export class ModelsJsonStore {
 
 	get pendingCount(): number {
 		return this.ops.length;
+	}
+
+	/** Pending edits that the next save writes; a new provider's edits wait until it has a setting. */
+	get writableCount(): number {
+		return this.ops.filter((op) => this.isWritable(op, this.baseline)).length;
+	}
+
+	private isWritable(op: Op, saved: ModelsJsonDocument): boolean {
+		const provider = this.getProvider(op.providerId);
+		return (
+			Object.hasOwn(saved.providers, op.providerId) ||
+			!provider ||
+			Object.keys(provider).length === 0 ||
+			hasProviderSettings(provider)
+		);
 	}
 
 	/** The latest save failed; pending edits remain available for retry. */
@@ -427,15 +423,7 @@ export class ModelsJsonStore {
 				return { kind: "error", error: `models.json changed on disk and is unreadable: ${formatError(error)}` };
 			}
 			const working = structuredClone(disk.doc);
-			const batch = this.ops.filter((op) => {
-				const provider = this.getProvider(op.providerId);
-				return (
-					Object.hasOwn(disk.doc.providers, op.providerId) ||
-					!provider ||
-					Object.keys(provider).length === 0 ||
-					hasProviderSettings(provider)
-				);
-			});
+			const batch = this.ops.filter((op) => this.isWritable(op, disk.doc));
 			// Apply blindly onto the freshest disk content: unrelated external
 			// edits are preserved, a same-field race resolves last-writer-wins,
 			// and ops targeting externally removed models simply miss.
@@ -452,7 +440,10 @@ export class ModelsJsonStore {
 				settle();
 				return { kind: "saved", applied: batch.length };
 			}
-			const candidate = `${JSON.stringify(working, null, 2)}\n`;
+			const candidate =
+				disk.rawText === undefined
+					? `${JSON.stringify(working, null, 2)}\n`
+					: editJsonText(disk.rawText, disk.doc, working);
 			await writeFile(tempPath, candidate, { encoding: "utf8", mode: 0o600 });
 			const check = await ModelConfig.load(tempPath);
 			const validationError = check.getError();

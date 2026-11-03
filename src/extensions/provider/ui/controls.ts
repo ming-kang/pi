@@ -25,6 +25,8 @@ type ControlHost = Pick<PaneHost, "theme" | "keybindings" | "refresh" | "popPane
 interface ChoiceOptions<T> {
 	choices(): readonly Choice<T>[];
 	current(): T;
+	/** Highlighted on open instead of the current value, e.g. a suggested default. */
+	initial?: T;
 	choose(value: T): string | undefined;
 }
 
@@ -42,7 +44,7 @@ export class ChoicePane<T> implements EditorPane {
 		this.options = options;
 		this.index = Math.max(
 			0,
-			options.choices().findIndex((choice) => choice.value === options.current()),
+			options.choices().findIndex((choice) => choice.value === (options.initial ?? options.current())),
 		);
 	}
 
@@ -87,7 +89,7 @@ export class ChoicePane<T> implements EditorPane {
 	}
 	hints(): string {
 		return [
-			rawKeyHint("↑↓", "move"),
+			rawKeyHint("↑↓", "navigate"),
 			keyHint("tui.select.confirm", "select"),
 			keyHint("tui.select.cancel", "back"),
 		].join("  ");
@@ -120,11 +122,22 @@ export class InlineEdit<Key> {
 		focused: boolean,
 		commit: (value: string) => string | undefined,
 		firstData?: string,
+		extras: {
+			placeholder?: string;
+			placeholderStyle?: (text: string) => string;
+			/** Runs after a successful commit closes the editor, e.g. to open the next field. */
+			onDone?: () => void;
+		} = {},
 	): void {
 		const editor = new ValueEditor({
+			placeholder: extras.placeholder,
+			placeholderStyle: extras.placeholderStyle,
 			onCommit: (value) => {
 				this.error = commit(value);
-				if (!this.error) this.active = undefined;
+				if (!this.error) {
+					this.active = undefined;
+					extras.onDone?.();
+				}
 				this.refresh();
 			},
 			onCancel: () => {

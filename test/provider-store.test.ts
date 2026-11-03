@@ -173,24 +173,59 @@ describe("provider store", () => {
 		expect(JSON.parse(readFileSync(`${modelsPath}.bak`, "utf8")).providers.cpa.apiKey).toBeUndefined();
 	});
 
-	test("preserves unknown fields while normalizing comments and formatting", async () => {
-		writeFileSync(
-			modelsPath,
-			`{
+	test("saves in place, keeping comments, unknown fields and formatting", async () => {
+		const original = `{
   // a comment
   "customTopLevel": { "keep": true },
   "providers": { "cpa": { "baseUrl": "https://a", "customProviderField": 42, "models": [] } }
-}`,
-			"utf8",
-		);
+}`;
+		writeFileSync(modelsPath, original, "utf8");
 		const store = await loadStore();
 		store.setProviderField("cpa", ["api"], "openai-completions");
 		await flush(store);
-		const disk = readDisk() as Record<string, unknown>;
-		expect(disk.customTopLevel).toEqual({ keep: true });
-		expect((disk.providers as Record<string, Record<string, unknown>>).cpa.customProviderField).toBe(42);
-		// Comments are gone after the rewrite.
-		expect(readFileSync(modelsPath, "utf8")).not.toContain("// a comment");
+		expect(readFileSync(modelsPath, "utf8")).toBe(`{
+  // a comment
+  "customTopLevel": { "keep": true },
+  "providers": {
+    "cpa": {
+      "baseUrl": "https://a",
+      "customProviderField": 42,
+      "models": [],
+      "api": "openai-completions"
+    }
+  }
+}`);
+		expect(readFileSync(`${modelsPath}.bak`, "utf8")).toBe(original);
+	});
+
+	test("clearing an override in a commented file removes it and its emptied parents", async () => {
+		writeFileSync(
+			modelsPath,
+			`{
+  "providers": {
+    // Astra with a bigger window.
+    "openai": { "modelOverrides": { "gpt-6-astra": { "contextWindow": 500000 } } },
+    "cpa": { "baseUrl": "https://a" }, // gateway
+  },
+}
+`,
+			"utf8",
+		);
+		const store = await loadStore();
+		store.batch(() => {
+			store.setProviderField("openai", ["modelOverrides", "gpt-6-astra", "contextWindow"], DELETE);
+			store.setProviderField("openai", ["modelOverrides", "gpt-6-astra"], DELETE);
+			store.setProviderField("openai", ["modelOverrides"], DELETE);
+			store.removeProvider("openai");
+		});
+		await flush(store);
+		expect(readFileSync(modelsPath, "utf8")).toBe(`{
+  "providers": {
+    // Astra with a bigger window.
+    "cpa": { "baseUrl": "https://a" }, // gateway
+  },
+}
+`);
 	});
 
 	test("adds, edits, renames, and removes models", async () => {

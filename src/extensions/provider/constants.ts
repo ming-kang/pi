@@ -26,6 +26,18 @@ export const API_TYPES: readonly Api[] = [
 	"pi-messages",
 ];
 
+/** What the common API types speak; API pickers show it beside the tag. */
+const API_TYPE_NOTES: Readonly<Record<string, string>> = {
+	"openai-responses": "OpenAI Responses",
+	"openai-completions": "OpenAI-compatible, used by most gateways and local servers",
+	"anthropic-messages": "Anthropic-compatible",
+};
+
+export function apiTypeLabel(api: string): string {
+	const note = API_TYPE_NOTES[api];
+	return note ? `${api} · ${note}` : api;
+}
+
 /** Input modality options. Adding a type also requires pi-ai Model.input and the models.json schema to support it. */
 export const INPUT_TYPES = ["text", "image"] as const;
 export type InputType = (typeof INPUT_TYPES)[number];
@@ -51,7 +63,7 @@ export const PROBE_LIMITS = {
 	maxPages: 5,
 } as const;
 
-/** Maximum reference candidates offered by Use Built-in Data. */
+/** Maximum reference candidates offered by Use built-in data. */
 export const MAX_CANDIDATES = 8;
 
 /** Runtime refresh deadline when leaving /provider or after a fetch import. */

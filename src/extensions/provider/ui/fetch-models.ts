@@ -1,7 +1,7 @@
 /**
- * Fetch Models pane: idle intro → cancellable loading → error / searchable
+ * Fetch models pane: idle intro → cancellable loading → error / searchable
  * checklist of the remote catalog. Rows summarize the metadata each entry
- * declared; already-configured ids are marked "Added" and cannot be checked.
+ * declared; already-configured ids are marked "added" and cannot be checked.
  * Importing appends the new entries with that metadata, saves once, and
  * refreshes the provider immediately.
  */
@@ -12,7 +12,14 @@ import { truncate } from "../constants.ts";
 import { modelCatalogUrl, type ProbeModel } from "../probe.ts";
 import { moveSelection } from "./controls.ts";
 import type { EditorPane, FetchModelsHost } from "./pane.ts";
-import { renderInfoLine, renderPlainLine, type ScrollWindowInfo, truncateMiddle, ValueEditor } from "./value-row.ts";
+import {
+	renderErrorLines,
+	renderInfoLine,
+	renderPlainLine,
+	type ScrollWindowInfo,
+	truncateMiddle,
+	ValueEditor,
+} from "./value-row.ts";
 
 interface CatalogResults {
 	models: ProbeModel[];
@@ -93,7 +100,7 @@ export class FetchModelsPane implements EditorPane {
 					this.search.reset("");
 					this.index = 0;
 					this.search.focused = this.focused;
-					this.host.setFetchStatus(`· ${result.models.length} models`);
+					this.host.setFetchStatus(`· ${result.models.length} found`);
 				}
 				this.host.refresh();
 			})
@@ -144,14 +151,14 @@ export class FetchModelsPane implements EditorPane {
 				// A real action row, so → moving focus here has a visible effect.
 				return catalogUrl
 					? [
-							renderPlainLine(theme, "Fetch Models", {
+							renderPlainLine(theme, "Fetch models", {
 								active: true,
 								paneFocused: this.focused,
 								note: `· from ${truncateMiddle(catalogUrl, Math.max(10, width - 22))}`,
 								width,
 							}),
 						]
-					: [renderInfoLine(theme, "Set a baseUrl under API Auth first.", width)];
+					: [renderInfoLine(theme, "Set a baseUrl under Authentication first.", width)];
 			case "loading":
 				return [
 					renderInfoLine(theme, `Fetching ${catalogUrl ?? ""} …`, width),
@@ -159,7 +166,7 @@ export class FetchModelsPane implements EditorPane {
 				];
 			case "error":
 				return [
-					theme.fg("error", truncate(this.state.message, Math.max(10, width - 2))),
+					...renderErrorLines(theme, this.state.message, width),
 					renderInfoLine(theme, "Enter retries; Esc goes back.", width),
 				];
 			case "importing":
@@ -180,7 +187,7 @@ export class FetchModelsPane implements EditorPane {
 								active: rowIndex === this.index,
 								paneFocused: this.focused,
 								dim: true,
-								note: "· Added",
+								note: "· added",
 								width,
 							}),
 						);
@@ -322,7 +329,7 @@ export class FetchModelsPane implements EditorPane {
 					this.host.setFetchStatus("· import failed");
 					return this.host.refresh();
 				}
-				this.host.setFetchStatus(`· ${this.host.store.getModels(this.host.providerId).length} models`);
+				this.host.setFetchStatus(`· ${chosen.length} imported`);
 				this.state = { type: "idle" };
 				this.host.popPane(); // back to the left column with the new models visible
 			})

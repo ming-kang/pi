@@ -1,5 +1,5 @@
 /**
- * Use Built-in Data: pick a Pi builtin catalog entry as a reference for the
+ * Use built-in data: pick a Pi builtin catalog entry as a reference for the
  * current model, preview per-field changes ("current → reference"), check the
  * fields to copy, and apply once. Selection and preview are temporary state;
  * Esc applies nothing. Identity/connection fields (provider, id, api,
@@ -23,7 +23,7 @@ function formatContext(model: Model<Api>): string {
 }
 
 export class BuiltinCandidatesPane implements EditorPane {
-	readonly crumb = "Use Built-in Data";
+	readonly crumb = "Use built-in data";
 	private readonly search: ValueEditor;
 	private query: string;
 	private index = 0;
@@ -52,7 +52,7 @@ export class BuiltinCandidatesPane implements EditorPane {
 		const lines: string[] = [this.search.renderLine(width)];
 		const matches = this.candidates();
 		if (matches.length === 0) {
-			lines.push(renderInfoLine(theme, "No builtin candidates — keep configuring manually.", width));
+			lines.push(renderInfoLine(theme, "No built-in candidates — keep configuring manually.", width));
 		}
 		for (const [rowIndex, match] of matches.entries()) {
 			const { providerId, model } = match.entry;
@@ -122,7 +122,7 @@ export class BuiltinCandidatesPane implements EditorPane {
 	hints(): string {
 		return [
 			rawKeyHint("type", "filter"),
-			rawKeyHint("↑↓", "move"),
+			rawKeyHint("↑↓", "navigate"),
 			keyHint("tui.select.confirm", "preview"),
 			keyHint("tui.select.cancel", "back"),
 		].join("  ");
@@ -130,7 +130,7 @@ export class BuiltinCandidatesPane implements EditorPane {
 }
 
 export class BuiltinPreviewPane implements EditorPane {
-	readonly crumb = "Use Built-in Data · preview";
+	readonly crumb = "Use built-in data · preview";
 	private readonly changes: FieldChange[];
 	private readonly checked: boolean[];
 	private readonly snapshot: Partial<ModelsJsonModel> & { id?: string };
@@ -187,7 +187,7 @@ export class BuiltinPreviewPane implements EditorPane {
 			}
 		}
 		lines.push(
-			renderPlainLine(theme, "Apply Selected Fields", {
+			renderPlainLine(theme, "Apply selected fields", {
 				active: this.index === this.changes.length,
 				paneFocused: this.focused,
 				width,

@@ -11,6 +11,7 @@ import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybi
 import { matchBuiltinModels } from "../catalog.ts";
 import { plural, truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
+import { AdvancedPane, advancedNote, MODEL_ADVANCED_FIELDS } from "./advanced.ts";
 import { BuiltinCandidatesPane } from "./builtin-data.ts";
 import { CompatPane } from "./compat.ts";
 import { moveSelection } from "./controls.ts";
@@ -34,8 +35,28 @@ type FieldRow =
 	| { kind: "subpage"; key: "thinkingLevelMap" | "input" | "cost" | "compat" }
 	| { kind: "number"; key: "contextWindow" | "maxTokens" }
 	| { kind: "builtin" }
+	| { kind: "advanced" }
 	| { kind: "modelApi" }
-	| { kind: "deleteModel" };
+	| { kind: "deleteModel" }
+	| { kind: "resetOverride" };
+
+const COST_RATES = ["input", "output", "cacheRead", "cacheWrite"] as const;
+
+/** A $/M rate without float noise or trailing zeros; "-" when unset. */
+function formatRate(rate: number | undefined): string {
+	return rate === undefined ? "-" : String(Number(rate.toFixed(6)));
+}
+
+/** A token count as typed: 500000, 500_000, 500,000, 500k, or 1.5m (k = 1000, as catalog sizes are written). */
+export function parseTokenCount(raw: string): number | undefined {
+	const match = /^(\d+(?:\.\d+)?)([km]?)$/i.exec(raw.trim().replace(/[_,]/g, ""));
+	if (!match) return undefined;
+	const scale = { "": 1, k: 1_000, m: 1_000_000 }[match[2]!.toLowerCase() as "" | "k" | "m"];
+	const value = Number(match[1]) * scale;
+	return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+type FieldKey = "name" | "reasoning" | "thinkingLevelMap" | "input" | "cost" | "contextWindow" | "maxTokens" | "compat";
 
 export class ModelFieldsPane implements EditorPane {
 	private readonly rows: FieldRow[];
@@ -53,8 +74,9 @@ export class ModelFieldsPane implements EditorPane {
 		this.host = host;
 		this.model = model;
 
-		const rows: FieldRow[] = [
-			{ kind: "text", key: "id" },
+		// An override edits a catalog model in place: its id is fixed and its api/baseUrl cannot be overridden.
+		const rows: FieldRow[] = model.kind === "override" ? [] : [{ kind: "text", key: "id" }];
+		rows.push(
 			{ kind: "text", key: "name" },
 			{ kind: "reasoning" },
 			{ kind: "subpage", key: "thinkingLevelMap" },
@@ -63,9 +85,11 @@ export class ModelFieldsPane implements EditorPane {
 			{ kind: "number", key: "contextWindow" },
 			{ kind: "number", key: "maxTokens" },
 			{ kind: "subpage", key: "compat" },
-		];
-		if (model.isDraft) rows.push({ kind: "modelApi" });
-		else rows.push({ kind: "builtin" }, { kind: "modelApi" }, { kind: "deleteModel" });
+			{ kind: "advanced" },
+		);
+		if (model.kind === "draft") rows.push({ kind: "modelApi" });
+		else if (model.kind === "custom") rows.push({ kind: "builtin" }, { kind: "modelApi" }, { kind: "deleteModel" });
+		else rows.push({ kind: "resetOverride" });
 		this.rows = rows;
 	}
 
@@ -77,7 +101,20 @@ export class ModelFieldsPane implements EditorPane {
 
 	/** A draft with no fields set is safe to abandon without asking. */
 	private draftEmpty(): boolean {
-		return this.model.isDraft && Object.keys(this.model.read()).length === 0;
+		return this.model.kind === "draft" && Object.keys(this.model.read()).length === 0;
+	}
+
+	/** A pushed page (a catalog model opened from Built-in models) keeps its name in the title. */
+	get heading(): string {
+		const fields = this.model.read();
+		return fields.name ?? fields.id ?? "New model";
+	}
+
+	/** Display of a set value: a model with built-in values dims what it inherits and marks what it overrides. */
+	private tagged(key: FieldKey, text: string): { valueText: string; unset: boolean; note?: string } {
+		if (!this.model.base()) return { valueText: text, unset: false };
+		const own = this.model.own()[key] !== undefined;
+		return { valueText: text, unset: !own, note: own ? "· overridden" : undefined };
 	}
 
 	render(width: number): string[] {
@@ -85,10 +122,18 @@ export class ModelFieldsPane implements EditorPane {
 		const current = this.model.read();
 		const lines: string[] = [];
 		const api = this.host.effectiveApi(current);
+		const provider = this.host.store.getProvider(this.host.providerId);
+		const apiSource = this.model.base()
+			? " · built-in"
+			: current.api
+				? " · model"
+				: provider?.api
+					? " · provider"
+					: "";
 		lines.push(
 			renderInfoLine(
 				theme,
-				api ? `api: ${api}${current.api ? " (model)" : ""}` : "api: none resolved — see Model-Specific API below",
+				api ? `api: ${api}${apiSource}` : "api: none resolved — see Model-specific API below",
 				width,
 			),
 		);
@@ -98,6 +143,8 @@ export class ModelFieldsPane implements EditorPane {
 		}
 		if (this.error) lines.push(theme.fg("error", truncate(this.error, Math.max(10, width - 2))));
 		if (this.renaming) lines.push(renderInfoLine(theme, "Saving model id…", width));
+		if (this.model.base())
+			lines.push(renderInfoLine(theme, "Dim values are built in; clearing restores them.", width));
 		return lines;
 	}
 
@@ -105,7 +152,7 @@ export class ModelFieldsPane implements EditorPane {
 		// The effective-api header stays pinned above, errors/progress below.
 		return {
 			top: 1,
-			bottom: (this.error ? 1 : 0) + (this.renaming ? 1 : 0),
+			bottom: (this.error ? 1 : 0) + (this.renaming ? 1 : 0) + (this.model.base() ? 1 : 0),
 			cursor: 1 + this.index,
 		};
 	}
@@ -122,10 +169,13 @@ export class ModelFieldsPane implements EditorPane {
 			case "text": {
 				const value = current[row.key];
 				const unsetText = row.key === "id" ? "required" : `falls back to id`;
+				const shown =
+					row.key === "name" && value
+						? this.tagged("name", value)
+						: { valueText: value ?? `not set (${unsetText})`, unset: !value };
 				return renderKeyValueLine(theme, {
 					keyLabel: row.key,
-					valueText: value ?? `not set (${unsetText})`,
-					unset: !value,
+					...shown,
 					active,
 					paneFocused: this.focused,
 					editing,
@@ -136,8 +186,9 @@ export class ModelFieldsPane implements EditorPane {
 				const value = current.reasoning;
 				return renderKeyValueLine(theme, {
 					keyLabel: "reasoning",
-					valueText: value === undefined ? "false (default)" : String(value),
-					unset: value === undefined,
+					...(value === undefined
+						? { valueText: "false (default)", unset: true }
+						: this.tagged("reasoning", String(value))),
 					active,
 					paneFocused: this.focused,
 					width,
@@ -145,10 +196,10 @@ export class ModelFieldsPane implements EditorPane {
 			}
 			case "subpage": {
 				const summary = this.subpageSummary(row.key, current);
+				const shown = summary.unset ? { valueText: summary.text, unset: true } : this.tagged(row.key, summary.text);
 				return renderKeyValueLine(theme, {
 					keyLabel: row.key,
-					valueText: summary.text,
-					unset: summary.unset,
+					...shown,
 					active,
 					paneFocused: this.focused,
 					width,
@@ -159,8 +210,9 @@ export class ModelFieldsPane implements EditorPane {
 				const fallback = row.key === "contextWindow" ? DEFAULT_CONTEXT_WINDOW : DEFAULT_MAX_TOKENS;
 				return renderKeyValueLine(theme, {
 					keyLabel: row.key,
-					valueText: value === undefined ? `${fallback} (default)` : String(value),
-					unset: value === undefined,
+					...(value === undefined
+						? { valueText: `${fallback} (default)`, unset: true }
+						: this.tagged(row.key, String(value))),
 					active,
 					paneFocused: this.focused,
 					editing,
@@ -171,16 +223,25 @@ export class ModelFieldsPane implements EditorPane {
 				const id = current.id;
 				const count = id ? matchBuiltinModels(id, this.host.effectiveApi(current)).length : 0;
 				return renderKeyValueLine(theme, {
-					valueText: "Use Built-in Data",
+					valueText: "Use built-in data",
 					active,
 					paneFocused: this.focused,
 					note: id ? `· ${count} ${plural(count, "candidate")}` : "· set id first",
 					width,
 				});
 			}
+			case "advanced": {
+				return renderKeyValueLine(theme, {
+					valueText: "Advanced",
+					active,
+					paneFocused: this.focused,
+					note: advancedNote(this.model, MODEL_ADVANCED_FIELDS),
+					width,
+				});
+			}
 			case "modelApi":
 				return renderKeyValueLine(theme, {
-					valueText: "Model-Specific API",
+					valueText: "Model-specific API",
 					active,
 					paneFocused: this.focused,
 					note: `· ${this.modelApiSummary(current)}`,
@@ -188,11 +249,21 @@ export class ModelFieldsPane implements EditorPane {
 				});
 			case "deleteModel":
 				return renderKeyValueLine(theme, {
-					valueText: "Delete Model",
+					valueText: "Delete model",
 					active,
 					paneFocused: this.focused,
 					width,
 				});
+			case "resetOverride": {
+				const count = Object.keys(this.model.own()).length;
+				return renderKeyValueLine(theme, {
+					valueText: "Reset to built-in",
+					active,
+					paneFocused: this.focused,
+					note: count > 0 ? `· ${count} overridden` : "· nothing overridden",
+					width,
+				});
+			}
 		}
 	}
 
@@ -215,7 +286,7 @@ export class ModelFieldsPane implements EditorPane {
 				const map = current.thinkingLevelMap;
 				const count = map ? Object.keys(map).length : 0;
 				return count > 0
-					? { text: `${count} ${plural(count, "mapping")}`, unset: false }
+					? { text: `${count} ${plural(count, "level")}`, unset: false }
 					: { text: "default", unset: true };
 			}
 			case "input":
@@ -224,17 +295,18 @@ export class ModelFieldsPane implements EditorPane {
 					: { text: "[text] (default)", unset: true };
 			case "cost": {
 				const cost = current.cost;
-				if (!cost) return { text: "all 0 (default)", unset: true };
-				return { text: `$${cost.input} / $${cost.output} in/out`, unset: false };
+				if (!cost) return { text: "- / - / - / -", unset: true };
+				// Rates only; the sub-page names them and holds the tiers.
+				return { text: COST_RATES.map((rate) => formatRate(cost[rate])).join(" / "), unset: false };
 			}
 			case "compat": {
 				const compat = current.compat;
 				const count = compat ? Object.keys(compat).length : 0;
-				if (count > 0) return { text: `${count} ${count === 1 ? "entry" : "entries"}`, unset: false };
+				if (count > 0) return { text: `${count} ${plural(count, "entry")}`, unset: false };
 				const inherited = this.host.store.getProvider(this.host.providerId)?.compat;
 				const inheritedCount = inherited ? Object.keys(inherited).length : 0;
 				return inheritedCount > 0
-					? { text: `${inheritedCount} from provider`, unset: true }
+					? { text: `${inheritedCount} ${plural(inheritedCount, "entry")} · provider`, unset: true }
 					: { text: "none", unset: true };
 			}
 		}
@@ -256,7 +328,7 @@ export class ModelFieldsPane implements EditorPane {
 			return;
 		}
 		if (kb.matches(data, "tui.select.cancel")) {
-			if (!this.model.isDraft) {
+			if (this.model.kind !== "draft") {
 				this.host.popPane();
 				return;
 			}
@@ -265,8 +337,8 @@ export class ModelFieldsPane implements EditorPane {
 				this.host.discardModelDraft();
 				return;
 			}
-			const label = this.model.read().name ?? this.model.read().id ?? "New Model";
-			this.host.confirm(`Discard the new model "${label}"? Its fields are not saved.`, "Discard Model", () =>
+			const label = this.model.read().name ?? this.model.read().id ?? "New model";
+			this.host.confirm(`Discard the new model "${label}"? Its fields are not saved.`, "Discard model", () =>
 				this.host.discardModelDraft(),
 			);
 			return;
@@ -305,6 +377,9 @@ export class ModelFieldsPane implements EditorPane {
 			case "subpage":
 				this.pushSubpage(row.key);
 				return;
+			case "advanced":
+				this.host.pushPane(new AdvancedPane(this.host, this.model, MODEL_ADVANCED_FIELDS));
+				return;
 			case "modelApi":
 				this.host.pushPane(new ModelSpecificApiPane(this.host, this.model));
 				return;
@@ -317,6 +392,19 @@ export class ModelFieldsPane implements EditorPane {
 				this.host.pushPane(new BuiltinCandidatesPane(this.host, this.model));
 				return;
 			}
+			case "resetOverride": {
+				const model = this.model;
+				if (model.kind !== "override" || Object.keys(model.own()).length === 0) return;
+				this.host.confirm(
+					`Remove every override of "${model.read().id}"? The built-in values return.`,
+					"Reset to built-in",
+					() => {
+						model.reset();
+						this.host.popPane();
+					},
+				);
+				return;
+			}
 			case "deleteModel": {
 				const id = this.model.read().id;
 				if (!id) return;
@@ -324,7 +412,7 @@ export class ModelFieldsPane implements EditorPane {
 					this.host.notify("The current model cannot be deleted; switch models with /model first.", "error");
 					return;
 				}
-				this.host.confirm(`Delete model "${id}" from ${this.host.providerId}?`, "Delete Model", () => {
+				this.host.confirm(`Delete model "${id}" from ${this.host.providerId}?`, "Delete model", () => {
 					this.host.edits.removeModel(id);
 					this.host.onModelRemoved(id);
 				});
@@ -384,13 +472,13 @@ export class ModelFieldsPane implements EditorPane {
 				finish("id is required and cannot be empty.");
 				return;
 			}
-			if (this.model.isDraft) {
+			if (this.model.kind === "draft") {
 				this.model.setField(["id"], value);
 				finish(this.host.commitModelDraft());
 				return;
 			}
 			const current = this.model.read().id;
-			if (!current) {
+			if (!current || this.model.kind !== "custom") {
 				finish("Missing current id.");
 				return;
 			}
@@ -431,9 +519,9 @@ export class ModelFieldsPane implements EditorPane {
 			finish();
 			return;
 		}
-		const parsed = Number(value);
-		if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-			finish(`${row.key} must be a positive integer.`);
+		const parsed = parseTokenCount(value);
+		if (parsed === undefined) {
+			finish(`${row.key} must be a positive whole number of tokens, e.g. 500000 or 500k.`);
 			return;
 		}
 		this.model.setField([row.key], parsed);
@@ -471,13 +559,23 @@ export class ModelFieldsPane implements EditorPane {
 		this.disposed = true;
 	}
 
+	/** Only the keys the selected row answers to, so the footer fits 80 columns and never lies. */
 	hints(): string {
 		if (this.editing) return [keyHint("tui.input.submit", "save"), keyHint("tui.select.cancel", "cancel")].join("  ");
-		return [
-			rawKeyHint("type", "overwrite"),
-			keyHint("tui.select.confirm", "edit / open"),
-			keyHint("app.list.toggle", "toggle"),
-			keyHint("tui.select.cancel", this.model.isDraft ? "discard" : "back"),
-		].join("  ");
+		const row = this.rows[this.index];
+		const back = keyHint("tui.select.cancel", this.model.kind === "draft" ? "discard" : "back");
+		switch (row?.kind) {
+			case "text":
+			case "number":
+				return [rawKeyHint("type", "overwrite"), keyHint("tui.select.confirm", "edit"), back].join("  ");
+			case "reasoning":
+				return [keyHint("app.list.toggle", "toggle"), keyHint("tui.select.confirm", "open"), back].join("  ");
+			case "resetOverride":
+				return [keyHint("tui.select.confirm", "reset"), back].join("  ");
+			case "deleteModel":
+				return [keyHint("tui.select.confirm", "delete"), back].join("  ");
+			default:
+				return [keyHint("tui.select.confirm", "open"), back].join("  ");
+		}
 	}
 }

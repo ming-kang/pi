@@ -33,6 +33,8 @@ tui-test key press Ctrl+U                                # then clear it from th
 
 Pi starts in fullscreen mode. Append `--tui-mode regular` to test the layout that uses the terminal's normal scrollback. End the session with `tui-test close`.
 
+`--no-env` is a `scripts/run-source.mjs` flag that strips provider credential variables before starting the source CLI. To drive the packaged build instead, run `npm run build` and replace `node scripts/run-source.mjs --no-env` with `node dist/bundle/cli.js`; bundling-only failures, such as a dependency esbuild cannot resolve, appear only there.
+
 ## Fixture prompts
 
 The offline provider (`test/fixtures/offline-provider.ts`) answers these prompts without network access:
@@ -83,5 +85,6 @@ tui-test expect text "Fixture result line 1 of 14"                    # expanded
 
 - **Always pass `--backend xtermjs` on Windows.** Windows Console drops Kitty keyboard sequences (`\x1b[27u`); the xterm.js backend preserves plain bytes (`\x1b`, `\x0f`).
 - **Color-query leak.** At startup and on `/reload`, Windows Console answers Pi's DA1 query immediately and leaks unparsed OSC 10/11/4 color fragments (`b:8080/8080/8080` plus BEL) into the editor. BEL is `Ctrl+G`, the external editor key, hence the unbinding; clear the rest with `Ctrl+U`.
+- **Git Bash path conversion.** MSYS rewrites arguments that start with `/`, so `tui-test submit "/provider"` types `C:/Program Files/Git/provider`. Set `MSYS_NO_PATHCONV=1` before driving Pi from Git Bash.
 - **Key limits.** Plain bytes cannot distinguish `Shift+Enter` from `Enter`; use `Ctrl+J` for a newline. Write Alt combinations in lowercase (`Alt+v`).
 - **Spinners block `wait idle`.** It never settles while an animation runs; wait for explicit text with `expect text`.

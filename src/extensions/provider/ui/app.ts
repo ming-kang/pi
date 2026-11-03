@@ -9,17 +9,19 @@ import { DynamicBorder } from "../../../modes/interactive/components/dynamic-bor
 import { ExtensionSelectorComponent } from "../../../modes/interactive/components/extension-selector.ts";
 import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
+import { builtinProviderIds, isBuiltinProviderId } from "../catalog.ts";
 import { formatError, truncate } from "../constants.ts";
 import { RefreshCoordinator } from "../refresh.ts";
 import type { ModelsJsonStore } from "../store.ts";
+import { type CredentialRuntime, credentialSource } from "./credential.ts";
 import { ProviderEditorScreen } from "./editor.ts";
-import { ProviderListScreen } from "./provider-list.ts";
+import { type ProviderListContext, ProviderListScreen } from "./provider-list.ts";
 import { ProviderTuiSession } from "./session.ts";
 
 export interface ProviderAppOptions {
 	store: ModelsJsonStore;
-	runtime: Pick<ModelRuntime, "refresh" | "getError" | "getAuth" | "getProviderAuthStatus">;
-	registry: Pick<ModelRegistry, "find" | "getProviderAuthStatus">;
+	runtime: CredentialRuntime & Pick<ModelRuntime, "refresh" | "getError" | "getAuth">;
+	registry: Pick<ModelRegistry, "find">;
 	getCurrentModel(): { provider: string; id: string } | undefined;
 	setModel(model: Model<Api>): Promise<boolean>;
 	notify(message: string, type: "info" | "warning" | "error"): void;
@@ -78,6 +80,8 @@ export function createProviderApp(
 
 	function showList(): void {
 		if (session.signal.aborted) return;
+		// Dispose first: it drops an untouched built-in's draft view, which would otherwise list it as configured.
+		activeEditor?.dispose();
 		activeEditor = undefined;
 		session.setScreen(
 			new ProviderListScreen(
@@ -89,21 +93,35 @@ export function createProviderApp(
 					else openProvider(result.providerId);
 				},
 				store,
+				listContext(),
 			),
 		);
 	}
 
+	function listContext(): ProviderListContext {
+		const stored = new Set(store.getProviderIds());
+		// Configured: any credential source (/login key or OAuth, env, models.json, --api-key) or a models.json entry.
+		// The model in use does not count: /provider edits configuration, /model picks the model.
+		const configured = builtinProviderIds().filter(
+			(id) => stored.has(id) || runtime.getProviderAuthStatus(id).configured,
+		);
+		return { configured, authNote: (id) => credentialSource(runtime, id) };
+	}
+
 	function openProvider(providerId: string): void {
 		if (!store.getProviderIds().includes(providerId)) {
-			notify(`No provider ${JSON.stringify(providerId)} in models.json.`, "warning");
-			showList();
-			return;
+			if (!isBuiltinProviderId(providerId)) {
+				notify(`No provider ${JSON.stringify(providerId)} in models.json.`, "warning");
+				showList();
+				return;
+			}
+			// A built-in provider opens without an entry; untouched views are pruned on save.
+			store.ensureProviderView(providerId);
 		}
 		activeEditor = new ProviderEditorScreen(tui, theme, keybindings, showList, {
 			store,
 			refresher,
 			providerId,
-			registry,
 			runtime,
 			currentModel: options.getCurrentModel(),
 			notify,
