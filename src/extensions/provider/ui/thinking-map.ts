@@ -6,7 +6,7 @@ import { THINKING_LEVELS } from "../constants.ts";
 import { DELETE } from "../store.ts";
 import { InlineEdit, moveSelection } from "./controls.ts";
 import type { EditorPane, ModelHandle, PaneHost } from "./pane.ts";
-import { isPrintableInput, renderErrorLines, renderInfoLine, renderKeyValueLine } from "./value-row.ts";
+import { fieldOrigin, isPrintableInput, renderErrorLines, renderInfoLine, renderKeyValueLine } from "./value-row.ts";
 
 /** A level's three states, in the order the choice rows show them. */
 const STATES = ["custom", "default", "hidden"] as const;
@@ -79,8 +79,7 @@ export class ThinkingMapPane implements EditorPane {
 			return renderKeyValueLine(this.host.theme, {
 				keyLabel: level,
 				valueText: this.describe(shown),
-				unset: own === undefined,
-				note: this.inherits && own !== undefined ? "· overridden" : undefined,
+				...fieldOrigin(this.model, ["thinkingLevelMap", level]),
 				active: rowIndex === this.index,
 				paneFocused: this.focused,
 				width,

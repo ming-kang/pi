@@ -9,6 +9,7 @@
 
 import { decodeKittyPrintable, Input, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
+import { getPath } from "../json-fields.ts";
 
 export const CURSOR = "›";
 
@@ -115,6 +116,19 @@ export function renderKeyValueLine(theme: Theme, opts: KeyValueLineOptions): str
 	const valueColor = opts.unset ? "dim" : keyColor;
 	const line = marker + theme.fg(keyColor, keyPrefix) + theme.fg(valueColor, opts.valueText ?? "") + note;
 	return truncateToWidth(line, opts.width);
+}
+
+/**
+ * The `unset` and `note` of a field row on a page that edits a handle: a value
+ * the entry does not set itself renders dim, and over built-in values (base())
+ * one it does set is marked as an override.
+ */
+export function fieldOrigin(
+	handle: { own(): object; base(): object | undefined },
+	path: readonly string[],
+): Pick<KeyValueLineOptions, "unset" | "note"> {
+	const own = getPath(handle.own(), path) !== undefined;
+	return { unset: !own, note: own && handle.base() ? "· overridden" : undefined };
 }
 
 export interface PlainLineOptions {

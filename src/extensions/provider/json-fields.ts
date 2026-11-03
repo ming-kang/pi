@@ -37,7 +37,7 @@ export function setPath(root: Record<string, unknown>, path: readonly string[], 
 	let current = root;
 	for (const segment of path.slice(0, -1)) {
 		const next = Object.hasOwn(current, segment) ? current[segment] : undefined;
-		if (typeof next === "object" && next !== null && !Array.isArray(next)) current = next as Record<string, unknown>;
+		if (isPlainObject(next)) current = next;
 		else {
 			const created: Record<string, unknown> = {};
 			Object.defineProperty(current, segment, {

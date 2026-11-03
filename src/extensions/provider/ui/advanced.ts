@@ -18,6 +18,7 @@ import { CompatPane } from "./compat.ts";
 import { InlineEdit, moveSelection } from "./controls.ts";
 import type { CompatFields, EditorPane, FieldsHandle, ProviderPaneHost } from "./pane.ts";
 import {
+	fieldOrigin,
 	isPrintableInput,
 	renderErrorLines,
 	renderInfoLine,
@@ -165,19 +166,13 @@ export class AdvancedPane implements EditorPane {
 				note: "· applies to every model of this provider",
 			});
 		}
-		if (own !== undefined) {
-			return renderKeyValueLine(theme, {
-				...base,
-				valueText: displayValue(own),
-				editing: this.edit.editor(field),
-				note: this.target.base() ? "· overridden" : undefined,
-			});
-		}
+		// An unset field shows what applies anyway: the built-in value, or the default.
+		const shown = own !== undefined ? own : effective;
 		const fallback = field.kind === "toggle" ? "false (default)" : "not set";
 		return renderKeyValueLine(theme, {
 			...base,
-			valueText: effective === undefined ? fallback : displayValue(effective),
-			unset: true,
+			valueText: shown === undefined ? fallback : displayValue(shown),
+			...fieldOrigin(this.target, field.path),
 			editing: this.edit.editor(field),
 		});
 	}

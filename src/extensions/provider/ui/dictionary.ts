@@ -4,6 +4,7 @@ import "../keybindings.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { THINKING_VARIABLES, validateChatTemplateKwarg } from "../compat-fields.ts";
 import { truncate } from "../constants.ts";
+import { isPlainObject } from "../json-fields.ts";
 import { DELETE } from "../store.ts";
 import { moveSelection } from "./controls.ts";
 import type { CompatFields, EditorPane, PaneHost } from "./pane.ts";
@@ -15,14 +16,13 @@ import {
 	ValueEditor,
 } from "./value-row.ts";
 
-function compatObject(handle: CompatFields): Record<string, unknown> {
+/** The handle's compat object; empty when unset. */
+export function compatObject(handle: CompatFields): Record<string, unknown> {
 	const compat = handle.read().compat;
-	return typeof compat === "object" && compat !== null && !Array.isArray(compat)
-		? (compat as Record<string, unknown>)
-		: {};
+	return isPlainObject(compat) ? compat : {};
 }
 
-function scalarText(value: unknown): string {
+export function scalarText(value: unknown): string {
 	if (value === null) return "null";
 	if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
 	return JSON.stringify(value) ?? String(value);

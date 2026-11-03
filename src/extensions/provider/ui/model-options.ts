@@ -8,7 +8,7 @@ import { DELETE } from "../store.ts";
 import { ChoicePane, InlineEdit, moveSelection } from "./controls.ts";
 import type { EditorPane, ModelHandle, PaneHost, ProviderPaneHost } from "./pane.ts";
 import { baseUrlHint, validateBaseUrlValue } from "./provider-fields.ts";
-import { isPrintableInput, renderInfoLine, renderKeyValueLine, renderPlainLine } from "./value-row.ts";
+import { fieldOrigin, isPrintableInput, renderInfoLine, renderKeyValueLine, renderPlainLine } from "./value-row.ts";
 
 // -------------------------------------------------------------------------
 // reasoning
@@ -151,18 +151,14 @@ export class CostPane implements EditorPane {
 	render(width: number): string[] {
 		const theme = this.host.theme;
 		const cost = this.cost();
-		const own = this.model.own().cost;
-		const inherits = this.inherits();
 		const lines: string[] = [];
 		for (const [rowIndex, rate] of COST_RATES.entries()) {
 			const value = cost?.[rate];
-			const overridden = inherits && own?.[rate] !== undefined;
 			lines.push(
 				renderKeyValueLine(theme, {
 					keyLabel: rate,
 					valueText: value === undefined ? "0 (default)" : `$${value} / M tokens`,
-					unset: inherits ? !overridden : value === undefined,
-					note: overridden ? "· overridden" : undefined,
+					...fieldOrigin(this.model, ["cost", rate]),
 					active: rowIndex === this.index,
 					paneFocused: this.focused,
 					editing: this.edit.editor(rate),
@@ -175,7 +171,7 @@ export class CostPane implements EditorPane {
 			lines.push(renderInfoLine(theme, `tiers: ${tiers.length} (edit under Advanced)`, width));
 		}
 		if (this.edit.error) lines.push(theme.fg("error", truncate(this.edit.error, Math.max(10, width - 2))));
-		if (inherits) lines.push(renderInfoLine(theme, "Dim rates are built in; empty restores them.", width));
+		if (this.inherits()) lines.push(renderInfoLine(theme, "Dim rates are built in; empty restores them.", width));
 		return lines;
 	}
 

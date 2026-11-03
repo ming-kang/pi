@@ -19,6 +19,7 @@ import { CostPane, createReasoningPane, InputTypesPane, ModelSpecificApiPane } f
 import type { EditorPane, ModelFieldsHost, ModelHandle } from "./pane.ts";
 import { ThinkingMapPane } from "./thinking-map.ts";
 import {
+	fieldOrigin,
 	isPrintableInput,
 	renderInfoLine,
 	renderKeyValueLine,
@@ -111,10 +112,8 @@ export class ModelFieldsPane implements EditorPane {
 	}
 
 	/** Display of a set value: a model with built-in values dims what it inherits and marks what it overrides. */
-	private tagged(key: FieldKey, text: string): { valueText: string; unset: boolean; note?: string } {
-		if (!this.model.base()) return { valueText: text, unset: false };
-		const own = this.model.own()[key] !== undefined;
-		return { valueText: text, unset: !own, note: own ? "· overridden" : undefined };
+	private tagged(key: FieldKey, text: string): { valueText: string; unset?: boolean; note?: string } {
+		return { valueText: text, ...fieldOrigin(this.model, [key]) };
 	}
 
 	render(width: number): string[] {

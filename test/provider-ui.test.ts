@@ -854,8 +854,9 @@ describe("provider fixed layout", () => {
 		screen.handleInput("\x1b"); // right pane → navigation
 		screen.handleInput("\x1b"); // navigation → back
 		expect(done).toHaveBeenCalledWith("back");
+		screen.dispose(); // the app disposes the editor as it returns to the list
 		expect(store.getProvider("half")).toBeUndefined();
-		screen.dispose();
+		expect(store.pendingCount).toBe(0);
 	});
 
 	test("the narrow editor shows only the focused pane and preserves its fixed frame", () => {

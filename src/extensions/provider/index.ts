@@ -26,21 +26,14 @@ export default function providerExtension(pi: ExtensionAPI): void {
 			if (!load.ok) return null;
 			const query = prefix.trim().toLowerCase();
 			const configured = load.store.getProviderIds();
+			const describe = (id: string): string => {
+				if (isBuiltinProviderId(id)) return configured.includes(id) ? "built-in · customized" : "built-in";
+				const count = load.store.getModels(id).length;
+				return `${String(count)} ${plural(count, "model")}`;
+			};
 			const items = [...new Set([...configured, ...builtinProviderIds()])]
 				.filter((id) => id.toLowerCase().startsWith(query))
-				.map((id) => {
-					const count = load.store.getModels(id).length;
-					const builtin = isBuiltinProviderId(id);
-					return {
-						value: id,
-						label: id,
-						description: builtin
-							? configured.includes(id)
-								? "built-in · customized"
-								: "built-in"
-							: `${String(count)} ${plural(count, "model")}`,
-					};
-				});
+				.map((id) => ({ value: id, label: id, description: describe(id) }));
 			return items.length ? items : null;
 		},
 		handler: async (args, ctx) => {

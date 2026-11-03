@@ -12,7 +12,7 @@ import { type CompatField, compatFieldFor, compatFieldsForApi, validateJsonCompa
 import { truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
 import { moveSelection } from "./controls.ts";
-import { DictPane } from "./dictionary.ts";
+import { compatObject, DictPane, scalarText } from "./dictionary.ts";
 import type { CompatFields, EditorPane, PaneHost, ProviderPaneHost } from "./pane.ts";
 import {
 	renderInfoLine,
@@ -21,19 +21,6 @@ import {
 	type ScrollWindowInfo,
 	ValueEditor,
 } from "./value-row.ts";
-
-function compatObject(handle: CompatFields): Record<string, unknown> {
-	const compat = handle.read().compat;
-	return typeof compat === "object" && compat !== null && !Array.isArray(compat)
-		? (compat as Record<string, unknown>)
-		: {};
-}
-
-function scalarText(value: unknown): string {
-	if (value === null) return "null";
-	if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
-	return JSON.stringify(value) ?? String(value);
-}
 
 type CompatMode =
 	| { type: "list" }

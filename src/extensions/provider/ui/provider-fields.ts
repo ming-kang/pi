@@ -328,19 +328,12 @@ export class AuthenticationPane implements EditorPane {
 		}
 		if (row === "baseUrl" && value) {
 			const invalid = validateBaseUrlValue(value);
-			if (invalid) {
-				return invalid;
-			}
-		}
-		if (row === "baseUrl" && !value) {
-			// Removing baseUrl is only allowed while models still resolve an address.
-			const modelsCovered = this.host.store
-				.getModels(this.host.providerId)
-				.every((model) => model.baseUrl !== undefined);
-			const builtin = builtinDefaults(this.host.providerId).baseUrl !== undefined;
-			if (!builtin && !modelsCovered && this.host.store.getModels(this.host.providerId).length > 0) {
+			if (invalid) return invalid;
+		} else if (row === "baseUrl") {
+			// Removing baseUrl is only allowed while every model still resolves an address.
+			const reliant = this.host.store.getModels(this.host.providerId).some((model) => model.baseUrl === undefined);
+			if (reliant && builtinDefaults(this.host.providerId).baseUrl === undefined)
 				return "baseUrl cannot be removed while models rely on it.";
-			}
 		}
 		this.host.edits.setProviderField([row], value === "" ? DELETE : value);
 		return undefined;
