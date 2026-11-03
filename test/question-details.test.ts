@@ -8,9 +8,9 @@ import { stripAnsi } from "../src/utils/ansi.ts";
 import { VirtualTerminal } from "./helpers/virtual-terminal.ts";
 
 const DOWN = "\x1b[B";
-const PAGE_DOWN = "\x1b[1;3B";
-const PAGE_UP = "\x1b[1;3A";
-const pageHint = `${process.platform === "darwin" ? "Option" : "Alt"}+↑/${process.platform === "darwin" ? "Option" : "Alt"}+↓`;
+const PAGE_DOWN = "\x1b[6~";
+const PAGE_UP = "\x1b[5~";
+const pageHint = "PgUp/PgDn";
 const options = Array.from({ length: 4 }, (_, index) => ({
 	label: `Option ${index + 1}`,
 	description: `Description ${index + 1}: ${"consequence and trade-off ".repeat(8)}END-DESCRIPTION-${index + 1}`,
@@ -208,7 +208,7 @@ describe("question choices and details", () => {
 	it("uses configured paging bindings and omits unbound hints", () => {
 		const dialog = open(
 			undefined,
-			new KeybindingsManager({ "app.question.pageDown": "ctrl+n", "app.question.pageUp": [] }),
+			new KeybindingsManager({ "tui.editor.pageDown": "ctrl+n", "tui.editor.pageUp": [] }),
 		);
 		const first = dialog.view();
 		expect(first).toContain("Ctrl+N");

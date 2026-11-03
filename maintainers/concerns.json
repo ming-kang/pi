@@ -56,7 +56,7 @@
 				},
 				{
 					"path": "src/utils/syntax-highlight.ts",
-					"rewrite": "Repository source policy loads every grammar through static imports instead of upstream's deferred dynamic import."
+					"rewrite": "Repository source policy allows only top-level imports, so a static import registers every grammar and replaces upstream's deferred dynamic loader."
 				},
 				{
 					"path": "src/utils/version-check.ts",
@@ -164,9 +164,6 @@
 					"path": "src/core/tools/renderers/index.ts"
 				},
 				{
-					"path": "src/modes/interactive/components/custom-message.ts"
-				},
-				{
 					"path": "src/modes/print-mode.ts"
 				},
 				{
@@ -241,6 +238,9 @@
 			"why": "Auto-compaction triggers at a percentage of the context window by converting it into upstream's reserveTokens.",
 			"paths": [
 				{
+					"path": "src/core/agent-session.ts"
+				},
+				{
 					"path": "src/core/settings-manager.ts",
 					"rewrite": "Deriving the reserve from triggerPercent needs the configured-versus-default split inside upstream's compaction settings resolver."
 				},
@@ -253,7 +253,8 @@
 			],
 			"tests": [
 				"test/compaction-settings.test.ts",
-				"test/settings-manager-compaction.test.ts"
+				"test/settings-manager-compaction.test.ts",
+				"test/suite/compaction-budget.test.ts"
 			]
 		},
 		{
@@ -299,9 +300,6 @@
 				},
 				{
 					"path": "src/index.ts"
-				},
-				{
-					"path": "src/modes/interactive/components/index.ts"
 				},
 				{
 					"path": "src/modes/interactive/components/tool-execution.ts",
@@ -407,13 +405,7 @@
 			"why": "Extensions get one canonical guarded ExtensionContext with the session's ModelRuntime and a detectable stale-context error.",
 			"paths": [
 				{
-					"path": "src/core/agent-session.ts"
-				},
-				{
 					"path": "src/core/extensions/index.ts"
-				},
-				{
-					"path": "src/core/extensions/loader.ts"
 				},
 				{
 					"path": "src/core/extensions/runner.ts"
@@ -504,7 +496,7 @@
 		},
 		{
 			"id": "windows-find-glob",
-			"why": "Path-segment globs in find work on Windows, where fd matches no slash-containing pattern.",
+			"why": "Path-segment globs in find keep POSIX semantics on Windows, where fd's `*` also crosses `\\` separators.",
 			"paths": [
 				{
 					"path": "src/core/tools/find.ts"
@@ -514,7 +506,7 @@
 				"test/suite/regressions/3302-find-path-glob.test.ts",
 				"test/find-windows-glob.test.ts"
 			],
-			"watch": "A managed fd release matches slash-containing globs on Windows and the native slash and backslash regressions pass without the fallback."
+			"watch": "fd's Windows glob stops matching `\\` with a single `*` and the path-glob regression passes without the fallback."
 		},
 		{
 			"id": "windows-external-editor",

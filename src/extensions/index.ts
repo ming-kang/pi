@@ -18,12 +18,15 @@ import toolPresentationExtension from "./tool-presentation/index.ts";
 import toolSearchExtension from "./tool-search/index.ts";
 
 export const builtInExtensions: InlineExtension[] = [
-	{ name: "Agent", factory: agentExtension, replaceable: true, builtin: true },
-	{ name: "codemode", factory: codemodeExtension, replaceable: true, builtin: true },
-	{ name: "mcp", factory: mcpExtension, replaceable: true, builtin: true },
-	{ name: "tool-search", factory: toolSearchExtension, replaceable: true, builtin: true },
-	{ name: "cached-compaction", factory: cachedCompactionExtension, replaceable: true, builtin: true },
 	{ name: "llama.cpp", factory: llamaExtension, builtin: true },
+	// Replaceable: an extension that registers `codemode`, `tool_search`, or `/mcp` (such as a third-party
+	// MCP extension) takes over instead of running alongside the built-in one.
+	{ name: "codemode", factory: codemodeExtension, replaceable: true, builtin: true },
+	{ name: "tool-search", factory: toolSearchExtension, replaceable: true, builtin: true },
+	{ name: "mcp", factory: mcpExtension, replaceable: true, builtin: true },
+	// Distribution additions follow upstream's built-ins.
+	{ name: "Agent", factory: agentExtension, replaceable: true, builtin: true },
+	{ name: "cached-compaction", factory: cachedCompactionExtension, replaceable: true, builtin: true },
 	{ name: "btw", factory: btwExtension, builtin: true },
 	{ name: "deepwiki", factory: deepwikiExtension, builtin: true },
 	{ name: "provider", factory: providerExtension, builtin: true },

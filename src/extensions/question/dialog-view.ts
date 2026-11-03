@@ -247,7 +247,7 @@ export class QuestionDialogView {
 				content,
 				detailWidth,
 				detailRows,
-				this.keyGroupAction(["app.question.pageUp", "app.question.pageDown"], "scroll"),
+				this.keyGroupAction(["tui.editor.pageUp", "tui.editor.pageDown"], "scroll"),
 				theme,
 			);
 			focusRow = left.focusRow;

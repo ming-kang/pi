@@ -12,7 +12,7 @@ function mockFetch(impl: (url: URL, init: RequestInit) => Promise<Response> | Re
 	calls: { url: URL; init: RequestInit }[];
 } {
 	const calls: { url: URL; init: RequestInit }[] = [];
-	const fetchFn = (async (input: URL | RequestInfo | string, init?: RequestInit) => {
+	const fetchFn = (async (input: URL | Request | string, init?: RequestInit) => {
 		const url = input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
 		const call = { url, init: init ?? {} };
 		calls.push(call);

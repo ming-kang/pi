@@ -49,9 +49,6 @@ const APP_KEYBINDINGS = {
 	},
 	"app.model.select": { defaultKeys: "ctrl+l", description: "Open model selector" },
 	"app.tools.expand": { defaultKeys: "ctrl+o", description: "Toggle tool output" },
-	// Plain Page Up/Down belong to the fullscreen transcript even while a dock dialog is focused.
-	"app.question.pageUp": { defaultKeys: "alt+up", description: "Page up in question details" },
-	"app.question.pageDown": { defaultKeys: "alt+down", description: "Page down in question details" },
 	"app.thinking.toggle": {
 		defaultKeys: "ctrl+t",
 		description: "Toggle thinking blocks",
@@ -186,7 +183,6 @@ export type AppKeybinding = Extract<Keybinding, `app.${string}`>;
 
 export const KEYBINDINGS = {
 	...TUI_KEYBINDINGS,
-	"tui.editor.cursorLeft": { ...TUI_KEYBINDINGS["tui.editor.cursorLeft"], defaultKeys: "left" },
 	"tui.editor.undo": {
 		...TUI_KEYBINDINGS["tui.editor.undo"],
 		defaultKeys: process.platform === "win32" ? "ctrl+z" : windowsKeybindings ? "alt+z" : "ctrl+-",

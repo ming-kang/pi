@@ -147,14 +147,7 @@ Ctrl+B also works while `/tasks` owns focus. It does not restart execution, rese
 
 ### Question Details
 
-These actions apply while the [question dialog](bundled/extensions/question.md) is showing choices. Up/Down move between choices; the detail paging keys read the focused choice's description, notes, and preview without selecting it.
-
-| Keybinding id | Default | Description |
-| --- | --- | --- |
-| `app.question.pageUp` | `alt+up` | Page up in question details |
-| `app.question.pageDown` | `alt+down` | Page down in question details |
-
-In fullscreen mode, plain Page Up/Down still target the transcript. Notes and custom-answer editors use the ordinary editor bindings.
+While the [question dialog](bundled/extensions/question.md) is showing choices, Up/Down move between choices and `tui.editor.pageUp`/`pageDown` page the focused choice's description, notes, and preview without selecting it. Like other focused lists, the dialog receives the page keys in fullscreen mode instead of the transcript. Notes and custom-answer editors use the ordinary editor bindings.
 
 ### BTW Side Questions
 

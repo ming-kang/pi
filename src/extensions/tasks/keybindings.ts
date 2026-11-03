@@ -1,3 +1,4 @@
+import { TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import {
 	registerKeybindingHelpSection,
 	registerKeybindings,
@@ -38,7 +39,11 @@ const TASK_KEYBINDINGS = {
 	"app.tasks.help": { defaultKeys: "?", description: "Show task controls" },
 } as const;
 
-registerKeybindings(TASK_KEYBINDINGS);
+registerKeybindings({
+	...TASK_KEYBINDINGS,
+	// The detach key displaces the editor's secondary cursor-left binding.
+	"tui.editor.cursorLeft": { ...TUI_KEYBINDINGS["tui.editor.cursorLeft"], defaultKeys: "left" },
+});
 
 registerReservedKeybindings("app.tasks.detach");
 

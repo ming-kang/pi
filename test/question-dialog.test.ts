@@ -14,7 +14,7 @@ const DOWN = "\x1b[B";
 const LEFT = "\x1b[D";
 const TAB = "\t";
 const BACKSPACE = "\x7f";
-const pageHint = process.platform === "darwin" ? "Option+↑/Option+↓ scroll" : "Alt+↑/Alt+↓ scroll";
+const pageHint = "PgUp/PgDn scroll";
 
 function question(overrides?: Partial<Question>): Question {
 	return {

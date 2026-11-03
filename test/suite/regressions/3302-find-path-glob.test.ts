@@ -13,9 +13,10 @@ import { createFindToolDefinition } from "../../../src/core/tools/find.ts";
  * containing a `/` therefore silently returned no matches.
  *
  * On Unix, the fix switches fd into full-path mode when the pattern contains
- * a `/` and prepends `**\/` so it can match fd's absolute candidate path. fd's
- * Windows glob matcher does not match path separators, so Pi streams broad fd
- * candidates there and applies the original POSIX-style glob itself.
+ * a `/` and prepends `**\/` so it can match fd's absolute candidate path. On
+ * Windows, fd's `*` also crosses `\` separators, so `src/*.ts` would match
+ * nested files; Pi streams broad fd candidates there and applies the original
+ * POSIX-style glob itself.
  */
 describe("issue #3302 find returns no results for path-based glob patterns", () => {
 	let tempRoot: string;
@@ -74,5 +75,11 @@ describe("issue #3302 find returns no results for path-based glob patterns", () 
 	it("src/**/*.spec.ts matches nested spec file", async () => {
 		const files = await runFind("src/**/*.spec.ts");
 		expect(files).toEqual(["src/foo/bar/example.spec.ts"]);
+	});
+
+	it("a single-segment * stays within its directory", async () => {
+		writeFileSync(join(tempRoot, "src", "top.ts"), "");
+		const files = await runFind("src/*.ts");
+		expect(files).toEqual(["src/top.ts"]);
 	});
 });

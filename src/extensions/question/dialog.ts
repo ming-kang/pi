@@ -219,8 +219,8 @@ export function createQuestionDialog(questions: readonly Question[], signal?: Ab
 			} else if (keyMatches(data, "tui.editor.cursorRight")) {
 				if (current < questions.length - 1) goTo(current + 1);
 				else if (firstUnanswered(states) === undefined) setMode({ kind: "review" });
-			} else if (keyMatches(data, "app.question.pageUp") || keyMatches(data, "app.question.pageDown")) {
-				view.pageDetails(snapshot(), keyMatches(data, "app.question.pageUp") ? -1 : 1);
+			} else if (keyMatches(data, "tui.editor.pageUp") || keyMatches(data, "tui.editor.pageDown")) {
+				view.pageDetails(snapshot(), keyMatches(data, "tui.editor.pageUp") ? -1 : 1);
 				refresh();
 			} else if (keyMatches(data, "tui.select.up")) {
 				target.warning = undefined;
@@ -275,6 +275,10 @@ export function createQuestionDialog(questions: readonly Question[], signal?: Ab
 			set focused(value: boolean) {
 				dialogFocused = value;
 				editor.focused = dialogFocused && isEditing();
+			},
+			/** While choosing, the page keys page the details instead of scrolling the fullscreen transcript. */
+			get capturesViewportInput() {
+				return mode.kind === "choose" || mode.kind === "chat";
 			},
 			render,
 			invalidate: () => {

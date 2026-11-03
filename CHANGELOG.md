@@ -4,6 +4,11 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (keybindings):** the Question dialog pages its details with `tui.editor.pageUp` / `tui.editor.pageDown` (Page Up / Page Down). Like upstream v1.5.0's focused lists, it receives those keys in fullscreen mode while it shows choices, so the transcript no longer needs its own paging actions. `app.question.pageUp` / `app.question.pageDown` and their Alt+Up / Alt+Down defaults are removed; move custom bindings to the editor actions.
+- Built-in extensions load in upstream's order (`llama.cpp`, `codemode`, `tool-search`, `mcp`) followed by this distribution's, so tools and commands list in that order.
+
 ## [1.5.1] - 2026-11-02
 
 ### Fixed

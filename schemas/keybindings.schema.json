@@ -235,14 +235,6 @@
       "$ref": "#/$defs/KeybindingValue",
       "description": "Toggle tool output"
     },
-    "app.question.pageUp": {
-      "$ref": "#/$defs/KeybindingValue",
-      "description": "Page up in question details"
-    },
-    "app.question.pageDown": {
-      "$ref": "#/$defs/KeybindingValue",
-      "description": "Page down in question details"
-    },
     "app.thinking.toggle": {
       "$ref": "#/$defs/KeybindingValue",
       "description": "Toggle thinking blocks"

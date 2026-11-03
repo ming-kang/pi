@@ -230,8 +230,8 @@ export function createFindToolDefinition(
 						let effectivePattern = pattern;
 						if (pattern.includes("/")) {
 							if (needsWindowsPathFilter) {
-								// fd's Windows glob matcher does not match path separators. Ask fd for
-								// bounded streaming candidates, then apply the original POSIX-style glob below.
+								// On Windows, fd's `*` crosses `\` separators, so `src/*.ts` would match nested files. Ask
+								// fd for bounded streaming candidates, then apply the original POSIX-style glob below.
 								effectivePattern = "**";
 							} else {
 								args.push("--full-path");
