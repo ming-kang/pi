@@ -10,10 +10,10 @@ export const DEEPWIKI_TOOL_NAME = "deepwiki";
 export const DEEPWIKI_LABEL = "DeepWiki";
 
 export const DEEPWIKI_DESCRIPTION =
-	"Query DeepWiki's AI-generated documentation for indexed public GitHub repositories. structure lists a repo's wiki pages; contents reads one page, or the whole wiki truncated past ~120k chars when page is omitted; question answers a focused query about one repo, or across up to 10 repos for a comparison. Results are indexed public snapshots and may cite sources. A repository that is not indexed fails every action with a repository-not-found error.";
+	"Query DeepWiki's AI-generated documentation for indexed public GitHub repositories. Inspect a repository's wiki structure, read one page or a whole wiki truncated past ~120k characters, or ask focused questions about one repository or compare up to 10 repositories. Results are indexed public snapshots and may cite sources. Unindexed repositories fail with a repository-not-found error.";
 
 export const DEEPWIKI_PROMPT_SNIPPET =
-	"Query AI-generated docs for public GitHub repos: architecture, APIs, implementation patterns";
+	"Query AI-generated docs for indexed public GitHub repos: architecture, APIs, implementation patterns";
 
 // Routing only: how to pick and reject `deepwiki`. Per-parameter syntax stays in
 // DeepWikiParamsSchema, which the model receives in the same request.

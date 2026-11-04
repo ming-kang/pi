@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Refined the model-facing descriptions and prompt guidance for `question`, `tasks`, and `deepwiki`: shorter capability snippets, less duplication between tool descriptions and parameter schemas, and clearer background-task completion and polling rules.
+
 ## [1.5.2] - 2026-11-03
 
 ### Added

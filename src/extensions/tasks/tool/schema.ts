@@ -64,13 +64,9 @@ export function clampSinceBytes(sinceBytes: number | undefined): number | undefi
 
 export const TASKS_TOOL_DESCRIPTION =
 	"Inspect and control background tasks started by native tools or extensions. " +
-	"Completion is delivered to you automatically and starts a new turn if yours has ended — never poll; end your turn instead of waiting. " +
-	"list: bounded activity/history listing; find task IDs here. " +
-	"read: bounded model-readable output or report slice (head/tail, by default a report from its start and a log from its end); tool-call activity stays in /tasks. " +
-	"kill: request cancellation of a whole task. " +
-	"tasks cannot start work; submit background work through its owning tool. Reads report byte ranges; use next sinceBytes only with that task's ID. Output is capped at 50KB per response.";
-export const TASKS_PROMPT_SNIPPET = "List, read, or stop background tasks; their results arrive automatically";
+	"`list` shows task IDs with bounded activity and history; `read` returns a bounded output or report slice; `kill` requests cancellation. ";
+export const TASKS_PROMPT_SNIPPET = "List, read, or stop background tasks";
 export const TASKS_PROMPT_GUIDELINES = [
-	"Start background work through its owning tool with background: true; continue independent work while it runs.",
-	"Ending your turn is the way to wait for a background task: when it finishes, its result starts a new turn for you automatically. Never poll with repeated reads or list calls.",
+	"`tasks` cannot start work: start background work through its owning tool with `background: true`, then continue independent work while it runs.",
+	"Ending your turn is the way to wait for a background task: when it finishes, its result starts a new turn for you automatically. Never poll `tasks` with repeated `list` or `read` calls.",
 ];
