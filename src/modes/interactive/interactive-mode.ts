@@ -4146,6 +4146,7 @@ export class InteractiveMode {
 							}
 							component.updateResult({ content: [{ type: "text", text: errorMessage }], isError: true });
 						} else {
+							component.setArgsComplete();
 							renderedPendingTools.set(content.id, component);
 						}
 					}

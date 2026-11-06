@@ -55,8 +55,7 @@
 					"path": "src/modes/interactive/components/easter-egg-3d.lazy.ts"
 				},
 				{
-					"path": "src/utils/syntax-highlight.ts",
-					"rewrite": "Repository source policy allows only top-level imports, so a static import registers every grammar and replaces upstream's deferred dynamic loader."
+					"path": "src/utils/syntax-highlight.ts"
 				},
 				{
 					"path": "src/utils/version-check.ts",
@@ -280,7 +279,7 @@
 		{
 			"id": "tool-presentation",
 			"why": "The bundled tool-presentation extension supplies compact dot/rail TUI chrome while upstream owns tool lifecycle and provides the native Box fallback.",
-			"watch": "Native lifecycle fixes should need little or no porting. Recheck the thin shell, row-gap, result-context, and disposal additions plus distribution renderers when upstream touches them; retire the local shell hook if upstream provides equivalent configurable TUI chrome. Verify native fallback and HTML export as well as interactive states.",
+			"watch": "Retire each performance-correctness patch independently when upstream covers its behavior: write caches refresh after grammar/theme changes; completing unchanged arguments reuses initial highlighting; successful replay exposes argsComplete. Recheck the separate shell, row-gap, result-context, and disposal additions when upstream touches them; retire the shell hook if upstream provides equivalent configurable TUI chrome. Verify native fallback, HTML export, and interactive states.",
 			"paths": [
 				{
 					"path": "src/core/tools/bash.ts"
@@ -310,7 +309,7 @@
 				},
 				{
 					"path": "src/modes/interactive/interactive-mode.ts",
-					"rewrite": "The interactive host constructs the native component and obtains its shell through the existing renderer resolver."
+					"rewrite": "The interactive host constructs the native component, obtains its shell through the existing renderer resolver, and marks successfully replayed calls' arguments complete."
 				}
 			],
 			"tests": [
@@ -318,6 +317,8 @@
 				"test/bash-tool-rendering.test.ts",
 				"test/built-in-extensions.test.ts",
 				"test/edit-tool-no-full-redraw.test.ts",
+				"test/code-highlighter.test.ts",
+				"test/suite/regressions/4167-thinking-toggle-pending-tool-render.test.ts",
 				"test/tool-execution-component.test.ts",
 				"test/tool-renderer-examples.test.ts",
 				"test/tool-view.test.ts"

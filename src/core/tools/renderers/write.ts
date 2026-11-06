@@ -35,6 +35,12 @@ class WriteCallRenderComponent extends Text {
 	constructor() {
 		super("", 0, 0);
 	}
+
+	override invalidate(): void {
+		super.invalidate();
+		// Cached ANSI must be rebuilt after theme changes or deferred grammar registration.
+		this.cache = undefined;
+	}
 }
 const WRITE_PARTIAL_FULL_HIGHLIGHT_LINES = 50;
 function highlightSingleLine(line: string, lang: string): string {
@@ -51,7 +57,11 @@ function refreshWriteHighlightPrefix(cache: WriteHighlightCache, highlighter: Co
 			prefixHighlighted[i] ?? highlightSingleLine(cache.normalizedLines[i] ?? "", cache.lang);
 	}
 }
-function rebuildWriteHighlightCacheFull(rawPath: string | null, fileContent: string): WriteHighlightCache | undefined {
+function rebuildWriteHighlightCacheFull(
+	rawPath: string | null,
+	fileContent: string,
+	highlighter: CodeHighlighter,
+): WriteHighlightCache | undefined {
 	const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
 	if (!lang) return undefined;
 	const displayContent = normalizeDisplayText(fileContent);
@@ -61,7 +71,8 @@ function rebuildWriteHighlightCacheFull(rawPath: string | null, fileContent: str
 		lang,
 		rawContent: fileContent,
 		normalizedLines: normalized.split("\n"),
-		highlightedLines: highlightCode(normalized, lang),
+		// Incremental updates mutate their own lines, not the highlighter's shared result.
+		highlightedLines: highlighter.highlight(normalized, lang).slice(),
 	};
 }
 function updateWriteHighlightCacheIncremental(
@@ -72,9 +83,9 @@ function updateWriteHighlightCacheIncremental(
 ): WriteHighlightCache | undefined {
 	const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
 	if (!lang) return undefined;
-	if (!cache) return rebuildWriteHighlightCacheFull(rawPath, fileContent);
+	if (!cache) return rebuildWriteHighlightCacheFull(rawPath, fileContent, highlighter);
 	if (cache.lang !== lang || cache.rawPath !== rawPath || !fileContent.startsWith(cache.rawContent)) {
-		return rebuildWriteHighlightCacheFull(rawPath, fileContent);
+		return rebuildWriteHighlightCacheFull(rawPath, fileContent, highlighter);
 	}
 	if (fileContent.length === cache.rawContent.length) return cache;
 

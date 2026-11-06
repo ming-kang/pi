@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
-// Adapted from upstream v1.0.3: consume installed pi-ai artifacts and keep
+// Adapted from upstream v1.5.0: consume installed pi-ai artifacts and keep
 // the stable SDK modular while bundling Node executables and their lazy modules.
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isBuiltin } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -167,7 +167,7 @@ const mainResult = await build({
 	...commonBuildOptions(),
 	entryNames: "[name]",
 	entryPoints: {
-		cli: join(codingAgentDistDir, "cli.js"),
+		"cli-runtime": join(codingAgentDistDir, "cli.js"),
 		index: join(codingAgentDistDir, "index.js"),
 		"rpc-entry": join(codingAgentDistDir, "rpc-entry.js"),
 	},
@@ -258,14 +258,18 @@ for (const [outputPath, output] of Object.entries(codemodeWorkerResult.metafile.
 	}
 }
 
-validateExternalImports([mainResult.metafile, lazyResult.metafile, codemodeWorkerResult.metafile]);
+const metafiles = [mainResult.metafile, lazyResult.metafile, codemodeWorkerResult.metafile];
+validateExternalImports(metafiles);
+const cliLauncher = `#!/usr/bin/env node
+import { createRequire, enableCompileCache } from "node:module";
+
+enableCompileCache();
+createRequire(import.meta.url)("./cli-runtime.js");
+`;
+writeFileSync(join(bundleDir, "cli.js"), cliLauncher);
 chmodSync(join(bundleDir, "cli.js"), 0o755);
 chmodSync(join(bundleDir, "rpc-entry.js"), 0o755);
 
-const files = new Set([
-	...Object.keys(mainResult.metafile.outputs),
-	...Object.keys(lazyResult.metafile.outputs),
-	...Object.keys(codemodeWorkerResult.metafile.outputs),
-]).size;
-const mib = outputBytes([mainResult.metafile, lazyResult.metafile, codemodeWorkerResult.metafile]) / (1024 * 1024);
+const files = new Set(metafiles.flatMap((metafile) => Object.keys(metafile.outputs))).size + 1;
+const mib = (outputBytes(metafiles) + cliLauncher.length) / (1024 * 1024);
 console.log(`Built ${relative(repoRoot, bundleDir)} (${files} files, ${mib.toFixed(1)} MiB)`);

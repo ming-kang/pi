@@ -7,6 +7,11 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 ### Changed
 
 - Refined the model-facing descriptions and prompt guidance for `question`, `tasks`, and `deepwiki`: shorter capability snippets, less duplication between tool descriptions and parameter schemas, and clearer background-task completion and polling rules.
+- Startup is faster: the `pi` command reuses compiled code through Node's compile cache (`NODE_DISABLE_COMPILE_CACHE=1` turns it off), and uncommon syntax-highlighting grammars load after the interactive UI is ready, so they are not loaded at startup in print and RPC modes.
+
+### Fixed
+
+- Restored syntax colors in saved and streaming `write` previews after deferred grammars load or the theme changes.
 
 ## [1.5.2] - 2026-11-03
 

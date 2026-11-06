@@ -1,6 +1,4 @@
 import hljs from "highlight.js/lib/core.js";
-// Distribution: source imports are top-level only, so every grammar registers here instead of on demand.
-import "highlight.js/lib/index.js";
 import bash from "highlight.js/lib/languages/bash.js";
 import c from "highlight.js/lib/languages/c.js";
 import cpp from "highlight.js/lib/languages/cpp.js";
@@ -22,6 +20,7 @@ import rust from "highlight.js/lib/languages/rust.js";
 import scala from "highlight.js/lib/languages/scala.js";
 import swift from "highlight.js/lib/languages/swift.js";
 import typescript from "highlight.js/lib/languages/typescript.js";
+import { loadHighlightLanguages } from "./highlight-languages.lazy.ts";
 import { decodeHtmlEntityAt } from "./html.ts";
 
 const eagerLanguages = {
@@ -52,8 +51,24 @@ for (const [name, language] of Object.entries(eagerLanguages)) {
 	hljs.registerLanguage(name, language);
 }
 
-/** Every grammar is already registered by the static import above; kept for upstream callers. */
-export async function loadAllHighlightLanguages(): Promise<void> {}
+let allLanguagesPromise: Promise<void> | undefined;
+
+export function loadAllHighlightLanguages(): Promise<void> {
+	if (!allLanguagesPromise) {
+		allLanguagesPromise = new Promise((resolve) => {
+			setImmediate(() => {
+				void loadHighlightLanguages().then(
+					() => resolve(),
+					() => {
+						// Eager languages and plaintext fallback remain available.
+						resolve();
+					},
+				);
+			});
+		});
+	}
+	return allLanguagesPromise;
+}
 
 export type HighlightFormatter = (text: string) => string;
 export type HighlightTheme = Partial<Record<string, HighlightFormatter>>;

@@ -15,7 +15,7 @@ describe("CodeHighlighter", () => {
 		vi.useRealTimers();
 	});
 
-	it("reuses its last result until the code, the theme or the grammars change", async () => {
+	it("reuses its last result until the code or the theme changes", () => {
 		const code = 'const page = html`<div class="x">ok</div>`;';
 		const highlighter = new CodeHighlighter();
 		const first = highlighter.highlight(code, "javascript");
@@ -24,10 +24,50 @@ describe("CodeHighlighter", () => {
 
 		initTheme("light");
 		expect(highlighter.highlight(code, "javascript")).toEqual(highlightCode(code, "javascript"));
-		const light = highlighter.highlight(code, "javascript");
-		// Every grammar loads statically in this distribution, so loading them changes nothing and the result is reused.
+	});
+
+	it("refreshes cached code and restored write previews after deferred grammars load", async () => {
+		const code = 'const page = html`<div class="x">ok</div>`;';
+		const highlighter = new CodeHighlighter();
+		const beforeCode = highlighter.highlight(code, "javascript");
+		const createRestoredRow = () => {
+			const row = new ToolExecutionComponent(
+				"write",
+				"w",
+				{ path: "page.html", content: '<div class="x">ok</div>' },
+				{},
+				writeRenderers,
+				tui,
+				"/",
+			);
+			// Restored or interrupted calls can have a result without streaming argument-completion events.
+			row.updateResult({ content: [{ type: "text", text: "Written" }], isError: false });
+			row.setExpanded(true);
+			return row;
+		};
+		const row = createRestoredRow();
+		const beforeWrite = row.render(80);
+
 		await syntaxHighlight.loadAllHighlightLanguages();
-		expect(highlighter.highlight(code, "javascript")).toBe(light);
+		expect(highlighter.highlight(code, "javascript")).not.toEqual(beforeCode);
+		row.invalidate();
+		const expected = createRestoredRow().render(80);
+		expect(row.render(80)).toEqual(expected);
+		expect(row.render(80)).not.toEqual(beforeWrite);
+		row.setExpanded(false);
+		row.setExpanded(true);
+		expect(row.render(80)).toEqual(expected);
+	});
+
+	it("refreshes a streaming write preview after a theme change", () => {
+		const args = { path: "a.ts", content: "const value = 1;" };
+		const row = new ToolExecutionComponent("write", "w", args, {}, writeRenderers, tui, "/");
+		row.render(80);
+
+		initTheme("light");
+		row.invalidate();
+		const fresh = new ToolExecutionComponent("write", "w", args, {}, writeRenderers, tui, "/");
+		expect(row.render(80)).toEqual(fresh.render(80));
 	});
 
 	it("codemode highlights the script once across progress, timer ticks, expanding and completion", () => {
@@ -48,6 +88,24 @@ describe("CodeHighlighter", () => {
 		vi.advanceTimersByTime(2_000);
 		row.setExpanded(true);
 		row.updateResult({ content: [{ type: "text", text: "done" }], details: { calls: [] }, isError: false }, false);
+		row.render(80);
+		expect(highlight).toHaveBeenCalledTimes(1);
+	});
+
+	it("write reuses its initial highlight when restored arguments become complete", () => {
+		const highlight = vi.spyOn(syntaxHighlight, "highlight");
+		const row = new ToolExecutionComponent(
+			"write",
+			"w",
+			{ path: "a.ts", content: "const value = 1;" },
+			{},
+			writeRenderers,
+			tui,
+			"/",
+		);
+		row.setArgsComplete();
+		row.setExpanded(true);
+		row.setExpanded(false);
 		row.render(80);
 		expect(highlight).toHaveBeenCalledTimes(1);
 	});

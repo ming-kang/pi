@@ -3,6 +3,7 @@ import type { AssistantMessage, ToolResultMessage, Usage } from "@earendil-works
 import { Container, Text, type TUI } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import type { AgentSessionEvent } from "../../../src/core/agent-session.ts";
+import type { ToolRenderers } from "../../../src/core/extensions/types.ts";
 import type { SessionEntry } from "../../../src/core/session-manager.ts";
 import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../../../src/modes/interactive/theme/theme.ts";
@@ -11,6 +12,11 @@ import type { ToolExecutionComponent } from "../tool-execution.ts";
 
 const TOOL_CALL_ID = "tool-4167";
 const TOOL_NAME = "slow_tool";
+const argumentsRenderer: ToolRenderers = {
+	renderCall(_args, _theme, context) {
+		return new Text(context.argsComplete ? "Arguments complete" : "Arguments streaming", 0, 0);
+	},
+};
 
 const EMPTY_USAGE: Usage = {
 	input: 0,
@@ -49,7 +55,7 @@ type RenderSessionContextThis = {
 	toolOutputExpanded: boolean;
 	isInitialized: boolean;
 	updateEditorBorderColor(): void;
-	getRegisteredToolDefinition(toolName: string): undefined;
+	getRegisteredToolDefinition(toolName: string): ToolRenderers | undefined;
 	maybeShowAssistantDiagnostics(message: AssistantMessage): void;
 	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void;
 	renderSessionItems: RenderSessionItems;
@@ -66,7 +72,7 @@ type RenderSessionEntries = (
 
 type HandleEvent = (this: RenderSessionContextThis, event: AgentSessionEvent) => Promise<void>;
 
-function createFakeInteractiveModeThis(): RenderSessionContextThis {
+function createFakeInteractiveModeThis(renderers?: ToolRenderers): RenderSessionContextThis {
 	const chatContainer = new Container();
 	return {
 		pendingTools: new Map<string, ToolExecutionComponent>(),
@@ -84,7 +90,7 @@ function createFakeInteractiveModeThis(): RenderSessionContextThis {
 		toolOutputExpanded: false,
 		isInitialized: true,
 		updateEditorBorderColor: vi.fn(),
-		getRegisteredToolDefinition: (_toolName: string) => undefined,
+		getRegisteredToolDefinition: (_toolName: string) => renderers,
 		maybeShowAssistantDiagnostics: vi.fn(),
 		renderSessionItems: (InteractiveMode.prototype as unknown as { renderSessionItems: RenderSessionItems })
 			.renderSessionItems,
@@ -163,7 +169,7 @@ describe("InteractiveMode.renderSessionEntries", () => {
 	});
 
 	test("keeps unresolved rendered tool calls registered for live completion events", async () => {
-		const fakeThis = createFakeInteractiveModeThis();
+		const fakeThis = createFakeInteractiveModeThis(argumentsRenderer);
 		const renderSessionEntries = (
 			InteractiveMode.prototype as unknown as { renderSessionEntries: RenderSessionEntries }
 		).renderSessionEntries;
@@ -172,6 +178,7 @@ describe("InteractiveMode.renderSessionEntries", () => {
 		renderSessionEntries.call(fakeThis, createSessionEntries([createAssistantToolCallMessage()]));
 
 		expect(fakeThis.pendingTools.has(TOOL_CALL_ID)).toBe(true);
+		expect(renderChat(fakeThis.chatContainer)).toContain("Arguments complete");
 
 		await handleEvent.call(fakeThis, {
 			type: "tool_execution_end",
@@ -186,7 +193,7 @@ describe("InteractiveMode.renderSessionEntries", () => {
 	});
 
 	test("does not keep completed historical tool calls registered as pending", () => {
-		const fakeThis = createFakeInteractiveModeThis();
+		const fakeThis = createFakeInteractiveModeThis(argumentsRenderer);
 		const renderSessionEntries = (
 			InteractiveMode.prototype as unknown as { renderSessionEntries: RenderSessionEntries }
 		).renderSessionEntries;
@@ -198,5 +205,23 @@ describe("InteractiveMode.renderSessionEntries", () => {
 
 		expect(fakeThis.pendingTools.size).toBe(0);
 		expect(renderChat(fakeThis.chatContainer)).toContain("HISTORICAL_RESULT");
+		expect(renderChat(fakeThis.chatContainer)).toContain("Arguments complete");
 	});
+
+	test.each(["aborted", "error"] as const)(
+		"keeps interrupted %s call arguments incomplete on replay",
+		(stopReason) => {
+			const fakeThis = createFakeInteractiveModeThis(argumentsRenderer);
+			const renderSessionEntries = (
+				InteractiveMode.prototype as unknown as { renderSessionEntries: RenderSessionEntries }
+			).renderSessionEntries;
+			renderSessionEntries.call(
+				fakeThis,
+				createSessionEntries([{ ...createAssistantToolCallMessage(), stopReason }]),
+			);
+
+			expect(renderChat(fakeThis.chatContainer)).toContain("Arguments streaming");
+			expect(fakeThis.pendingTools.size).toBe(0);
+		},
+	);
 });
