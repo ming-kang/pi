@@ -4,6 +4,16 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Adopted upstream v1.5.2: when a session's working directory no longer exists, interactive mode offers **Continue**, **Fork**, or **Cancel** at startup, in `/resume` and `/import`, and for `ctx.switchSession()`. **Fork** copies the session into the current directory with a new ID, leaving the original unchanged and avoiding the same prompt on the next resume. See [Session Storage](docs/sessions.md#session-storage).
+
+### Fixed
+
+- Adopted upstream v1.5.2 fixes:
+  - A failed `/import` caused by a missing working directory no longer leaves a copied session behind, and retrying with **Continue** no longer creates a second copy with the same session ID.
+  - Anthropic OAuth requests no longer report an outdated Claude Code version.
+
 ## [1.5.3] - 2026-11-10
 
 ### Added

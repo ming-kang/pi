@@ -10,7 +10,7 @@ Install llama.cpp with the [official installer](https://llama.app/docs/installat
 curl -LsSf https://llama.app/install.sh | sh
 ```
 
-Verify the installation with `llama cli --version`. See [llama.app](https://llama.app) for other installation methods, including package managers and building from source.
+Verify the installation with `llama --version`. See [llama.app](https://llama.app) for other installation methods, including package managers and building from source.
 
 ## Start the router
 
