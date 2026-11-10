@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-11-10
+
 ### Added
 
 - Adopted upstream v1.5.1:
