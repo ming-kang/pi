@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-11-10
+
 ### Added
 
 - Adopted upstream v1.5.2: when a session's working directory no longer exists, interactive mode offers **Continue**, **Fork**, or **Cancel** at startup, in `/resume` and `/import`, and for `ctx.switchSession()`. **Fork** copies the session into the current directory with a new ID, leaving the original unchanged and avoiding the same prompt on the next resume. See [Session Storage](docs/sessions.md#session-storage).
