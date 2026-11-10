@@ -81,7 +81,6 @@
 		"yaml": "2.9.0"
 	},
 	"devDependencies": {
-		"@anthropic-ai/sandbox-runtime": "0.0.26",
 		"@anthropic-ai/sdk": "0.52.0",
 		"@biomejs/biome": "2.3.5",
 		"@types/cross-spawn": "6.0.6",
