@@ -961,6 +961,10 @@ Emitted when nothing more will happen without new input: no run, compaction, ret
 
 `RpcClient.waitForQuiescence(timeout?)` resolves on this event, or at once when `get_state` reports `isQuiescent`. `collectEventsUntilQuiescent(timeout?)` collects events until the next one: start it before the prompt it should cover, since it does not resolve early when the session is quiescent before that prompt begins. `waitForIdle()` and `collectEvents()` still resolve on the first `agent_settled`. Closing stdin shuts the process down immediately, without waiting for Background work.
 
+Shutdown still disposes the active runtime and finishes pending cleanup, such as saving a refreshed OAuth or MCP token, so give Pi time to exit before killing it. SIGTERM and SIGHUP also start an orderly shutdown. Once a shutdown has started, from either stdin EOF or a signal, a stdin EOF or a single signal does not interrupt it; a second signal exits at once. Closing stdin and sending SIGTERM together is safe.
+
+An extension can also request shutdown with `ctx.shutdown()`. If the session is idle and no command is being handled, Pi shuts down right away. Otherwise it shuts down once the current command finishes (for `prompt`, once the prompt settles) or the active run emits `agent_settled`. (A request made while an extension-started compaction is running waits for the next command or run to finish.)
+
 ### turn_start / turn_end
 
 A turn consists of one assistant response plus any resulting tool calls and results.

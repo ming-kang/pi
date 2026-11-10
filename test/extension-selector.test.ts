@@ -1,17 +1,22 @@
-import { setKeybindings, visibleWidth } from "@earendil-works/pi-tui";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setKeybindings } from "@earendil-works/pi-tui";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { ExtensionSelectorComponent } from "../src/modes/interactive/components/extension-selector.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
-const WIDTH = 120;
-
 function render(selector: ExtensionSelectorComponent): string {
-	return stripAnsi(selector.render(WIDTH).join("\n"));
+	return stripAnsi(selector.render(80).join("\n"));
 }
 
-describe("ExtensionSelectorComponent", () => {
+function visibleOptions(output: string): string[] {
+	return output
+		.split("\n")
+		.filter((line) => line.includes("option-"))
+		.map((line) => line.trim().replace(/^→ /, ""));
+}
+
+describe("extension selector", () => {
 	beforeAll(() => {
 		initTheme("dark");
 	});
@@ -20,57 +25,58 @@ describe("ExtensionSelectorComponent", () => {
 		setKeybindings(new KeybindingsManager());
 	});
 
-	it("renders options and resolves the selected one", () => {
-		const onSelect = vi.fn();
-		const selector = new ExtensionSelectorComponent("Pick one:", ["A", "B"], onSelect, () => {});
-
-		expect(render(selector)).toContain("A");
-		selector.handleInput("j");
-		selector.handleInput("\n");
-		expect(onSelect).toHaveBeenCalledWith("B");
-	});
-
-	it("renders a description under the title", () => {
+	// #6688: long extension selectors must keep the selected option visible.
+	it("windows long option lists around the selection", () => {
+		const options = Array.from({ length: 15 }, (_, index) => `option-${index + 1}`);
 		const selector = new ExtensionSelectorComponent(
-			"Approve?",
-			["A"],
+			"Choose",
+			options,
 			() => {},
 			() => {},
-			{
-				description: "Context now 29% full",
-			},
 		);
 
-		expect(render(selector)).toContain("Context now 29% full");
+		let output = render(selector);
+		expect(visibleOptions(output)).toEqual(options.slice(0, 10));
+		expect(output).toContain("→ option-1");
+		expect(output).toContain("  (1/15)");
+
+		for (let i = 0; i < 7; i++) selector.handleInput("\x1b[B");
+		output = render(selector);
+		expect(visibleOptions(output)).toEqual(options.slice(2, 12));
+		expect(output).toContain("→ option-8");
+		expect(output).toContain("  (8/15)");
+
+		for (let i = 0; i < 7; i++) selector.handleInput("\x1b[B");
+		output = render(selector);
+		expect(visibleOptions(output)).toEqual(options.slice(5, 15));
+		expect(output).toContain("→ option-15");
+		expect(output).toContain("  (15/15)");
 	});
 
-	it("reflects the first custom binding in both hints and input", () => {
-		setKeybindings(
-			new KeybindingsManager({
-				"tui.select.up": ["ctrl+p", "up"],
-				"tui.select.down": ["ctrl+n", "down"],
-				"tui.select.confirm": ["ctrl+x", "enter"],
-				"tui.select.cancel": ["ctrl+g", "escape"],
-			}),
+	it("renders short and empty option lists without a scroll indicator", () => {
+		const shortOptions = ["option-1", "option-2", "option-3"];
+		const shortOutput = render(
+			new ExtensionSelectorComponent(
+				"Choose",
+				shortOptions,
+				() => {},
+				() => {},
+			),
 		);
-		const onSelect = vi.fn();
-		const selector = new ExtensionSelectorComponent("Approve?", ["A", "B"], onSelect, () => {});
-		const output = render(selector);
-		expect(output).toContain("Ctrl+P/Ctrl+N navigate • Ctrl+X select • Ctrl+G cancel");
-		expect(output).not.toContain("Enter select");
+		expect(visibleOptions(shortOutput)).toEqual(shortOptions);
+		expect(shortOutput).toContain("→ option-1");
+		expect(shortOutput).not.toContain("(1/3)");
 
-		selector.handleInput("\x0e");
-		selector.handleInput("\x18");
-		expect(onSelect).toHaveBeenCalledWith("B");
-	});
-
-	it("wraps unified hints within narrow selector widths", () => {
-		const selector = new ExtensionSelectorComponent(
-			"Approve?",
-			["A"],
-			() => {},
-			() => {},
+		const emptyOutput = render(
+			new ExtensionSelectorComponent(
+				"Choose",
+				[],
+				() => {},
+				() => {},
+			),
 		);
-		expect(selector.render(24).every((line) => visibleWidth(line) <= 24)).toBe(true);
+		expect(emptyOutput).toContain("Choose");
+		expect(emptyOutput).toContain("↑/↓ navigate");
+		expect(emptyOutput).not.toContain("→");
 	});
 });

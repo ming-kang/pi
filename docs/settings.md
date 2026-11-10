@@ -34,7 +34,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `hideThinkingBlock` | boolean | `false` | Show up to three live preview lines for collapsed thinking while streaming, then settle to `Thoughts`; click to expand |
 | `showCacheMissNotices` | boolean | `false` | Show transcript notices for significant prompt-cache misses, successful cache-warming usage, compaction or branch-summary usage, and provider recovery diagnostics such as dropped Anthropic thinking blocks |
 | `thinkingBudgets` | object | - | Custom token budgets per thinking level. Anthropic, Google, and Bedrock use these natively. OpenAI-compatible models use them when `compat.thinkingTokenBudgetField` (or `supportsThinkingTokenBudget`) is set. |
-| `cacheWarming` | string | `"streaming"` | Prompt cache-warming mode: `"off"`, `"streaming"`, or `"idle"`. Global setting only. |
+| `cacheWarming` | string | `"idle"` | Prompt cache-warming mode: `"off"`, `"streaming"`, or `"idle"`. Global setting only. |
 
 #### Cache Warming
 
@@ -42,11 +42,11 @@ Providers drop a prompt cache entry after a period of inactivity, so the first r
 
 - `"off"` disables warming.
 - `"streaming"` protects expensive prefixes during long tool executions and stops as soon as the agent settles.
-- `"idle"` also considers refreshes while waiting for your next prompt, using a fixed 15% continuation probability measured from real usage.
+- `"idle"` (default) also keeps eligible caches warm for up to 30 minutes while waiting for your next prompt, but only when a refresh is expected to pay for itself.
 
 ```json
 {
-  "cacheWarming": "idle"
+  "cacheWarming": "streaming"
 }
 ```
 

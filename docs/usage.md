@@ -159,6 +159,8 @@ pi list                      # List installed packages
 pi config                    # Enable/disable package resources
 ```
 
+`pi update` lists each updated package with its npm version or git commit change, for example `npm:foo 1.2.0 -> 1.3.0`, and reports when packages are already up to date, were skipped in offline mode, or produced only warnings.
+
 To uninstall pi itself, see [Quickstart](quickstart.md#uninstall). `pi config` and project package commands accept `--approve`/`--no-approve` to trust or ignore project-local settings for one command. `pi update` never prompts for project trust.
 
 See [Pi Packages](packages.md) for package sources and security notes.
@@ -172,6 +174,22 @@ export PI_SELF_UPDATE_COMMAND="mise use -g npm:{packageName}@{version}"
 ```
 
 `pi update` runs it only when the npm registry has a newer release, replacing `{packageName}`, `{version}`, and `{installSpec}` (`{packageName}@{version}`) with that release. The value is split on spaces. For arguments with spaces, use the `selfUpdateCommand` setting in `~/.pi/agent/settings.json` instead, an argv array such as `["nix", "profile", "upgrade", "pi"]`.
+
+### Credential commands
+
+```bash
+pi auth login <provider> [--api-key] [--no-browser]
+pi auth logout <provider>
+```
+
+`pi auth login <provider>` logs in to a provider in the terminal and exits, without starting a session. It signs in with an account and opens the browser, like `/login <provider>`. Providers without account sign-in ask for an API key. Logging in to Radius also adds the Radius MCP server to `~/.pi/agent/mcp.json` when no global server uses that login yet. It requires an interactive terminal.
+
+| Option | Description |
+|--------|-------------|
+| `--api-key` | Save an API key instead of signing in with an account; the key is read without echoing it |
+| `--no-browser` | Do not open a browser; use the provider's other sign-in method, such as a device code, for example over SSH. Asks when there are several. Not allowed with `--api-key` |
+
+`pi auth logout <provider>` removes the credentials that `pi auth login` or `/login` stored, like `/logout`. Environment variables and `models.json` config are unchanged. It exits with status `0` when nothing is stored, so it is safe to repeat.
 
 ### Modes
 

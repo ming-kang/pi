@@ -24,7 +24,7 @@ Use `/login` in interactive mode, then select a provider:
 - OpenRouter (OAuth-minted API key billed from OpenRouter credits)
 - Radius
 
-Use `/logout` to clear credentials. Tokens are stored in `~/.pi/agent/auth.json` and auto-refresh when expired. OpenRouter instead mints a user-controlled API key that does not expire automatically.
+Use `/logout` to clear credentials. From the shell, `pi auth login <provider>` and `pi auth logout <provider>` do the same without starting a session; see [Credential commands](usage.md#credential-commands). Tokens are stored in `~/.pi/agent/auth.json` and auto-refresh when expired. OpenRouter instead mints a user-controlled API key that does not expire automatically.
 
 ### OpenAI Codex
 
@@ -129,6 +129,7 @@ pi
 | Qwen Token Plan (existing catalog) | `QWEN_TOKEN_PLAN_API_KEY` | `qwen-token-plan` |
 | Qwen Token Plan (Individual) | `QWEN_TOKEN_PLAN_API_KEY` | `qwen-token-plan-individual` |
 | Qwen Token Plan (China) | `QWEN_TOKEN_PLAN_CN_API_KEY` | `qwen-token-plan-cn` |
+| Qwen Token Plan (Individual, China) | `QWEN_TOKEN_PLAN_CN_API_KEY` | `qwen-token-plan-individual-cn` |
 | Xiaomi MiMo | `XIAOMI_API_KEY` | `xiaomi` |
 | Xiaomi MiMo Token Plan (China) | `XIAOMI_TOKEN_PLAN_CN_API_KEY` | `xiaomi-token-plan-cn` |
 | Xiaomi MiMo Token Plan (Amsterdam) | `XIAOMI_TOKEN_PLAN_AMS_API_KEY` | `xiaomi-token-plan-ams` |

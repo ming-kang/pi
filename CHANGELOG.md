@@ -4,14 +4,51 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Adopted upstream v1.5.1:
+  - `pi auth login <provider>` and `pi auth logout <provider>` manage credentials from the shell without starting a session; `--api-key` saves an API key and `--no-browser` uses device-code or copy-code sign-in. Logging in to Radius also configures the Radius MCP server. See [Credential commands](docs/usage.md#credential-commands).
+  - Anthropic sessions use message threads: each request sends only the new messages and falls back to the full request when earlier context changed. On by default for `anthropic` on `api.anthropic.com`; set `compat.supportsMessageThreads` in `models.json` for gateways that forward the `thread` field, or to turn it off.
+  - `pi.registerMarkdownTransformer()` takes `{ messageTypes }` to opt into `custom`, `summary`, and `changelog` Markdown, and the built-in Mermaid renderer draws diagrams in expanded branch and compaction summaries. See [Extensions](docs/extensions.md#piregistermarkdowntransformertransformer-options).
+  - `pi update` lists each updated package with its npm version or git commit change and distinguishes unchanged, skipped, and warned updates; `PackageManager.update()` reports each change as a `result` progress event.
+  - `ctx.ui.custom()` overlays honor `blocked` and report blocked program status until they call `done()`.
+  - Claude Fable 5.2 on `anthropic`, the `qwen-token-plan-individual-cn` provider, GLM 5.3 for Qwen Token Plan Individual, and Microsoft-Decision-1 classification through GitHub Copilot, including codemode `models.classify()`.
+  - `compat.promptCacheKeyMode`, `compat.requiresNonNullAssistantContent`, and `compat.requiresToolsWithToolHistory` for OpenAI-compatible endpoints. See [Models configuration](docs/models-configuration.md).
+  - `ReadOperations.createReadStream` lets custom read backends stream large files.
+  - Syntax highlighting for Dart, Nix, Groovy, and Gradle files.
+
 ### Changed
 
 - Refined the model-facing descriptions and prompt guidance for `question`, `tasks`, and `deepwiki`: shorter capability snippets, less duplication between tool descriptions and parameter schemas, and clearer background-task completion and polling rules.
 - Startup is faster: the `pi` command reuses compiled code through Node's compile cache (`NODE_DISABLE_COMPILE_CACHE=1` turns it off), and uncommon syntax-highlighting grammars load after the interactive UI is ready, so they are not loaded at startup in print and RPC modes.
+- Adopted upstream v1.5.1:
+  - **Breaking:** custom `GrepOperations.readFile` callbacks are no longer called; grep takes context lines from ripgrep. To search a remote system, override grep's `execute()`.
+  - **Breaking:** OpenAI-compatible models omit `tools` instead of sending `"tools": []` when all tools are disabled. Set `compat.requiresToolsWithToolHistory: true` for proxies that require the field once the history has tool calls.
+  - `cacheWarming` defaults to `"idle"`: eligible prompt caches stay warm for up to 30 minutes between runs when a refresh is expected to pay for itself. Set `"cacheWarming": "streaming"` for the previous behavior. Consecutive warms show as one `Cache warmed: $<total>` line.
+  - Default models moved to newer models at the same or a lower price, including Claude Opus 5.5 for `anthropic` and `amazon-bedrock`, GPT-6.1 Sol for `azure`, and Gemini 4 Argon for `google` and `google-vertex`.
+  - `/login` and `/logout` list the preferred partners Radius and OpenRouter first, marked with `✦`, then all other providers alphabetically. OpenAI Codex is shown as "OpenAI Codex" again.
+  - Terminal Mermaid rendering supports more diagram types, including pie charts, author-defined styles, and clickable labels on terminals with hyperlink support.
+  - `reload()` from the SDK or RPC throws while a response or compaction is running instead of replacing extensions under it.
+- The find tool uses upstream's Windows path matching instead of this distribution's fallback: `src\**\*.ts` patterns work, `src/**/*.ts` also finds files directly in `src/`, and results no longer depend on the installed fd version.
 
 ### Fixed
 
 - Restored syntax colors in saved and streaming `write` previews after deferred grammars load or the theme changes.
+- Adopted upstream v1.5.1 fixes:
+  - The read tool streams files and the edit tool computes its diff before writing, so neither runs out of memory on large files; edit also keeps the line endings of untouched lines in mixed CRLF/LF files.
+  - grep `glob` patterns are relative to `path`, context lines come from ripgrep instead of reading every matched file, and `limit: 0` in find and ls means 1. Truncation no longer cuts an emoji or other non-BMP character in half.
+  - The bash tool reports the shell's exit code when a background process kept the output open until the timeout, and the powershell tool no longer reports exit code 1 under Windows PowerShell 5.1 when a successful native command's stderr was redirected.
+  - Ctrl+V pastes clipboard images and text on Windows and WSL; both Ctrl+V and Alt+V are default paste shortcuts there.
+  - OAuth logins no longer fail with `invalid_grant` after Pi exits during a token refresh: exit waits for the refreshed token to be saved. RPC and print mode shutdown is no longer cut off by a stdin EOF or a single signal.
+  - RPC mode honors an extension's `ctx.shutdown()` while idle.
+  - MCP: a failed token refresh no longer breaks a sign-in in progress, `/mcp` sign-in no longer hangs on "Connecting…", `pi mcp list` sends provider login tokens, and stdio and Streamable HTTP transports handle large, oversized, and CR-only messages correctly.
+  - Prompt template arguments keep apostrophes inside words and unmatched quotes as text.
+  - Images in steering and follow-up messages are resized like images in idle prompts, and repeated image reads no longer abort Pi on macOS arm64.
+  - `ctrl+o` expands the output of `!` and `!!` commands run while the agent is working, large pasted text survives editor switches and custom UI, and deleting a paste marker no longer corrupts later markers.
+  - Ctrl+P switches to the only model in scope, the model selector keeps its selection when a background refresh arrives, and resuming after `/tree` keeps the live thinking level.
+  - `/reload` and session switches remove every extension overlay, extension selection dialogs scroll within ten options, and `pi config` honors `keybindings.json`.
+  - Extensions loaded through symlinked paths resolve their dependencies, and `tool_search`, `searchTools()`, and codemode read tool schemas behind local `$ref`s.
+  - Provider fixes for Anthropic strict tools and `$defs`, OpenRouter output limits near a full context window, OpenCode Go Claude thinking signatures, Azure GPT-6 context windows and long-context pricing, Claude Sonnet 5 temperature, OpenAI Responses `session-id` headers, and dropped streams that were not retried.
 
 ## [1.5.2] - 2026-11-03
 

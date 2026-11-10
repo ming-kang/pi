@@ -1,5 +1,5 @@
 import type { AgentToolResult } from "../../core/extensions/types.ts";
-import { truncateMiddle } from "../../core/tools/truncate.ts";
+import { sliceHead, sliceTail } from "../../core/tools/truncate.ts";
 import { QUESTION_LIMITS, TRUNCATION_FOLLOW_UP } from "./limits.ts";
 import type { QuestionAnswer, QuestionToolDetails, QuestionToolError } from "./types.ts";
 
@@ -29,12 +29,14 @@ function fairShare(lengths: number[], budget: number): number {
 	return Number.POSITIVE_INFINITY;
 }
 
-/** Keep the start and end of `text` within `cap` characters. */
+/** Keep the start and end of `text` within `cap` characters, without splitting a surrogate pair. */
 function shorten(text: string, cap: number): string {
 	if (text.length <= cap) return text;
-	// A UTF-16 length never exceeds the UTF-8 byte count, so a byte budget bounds characters too.
-	const marker = `…${text.length} chars truncated…`;
-	return truncateMiddle(text, Math.max(0, cap - marker.length)).content;
+	// The marker reserves room for the largest count it can show, so the result never exceeds `cap`.
+	const budget = Math.max(0, cap - `…${text.length} chars truncated…`.length);
+	const head = sliceHead(text, Math.floor(budget / 2));
+	const tail = sliceTail(text, budget - Math.floor(budget / 2));
+	return `${head}…${text.length - head.length - tail.length} chars truncated…${tail}`;
 }
 
 /**

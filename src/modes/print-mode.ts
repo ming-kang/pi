@@ -53,16 +53,19 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	let session = runtimeHost.session;
 	let unsubscribe: (() => void) | undefined;
 	let unsubscribeBackpressure: (() => void) | undefined;
-	let disposed = false;
-	let shuttingDown = false;
+	let disposing: Promise<void> | undefined;
+	// SIGTERM/SIGHUP received so far. Only a repeated signal forces exit during disposal.
+	let signalCount = 0;
 	const signalCleanupHandlers: Array<() => void> = [];
 
-	const disposeRuntime = async (): Promise<void> => {
-		if (disposed) return;
-		disposed = true;
-		unsubscribe?.();
-		unsubscribeBackpressure?.();
-		await runtimeHost.dispose();
+	// Callers share one disposal, so a signal during the final disposal waits for it to finish.
+	const disposeRuntime = (): Promise<void> => {
+		disposing ??= (async () => {
+			unsubscribe?.();
+			unsubscribeBackpressure?.();
+			await runtimeHost.dispose();
+		})();
+		return disposing;
 	};
 
 	const registerSignalHandlers = (): void => {
@@ -74,10 +77,9 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		for (const signal of signals) {
 			const exitCode = signal === "SIGINT" ? 130 : signal === "SIGHUP" ? 129 : 143;
 			const handler = () => {
-				// A second signal while shutting down stops waiting for disposal.
-				if (shuttingDown) process.exit(exitCode);
-				shuttingDown = true;
+				signalCount++;
 				killTrackedDetachedChildren();
+				if (signalCount > 1) process.exit(exitCode);
 				void disposeRuntime().finally(() => {
 					process.exit(exitCode);
 				});
@@ -197,14 +199,16 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		return exitCode;
 	} catch (error: unknown) {
 		// A signal disposed the session under the wait; the signal handler owns the exit.
-		if (shuttingDown) return 1;
+		if (signalCount > 0) return 1;
 		console.error(error instanceof Error ? error.message : String(error));
 		return 1;
 	} finally {
+		// Keep the signal handlers until disposal is done: without one, a signal would kill the
+		// process mid-dispose (for example during a pending MCP token refresh).
+		await disposeRuntime();
 		for (const cleanup of signalCleanupHandlers) {
 			cleanup();
 		}
-		await disposeRuntime();
 		await flushRawStdout();
 	}
 }

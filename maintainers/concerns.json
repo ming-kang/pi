@@ -363,6 +363,7 @@
 			"tests": [
 				"test/custom-message-click.test.ts",
 				"test/extension-selector.test.ts",
+				"test/extension-selector-hints.test.ts",
 				"test/keybinding-hints.test.ts",
 				"test/model-selector.test.ts",
 				"test/thinking-selector.test.ts",
@@ -532,20 +533,6 @@
 				"test/extensions-runner-distribution.test.ts"
 			],
 			"watch": "Upstream extensions can register configurable keybindings, editor-global reservations, and keyboard-help sections."
-		},
-		{
-			"id": "windows-find-glob",
-			"why": "Path-segment globs in find keep POSIX semantics on Windows, where fd's `*` also crosses `\\` separators.",
-			"paths": [
-				{
-					"path": "src/core/tools/find.ts"
-				}
-			],
-			"tests": [
-				"test/suite/regressions/3302-find-path-glob.test.ts",
-				"test/find-windows-glob.test.ts"
-			],
-			"watch": "fd's Windows glob stops matching `\\` with a single `*` and the path-glob regression passes without the fallback."
 		},
 		{
 			"id": "windows-external-editor",
