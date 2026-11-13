@@ -4,9 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { formatTaskActivityDuration } from "../src/core/tasks/activity.ts";
 import type { TaskControl, TaskUpdate } from "../src/core/tasks/types.ts";
 import { activityTarget, relativeToCwd } from "../src/extensions/agent/activity.ts";
-import { activityLines } from "../src/extensions/agent/activity-lines.ts";
 import { AgentProgress } from "../src/extensions/agent/progress.ts";
-import { agentRenderers } from "../src/extensions/agent/render.ts";
+import { activityLines, agentRenderers } from "../src/extensions/agent/render.ts";
 import { AGENT_MAX_ACTIVITIES, type AgentToolDetails } from "../src/extensions/agent/types.ts";
 import { initTheme, type Theme, theme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -121,6 +120,29 @@ describe("Agent tool-call display", () => {
 		expect(completion.display).toBeUndefined();
 		expect(completion.result.content).toEqual([{ type: "text", text: "The report" }]);
 		expect(agent.complete("failed", "boom", { text: "Error: boom" }).display).toBeUndefined();
+	});
+
+	it("handles null, non-object, and malformed error tool results without throwing", () => {
+		const { agent, display } = progress();
+		const malformedResults = [null, undefined, "plain error", { content: "not-an-array" }, { content: [null] }];
+		malformedResults.forEach((result, index) => {
+			const toolCallId = `bad-${index}`;
+			agent.handle({
+				type: "tool_execution_start",
+				toolCallId,
+				toolName: "bash",
+				args: { command: `c${index}` },
+			} as never);
+			agent.handle({
+				type: "tool_execution_end",
+				toolCallId,
+				toolName: "bash",
+				durationMs: 10,
+				isError: true,
+				result,
+			} as never);
+		});
+		expect(display()).toContain("Tool call failed.");
 	});
 });
 

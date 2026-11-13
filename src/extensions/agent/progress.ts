@@ -31,10 +31,16 @@ export function finalAssistantText(messages: readonly AgentMessage[]): string {
 }
 
 function toolErrorText(result: unknown): string {
-	const content = (result as { content?: Array<{ type: string; text?: string }> }).content;
+	const content =
+		result && typeof result === "object" && "content" in result && Array.isArray(result.content)
+			? result.content
+			: undefined;
 	const text = content
-		?.filter((block) => block.type === "text")
-		.map((block) => block.text ?? "")
+		?.filter(
+			(block): block is { type: string; text?: string } =>
+				Boolean(block) && typeof block === "object" && "type" in block && block.type === "text",
+		)
+		.map((block) => (typeof block.text === "string" ? block.text : ""))
 		.join("\n");
 	return clipText(text || "Tool call failed.", 1000);
 }

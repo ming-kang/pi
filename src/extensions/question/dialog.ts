@@ -3,8 +3,8 @@ import { Editor, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
 import type { Keybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { keyLabel } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
+import { QUESTION_LIMITS } from "./constants.ts";
 import { type DialogSnapshot, QuestionDialogView } from "./dialog-view.ts";
-import { QUESTION_LIMITS } from "./limits.ts";
 import { WidthCachedRender } from "./render-cache.ts";
 import { customText, displayOptions, firstUnanswered, hasAnswer, newQuestionState, orderedAnswers } from "./state.ts";
 import type { DialogMode, DialogResult, DisplayOption, Question } from "./types.ts";
@@ -17,6 +17,7 @@ export function createQuestionDialog(questions: readonly Question[], signal?: Ab
 		let mode: DialogMode = { kind: "choose" };
 		let dialogFocused = false;
 		let finished = false;
+		let abortedOnInit = false;
 		const cache = new WidthCachedRender();
 		const view = new QuestionDialogView(theme, keybindings);
 		const editor = new Editor(tui, {
@@ -66,8 +67,13 @@ export function createQuestionDialog(questions: readonly Question[], signal?: Ab
 			discardEdit();
 			finish("cancelled");
 		};
-		if (signal?.aborted) onAbort();
-		else signal?.addEventListener("abort", onAbort, { once: true });
+		// Defer pre-aborted resolution past construction so ctx.ui.custom() mounts before done() runs.
+		if (signal?.aborted) {
+			abortedOnInit = true;
+			queueMicrotask(onAbort);
+		} else {
+			signal?.addEventListener("abort", onAbort, { once: true });
+		}
 
 		function goTo(index: number, warning?: string): void {
 			current = Math.max(0, Math.min(questions.length - 1, index));
@@ -285,6 +291,7 @@ export function createQuestionDialog(questions: readonly Question[], signal?: Ab
 				cache.invalidate();
 			},
 			handleInput(data: string): void {
+				if (finished || abortedOnInit) return;
 				if (mode.kind === "review") handleReviewInput(data);
 				else if (isEditing()) handleEditorInput(data);
 				else handleChoiceInput(data);

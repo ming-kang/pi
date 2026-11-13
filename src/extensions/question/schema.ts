@@ -1,5 +1,5 @@
 import { type Static, Type } from "typebox";
-import { QUESTION_LIMITS } from "./limits.ts";
+import { QUESTION_LIMITS } from "./constants.ts";
 import type { QuestionToolError } from "./types.ts";
 
 const MIN_OPTIONS = 2;

@@ -17,6 +17,18 @@ export const QUESTION_DESCRIPTION =
 
 export const QUESTION_PROMPT_SNIPPET = "Ask the user structured multiple-choice questions";
 
+export const QUESTION_LIMITS = {
+	questionChars: 400,
+	headerChars: 32,
+	optionLabelChars: 80,
+	optionDescriptionChars: 300,
+	previewChars: 8_000,
+	userTextChars: 4_000,
+	modelResultChars: 12_000,
+} as const;
+
+export const TRUNCATION_FOLLOW_UP = "Ask the user a focused follow-up question to clarify the omitted portion.";
+
 export const QUESTION_PROMPT_GUIDELINES = [
 	"Use `question` only for decisions you cannot resolve from the request, the code, or sensible defaults (direction, preference, permissions, destructive choices); for everything else choose a reasonable default and state it.",
 	"Batch related decisions into one `question` call (1-4 questions); ask no more than needed to unblock the next step.",

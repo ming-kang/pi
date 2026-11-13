@@ -3,9 +3,11 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../src/core/session-manager.ts";
-import { formatRunSummary } from "../src/extensions/run-summary/format.ts";
-import runSummary from "../src/extensions/run-summary/index.ts";
-import { RUN_SUMMARY_ENTRY_TYPE, readRunSummaryRecord } from "../src/extensions/run-summary/record.ts";
+import runSummary, {
+	formatRunSummary,
+	RUN_SUMMARY_ENTRY_TYPE,
+	readRunSummaryRecord,
+} from "../src/extensions/run-summary/index.ts";
 import { CustomEntryComponent } from "../src/modes/interactive/components/custom-entry.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";

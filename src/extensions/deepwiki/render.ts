@@ -12,7 +12,7 @@ import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/them
 import { extractContentPages, extractStructureSections } from "./client.ts";
 import { DEEPWIKI_LABEL } from "./constants.ts";
 import type { DeepWikiDetails } from "./execute.ts";
-import type { DeepWikiParams } from "./schema.ts";
+import { coerceRepoNameInput, type DeepWikiParams } from "./schema.ts";
 
 function truncateText(text: string, maxLength: number, options?: { word?: boolean }): string {
 	if (text.length <= maxLength) return text;
@@ -120,20 +120,11 @@ function repoLabel(repoName: DeepWikiParams["repoName"] | undefined): string {
 
 /** renderCall sees raw tool args; normalize JSON-array strings for display. */
 function repoLabelForCall(repoName: unknown): string {
-	if (Array.isArray(repoName)) return repoLabel(repoName as DeepWikiParams["repoName"]);
-	if (typeof repoName === "string") {
-		const trimmed = repoName.trim();
-		if (trimmed.startsWith("[")) {
-			try {
-				const parsed: unknown = JSON.parse(trimmed);
-				if (Array.isArray(parsed)) return repoLabel(parsed as string[]);
-			} catch {
-				/* fall through */
-			}
-		}
-		return repoLabel(repoName);
+	const coerced = coerceRepoNameInput(repoName);
+	if (Array.isArray(coerced)) {
+		return repoLabel(coerced.filter((item): item is string => typeof item === "string"));
 	}
-	return repoLabel(undefined);
+	return typeof coerced === "string" ? repoLabel(coerced) : repoLabel(undefined);
 }
 
 export function renderDeepWikiCall(args: DeepWikiParams, theme: Theme): Component {

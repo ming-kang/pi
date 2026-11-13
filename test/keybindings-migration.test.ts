@@ -3,7 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.ts";
-import { KeybindingsManager } from "../src/core/keybindings.ts";
+import { KeybindingsManager, migrateKeybindingsConfig } from "../src/core/keybindings.ts";
+import "../src/extensions/keybindings.ts";
 import { runMigrations } from "../src/migrations.ts";
 
 describe("keybindings migration", () => {
@@ -84,5 +85,22 @@ describe("keybindings migration", () => {
 		const effective = keybindings.getEffectiveConfig();
 		expect(effective["tui.select.confirm"]).toBe("enter");
 		expect(effective["app.interrupt"]).toBe("ctrl+x");
+	});
+
+	it("orders registered extension keybindings in definition order before unknown extras", () => {
+		const { config } = migrateKeybindingsConfig({
+			"z.unknown": "ctrl+u",
+			"a.unknown": "ctrl+y",
+			"app.tasks.kill": "k",
+			"app.btw.close": "escape",
+			"app.interrupt": "ctrl+c",
+		});
+		expect(Object.keys(config)).toEqual([
+			"app.interrupt",
+			"app.btw.close",
+			"app.tasks.kill",
+			"a.unknown",
+			"z.unknown",
+		]);
 	});
 });

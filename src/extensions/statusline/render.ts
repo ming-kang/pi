@@ -3,6 +3,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { ContextUsage } from "../../core/extensions/types.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
+import { formatTokens } from "../../utils/number.ts";
 import type { UsageSummary } from "./usage.ts";
 
 export interface StatuslineData {
@@ -45,21 +46,13 @@ function pathBasename(displayPath: string): string {
 	return normalized.startsWith("~/") ? `~/${base}` : base;
 }
 
-function formatTokenCount(count: number): string {
-	if (count < 1000) return `${count}`;
-	if (count < 10_000) return `${(count / 1000).toFixed(1)}k`;
-	if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
-	if (count < 10_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-	return `${Math.round(count / 1_000_000)}M`;
-}
-
 function joinSegments(segments: string[], separator: string): string {
 	return segments.filter(Boolean).join(separator);
 }
 
 function formatContextUsage(data: StatuslineData, theme: Theme): string {
 	const contextWindow = data.contextUsage?.contextWindow ?? data.model?.contextWindow;
-	const suffix = contextWindow ? `/${formatTokenCount(contextWindow)}` : "";
+	const suffix = contextWindow ? `/${formatTokens(contextWindow)}` : "";
 	const percent = data.contextUsage?.percent;
 	const label = `CTX ${percent == null ? "?" : percent.toFixed(1)}%${suffix}`;
 	if (percent != null && percent > CONTEXT_ERROR_PERCENT) return theme.fg("error", label);
@@ -70,11 +63,11 @@ function formatContextUsage(data: StatuslineData, theme: Theme): string {
 /** Format fields once, then offer full usage, without W, and without W/R. */
 function formatUsageCandidates(summary: UsageSummary, subscription: boolean, theme: Theme): string[] {
 	const tokens = [
-		summary.input > 0 ? `↑${formatTokenCount(summary.input)}` : "",
-		summary.output > 0 ? `↓${formatTokenCount(summary.output)}` : "",
+		summary.input > 0 ? `↑${formatTokens(summary.input)}` : "",
+		summary.output > 0 ? `↓${formatTokens(summary.output)}` : "",
 	];
-	const read = summary.cacheRead > 0 ? `R${formatTokenCount(summary.cacheRead)}` : "";
-	const write = summary.cacheWrite > 0 ? `W${formatTokenCount(summary.cacheWrite)}` : "";
+	const read = summary.cacheRead > 0 ? `R${formatTokens(summary.cacheRead)}` : "";
+	const write = summary.cacheWrite > 0 ? `W${formatTokens(summary.cacheWrite)}` : "";
 	const suffix = [
 		summary.latestCacheHitPercent === undefined ? "" : `CH${summary.latestCacheHitPercent.toFixed(1)}%`,
 		summary.cost > 0 ? `$${summary.cost.toFixed(3)}${subscription ? " (sub)" : ""}` : "",

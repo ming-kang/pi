@@ -91,4 +91,39 @@ describe("executeDeepWiki output bounds", () => {
 		expect(textOf(result)).toBe("Short answer");
 		expect(result.details.truncatedChars).toBeUndefined();
 	});
+
+	it("never splits UTF-16 surrogate pairs when bounding output", async () => {
+		const fullText = `a${"🙂".repeat(DEEPWIKI_OUTPUT_CHAR_BUDGET)}`;
+		callDeepWikiMock.mockResolvedValue(response(fullText, "ask_question"));
+		const result = await executeDeepWiki(
+			{ action: "question", repoName: "phase4/surrogates", question: "How?" },
+			undefined,
+			undefined,
+		);
+		const text = textOf(result);
+		expect(text.length).toBeLessThanOrEqual(DEEPWIKI_OUTPUT_CHAR_BUDGET);
+		expect(text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
+	});
+
+	it("avoids double truncation when long omitted page titles push the page notice past the budget", async () => {
+		const pages = Array.from({ length: 22 }, (_, index) => {
+			const title = `Page ${index + 1} ${"TitleSegment".repeat(12)}`;
+			const body = index === 0 ? "x".repeat(DEEPWIKI_OUTPUT_CHAR_BUDGET - 2_500) : "y".repeat(500);
+			return { title, chunk: `# Page: ${title}\n${body}` };
+		});
+		const fullText = pages.map((p) => p.chunk).join("\n");
+		callDeepWikiMock.mockResolvedValue({
+			...response(fullText, "read_wiki_contents"),
+			pageTitles: pages.map((p) => p.title),
+		});
+		const result = await executeDeepWiki(
+			{ action: "contents", repoName: "phase4/long-notice" },
+			undefined,
+			undefined,
+		);
+		const text = textOf(result);
+		expect(text.length).toBeLessThanOrEqual(DEEPWIKI_OUTPUT_CHAR_BUDGET);
+		expect(text).toContain("[DeepWiki contents truncated");
+		expect(text).not.toContain("[DeepWiki contents output truncated");
+	});
 });

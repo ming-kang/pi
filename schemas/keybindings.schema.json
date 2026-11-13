@@ -397,7 +397,11 @@
     },
     "app.provider.removeEntry": {
       "$ref": "#/$defs/KeybindingValue",
-      "description": "/provider: remove the selected compat or dictionary entry"
+      "description": "/provider: remove the selected model, compat entry, or dictionary entry"
+    },
+    "app.provider.checkAll": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "/provider: check or uncheck every listed model in Fetch models"
     },
     "app.tasks.detach": {
       "$ref": "#/$defs/KeybindingValue",

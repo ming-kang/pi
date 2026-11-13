@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "../../core/extensions/types.ts";
 import { sliceHead, sliceTail } from "../../core/tools/truncate.ts";
-import { QUESTION_LIMITS, TRUNCATION_FOLLOW_UP } from "./limits.ts";
+import { QUESTION_LIMITS, TRUNCATION_FOLLOW_UP } from "./constants.ts";
 import type { QuestionAnswer, QuestionToolDetails, QuestionToolError } from "./types.ts";
 
 const DECLINE_MESSAGE = "User declined to answer the questions.";

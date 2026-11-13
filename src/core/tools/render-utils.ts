@@ -138,6 +138,16 @@ export function startToolTimer(context: ToolRenderContext<ToolTimerState>): void
 	}
 }
 
+/** Stop the row's clock without formatting a duration line. */
+export function stopToolTimer(context: ToolRenderContext<ToolTimerState>): void {
+	const state = context.state;
+	state.endedAt ??= Date.now();
+	if (state.interval) {
+		clearInterval(state.interval);
+		state.interval = undefined;
+	}
+}
+
 /**
  * The row's timing line, from `renderResult`: `Elapsed 4.2s` while the result is partial, redrawn
  * every second, and `Took 4.2s` once it is final. Undefined when the row has no start time and no
@@ -152,11 +162,7 @@ export function toolTimerText(context: ToolRenderContext<ToolTimerState>, isPart
 		context.onDispose(() => clearInterval(interval));
 	}
 	if (!isPartial || context.isError) {
-		state.endedAt ??= Date.now();
-		if (state.interval) {
-			clearInterval(state.interval);
-			state.interval = undefined;
-		}
+		stopToolTimer(context);
 	}
 	// A final result's recorded duration wins: it is monotonic and survives reloads. The renderer's own clock is the
 	// fallback for live progress and for results stored without one.

@@ -1,7 +1,7 @@
 import { Text } from "@earendil-works/pi-tui";
 import { keyLabel } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
-import { QUESTION_LIMITS } from "./limits.ts";
+import { QUESTION_LIMITS } from "./constants.ts";
 import type { AnswerNote, QuestionOutcome } from "./types.ts";
 
 type RenderOptions = { expanded: boolean };

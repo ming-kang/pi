@@ -53,14 +53,26 @@ export class AgentSettingsHost extends Container implements Focusable {
 			// A torn-down dialog never answers, like any other disposed custom UI.
 			if (this.disposed) return;
 			let answered = false;
-			const page = create(this.tui, this.theme, this.keys, (result) => {
-				if (answered || this.disposed) return;
-				answered = true;
-				this.accepting = false;
-				resolve(result);
-			});
-			this.replacePage(page);
 			this.accepting = true;
+			let page: AgentSettingsPage;
+			try {
+				page = create(this.tui, this.theme, this.keys, (result) => {
+					if (answered || this.disposed) return;
+					answered = true;
+					this.accepting = false;
+					resolve(result);
+				});
+			} catch (error) {
+				this.accepting = false;
+				throw error;
+			}
+			if (this.disposed) {
+				this.accepting = false;
+				page.dispose?.();
+				return;
+			}
+			this.replacePage(page);
+			if (answered) this.accepting = false;
 		});
 	}
 

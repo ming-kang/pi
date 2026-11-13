@@ -1,10 +1,26 @@
 import { type Component, Container, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AgentToolResult, ToolDefinition, ToolRenderContext } from "../../core/extensions/types.ts";
-import { getTextOutput, startToolTimer, toolTimerText } from "../../core/tools/render-utils.ts";
+import { getTextOutput, startToolTimer, stopToolTimer, toolTimerText } from "../../core/tools/render-utils.ts";
+import { taskActivityLines } from "../../modes/interactive/components/task-activity-list.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { clipText, targetOf } from "./activity.ts";
-import { activityLines } from "./activity-lines.ts";
-import type { AgentToolDetails } from "./types.ts";
+import type { AgentActivity, AgentToolDetails } from "./types.ts";
+
+/** Transcript details retain bounded arguments for older snapshots; derive their target before rendering. */
+export function activityLines(
+	activities: readonly AgentActivity[],
+	width: number,
+	theme: Theme,
+	now = Date.now(),
+): string[] {
+	return taskActivityLines(
+		activities.map((activity) => ({ ...activity, target: targetOf(activity) })),
+		width,
+		theme,
+		0,
+		now,
+	);
+}
 
 const EXPANDED_ACTIVITIES = 5;
 
@@ -82,7 +98,7 @@ function statusParts(
 ): StatusParts {
 	const status = details?.state;
 	if (status === "background") {
-		toolTimerText(context, false);
+		stopToolTimer(context);
 		return { diagnostic: "Background", tasks: "/tasks" };
 	}
 	const timer = toolTimerText(context, context.isPartial);
@@ -102,7 +118,7 @@ function statusParts(
 export const agentRenderers: AgentRenderer = {
 	renderCall(args, theme, context) {
 		startToolTimer(context);
-		const input = args as { description?: unknown; prompt?: unknown };
+		const input = args && typeof args === "object" ? (args as { description?: unknown; prompt?: unknown }) : {};
 		const title =
 			typeof input.description === "string" && input.description.trim()
 				? input.description
@@ -116,7 +132,7 @@ export const agentRenderers: AgentRenderer = {
 		return component;
 	},
 	renderResult(result, options, theme, context) {
-		const component = (context.lastComponent as Container | undefined) ?? new Container();
+		const component = context.lastComponent instanceof Container ? context.lastComponent : new Container();
 		component.clear();
 		const details = detailsOf(result);
 		// Only live progress carries activities; settled rows stay one line.

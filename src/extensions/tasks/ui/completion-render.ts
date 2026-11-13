@@ -86,21 +86,24 @@ class CompletionNotice implements Component {
 	private readonly view: CompletionView;
 	private readonly options: MessageRenderOptions;
 	private readonly theme: Theme;
+	private readonly chrome: FramedComponent;
 	constructor(view: CompletionView, options: MessageRenderOptions, theme: Theme) {
 		this.view = view;
 		this.options = options;
 		this.theme = theme;
-	}
-	invalidate(): void {}
-	render(width: number): string[] {
-		if (width < 1) return [];
-		const chrome = new FramedComponent(
+		this.chrome = new FramedComponent(
 			{ render: (contentWidth) => this.renderContent(contentWidth), invalidate() {} },
 			"header",
 			() => (this.view.kind === "task" ? statusView(this.view.status).color : "muted"),
 		);
+	}
+	invalidate(): void {
+		this.chrome.invalidate();
+	}
+	render(width: number): string[] {
+		if (width < 1) return [];
 		// The gutter reserves its own cells; clip defensively for one-cell terminals.
-		return chrome.render(width).map((line) => truncateToWidth(line, width, ""));
+		return this.chrome.render(width).map((line) => truncateToWidth(line, width, ""));
 	}
 	private renderContent(width: number): string[] {
 		// The chrome clamps to ≥1 already; keep the padding arithmetic safe regardless.

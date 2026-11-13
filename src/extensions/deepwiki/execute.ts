@@ -1,7 +1,8 @@
 import type { AgentToolResult, AgentToolUpdateCallback } from "../../core/extensions/types.ts";
+import { sliceHead } from "../../core/tools/truncate.ts";
 
 import { callDeepWiki, type DeepWikiResponse } from "./client.ts";
-import { extractPage, truncateContentsByPages } from "./contents.ts";
+import { type ContentsTruncation, extractPage, truncateContentsByPages } from "./contents.ts";
 import { type DeepWikiAction, type DeepWikiParams, normalizeDeepWikiParams } from "./schema.ts";
 
 export const DEEPWIKI_OUTPUT_CHAR_BUDGET = 120_000;
@@ -51,8 +52,23 @@ function boundDeepWikiOutput(
 	if (text.length <= DEEPWIKI_OUTPUT_CHAR_BUDGET) return { text, truncated: false, truncatedChars: 0 };
 	const notice = `\n\n[DeepWiki ${action} output truncated to ${DEEPWIKI_OUTPUT_CHAR_BUDGET} characters. Use a focused page or question request for the omitted content.]`;
 	const keepLength = Math.max(0, DEEPWIKI_OUTPUT_CHAR_BUDGET - notice.length);
-	const kept = text.slice(0, keepLength).trimEnd();
+	const kept = sliceHead(text, keepLength).trimEnd();
 	return { text: `${kept}${notice}`, truncated: true, truncatedChars: text.length - kept.length };
+}
+
+/** Shrink the page-body budget if long omitted titles push the page-aware notice past the hard limit. */
+function fitContentsToBudget(text: string): ContentsTruncation {
+	let budget = CONTENTS_BODY_CHAR_BUDGET;
+	let truncation = truncateContentsByPages(text, budget);
+	while (truncation.truncated && truncation.text.length > DEEPWIKI_OUTPUT_CHAR_BUDGET && budget > 0) {
+		const keptChars = text.length - truncation.truncatedChars;
+		const noticeChars = truncation.text.length - keptChars;
+		const nextBudget = Math.min(budget - 1, Math.max(0, DEEPWIKI_OUTPUT_CHAR_BUDGET - noticeChars));
+		if (nextBudget >= budget) break;
+		budget = nextBudget;
+		truncation = truncateContentsByPages(text, budget);
+	}
+	return truncation;
 }
 
 export async function executeDeepWiki(
@@ -109,13 +125,13 @@ export async function executeDeepWiki(
 					`page "${normalizedParams.page}" not found in ${repoLabel} wiki (${lookup.titles.length} pages).\nAvailable pages: ${list}${more}`,
 				);
 			}
-			const truncation = truncateContentsByPages(lookup.found.text, CONTENTS_BODY_CHAR_BUDGET);
+			const truncation = fitContentsToBudget(lookup.found.text);
 			resultText = truncation.text;
 			extra.requestedPage = lookup.found.title;
 			extra.pageIndex = lookup.found.index;
 			if (truncation.truncated) extra.truncatedChars = truncation.truncatedChars;
 		} else {
-			const truncation = truncateContentsByPages(response.text, CONTENTS_BODY_CHAR_BUDGET);
+			const truncation = fitContentsToBudget(response.text);
 			if (truncation.truncated) {
 				resultText = truncation.text;
 				extra.shownPages = truncation.shownPages;

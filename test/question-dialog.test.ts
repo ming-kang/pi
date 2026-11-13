@@ -1,8 +1,8 @@
 import { setKeybindings, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
+import { QUESTION_LIMITS } from "../src/extensions/question/constants.ts";
 import { createQuestionDialog } from "../src/extensions/question/dialog.ts";
-import { QUESTION_LIMITS } from "../src/extensions/question/limits.ts";
 import type { DialogResult, Question } from "../src/extensions/question/types.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -530,10 +530,14 @@ describe("question dialog", () => {
 		expect(results).toHaveLength(1);
 	});
 
-	it("resolves immediately when created with an already-aborted signal", () => {
+	it("defers resolution to a microtask and ignores input when created with an already-aborted signal", async () => {
 		const controller = new AbortController();
 		controller.abort();
-		const { results } = createDialog([question()], controller.signal);
+		const { component, results } = createDialog([question()], controller.signal);
+		expect(results).toHaveLength(0);
+		component.handleInput(ENTER);
+		expect(results).toHaveLength(0);
+		await Promise.resolve();
 		expect(results).toHaveLength(1);
 		expect(results[0].outcome).toBe("cancelled");
 		expect(results[0].answers).toHaveLength(0);

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionUIContext } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { openAgentSettings, readAgentSettings, resolveAgentConfiguration } from "../src/extensions/agent/settings.ts";
+import { AgentSettingsHost } from "../src/extensions/agent/settings-host.ts";
 import { initTheme, type Theme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 import { createFakeTui } from "./suite/fake-tui.ts";
@@ -463,5 +464,19 @@ describe("Agent settings", () => {
 		await ctx.setExtensionSettings("agent", { model: "faux/main", thinking: "high" });
 		await openAgentSettings(ctx);
 		expect(notify).toHaveBeenCalledWith("Agent model: faux/main · Effort: high", "info");
+	});
+
+	it("does not forward input to a page whose factory called done synchronously", async () => {
+		const tui = createFakeTui();
+		const host = new AgentSettingsHost(tui, theme, new KeybindingsManager());
+		const handleInput = vi.fn();
+		const result = await host.show<string>((_t, _th, _k, done) => {
+			done("immediate");
+			return { render: () => ["done"], invalidate() {}, handleInput };
+		});
+		expect(result).toBe("immediate");
+		host.handleInput("\r");
+		expect(handleInput).not.toHaveBeenCalled();
+		host.dispose();
 	});
 });

@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { keyLabel } from "../../modes/interactive/components/keybinding-hints.ts";
 import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
+import { formatTokens } from "../../utils/number.ts";
 import type { BtwConversationState, BtwTurn } from "./agent.ts";
 
 export type BtwPanelState<Conversation extends BtwConversationState = Readonly<BtwConversationState>> =
@@ -22,14 +23,6 @@ export type BtwPanelState<Conversation extends BtwConversationState = Readonly<B
 			usesSubscription: boolean;
 			conversation: Conversation;
 	  };
-
-function tokens(value: number): string {
-	if (value < 1000) return String(value);
-	if (value < 10_000) return `${(value / 1000).toFixed(1)}k`;
-	if (value < 1_000_000) return `${Math.round(value / 1000)}k`;
-	if (value < 10_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-	return `${Math.round(value / 1_000_000)}M`;
-}
 
 /** A bounded, scrollable widget above the normal editor. It never takes keyboard focus. */
 export class BtwPanel implements Component {
@@ -200,10 +193,10 @@ export class BtwPanel implements Component {
 			const { conversation } = state;
 			const { usage } = conversation;
 			const stats: string[] = [];
-			if (usage.input > 0) stats.push(`↑${tokens(usage.input)}`);
-			if (usage.output > 0) stats.push(`↓${tokens(usage.output)}`);
-			if (usage.cacheRead > 0) stats.push(`R${tokens(usage.cacheRead)}`);
-			if (usage.cacheWrite > 0) stats.push(`W${tokens(usage.cacheWrite)}`);
+			if (usage.input > 0) stats.push(`↑${formatTokens(usage.input)}`);
+			if (usage.output > 0) stats.push(`↓${formatTokens(usage.output)}`);
+			if (usage.cacheRead > 0) stats.push(`R${formatTokens(usage.cacheRead)}`);
+			if (usage.cacheWrite > 0) stats.push(`W${formatTokens(usage.cacheWrite)}`);
 			if (conversation.latestCacheHitPercent !== undefined)
 				stats.push(`CH${conversation.latestCacheHitPercent.toFixed(1)}%`);
 			if (usage.cost.total > 0)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { QUESTION_LIMITS } from "../src/extensions/question/limits.ts";
+import { QUESTION_LIMITS } from "../src/extensions/question/constants.ts";
 import { cancelResult, clarificationResult, errorResult, successResult } from "../src/extensions/question/results.ts";
 import type { QuestionAnswer } from "../src/extensions/question/types.ts";
 

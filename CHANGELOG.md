@@ -22,6 +22,12 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 ### Fixed
 
 - `/provider` confirmation questions wrap instead of being cut off, and a note beside a field no longer turns into `...` while the field is edited.
+- `/provider` validates JSON compat fields against the active API's schema, preserves `/* ... */` block comments in `models.json`, writes backups atomically, and omits pending-deleted providers from listings.
+- `cached-compaction` preserves prompt/tools on snapshots without a leading system message and avoids appending stale cards when another compaction extension overrides the summary.
+- `tool-presentation` no longer shadows MCP fallback renderers for disconnected servers, and clearing pending tools no longer prematurely disposes rows still mounted in the transcript.
+- `/config` preserves `skillInvocationOverrides` and `autoload: false` when toggling package resources and matches package overrides across resource patterns.
+- `search` bounds HTTP/protobuf response and workspace file reads, repairs unquoted planner keys without altering string literals, and recovers from transient `rg` indexing failures.
+- `SessionManager` excludes `.tasks-late.jsonl` sidecars from session discovery, `AgentSession.setModel()` schedules queued background completions, `SettingsManager` handles prototype-named extension namespaces safely, `question` defers pre-aborted dialog resolution, and `schemas/keybindings.schema.json` includes current `/provider` bindings.
 
 ## [1.5.4] - 2026-11-10
 

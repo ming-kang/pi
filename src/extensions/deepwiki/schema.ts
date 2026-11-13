@@ -92,7 +92,7 @@ function readPageRef(record: Record<string, unknown>): string | number | undefin
 	return undefined;
 }
 
-function coerceRepoNameInput(value: unknown): unknown {
+export function coerceRepoNameInput(value: unknown): unknown {
 	if (Array.isArray(value)) return value;
 	if (typeof value !== "string") return value;
 	const trimmed = value.trim();

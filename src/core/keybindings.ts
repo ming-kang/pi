@@ -303,7 +303,7 @@ export function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): {
 
 function orderKeybindingsConfig(config: Record<string, unknown>): Record<string, unknown> {
 	const ordered: Record<string, unknown> = {};
-	for (const keybinding of Object.keys(KEYBINDINGS)) {
+	for (const keybinding of Object.keys({ ...KEYBINDINGS, ...getRegisteredKeybindings() })) {
 		if (Object.hasOwn(config, keybinding)) {
 			ordered[keybinding] = config[keybinding];
 		}

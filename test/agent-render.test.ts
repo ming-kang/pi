@@ -1,6 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolRenderContext } from "../src/core/extensions/types.ts";
 import { activityTarget } from "../src/extensions/agent/activity.ts";
@@ -219,6 +219,22 @@ describe("Agent transcript renderer", () => {
 			expect(lines).toHaveLength(1);
 			expect(visibleWidth(lines[0]!)).toBeLessThanOrEqual(width);
 		}
+	});
+
+	it("handles non-object call args and non-Container lastComponent safely", () => {
+		const ctx = context(result("running"), {
+			args: null as unknown as Record<string, unknown>,
+			isPartial: true,
+			expanded: true,
+			lastComponent: new Text("stale", 0, 0),
+		});
+		expect(stripVTControlCharacters(agentRenderers.renderCall(ctx.args, theme, ctx).render(80).join("\n"))).toContain(
+			"Delegated task",
+		);
+		const body = agentRenderers.renderResult(ctx.result!, ctx, theme, ctx);
+		const rendered = stripVTControlCharacters(body.render(80).join("\n"));
+		expect(rendered).toContain("src/2.ts");
+		expect(rendered).toContain("src/6.ts");
 	});
 
 	describe("clock lifecycle", () => {
