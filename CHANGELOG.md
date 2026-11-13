@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-11-13
+
 ### Added
 
 - `statusline` now displays live and settled decode-only `TPS <n>` beside `CTX` for the latest main-session assistant response (excluding TTFT and tool execution time), colored across five 50 tok/s tiers (`thinkingLow` through `thinkingMax`) and cleared on model switches.
