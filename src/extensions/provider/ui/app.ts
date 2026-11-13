@@ -78,6 +78,9 @@ export function createProviderApp(
 		tui.requestRender();
 	};
 
+	/** The provider whose editor was last open; the list returns to its row. */
+	let lastOpened: string | undefined;
+
 	function showList(): void {
 		if (session.signal.aborted) return;
 		// Dispose first: it drops an untouched built-in's draft view, which would otherwise list it as configured.
@@ -94,6 +97,7 @@ export function createProviderApp(
 				},
 				store,
 				listContext(),
+				lastOpened,
 			),
 		);
 	}
@@ -118,6 +122,7 @@ export function createProviderApp(
 			// A built-in provider opens without an entry; untouched views are pruned on save.
 			store.ensureProviderView(providerId);
 		}
+		lastOpened = providerId;
 		activeEditor = new ProviderEditorScreen(tui, theme, keybindings, showList, {
 			store,
 			refresher,

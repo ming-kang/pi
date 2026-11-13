@@ -7,11 +7,32 @@
  * old value, Esc restores.
  */
 
-import { decodeKittyPrintable, Input, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+	decodeKittyPrintable,
+	Input,
+	type TUI,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import { getPath } from "../json-fields.ts";
 
 export const CURSOR = "›";
+
+const BODY_ROWS_MIN = 14;
+const BODY_ROWS_MAX = 18;
+/** Terminal lines left to the frame's own borders, title, and footer, and to Pi's footer and transcript. */
+const ROWS_OUTSIDE_BODY = 16;
+
+/**
+ * Body height shared by the provider list and the editor, so opening a
+ * provider never resizes the dialog. A tall terminal gets a taller body, where
+ * a model's whole page fits; a short one keeps the compact height.
+ */
+export function frameBodyRows(tui: TUI): number {
+	return Math.max(BODY_ROWS_MIN, Math.min(BODY_ROWS_MAX, tui.terminal.rows - ROWS_OUTSIDE_BODY));
+}
 
 const PASTE_START = "\x1b[200~";
 const PASTE_END = "\x1b[201~";
@@ -110,8 +131,9 @@ export function renderKeyValueLine(theme: Theme, opts: KeyValueLineOptions): str
 	const keyColor = lit ? "accent" : "text";
 	const note = opts.note ? theme.fg("dim", ` ${opts.note}`) : "";
 	if (opts.editing) {
+		// The input fills the row; a note after it would be pushed past the edge and cut to an ellipsis.
 		const body = opts.editing.renderLine(Math.max(1, opts.width - visibleWidth(marker) - visibleWidth(keyPrefix)));
-		return truncateToWidth(marker + theme.fg(keyColor, keyPrefix) + theme.fg(keyColor, body) + note, opts.width);
+		return truncateToWidth(marker + theme.fg(keyColor, keyPrefix) + theme.fg(keyColor, body), opts.width);
 	}
 	const valueColor = opts.unset ? "dim" : keyColor;
 	const line = marker + theme.fg(keyColor, keyPrefix) + theme.fg(valueColor, opts.valueText ?? "") + note;
@@ -155,6 +177,21 @@ export function renderPlainLine(theme: Theme, text: string, opts: PlainLineOptio
 /** Dim informational line without a cursor slot. */
 export function renderInfoLine(theme: Theme, text: string, width: number): string {
 	return truncateToWidth(theme.fg("dim", text), width);
+}
+
+/** A pane's filter input, labeled the same way on every searchable page. */
+export function renderSearchLine(theme: Theme, search: ValueEditor, paneFocused: boolean, width: number): string {
+	return renderKeyValueLine(theme, { keyLabel: "Search", active: false, paneFocused, editing: search, width });
+}
+
+/** Prose wrapped to the pane instead of cut: confirm questions and descriptions must stay readable whole. */
+export function renderWrappedLines(
+	theme: Theme,
+	text: string,
+	width: number,
+	color: "dim" | "warning" | "text" = "dim",
+): string[] {
+	return wrapTextWithAnsi(text, Math.max(10, width)).map((line) => theme.fg(color, line));
 }
 
 const MAX_ERROR_LINES = 4;

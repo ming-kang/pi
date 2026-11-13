@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { CredentialSummary } from "../src/core/credential-summary.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type { AuthStatus } from "../src/core/provider-composer.ts";
+import { connectionNote } from "../src/extensions/provider/base-url.ts";
 import { compatFieldsForApi } from "../src/extensions/provider/compat-fields.ts";
 import { ProviderEdits } from "../src/extensions/provider/editing.ts";
 import { RefreshCoordinator } from "../src/extensions/provider/refresh.ts";
@@ -89,17 +90,23 @@ function listContext(configured: string[] = [], auth: Record<string, string> = {
 	return { configured, authNote: (id: string) => auth[id] };
 }
 
-function editor(providerId = "cpa", runtime: ReturnType<typeof runtimeStub> = runtimeStub()) {
+function editor(
+	providerId = "cpa",
+	runtime: ReturnType<typeof runtimeStub> = runtimeStub(),
+	currentModel?: { provider: string; id: string },
+) {
 	const done = vi.fn();
+	const notify = vi.fn();
 	const screen = new ProviderEditorScreen(tui, theme, keys, done, {
 		store,
 		providerId,
 		runtime,
 		refresher: new RefreshCoordinator(runtime),
-		notify: vi.fn(),
+		currentModel,
+		notify,
 	});
 	screen.focused = true;
-	return { screen, done };
+	return { screen, done, notify };
 }
 
 function hostFixture(): { host: EditorHost; model: ModelHandle } {
@@ -122,7 +129,7 @@ function hostFixture(): { host: EditorHost; model: ModelHandle } {
 		runFetch: async () => ({ ok: true, models: [{ id: "new-model" }], truncated: false }),
 		importModels: async () => undefined,
 		confirm: vi.fn(),
-		onModelRemoved: vi.fn(),
+		removeModel: vi.fn(),
 		openOverride: vi.fn(),
 	};
 	const read = () => store.getModel("cpa", "k3") ?? {};
@@ -136,6 +143,9 @@ function hostFixture(): { host: EditorHost; model: ModelHandle } {
 	};
 	return { host, model };
 }
+
+/** Frame height on the 40-row fixture terminal: an 18-row body inside six lines of borders, title, and footer. */
+const FRAME = 24;
 
 function render(component: { render(width: number): string[] }): string {
 	return stripAnsi(component.render(120).join("\n"));
@@ -215,6 +225,17 @@ describe("provider modal lifecycle", () => {
 		expect(done).toHaveBeenCalledOnce();
 	});
 
+	test("leaving an editor returns the list to that provider's row", () => {
+		store.ensureProviderView("aaa");
+		store.setProviderField("aaa", ["baseUrl"], "https://aaa.example/v1");
+		const { app } = appFixture(); // opens cpa directly
+		app.handleInput("\x1b");
+		const list = render(app);
+		expect(list).toContain("  aaa");
+		expect(list).toContain("› cpa");
+		app.dispose();
+	});
+
 	test("closing after Fetch still updates the active model metadata", async () => {
 		vi.stubGlobal(
 			"fetch",
@@ -271,7 +292,7 @@ describe("provider editor interactions", () => {
 		pane.handleInput("\x0e");
 		pane.handleInput("\x19");
 		await store.flush();
-		expect(store.getProvider("cpa")?.api).toBe("anthropic-messages");
+		expect(store.getProvider("cpa")?.api).toBe("google-generative-ai");
 		expect(host.popPane).toHaveBeenCalledOnce();
 	});
 	test("an invalid cost edit can be cancelled without changing the value or leaving editing focus behind", async () => {
@@ -392,6 +413,64 @@ describe("provider editor interactions", () => {
 		expect(store.pendingCount).toBe(0);
 	});
 
+	test("a built-in preview sets apart the fields the model already has", async () => {
+		store.setModelField("cpa", "k3", ["name"], "Reference");
+		store.setModelField("cpa", "k3", ["contextWindow"], 64000);
+		await store.flush();
+		const { host, model } = hostFixture();
+		const reference: Model<"openai-completions"> = {
+			id: "reference",
+			name: "Reference",
+			provider: "reference",
+			api: "openai-completions",
+			baseUrl: "https://example.test",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 1000,
+		};
+		const pane = new BuiltinPreviewPane(host, model, { providerId: "reference", model: reference });
+		pane.setFocused(true);
+		const page = render(pane);
+		// No checkbox and no "x → x" for a value that would not change; the cursor starts on a row that can.
+		expect(page).toContain("      name: Reference · already set");
+		expect(page).toContain("› [ ] reasoning: false (default) → false");
+		expect(page).toContain("  [ ] contextWindow: 64000 → 128000");
+		expect(page).toContain("Apply 2 fields"); // input and maxTokens are unset, so pre-checked
+		pane.handleInput("\x1b[A");
+		pane.handleInput(" "); // Space on the already-set name checks nothing
+		expect(render(pane)).toContain("Apply 2 fields");
+	});
+
+	test("the remove key deletes a model from the list behind a confirm that returns to the list", async () => {
+		store.addModel("cpa", { id: "m2" });
+		await store.flush();
+		const { screen, notify } = editor("cpa", runtimeStub(), { provider: "cpa", id: "k3" });
+		screen.handleInput("\x1b[B");
+		screen.handleInput("\x1b[B"); // k3, the session's model
+		expect(render(screen)).toContain("› k3 · in use");
+		screen.handleInput("\x18"); // ctrl+x
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("current model cannot be deleted"), "error");
+		expect(render(screen)).not.toContain("Confirm");
+
+		screen.handleInput("\x1b[B"); // m2
+		expect(render(screen)).toContain("ctrl+x delete");
+		screen.handleInput("\x18");
+		expect(render(screen)).toContain('Delete model "m2" from cpa?');
+		screen.handleInput("\x1b"); // cancel: the keyboard goes back to the list it came from
+		expect(render(screen)).toContain("› m2");
+		expect(store.getModel("cpa", "m2")).toBeDefined();
+
+		screen.handleInput("\x18");
+		screen.handleInput("\x1b[A"); // Delete model
+		screen.handleInput("\r");
+		await store.flush();
+		expect(store.getModel("cpa", "m2")).toBeUndefined();
+		expect(render(screen)).toContain("› k3"); // stays among the models rather than dropping into MANAGE
+		screen.dispose();
+	});
+
 	test("Delete Provider gives the confirmation keyboard focus", async () => {
 		const { screen, done } = editor();
 		screen.handleInput("\x1b[A");
@@ -424,8 +503,7 @@ describe("provider editor interactions", () => {
 		screen.handleInput("\x1b[B");
 		screen.handleInput("\x1b[B"); // API Type row
 		screen.handleInput("\r"); // open the radio sub-page
-		screen.handleInput("\x1b[A");
-		screen.handleInput("\x1b[A"); // not set
+		for (let step = 0; step < 3; step++) screen.handleInput("\x1b[A"); // not set
 		screen.handleInput("\r");
 		await store.flush();
 		expect(store.getProvider("cpa")?.api).toBe("openai-completions");
@@ -444,19 +522,26 @@ describe("provider editor interactions", () => {
 		expect(page).toContain("baseUrl: https://old.example/v1");
 		expect(page).toContain("apiKey: not set");
 		expect(page).toContain("API Type: openai-completions");
-		expect(page).toContain("version path"); // openai-style baseUrl hint
+		expect(page).toContain("Requests go to https://old.example/v1/chat/completions");
 		screen.handleInput("\x1b[B");
 		screen.handleInput("\x1b[B"); // API Type row
 		screen.handleInput("\r"); // push the radio sub-page
-		expect(render(screen)).toContain("Authentication / API Type");
-		expect(render(screen)).toContain("● openai-completions");
-		screen.handleInput("\x1b[B"); // anthropic-messages
+		const picker = render(screen);
+		expect(picker).toContain("Authentication / API Type");
+		expect(picker).toContain("● openai-completions · OpenAI /v1/chat/completions");
+		// The widely used protocols lead the list, and none is called the usual choice.
+		expect(picker.indexOf("anthropic-messages")).toBeLessThan(picker.indexOf("openai-completions"));
+		expect(picker.indexOf("openai-responses")).toBeLessThan(picker.indexOf("openai-completions"));
+		screen.handleInput("\x1b[A");
+		screen.handleInput("\x1b[A"); // anthropic-messages
 		screen.handleInput("\r"); // select applies and returns to Authentication
 		await store.flush();
 		expect(store.getProvider("cpa")?.api).toBe("anthropic-messages");
 		const after = render(screen);
 		expect(after).toContain("API Type: anthropic-messages");
-		expect(after).toContain("bare origin"); // the baseUrl hint follows the API
+		// The note follows the API: the Anthropic client appends /v1 itself, so this baseUrl now doubles it.
+		expect(after).toContain("https://old.example/v1/v1/messages");
+		expect(after).toContain("/v1 is doubled");
 		screen.dispose();
 	});
 
@@ -467,8 +552,7 @@ describe("provider editor interactions", () => {
 		const { host } = hostFixture();
 		const pane = createProviderApiPane(host);
 		pane.setFocused(true);
-		pane.handleInput("\x1b[A");
-		pane.handleInput("\x1b[A"); // not set
+		for (let step = 0; step < 3; step++) pane.handleInput("\x1b[A"); // not set
 		pane.handleInput("\r");
 		expect(render(pane)).toContain('"m2"');
 		expect(store.getProvider("cpa")?.api).toBe("openai-completions");
@@ -497,7 +581,7 @@ describe("provider editor interactions", () => {
 		const pane = createModelApiPane(host, model);
 		pane.setFocused(true);
 		expect(render(pane)).toContain("provider: openai-completions");
-		for (let index = 0; index < 3; index++) pane.handleInput("\x1b[B"); // anthropic-messages
+		pane.handleInput("\x1b[B"); // anthropic-messages
 		pane.handleInput("\r");
 		await store.flush();
 		expect(store.getModel("cpa", "k3")?.api).toBe("anthropic-messages");
@@ -520,8 +604,10 @@ describe("provider editor interactions", () => {
 		pane.handleInput("\r");
 		const picker = vi.mocked(host.pushPane).mock.calls[0]![0];
 		picker.handleInput("\r");
-		expect(render(pane)).toContain("supportsStore:");
-		expect(render(pane)).toContain("false");
+		// The key heads its choices with what it does; one marker, on the choice.
+		expect(render(pane)).toContain("supportsStore · Accepts the `store` parameter");
+		expect(render(pane)).toContain("› ○ true");
+		expect(render(pane)).toContain("  ○ false");
 		expect(store.getModel("cpa", "k3")?.compat).toBeUndefined();
 		pane.handleInput("\x1b[B");
 		pane.handleInput("\r");
@@ -649,6 +735,29 @@ describe("provider editor interactions", () => {
 		pane.dispose();
 	});
 
+	test("the check-all key checks every listed model that can be added, then clears them", async () => {
+		const { host } = hostFixture();
+		host.runFetch = async () => ({
+			ok: true,
+			models: [{ id: "k3" }, { id: "claude-a" }, { id: "claude-b" }, { id: "gpt-x" }],
+			truncated: false,
+		});
+		const pane = new FetchModelsPane(host);
+		pane.setFocused(true);
+		pane.start();
+		await vi.waitFor(() => expect(render(pane)).toContain("4 shown"));
+		pane.handleInput("claude"); // check-all follows the filter
+		pane.handleInput("\x01"); // ctrl+a
+		expect(render(pane)).toContain("2 selected · 2 shown");
+		pane.handleInput("\x15"); // ctrl+u clears the filter
+		pane.handleInput("\x01"); // k3 is already added and stays unchecked
+		const all = render(pane);
+		expect(all).toContain("3 selected · 4 shown · 1 already added");
+		expect(all).toContain("k3 · added");
+		pane.handleInput("\x01");
+		expect(render(pane)).toContain("0 selected");
+	});
+
 	test("Enter on an already-added fetch row is a no-op, not a discard", async () => {
 		const { host } = hostFixture();
 		host.runFetch = async () => ({ ok: true, models: [{ id: "k3" }], truncated: false });
@@ -700,6 +809,26 @@ describe("provider editor interactions", () => {
 	});
 });
 
+describe("provider connection note", () => {
+	test("shows where requests go and flags only a doubled /v1", () => {
+		expect(connectionNote("anthropic-messages", "https://gw.example")).toEqual({
+			text: "Requests go to https://gw.example/v1/messages",
+		});
+		expect(connectionNote("anthropic-messages", "https://gw.example/v1/")).toEqual({
+			text: "Requests go to https://gw.example/v1/v1/messages — /v1 is doubled; remove it from baseUrl.",
+			warning: true,
+		});
+		// DeepSeek and GitHub Copilot serve Chat Completions without a version path, so that shape is not judged.
+		expect(connectionNote("openai-completions", "https://api.deepseek.com")).toEqual({
+			text: "Requests go to https://api.deepseek.com/chat/completions",
+		});
+		// No URL to show yet, or one the suffix cannot simply follow: the generic shape hint.
+		expect(connectionNote("openai-responses", undefined)?.text).toContain("version path");
+		expect(connectionNote("openai-responses", "https://gw.example/v1?api-version=2")?.text).toContain("version path");
+		expect(connectionNote("pi-messages", "https://gw.example")).toBeUndefined();
+	});
+});
+
 describe("provider fixed layout", () => {
 	test("windowLines pads short content and clips around the cursor with an indicator", () => {
 		expect(windowLines(theme, ["a", "b"], 4)).toEqual(["a", "b", "", ""]);
@@ -713,14 +842,25 @@ describe("provider fixed layout", () => {
 		expect(pinned).toEqual(["row 0", "row 7", "row 8", "  (8/8)", "row 9"]);
 	});
 
+	test("a short terminal keeps the compact frame, in the list and the editor alike", () => {
+		tui.stop();
+		tui = new TuiMainScreen(new VirtualTerminal(120, 24));
+		vi.spyOn(tui, "requestRender").mockImplementation(() => {});
+		const list = new ProviderListScreen(tui, theme, keys, vi.fn(), store, listContext());
+		expect(list.render(120).length).toBe(20);
+		const { screen } = editor();
+		expect(screen.render(120).length).toBe(20);
+		screen.dispose();
+	});
+
 	test("the left column scrolls with a position indicator", () => {
 		for (let index = 0; index < 14; index++) store.addModel("cpa", { id: `m${index}` });
 		const { screen } = editor();
 		expect(render(screen)).toContain("(1/19)");
-		expect(screen.render(120).length).toBe(20);
+		expect(screen.render(120).length).toBe(FRAME);
 		for (let index = 0; index < 3; index++) screen.handleInput("\x1b[B");
 		expect(render(screen)).toContain("(4/19)");
-		expect(screen.render(120).length).toBe(20);
+		expect(screen.render(120).length).toBe(FRAME);
 		screen.dispose();
 	});
 
@@ -730,20 +870,20 @@ describe("provider fixed layout", () => {
 			vi.fn(
 				async () =>
 					new Response(
-						JSON.stringify({ data: Array.from({ length: 15 }, (_, index) => ({ id: `remote-${index}` })) }),
+						JSON.stringify({ data: Array.from({ length: 20 }, (_, index) => ({ id: `remote-${index}` })) }),
 					),
 			),
 		);
 		const { screen } = editor();
 		screen.handleInput("\x1b[B"); // Fetch models row
 		screen.handleInput("\r"); // focus right and start the request
-		await vi.waitFor(() => expect(render(screen)).toContain("(1/15)"));
-		expect(screen.render(120).length).toBe(20);
+		await vi.waitFor(() => expect(render(screen)).toContain("(1/20)"));
+		expect(screen.render(120).length).toBe(FRAME);
 		// The filter input stays pinned above the scrolled rows.
-		expect(render(screen)).toContain("0 selected · 15 shown");
+		expect(render(screen)).toContain("0 selected · 20 shown");
 		screen.handleInput("\x1b[B");
-		expect(render(screen)).toContain("(2/15)");
-		expect(screen.render(120).length).toBe(20);
+		expect(render(screen)).toContain("(2/20)");
+		expect(screen.render(120).length).toBe(FRAME);
 		screen.dispose();
 	});
 
@@ -755,18 +895,18 @@ describe("provider fixed layout", () => {
 		expect(initial).not.toContain("models.json");
 		expect(initial).not.toContain("1 model");
 		expect(initial).not.toContain("openai-completions");
-		expect(list.render(120).length).toBe(20);
+		expect(list.render(120).length).toBe(FRAME);
 		list.handleInput("zzz"); // filter to no match
-		expect(list.render(120).length).toBe(20);
+		expect(list.render(120).length).toBe(FRAME);
 		expect(stripAnsi(list.render(120).join("\n"))).toContain('No providers match "zzz".');
 		expect(stripAnsi(list.render(120).join("\n"))).toContain('Enter will create provider "zzz".');
 		list.handleInput("\x15"); // ctrl+u clears the query
 		list.handleInput("\r"); // + Add Provider without a query → id entry mode
-		expect(list.render(120).length).toBe(20);
+		expect(list.render(120).length).toBe(FRAME);
 		expect(stripAnsi(list.render(120).join("\n"))).toContain("Choose a unique provider id.");
 		list.handleInput("\r"); // empty id → inline error, still fixed height
 		expect(stripAnsi(list.render(120).join("\n"))).toContain("Provider id is required.");
-		expect(list.render(120).length).toBe(20);
+		expect(list.render(120).length).toBe(FRAME);
 	});
 
 	test('an id with "/" stays in id entry with the reason instead of creating a provider', () => {
@@ -801,7 +941,11 @@ describe("provider fixed layout", () => {
 		expect(text).not.toContain("cannot");
 	});
 
-	test("a fruitless search creates the provider in one Enter and opens at its API type", async () => {
+	test("a fruitless search creates the provider in one Enter and setup ends on its model list", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(JSON.stringify({ data: [{ id: "remote-1" }] }))),
+		);
 		const done = vi.fn();
 		const list = new ProviderListScreen(tui, theme, keys, done, store, listContext());
 		list.focused = true;
@@ -809,31 +953,53 @@ describe("provider fixed layout", () => {
 		list.handleInput("\r");
 		expect(done).toHaveBeenCalledWith({ kind: "open", providerId: "my-gw" });
 
-		const { screen } = editor("my-gw");
+		// The typed key resolves through the runtime, as Pi's credential chain does.
+		const runtime = {
+			...runtimeStub(),
+			getAuth: async () => ({ auth: { apiKey: "sk-demo-0000000000wxyz" } }),
+		} as unknown as ReturnType<typeof runtimeStub>;
+		const { screen } = editor("my-gw", runtime);
 		const picker = render(screen);
 		expect(picker).toContain("Authentication / API Type");
-		expect(picker).toContain("› ○ openai-completions · OpenAI-compatible");
+		expect(picker).toContain("› ○ anthropic-messages · Anthropic /v1/messages");
 		screen.handleInput("\r");
-		expect(store.getProvider("my-gw")).toEqual({ api: "openai-completions" });
+		expect(store.getProvider("my-gw")).toEqual({ api: "anthropic-messages" });
 		await store.flush();
 		// An API type alone is held back until baseUrl, so the title does not claim a save.
 		expect(render(screen).split("\n")[1]).not.toContain("Saving…");
 		const connection = render(screen);
 		expect(connection).not.toContain("/ API Type");
-		// baseUrl is already open, showing the expected shape until the paste.
-		expect(connection).toMatch(/› baseUrl: .*ttps:\/\/api\.example\.com\/v1/);
-		screen.handleInput("\x1b[200~http://localhost:11434/v1\x1b[201~");
+		// baseUrl is already open, showing the shape the chosen API expects until the paste.
+		expect(connection).toMatch(/› baseUrl: .*ttps:\/\/api\.example\.com(?!\/v1)/);
+		screen.handleInput("\x1b[200~https://gw.example\x1b[201~");
 		screen.handleInput("\r");
 		// The first baseUrl leads straight on to an empty apiKey.
 		expect(render(screen)).toMatch(/› apiKey: .*k-…, \$ENV_VAR, or !command/);
 		screen.handleInput("\x1b[200~sk-demo-0000000000wxyz\x1b[201~");
 		screen.handleInput("\r");
 		expect(store.getProvider("my-gw")).toEqual({
-			api: "openai-completions",
-			baseUrl: "http://localhost:11434/v1",
+			api: "anthropic-messages",
+			baseUrl: "https://gw.example",
 			apiKey: "sk-demo-0000000000wxyz",
 		});
-		expect(render(screen)).toContain("› apiKey: ••••••wxyz");
+		// The key was the last thing the endpoint needed, so its models are listed without another keypress.
+		await vi.waitFor(() => expect(render(screen)).toContain("› [ ] remote-1"));
+		expect(String(vi.mocked(fetch).mock.calls[0]![0])).toBe("https://gw.example/v1/models");
+		screen.dispose();
+	});
+
+	test("Esc on the setup apiKey lands on Fetch models without sending a request", () => {
+		vi.stubGlobal("fetch", vi.fn());
+		store.ensureProviderView("keyless");
+		const { screen } = editor("keyless");
+		screen.handleInput("\r"); // API type
+		screen.handleInput("\x1b[200~http://localhost:11434\x1b[201~");
+		screen.handleInput("\r"); // baseUrl → apiKey opens
+		screen.handleInput("\x1b"); // a local server needs no key
+		const page = render(screen);
+		expect(page).toContain("› Fetch models · from http://localhost:11434/v1/models");
+		expect(page).toContain("enter fetch");
+		expect(vi.mocked(fetch)).not.toHaveBeenCalled();
 		screen.dispose();
 	});
 
@@ -849,7 +1015,7 @@ describe("provider fixed layout", () => {
 	test("leaving a new provider that holds only an API type drops it", () => {
 		store.ensureProviderView("half");
 		const { screen, done } = editor("half");
-		screen.handleInput("\r"); // choose the suggested API; baseUrl opens for editing
+		screen.handleInput("\r"); // choose the highlighted API; baseUrl opens for editing
 		screen.handleInput("\x1b"); // leave baseUrl empty
 		screen.handleInput("\x1b"); // right pane → navigation
 		screen.handleInput("\x1b"); // navigation → back
@@ -862,7 +1028,7 @@ describe("provider fixed layout", () => {
 	test("the narrow editor shows only the focused pane and preserves its fixed frame", () => {
 		const { screen } = editor();
 		const navigation = screen.render(56);
-		expect(navigation.length).toBe(20);
+		expect(navigation.length).toBe(FRAME);
 		expect(stripAnsi(navigation.join("\n"))).toContain("SETUP");
 		expect(stripAnsi(navigation.join("\n"))).not.toContain("baseUrl");
 		expect(stripAnsi(navigation.join("\n"))).not.toContain("│");
@@ -870,7 +1036,7 @@ describe("provider fixed layout", () => {
 
 		screen.handleInput("\x1b[C");
 		const details = screen.render(56);
-		expect(details.length).toBe(20);
+		expect(details.length).toBe(FRAME);
 		expect(stripAnsi(details.join("\n"))).toContain("Authentication");
 		expect(stripAnsi(details.join("\n"))).toContain("baseUrl: https://old.example/v1");
 		expect(stripAnsi(details.join("\n"))).not.toContain("MANAGE");
@@ -901,6 +1067,7 @@ describe("provider fixed layout", () => {
 		screen.syncFromStore();
 		expect(render(screen)).not.toContain("Saving…");
 		expect(render(screen)).not.toContain("Save failed");
+		expect(render(screen).split("\n")[1]).toMatch(/Saved$/); // the edit reached the file
 		screen.dispose();
 	});
 
@@ -909,11 +1076,11 @@ describe("provider fixed layout", () => {
 		const list = new ProviderListScreen(tui, theme, keys, vi.fn(), store, listContext());
 		list.focused = true;
 		expect(stripAnsi(list.render(120).join("\n"))).toContain("(1/18)");
-		expect(list.render(120).length).toBe(20);
+		expect(list.render(120).length).toBe(FRAME);
 		for (let index = 0; index < 17; index++) list.handleInput("\x1b[B");
 		expect(stripAnsi(list.render(120).join("\n"))).toContain("(18/18)");
 		expect(stripAnsi(list.render(120).join("\n"))).toContain("More built-in providers");
-		expect(list.render(120).length).toBe(20);
+		expect(list.render(120).length).toBe(FRAME);
 	});
 
 	test("Esc on a fresh model draft discards it in one step", () => {
@@ -924,7 +1091,7 @@ describe("provider fixed layout", () => {
 		screen.handleInput("\x1b"); // cancels id editing → the empty draft is discarded
 		expect(render(screen)).not.toContain("New model");
 		expect(render(screen)).toContain("› + Add model");
-		expect(screen.render(120).length).toBe(20);
+		expect(screen.render(120).length).toBe(FRAME);
 		screen.dispose();
 	});
 

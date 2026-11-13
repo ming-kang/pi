@@ -18,6 +18,7 @@ import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import { builtinModelFields, builtinModelIds, isBuiltinProviderId } from "../catalog.ts";
 import { effectiveModelSettings, hasProviderSettings } from "../configuration.ts";
 import { fetchProviderModels, importProviderModels } from "../connection.ts";
+import { API_TYPES } from "../constants.ts";
 import { type DraftModelHandle, ProviderEdits } from "../editing.ts";
 import type { RefreshCoordinator } from "../refresh.ts";
 import type { ModelsJsonStore } from "../store.ts";
@@ -27,8 +28,8 @@ import { ConfirmPane, InfoPane } from "./dialogs.ts";
 import { FetchModelsPane } from "./fetch-models.ts";
 import { ModelFieldsPane } from "./model-fields.ts";
 import type { EditorHost, EditorPane } from "./pane.ts";
-import { AuthenticationPane, createProviderApiPane } from "./provider-fields.ts";
-import { CURSOR, truncateMiddle, windowLines } from "./value-row.ts";
+import { AuthenticationPane, createProviderApiPane, type SetupOutcome } from "./provider-fields.ts";
+import { CURSOR, frameBodyRows, truncateMiddle, windowLines } from "./value-row.ts";
 
 export interface ProviderEditorOptions {
 	store: ModelsJsonStore;
@@ -55,9 +56,11 @@ interface LeftRow {
 	pane(): EditorPane;
 	/** What Enter runs instead of focusing the pane; → only ever focuses it. */
 	readonly action?: { readonly verb: string; run(): void };
+	/** What the remove key does to the row's entry, behind a confirm. */
+	readonly remove?: { readonly verb: string; run(): void };
 }
 
-type LeftItem = LeftRow | { readonly section: "SETUP" | "MODELS" | "MANAGE" };
+type LeftItem = LeftRow | { readonly section: string };
 
 function isRow(item: LeftItem | undefined): item is LeftRow {
 	return item !== undefined && !("section" in item);
@@ -66,9 +69,7 @@ function isRow(item: LeftItem | undefined): item is LeftRow {
 const modelKey = (modelId: string) => `model:${modelId}`;
 
 const LEFT_WIDTH_MIN = 16;
-const LEFT_WIDTH_MAX = 40;
-/** Fixed editor body height: both columns scroll inside it rather than resizing the frame. */
-const BODY_ROWS = 14;
+const LEFT_WIDTH_MAX = 32;
 const DOUBLE_PANE_MIN_WIDTH = 72;
 const MIN_WIDTH = 32;
 
@@ -118,7 +119,9 @@ export class ProviderEditorScreen implements Component, Focusable {
 	private readonly removal: (typeof REMOVAL)[keyof typeof REMOVAL];
 	private disposed = false;
 	private _focused = false;
-	private cache: { width: number; lines: string[] } | undefined;
+	/** Stack depth to hand focus back to the left column at: a confirm opened from there returns there. */
+	private returnLeftAt: number | undefined;
+	private cache: { width: number; rows: number; lines: string[] } | undefined;
 
 	constructor(
 		tui: TUI,
@@ -144,12 +147,29 @@ export class ProviderEditorScreen implements Component, Focusable {
 		if (fresh && Object.keys(options.store.getProvider(options.providerId) ?? {}).length === 0) this.startSetup();
 	}
 
-	/** Every new provider starts the same way: the API picker (OpenAI-compatible suggested), then baseUrl, then apiKey. */
+	/**
+	 * Every new provider starts the same way: the API picker, then baseUrl, then
+	 * apiKey, then the endpoint's model list, so one pass ends on models to import.
+	 */
 	private startSetup(): void {
 		for (const pane of this.stack) pane.dispose?.();
 		const auth = new AuthenticationPane(this.host, this.options.runtime);
 		this.focusPane = "right";
-		this.stack = [auth, createProviderApiPane(this.host, "openai-completions", () => auth.beginSetup())];
+		const picker = createProviderApiPane(this.host, API_TYPES[0], () =>
+			auth.beginSetup((outcome) => this.fetchAfterSetup(outcome)),
+		);
+		this.stack = [auth, picker];
+	}
+
+	/**
+	 * A key entered with Enter carries on into the request. Esc on apiKey only
+	 * lands on Fetch models, one Enter away: a cancel key should not send one.
+	 */
+	private fetchAfterSetup(outcome: SetupOutcome): void {
+		if (this.disposed || !this.select("fetch")) return;
+		this.resetRightStack();
+		if (outcome === "entered") this.selectedRow()?.action?.run();
+		else this.focusRight();
 	}
 
 	// ------------------------------------------------------------------
@@ -180,10 +200,16 @@ export class ProviderEditorScreen implements Component, Focusable {
 		if (!hasProviderSettings(providerId, store.getProvider(providerId))) store.discardProviderDraft(providerId);
 	}
 
+	/** Body height both columns scroll inside; it follows the terminal height, never the content. */
+	private bodyRows(): number {
+		return frameBodyRows(this.tui);
+	}
+
 	render(width: number): string[] {
-		if (this.cache && this.cache.width === width) return this.cache.lines;
+		const rows = this.bodyRows();
+		if (this.cache && this.cache.width === width && this.cache.rows === rows) return this.cache.lines;
 		const lines = this.renderFrame(width);
-		this.cache = { width, lines };
+		this.cache = { width, rows, lines };
 		return lines;
 	}
 
@@ -216,6 +242,10 @@ export class ProviderEditorScreen implements Component, Focusable {
 			this.activateLeftItem("activate");
 			return;
 		}
+		if (kb.matches(data, "app.provider.removeEntry")) {
+			this.selectedRow()?.remove?.run();
+			return;
+		}
 		if (kb.matches(data, "tui.select.cancel")) this.done("back");
 	}
 
@@ -242,8 +272,10 @@ export class ProviderEditorScreen implements Component, Focusable {
 		const { store, providerId } = this.options;
 		const items: LeftItem[] = [{ section: "SETUP" }, this.authenticationRow()];
 		if (!this.builtin) items.push(this.fetchRow());
-		items.push({ section: "MODELS" });
-		for (const model of store.getModels(providerId)) items.push(this.modelRow(model.id));
+		const models = store.getModels(providerId);
+		// An empty section says so, instead of reading as a rendering gap above MANAGE.
+		items.push({ section: this.builtin || models.length > 0 || this.draft ? "MODELS" : "MODELS · none yet" });
+		for (const model of models) items.push(this.modelRow(model.id));
 		if (this.builtin) {
 			// Only customized catalog models get a row; the full catalog stays behind Built-in models.
 			const overrides = store.getProvider(providerId)?.modelOverrides ?? {};
@@ -289,9 +321,17 @@ export class ProviderEditorScreen implements Component, Focusable {
 			label: () => {
 				const model = store.getModel(providerId, modelId);
 				// On a built-in provider, a models.json model either replaces a catalog entry or adds one.
-				const origin = this.catalogIds.includes(modelId) ? "· replaced" : "· custom";
-				return { text: model ? (model.name ?? model.id) : modelId, note: this.builtin ? origin : undefined };
+				const origin = this.catalogIds.includes(modelId) ? "replaced" : "custom";
+				// The session's model is protected from delete and rename, so the row says which one it is.
+				const notes = [this.builtin ? origin : "", this.host.isCurrentModel(modelId) ? "in use" : ""].filter(
+					Boolean,
+				);
+				return {
+					text: model ? (model.name ?? model.id) : modelId,
+					note: notes.length > 0 ? `· ${notes.join(" · ")}` : undefined,
+				};
 			},
+			remove: { verb: "delete", run: () => this.removeModel(modelId) },
 			pane: () =>
 				new ModelFieldsPane(
 					this.host,
@@ -314,6 +354,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 				return { text: builtinModelFields(providerId, modelId, own)?.name ?? modelId };
 			},
 			pane: () => new ModelFieldsPane(this.host, this.edits.override(modelId)),
+			remove: { verb: "reset", run: () => this.resetOverride(modelId) },
 		};
 	}
 
@@ -427,6 +468,42 @@ export class ProviderEditorScreen implements Component, Focusable {
 		if (pane instanceof ModelFieldsPane && !this.draft.read().id) pane.startEditingId();
 	}
 
+	/** Delete a models.json model behind a confirm; the session's model is refused. */
+	private removeModel(modelId: string): void {
+		if (this.host.isCurrentModel(modelId)) {
+			this.host.notify("The current model cannot be deleted; switch models with /model first.", "error");
+			return;
+		}
+		this.host.confirm(`Delete model "${modelId}" from ${this.options.providerId}?`, "Delete model", () => {
+			this.edits.removeModel(modelId);
+			this.landAfterRemoval();
+		});
+	}
+
+	/** Drop a catalog model's whole modelOverrides entry behind a confirm. */
+	private resetOverride(modelId: string): void {
+		this.host.confirm(
+			`Remove every override of "${modelId}"? The built-in values return.`,
+			"Reset to built-in",
+			() => {
+				this.edits.override(modelId).reset();
+				this.landAfterRemoval();
+			},
+		);
+	}
+
+	/** A model row just went away: rebuild, land on the row that took its place, and return to navigation. */
+	private landAfterRemoval(): void {
+		this.rebuildLeftItems();
+		this.leftIndex = Math.min(this.leftIndex, this.leftItems.length - 1);
+		// Walk back over section labels.
+		while (this.leftIndex > 0 && !isRow(this.leftItems[this.leftIndex])) this.leftIndex--;
+		if (!isRow(this.leftItems[this.leftIndex])) this.leftIndex = this.selectableIndex(0);
+		this.focusPane = "left";
+		this.resetRightStack();
+		this.refresh();
+	}
+
 	private removeProvider(): void {
 		const { store, providerId, currentModel: current } = this.options;
 		// Resetting a built-in provider keeps its catalog models; only models.json-defined ones disappear.
@@ -459,18 +536,19 @@ export class ProviderEditorScreen implements Component, Focusable {
 				? this.renderLeftItem(item, index === this.leftIndex, focused, width)
 				: theme.fg("dim", item!.section);
 		};
-		if (this.leftItems.length <= BODY_ROWS) {
+		const bodyRows = this.bodyRows();
+		if (this.leftItems.length <= bodyRows) {
 			for (let index = 0; index < this.leftItems.length; index++) rows.push(renderRow(index));
 		} else {
 			// One row carries the (n/N) position indicator, like the /model selector.
-			const slots = BODY_ROWS - 1;
+			const slots = bodyRows - 1;
 			const start = Math.max(0, Math.min(this.leftIndex - Math.floor(slots / 2), this.leftItems.length - slots));
 			for (let index = start; index < start + slots; index++) rows.push(renderRow(index));
 			const selectable: LeftItem[] = this.leftItems.filter(isRow);
 			const position = selectable.indexOf(this.leftItems[this.leftIndex]!);
 			rows.push(theme.fg("dim", `  (${position + 1}/${selectable.length})`));
 		}
-		while (rows.length < BODY_ROWS) rows.push("");
+		while (rows.length < bodyRows) rows.push("");
 		return rows;
 	}
 
@@ -518,12 +596,17 @@ export class ProviderEditorScreen implements Component, Focusable {
 		const pane = this.stack.pop();
 		pane?.setFocused(false);
 		pane?.dispose?.();
+		if (this.returnLeftAt === this.stack.length) {
+			this.returnLeftAt = undefined;
+			this.focusPane = "left";
+		}
 		this.topPane()?.setFocused(this._focused && this.focusPane === "right");
 		this.refresh();
 	}
 
 	private resetRightStack(): void {
 		for (const pane of this.stack) pane.dispose?.();
+		this.returnLeftAt = undefined;
 		this.stack = [this.selectedRow()?.pane() ?? new InfoPane(this.host, [])];
 		this.topPane()?.setFocused(this._focused && this.focusPane === "right");
 	}
@@ -566,18 +649,11 @@ export class ProviderEditorScreen implements Component, Focusable {
 				return error;
 			},
 			openOverride: (modelId) => this.pushPane(new ModelFieldsPane(this.host, this.edits.override(modelId))),
-			confirm: (message, actionLabel, action) =>
-				this.pushPane(new ConfirmPane(this.host, message, actionLabel, action)),
-			onModelRemoved: () => {
-				this.rebuildLeftItems();
-				// Land on the next row where the model was; walk back over section labels.
-				this.leftIndex = Math.min(this.leftIndex, this.leftItems.length - 1);
-				while (this.leftIndex > 0 && !isRow(this.leftItems[this.leftIndex])) this.leftIndex--;
-				if (!isRow(this.leftItems[this.leftIndex])) this.leftIndex = this.selectableIndex(0);
-				this.focusPane = "left";
-				this.resetRightStack();
-				this.refresh();
+			confirm: (message, actionLabel, action) => {
+				if (this.focusPane === "left") this.returnLeftAt = this.stack.length;
+				this.pushPane(new ConfirmPane(this.host, message, actionLabel, action));
 			},
+			removeModel: (modelId) => this.removeModel(modelId),
 		};
 	}
 
@@ -626,6 +702,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 			];
 		}
 		const title = this.renderTitle(width);
+		const bodyRows = this.bodyRows();
 		let body: string[];
 		if (width < DOUBLE_PANE_MIN_WIDTH) {
 			body = this.focusPane === "left" ? this.renderLeft(width) : this.renderRight(width);
@@ -636,7 +713,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 			const leftLines = this.renderLeft(leftWidth);
 			const rightLines = this.renderRight(rightWidth);
 			body = [];
-			for (let row = 0; row < BODY_ROWS; row++) {
+			for (let row = 0; row < bodyRows; row++) {
 				const left = padTo(truncateToWidth(leftLines[row] ?? "", leftWidth), leftWidth);
 				const right = truncateToWidth(rightLines[row] ?? "", rightWidth);
 				body.push(left + separator + right);
@@ -649,7 +726,9 @@ export class ProviderEditorScreen implements Component, Focusable {
 
 	private renderRight(width: number): string[] {
 		const pane = this.topPane();
-		const paneLines = pane ? windowLines(this.theme, pane.render(width), BODY_ROWS - 1, pane.scrollWindow?.()) : [];
+		const paneLines = pane
+			? windowLines(this.theme, pane.render(width), this.bodyRows() - 1, pane.scrollWindow?.())
+			: [];
 		return [this.renderPaneTitle(width), ...paneLines];
 	}
 
@@ -664,7 +743,7 @@ export class ProviderEditorScreen implements Component, Focusable {
 		return truncateToWidth(this.theme.fg("text", this.theme.bold(title)), width);
 	}
 
-	/** Content-driven left width: fits the longest visible label, clamped to 16–40 and 45% of the terminal. */
+	/** Content-driven left width: fits the longest visible label, clamped to 16–32 and 40% of the terminal. */
 	private computeLeftWidth(width: number): number {
 		let longest = 12;
 		for (const item of this.leftItems) {
@@ -674,16 +753,20 @@ export class ProviderEditorScreen implements Component, Focusable {
 			longest = Math.max(longest, visibleWidth(label));
 		}
 		const fit = Math.max(LEFT_WIDTH_MIN, Math.min(LEFT_WIDTH_MAX, longest + 2));
-		return Math.min(fit, Math.max(LEFT_WIDTH_MIN, Math.floor(width * 0.45)));
+		return Math.min(fit, Math.max(LEFT_WIDTH_MIN, Math.floor(width * 0.4)));
 	}
 
 	private renderTitle(width: number): string {
 		const theme = this.theme;
 		const title = theme.fg("accent", theme.bold(` Providers / ${this.options.providerId}`));
-		const status =
-			this.options.store.writableCount === 0 ? "" : this.options.store.saveFailed ? "Save failed" : "Saving…";
+		const store = this.options.store;
+		// Edits save as they are made, so the title says where the last one stands.
+		const writing = store.writableCount > 0;
+		// Edits held back (a new provider that cannot reach a request yet) are pending but not written, so not "Saved".
+		const saved = this.edits.edited && store.pendingCount === 0;
+		const status = writing ? (store.saveFailed ? "Save failed" : "Saving…") : saved ? "Saved" : "";
 		if (!status) return truncateToWidth(title, width);
-		const styledStatus = theme.fg(this.options.store.saveFailed ? "error" : "dim", status);
+		const styledStatus = theme.fg(status === "Save failed" ? "error" : "dim", status);
 		const statusWidth = visibleWidth(status);
 		if (statusWidth + 1 >= width) return truncateToWidth(styledStatus, width);
 		const left = truncateToWidth(title, width - statusWidth - 1);
@@ -716,13 +799,18 @@ export class ProviderEditorScreen implements Component, Focusable {
 				.join("  ");
 			return [truncateToWidth(hints, width)];
 		}
+		const row = this.selectedRow();
 		const hints = [
 			rawKeyHint("↑↓", "navigate"),
 			// What Enter does to the selected row, so the footer never lies about action rows.
-			keyHint("tui.select.confirm", this.selectedRow()?.action?.verb ?? "open"),
-			this.arrowHint("app.provider.switchPaneRight", "details"),
+			keyHint("tui.select.confirm", row?.action?.verb ?? "open"),
+			// → only differs from Enter on an action row, where it shows the explanation without running it.
+			row?.action ? this.arrowHint("app.provider.switchPaneRight", "details") : "",
+			row?.remove ? keyHint("app.provider.removeEntry", row.remove.verb) : "",
 			keyHint("tui.select.cancel", "back"),
-		].join("  ");
+		]
+			.filter(Boolean)
+			.join("  ");
 		return [truncateToWidth(hints, width)];
 	}
 }

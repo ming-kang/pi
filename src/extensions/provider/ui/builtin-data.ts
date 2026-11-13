@@ -11,15 +11,29 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelsJsonModel } from "../../../core/model-config.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { type CatalogEntry, computeFieldChanges, type FieldChange, matchBuiltinModels } from "../catalog.ts";
-import { truncate } from "../constants.ts";
+import { formatTokens, plural, truncate } from "../constants.ts";
+import { getPath } from "../json-fields.ts";
 import { jsonEquals } from "../store.ts";
 import { moveSelection } from "./controls.ts";
 import type { EditorPane, ModelHandle, ProviderPaneHost } from "./pane.ts";
-import { renderInfoLine, renderPlainLine, type ScrollWindowInfo, ValueEditor } from "./value-row.ts";
+import { renderInfoLine, renderPlainLine, renderSearchLine, type ScrollWindowInfo, ValueEditor } from "./value-row.ts";
 
-function formatContext(model: Model<Api>): string {
-	const ctx = model.contextWindow >= 1000 ? `${Math.round(model.contextWindow / 1024)}k` : String(model.contextWindow);
-	return `${model.api} · ${ctx} ctx${model.reasoning ? " · reasoning" : ""}`;
+/**
+ * What tells two candidates apart, in the Fetch models wording. The API shows
+ * only when it differs from the model's, since that is what makes a
+ * candidate's thinking map and compat view-only.
+ */
+function candidateNote(model: Model<Api>, effectiveApi: string | undefined): string {
+	return [
+		`${formatTokens(model.contextWindow)} ctx`,
+		`${formatTokens(model.maxTokens)} out`,
+		model.input.includes("image") ? "img" : "",
+		model.reasoning ? "think" : "",
+		model.api === effectiveApi ? "" : model.api,
+	]
+		.filter(Boolean)
+		.map((part) => `· ${part}`)
+		.join(" ");
 }
 
 export class BuiltinCandidatesPane implements EditorPane {
@@ -49,29 +63,24 @@ export class BuiltinCandidatesPane implements EditorPane {
 
 	render(width: number): string[] {
 		const theme = this.host.theme;
-		const lines: string[] = [this.search.renderLine(width)];
+		const lines: string[] = [renderSearchLine(theme, this.search, this.focused, width)];
 		const matches = this.candidates();
+		const api = this.host.effectiveApi(this.model.read());
 		if (matches.length === 0) {
 			lines.push(renderInfoLine(theme, "No built-in candidates — keep configuring manually.", width));
 		}
 		for (const [rowIndex, match] of matches.entries()) {
 			const { providerId, model } = match.entry;
-			const label = `${providerId} / ${model.id}`;
-			const note =
-				(match.tier === "exact" ? "exact · " : "") +
-				`${model.name !== model.id ? `${model.name} · ` : ""}${formatContext(model)}`;
 			lines.push(
-				renderPlainLine(theme, label, {
+				renderPlainLine(theme, `${providerId} / ${model.id}`, {
 					active: rowIndex === this.index,
 					paneFocused: this.focused,
-					note,
+					note: candidateNote(model, api),
 					width,
 				}),
 			);
 		}
-		lines.push(
-			renderInfoLine(theme, "Candidates are a reference only; the configured id is never rewritten.", width),
-		);
+		lines.push(renderInfoLine(theme, "A reference to copy fields from; the model's id and API stay.", width));
 		return lines;
 	}
 
@@ -132,6 +141,8 @@ export class BuiltinCandidatesPane implements EditorPane {
 export class BuiltinPreviewPane implements EditorPane {
 	readonly crumb = "Use built-in data · preview";
 	private readonly changes: FieldChange[];
+	/** Rows whose reference value the model already has: shown for context, never checkable. */
+	private readonly same: boolean[];
 	private readonly checked: boolean[];
 	private readonly snapshot: Partial<ModelsJsonModel> & { id?: string };
 	private readonly snapshotApi: string | undefined;
@@ -152,7 +163,23 @@ export class BuiltinPreviewPane implements EditorPane {
 		this.snapshot = structuredClone(current);
 		this.snapshotApi = host.effectiveApi(current);
 		this.changes = computeFieldChanges(current, reference.model, host.effectiveApi(current));
-		this.checked = this.changes.map((change) => change.checked && change.applicable);
+		this.same = this.changes.map(
+			(change) =>
+				change.patches.length > 0 &&
+				change.patches.every((patch) => jsonEquals(getPath(current, patch.path), patch.value)),
+		);
+		this.checked = this.changes.map((change, index) => change.checked && this.canApply(index));
+		// Start on the first row that can change something; with none, on the closing row.
+		const first = this.changes.findIndex((_, index) => this.canApply(index));
+		this.index = first >= 0 ? first : this.changes.length;
+	}
+
+	private canApply(index: number): boolean {
+		return this.changes[index]!.applicable && !this.same[index];
+	}
+
+	private chosen(): FieldChange[] {
+		return this.changes.filter((_, index) => this.checked[index] && this.canApply(index));
 	}
 
 	private rowCount(): number {
@@ -167,13 +194,18 @@ export class BuiltinPreviewPane implements EditorPane {
 		for (const [rowIndex, change] of this.changes.entries()) {
 			const active = rowIndex === this.index;
 			const expandable = change.referenceDetails !== undefined;
-			const note = !change.applicable ? "· view only" : undefined;
+			const same = this.same[rowIndex];
+			const text = same
+				? `${change.field}: ${change.referenceText}`
+				: `${change.field}: ${change.currentText} → ${change.referenceText}`;
 			lines.push(
-				renderPlainLine(theme, `${change.field}: ${change.currentText} → ${change.referenceText}`, {
-					checked: change.applicable ? this.checked[rowIndex] : undefined,
+				// Rows without a checkbox indent to the same column as those with one.
+				renderPlainLine(theme, this.canApply(rowIndex) ? text : `    ${text}`, {
+					checked: this.canApply(rowIndex) ? this.checked[rowIndex] : undefined,
 					active,
 					paneFocused: this.focused,
-					note,
+					dim: same,
+					note: same ? "· already set" : change.applicable ? undefined : "· another API, view only",
 					width,
 				}),
 			);
@@ -186,10 +218,12 @@ export class BuiltinPreviewPane implements EditorPane {
 				}
 			}
 		}
+		const count = this.chosen().length;
 		lines.push(
-			renderPlainLine(theme, "Apply selected fields", {
+			renderPlainLine(theme, count > 0 ? `Apply ${count} ${plural(count, "field")}` : "Nothing checked", {
 				active: this.index === this.changes.length,
 				paneFocused: this.focused,
+				dim: count === 0,
 				width,
 			}),
 		);
@@ -225,8 +259,8 @@ export class BuiltinPreviewPane implements EditorPane {
 		if (kb.matches(data, "app.list.toggle")) {
 			const change = this.changes[this.index];
 			if (!change) return;
-			if (!change.applicable) {
-				this.expanded = this.expanded === this.index ? undefined : this.index;
+			if (!this.canApply(this.index)) {
+				if (change.referenceDetails) this.expanded = this.expanded === this.index ? undefined : this.index;
 				this.host.refresh();
 				return;
 			}
@@ -242,7 +276,7 @@ export class BuiltinPreviewPane implements EditorPane {
 			const change = this.changes[this.index]!;
 			if (change.referenceDetails) {
 				this.expanded = this.expanded === this.index ? undefined : this.index;
-			} else if (change.applicable) {
+			} else if (this.canApply(this.index)) {
 				this.checked[this.index] = !this.checked[this.index];
 			}
 			this.host.refresh();
@@ -263,7 +297,7 @@ export class BuiltinPreviewPane implements EditorPane {
 			this.host.refresh();
 			return;
 		}
-		const chosen = this.changes.filter((_, rowIndex) => this.checked[rowIndex] && this.changes[rowIndex]!.applicable);
+		const chosen = this.chosen();
 		if (chosen.length === 0) {
 			this.host.popPane();
 			return;
@@ -274,7 +308,7 @@ export class BuiltinPreviewPane implements EditorPane {
 			}
 		});
 		this.host.notify(
-			`Applied ${chosen.length} field${chosen.length === 1 ? "" : "s"} from ${this.reference.providerId} / ${this.reference.model.id}.`,
+			`Applied ${chosen.length} ${plural(chosen.length, "field")} from ${this.reference.providerId} / ${this.reference.model.id}.`,
 			"info",
 		);
 		this.host.popPane(); // preview
@@ -285,11 +319,16 @@ export class BuiltinPreviewPane implements EditorPane {
 		this.focused = focused;
 	}
 
+	/** Only what the selected row answers to. */
 	hints(): string {
-		return [
-			keyHint("app.list.toggle", "check"),
-			keyHint("tui.select.confirm", "details / apply"),
-			keyHint("tui.select.cancel", "back"),
-		].join("  ");
+		const back = keyHint("tui.select.cancel", "back");
+		const change = this.changes[this.index];
+		if (!change)
+			return [keyHint("tui.select.confirm", this.chosen().length > 0 ? "apply" : "close"), back].join("  ");
+		const hints: string[] = [];
+		if (this.canApply(this.index)) hints.push(keyHint("app.list.toggle", "check"));
+		if (change.referenceDetails) hints.push(keyHint("tui.select.confirm", "details"));
+		else if (this.canApply(this.index)) hints.push(keyHint("tui.select.confirm", "check"));
+		return [rawKeyHint("↑↓", "navigate"), ...hints, back].join("  ");
 	}
 }

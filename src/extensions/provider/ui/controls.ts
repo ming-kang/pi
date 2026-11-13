@@ -19,13 +19,15 @@ export interface Choice<T> {
 	label: string;
 	value: T;
 	dim?: boolean;
+	/** Dim text after the label, e.g. what the option stands for. */
+	note?: string;
 }
 
 type ControlHost = Pick<PaneHost, "theme" | "keybindings" | "refresh" | "popPane">;
 interface ChoiceOptions<T> {
 	choices(): readonly Choice<T>[];
 	current(): T;
-	/** Highlighted on open instead of the current value, e.g. a suggested default. */
+	/** Highlighted on open instead of the current value, e.g. where a first-time pick starts. */
 	initial?: T;
 	choose(value: T): string | undefined;
 }
@@ -54,6 +56,7 @@ export class ChoicePane<T> implements EditorPane {
 				active: index === this.index,
 				paneFocused: this.focused,
 				dim: choice.dim,
+				note: choice.note,
 				width,
 			}),
 		);
@@ -127,6 +130,8 @@ export class InlineEdit<Key> {
 			placeholderStyle?: (text: string) => string;
 			/** Runs after a successful commit closes the editor, e.g. to open the next field. */
 			onDone?: () => void;
+			/** Runs after Esc closes the editor without a value, e.g. when the field was an optional step. */
+			onCancel?: () => void;
 		} = {},
 	): void {
 		const editor = new ValueEditor({
@@ -143,6 +148,7 @@ export class InlineEdit<Key> {
 			onCancel: () => {
 				this.active = undefined;
 				this.error = undefined;
+				extras.onCancel?.();
 				this.refresh();
 			},
 		});

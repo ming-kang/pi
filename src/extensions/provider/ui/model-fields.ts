@@ -9,7 +9,7 @@ import "../keybindings.ts";
 import type { ModelsJsonModel } from "../../../core/model-config.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { matchBuiltinModels } from "../catalog.ts";
-import { plural, truncate } from "../constants.ts";
+import { formatTokens, plural, truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
 import { AdvancedPane, advancedNote, MODEL_ADVANCED_FIELDS } from "./advanced.ts";
 import { BuiltinCandidatesPane } from "./builtin-data.ts";
@@ -207,11 +207,16 @@ export class ModelFieldsPane implements EditorPane {
 			case "number": {
 				const value = current[row.key];
 				const fallback = row.key === "contextWindow" ? DEFAULT_CONTEXT_WINDOW : DEFAULT_MAX_TOKENS;
+				// The exact count is what is saved; the short form is how a long number gets read.
+				const shown =
+					value === undefined
+						? { valueText: `${fallback} (default)`, unset: true }
+						: this.tagged(row.key, String(value));
+				const short = value !== undefined && value >= 100_000 ? `· ${formatTokens(value)}` : undefined;
 				return renderKeyValueLine(theme, {
 					keyLabel: row.key,
-					...(value === undefined
-						? { valueText: `${fallback} (default)`, unset: true }
-						: this.tagged(row.key, String(value))),
+					...shown,
+					note: [short, shown.note].filter(Boolean).join(" ") || undefined,
 					active,
 					paneFocused: this.focused,
 					editing,
@@ -406,15 +411,7 @@ export class ModelFieldsPane implements EditorPane {
 			}
 			case "deleteModel": {
 				const id = this.model.read().id;
-				if (!id) return;
-				if (this.host.isCurrentModel(id)) {
-					this.host.notify("The current model cannot be deleted; switch models with /model first.", "error");
-					return;
-				}
-				this.host.confirm(`Delete model "${id}" from ${this.host.providerId}?`, "Delete model", () => {
-					this.host.edits.removeModel(id);
-					this.host.onModelRemoved(id);
-				});
+				if (id) this.host.removeModel(id);
 				return;
 			}
 		}

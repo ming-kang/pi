@@ -52,6 +52,8 @@ export class ProviderEdits {
 	private readonly refresher: RefreshCoordinator;
 	private readonly refresh: () => void;
 	renaming = false;
+	/** An edit went to the store since this editor opened. */
+	edited = false;
 
 	constructor(store: ModelsJsonStore, providerId: string, refresher: RefreshCoordinator, refresh: () => void) {
 		this.store = store;
@@ -61,6 +63,7 @@ export class ProviderEdits {
 	}
 
 	private changed(): void {
+		this.edited = true;
 		if (
 			!this.store.isDraftProvider(this.providerId) ||
 			hasProviderSettings(this.providerId, this.store.getProvider(this.providerId))

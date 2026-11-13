@@ -153,8 +153,9 @@ export interface FieldChange {
 const DEFAULT_CONTEXT_WINDOW = 128000;
 const DEFAULT_MAX_TOKENS = 16384;
 
+/** The four $/M rates as the model page lists them: input / output / cacheRead / cacheWrite. */
 function formatCostRates(cost: { input: number; output: number; cacheRead: number; cacheWrite: number }): string {
-	return `$${cost.input} / $${cost.output} in/out (cache $${cost.cacheRead} / $${cost.cacheWrite})`;
+	return [cost.input, cost.output, cost.cacheRead, cost.cacheWrite].join(" / ");
 }
 
 /**
@@ -273,7 +274,7 @@ export function computeFieldChanges(
 				: [{ path: ["cost"], value: rates }],
 			checked: false,
 			applicable: true,
-			currentText: current.cost ? formatCostRates(current.cost) : "all 0 (default)",
+			currentText: current.cost ? formatCostRates(current.cost) : "not set",
 			referenceText: formatCostRates(reference.cost),
 			referenceDetails: [
 				`input: $${reference.cost.input} / M tokens`,

@@ -4,6 +4,25 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- `/provider` setup runs through to the model list: after the API type and `baseUrl`, Enter on `apiKey` fetches the endpoint's models, ready to check and import. Escape on `apiKey` (a keyless local server) lands on Fetch models without sending a request. See [Adding a provider](docs/bundled/extensions/provider.md#adding-a-provider).
+- `/provider` shows where a custom provider's requests go, such as `Requests go to https://gw.example/v1/messages`, and warns when `/v1` is doubled. A fetched model list does not prove the `baseUrl` shape is right, because discovery accepts both. See [Authentication](docs/bundled/extensions/provider.md#authentication).
+- `/provider` deletes a model from the left column with `Ctrl+X` (`app.provider.removeEntry`) after a confirm, and resets a built-in model's overrides the same way. In Fetch models results, `Ctrl+A` (`app.provider.checkAll`) checks every listed model, following the filter.
+- `/provider` marks the session's model `· in use`, heads an empty model list `MODELS · none yet`, and shows `Saved` in the title once edits are written.
+
+### Changed
+
+- `/provider` API Type pickers no longer present `openai-completions` as the usual choice. `anthropic-messages` and `openai-responses` now lead the list, a new provider's picker starts on the first entry, and each common tag names the route it calls (`OpenAI /v1/chat/completions`) instead of describing its popularity.
+- `/provider` uses an 18-row body on tall terminals, so a model's page fits without scrolling; short terminals keep 14 rows. Leaving an editor returns the provider list to that provider's row.
+- `/provider` Use built-in data lists candidates as `1.0M ctx · 131k out · img · think`, dims fields the model already has as `· already set`, counts what will be written (`Apply 2 fields`), and shows cost as the model page does (`0.6 / 2.5 / 0.15 / 0`).
+- `/provider` compat pages describe the selected key, list keys with their full description, and open a choice on its current value. Every filter input is labeled `Search`, and footers list only the keys the selected row answers to.
+- `/provider` token fields show a short form beside counts of 100,000 or more (`1048576 · 1.0M`).
+
+### Fixed
+
+- `/provider` confirmation questions wrap instead of being cut off, and a note beside a field no longer turns into `...` while the field is edited.
+
 ## [1.5.4] - 2026-11-10
 
 ### Added

@@ -9,14 +9,15 @@ export const NO_MODELS_FILE_WARNING =
 	"models.json is disabled for this runtime (custom SDK configuration), so /provider is unavailable.";
 
 /**
- * API types offered in the single-select list. The four common custom-endpoint
- * protocols come first; the rest follow in stable order. Custom api strings
- * already present in models.json are preserved and appended at render time.
+ * API types offered in the single-select list. The three protocols custom
+ * endpoints speak come first, the two in widest use ahead of Chat Completions;
+ * the rest follow in stable order. Custom api strings already present in
+ * models.json are preserved and appended at render time.
  */
 export const API_TYPES: readonly Api[] = [
+	"anthropic-messages",
 	"openai-responses",
 	"openai-completions",
-	"anthropic-messages",
 	"google-generative-ai",
 	"azure-openai-responses",
 	"openai-codex-responses",
@@ -26,16 +27,21 @@ export const API_TYPES: readonly Api[] = [
 	"pi-messages",
 ];
 
-/** What the common API types speak; API pickers show it beside the tag. */
-const API_TYPE_NOTES: Readonly<Record<string, string>> = {
-	"openai-responses": "OpenAI Responses",
-	"openai-completions": "OpenAI-compatible, used by most gateways and local servers",
-	"anthropic-messages": "Anthropic-compatible",
+/**
+ * The endpoint each common API type calls, which is how an endpoint's own docs
+ * name its protocol. A neutral fact rather than a recommendation: which one is
+ * right depends on the server, not on how popular the protocol is.
+ */
+const API_TYPE_ENDPOINTS: Readonly<Record<string, string>> = {
+	"anthropic-messages": "Anthropic /v1/messages",
+	"openai-responses": "OpenAI /v1/responses",
+	"openai-completions": "OpenAI /v1/chat/completions",
 };
 
-export function apiTypeLabel(api: string): string {
-	const note = API_TYPE_NOTES[api];
-	return note ? `${api} · ${note}` : api;
+/** Dim note API pickers show beside a common tag. */
+export function apiTypeNote(api: string): string | undefined {
+	const endpoint = API_TYPE_ENDPOINTS[api];
+	return endpoint ? `· ${endpoint}` : undefined;
 }
 
 /** Input modality options. Adding a type also requires pi-ai Model.input and the models.json schema to support it. */
@@ -77,6 +83,15 @@ export function formatError(error: unknown): string {
 export function plural(count: number, word: string): string {
 	if (count === 1) return word;
 	return word.endsWith("y") ? `${word.slice(0, -1)}ies` : `${word}s`;
+}
+
+/** Compact token count, e.g. `1.0M`; the thresholds match the footer's usage stats. */
+export function formatTokens(count: number): string {
+	if (count < 1000) return count.toString();
+	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+	if (count < 1000000) return `${Math.round(count / 1000)}k`;
+	if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
+	return `${Math.round(count / 1000000)}M`;
 }
 
 /** Display truncate by characters (rows are width-truncated again at render time). */

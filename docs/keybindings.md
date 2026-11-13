@@ -185,7 +185,8 @@ These actions apply while the [BTW panel](bundled/extensions/btw.md) is open and
 | `app.models.save` | `ctrl+s` | Save the selected default model or scoped model configuration to settings |
 | `app.provider.switchPaneLeft` | `left` | Focus the left pane in /provider |
 | `app.provider.switchPaneRight` | `right` | Focus the right pane in /provider |
-| `app.provider.removeEntry` | `ctrl+x` | Remove the selected compat or dictionary entry in /provider |
+| `app.provider.removeEntry` | `ctrl+x` | Remove the selected model, compat entry, or dictionary entry in /provider |
+| `app.provider.checkAll` | `ctrl+a` | Check or uncheck every listed model in /provider's Fetch models |
 | `app.thinking.cycle` | `shift+tab` | Cycle thinking level |
 | `app.thinking.save` | `ctrl+s` | Save current thinking level to settings |
 | `app.thinking.toggle` | `ctrl+t` | Collapse or expand thinking blocks |

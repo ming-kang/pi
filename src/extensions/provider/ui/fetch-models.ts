@@ -8,7 +8,7 @@
 
 import "../keybindings.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
-import { truncate } from "../constants.ts";
+import { formatTokens, truncate } from "../constants.ts";
 import { modelCatalogUrl, type ProbeModel } from "../probe.ts";
 import { moveSelection } from "./controls.ts";
 import type { EditorPane, FetchModelsHost } from "./pane.ts";
@@ -16,6 +16,7 @@ import {
 	renderErrorLines,
 	renderInfoLine,
 	renderPlainLine,
+	renderSearchLine,
 	type ScrollWindowInfo,
 	truncateMiddle,
 	ValueEditor,
@@ -32,15 +33,6 @@ type FetchState =
 	| { type: "error"; message: string }
 	| { type: "results"; catalog: CatalogResults; error?: string }
 	| { type: "importing"; catalog: CatalogResults; controller: AbortController };
-
-/** Compact token count for the row note, e.g. `1.0M`; the thresholds match the footer's usage stats. */
-function formatTokens(count: number): string {
-	if (count < 1000) return count.toString();
-	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-	if (count < 1000000) return `${Math.round(count / 1000)}k`;
-	if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
-	return `${Math.round(count / 1000000)}M`;
-}
 
 /** Dim row note for the declared metadata, e.g. `· 1.0M ctx · 393k out · img · think`. */
 function metadataNote(model: ProbeModel): string | undefined {
@@ -167,7 +159,8 @@ export class FetchModelsPane implements EditorPane {
 			case "error":
 				return [
 					...renderErrorLines(theme, this.state.message, width),
-					renderInfoLine(theme, "Enter retries; Esc goes back.", width),
+					// Whatever failed, discovery is optional: a model added by id works the same.
+					renderInfoLine(theme, "Enter retries; + Add model adds a model by id instead.", width),
 				];
 			case "importing":
 			case "results": {
@@ -177,7 +170,7 @@ export class FetchModelsPane implements EditorPane {
 						renderInfoLine(theme, "The catalog was truncated; refine manually if a model is missing.", width),
 					);
 				}
-				lines.push(this.search.renderLine(width));
+				lines.push(renderSearchLine(theme, this.search, this.focused, width));
 				// All rows render; the editor's fixed window scrolls around scrollWindow().
 				const rows = this.rows();
 				for (const [rowIndex, row] of rows.entries()) {
@@ -284,6 +277,18 @@ export class FetchModelsPane implements EditorPane {
 			this.host.refresh();
 			return;
 		}
+		if (kb.matches(data, "app.provider.checkAll")) {
+			if (this.state.type === "importing") return;
+			// Checks every listed model that can be added, or clears them once all are checked.
+			const ids = rows.filter((row) => !row.added).map((row) => row.model.id);
+			const all = ids.length > 0 && ids.every((id) => this.checked.has(id));
+			for (const id of ids) {
+				if (all) this.checked.delete(id);
+				else this.checked.add(id);
+			}
+			this.host.refresh();
+			return;
+		}
 		if (kb.matches(data, "tui.select.cancel")) {
 			this.exitResults();
 			return;
@@ -376,6 +381,7 @@ export class FetchModelsPane implements EditorPane {
 				return [
 					rawKeyHint("type", "filter"),
 					keyHint("app.list.toggle", "check"),
+					keyHint("app.provider.checkAll", "all"),
 					keyHint("tui.select.confirm", "import"),
 					keyHint("tui.select.cancel", "discard"),
 				].join("  ");

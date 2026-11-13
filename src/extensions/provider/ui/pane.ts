@@ -49,7 +49,7 @@ export interface PaneHost {
 /** A pane that reads or edits the provider being configured. */
 export interface ProviderPaneHost extends PaneHost {
 	readonly store: ProviderView;
-	readonly edits: Pick<ProviderEdits, "setProviderField" | "removeModel" | "batch">;
+	readonly edits: Pick<ProviderEdits, "setProviderField" | "batch">;
 	readonly providerId: string;
 	/** Effective api/baseUrl after provider-level and builtin-overlay fallbacks. */
 	effectiveApi(model?: Partial<ModelsJsonModel>): string | undefined;
@@ -64,8 +64,8 @@ export interface ModelFieldsHost extends ProviderPaneHost {
 	discardModelDraft(): void;
 	/** Current session model protection (§4.3): no delete/rename of the active model. */
 	isCurrentModel(modelId: string): boolean;
-	/** A model was just removed: rebuild the left column and reset the right stack. */
-	onModelRemoved(modelId: string): void;
+	/** Delete a models.json model behind a confirm, then land the left column where it was. */
+	removeModel(modelId: string): void;
 }
 
 /** The Fetch models pane. */

@@ -6,6 +6,7 @@ declare module "@earendil-works/pi-tui" {
 		"app.provider.switchPaneLeft": true;
 		"app.provider.switchPaneRight": true;
 		"app.provider.removeEntry": true;
+		"app.provider.checkAll": true;
 	}
 }
 
@@ -15,6 +16,10 @@ registerKeybindings({
 	"app.provider.switchPaneRight": { defaultKeys: "right", description: "/provider: focus the right pane" },
 	"app.provider.removeEntry": {
 		defaultKeys: "ctrl+x",
-		description: "/provider: remove the selected compat or dictionary entry",
+		description: "/provider: remove the selected model, compat entry, or dictionary entry",
+	},
+	"app.provider.checkAll": {
+		defaultKeys: "ctrl+a",
+		description: "/provider: check or uncheck every listed model in Fetch models",
 	},
 });

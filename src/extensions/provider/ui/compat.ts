@@ -18,6 +18,7 @@ import {
 	renderInfoLine,
 	renderKeyValueLine,
 	renderPlainLine,
+	renderSearchLine,
 	type ScrollWindowInfo,
 	ValueEditor,
 } from "./value-row.ts";
@@ -62,18 +63,16 @@ export class CompatPane implements EditorPane {
 		];
 		if (this.mode.type === "chooseValue") {
 			const mode = this.mode;
-			lines.push(
-				renderKeyValueLine(theme, {
-					keyLabel: mode.key,
-					valueText: "choose a value",
-					active: true,
-					paneFocused: this.focused,
-					width,
-				}),
-			);
+			const note = api ? compatFieldFor(api, mode.key)?.note : undefined;
+			const current = compatObject(this.model)[mode.key];
+			lines.push(renderInfoLine(theme, note ? `${mode.key} · ${note}` : mode.key, width));
 			for (const [index, option] of mode.options.entries()) {
 				lines.push(
-					renderPlainLine(theme, option, { active: index === mode.index, paneFocused: this.focused, width }),
+					renderPlainLine(theme, `${String(current) === option ? "●" : "○"} ${option}`, {
+						active: index === mode.index,
+						paneFocused: this.focused,
+						width,
+					}),
 				);
 			}
 			return lines;
@@ -112,13 +111,22 @@ export class CompatPane implements EditorPane {
 			}),
 		);
 		if (this.error) lines.push(theme.fg("error", truncate(this.error, Math.max(10, width - 2))));
+		// What the selected key does, since its name alone rarely says; a blank line keeps it from reading as a row.
+		const about = this.selectedNote();
+		if (about) lines.push("", renderInfoLine(theme, about, width));
 		return lines;
 	}
 
+	private selectedNote(): string | undefined {
+		const api = this.effectiveApi();
+		const key = this.entries()[this.index]?.[0];
+		return api && key ? compatFieldFor(api, key)?.note : undefined;
+	}
+
 	scrollWindow(): ScrollWindowInfo {
-		// The effective-api header pins above; errors pin below.
+		// The effective-api header pins above; errors and the selected key's description pin below.
 		if (this.mode.type === "chooseValue") return { top: 1, cursor: 2 + this.mode.index };
-		return { top: 1, bottom: this.error ? 1 : 0, cursor: 1 + this.index };
+		return { top: 1, bottom: (this.error ? 1 : 0) + (this.selectedNote() ? 2 : 0), cursor: 1 + this.index };
 	}
 
 	handleInput(data: string): void {
@@ -207,7 +215,12 @@ export class CompatPane implements EditorPane {
 				this.writeValue(key, value !== true);
 				return;
 			case "enum":
-				this.mode = { type: "chooseValue", key, options: field.options, index: 0 };
+				this.mode = {
+					type: "chooseValue",
+					key,
+					options: field.options,
+					index: Math.max(0, field.options.indexOf(String(value))),
+				};
 				this.host.refresh();
 				return;
 			case "number":
@@ -336,12 +349,29 @@ export class CompatPane implements EditorPane {
 				keyHint("tui.select.confirm", "set"),
 				keyHint("tui.select.cancel", "cancel"),
 			].join("  ");
+		const back = keyHint("tui.select.cancel", "back");
+		const entry = this.entries()[this.index];
+		if (!entry) return [keyHint("tui.select.confirm", "add"), back].join("  ");
 		return [
-			keyHint("tui.select.confirm", "edit"),
-			keyHint("app.list.toggle", "toggle"),
+			keyHint("tui.select.confirm", this.rowVerb(entry[0])),
 			keyHint("app.provider.removeEntry", "remove"),
-			keyHint("tui.select.cancel", "back"),
+			back,
 		].join("  ");
+	}
+
+	/** What Enter does to an entry: its kind decides, and a key the API does not know edits as JSON. */
+	private rowVerb(key: string): string {
+		const api = this.effectiveApi();
+		switch (api ? compatFieldFor(api, key)?.kind : undefined) {
+			case "boolean":
+				return "toggle";
+			case "enum":
+				return "choose";
+			case "stringMap":
+				return "open";
+			default:
+				return "edit";
+		}
 	}
 }
 
@@ -381,7 +411,7 @@ export class CompatKeyPickerPane implements EditorPane {
 
 	render(width: number): string[] {
 		const theme = this.host.theme;
-		const lines: string[] = [this.editor.renderLine(width)];
+		const lines: string[] = [renderSearchLine(theme, this.editor, this.focused, width)];
 		const candidates = this.candidates();
 		if (candidates.length === 0) lines.push(renderInfoLine(theme, "No remaining known fields.", width));
 		// All candidates render; the editor's fixed window scrolls around scrollWindow().
@@ -390,7 +420,8 @@ export class CompatKeyPickerPane implements EditorPane {
 				renderPlainLine(theme, field.key, {
 					active: rowIndex === this.index,
 					paneFocused: this.focused,
-					note: field.note ? `· ${field.kind} — ${truncate(field.note, 30)}` : `· ${field.kind}`,
+					// The description is what tells similar keys apart; the row cuts at the pane edge, not at 30 characters.
+					note: field.note ? `· ${field.note}` : `· ${field.kind}`,
 					width,
 				}),
 			);

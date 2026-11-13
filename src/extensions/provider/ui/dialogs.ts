@@ -3,7 +3,7 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import type { EditorPane, PaneHost } from "./pane.ts";
-import { CURSOR, renderInfoLine, renderPlainLine } from "./value-row.ts";
+import { CURSOR, renderInfoLine, renderPlainLine, renderWrappedLines } from "./value-row.ts";
 
 /** Static dim text lines (e.g. action-row explanations); optionally Enter-activatable. */
 export class InfoPane implements EditorPane {
@@ -55,6 +55,8 @@ export class ConfirmPane implements EditorPane {
 	readonly crumb = "Confirm";
 	private index = 1; // default to Cancel
 	private focused = false;
+	/** Lines the wrapped question took in the last render. */
+	private messageLines = 1;
 
 	private readonly host: PaneHost;
 	private readonly message: string;
@@ -70,11 +72,18 @@ export class ConfirmPane implements EditorPane {
 
 	render(width: number): string[] {
 		const theme = this.host.theme;
+		// The question names what is lost and what is kept, so it wraps rather than ending in an ellipsis.
+		const message = renderWrappedLines(theme, this.message, width, "warning");
+		this.messageLines = message.length;
 		return [
-			truncateToWidth(theme.fg("warning", this.message), width),
+			...message,
 			renderPlainLine(theme, this.actionLabel, { active: this.index === 0, paneFocused: this.focused, width }),
 			renderPlainLine(theme, "Cancel", { active: this.index === 1, paneFocused: this.focused, width }),
 		];
+	}
+
+	scrollWindow(): { top: number; cursor: number } {
+		return { top: this.messageLines, cursor: this.messageLines + this.index };
 	}
 
 	handleInput(data: string): void {

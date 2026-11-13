@@ -117,7 +117,15 @@ export class DictPane implements EditorPane {
 		const mode = this.mode;
 		switch (mode.type) {
 			case "keyEdit":
-				return [renderInfoLine(theme, "new key:", width), mode.editor.renderLine(width)];
+				return [
+					renderKeyValueLine(theme, {
+						keyLabel: "New key",
+						active: true,
+						paneFocused: this.focused,
+						editing: mode.editor,
+						width,
+					}),
+				];
 			case "kindPick": {
 				return [
 					renderInfoLine(theme, `${mode.key} · value kind`, width),

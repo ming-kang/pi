@@ -2,13 +2,21 @@
 
 import "../keybindings.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
+import { connectionNote, validateBaseUrlValue } from "../base-url.ts";
 import { builtinDefaults } from "../catalog.ts";
-import { API_TYPES, apiTypeLabel, INPUT_TYPES, type InputType, truncate } from "../constants.ts";
+import { INPUT_TYPES, type InputType, truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
 import { ChoicePane, InlineEdit, moveSelection } from "./controls.ts";
 import type { EditorPane, ModelHandle, PaneHost, ProviderPaneHost } from "./pane.ts";
-import { baseUrlHint, validateBaseUrlValue } from "./provider-fields.ts";
-import { fieldOrigin, isPrintableInput, renderInfoLine, renderKeyValueLine, renderPlainLine } from "./value-row.ts";
+import { apiTypeChoices } from "./provider-fields.ts";
+import {
+	fieldOrigin,
+	isPrintableInput,
+	renderInfoLine,
+	renderKeyValueLine,
+	renderPlainLine,
+	renderWrappedLines,
+} from "./value-row.ts";
 
 // -------------------------------------------------------------------------
 // reasoning
@@ -306,8 +314,8 @@ export class ModelSpecificApiPane implements EditorPane {
 		}
 
 		if (this.edit.error) lines.push(theme.fg("error", truncate(this.edit.error, Math.max(10, width - 2))));
-		const hint = baseUrlHint(this.host.effectiveApi(current));
-		if (hint) lines.push(renderInfoLine(theme, hint, width));
+		const note = connectionNote(this.host.effectiveApi(current), this.host.effectiveBaseUrl(current));
+		if (note) lines.push("", ...renderWrappedLines(theme, note.text, width, note.warning ? "warning" : "dim"));
 		return lines;
 	}
 
@@ -388,14 +396,7 @@ export function createModelApiPane(host: ProviderPaneHost, model: ModelHandle): 
 				: inherited
 					? `built-in: ${inherited}`
 					: "no provider or built-in API";
-			const values: (string | undefined)[] = [undefined, ...API_TYPES];
-			const current = model.read().api;
-			if (current && !values.includes(current)) values.push(current);
-			return values.map((value) => ({
-				value,
-				label: value === undefined ? label : apiTypeLabel(value),
-				dim: value === undefined,
-			}));
+			return apiTypeChoices(label, model.read().api);
 		},
 		choose: (value) => {
 			if (value === undefined && !fallback()) return "Nothing to inherit — pick an API.";

@@ -4,7 +4,7 @@ Minimalist visual editor for the `providers` record of `models.json` (`~/.pi/age
 
 ## Usage
 
-`/provider` requires interactive TUI mode. The provider list and the editor share the same fixed frame height, so opening a provider never resizes the dialog.
+`/provider` requires interactive TUI mode. The provider list and the editor share one frame height, so opening a provider never resizes the dialog. The frame has a 14-row body, growing to 18 rows on terminals tall enough to keep the transcript in view, where a model's whole page fits without scrolling. Leaving an editor returns the list to that provider's row.
 
 ```text
 /provider         Open the searchable provider list (+ Add provider; Enter on a fruitless search creates that id)
@@ -19,14 +19,14 @@ Every other built-in sits behind the dim `More built-in providers` row at the bo
 
 `/provider` presents a two-pane editor on wide terminals:
 
-- **Left column:** Navigation grouped into `SETUP` (Authentication and Fetch models), `MODELS` (display name → `id` → `"New model"` draft fallback; at most one draft at a time), and `MANAGE` (`+ Add model` and `Delete provider`). Built-in providers swap Fetch models for `Built-in models` and Delete for `Reset provider`; see [Built-in providers](#built-in-providers).
+- **Left column:** Navigation grouped into `SETUP` (Authentication and Fetch models), `MODELS` (display name → `id` → `"New model"` draft fallback; at most one draft at a time), and `MANAGE` (`+ Add model` and `Delete provider`). The heading reads `MODELS · none yet` while a custom provider has no models, and the session's model is marked `· in use`. Built-in providers swap Fetch models for `Built-in models` and Delete for `Reset provider`; see [Built-in providers](#built-in-providers).
 - **Right column:** A contextual page title above the selected item's field pane and sub-pane stack. Nested titles show their path, such as `Authentication / API Type`.
 
 Below 72 columns, the editor shows only the focused pane: Enter or Right opens the detail view, and Escape or Left returns to navigation. Both layouts retain the same controls and fixed frame height.
 
 Both columns keep independent selection and scroll positions. Instead of resizing, each column scrolls inside a fixed window with a `(n/N)` position indicator (the `/model` selector convention), and pinned rows such as filter inputs and error lines stay on screen. Exactly one accent `›` selection marker is shown at any time — the pane holding keyboard focus; unfocused panes keep their content readable without any selection marker.
 
-Fixed fields keep their `Key: ` prefix while editing, and the selected key and value are highlighted together. Typing or pasting replaces the value; Enter opens the existing value for adjustment. Escape cancels that edit.
+Fixed fields keep their `Key: ` prefix while editing, and the selected key and value are highlighted together. Typing or pasting replaces the value; Enter opens the existing value for adjustment. Escape cancels that edit. The footer lists only the keys the selected row answers to.
 
 ### Key controls
 
@@ -34,16 +34,17 @@ Fixed fields keep their `Key: ` prefix while editing, and the selected key and v
 |---|---|---|
 | `↑` / `↓` | `up` / `down` | Navigate rows (wraps at list boundaries) |
 | `←` | `app.provider.switchPaneLeft` (`left`) | Focus the left navigation pane |
-| `→` | `app.provider.switchPaneRight` (`right`) | Focus the right detail pane (never activates an action row) |
+| `→` | `app.provider.switchPaneRight` (`right`) | Focus the right detail pane (never activates an action row, so it shows that row's explanation instead) |
 | `Enter` | `enter` | Tweak a value, enter a sub-pane, or activate the selected action row (Fetch models, Built-in models, + Add model, Delete or Reset provider) |
 | Printable typing | | Overwrite the highlighted text or numeric value |
 | `Space` | `app.list.toggle` (`space`) | Toggle booleans and checklist items |
-| `Ctrl+X` | `app.provider.removeEntry` (`ctrl+x`) | Remove the selected compat or dictionary entry |
+| `Ctrl+X` | `app.provider.removeEntry` (`ctrl+x`) | Remove the selected compat or dictionary entry. On a model in the left column: delete it, or reset a built-in model's overrides, after a confirm; cancelling returns to the list |
+| `Ctrl+A` | `app.provider.checkAll` (`ctrl+a`) | In Fetch models results, check every listed model that can be added, or clear them when all are checked; follows the filter |
 | `Esc` | `escape` | Cancel the current edit, discard a model draft (confirming when it has fields), pop the sub-pane, or return to the provider list |
 
 ### Adding a provider
 
-Type the new id in the list search and press Enter: when nothing matches, the provider is created at once and opens on its API Type picker with `openai-completions` (OpenAI-compatible, which most gateways and local servers speak) highlighted. Enter accepts it and opens `baseUrl` for editing, with the expected shape as a placeholder, so the next paste fills it. Enter on the first `baseUrl` moves straight to an empty `apiKey` (a literal key, `$ENV_VAR`, or `!command`); press Escape there for keyless local servers, then use Fetch models. Provider ids cannot contain spaces or start with `/` (a slash command typed into the open panel); an inner `/`, as in `acme/eu`, works because `provider/model` references match the longest known provider id. A new provider left with nothing but an API type or name is not written to `models.json` and is dropped when you return to the list.
+Type the new id in the list search and press Enter: when nothing matches, the provider is created at once and opens on its API Type picker. The picker starts on the first protocol in the list and recommends none: which one is right depends on the endpoint, so each common tag names the route it calls (`Anthropic /v1/messages`, `OpenAI /v1/responses`, `OpenAI /v1/chat/completions`), which is how an endpoint's own documentation names its protocol. Enter on a protocol opens `baseUrl` for editing, with the shape that protocol expects as a placeholder, so the next paste fills it. Enter on the first `baseUrl` moves straight to an empty `apiKey` (a literal key, `$ENV_VAR`, or `!command`). Enter on the key fetches the endpoint's model list, ready to check and import. For a keyless local server press Escape on `apiKey`: setup lands on Fetch models without sending a request, and Enter starts it. Provider ids cannot contain spaces or start with `/` (a slash command typed into the open panel); an inner `/`, as in `acme/eu`, works because `provider/model` references match the longest known provider id. A new provider left with nothing but an API type or name is not written to `models.json` and is dropped when you return to the list.
 
 ## Provider configuration
 
@@ -51,13 +52,13 @@ Type the new id in the list search and press Enter: when nothing matches, the pr
 
 Configures how Pi reaches and authenticates with the provider, in one page:
 
-- **`baseUrl`**: Endpoint URL (for example, `http://localhost:11434/v1`). The expected shape depends on the API type: OpenAI-style APIs need the version path in the URL (`https://api.openai.com/v1`), while the Anthropic and Mistral clients append `/v1` themselves (`https://api.anthropic.com`). A hint line on the page states the convention for the selected API type.
+- **`baseUrl`**: Endpoint URL (for example, `http://localhost:11434/v1`). The expected shape depends on the API type: OpenAI-style APIs need the version path in the URL (`https://api.openai.com/v1`), while the Anthropic and Mistral clients append `/v1` themselves (`https://api.anthropic.com`). For `anthropic-messages`, `openai-responses`, `openai-completions`, and `mistral-conversations`, a custom provider's page shows the resulting address, such as `Requests go to https://gw.example/v1/messages`, and warns when `/v1` is doubled (`…/v1/v1/messages`). Model discovery tolerates both shapes, so a fetched model list does not prove the address is right; this line does. Other API types, and a page with no `baseUrl` yet, state the convention instead.
 - **`apiKey`**: Provider API key or credential expression. Literal keys are masked in the display (e.g. `••••••1234`), while environment variable references (`$VAR`) and command substitutions (`!command`) are displayed verbatim. Values are stored raw in `models.json`; variable and command references resolve dynamically at request time.
-- **API Type**: Opens a single-select picker over Pi's supported API protocols. Common protocols are listed first:
+- **API Type**: Opens a single-select picker over Pi's supported API protocols. The three that custom endpoints speak come first, each with the route it calls:
 
-1. `openai-responses`
-2. `openai-completions`
-3. `anthropic-messages`
+1. `anthropic-messages`
+2. `openai-responses`
+3. `openai-completions`
 4. `google-generative-ai`
 5. `azure-openai-responses`
 6. `openai-codex-responses`
@@ -84,9 +85,9 @@ Selecting a model in the left column displays its editable fields in the right c
   - **`Hidden`:** Writes `null`, hiding the level from selection.
 - **`input`**: Modality checkboxes for `text` and `image`. At least one input modality must remain selected.
 - **`cost`**: Sub-pane for $/M-token rates (`input`, `output`, `cacheRead`, `cacheWrite`). The row lists them in that order, such as `cost: 10 / 50 / 1 / 12.5`, with `-` for an unset rate; the sub-pane names each rate and holds any tiers. Edits require a complete cost object (unspecified rates default to `0`). Existing cost `tiers` are preserved; edit them under Advanced.
-- **`contextWindow`**: Positive integer total context token limit. Both token fields also accept `500k`, `1.5m`, or `500,000`.
+- **`contextWindow`**: Positive integer total context token limit. Both token fields also accept `500k`, `1.5m`, or `500,000`, and show a short form beside a count of 100,000 or more (`1048576 · 1.0M`).
 - **`maxTokens`**: Positive integer maximum generation token limit.
-- **`compat`**: Sub-pane configuring flags consumed by the selected API implementation. Open dictionary fields (`chatTemplateKwargs` and `chatTemplateArgs`) allow arbitrary keys and Pi thinking variables, including `thinking.budget`. Nested JSON values use the core models.json validation rules. Pressing `Ctrl+X` removes an entry to restore inherited behavior.
+- **`compat`**: Sub-pane configuring flags consumed by the selected API implementation. Open dictionary fields (`chatTemplateKwargs` and `chatTemplateArgs`) allow arbitrary keys and Pi thinking variables, including `thinking.budget`. Nested JSON values use the core models.json validation rules. The page describes the selected key under the list, the key picker lists each key with its description, and a choice field opens on its current value. Pressing `Ctrl+X` removes an entry to restore inherited behavior.
 - **Advanced**: Rarely edited model fields. See [Advanced fields](#advanced-fields).
 - **Model-specific API**: Sub-page for model-level `baseUrl` and API Type overrides. Rows display the inherited provider or built-in value dimmed; editing a value writes an override for this model only, and clearing it returns to inheritance.
 
@@ -119,7 +120,7 @@ Emptied override objects are pruned as they empty, and a built-in entry with not
 
 ## Fetch models
 
-For OpenAI-compatible APIs, discovery uses `GET {baseUrl}/models`. Anthropic Messages uses `{baseUrl}/v1/models`, without repeating an existing `/v1` suffix. The pane's idle action row shows the discovery URL; `Enter` starts the request. Without a `baseUrl`, the pane instead explains what to configure and discovery cannot start.
+For OpenAI-compatible APIs, discovery uses `GET {baseUrl}/models`. Anthropic Messages uses `{baseUrl}/v1/models`, without repeating an existing `/v1` suffix. The pane's idle action row shows the discovery URL; `Enter` starts the request. Without a `baseUrl`, the pane instead explains what to configure and discovery cannot start. Discovery is optional: when an endpoint has no model list, add its models by id with `+ Add model`.
 
 Accepted catalog shapes are `data[]`, `models[]`, or a bare array. Entries can provide `id` or `slug`, plus an optional `name`, `display_name`, or `displayName`. Alongside the identifier and label, discovery imports the metadata an entry declares under the common field names — `context_window` / `context_length` / `max_model_len`, `max_output_tokens` / `max_tokens`, image input via `input_modalities` or an explicit vision flag, and reasoning via a supported-effort list or a capability flag. Only positive integers count (`0`, `null`, decimals, and non-numeric values are ignored); where fields disagree the smallest value wins, because an overstated limit overflows requests while an understated one only compacts earlier. Native Google catalog shapes are not supported.
 
@@ -127,7 +128,7 @@ Accepted catalog shapes are `data[]`, `models[]`, or a bare array. Entries can p
 - **Anthropic-compatible gateways:** Anthropic Messages catalogs are often served OpenAI-style only, so a `401`, `403`, or `404` on the Anthropic path triggers exactly one retry with `Authorization: Bearer` at the same URL, or at the base URL with a trailing `/anthropic` removed. Both attempts stay on the original origin, an explicitly configured `Authorization` header is never overridden, and other API types are never retried. A failed retry reports both URLs and their status codes.
 - **Pagination:** Anthropic catalogs answer with their `has_more` marker; discovery follows that marker through `after_id` (up to five pages) instead of reporting the first 20-entry page as partial. Every other catalog is fetched once and a response declaring `has_more` is still marked partial.
 - **Limits:** Discovery has a 10-second deadline covering the whole attempt sequence, including preparation, authentication waits, retries, and pagination. Responses are bounded to 4 MiB (error payloads are bounded to 4 KiB and displayed up to 400 characters). Catalogs are capped at 2,000 models.
-- **Checklist import:** Discovered models appear in a searchable checklist. Models already configured in `models.json` are marked `added` and cannot be checked. Each row shows the metadata it declared, e.g. `deepseek-flash · DeepSeek-V4.1-Flash · 1.0M ctx · 393k out · img · think`. Confirming imports the checked models — or just the highlighted one when nothing is checked — with that metadata, saves immediately, and refreshes the provider runtime. `Esc` discards the results.
+- **Checklist import:** Discovered models appear in a searchable checklist. Models already configured in `models.json` are marked `added` and cannot be checked. Each row shows the metadata it declared, e.g. `deepseek-flash · DeepSeek-V4.1-Flash · 1.0M ctx · 393k out · img · think`. `Ctrl+A` checks every listed model that can be added, so filtering to `claude` and pressing it selects that family. Confirming imports the checked models — or just the highlighted one when nothing is checked — with that metadata, saves immediately, and refreshes the provider runtime. `Esc` discards the results.
 
 Imported metadata lands in the same fields the editor already manages, so `contextWindow`, `maxTokens`, `input`, and `reasoning` remain editable afterwards. Cost is never imported: catalog pricing dialects differ in both unit and precision, and a misread rate misreports spend by orders of magnitude.
 
@@ -135,14 +136,14 @@ Imported metadata lands in the same fields the editor already manages, so `conte
 
 The `Use built-in data` row in a model's field list provides field-level completion from Pi's built-in model catalog:
 
-- **Matching:** Queries Pi's catalog using exact ID matches first, then normalized ID comparisons, then fuzzy search. Ties prefer entries sharing the model's effective API protocol. Up to 8 candidates are presented.
-- **Preview:** Selecting a candidate displays a per-field comparison (`current → reference`). Applying verifies that the model and its effective API still match the preview. Existing cost tiers and unrelated nested compatibility entries are retained.
+- **Matching:** Queries Pi's catalog using exact ID matches first, then normalized ID comparisons, then fuzzy search. Ties prefer entries sharing the model's effective API protocol. Up to 8 candidates are presented, each with what sets it apart: `moonshotai / kimi-k3 · 1.0M ctx · 131k out · img · think`, plus its API when that differs from the model's.
+- **Preview:** Selecting a candidate displays a per-field comparison (`current → reference`). A field the model already has at the reference value is listed dim as `· already set`, without a checkbox. The last row counts what will be written (`Apply 2 fields`). Applying verifies that the model and its effective API still match the preview. Existing cost tiers and unrelated nested compatibility entries are retained.
 - **Default selections:** Unset scalar fields (`name`, `reasoning`, `input`, `contextWindow`, `maxTokens`) are pre-checked. Explicitly configured values remain unchecked. `thinkingLevelMap`, `compat`, and `cost` are always opt-in.
 - **Safety boundaries:** Cross-API thinking maps and compat dictionaries are view-only and cannot be imported. Cost tiers from the reference are never imported. Identity and connection fields (`provider`, `id`, `api`, `baseUrl`, keys) are never altered. Pressing `Esc` discards the preview without applying changes.
 
 ## Persistence and runtime refresh
 
-- **Atomic locking:** Edits save immediately. The editor title shows `Saving…` while a write is pending and `Save failed` when edits remain unsaved after an error. Writes acquire a cross-process lock via `proper-lockfile`, write to a temporary file in the same directory, validate the candidate file with `ModelConfig`, and atomically rename it into place.
+- **Atomic locking:** Edits save immediately. The editor title shows `Saving…` while a write is pending, `Saved` once the edits made in this editor are in the file, and `Save failed` when edits remain unsaved after an error. Writes acquire a cross-process lock via `proper-lockfile`, write to a temporary file in the same directory, validate the candidate file with `ModelConfig`, and atomically rename it into place.
 - **Backup:** The first write over an existing file creates a `.bak` copy of its content. Symlinked configuration files are edited at their resolved target without replacing the symlink.
 - **Formatting:** Saves edit the file in place: `//` comments, trailing commas, key order, and the formatting of untouched entries stay as written, and new entries follow the file's indentation (a one-line file stays on one line). A new file is written as two-space JSON. Unknown top-level and nested values are preserved.
 - **Conflict resolution:** Every save re-reads the file under a cross-process lock and applies pending edits onto the freshest content, so unrelated external edits merge automatically and a same-field race resolves last-writer-wins. Edits targeting externally removed models simply miss, and the view resyncs onto the merged result after each save.

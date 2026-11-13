@@ -5,72 +5,24 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { ModelsJsonProvider } from "../../../core/model-config.ts";
 import type { AuthStatus } from "../../../core/provider-composer.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
+import { baseUrlPlaceholder, type ConnectionNote, connectionNote, validateBaseUrlValue } from "../base-url.ts";
 import { builtinDefaults, isBuiltinProviderId } from "../catalog.ts";
-import { API_TYPES, apiTypeLabel, maskApiKey, plural } from "../constants.ts";
+import { API_TYPES, apiTypeNote, maskApiKey, plural } from "../constants.ts";
 import { DELETE } from "../store.ts";
 import { AdvancedPane, advancedNote, PROVIDER_ADVANCED_FIELDS, providerAdvancedTarget } from "./advanced.ts";
-import { ChoicePane, InlineEdit, moveSelection } from "./controls.ts";
+import { type Choice, ChoicePane, InlineEdit, moveSelection } from "./controls.ts";
 import { type CredentialRuntime, CredentialState } from "./credential.ts";
 import type { EditorPane, ProviderPaneHost } from "./pane.ts";
 import {
 	isPrintableInput,
 	renderErrorLines,
-	renderInfoLine,
 	renderKeyValueLine,
+	renderWrappedLines,
 	type ScrollWindowInfo,
 } from "./value-row.ts";
 
-/**
- * One-line guidance on the baseUrl shape an API tag expects: pi-ai delegates
- * URL assembly to the vendor SDKs, so OpenAI-style tags need the version path
- * in baseUrl while the Anthropic and Mistral clients append it themselves.
- */
-export function baseUrlHint(api: string | undefined): string | undefined {
-	switch (api) {
-		case "openai-responses":
-		case "openai-completions":
-		case "openai-codex-responses":
-			return "baseUrl includes the version path, e.g. /v1";
-		case "anthropic-messages":
-			return "baseUrl is the bare origin; /v1/messages is appended";
-		case "mistral-conversations":
-			return "baseUrl is the bare origin; /v1 is appended";
-		case "google-generative-ai":
-			return "baseUrl includes the version path, e.g. /v1beta";
-		default:
-			return undefined;
-	}
-}
-
-/** Shared baseUrl validation for provider-level and model-level entries; returns an error or undefined. */
-export function validateBaseUrlValue(value: string): string | undefined {
-	let url: URL;
-	try {
-		url = new URL(value);
-	} catch {
-		return "baseUrl must be a valid URL.";
-	}
-	if (url.protocol !== "http:" && url.protocol !== "https:") {
-		return `Unsupported protocol: ${url.protocol}`;
-	}
-	if (url.username || url.password || url.hash) {
-		return "baseUrl must not contain credentials or a fragment.";
-	}
-	return undefined;
-}
-
-/** The empty baseUrl's placeholder, following the same convention as baseUrlHint. */
-function baseUrlPlaceholder(api: string | undefined): string {
-	switch (api) {
-		case "anthropic-messages":
-		case "mistral-conversations":
-			return "https://api.example.com";
-		case "google-generative-ai":
-			return "https://api.example.com/v1beta";
-		default:
-			return "https://api.example.com/v1";
-	}
-}
+/** How first-time setup ended: every step answered, or the optional apiKey left with Esc. */
+export type SetupOutcome = "entered" | "skipped";
 
 type AuthRow = "credential" | "logout" | "baseUrl" | "apiKey" | "apiType" | "advanced";
 
@@ -86,6 +38,8 @@ export class AuthenticationPane implements EditorPane {
 	private focused = false;
 	/** Lines below the rows in the last render: error, result, and notes. */
 	private footerLines = 0;
+	/** Runs once the first-time setup has asked for baseUrl and apiKey; unset outside setup. */
+	private setupDone: ((outcome: SetupOutcome) => void) | undefined;
 
 	private readonly host: ProviderPaneHost;
 	private readonly runtime: CredentialRuntime;
@@ -131,7 +85,7 @@ export class AuthenticationPane implements EditorPane {
 	 * over models.json, which wins over the environment, so an apiKey typed
 	 * here hides the environment note immediately instead of after a reload.
 	 */
-	private notes(): string[] {
+	private notes(): ConnectionNote[] {
 		const provider = this.provider();
 		const status = this.runtime.getProviderAuthStatus(this.host.providerId);
 		const notes: string[] = [];
@@ -144,9 +98,9 @@ export class AuthenticationPane implements EditorPane {
 			}
 			notes.push("Saved as typed; $VAR and !command resolve when sent.");
 		}
-		const hint = baseUrlHint(provider?.api);
-		if (hint) notes.push(hint);
-		return notes;
+		// A custom provider's api and baseUrl are the user's to get right, so the page shows where they lead.
+		const connection = this.builtin ? undefined : connectionNote(provider?.api, provider?.baseUrl);
+		return [...(connection ? [connection] : []), ...notes.map((text) => ({ text }))];
 	}
 
 	/** Short lines, so they fit the right pane of an 80-column terminal. */
@@ -230,7 +184,8 @@ export class AuthenticationPane implements EditorPane {
 		const notes = this.notes();
 		// A blank line keeps the notes from reading as one more row.
 		if (notes.length > 0) lines.push("");
-		for (const note of notes) lines.push(renderInfoLine(theme, note, width));
+		for (const note of notes)
+			lines.push(...renderWrappedLines(theme, note.text, width, note.warning ? "warning" : "dim"));
 		this.footerLines = lines.length - rowCount;
 		return lines;
 	}
@@ -284,10 +239,13 @@ export class AuthenticationPane implements EditorPane {
 		const current = row === "credential" ? "" : (this.provider()?.[row] ?? "");
 		// Only a first baseUrl leads on to apiKey; re-editing an address stays put.
 		const firstBaseUrl = row === "baseUrl" && current === "";
+		// During setup apiKey is the last step, and Esc there means the endpoint needs no key.
+		const setup = row === "apiKey" && this.setupDone !== undefined;
 		this.edit.begin(row, current, mode, this.focused, (value) => this.commit(row, value), firstData, {
 			placeholder: this.placeholder(row),
 			placeholderStyle: (text) => this.host.theme.fg("dim", text),
-			onDone: firstBaseUrl ? () => this.advanceToApiKey() : undefined,
+			onDone: firstBaseUrl ? () => this.advanceToApiKey() : setup ? () => this.finishSetup("entered") : undefined,
+			onCancel: setup ? () => this.finishSetup("skipped") : undefined,
 		});
 	}
 
@@ -302,19 +260,32 @@ export class AuthenticationPane implements EditorPane {
 		}
 	}
 
-	/** New-provider setup: open the empty baseUrl, so the next paste fills it. */
-	beginSetup(): void {
+	/**
+	 * New-provider setup: open the empty baseUrl, so the next paste fills it.
+	 * `onComplete` runs once the connection is entered, key or no key.
+	 */
+	beginSetup(onComplete?: (outcome: SetupOutcome) => void): void {
 		if (this.provider()?.baseUrl) return;
+		this.setupDone = onComplete;
 		this.index = this.rows().indexOf("baseUrl");
 		this.beginEdit("baseUrl", "overwrite");
 	}
 
+	private finishSetup(outcome: SetupOutcome): void {
+		const done = this.setupDone;
+		this.setupDone = undefined;
+		done?.(outcome);
+	}
+
 	/** After a first baseUrl, a provider without any key opens apiKey next, ready for the paste. */
 	private advanceToApiKey(): void {
-		if (!this.provider()?.baseUrl || this.provider()?.apiKey) return;
-		if (this.runtime.getProviderAuthStatus(this.host.providerId).configured) return;
+		if (!this.provider()?.baseUrl) return;
 		const next = this.rows().indexOf("apiKey");
-		if (next < 0) return;
+		const keyed = this.provider()?.apiKey || this.runtime.getProviderAuthStatus(this.host.providerId).configured;
+		if (keyed || next < 0) {
+			this.finishSetup("entered");
+			return;
+		}
 		this.index = next;
 		this.beginEdit("apiKey", "overwrite");
 	}
@@ -373,6 +344,19 @@ export class AuthenticationPane implements EditorPane {
 }
 
 /**
+ * The rows of an API picker: the unset choice, every known tag, then a custom
+ * tag models.json already holds.
+ */
+export function apiTypeChoices(unsetLabel: string, current: string | undefined): Choice<string | undefined>[] {
+	const tags: string[] = [...API_TYPES];
+	if (current && !tags.includes(current)) tags.push(current);
+	return [
+		{ value: undefined, label: unsetLabel, dim: true },
+		...tags.map((tag) => ({ value: tag, label: tag, note: apiTypeNote(tag) })),
+	];
+}
+
+/**
  * Single-select provider api sub-page of Authentication; Enter applies and
  * returns. Clearing is refused while any model still resolves its api from
  * the provider — set a model-level API under Model-specific API first.
@@ -385,14 +369,7 @@ export function createProviderApiPane(host: ProviderPaneHost, initial?: string, 
 		choices: () => {
 			const fallback = builtinDefaults(host.providerId).api;
 			const label = fallback ? `not set (built-in default: ${fallback})` : "not set (models define their own)";
-			const values: (string | undefined)[] = [undefined, ...API_TYPES];
-			const value = current();
-			if (value && !values.includes(value)) values.push(value);
-			return values.map((value) => ({
-				value,
-				label: value === undefined ? label : apiTypeLabel(value),
-				dim: value === undefined,
-			}));
+			return apiTypeChoices(label, current());
 		},
 		choose: (api) => {
 			if (api === undefined) {

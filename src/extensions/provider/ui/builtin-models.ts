@@ -12,8 +12,8 @@ import { moveSelection } from "./controls.ts";
 import type { BuiltinModelsHost, EditorPane } from "./pane.ts";
 import {
 	renderInfoLine,
-	renderKeyValueLine,
 	renderPlainLine,
+	renderSearchLine,
 	type ScrollWindowInfo,
 	truncateMiddle,
 	ValueEditor,
@@ -42,21 +42,14 @@ export class BuiltinModelsPane implements EditorPane {
 		const overridden = this.host.store.getProvider(this.host.providerId)?.modelOverrides ?? {};
 		const entries = this.filtered();
 		this.index = Math.min(this.index, Math.max(0, entries.length - 1));
-		const lines = [
-			renderKeyValueLine(theme, {
-				keyLabel: "Search",
-				active: false,
-				paneFocused: this.focused,
-				editing: this.search,
-				width,
-			}),
-		];
+		const lines = [renderSearchLine(theme, this.search, this.focused, width)];
 		for (const [row, id] of entries.entries()) {
-			const note = Object.hasOwn(overridden, id) ? " · overridden" : "";
+			const note = Object.hasOwn(overridden, id) ? "· overridden" : undefined;
 			lines.push(
-				renderPlainLine(theme, truncateMiddle(id, Math.max(8, width - 2 - note.length)) + note, {
+				renderPlainLine(theme, truncateMiddle(id, Math.max(8, width - 3 - (note?.length ?? 0))), {
 					active: row === this.index,
 					paneFocused: this.focused,
+					note,
 					width,
 				}),
 			);

@@ -8,7 +8,14 @@ import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import { builtinModelIds, builtinProviderIds, isBuiltinProviderId } from "../catalog.ts";
 import { plural } from "../constants.ts";
 import type { ModelsJsonStore } from "../store.ts";
-import { renderInfoLine, renderKeyValueLine, renderPlainLine, ValueEditor, windowLines } from "./value-row.ts";
+import {
+	frameBodyRows,
+	renderInfoLine,
+	renderKeyValueLine,
+	renderPlainLine,
+	ValueEditor,
+	windowLines,
+} from "./value-row.ts";
 
 /** Why a typed id can never name a provider. */
 function invalidIdReason(id: string): string | undefined {
@@ -18,8 +25,8 @@ function invalidIdReason(id: string): string | undefined {
 	return id.startsWith("/") ? 'Provider ids cannot start with "/".' : undefined;
 }
 
-/** Fixed list-area height: the screen frame matches the provider editor's. */
-const LIST_ROWS = 12;
+/** Lines the search input and its spacer take from the body, so the frame matches the provider editor's. */
+const ROWS_ABOVE_LIST = 2;
 const MORE_LABEL = "More built-in providers";
 export type ProviderListResult = { kind: "open"; providerId: string } | { kind: "close" };
 
@@ -60,6 +67,8 @@ export class ProviderListScreen implements Component, Focusable {
 		done: (result: ProviderListResult) => void,
 		store: ModelsJsonStore,
 		context: ProviderListContext,
+		/** The provider to start on, e.g. the one whose editor was just left. */
+		selectId?: string,
 	) {
 		this.context = context;
 		this.tui = tui;
@@ -68,6 +77,10 @@ export class ProviderListScreen implements Component, Focusable {
 		this.done = done;
 		this.store = store;
 		this.input = new ValueEditor({ onCommit: () => this.confirm(), onCancel: () => this.cancel() });
+		this.index = Math.max(
+			0,
+			this.rows().findIndex((row) => row.kind === "provider" && row.id === selectId),
+		);
 	}
 
 	get focused(): boolean {
@@ -173,6 +186,7 @@ export class ProviderListScreen implements Component, Focusable {
 		// The list area is a fixed window: overlong lists scroll with a (n/N)
 		// indicator (the /model selector convention) instead of resizing.
 		const area: string[] = [];
+		const listRows = frameBodyRows(this.tui) - ROWS_ABOVE_LIST;
 		if (this.mode === "newProvider") {
 			const id = this.input.value.trim();
 			// An id that can never work says so while typing, instead of naming the key it would become.
@@ -217,9 +231,9 @@ export class ProviderListScreen implements Component, Focusable {
 			}
 			// The indicator counts rows, not the spacer line.
 			const indicator = () => theme.fg("dim", `  (${this.index + 1}/${rows.length})`);
-			area.push(...windowLines(theme, rendered, LIST_ROWS, { cursor }, indicator));
+			area.push(...windowLines(theme, rendered, listRows, { cursor }, indicator));
 		}
-		while (area.length < LIST_ROWS) area.push("");
+		while (area.length < listRows) area.push("");
 		const hints =
 			this.mode === "newProvider"
 				? [keyHint("tui.input.submit", "create"), keyHint("tui.select.cancel", "cancel")]
