@@ -6,6 +6,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createEditToolDefinition } from "../src/core/tools/edit.ts";
 import { computeEditsDiff, type Edit } from "../src/core/tools/edit-diff.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { stripAnsi } from "../src/utils/ansi.ts";
 import { ToolExecutionComponent } from "./suite/tool-execution.ts";
 
 class FakeTerminal implements Terminal {
@@ -240,5 +241,30 @@ describe("edit tool TUI rendering", () => {
 		);
 		expect(rendered).not.toContain("+1 ");
 		expect(rendered).not.toContain("-1 ");
+	});
+
+	it("aligns a settled error result body with the call header", () => {
+		// The result body is framed by the same rail as the header, so it must start at the same
+		// column. An extra outputPad indent would push the diff/error one column past the header.
+		const component = new ToolExecutionComponent(
+			"edit",
+			"tool-call-align",
+			{ path: "src/x.ts", edits: [{ oldText: "a", newText: "b" }] },
+			{},
+			createEditToolDefinition(process.cwd()),
+			{ requestRender: () => {} } as never,
+			process.cwd(),
+		);
+		component.setArgsComplete();
+		component.updateResult(
+			{ content: [{ type: "text", text: "Edit failed: could not find old text" }], isError: true },
+			false,
+		);
+		const lines = component.render(80).map((line) => stripAnsi(line));
+		const header = lines.find((line) => line.includes("edit src/x.ts"));
+		const body = lines.find((line) => line.includes("Edit failed"));
+		expect(header).toBeDefined();
+		expect(body).toBeDefined();
+		expect(body!.indexOf("Edit")).toBe(header!.indexOf("edit"));
 	});
 });

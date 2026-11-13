@@ -44,6 +44,22 @@ describe("extension settings", () => {
 		expect(storage.text).toBe("{broken");
 	});
 
+	it("treats prototype keys like constructor as ordinary namespaces", async () => {
+		const storage = new Storage();
+		const manager = SettingsManager.fromStorage(storage);
+		// "constructor" passes the namespace regex but must not resolve through Object.prototype.
+		expect(manager.getExtensionSettings("constructor")).toEqual({});
+		await manager.setExtensionSettings("constructor", { model: "test/model" });
+		expect(manager.getExtensionSettings("constructor")).toEqual({ model: "test/model" });
+		expect(JSON.parse(storage.text)).toMatchObject({ extensionSettings: { constructor: { model: "test/model" } } });
+		// An unchanged prototype-key write is skipped, and sibling namespaces stay isolated.
+		const writes = storage.writes;
+		await manager.setExtensionSettings("constructor", { model: "test/model" });
+		expect(storage.writes).toBe(writes);
+		expect(manager.getExtensionSettings("tostring")).toEqual({});
+		expect(manager.getExtensionSettings("other")).toEqual({ enabled: true });
+	});
+
 	it("returns detached global data and rejects invalid namespaces and values", async () => {
 		const manager = SettingsManager.inMemory({ extensionSettings: { agent: { model: "test/model" } } });
 		const value = manager.getExtensionSettings("agent");

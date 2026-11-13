@@ -473,7 +473,10 @@ export class SettingsManager {
 	getExtensionSettings(namespace: string): Record<string, unknown> {
 		if (!/^[a-z][a-z0-9-]{0,63}$/.test(namespace)) throw new Error("Invalid extension settings namespace");
 		if (this.globalSettingsLoadError) throw this.globalSettingsLoadError;
-		const value = this.globalSettings.extensionSettings?.[namespace];
+		// `constructor` and friends pass the namespace regex; an own-property check keeps them from
+		// resolving through Object.prototype (which is not a mergeable settings object).
+		const stored = this.globalSettings.extensionSettings;
+		const value = stored && Object.hasOwn(stored, namespace) ? stored[namespace] : undefined;
 		if (value !== undefined && !isMergeableObject(value)) throw new Error("Invalid extension settings object");
 		return structuredClone(value ?? {});
 	}
@@ -486,12 +489,16 @@ export class SettingsManager {
 		if (encoded === undefined) throw new Error("Extension settings must be JSON serializable");
 		const snapshot: Record<string, unknown> = JSON.parse(encoded);
 		const write = this.writeQueue.then(() => {
+			// The synchronous guard above can race a concurrent reload; refuse the write here too so the
+			// readable in-memory value is never advanced past a failed or unloaded global scope.
+			if (this.globalSettingsLoadError) throw this.globalSettingsLoadError;
 			this.storage.withLock("global", (current) => {
 				const settings: unknown = current ? JSON.parse(stripBom(current)) : {};
 				if (!isMergeableObject(settings)) throw new Error("Invalid settings object");
 				const namespaces = settings.extensionSettings ?? {};
 				if (!isMergeableObject(namespaces)) throw new Error("Invalid extension settings object");
-				if (JSON.stringify(namespaces[namespace] ?? {}) === encoded) return undefined;
+				const existing = Object.hasOwn(namespaces, namespace) ? namespaces[namespace] : undefined;
+				if (JSON.stringify(existing ?? {}) === encoded) return undefined;
 				return JSON.stringify(
 					{ ...settings, extensionSettings: { ...namespaces, [namespace]: snapshot } },
 					null,

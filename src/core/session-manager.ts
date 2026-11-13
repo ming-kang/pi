@@ -275,6 +275,15 @@ export function getTasksLateSidecarPath(sessionFile: string): string {
 	return `${sessionFile}.tasks-late.jsonl`;
 }
 
+/**
+ * Whether a directory entry is a session transcript rather than a sidecar it owns. The late-task
+ * sidecar also ends in `.jsonl`, so scans that only test `endsWith(".jsonl")` open, parse and count
+ * it as a candidate session; this keeps every discovery path to real transcripts.
+ */
+export function isSessionJsonlFile(file: string): boolean {
+	return file.endsWith(".jsonl") && !file.endsWith(".tasks-late.jsonl");
+}
+
 /** Everything a session file owns that currently exists: the file, its artifacts directory and its late-task sidecar. */
 export function listSessionOwnedPaths(sessionFile: string): string[] {
 	return [sessionFile, getSessionArtifactDir(sessionFile), getTasksLateSidecarPath(sessionFile)].filter((path) =>
@@ -773,7 +782,7 @@ export function findMostRecentSession(sessionDir: string, cwd?: string): string 
 	const resolvedCwd = cwd ? resolvePath(cwd) : undefined;
 	try {
 		const files = readdirSync(resolvedSessionDir)
-			.filter((file) => file.endsWith(".jsonl"))
+			.filter((file) => isSessionJsonlFile(file))
 			.map((file) => join(resolvedSessionDir, file))
 			.map((path) => ({ path, mtime: statSync(path).mtimeMs }))
 			.sort((a, b) => b.mtime - a.mtime);
@@ -971,7 +980,7 @@ async function listSessionsFromDir(
 	try {
 		const dirEntries = await readdir(dir);
 		const files = dirEntries
-			.filter((file) => file.endsWith(".jsonl"))
+			.filter((file) => isSessionJsonlFile(file))
 			.sort((a, b) => b.localeCompare(a))
 			.map((file) => ({ path: join(dir, file) }));
 		const total = files.length;
@@ -1931,7 +1940,7 @@ export class SessionManager {
 
 		try {
 			for (const file of readdirSync(dir)) {
-				if (!file.endsWith(".jsonl")) continue;
+				if (!isSessionJsonlFile(file)) continue;
 				const path = join(dir, file);
 				const header = readSessionHeaderForDiscovery(path);
 				if (header?.id !== id) continue;
@@ -2013,7 +2022,7 @@ export class SessionManager {
 				MAX_CONCURRENT_SESSION_DISCOVERY_LOADS,
 				async (dir) => {
 					try {
-						return (await readdir(dir)).filter((file) => file.endsWith(".jsonl")).map((file) => join(dir, file));
+						return (await readdir(dir)).filter((file) => isSessionJsonlFile(file)).map((file) => join(dir, file));
 					} catch {
 						return [];
 					}

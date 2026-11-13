@@ -2871,6 +2871,11 @@ export class AgentSession {
 		this.setThinkingLevel(thinkingLevel);
 
 		await this._emitModelSelect(model, previousModel, "set");
+
+		// A background completion that settled while no model was set is queued but undeliverable
+		// (canDeliver() requires a model). Now that one exists, schedule it instead of leaving it
+		// stuck until some unrelated trigger happens to drain the queue.
+		if (previousModel === undefined) this._tasksHost.delivery.schedule();
 	}
 
 	private _addPersistedDefaultToNonEmptyScope(model: Model<any>): void {

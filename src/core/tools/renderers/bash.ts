@@ -57,6 +57,11 @@ class BashCallRenderComponent implements Component {
 	}
 
 	private renderLines(width: number): string[] {
+		// A command spanning multiple physical lines is always shown truncated when collapsed, so skip
+		// highlighting and rendering the whole script only to throw the rendered result away.
+		if (!this.expanded && this.command !== null && /\r?\n/.test(this.command)) {
+			return [formatTruncatedShellCall(this.command, this.timeout, width, this.config)];
+		}
 		const fullCall = formatFullShellCall(this.command, this.timeout, this.config);
 		const fullLines = new Text(fullCall, 0, 0).render(width);
 		if (this.expanded || fullLines.length <= 1) return fullLines;

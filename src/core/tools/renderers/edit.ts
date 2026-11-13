@@ -227,7 +227,10 @@ export const editRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rende
 			return component;
 		}
 		component.addChild(new Spacer(1));
-		component.addChild(new Text(output, context.outputPad, 0));
+		// The call header and preview diff render at padding 0 (as every other renderer does); the
+		// framing shell supplies the shared gutter. Padding the result body by outputPad as well would
+		// indent it one column past the header it belongs to.
+		component.addChild(new Text(output, 0, 0));
 		return component;
 	},
 };

@@ -39,6 +39,33 @@ describe("bash tool call rendering", () => {
 		expect(renderCall(component, 120)).toContain("● $ git status --short");
 	});
 
+	test("collapses a multi-line command to a truncated one-liner and expands it in full", () => {
+		const component = createRenderer("echo hi\necho bye");
+		component.setArgsComplete();
+
+		// Collapsed: only the first physical line plus a hidden-line count; the rest is never rendered.
+		const collapsed = renderCall(component, 80);
+		expect(collapsed).toContain("$ echo hi (+1 line)");
+		expect(collapsed).not.toContain("echo bye");
+
+		component.setExpanded(true);
+		const expanded = renderCall(component, 80);
+		expect(expanded).toContain("echo hi");
+		expect(expanded).toContain("echo bye");
+	});
+
+	test("keeps a single long line a truncated preview instead of a wrapped dump", () => {
+		// A single physical line that overflows the width still renders through the full path and is
+		// shown truncated, never dumped across several wrapped lines.
+		const command = "aaaa ".repeat(40).trim();
+		const component = createRenderer(command);
+		component.setArgsComplete();
+		const rendered = renderCall(component, 20);
+		expect(rendered).toContain("$ aaaa aaaa");
+		expect(rendered).toContain("…");
+		expect(rendered).not.toContain(command);
+	});
+
 	test("keeps long commands as a raw preview with timeout metadata", () => {
 		const component = createRenderer(
 			"pwd && git branch --show-current && git status --short && git log -1 --oneline && git tag --points-at HEAD && git remote -v && npm --version && node --version",

@@ -62,6 +62,46 @@ describe("session artifacts", () => {
 		expect(findMostRecentSession(sessionDir)).toBe(file);
 		expect(SessionManager.continueRecent(root, sessionDir).getSessionFile()).toBe(manager.getSessionFile());
 	});
+
+	it("excludes the late-task sidecar from every scan, even when it holds a valid session line", async () => {
+		const root = tempRoot();
+		const manager = SessionManager.create(root, join(root, "sessions"));
+		manager.appendMessage({ role: "user", content: "Start", timestamp: 1 });
+		const file = manager.getSessionFile()!;
+		const sessionDir = join(root, "sessions");
+		// A sidecar that looks exactly like a real session: a valid header plus a message. Every scan
+		// ends with `.jsonl`, so without the exclusion they open, parse and count this as a session.
+		const sidecarId = "00000000-0000-7000-8000-0000000000ff";
+		const sidecarHeader = {
+			type: "session",
+			version: 3,
+			id: sidecarId,
+			timestamp: new Date(2).toISOString(),
+			cwd: root,
+		};
+		const sidecarMessage = {
+			type: "message",
+			id: "m1",
+			parentId: null,
+			timestamp: new Date(2).toISOString(),
+			message: { role: "user", content: "late settlement", timestamp: 2 },
+		};
+		writeFileSync(
+			`${file}.tasks-late.jsonl`,
+			`${JSON.stringify(sidecarHeader)}\n${JSON.stringify(sidecarMessage)}\n`,
+		);
+
+		// Discovery reads only the header; it must pick the real session, not the sidecar.
+		expect(findMostRecentSession(sessionDir)).toBe(file);
+		expect(SessionManager.findById(root, sidecarId, sessionDir)).toBeUndefined();
+		// Listing counts exactly one session and never the sidecar.
+		expect((await SessionManager.list(root, sessionDir)).map((info) => info.path)).toEqual([file]);
+		expect((await SessionManager.listAll(sessionDir)).map((info) => info.path)).toEqual([file]);
+		// The progress total counts real sessions only, never the sidecar.
+		const totals: number[] = [];
+		await SessionManager.list(root, sessionDir, (_loaded, total) => totals.push(total));
+		expect(totals).toEqual([1]);
+	});
 });
 
 describe("session deletion", () => {

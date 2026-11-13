@@ -201,6 +201,55 @@ describe("wrapToolDefinition validation hints", () => {
 		}
 	});
 
+	it("passes an already-wrapped prepareArguments through instead of validating twice", () => {
+		const once = wrapToolDefinition(definition());
+		const synthesized = createToolDefinitionFromAgentTool(once);
+		const twice = wrapToolDefinition(synthesized);
+		// The synthesized definition already carries this module's validated wrapper; re-wrapping it
+		// would run validateToolArguments a second time, so the wrapper is passed through unchanged.
+		expect(twice.prepareArguments).toBe(synthesized.prepareArguments);
+	});
+
+	it("collects hints inside allOf (intersection) branches", () => {
+		const AllOfSchema = Type.Object(
+			{
+				name: Type.String(),
+				meta: Type.Optional(
+					Type.Intersect([
+						Type.Object({ label: Type.String() }, { additionalProperties: false }),
+						Type.Object({ note: Type.Optional(Type.String()) }),
+					]),
+				),
+			},
+			{ additionalProperties: false },
+		);
+		const wrapped = wrapToolDefinition({
+			name: "job",
+			label: "Job",
+			description: "d",
+			parameters: AllOfSchema,
+			execute: vi.fn(),
+		} as ToolDefinition<typeof AllOfSchema>);
+		try {
+			wrapped.prepareArguments?.({ name: "x", meta: { label: "y", extra: "z" } });
+			expect.unreachable("validation should have failed");
+		} catch (error) {
+			const message = (error as Error).message;
+			expect(message).toContain("Hint: meta.extra is not a field; fields at meta: label");
+		}
+	});
+
+	it("flags an unknown field whose name shadows an Object.prototype member", () => {
+		const wrapped = wrapToolDefinition(definition());
+		try {
+			wrapped.prepareArguments?.({ tasks: [{ prompt: "Audit." }], constructor: "shadow" });
+			expect.unreachable("validation should have failed");
+		} catch (error) {
+			const message = (error as Error).message;
+			expect(message).toContain("Hint: constructor is not a field; fields at root: background, tasks");
+		}
+	});
+
 	it("wraps every definition in a batch", () => {
 		const wrapped = wrapToolDefinitions([definition(), definition({ name: "other" })]);
 		expect(wrapped).toHaveLength(2);

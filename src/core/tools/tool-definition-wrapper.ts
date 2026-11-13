@@ -26,10 +26,17 @@ export type TypeBoxAgentTool<TParams extends TSchema = TSchema, TDetails = any> 
 export type ToolContextFactory = (toolCallId: string, signal: AbortSignal | undefined) => ExtensionToolContext;
 
 const RECEIVED_ARGUMENTS_MARKER = "\n\nReceived arguments:\n";
-const HINT_MARKER = "\n\nHint: ";
 const RECEIVED_ARGUMENTS_MAX_BYTES = 2 * 1024;
 const RECEIVED_ARGUMENTS_MAX_LINES = 40;
 const FIELD_HINTS_MAX = 10;
+
+/**
+ * Every `prepareArguments` wrapper this module creates. A definition synthesized from an
+ * already-wrapped tool (`createToolDefinitionFromAgentTool`) carries such a wrapper as its
+ * `prepareArguments`; recognizing it lets `wrapToolDefinition` pass it through instead of wrapping
+ * it again and validating the same arguments a second time.
+ */
+const prepareArgumentsWrappers = new WeakSet<(raw: unknown) => unknown>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -57,6 +64,11 @@ function collectFieldHints(schema: unknown, args: unknown): string[] {
 			if (value !== null && variants.length === 1) visit(variants[0], value, path);
 			return;
 		}
+		if (Array.isArray(node.allOf)) {
+			// An intersection constrains the same value with every branch, so walk them all.
+			for (const variant of node.allOf) visit(variant, value, path);
+			return;
+		}
 		if (node.type === "array" && Array.isArray(value)) {
 			for (let index = 0; index < value.length; index++) {
 				visit(node.items, value[index], `${path}.${index}`);
@@ -69,7 +81,9 @@ function collectFieldHints(schema: unknown, args: unknown): string[] {
 		const where = path || "root";
 		if (node.additionalProperties === false) {
 			for (const [key, entry] of Object.entries(value)) {
-				if (entry !== null && !(key in properties) && hints.length < FIELD_HINTS_MAX) {
+				// `properties` is a plain object, so an inherited member like `constructor` must not read
+				// as a declared field: only an own property of the schema names a legal field.
+				if (entry !== null && !Object.hasOwn(properties, key) && hints.length < FIELD_HINTS_MAX) {
 					const subject = path ? `${path}.${key}` : key;
 					hints.push(`${subject} is not a field; fields at ${where}: ${fields.join(", ")}`);
 				}
@@ -102,9 +116,6 @@ function collectFieldHints(schema: unknown, args: unknown): string[] {
  */
 function enrichValidationError(error: unknown, parameters: TSchema, args: unknown): Error {
 	const message = error instanceof Error ? error.message : String(error);
-	// A definition synthesized from an already-wrapped tool enriches on the
-	// inside; do not stack a second layer of hints on the same failure.
-	if (message.includes(HINT_MARKER)) return error instanceof Error ? error : new Error(message);
 	const hints = collectFieldHints(parameters, args);
 	const markerIndex = message.indexOf(RECEIVED_ARGUMENTS_MARKER);
 	const head = markerIndex === -1 ? message : message.slice(0, markerIndex);
@@ -128,7 +139,7 @@ function enrichValidationError(error: unknown, parameters: TSchema, args: unknow
  */
 function wrapPrepareArguments(definition: ToolDefinition<any, any>): (raw: unknown) => unknown {
 	const tool = { name: definition.name, description: definition.description, parameters: definition.parameters };
-	return (raw: unknown): unknown => {
+	const wrapper = (raw: unknown): unknown => {
 		const args = definition.prepareArguments ? definition.prepareArguments(raw) : raw;
 		try {
 			validateToolArguments(tool, {
@@ -142,6 +153,8 @@ function wrapPrepareArguments(definition: ToolDefinition<any, any>): (raw: unkno
 		}
 		return args;
 	};
+	prepareArgumentsWrappers.add(wrapper);
+	return wrapper;
 }
 
 /** Wrap a ToolDefinition into an AgentTool for the core runtime. */
@@ -149,6 +162,13 @@ export function wrapToolDefinition<TDetails = unknown>(
 	definition: ToolDefinition<any, TDetails>,
 	ctxFactory?: ToolContextFactory,
 ): AgentTool<any, TDetails> {
+	// A definition synthesized from an already-wrapped tool carries our wrapper as its
+	// prepareArguments. Wrapping it again would validate the same arguments twice, so pass it through.
+	const existingPrepareArguments = definition.prepareArguments;
+	const prepareArguments =
+		existingPrepareArguments && prepareArgumentsWrappers.has(existingPrepareArguments)
+			? existingPrepareArguments
+			: wrapPrepareArguments(definition);
 	return {
 		name: definition.name,
 		label: definition.label,
@@ -156,7 +176,7 @@ export function wrapToolDefinition<TDetails = unknown>(
 		parameters: definition.parameters,
 		outputSchema: definition.outputSchema,
 		constrainedSampling: definition.constrainedSampling,
-		prepareArguments: wrapPrepareArguments(definition),
+		prepareArguments,
 		executionMode: definition.executionMode,
 		execute: (toolCallId, params, signal, onUpdate, ctx?: ExtensionToolContext) =>
 			definition.execute(

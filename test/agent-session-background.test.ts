@@ -624,6 +624,29 @@ describe("session-owned background host", () => {
 		}
 	});
 
+	it("delivers a completion queued without a model as soon as setModel provides one", async () => {
+		const session = await host();
+		await session.bindExtensions({ tasksEnabled: true });
+		const model = session.agent.state.model;
+		session.agent.state.model = undefined as never;
+		try {
+			const execution = await task(session);
+			execution.finish();
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			// The completion is queued but cannot deliver while there is no model to run it.
+			expect(sessionDelivery(session).pending()).toHaveLength(1);
+			expect(session.messages.some((message) => message.role === "custom")).toBe(false);
+			// Providing the model through setModel must schedule the stuck completion on its own,
+			// without waiting for another trigger such as retryTaskNotifications().
+			await session.setModel(model);
+			await vi.waitFor(() => expect(session.messages.some((message) => message.role === "custom")).toBe(true));
+			await session.waitForIdle();
+			expect(sessionDelivery(session).pending()).toEqual([]);
+		} finally {
+			session.agent.state.model = model;
+		}
+	});
+
 	it("carries pending nextTurn messages into the completion turn", async () => {
 		const session = await host();
 		await session.bindExtensions({ tasksEnabled: true });
