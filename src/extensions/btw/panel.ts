@@ -4,6 +4,8 @@ import {
 	Markdown,
 	Text,
 	type TUI,
+	type TuiMouseEvent,
+	type TuiMouseEventResult,
 	truncateToWidth,
 	visibleWidth,
 	wrapTextWithAnsi,
@@ -71,10 +73,18 @@ export class BtwPanel implements Component {
 
 	scroll(delta: number): boolean {
 		if (this.maxOffset === 0) return false;
-		this.offset = Math.max(0, Math.min(this.maxOffset, this.offset + delta));
+		const next = Math.max(0, Math.min(this.maxOffset, this.offset + delta));
+		if (next === this.offset) return false;
+		this.offset = next;
 		this.follow = this.offset === this.maxOffset;
 		this.tui.requestRender();
 		return true;
+	}
+
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (this.disposed || event.type !== "wheel" || !event.wheelDelta) return undefined;
+		const moved = this.scroll(event.wheelDelta);
+		return { handled: true, render: moved };
 	}
 
 	dispose(): void {
@@ -91,7 +101,9 @@ export class BtwPanel implements Component {
 		const theme = this.getTheme();
 		const innerWidth = Math.max(1, width - 4);
 		const lines = this.body(state, innerWidth, theme);
-		const cap = Math.max(1, Math.floor(this.tui.terminal.rows / 3) - 2);
+		const targetTotal = Math.floor(this.tui.terminal.rows / 2);
+		const safeTotal = Math.max(3, Math.min(targetTotal, this.tui.terminal.rows - 7));
+		const cap = Math.max(1, safeTotal - 2);
 		const needed = Math.min(cap, Math.max(1, lines.length));
 		this.heldHeight = busy ? Math.min(cap, Math.max(this.heldHeight, needed)) : needed;
 		this.maxOffset = Math.max(0, lines.length - this.heldHeight);
@@ -107,17 +119,17 @@ export class BtwPanel implements Component {
 		]
 			.filter(Boolean)
 			.join(theme.fg("muted", " · "));
-		const footer = this.footer(state, theme);
+		const meta = this.headerRight(state, theme);
 		if (width < 6) return body.map((line) => truncateToWidth(line, width));
 		return [
-			this.border(title, width, true, theme),
+			this.topBorder(title, meta, width, theme),
 			...body.map(
 				(line) =>
 					theme.fg("borderAccent", "│ ") +
 					truncateToWidth(line, innerWidth, "…", true) +
 					theme.fg("borderAccent", " │"),
 			),
-			this.border(footer, width, false, theme),
+			this.bottomBorder(width, theme),
 		];
 	}
 
@@ -177,48 +189,47 @@ export class BtwPanel implements Component {
 		return lines;
 	}
 
-	private footer(state: BtwPanelState, theme: Theme): string {
+	private headerRight(state: BtwPanelState, theme: Theme): string {
 		const parts: string[] = [];
-		const label = (text: string) => theme.fg("muted", text);
 		const value = (text: string) => theme.fg("text", text);
 		if (this.maxOffset > 0) {
-			const keys = [keyLabel("app.btw.scrollUp"), keyLabel("app.btw.scrollDown")].filter(Boolean).join("/");
-			parts.push(
-				value(keys) +
-					label(" scroll ") +
-					value(`${this.offset + 1}–${this.offset + this.heldHeight}/${this.maxOffset + this.heldHeight}`),
-			);
+			parts.push(value(`${this.offset + 1}–${this.offset + this.heldHeight}/${this.maxOffset + this.heldHeight}`));
 		}
 		if (state.phase === "ready") {
 			const { conversation } = state;
-			const { usage } = conversation;
-			const stats: string[] = [];
-			if (usage.input > 0) stats.push(`↑${formatTokens(usage.input)}`);
-			if (usage.output > 0) stats.push(`↓${formatTokens(usage.output)}`);
-			if (usage.cacheRead > 0) stats.push(`R${formatTokens(usage.cacheRead)}`);
-			if (usage.cacheWrite > 0) stats.push(`W${formatTokens(usage.cacheWrite)}`);
-			if (conversation.latestCacheHitPercent !== undefined)
-				stats.push(`CH${conversation.latestCacheHitPercent.toFixed(1)}%`);
-			if (usage.cost.total > 0)
-				stats.push(`$${usage.cost.total.toFixed(3)}${state.usesSubscription ? " (sub)" : ""}`);
-			if (stats.length) parts.push(value(stats.join(" ")));
-			if (conversation.blockedTools) parts.push(value(String(conversation.blockedTools)) + label(" tools blocked"));
+			if (conversation.usage.output > 0) parts.push(value(`↓${formatTokens(conversation.usage.output)}`));
 			const turn = conversation.turns.at(-1);
-			if (turn && !conversation.busy) {
-				parts.push(value(`${(turn.elapsedMs / 1000).toFixed(1)}s`));
-				if (turn.firstAnswerMs !== undefined)
-					parts.push(label("first ") + value(`${(turn.firstAnswerMs / 1000).toFixed(1)}s`));
-			}
+			if (turn && !conversation.busy) parts.push(value(`${(turn.elapsedMs / 1000).toFixed(1)}s`));
 		}
-		return parts.join(label(" · "));
+		return parts.join(theme.fg("muted", " · "));
 	}
 
-	private border(label: string, width: number, top: boolean, theme: Theme): string {
-		const text = label ? ` ${truncateToWidth(label, Math.max(0, width - 4))} ` : "";
-		return (
-			theme.fg("borderAccent", top ? "╭" : "╰") +
-			text +
-			theme.fg("borderAccent", `${"─".repeat(Math.max(0, width - visibleWidth(text) - 2))}${top ? "╮" : "╯"}`)
-		);
+	private topBorder(left: string, right: string, width: number, theme: Theme): string {
+		const inner = Math.max(0, width - 2);
+		const border = (text: string) => theme.fg("borderAccent", text);
+		if (!right) {
+			const leftText = left ? ` ${truncateToWidth(left, Math.max(0, width - 4), "…")} ` : "";
+			return border("╭") + leftText + border(`${"─".repeat(Math.max(0, inner - visibleWidth(leftText)))}╮`);
+		}
+		const leftText = left ? ` ${left} ` : "";
+		const rightText = ` ${right} `;
+		const leftWidth = visibleWidth(leftText);
+		const rightWidth = visibleWidth(rightText);
+		if (leftWidth + 1 + rightWidth <= inner) {
+			const fill = inner - leftWidth - rightWidth;
+			return border("╭") + leftText + border("─".repeat(fill)) + rightText + border("╮");
+		}
+		const maxRightLabel = inner - leftWidth - 3;
+		if (maxRightLabel >= 3) {
+			const clippedRight = ` ${truncateToWidth(right, maxRightLabel, "…")} `;
+			const fill = Math.max(1, inner - leftWidth - visibleWidth(clippedRight));
+			return border("╭") + leftText + border("─".repeat(fill)) + clippedRight + border("╮");
+		}
+		const clippedLeft = left ? ` ${truncateToWidth(left, Math.max(0, width - 4), "…")} ` : "";
+		return border("╭") + clippedLeft + border(`${"─".repeat(Math.max(0, inner - visibleWidth(clippedLeft)))}╮`);
+	}
+
+	private bottomBorder(width: number, theme: Theme): string {
+		return theme.fg("borderAccent", `╰${"─".repeat(Math.max(0, width - 2))}╯`);
 	}
 }

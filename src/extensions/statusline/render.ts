@@ -14,12 +14,17 @@ export interface StatuslineData {
 	gitBranch: string | null;
 	contextUsage: ContextUsage | undefined;
 	usage: UsageSummary;
+	tps?: number;
 	usesSubscription: boolean;
 	statuses: ReadonlyMap<string, string>;
 }
 
 const CONTEXT_WARNING_PERCENT = 40;
 const CONTEXT_ERROR_PERCENT = 80;
+const TPS_TIER_MEDIUM = 50;
+const TPS_TIER_HIGH = 100;
+const TPS_TIER_XHIGH = 150;
+const TPS_TIER_MAX = 200;
 const MIN_GAP = 1;
 
 /** Shorten a path to `~` relative to the user's home directory. */
@@ -58,6 +63,17 @@ function formatContextUsage(data: StatuslineData, theme: Theme): string {
 	if (percent != null && percent > CONTEXT_ERROR_PERCENT) return theme.fg("error", label);
 	if (percent != null && percent > CONTEXT_WARNING_PERCENT) return theme.fg("warning", label);
 	return theme.fg("accent", label);
+}
+
+function formatTps(tps: number | undefined, theme: Theme): string {
+	if (tps === undefined || !Number.isFinite(tps) || tps < 0) return "";
+	const rounded = Math.round(tps);
+	const label = `TPS ${rounded}`;
+	if (rounded < TPS_TIER_MEDIUM) return theme.fg("thinkingLow", label);
+	if (rounded < TPS_TIER_HIGH) return theme.fg("thinkingMedium", label);
+	if (rounded < TPS_TIER_XHIGH) return theme.fg("thinkingHigh", label);
+	if (rounded < TPS_TIER_MAX) return theme.fg("thinkingXhigh", label);
+	return theme.fg("thinkingMax", label);
 }
 
 /** Format fields once, then offer full usage, without W, and without W/R. */
@@ -163,13 +179,26 @@ export function renderStatusline(data: StatuslineData, theme: Theme, width: numb
 	const ellipsis = theme.fg("dim", "...");
 	const primary = renderPrimaryLine(data, theme, width, ellipsis);
 	const context = formatContextUsage(data, theme);
+	const tps = formatTps(data.tps, theme);
+	const leftWithTps = tps ? `${context}${theme.fg("dim", " · ")}${tps}` : context;
 	const status = formatExtensionStatuses(data.statuses, theme);
 	const candidates = formatUsageCandidates(data.usage, data.usesSubscription, theme);
-	const usage = candidates.find((candidate) => fitsLeftRight(context, candidate, width));
-	// If no usage variant fits, retain the original full-usage truncation policy.
-	const secondary =
-		candidates.length > 0 && usage === undefined
-			? layoutLeftRight(context, candidates[0], width, ellipsis)
-			: layoutSecondaryLine(context, status, usage ?? "", width, ellipsis);
+	let secondary: string;
+	if (candidates.length === 0) {
+		const left = fitsLeftRight(leftWithTps, "", width) ? leftWithTps : context;
+		secondary = layoutSecondaryLine(left, status, "", width, ellipsis);
+	} else {
+		const usageWithTps = candidates.find((candidate) => fitsLeftRight(leftWithTps, candidate, width));
+		if (usageWithTps !== undefined) {
+			secondary = layoutSecondaryLine(leftWithTps, status, usageWithTps, width, ellipsis);
+		} else {
+			const usage = candidates.find((candidate) => fitsLeftRight(context, candidate, width));
+			// If no usage variant fits beside CTX, retain the original full-usage truncation policy.
+			secondary =
+				usage === undefined
+					? layoutLeftRight(context, candidates[0], width, ellipsis)
+					: layoutSecondaryLine(context, status, usage, width, ellipsis);
+		}
+	}
 	return [primary, secondary];
 }

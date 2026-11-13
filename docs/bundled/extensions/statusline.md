@@ -6,7 +6,7 @@ Replaces Pi's built-in footer with a fixed, color-coded two-line status display 
 
 ```text
 DeepSeek V4 Pro (opencode-go) · xhigh          ~/Projects · main
-CTX 2.1%/1.0M                    ↑13k ↓13k R440k CH99.4% $0.074
+CTX 2.1%/1.0M · TPS 84           ↑13k ↓13k R440k CH99.4% $0.074
 ```
 
 ### Line 1 — session identity (left) · location (right)
@@ -22,11 +22,12 @@ CTX 2.1%/1.0M                    ↑13k ↓13k R440k CH99.4% $0.074
 - **Working directory:** full cwd shortened against the home directory with `~`.
 - **Git branch:** appended when available.
 
-### Line 2 — context (left) · usage (right)
+### Line 2 — context & speed (left) · usage (right)
 
 **Left**
 
 - **Context:** used percentage plus context-window size. The percentage uses fixed semantic tiers: accent normally, warning above 40%, error above 80%.
+- **Decode TPS (when measured):** rounded tokens per second (`TPS <n>`) for the latest main-session assistant response, excluding TTFT and tool execution time. Updates live during streaming from accumulated character estimates and reconciles with provider `usage.output` on completion; cleared on model switch and preserved across `/reload`. Colored by speed tier using Pi's thinking colors: `thinkingLow` (`0–49`), `thinkingMedium` (`50–99`), `thinkingHigh` (`100–149`), `thinkingXhigh` (`150–199`), and `thinkingMax` (`200+`).
 
 **Right**
 
@@ -64,9 +65,10 @@ The short path is `~/basename` (or bare basename). Shortening the path or droppi
 
 **Line 2** (first drop → last):
 
-1. Keep the fullest usage cluster that fits beside CTX, trying full usage, then without `W`, then without `W` and `R`.
+1. Keep the fullest usage cluster that fits beside CTX and TPS, trying full usage, then without `W`, then without `W` and `R`.
 2. Include centered extension status only if the selected pair leaves enough room.
-3. If no usage variant fits, omit status and truncate CTX with the full usage cluster.
+3. If no usage variant fits beside CTX and TPS, drop TPS and try full, without `W`, then without `W` and `R` beside CTX alone.
+4. If no usage variant fits beside CTX either, omit status and truncate CTX with the full usage cluster.
 
 Status therefore yields to usage; it never causes an extra usage field to be dropped.
 
@@ -75,6 +77,7 @@ Status therefore yields to usage; it never causes an extra usage field to be dro
 - Model name uses `toolTitle` and bold; provider uses `muted`.
 - Effort uses Pi's thinking-level color.
 - Context uses `accent`, `warning`, or `error` according to the fixed thresholds.
+- TPS uses `thinkingLow`, `thinkingMedium`, `thinkingHigh`, `thinkingXhigh`, or `thinkingMax` across 50 tok/s bands (`<50`, `<100`, `<150`, `<200`, `200+`).
 - Working directory uses `success`; Git branch uses `accent`.
 - Usage statistics use `dim`; extension status text uses `muted`.
 - Each line left-aligns its primary cluster and right-aligns the secondary cluster, filling the gap with spaces so wide terminals stay balanced.

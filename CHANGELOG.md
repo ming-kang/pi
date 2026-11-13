@@ -4,6 +4,15 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- `statusline` now displays live and settled decode-only `TPS <n>` beside `CTX` for the latest main-session assistant response (excluding TTFT and tool execution time), colored across five 50 tok/s tiers (`thinkingLow` through `thinkingMax`) and cleared on model switches.
+- `/btw` supports mouse-wheel scrolling in fullscreen mode isolated to the BTW panel without stealing editor focus or scrolling the main transcript.
+
+### Changed
+
+- `/btw` now grows up to half of the terminal height (capped safely on very short screens) and moves a simplified `scroll · ↓output · elapsed` summary into the top-right border while keeping the bottom border clean.
+
 ## [1.5.5] - 2026-11-13
 
 ### Added

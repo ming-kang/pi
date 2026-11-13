@@ -1,12 +1,16 @@
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { stripTerminalSequences, TuiMainScreen } from "@earendil-works/pi-tui";
-import { expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { ExtensionUIContext } from "../src/core/extensions/types.ts";
 import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.ts";
 import statusline from "../src/extensions/statusline/index.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { VirtualTerminal } from "./helpers/virtual-terminal.ts";
 import { createHarness, createTestUiContext } from "./suite/harness.ts";
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 type FooterFactory = NonNullable<Parameters<ExtensionUIContext["setFooter"]>[0]>;
 
@@ -99,4 +103,101 @@ it("shows finalized usage after streaming and preserves it through reload", asyn
 		harness.cleanup();
 	}
 	expect(listeners.size).toBe(0);
+});
+
+it("updates live decode TPS while streaming, reconciles at message_end, survives reload, and clears on model change", async () => {
+	initTheme("dark");
+	let footer: ReturnType<FooterFactory> | undefined;
+	const tui = new TuiMainScreen(new VirtualTerminal());
+	const footerData: ReadonlyFooterDataProvider = {
+		onBranchChange: () => () => {},
+		getGitBranch: () => null,
+		getExtensionStatuses: () => new Map(),
+		getAvailableProviderCount: () => 1,
+	};
+	const renderLine2 = () => {
+		if (!footer) throw new Error("Missing statusline");
+		return stripTerminalSequences(footer.render(200)[1]!);
+	};
+
+	let now = 1_000;
+	vi.spyOn(performance, "now").mockImplementation(() => now);
+	const streamingSnapshots: string[] = [];
+	let chunkIndex = 0;
+
+	const harness = await createHarness({
+		models: [
+			{ id: "model-a", name: "Model A", reasoning: true },
+			{ id: "model-b", name: "Model B", reasoning: true },
+		],
+		extensionFactories: [
+			(pi) => {
+				pi.on("message_start", (event) => {
+					if (event.message.role === "assistant") {
+						chunkIndex = 0;
+						now = 1_500;
+					}
+				});
+				pi.on("message_update", (event) => {
+					if (event.assistantMessageEvent.type !== "text_delta") return;
+					chunkIndex++;
+					now = chunkIndex === 1 ? 2_000 : 2_000 + chunkIndex * 250;
+				});
+				pi.on("message_end", (event) => {
+					if (event.message.role === "assistant") now = 3_000;
+				});
+			},
+			statusline,
+			(pi) => {
+				pi.on("message_update", () => {
+					streamingSnapshots.push(renderLine2());
+				});
+				pi.on("message_end", (event) => {
+					if (event.message.role !== "assistant") return;
+					return {
+						message: {
+							...event.message,
+							usage: {
+								input: 10,
+								output: 125,
+								cacheRead: 0,
+								cacheWrite: 0,
+								totalTokens: 135,
+								cost: { input: 0, output: 0.01, cacheRead: 0, cacheWrite: 0, total: 0.01 },
+							},
+						},
+					};
+				});
+			},
+		],
+	});
+	try {
+		await harness.session.bindExtensions({
+			mode: "tui",
+			uiContext: createTestUiContext({
+				setFooter(factory) {
+					footer?.dispose?.();
+					footer = factory?.(tui, theme, footerData);
+				},
+			}),
+		});
+		harness.setResponses([
+			fauxAssistantMessage(
+				"This streamed response has enough characters across several chunks to measure live decode TPS.",
+			),
+		]);
+		await harness.session.prompt("measure");
+
+		expect(streamingSnapshots.some((line) => /TPS \d+/.test(line))).toBe(true);
+		expect(renderLine2()).toContain(" · TPS 125");
+
+		await harness.session.reload();
+		expect(renderLine2()).toContain(" · TPS 125");
+
+		await harness.session.setModel(harness.getModel("model-b")!);
+		expect(renderLine2()).not.toContain("TPS");
+	} finally {
+		footer?.dispose?.();
+		harness.cleanup();
+	}
 });
