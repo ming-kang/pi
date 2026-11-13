@@ -1,4 +1,4 @@
-import { contentText } from "@earendil-works/pi-ai";
+import { contentText, getCurrentSystemMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "../../core/extensions/types.ts";
 import { type CachedCompactionCard, renderCachedCompactionEntry } from "./render.ts";
 import { checkpointSummary, keptStart, summaryInstruction } from "./summary.ts";
@@ -22,7 +22,7 @@ export default function cachedCompaction(pi: ExtensionAPI): void {
 			// A prepared snapshot already carries the leading system message; declaring the prompt and
 			// tools again would duplicate it. Before the first request, or after a
 			// `context_with_system` handler dropped it, they have to be declared here.
-			const declared = snapshot.messages[0]?.role === "system";
+			const declared = getCurrentSystemMessage(snapshot.messages) !== undefined;
 			const response = await ctx.modelRuntime
 				.streamSimple(
 					snapshot.model,

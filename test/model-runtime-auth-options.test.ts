@@ -154,6 +154,7 @@ describe("ModelRuntime auth options", () => {
 		expect(runtime.isUsingSubscription("openrouter")).toBe(false);
 		expect(runtime.isUsingOAuth("radius")).toBe(true);
 		expect(runtime.isUsingSubscription("radius")).toBe(false);
+		expect(runtime.isUsingSubscription("kimi-coding")).toBe(true);
 	});
 
 	it("constructs an API key method for an extension API-key provider", async () => {

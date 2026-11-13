@@ -6,15 +6,9 @@ import { THINKING_VARIABLES, validateChatTemplateKwarg } from "../compat-fields.
 import { truncate } from "../constants.ts";
 import { isPlainObject } from "../json-fields.ts";
 import { DELETE } from "../store.ts";
-import { ChoicePane, moveSelection } from "./controls.ts";
+import { ChoicePane, InlineEdit, moveSelection } from "./controls.ts";
 import type { CompatFields, EditorPane, PaneHost } from "./pane.ts";
-import {
-	renderInfoLine,
-	renderKeyValueLine,
-	renderPlainLine,
-	type ScrollWindowInfo,
-	ValueEditor,
-} from "./value-row.ts";
+import { renderInfoLine, renderKeyValueLine, renderPlainLine, type ScrollWindowInfo } from "./value-row.ts";
 
 /** The handle's compat object; empty when unset. */
 export function compatObject(handle: CompatFields): Record<string, unknown> {
@@ -32,16 +26,14 @@ type DictValueKind = "string" | "number" | "boolean" | "null" | "$var";
 const DICT_VALUE_KINDS: readonly DictValueKind[] = ["string", "number", "boolean", "null", "$var"];
 const VAR_OPTIONS = THINKING_VARIABLES;
 
-type DictMode =
-	| { type: "list" }
-	| { type: "keyEdit"; editor: ValueEditor }
-	| { type: "valueEdit"; key: string; kind: "string" | "number"; editor: ValueEditor };
+const NEW_KEY = Symbol("NEW_KEY");
+type DictEditKey = typeof NEW_KEY | string;
 
 export class DictPane implements EditorPane {
 	readonly crumb: string;
 	private index = 0;
-	private mode: DictMode = { type: "list" };
-	private error: string | undefined;
+	private readonly edit: InlineEdit<DictEditKey>;
+	private editingKind: "string" | "number" | undefined;
 	private focused = false;
 
 	private readonly host: PaneHost;
@@ -51,6 +43,7 @@ export class DictPane implements EditorPane {
 		this.host = host;
 		this.model = model;
 		this.dictKey = dictKey;
+		this.edit = new InlineEdit(() => host.refresh());
 
 		this.crumb = `compat · ${dictKey}`;
 	}
@@ -71,9 +64,31 @@ export class DictPane implements EditorPane {
 		const lines: string[] = [
 			renderInfoLine(theme, `free-form keys; values: string · number · boolean · null · $var`, width),
 		];
-		if (this.mode.type !== "list") {
-			lines.push(...this.renderMode(width));
-			if (this.error) lines.push(renderInfoLine(theme, this.error, width));
+		const activeKey = this.edit.activeKey;
+		if (activeKey !== undefined) {
+			if (activeKey === NEW_KEY) {
+				lines.push(
+					renderKeyValueLine(theme, {
+						keyLabel: "New key",
+						active: true,
+						paneFocused: this.focused,
+						editing: this.edit.editor(NEW_KEY),
+						width,
+					}),
+				);
+			} else {
+				lines.push(
+					renderInfoLine(theme, `${activeKey} · ${this.editingKind ?? "string"}`, width),
+					renderKeyValueLine(theme, {
+						keyLabel: activeKey,
+						active: true,
+						paneFocused: this.focused,
+						editing: this.edit.editor(activeKey),
+						width,
+					}),
+				);
+			}
+			if (this.edit.error) lines.push(renderInfoLine(theme, this.edit.error, width));
 			return lines;
 		}
 		const entries = this.entries();
@@ -92,74 +107,30 @@ export class DictPane implements EditorPane {
 		}
 		lines.push(
 			renderPlainLine(theme, "+ Add entry", {
-				active: this.index === entries.length && this.mode.type === "list",
+				active: this.index === entries.length && !this.edit.editing,
 				paneFocused: this.focused,
 				width,
 			}),
 		);
-		if (this.error) lines.push(theme.fg("error", truncate(this.error, Math.max(10, width - 2))));
+		if (this.edit.error) lines.push(theme.fg("error", truncate(this.edit.error, Math.max(10, width - 2))));
 		return lines;
 	}
 
 	scrollWindow(): ScrollWindowInfo {
 		// The format header pins above; errors pin below. Entry flows are short
 		// enough to fit, so only the list mode reports a meaningful cursor.
-		if (this.mode.type !== "list") return { top: 1, bottom: this.error ? 1 : 0 };
-		return { top: 1, bottom: this.error ? 1 : 0, cursor: 1 + this.index };
-	}
-
-	private renderMode(width: number): string[] {
-		const theme = this.host.theme;
-		const mode = this.mode;
-		switch (mode.type) {
-			case "keyEdit":
-				return [
-					renderKeyValueLine(theme, {
-						keyLabel: "New key",
-						active: true,
-						paneFocused: this.focused,
-						editing: mode.editor,
-						width,
-					}),
-				];
-			case "valueEdit":
-				return [
-					renderInfoLine(theme, `${mode.key} · ${mode.kind}`, width),
-					renderKeyValueLine(theme, {
-						keyLabel: mode.key,
-						active: true,
-						paneFocused: this.focused,
-						editing: mode.editor,
-						width,
-					}),
-				];
-			default:
-				return [];
-		}
+		if (this.edit.editing) return { top: 1, bottom: this.edit.error ? 1 : 0 };
+		return { top: 1, bottom: this.edit.error ? 1 : 0, cursor: 1 + this.index };
 	}
 
 	handleInput(data: string): void {
 		const kb = this.host.keybindings;
-		const mode = this.mode;
-		switch (mode.type) {
-			case "keyEdit":
-			case "valueEdit":
-				if (kb.matches(data, "tui.select.up") || kb.matches(data, "tui.select.down")) return;
-				mode.editor.handleInput(data);
-				this.host.refresh();
-				return;
-			case "list":
-				this.handleList(data);
-				return;
-		}
-	}
-
-	private handleList(data: string): void {
-		const kb = this.host.keybindings;
+		if (this.edit.handleInput(data, kb)) return;
 		const rowCount = this.entries().length + 1;
 		const next = moveSelection(kb, data, this.index, rowCount);
 		if (next !== undefined) {
 			this.index = next;
+			this.edit.error = undefined;
 			this.host.refresh();
 			return;
 		}
@@ -170,6 +141,7 @@ export class DictPane implements EditorPane {
 		if (kb.matches(data, "app.provider.removeEntry")) {
 			const entry = this.entries()[this.index];
 			if (!entry) return;
+			this.edit.error = undefined;
 			this.model.setField(["compat", this.dictKey, entry[0]], DELETE);
 			this.index = Math.max(0, Math.min(this.index, this.entries().length - 1));
 			return;
@@ -178,30 +150,26 @@ export class DictPane implements EditorPane {
 			const entry = this.entries()[this.index];
 			if (!entry) {
 				// + Add entry: key first, then the value flow.
-				const editor = new ValueEditor({
-					onCommit: (raw) => {
+				let acceptedKey: string | undefined;
+				this.edit.begin(
+					NEW_KEY,
+					"",
+					"overwrite",
+					this.focused,
+					(raw) => {
 						const key = raw.trim();
-						if (!key) {
-							this.error = "Key must be non-empty.";
-							return this.host.refresh();
-						}
-						if (Object.hasOwn(this.dict(), key)) {
-							this.error = `"${key}" already exists.`;
-							return this.host.refresh();
-						}
-						this.error = undefined;
-						this.mode = { type: "list" };
-						this.pushKindPicker(key);
+						if (!key) return "Key must be non-empty.";
+						if (Object.hasOwn(this.dict(), key)) return `"${key}" already exists.`;
+						acceptedKey = key;
+						return undefined;
 					},
-					onCancel: () => {
-						this.mode = { type: "list" };
-						this.error = undefined;
-						this.host.refresh();
+					undefined,
+					{
+						onDone: () => {
+							if (acceptedKey) this.pushKindPicker(acceptedKey);
+						},
 					},
-				});
-				editor.focused = this.focused;
-				this.mode = { type: "keyEdit", editor };
-				this.host.refresh();
+				);
 				return;
 			}
 			const [key, value] = entry;
@@ -224,39 +192,36 @@ export class DictPane implements EditorPane {
 				return; // unexpected object: remove + re-add
 			}
 			const kind: "string" | "number" = typeof value === "number" ? "number" : "string";
-			const editor = new ValueEditor({
-				onCommit: (raw) => this.commitScalar(key, kind, raw),
-				onCancel: () => {
-					this.mode = { type: "list" };
-					this.error = undefined;
-					this.host.refresh();
-				},
-			});
-			editor.beginTweak(String(value));
-			editor.focused = this.focused;
-			this.mode = { type: "valueEdit", key, kind, editor };
-			this.host.refresh();
-			return;
+			this.beginScalarEdit(key, kind, String(value));
 		}
+	}
+
+	private beginScalarEdit(key: string, kind: "string" | "number", current?: string): void {
+		this.editingKind = kind;
+		this.edit.begin(
+			key,
+			current ?? "",
+			current === undefined ? "overwrite" : "tweak",
+			this.focused,
+			(raw) => this.commitScalar(key, kind, raw),
+			undefined,
+			{
+				onDone: () => {
+					this.editingKind = undefined;
+				},
+				onCancel: () => {
+					this.editingKind = undefined;
+				},
+			},
+		);
 	}
 
 	private startValueForKind(key: string, kind: Exclude<DictValueKind, "null">): void {
 		switch (kind) {
 			case "string":
-			case "number": {
-				const editor = new ValueEditor({
-					onCommit: (raw) => this.commitScalar(key, kind, raw),
-					onCancel: () => {
-						this.mode = { type: "list" };
-						this.error = undefined;
-						this.host.refresh();
-					},
-				});
-				editor.focused = this.focused;
-				this.mode = { type: "valueEdit", key, kind, editor };
-				this.host.refresh();
+			case "number":
+				this.beginScalarEdit(key, kind);
 				return;
-			}
 			case "boolean":
 				this.pushBoolPicker(key);
 				return;
@@ -270,7 +235,6 @@ export class DictPane implements EditorPane {
 		this.host.pushPane(
 			new ChoicePane<DictValueKind>(this.host, `compat · ${this.dictKey} · ${key}`, {
 				header: `${key} · value kind`,
-				current: () => undefined as unknown as DictValueKind,
 				initial: DICT_VALUE_KINDS[0],
 				choices: () => DICT_VALUE_KINDS.map((kind) => ({ label: kind, value: kind })),
 				choose: (kind) => (kind === "null" ? this.writeEntry(key, null) : undefined),
@@ -283,9 +247,8 @@ export class DictPane implements EditorPane {
 
 	private pushBoolPicker(key: string): void {
 		this.host.pushPane(
-			new ChoicePane<boolean | undefined>(this.host, `compat · ${this.dictKey} · ${key}`, {
+			new ChoicePane<boolean>(this.host, `compat · ${this.dictKey} · ${key}`, {
 				header: `${key} · boolean`,
-				current: () => undefined,
 				initial: true,
 				choices: () => [
 					{ label: "true", value: true },
@@ -298,15 +261,12 @@ export class DictPane implements EditorPane {
 
 	private pushVarPicker(key: string): void {
 		this.host.pushPane(
-			new ChoicePane<(typeof VAR_OPTIONS)[number] | undefined>(this.host, `compat · ${this.dictKey} · ${key}`, {
+			new ChoicePane<(typeof VAR_OPTIONS)[number]>(this.host, `compat · ${this.dictKey} · ${key}`, {
 				header: `${key} · $var`,
-				current: () => undefined,
 				initial: VAR_OPTIONS[0],
 				choices: () => VAR_OPTIONS.map((option) => ({ label: option, value: option })),
 				choose: () => undefined,
-				afterChoose: ($var) => {
-					if ($var) this.pushOmitPicker(key, $var);
-				},
+				afterChoose: ($var) => this.pushOmitPicker(key, $var),
 			}),
 		);
 	}
@@ -318,9 +278,9 @@ export class DictPane implements EditorPane {
 	): void {
 		type OmitChoice = "default" | "true" | "false";
 		this.host.pushPane(
-			new ChoicePane<OmitChoice | undefined>(this.host, `compat · ${this.dictKey} · ${key}`, {
+			new ChoicePane<OmitChoice>(this.host, `compat · ${this.dictKey} · ${key}`, {
 				header: `${key} · omitWhenOff`,
-				current: () => currentOmit,
+				current: currentOmit === undefined ? undefined : () => currentOmit,
 				initial: currentOmit ?? "default",
 				choices: () => [
 					{ label: "default", value: "default" },
@@ -333,26 +293,14 @@ export class DictPane implements EditorPane {
 		);
 	}
 
-	private commitScalar(key: string, kind: "string" | "number", raw: string): void {
+	private commitScalar(key: string, kind: "string" | "number", raw: string): string | undefined {
 		let value: string | number = raw;
 		if (kind === "number") {
 			const parsed = Number(raw.trim());
-			if (!Number.isFinite(parsed)) {
-				this.error = `${key} must be a number.`;
-				this.host.refresh();
-				return;
-			}
+			if (!Number.isFinite(parsed)) return `${key} must be a number.`;
 			value = parsed;
 		}
-		const error = this.writeEntry(key, value);
-		if (error) {
-			this.error = error;
-			this.host.refresh();
-			return;
-		}
-		this.error = undefined;
-		this.mode = { type: "list" };
-		this.host.refresh();
+		return this.writeEntry(key, value);
 	}
 
 	private writeEntry(key: string, value: unknown): string | undefined {
@@ -364,11 +312,11 @@ export class DictPane implements EditorPane {
 
 	setFocused(focused: boolean): void {
 		this.focused = focused;
-		if (this.mode.type === "keyEdit" || this.mode.type === "valueEdit") this.mode.editor.focused = focused;
+		this.edit.setFocused(focused);
 	}
 
 	isEditing(): boolean {
-		return this.mode.type === "keyEdit" || this.mode.type === "valueEdit";
+		return this.edit.editing;
 	}
 
 	hints(): string {

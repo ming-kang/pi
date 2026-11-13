@@ -10,7 +10,7 @@
  */
 
 import type { ChatTemplateKwargValue } from "@earendil-works/pi-ai";
-import { CompatSchemasByApi, OpenAICompletionsCompatSchema } from "@earendil-works/pi-ai/providers/compat-schema";
+import { CompatSchemasByApi } from "@earendil-works/pi-ai/providers/compat-schema";
 import { Compile } from "typebox/compile";
 
 export type CompatValueKind = "boolean" | "enum" | "number" | "stringMap" | "json";
@@ -36,8 +36,8 @@ interface JsonSchema {
 	description?: string;
 }
 
-function apiSchema(api: string | undefined): JsonSchema | undefined {
-	return api === undefined ? undefined : (CompatSchemasByApi as Record<string, JsonSchema | undefined>)[api];
+function apiSchema(api: string): JsonSchema | undefined {
+	return (CompatSchemasByApi as Record<string, JsonSchema | undefined>)[api];
 }
 
 /**
@@ -154,17 +154,15 @@ function firstErrors(validator: CompatValidator, value: unknown): string | undef
 
 const validatorCache = new Map<string, CompatValidator>();
 
-/** Chat-template kwargs share the core completions schema, so it is compiled once here. */
-const completionsValidator = Compile(OpenAICompletionsCompatSchema);
-
 /** Validate `value` against the effective api's compat schema; unknown apis accept anything. */
 function validateAgainst(api: string | undefined, value: unknown): string | undefined {
+	if (api === undefined) return undefined;
 	const schema = apiSchema(api);
 	if (schema === undefined) return undefined;
-	let validator = validatorCache.get(api as string);
+	let validator = validatorCache.get(api);
 	if (!validator) {
 		validator = Compile(schema);
-		validatorCache.set(api as string, validator);
+		validatorCache.set(api, validator);
 	}
 	return firstErrors(validator, value);
 }
@@ -190,6 +188,6 @@ export function validateChatTemplateKwarg(value: unknown): string | undefined {
 	) {
 		return 'Only "$var" and "omitWhenOff" are allowed.';
 	}
-	const error = firstErrors(completionsValidator, { chatTemplateKwargs: { value } });
+	const error = validateAgainst("openai-completions", { chatTemplateKwargs: { value } });
 	return error ? `Value must be a scalar or valid $var reference: ${error}` : undefined;
 }

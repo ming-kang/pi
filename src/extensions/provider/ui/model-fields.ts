@@ -63,8 +63,6 @@ export class ModelFieldsPane implements EditorPane {
 	private index = 0;
 	private readonly edit: InlineEdit<FieldRow>;
 	private focused = false;
-	private renaming = false;
-	private disposed = false;
 
 	private readonly host: ModelFieldsHost;
 	private readonly model: ModelHandle;
@@ -139,7 +137,7 @@ export class ModelFieldsPane implements EditorPane {
 			lines.push(this.renderRow(row, current, active, width));
 		}
 		if (this.edit.error) lines.push(theme.fg("error", truncate(this.edit.error, Math.max(10, width - 2))));
-		if (this.renaming) lines.push(renderInfoLine(theme, "Saving model id…", width));
+		if (this.edit.pending) lines.push(renderInfoLine(theme, "Saving model id…", width));
 		if (this.model.base())
 			lines.push(renderInfoLine(theme, "Dim values are built in; clearing restores them.", width));
 		return lines;
@@ -149,7 +147,7 @@ export class ModelFieldsPane implements EditorPane {
 		// The effective-api header stays pinned above, errors/progress below.
 		return {
 			top: 1,
-			bottom: (this.edit.error ? 1 : 0) + (this.renaming ? 1 : 0) + (this.model.base() ? 1 : 0),
+			bottom: (this.edit.error ? 1 : 0) + (this.edit.pending ? 1 : 0) + (this.model.base() ? 1 : 0),
 			cursor: 1 + this.index,
 		};
 	}
@@ -315,7 +313,6 @@ export class ModelFieldsPane implements EditorPane {
 	}
 
 	handleInput(data: string): void {
-		if (this.renaming || this.disposed) return;
 		const kb = this.host.keybindings;
 		if (this.edit.handleInput(data, kb)) return;
 		const next = moveSelection(kb, data, this.index, this.rows.length);
@@ -458,11 +455,7 @@ export class ModelFieldsPane implements EditorPane {
 			if (this.host.store.getModel(this.host.providerId, value)) {
 				return `Model "${value}" already exists.`;
 			}
-			this.renaming = true;
-			this.host.refresh();
-			return this.model.rename(value).finally(() => {
-				this.renaming = false;
-			});
+			return this.model.rename(value);
 		}
 		if (row.key === "name") {
 			this.model.setField(["name"], value === "" ? DELETE : value);
@@ -504,11 +497,10 @@ export class ModelFieldsPane implements EditorPane {
 	}
 
 	isEditing(): boolean {
-		return this.edit.editing || this.renaming;
+		return this.edit.editing;
 	}
 
 	dispose(): void {
-		this.disposed = true;
 		this.edit.dispose();
 	}
 

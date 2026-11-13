@@ -713,6 +713,24 @@
 				"test/provider-jsonc-edit.test.ts"
 			],
 			"watch": "Upstream stripJsonComments strips /* ... */ block comments."
+		},
+		{
+			"id": "subscription-provider-semantics",
+			"why": "ModelRuntime.isUsingSubscription owns API-key subscription providers such as kimi-coding so footer, statusline, and btw do not duplicate provider checks.",
+			"paths": [
+				{
+					"path": "src/core/model-runtime.ts"
+				},
+				{
+					"path": "src/modes/interactive/components/footer.ts"
+				}
+			],
+			"tests": [
+				"test/model-runtime-auth-options.test.ts",
+				"test/footer-width.test.ts",
+				"test/statusline-extension.test.ts",
+				"test/btw-extension.test.ts"
+			]
 		}
 	]
 }

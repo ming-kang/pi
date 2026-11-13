@@ -11,24 +11,15 @@ import { keyHint } from "../../../modes/interactive/components/keybinding-hints.
 import { type CompatField, compatFieldFor, compatFieldsForApi, validateJsonCompatValue } from "../compat-fields.ts";
 import { truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
-import { ChoicePane, FilterListPane, moveSelection } from "./controls.ts";
+import { ChoicePane, FilterListPane, InlineEdit, moveSelection } from "./controls.ts";
 import { compatObject, DictPane, scalarText } from "./dictionary.ts";
 import type { CompatFields, EditorPane, PaneHost, ProviderPaneHost } from "./pane.ts";
-import {
-	renderInfoLine,
-	renderKeyValueLine,
-	renderPlainLine,
-	type ScrollWindowInfo,
-	ValueEditor,
-} from "./value-row.ts";
-
-type CompatMode = { type: "list" } | { type: "editValue"; key: string; editor: ValueEditor };
+import { renderInfoLine, renderKeyValueLine, renderPlainLine, type ScrollWindowInfo } from "./value-row.ts";
 
 export class CompatPane implements EditorPane {
 	readonly crumb = "compat";
 	private index = 0;
-	private mode: CompatMode = { type: "list" };
-	private error: string | undefined;
+	private readonly edit: InlineEdit<string>;
 	private focused = false;
 
 	private readonly host: ProviderPaneHost;
@@ -36,6 +27,7 @@ export class CompatPane implements EditorPane {
 	constructor(host: ProviderPaneHost, model: CompatFields) {
 		this.host = host;
 		this.model = model;
+		this.edit = new InlineEdit(() => host.refresh());
 	}
 
 	private entries(): [string, unknown][] {
@@ -59,7 +51,7 @@ export class CompatPane implements EditorPane {
 		];
 		const known = api ? compatFieldsForApi(api) : [];
 		const entries = this.entries();
-		const editingKey = this.mode.type === "list" ? undefined : this.mode.key;
+		const editingKey = this.edit.activeKey;
 		if (editingKey !== undefined && !entries.some(([key]) => key === editingKey))
 			entries.push([editingKey, undefined]);
 		if (known.length === 0 && entries.length === 0) {
@@ -69,7 +61,6 @@ export class CompatPane implements EditorPane {
 		for (const [rowIndex, [key, value]] of entries.entries()) {
 			const active = rowIndex === this.index;
 			const field = api ? compatFieldFor(api, key) : undefined;
-			const editing = this.mode.type === "editValue" && this.mode.key === key ? this.mode.editor : undefined;
 			const note = field ? undefined : `· not used by ${api ?? "this api"}`;
 			lines.push(
 				renderKeyValueLine(theme, {
@@ -77,7 +68,7 @@ export class CompatPane implements EditorPane {
 					valueText: value === undefined ? "not set" : scalarText(value),
 					active,
 					paneFocused: this.focused,
-					editing,
+					editing: this.edit.editor(key),
 					note,
 					width,
 				}),
@@ -85,12 +76,12 @@ export class CompatPane implements EditorPane {
 		}
 		lines.push(
 			renderPlainLine(theme, "+ Add entry", {
-				active: this.index === entries.length && this.mode.type === "list",
+				active: this.index === entries.length && !this.edit.editing,
 				paneFocused: this.focused,
 				width,
 			}),
 		);
-		if (this.error) lines.push(theme.fg("error", truncate(this.error, Math.max(10, width - 2))));
+		if (this.edit.error) lines.push(theme.fg("error", truncate(this.edit.error, Math.max(10, width - 2))));
 		// What the selected key does, since its name alone rarely says; a blank line keeps it from reading as a row.
 		const about = this.selectedNote();
 		if (about) lines.push("", renderInfoLine(theme, about, width));
@@ -105,21 +96,16 @@ export class CompatPane implements EditorPane {
 
 	scrollWindow(): ScrollWindowInfo {
 		// The effective-api header pins above; errors and the selected key's description pin below.
-		return { top: 1, bottom: (this.error ? 1 : 0) + (this.selectedNote() ? 2 : 0), cursor: 1 + this.index };
+		return { top: 1, bottom: (this.edit.error ? 1 : 0) + (this.selectedNote() ? 2 : 0), cursor: 1 + this.index };
 	}
 
 	handleInput(data: string): void {
 		const kb = this.host.keybindings;
-		if (this.mode.type === "editValue") {
-			if (kb.matches(data, "tui.select.up") || kb.matches(data, "tui.select.down")) return;
-			this.mode.editor.handleInput(data);
-			this.host.refresh();
-			return;
-		}
-		// list mode
+		if (this.edit.handleInput(data, kb)) return;
 		const next = moveSelection(kb, data, this.index, this.rowCount());
 		if (next !== undefined) {
 			this.index = next;
+			this.edit.error = undefined;
 			this.host.refresh();
 			return;
 		}
@@ -131,6 +117,7 @@ export class CompatPane implements EditorPane {
 			const entry = this.entries()[this.index];
 			if (!entry) return;
 			const [key] = entry;
+			this.edit.error = undefined;
 			this.model.setField(["compat", key], DELETE);
 			this.index = Math.min(this.index, this.rowCount() - 2 < 0 ? 0 : this.rowCount() - 2);
 			return;
@@ -210,57 +197,26 @@ export class CompatPane implements EditorPane {
 	}
 
 	private beginTextEdit(key: string, current: unknown): void {
-		const editor = new ValueEditor({
-			onCommit: (raw) => {
-				const parsed = Number(raw.trim());
-				if (!Number.isFinite(parsed)) {
-					this.error = `${key} must be a number.`;
-					return this.host.refresh();
-				}
-				this.error = undefined;
-				this.mode = { type: "list" };
-				this.writeValue(key, parsed);
-			},
-			onCancel: () => {
-				this.mode = { type: "list" };
-				this.error = undefined;
-				this.host.refresh();
-			},
+		this.edit.begin(key, current === undefined ? "" : String(current), "tweak", this.focused, (raw) => {
+			const parsed = Number(raw.trim());
+			if (!Number.isFinite(parsed)) return `${key} must be a number.`;
+			this.writeValue(key, parsed);
+			return undefined;
 		});
-		if (current !== undefined) editor.beginTweak(String(current));
-		editor.focused = this.focused;
-		this.mode = { type: "editValue", key, editor };
-		this.host.refresh();
 	}
 
 	private beginJsonEdit(key: string, current: unknown): void {
-		const editor = new ValueEditor({
-			onCommit: (raw) => {
-				const text = raw.trim();
-				if (!text) {
-					this.mode = { type: "list" };
-					this.writeValue(key, DELETE);
-					return;
-				}
-				const shapeError = validateJsonCompatValue(this.effectiveApi(), key, text);
-				if (shapeError) {
-					this.error = shapeError;
-					return this.host.refresh();
-				}
-				this.error = undefined;
-				this.mode = { type: "list" };
-				this.writeValue(key, JSON.parse(text));
-			},
-			onCancel: () => {
-				this.mode = { type: "list" };
-				this.error = undefined;
-				this.host.refresh();
-			},
+		this.edit.begin(key, current === undefined ? "" : JSON.stringify(current), "tweak", this.focused, (raw) => {
+			const text = raw.trim();
+			if (!text) {
+				this.writeValue(key, DELETE);
+				return undefined;
+			}
+			const shapeError = validateJsonCompatValue(this.effectiveApi(), key, text);
+			if (shapeError) return shapeError;
+			this.writeValue(key, JSON.parse(text));
+			return undefined;
 		});
-		if (current !== undefined) editor.beginTweak(JSON.stringify(current));
-		editor.focused = this.focused;
-		this.mode = { type: "editValue", key, editor };
-		this.host.refresh();
 	}
 
 	private pushChoicePane(key: string, options: readonly string[], note: string | undefined, isBoolean = false): void {
@@ -287,21 +243,21 @@ export class CompatPane implements EditorPane {
 	}
 
 	private fail(message: string): void {
-		this.error = message;
+		this.edit.error = message;
 		this.host.refresh();
 	}
 
 	setFocused(focused: boolean): void {
 		this.focused = focused;
-		if (this.mode.type === "editValue") this.mode.editor.focused = focused;
+		this.edit.setFocused(focused);
 	}
 
 	isEditing(): boolean {
-		return this.mode.type === "editValue";
+		return this.edit.editing;
 	}
 
 	hints(): string {
-		if (this.mode.type === "editValue")
+		if (this.edit.editing)
 			return [keyHint("tui.input.submit", "save"), keyHint("tui.select.cancel", "cancel")].join("  ");
 		const back = keyHint("tui.select.cancel", "back");
 		const entry = this.entries()[this.index];

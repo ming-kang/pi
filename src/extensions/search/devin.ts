@@ -250,13 +250,14 @@ export function decodeChatResponse(body: Buffer): string {
 			continue;
 		}
 		for (const chunk of readField(payload, 2)) {
-			text += decoder.decode(chunk);
+			text += decoder.decode(chunk, { stream: true });
 			textBytes += chunk.length;
 		}
 		if (textBytes > PLANNER_MAX_TEXT_BYTES) {
 			throw new DevinError("Devin's planner reply was too large.");
 		}
 	}
+	text += decoder.decode();
 	return text;
 }
 

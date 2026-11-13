@@ -48,9 +48,7 @@ export class BtwController {
 			conversation.unsubscribeKeys = editorHost.onInput((data) => this.handleKey(conversation, data));
 			const snapshot = await pendingSnapshot;
 			if (this.current !== conversation) return;
-			// Kimi Coding is subscription-backed despite using API-key authentication.
-			const usesSubscription =
-				snapshot.model.provider === "kimi-coding" || ctx.modelRuntime.isUsingSubscription(snapshot.model.provider);
+			const usesSubscription = ctx.modelRuntime.isUsingSubscription(snapshot.model.provider);
 			conversation.state = {
 				phase: "ready",
 				capturedAt: snapshot.capturedAt,

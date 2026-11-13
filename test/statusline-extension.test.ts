@@ -115,7 +115,9 @@ async function createFooter(
 		cwd: options.cwd ?? "/workspace/project",
 		model,
 		thinkingLevel: "off",
-		modelRegistry: { isUsingOAuth: () => options.subscription ?? false },
+		modelRuntime: {
+			isUsingSubscription: (providerId: string) => options.subscription ?? providerId === "kimi-coding",
+		},
 		sessionManager,
 		getContextUsage: () => ({ tokens: percent === null ? null : percent * 10, contextWindow: 1_000, percent }),
 		ui: { setFooter },

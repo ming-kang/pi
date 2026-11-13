@@ -186,9 +186,8 @@ export class FooterComponent implements Component {
 			statsParts.push(`CH${latestCacheHitRate.toFixed(1)}%`);
 		}
 
-		// Kimi Coding is subscription-backed despite using API-key authentication.
 		const usingSubscription = state.model
-			? state.model.provider === "kimi-coding" || this.session.modelRuntime.isUsingSubscription(state.model.provider)
+			? this.session.modelRuntime.isUsingSubscription(state.model.provider)
 			: false;
 		if (usageTotals.cost || usingSubscription) {
 			const costStr = `$${usageTotals.cost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;

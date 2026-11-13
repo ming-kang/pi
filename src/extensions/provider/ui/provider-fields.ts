@@ -320,6 +320,7 @@ export class AuthenticationPane implements EditorPane {
 	}
 
 	dispose(): void {
+		this.edit.dispose();
 		this.credential?.dispose();
 	}
 

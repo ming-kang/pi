@@ -649,7 +649,51 @@ describe("provider editor interactions", () => {
 		expect(render(screen)).toContain("● true");
 		screen.handleInput("\x1b");
 		expect(render(screen)).toContain("free-form keys; values:");
+		// Scalar string/number inline edits validate and save cleanly.
+		screen.handleInput("\x1b[B"); // + Add entry
+		screen.handleInput("\r");
+		screen.handleInput("count");
+		screen.handleInput("\r");
+		screen.handleInput("\x1b[B"); // number
+		screen.handleInput("\r");
+		screen.handleInput("bad");
+		screen.handleInput("\r");
+		expect(render(screen)).toContain("count must be a number");
+		screen.handleInput("\x15");
+		screen.handleInput("42");
+		screen.handleInput("\r");
+		await store.flush();
+		expect(store.getModel("cpa", "k3")?.compat).toMatchObject({
+			chatTemplateKwargs: { count: 42 },
+		});
 		screen.dispose();
+	});
+
+	test("compat inline edits validate errors and clear errors when moving selection", async () => {
+		const { host, model } = hostFixture();
+		const pane = new CompatPane(host, model);
+		pane.setFocused(true);
+		// Unresolved API refuses + Add entry with an error; moving clears it.
+		host.effectiveApi = () => undefined;
+		pane.handleInput("\r");
+		expect(render(pane)).toContain("Set API Type first");
+		host.effectiveApi = () => "openai-completions";
+		// Adding and editing a JSON field inline validates shape before saving.
+		pane.handleInput("\r");
+		const picker = vi.mocked(host.pushPane).mock.calls[0]![0];
+		picker.handleInput("openRouterRouting");
+		picker.handleInput("\r");
+		expect(pane.isEditing()).toBe(true);
+		pane.handleInput('["bad"]');
+		pane.handleInput("\r");
+		expect(render(pane)).toContain("openRouterRouting");
+		expect(pane.isEditing()).toBe(true);
+		pane.handleInput("\x15");
+		pane.handleInput('{"order":["a"]}');
+		pane.handleInput("\r");
+		await store.flush();
+		expect(pane.isEditing()).toBe(false);
+		expect(store.getModel("cpa", "k3")?.compat).toEqual({ openRouterRouting: { order: ["a"] } });
 	});
 
 	test("the compat key picker scrolls with its selection", () => {

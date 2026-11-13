@@ -89,7 +89,7 @@ function createSession(options: {
 		getContextUsage: () => ({ contextWindow: 200_000, percent: 12.3 }),
 		routedModel: options.routedModel,
 		modelRuntime: {
-			isUsingSubscription: () => options.usingSubscription ?? false,
+			isUsingSubscription: (providerId: string) => options.usingSubscription ?? providerId === "kimi-coding",
 		},
 	};
 

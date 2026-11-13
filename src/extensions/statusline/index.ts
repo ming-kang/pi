@@ -27,7 +27,7 @@ export default function statusline(pi: ExtensionAPI): void {
 							gitBranch: footerData.getGitBranch(),
 							contextUsage: ctx.getContextUsage(),
 							usage: usage.read(ctx.sessionManager),
-							usesSubscription: model ? ctx.modelRegistry.isUsingOAuth(model) : false,
+							usesSubscription: model ? ctx.modelRuntime.isUsingSubscription(model.provider) : false,
 							statuses: footerData.getExtensionStatuses(),
 						},
 						theme,

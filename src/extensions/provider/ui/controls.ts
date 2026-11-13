@@ -24,11 +24,14 @@ export interface Choice<T> {
 }
 
 type ControlHost = Pick<PaneHost, "theme" | "keybindings" | "refresh" | "popPane">;
+const NO_CURRENT = Symbol("NO_CURRENT");
+
 interface ChoiceOptions<T> {
 	/** Optional dim header line pinned above the choices. */
 	header?: string;
 	choices(): readonly Choice<T>[];
-	current(): T;
+	/** Current value, marked with `●` when provided. */
+	current?(): T;
 	/** Highlighted on open instead of the current value, e.g. where a first-time pick starts. */
 	initial?: T;
 	choose(value: T): string | undefined;
@@ -48,18 +51,23 @@ export class ChoicePane<T> implements EditorPane {
 		this.host = host;
 		this.crumb = crumb;
 		this.options = options;
-		this.index = Math.max(
-			0,
-			options.choices().findIndex((choice) => choice.value === (options.initial ?? options.current())),
-		);
+		const target = options.initial !== undefined ? options.initial : options.current ? options.current() : NO_CURRENT;
+		this.index =
+			target === NO_CURRENT
+				? 0
+				: Math.max(
+						0,
+						options.choices().findIndex((choice) => choice.value === target),
+					);
 	}
 
 	render(width: number): string[] {
 		const lines: string[] = [];
 		if (this.options.header) lines.push(renderInfoLine(this.host.theme, this.options.header, width));
+		const current = this.options.current ? this.options.current() : NO_CURRENT;
 		for (const [index, choice] of this.options.choices().entries()) {
 			lines.push(
-				renderPlainLine(this.host.theme, `${choice.value === this.options.current() ? "●" : "○"} ${choice.label}`, {
+				renderPlainLine(this.host.theme, `${choice.value === current ? "●" : "○"} ${choice.label}`, {
 					active: index === this.index,
 					paneFocused: this.focused,
 					dim: choice.dim,
@@ -218,10 +226,11 @@ export class FilterListPane<T> implements EditorPane {
 	}
 }
 
-/** Owns an inline edit's identity, input focus, validation error, and cancellation. */
+/** Owns an inline edit's identity, input focus, validation error, async pending state, and cancellation. */
 export class InlineEdit<Key> {
 	private readonly refresh: () => void;
 	private active: { key: Key; editor: ValueEditor } | undefined;
+	private pendingCommit = false;
 	private disposed = false;
 	error: string | undefined;
 
@@ -231,6 +240,12 @@ export class InlineEdit<Key> {
 	get editing(): boolean {
 		return this.active !== undefined;
 	}
+	get activeKey(): Key | undefined {
+		return this.active?.key;
+	}
+	get pending(): boolean {
+		return this.pendingCommit;
+	}
 	editor(key: Key): ValueEditor | undefined {
 		return this.active?.key === key ? this.active.editor : undefined;
 	}
@@ -239,6 +254,7 @@ export class InlineEdit<Key> {
 	}
 	dispose(): void {
 		this.disposed = true;
+		this.pendingCommit = false;
 	}
 
 	begin(
@@ -271,13 +287,16 @@ export class InlineEdit<Key> {
 			onCommit: (value) => {
 				const result = commit(value);
 				if (result && typeof result === "object" && "then" in result) {
+					this.pendingCommit = true;
 					this.error = undefined;
 					this.refresh();
 					void result.then(
 						(err) => {
+							this.pendingCommit = false;
 							if (!this.disposed) finish(err);
 						},
 						(err: unknown) => {
+							this.pendingCommit = false;
 							if (!this.disposed) finish(err instanceof Error ? err.message : String(err));
 						},
 					);
@@ -301,6 +320,7 @@ export class InlineEdit<Key> {
 
 	handleInput(data: string, keys: KeybindingsManager): boolean {
 		if (!this.active) return false;
+		if (this.pendingCommit) return true;
 		if (!keys.matches(data, "tui.select.up") && !keys.matches(data, "tui.select.down"))
 			this.active.editor.handleInput(data);
 		this.refresh();

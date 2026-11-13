@@ -552,6 +552,8 @@ export class ModelRuntime implements Models {
 	}
 
 	isUsingSubscription(providerId: string): boolean {
+		// Kimi Coding is subscription-backed even when authenticated with an API key.
+		if (providerId === "kimi-coding") return true;
 		return this.isUsingOAuth(providerId) && this.models.getProvider(providerId)?.auth.oauth?.isSubscription === true;
 	}
 

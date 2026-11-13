@@ -9,7 +9,7 @@
  */
 import { spawn } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
-import { open, stat } from "node:fs/promises";
+import { open } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { ensureTool } from "../../utils/tools-manager.ts";
@@ -199,16 +199,23 @@ function virtualOf(rel: string): string {
  * most that many bytes are read, so a huge or growing file never fills memory.
  */
 async function readFileBounded(path: string, name: string, signal?: AbortSignal): Promise<Buffer> {
-	const { size } = await stat(path);
-	if (size > READFILE_MAX_BYTES) {
-		throw new Error(`file is ${size} bytes, over the ${READFILE_MAX_BYTES}-byte read limit: ${name}`);
-	}
 	signal?.throwIfAborted();
 	const handle = await open(path, "r");
 	try {
+		const { size } = await handle.stat();
+		if (size > READFILE_MAX_BYTES) {
+			throw new Error(`file is ${size} bytes, over the ${READFILE_MAX_BYTES}-byte read limit: ${name}`);
+		}
+		if (size === 0) return Buffer.alloc(0);
 		const buffer = Buffer.alloc(size);
-		const { bytesRead } = await handle.read(buffer, 0, size, 0);
-		return buffer.subarray(0, bytesRead);
+		let totalRead = 0;
+		while (totalRead < size) {
+			signal?.throwIfAborted();
+			const { bytesRead } = await handle.read(buffer, totalRead, size - totalRead, totalRead);
+			if (bytesRead === 0) break;
+			totalRead += bytesRead;
+		}
+		return buffer.subarray(0, totalRead);
 	} finally {
 		await handle.close();
 	}

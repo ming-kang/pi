@@ -37,6 +37,15 @@ describe("decodeChatResponse", () => {
 		expect(decodeChatResponse(reply("hello planner"))).toBe("hello planner");
 	});
 
+	it("decodes multi-byte UTF-8 characters split across field chunks", () => {
+		const bytes = Buffer.from("你好世界", "utf-8");
+		const part1 = bytes.subarray(0, 4); // splits the second 3-byte character
+		const part2 = bytes.subarray(4);
+		const field = (buf: Buffer) => Buffer.concat([Buffer.from([0x12, buf.length]), buf]);
+		const stream = Buffer.concat([frame(0, field(part1)), frame(0, field(part2)), frame(2, Buffer.from("{}"))]);
+		expect(decodeChatResponse(stream)).toBe("你好世界");
+	});
+
 	it("rejects a frame whose length runs past the body", () => {
 		const body = Buffer.concat([Buffer.from([0, 0, 0, 0, 10]), Buffer.from("abc")]);
 		expect(() => decodeChatResponse(body)).toThrow(/truncated planner frame/);
