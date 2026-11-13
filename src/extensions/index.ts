@@ -19,6 +19,11 @@ import toolSearchExtension from "./tool-search/index.ts";
 
 export const builtInExtensions: InlineExtension[] = [
 	{ name: "llama.cpp", factory: llamaExtension, builtin: true },
+	// Distribution chrome resolves before the renderers it decorates: as the outermost
+	// `registerToolRenderer` it receives the final definition, so `mcp`'s fallback renderer for a
+	// tool whose server has not connected still applies and a user's replacement renderer keeps
+	// owning its collapsed view.
+	{ name: "tool-presentation", factory: toolPresentationExtension, builtin: true },
 	// Replaceable: an extension that registers `codemode`, `tool_search`, or `/mcp` (such as a third-party
 	// MCP extension) takes over instead of running alongside the built-in one.
 	{ name: "codemode", factory: codemodeExtension, replaceable: true, builtin: true },
@@ -33,7 +38,6 @@ export const builtInExtensions: InlineExtension[] = [
 	{ name: "question", factory: questionExtension, builtin: true },
 	{ name: "run-summary", factory: runSummaryExtension, replaceable: true, builtin: true },
 	{ name: "statusline", factory: statuslineExtension, builtin: true },
-	{ name: "tool-presentation", factory: toolPresentationExtension, builtin: true },
 	{ name: "tasks", factory: tasksExtension, replaceable: true, builtin: true },
 	{ name: "search", factory: searchExtension, builtin: true },
 	{ name: "shell-paths", factory: shellPathsExtension, builtin: true },

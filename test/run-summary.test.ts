@@ -88,6 +88,28 @@ describe("run summary lifecycle", () => {
 		expect(line).not.toContain("TPS");
 	});
 
+	it("keeps the initial start when another turn begins before the run settles", async () => {
+		const harness = await tuiHarness();
+		harness.setResponses([fauxAssistantMessage("first response")]);
+		await harness.session.prompt("start");
+		const runner = harness.session.extensionRunner;
+		const trigger = { messageType: "user" as const, prompt: "follow-up" };
+		const options = { cwd: process.cwd(), selectedTools: [] };
+
+		// A follow-up or a continuation inside the same continuous run starts another turn before the
+		// run settles, for example when a queued message is delivered while the run is settling.
+		await runner.emitBeforeAgentStart(trigger, options);
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		const followUpStartedAt = Date.now();
+		await runner.emitBeforeAgentStart(trigger, options);
+		await runner.emit({ type: "agent_settled", aborted: false });
+
+		const record = readRunSummaryRecord(harness.sessionManager.getLeafEntry()!);
+		expect(record).toBeDefined();
+		expect(record!.startedAt).toBeLessThan(followUpStartedAt);
+		expect(record!.finishedAt - record!.startedAt).toBeGreaterThanOrEqual(20);
+	});
+
 	it("closes an interrupted run with Stopped before the next prompt", async () => {
 		let markToolStarted!: () => void;
 		const toolStarted = new Promise<void>((resolve) => {

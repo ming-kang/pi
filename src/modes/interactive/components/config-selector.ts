@@ -609,10 +609,14 @@ class ResourceList implements Component, Focusable {
 			scope === "project" ? this.settingsManager.getProjectSettings() : this.settingsManager.getGlobalSettings();
 
 		const packages = [...(settings.packages ?? [])] as PackageSource[];
-		const pkgIndex = packages.findIndex((pkg) => {
-			const source = typeof pkg === "string" ? pkg : pkg.source;
-			return source === item.metadata.source;
-		});
+		const pkgIndex = packages.findIndex((pkg) =>
+			this.packageSourceStringMatches(
+				item.metadata.source,
+				this.getItemScope(item),
+				typeof pkg === "string" ? pkg : pkg.source,
+				scope,
+			),
+		);
 
 		if (pkgIndex === -1) return;
 
@@ -647,13 +651,8 @@ class ResourceList implements Component, Focusable {
 
 		(pkg as Record<string, unknown>)[arrayKey] = updated.length > 0 ? updated : undefined;
 
-		// Clean up empty filter object
-		const hasFilters = ["extensions", "skills", "prompts", "themes"].some(
-			(k) => (pkg as Record<string, unknown>)[k] !== undefined,
-		);
-		if (!hasFilters) {
-			packages[pkgIndex] = (pkg as { source: string }).source;
-		}
+		// The shared collapse keeps invocation overrides and an `autoload: false` delta intact.
+		collapsePackageEntry(packages, pkgIndex, scope);
 
 		if (scope === "project") {
 			this.settingsManager.setProjectPackages(packages);
@@ -747,7 +746,7 @@ class ResourceList implements Component, Focusable {
 		}
 		const pattern = this.getPackageResourcePattern(item);
 		const updated = ((pkg[item.resourceType] ?? []) as string[]).filter(
-			(entry) => this.getPatternEntryTarget(entry) !== pattern,
+			(entry) => !hasResourcePattern(this.getPackageOverridePatterns(item), this.getPatternEntryTarget(entry)),
 		);
 		if (state !== "inherit") updated.push(`${state === "load" ? "+" : "-"}${pattern}`);
 		(pkg as Record<string, unknown>)[item.resourceType] = updated.length > 0 ? updated : undefined;

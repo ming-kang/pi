@@ -52,13 +52,12 @@ export class ToolChatContainer extends TranscriptLayoutContainer {
 	}
 }
 
-/** Pending tool rows by call ID; clear() disposes the rows it forgets. */
-export class PendingToolMap extends Map<string, ToolExecutionComponent> {
-	override clear(): void {
-		disposeAll(this.values());
-		super.clear();
-	}
-}
+/** Pending tool rows by call ID.
+ *
+ * Forgetting a row here does not dispose it: `ToolChatContainer` owns the mounted rows and disposes
+ * them when the chat is cleared or the mode shuts down, while a pending row that outlives its call
+ * (an aborted run, a rebuilt transcript) stays mounted and must stay alive. */
+export class PendingToolMap extends Map<string, ToolExecutionComponent> {}
 
 /** Dispose every row still shown, for mode shutdown where the chat is not cleared. */
 export function disposeChatRows(chat: Container): void {

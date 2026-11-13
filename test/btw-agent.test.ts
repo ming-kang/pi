@@ -300,7 +300,8 @@ describe("BTW native Agent", () => {
 		await first;
 		expect(signal?.aborted).toBe(true);
 		expect(side.busy).toBe(false);
-		expect(side.turns[0]).toMatchObject({ status: "cancelled" });
+		// The size guard stopped the answer, which is a failed turn rather than a user cancellation.
+		expect(side.turns[0]).toMatchObject({ status: "error" });
 		expect(side.turns[0].notice).toContain("response size limit");
 		expect(side.turns[0].answer).toContain("[Display truncated]");
 		await btwAsk(side, "shorter follow-up");

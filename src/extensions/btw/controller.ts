@@ -48,7 +48,9 @@ export class BtwController {
 			conversation.unsubscribeKeys = editorHost.onInput((data) => this.handleKey(conversation, data));
 			const snapshot = await pendingSnapshot;
 			if (this.current !== conversation) return;
-			const usesSubscription = ctx.modelRegistry.isUsingOAuth(snapshot.model);
+			// Kimi Coding is subscription-backed despite using API-key authentication.
+			const usesSubscription =
+				snapshot.model.provider === "kimi-coding" || ctx.modelRuntime.isUsingSubscription(snapshot.model.provider);
 			conversation.state = {
 				phase: "ready",
 				capturedAt: snapshot.capturedAt,
@@ -105,11 +107,8 @@ export class BtwController {
 			return { handled: true, editorText: text };
 		}
 		conversation.panel?.followTail();
-		void result.completion.catch((error: unknown) => {
-			if (this.current !== conversation) return;
-			conversation.ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
-			if (!conversation.ctx.ui.getEditorText()) conversation.ctx.ui.setEditorText(text);
-		});
+		// runQuestion reports every failure on the turn itself, so nothing is left unhandled here.
+		void result.completion;
 		return { handled: true };
 	}
 

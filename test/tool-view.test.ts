@@ -340,7 +340,7 @@ describe("chat lifecycle", () => {
 		vi.useRealTimers();
 	});
 
-	test("disposes rows when the chat or the pending map is cleared", () => {
+	test("disposes a mounted row only when the chat is cleared", () => {
 		vi.useFakeTimers();
 		const requestRender = vi.fn();
 		const definition: ToolDefinition = {
@@ -379,13 +379,18 @@ describe("chat lifecycle", () => {
 		const pending = new PendingToolMap();
 		pending.set("l1", chatRow);
 
+		// The row is still mounted in the chat, so forgetting the call must not dispose it.
 		pending.clear();
-		chat.clear();
 		const requests = requestRender.mock.calls.length;
 		vi.advanceTimersByTime(5000);
-		expect(requestRender).toHaveBeenCalledTimes(requests);
-		expect(chat.children).toHaveLength(0);
+		expect(requestRender.mock.calls.length).toBeGreaterThan(requests);
 		expect(pending.size).toBe(0);
+
+		chat.clear();
+		const afterClear = requestRender.mock.calls.length;
+		vi.advanceTimersByTime(5000);
+		expect(requestRender).toHaveBeenCalledTimes(afterClear);
+		expect(chat.children).toHaveLength(0);
 	});
 
 	test("ignores non-row children when spacing rows", () => {

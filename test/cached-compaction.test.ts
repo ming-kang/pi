@@ -1,6 +1,8 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Context, Message } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import type { CustomEntry, SessionEntry } from "../src/core/session-manager.ts";
 import cachedCompactionExtension from "../src/extensions/cached-compaction/index.ts";
 import { type CachedCompactionCard, renderCachedCompactionEntry } from "../src/extensions/cached-compaction/render.ts";
@@ -77,6 +79,91 @@ describe("cached compaction", () => {
 					.entries.filter((entry) => entry.sourceEntry.type === "custom")
 					.every((entry) => entry.messages.length === 0),
 			).toBe(true);
+		} finally {
+			await fixture.cleanup();
+		}
+	});
+
+	it("declares the prompt and tools when the snapshot carries no system message", async () => {
+		// A `context_with_system` handler can drop the leading system message, so the snapshot no
+		// longer carries the prompt and the tool declarations the compaction request needs.
+		const dropSystem = (pi: ExtensionAPI) => {
+			pi.on("context_with_system", (event) => {
+				event.messages.splice(0, event.messages.length, ...event.messages.filter((m) => m.role !== "system"));
+				return { messages: event.messages };
+			});
+		};
+		const requests: Context[] = [];
+		const fixture = await createBtwTestSession({
+			settings: { compaction: { enabled: false, keepRecentTokens: 1 } },
+			extensions: [dropSystem, cachedCompactionExtension],
+			tools: [
+				{
+					name: "note",
+					label: "Note",
+					description: "Write a note",
+					parameters: Type.Object({ text: Type.String() }),
+					execute: async () => ({ content: [{ type: "text", text: "noted" }], details: {} }),
+				},
+			],
+			stream: (_model, context) => {
+				requests.push(structuredClone(context));
+				return btwDone(btwResponse(requests.length === 1 ? "working on it" : "## Goal\nFinish the tests."));
+			},
+		});
+		try {
+			await fixture.session.prompt("remember the goal");
+			const result = await fixture.session.compact("Focus on tests");
+
+			expect(result?.summary).toBe("## Goal\nFinish the tests.");
+			expect(requests).toHaveLength(2);
+			const system = requests[1]!.messages[0] as {
+				role: string;
+				content?: string;
+				toolsAdded?: Array<{ name: string }>;
+			};
+			expect(system?.role).toBe("system");
+			expect(system.content?.length ?? 0).toBeGreaterThan(0);
+			expect(system.toolsAdded?.map((tool) => tool.name)).toEqual(["note"]);
+			expect(requests[1]!.messages[1]).toMatchObject({ role: "user" });
+			const instruction = requests[1]!.messages.at(-1);
+			expect(instruction?.role).toBe("user");
+			expect(JSON.stringify(instruction)).toContain("<kept-start>");
+		} finally {
+			await fixture.cleanup();
+		}
+	});
+
+	it("does not append its card when a later handler overrides the compaction summary", async () => {
+		const override = (pi: ExtensionAPI) => {
+			pi.on("session_before_compact", (event) => ({
+				compaction: {
+					summary: "## Goal\nOverridden by the later handler.",
+					firstKeptEntryId: event.preparation.firstKeptEntryId,
+					tokensBefore: event.preparation.tokensBefore,
+					usage: undefined,
+					details: undefined,
+				},
+			}));
+		};
+		const fixture = await createBtwTestSession({
+			settings: { compaction: { enabled: false, keepRecentTokens: 1 } },
+			extensions: [cachedCompactionExtension, override],
+			stream: (_model, context) => {
+				const calls = context.messages.filter((message) => message.role === "assistant").length;
+				return btwDone(btwResponse(calls === 1 ? "working on it" : "## Goal\nDiscarded summary."));
+			},
+		});
+		try {
+			await fixture.session.prompt("remember the goal");
+			const result = await fixture.session.compact("Focus on tests");
+
+			expect(result?.summary).toBe("## Goal\nOverridden by the later handler.");
+			expect(
+				fixture.sessionManager
+					.getBranch()
+					.filter((entry) => entry.type === "custom" && entry.customType === "cached-compaction"),
+			).toEqual([]);
 		} finally {
 			await fixture.cleanup();
 		}

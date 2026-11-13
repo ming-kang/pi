@@ -734,6 +734,92 @@ if (process.platform !== "win32") fs.chmodSync(piPath, 0o755);
 		expect(pkg.skillInvocationOverrides).toEqual({ "skills/skill-b": "user-only" });
 	});
 
+	it("keeps a global package delta and its invocation overrides when toggling its skill", async () => {
+		const pkgRoot = join(packageDir, "global-skills-package");
+		const skillPath = writeSkill(join(pkgRoot, "skills", "skill-a"), "skill-a");
+		const settingsManager = SettingsManager.inMemory({
+			packages: [{ source: pkgRoot, autoload: false, skillInvocationOverrides: { "skills/skill-b": "user-only" } }],
+		});
+		const resolved: ResolvedPaths = {
+			extensions: [],
+			skills: [
+				{
+					path: skillPath,
+					enabled: true,
+					metadata: { source: pkgRoot, scope: "user", origin: "package", baseDir: pkgRoot },
+				},
+			],
+			prompts: [],
+			themes: [],
+		};
+		const list = openConfig(settingsManager, "global", { global: resolved, project: resolved });
+		initTheme("dark");
+
+		list.handleInput(" ");
+
+		const pattern = join("skills", "skill-a", "SKILL.md");
+		const packages = settingsManager.getGlobalSettings().packages;
+		expect(packages).toHaveLength(1);
+		const pkg = packages?.[0];
+		expect(typeof pkg).toBe("object");
+		if (typeof pkg !== "object") return;
+		// The `autoload: false` delta and the other skill's invocation override survive the toggle.
+		expect(pkg.autoload).toBe(false);
+		expect(pkg.skills).toEqual([`+${pattern}`]);
+		expect(pkg.skillInvocationOverrides?.["skills/skill-b"]).toBe("user-only");
+	});
+
+	it("matches a global package entry by package identity when toggling its extension", async () => {
+		const settingsManager = SettingsManager.inMemory({ packages: ["npm:pi-tools"] });
+		const resolvedPaths = extensionPaths(join(tempDir, "pkg"), "npm:pi-tools@1.2.3", "user", ["bar.ts"]);
+		const selector = new ConfigSelectorComponent(
+			{ global: resolvedPaths, project: resolvedPaths },
+			settingsManager,
+			projectDir,
+			agentDir,
+			() => {},
+			() => {},
+			() => {},
+			24,
+			"global",
+		);
+
+		selector.getResourceList().handleInput(" ");
+
+		expect(settingsManager.getGlobalSettings().packages).toEqual([
+			{ source: "npm:pi-tools", extensions: [`-${join("extensions", "bar.ts")}`] },
+		]);
+	});
+
+	it("clears every package filter alias when a project override returns to inherit", async () => {
+		const pkgRoot = join(packageDir, "alias-package");
+		const skillPath = writeSkill(join(pkgRoot, "skills", "demo"), "demo");
+		const settingsManager = SettingsManager.inMemory({ packages: [pkgRoot] });
+		// A hand-written filter can name the skill by its absolute path or its directory.
+		settingsManager.setProjectPackages([
+			{ source: pkgRoot, autoload: false, skills: [skillPath, `-${join("skills", "demo")}`] },
+		]);
+		const resolved: ResolvedPaths = {
+			extensions: [],
+			skills: [
+				{
+					path: skillPath,
+					enabled: true,
+					metadata: { source: pkgRoot, scope: "user", origin: "package", baseDir: pkgRoot },
+				},
+			],
+			prompts: [],
+			themes: [],
+		};
+		const list = openConfig(settingsManager, "project", { global: resolved, project: resolved });
+
+		list.handleInput(" ");
+		list.handleInput(" ");
+
+		// Back at inherit the aliases are gone too, so the delta collapses instead of lingering.
+		expect(settingsManager.getProjectSettings().packages).toEqual([]);
+	});
+
 	function writeSkill(dir: string, name: string): string {
 		mkdirSync(dir, { recursive: true });
 		const file = join(dir, "SKILL.md");

@@ -46,6 +46,19 @@ interface ActiveQuestion {
 	steps: number;
 	completedAnswer: string;
 	responseChars: number;
+	/** The response-size guard aborted this turn, so an aborted response is not a user cancellation. */
+	limitAborted: boolean;
+}
+
+/** Characters a response contributes to the size budget, without serializing its text again. */
+function messageChars(content: AssistantMessage["content"]): number {
+	let chars = 0;
+	for (const part of content) {
+		if (part.type === "text") chars += part.text.length;
+		else if (part.type === "thinking") chars += part.thinking.length;
+		else if (part.type === "toolCall") chars += JSON.stringify(part.arguments).length;
+	}
+	return chars;
 }
 
 function displayText(text: string): string {
@@ -155,6 +168,7 @@ export class BtwAgent implements BtwConversationState {
 			steps: 0,
 			completedAnswer: "",
 			responseChars: 0,
+			limitAborted: false,
 		};
 		this.active = question;
 		this.turns.push(question.turn);
@@ -229,21 +243,12 @@ export class BtwAgent implements BtwConversationState {
 		this.updateAnswer(question, message);
 		if (event.type === "message_end") {
 			question.completedAnswer = turn.answer;
-			question.responseChars += message.content.reduce(
-				(sum, part) =>
-					sum +
-					(part.type === "text"
-						? part.text.length
-						: part.type === "thinking"
-							? part.thinking.length
-							: JSON.stringify(part.arguments).length),
-				0,
-			);
+			question.responseChars += messageChars(message.content);
 			this.blockedTools += message.content.filter((part) => part.type === "toolCall").length;
 			this.latestCacheHitPercent = cacheHitPercent(message.usage);
 			this.usage = combineUsage(this.usage, message.usage);
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
-				turn.status = message.stopReason === "aborted" ? "cancelled" : "error";
+				turn.status = message.stopReason === "aborted" && !question.limitAborted ? "cancelled" : "error";
 				turn.notice ??=
 					message.stopReason === "aborted"
 						? "Stopped. You can ask another question."
@@ -266,7 +271,9 @@ export class BtwAgent implements BtwConversationState {
 		if (text && turn.firstAnswerMs === undefined) turn.firstAnswerMs = Date.now() - turn.startedAt;
 		turn.answer = displayText([question.completedAnswer, text].filter(Boolean).join("\n\n"));
 		turn.thinking = thinking.slice(-2000);
-		if (question.responseChars + JSON.stringify(message.content).length > MAX_RESPONSE_CHARS) {
+		if (question.responseChars + messageChars(message.content) > MAX_RESPONSE_CHARS) {
+			// The guard stopped the answer, which is a failed turn rather than a user cancellation.
+			if (turn.status === "streaming") question.limitAborted = true;
 			turn.notice = "Stopped at the BTW response size limit. You can ask a shorter follow-up.";
 			this.agent.abort();
 		}

@@ -7,19 +7,23 @@ const CARD_TYPE = "cached-compaction";
 
 export default function cachedCompaction(pi: ExtensionAPI): void {
 	/** Card for the summary returned to the current compaction; every compaction starts by clearing it. */
-	let completed: CachedCompactionCard | undefined;
+	let pending: { summary: string; card: CachedCompactionCard } | undefined;
 
 	pi.registerEntryRenderer(CARD_TYPE, renderCachedCompactionEntry);
 
 	pi.on("session_before_compact", async (event, ctx) => {
-		completed = undefined;
+		pending = undefined;
 		if (event.reason === "overflow") return;
 		const startedAt = Date.now();
 		try {
 			const snapshot = await ctx.getContextSnapshot();
 			const kept = keptStart(event.branchEntries, event.preparation.firstKeptEntryId, snapshot.messages);
 			if (!kept) return;
-			const response = await ctx.modelRegistry
+			// A prepared snapshot already carries the leading system message; declaring the prompt and
+			// tools again would duplicate it. Before the first request, or after a
+			// `context_with_system` handler dropped it, they have to be declared here.
+			const declared = snapshot.messages[0]?.role === "system";
+			const response = await ctx.modelRuntime
 				.streamSimple(
 					snapshot.model,
 					{
@@ -31,6 +35,7 @@ export default function cachedCompaction(pi: ExtensionAPI): void {
 								timestamp: Date.now(),
 							},
 						],
+						...(declared ? {} : { systemPrompt: snapshot.systemPrompt, tools: snapshot.tools }),
 					},
 					{
 						...snapshot.streamOptions,
@@ -44,13 +49,16 @@ export default function cachedCompaction(pi: ExtensionAPI): void {
 			const text = contentText(response.content).trim();
 			if (!text) return;
 			const checkpoint = checkpointSummary(text, event.preparation.fileOps, event.branchEntries);
-			completed = {
-				reason: event.reason,
-				cacheRead: response.usage.cacheRead,
-				input: response.usage.input,
-				cacheWrite: response.usage.cacheWrite,
-				output: response.usage.output,
-				durationMs: Date.now() - startedAt,
+			pending = {
+				summary: checkpoint.summary,
+				card: {
+					reason: event.reason,
+					cacheRead: response.usage.cacheRead,
+					input: response.usage.input,
+					cacheWrite: response.usage.cacheWrite,
+					output: response.usage.output,
+					durationMs: Date.now() - startedAt,
+				},
 			};
 			return {
 				compaction: {
@@ -67,8 +75,14 @@ export default function cachedCompaction(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_compact", (event) => {
-		const card = completed;
-		completed = undefined;
+		// A later `session_before_compact` handler can override this summary; its card, not ours,
+		// describes the compaction that was recorded.
+		const card = pending && event.compactionEntry.summary === pending.summary ? pending.card : undefined;
+		pending = undefined;
 		if (event.fromExtension && card) pi.appendEntry(CARD_TYPE, card);
+	});
+
+	pi.on("session_compact_failed", () => {
+		pending = undefined;
 	});
 }

@@ -29,7 +29,7 @@ function parseMounts(output: string): Mount[] {
 }
 
 function readMounts(shellPath: string | undefined): Promise<Mount[]> {
-	return new Promise((resolve) => {
+	return new Promise((resolve, reject) => {
 		try {
 			const shell = getShellConfig(shellPath ? normalizePath(shellPath) : undefined);
 			// Legacy WSL bash mounts live inside Linux; core already maps its /mnt/<drive> paths.
@@ -38,10 +38,10 @@ function readMounts(shellPath: string | undefined): Promise<Mount[]> {
 				shell.shell,
 				[...shell.args, "mount"],
 				{ timeout: MOUNT_TIMEOUT_MS, windowsHide: true },
-				(error, stdout) => resolve(error ? [] : parseMounts(stdout)),
+				(error, stdout) => (error ? reject(error) : resolve(parseMounts(stdout))),
 			);
-		} catch {
-			resolve([]);
+		} catch (error) {
+			reject(error);
 		}
 	});
 }
@@ -63,11 +63,17 @@ export default function shellPathsExtension(pi: ExtensionAPI): void {
 	if (process.platform !== "win32") return;
 	const mountsByShellPath = new Map<string | undefined, Promise<Mount[]>>();
 
-	function getMounts(): Promise<Mount[]> {
+	async function getMounts(): Promise<Mount[]> {
 		const shellPath = pi.getSettings().shellPath;
 		let mounts = mountsByShellPath.get(shellPath);
 		if (!mounts) {
-			mounts = readMounts(shellPath);
+			// A failed `mount` invocation is transient (a shell that is still starting, a timeout), so
+			// the attempt is dropped instead of cached: the next call retries. Empty but valid output
+			// is a real answer and stays cached.
+			mounts = readMounts(shellPath).catch(() => {
+				if (mountsByShellPath.get(shellPath) === mounts) mountsByShellPath.delete(shellPath);
+				return [] as Mount[];
+			});
 			mountsByShellPath.set(shellPath, mounts);
 		}
 		return mounts;
@@ -75,11 +81,13 @@ export default function shellPathsExtension(pi: ExtensionAPI): void {
 
 	pi.on("tool_call", async (event) => {
 		if (!PATH_TOOLS.has(event.toolName)) return;
-		const input = event.input as { path?: unknown };
-		const path = input.path;
+		const input = event.input;
+		// Tool inputs are model-authored JSON; a missing or non-object one has no path to rewrite.
+		if (!input || typeof input !== "object") return;
+		const path = (input as { path?: unknown }).path;
 		if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//")) return;
 		if (normalizeWindowsShellPath(path) !== path) return;
 		const windowsPath = toWindowsPath(path, await getMounts());
-		if (windowsPath) input.path = windowsPath;
+		if (windowsPath) (input as { path?: unknown }).path = windowsPath;
 	});
 }

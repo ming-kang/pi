@@ -22,7 +22,9 @@ export default function runSummary(pi: ExtensionAPI): void {
 	});
 
 	pi.on("before_agent_start", () => {
-		startedAt = Date.now();
+		// Follow-up work queued into the same continuous run starts another turn before the run
+		// settles; the summary still covers the time the user has been waiting since.
+		startedAt ??= Date.now();
 	});
 
 	pi.on("agent_settled", (event, ctx) => {
