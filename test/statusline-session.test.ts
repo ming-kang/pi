@@ -105,7 +105,7 @@ it("shows finalized usage after streaming and preserves it through reload", asyn
 	expect(listeners.size).toBe(0);
 });
 
-it("updates live decode TPS while streaming, reconciles at message_end, survives reload, and clears on model change", async () => {
+it("updates live decode TPS while streaming, settles from the persisted message, survives reload, and hides under another model", async () => {
 	initTheme("dark");
 	let footer: ReturnType<FooterFactory> | undefined;
 	const tui = new TuiMainScreen(new VirtualTerminal());
@@ -154,9 +154,12 @@ it("updates live decode TPS while streaming, reconciles at message_end, survives
 				});
 				pi.on("message_end", (event) => {
 					if (event.message.role !== "assistant") return;
+					// Replaces usage and duration after statusline saw message_end: 125 output tokens over a
+					// 2s request whose stream carried ~24 of them during its last 1s.
 					return {
 						message: {
 							...event.message,
+							durationMs: 2_000,
 							usage: {
 								input: 10,
 								output: 125,
@@ -181,18 +184,18 @@ it("updates live decode TPS while streaming, reconciles at message_end, survives
 				},
 			}),
 		});
-		harness.setResponses([
-			fauxAssistantMessage(
-				"This streamed response has enough characters across several chunks to measure live decode TPS.",
-			),
-		]);
+		const text = "This streamed response has enough characters across several chunks to measure live decode TPS.";
+		harness.setResponses([fauxAssistantMessage(text)]);
 		await harness.session.prompt("measure");
 
 		expect(streamingSnapshots.some((line) => /TPS \d+/.test(line))).toBe(true);
-		expect(renderLine2()).toContain(" · TPS 125");
+		// The visible share of the output earns the same share of the 1s first-token wait as a deduction.
+		const visibleShare = text.length / 4 / 125;
+		const settled = ` · TPS ${Math.round(125 / (2 - visibleShare))} `;
+		expect(renderLine2()).toContain(settled);
 
 		await harness.session.reload();
-		expect(renderLine2()).toContain(" · TPS 125");
+		expect(renderLine2()).toContain(settled);
 
 		await harness.session.setModel(harness.getModel("model-b")!);
 		expect(renderLine2()).not.toContain("TPS");

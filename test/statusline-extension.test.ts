@@ -430,6 +430,8 @@ describe("statusline TPS display and layout", () => {
 });
 
 describe("statusline TpsTracker", () => {
+	const MODEL = { provider: "test", id: "model-a" };
+
 	function makeAssistant(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
 		return {
 			role: "assistant",
@@ -444,121 +446,172 @@ describe("statusline TpsTracker", () => {
 		};
 	}
 
-	it("measures decode-only TPS (excluding TTFT), counts text/thinking/tool deltas, and reconciles with final usage", () => {
-		let clock = 1_000;
-		const tracker = new TpsTracker(() => clock);
+	function startTracker() {
+		const state = { clock: 0 };
+		const tracker = new TpsTracker(() => state.clock);
 		const session = SessionManager.inMemory();
-		const msg = makeAssistant({ timestamp: 5_000 });
-
 		tracker.onSessionStart(session.getSessionId(), "startup");
+		const delta = (
+			at: number,
+			text: string,
+			type: "text_delta" | "thinking_delta" | "toolcall_delta" = "text_delta",
+		) => {
+			state.clock = at;
+			return tracker.onMessageUpdate("assistant", { type, contentIndex: 0, delta: text, partial: makeAssistant() });
+		};
+		const end = (at: number, message: AssistantMessage) => {
+			state.clock = at;
+			return tracker.onMessageEnd(message);
+		};
+		return { state, tracker, session, delta, end };
+	}
+
+	it("excludes the whole first-token wait when every output token was streamed", () => {
+		const { tracker, session, delta, end } = startTracker();
 		tracker.onMessageStart("assistant");
+		// 2s wait, then 1s of stream carrying an estimated 100 tokens (CJK 1/char, the rest 4 chars/token).
+		delta(2_000, "思考".repeat(10), "thinking_delta");
+		delta(2_500, "x".repeat(160));
+		delta(3_000, "y".repeat(160), "toolcall_delta");
+		end(3_000, makeAssistant({ usage: usage(10, 80, 0, 0, 0), durationMs: 3_000 }));
 
-		// Empty delta must not start decode timing.
-		expect(
-			tracker.onMessageUpdate("assistant", { type: "text_delta", contentIndex: 0, delta: "", partial: msg }),
-		).toBe(false);
-		clock = 3_000; // 2s TTFT before first non-empty token.
-
-		// First token arrives at 3000ms (CJK=2 chars -> 2 tokens, plus ASCII=8 chars -> 2 tokens).
-		expect(
-			tracker.onMessageUpdate("assistant", { type: "thinking_delta", contentIndex: 0, delta: "思考", partial: msg }),
-		).toBe(false);
-		clock = 3_100; // < 250ms live threshold.
-		expect(
-			tracker.onMessageUpdate("assistant", {
-				type: "text_delta",
-				contentIndex: 1,
-				delta: "abcdefgh",
-				partial: msg,
-			}),
-		).toBe(false);
-		expect(tracker.read(session)).toBeUndefined();
-
-		// At 3300ms (300ms decode), estimated = 4 tokens -> ~13.3 TPS; throttled for next 200ms.
-		clock = 3_300;
-		expect(
-			tracker.onMessageUpdate("assistant", {
-				type: "toolcall_delta",
-				contentIndex: 2,
-				delta: '{"a":123}', // 9 chars -> +2.25 tokens -> 6.25 total / 0.3s = 20.83
-				partial: msg,
-			}),
-		).toBe(true);
-		expect(tracker.read(session)).toBeCloseTo(6.25 / 0.3, 5);
-
-		clock = 3_400; // Only 100ms since last sample -> throttled.
-		expect(
-			tracker.onMessageUpdate("assistant", { type: "text_delta", contentIndex: 1, delta: "1234", partial: msg }),
-		).toBe(false);
-
-		// Message ends at 4000ms (1000ms pure decode, excluding 2000ms TTFT) with provider usage.output = 80 -> 80 TPS.
-		clock = 4_000;
-		const finalized = makeAssistant({ timestamp: 5_000, usage: usage(10, 80, 0, 0, 0.1) });
-		expect(tracker.onMessageEnd(finalized)).toBe(true);
-		expect(tracker.read(session)).toBeCloseTo(80, 5);
+		expect(tracker.read(session, MODEL)).toBeCloseTo(80, 5);
 	});
 
-	it("reconciles later message_end usage mutations via session branch and keeps previous TPS on error", () => {
-		let clock = 0;
-		const tracker = new TpsTracker(() => clock);
-		const session = SessionManager.inMemory();
-
-		tracker.onSessionStart(session.getSessionId(), "startup");
+	it("keeps the wait in the decode time for output tokens that never streamed", () => {
+		const { tracker, session, delta, end } = startTracker();
 		tracker.onMessageStart("assistant");
-		clock = 100;
-		tracker.onMessageUpdate("assistant", {
-			type: "text_delta",
-			contentIndex: 0,
-			delta: "hello world!",
-			partial: makeAssistant(),
-		});
-		clock = 600; // 500ms decode.
-		const ended = makeAssistant({ timestamp: 2_000, usage: usage(10, 0, 0, 0, 0) });
-		expect(tracker.onMessageEnd(ended)).toBe(false);
-		session.appendMessage({ ...ended, usage: usage(10, 45, 0, 0, 0.1) });
-		expect(tracker.read(session)).toBeCloseTo(90, 5);
+		// 9s before the first delta, then 200 estimated tokens in 1s; the provider billed 2000.
+		delta(9_000, "x".repeat(400));
+		delta(10_000, "x".repeat(400));
+		end(10_000, makeAssistant({ usage: usage(10, 2_000, 0, 0, 0), durationMs: 10_000 }));
 
-		// Next turn errors before producing any output -> preserve previous valid TPS (90).
+		// A tenth of the output was visible, so a tenth of the wait is deducted: 2000 / 9.1s.
+		// Dividing by the 1s stream window alone would report 2000.
+		expect(tracker.read(session, MODEL)).toBeCloseTo(2_000 / 9.1, 5);
+	});
+
+	it("reports whole-request throughput when the stream arrives in one burst", () => {
+		const { tracker, session, delta, end } = startTracker();
 		tracker.onMessageStart("assistant");
-		clock = 1_500;
-		const errored = makeAssistant({ timestamp: 3_000, stopReason: "error", usage: usage(10, 0, 0, 0, 0) });
-		tracker.onMessageEnd(errored);
+		// A buffering gateway flushes everything 9s in; the 25ms window is transport, not decoding.
+		delta(9_000, "x".repeat(180));
+		delta(9_020, "x".repeat(180));
+		end(9_025, makeAssistant({ usage: usage(10, 90, 0, 0, 0), durationMs: 9_030 }));
+
+		expect(tracker.read(session, MODEL)).toBeCloseTo(90 / 9.03, 5);
+	});
+
+	it("reports whole-request throughput for a response with no deltas", () => {
+		const { tracker, session, end } = startTracker();
+		tracker.onMessageStart("assistant");
+		end(4_000, makeAssistant({ usage: usage(10, 200, 0, 0, 0), durationMs: 4_000 }));
+
+		expect(tracker.read(session, MODEL)).toBeCloseTo(50, 5);
+	});
+
+	it("falls back to the streamed rate when the provider reports no output usage", () => {
+		const { tracker, session, delta, end } = startTracker();
+		tracker.onMessageStart("assistant");
+		delta(1_000, "x".repeat(40));
+		delta(2_000, "x".repeat(240));
+		end(2_000, makeAssistant({ durationMs: 2_000 }));
+
+		// 60 tokens arrived during the 1s after the delta that opened the window.
+		expect(tracker.read(session, MODEL)).toBeCloseTo(60, 5);
+	});
+
+	it("measures live TPS from the tokens after the first delta and lets it decay while the stream stalls", () => {
+		const { state, tracker, session, delta } = startTracker();
+		tracker.onMessageStart("assistant");
+
+		expect(delta(500, "")).toBe(false);
+		// The first delta only opens the window: its 100 tokens arrived over no measured time.
+		expect(delta(2_000, "x".repeat(400))).toBe(false);
+		expect(delta(2_100, "x".repeat(40))).toBe(false);
+		expect(tracker.read(session, MODEL)).toBeUndefined();
+
+		// 20 tokens over 500ms. Counting the opening delta would report 240.
+		expect(delta(2_500, "x".repeat(40))).toBe(true);
+		expect(tracker.read(session, MODEL)).toBeCloseTo(40, 5);
+
+		// Render requests are throttled; the value itself is never cached.
+		expect(delta(2_600, "x".repeat(40))).toBe(false);
+		expect(tracker.read(session, MODEL)).toBeCloseTo(50, 5);
+		state.clock = 5_000;
+		expect(tracker.read(session, MODEL)).toBeCloseTo(10, 5);
+	});
+
+	it("shows nothing for a latest response it could not measure", () => {
+		const { tracker, session, delta, end } = startTracker();
+		tracker.onMessageStart("assistant");
+		delta(1_000, "x".repeat(400));
+		const measured = makeAssistant({ timestamp: 1_000, usage: usage(10, 100, 0, 0, 0), durationMs: 2_000 });
+		end(2_000, measured);
+		session.appendMessage(measured);
+		expect(tracker.read(session, MODEL)).toBeCloseTo(100, 5);
+
+		// The next request fails before producing output: the previous value must not stand in for it.
+		tracker.onMessageStart("assistant");
+		const errored = makeAssistant({ timestamp: 3_000, stopReason: "error", durationMs: 500 });
+		end(2_500, errored);
+		expect(tracker.read(session, MODEL)).toBeUndefined();
 		session.appendMessage(errored);
-		expect(tracker.read(session)).toBeCloseTo(90, 5);
+		expect(tracker.read(session, MODEL)).toBeUndefined();
 	});
 
-	it("clears on model_select and preserves TPS across reload", () => {
-		let clock = 0;
-		const tracker = new TpsTracker(() => clock);
-		const session = SessionManager.inMemory();
-		const sessionId = session.getSessionId();
-
-		tracker.onSessionStart(sessionId, "startup");
+	it("uses the persisted message when usage changes after message_end", () => {
+		const { tracker, session, delta, end } = startTracker();
 		tracker.onMessageStart("assistant");
-		clock = 100;
-		tracker.onMessageUpdate("assistant", {
-			type: "text_delta",
-			contentIndex: 0,
-			delta: "abcd",
-			partial: makeAssistant(),
-		});
-		clock = 1_100; // 1000ms decode.
-		tracker.onMessageEnd(makeAssistant({ timestamp: 1_000, usage: usage(5, 60, 0, 0, 0) }));
-		expect(tracker.read(session)).toBeCloseTo(60, 5);
+		delta(1_000, "x".repeat(400));
+		const ended = makeAssistant({ timestamp: 2_000, durationMs: 1_500 });
+		end(1_500, ended);
+		session.appendMessage({ ...ended, usage: usage(10, 45, 0, 0, 0.1) });
 
-		// Reload preserves TPS.
+		expect(tracker.read(session, MODEL)).toBeCloseTo(90, 5);
+	});
+
+	it("follows the latest response on the active branch and hides it under another model", () => {
+		const { tracker, session, delta, end } = startTracker();
+
+		tracker.onMessageStart("assistant");
+		delta(1_000, "x".repeat(400));
+		const first = makeAssistant({ timestamp: 1_000, usage: usage(10, 60, 0, 0, 0), durationMs: 2_000 });
+		end(2_000, first);
+		const firstId = session.appendMessage(first);
+
+		tracker.onMessageStart("assistant");
+		delta(3_000, "x".repeat(400));
+		const second = makeAssistant({ timestamp: 2_000, usage: usage(10, 90, 0, 0, 0), durationMs: 2_000 });
+		end(4_000, second);
+		session.appendMessage(second);
+		expect(tracker.read(session, MODEL)).toBeCloseTo(90, 5);
+
+		session.branch(firstId);
+		tracker.onSessionTree();
+		expect(tracker.read(session, MODEL)).toBeCloseTo(60, 5);
+
+		expect(tracker.read(session, { provider: "other", id: "model-b" })).toBeUndefined();
+		expect(tracker.read(session, MODEL)).toBeCloseTo(60, 5);
+	});
+
+	it("preserves TPS across reload and drops it when the session ends", () => {
+		const { state, tracker, session, delta, end } = startTracker();
+		const sessionId = session.getSessionId();
+		tracker.onMessageStart("assistant");
+		delta(100, "x".repeat(400));
+		const message = makeAssistant({ usage: usage(5, 60, 0, 0, 0), durationMs: 1_100 });
+		end(1_100, message);
+		session.appendMessage(message);
+		expect(tracker.read(session, MODEL)).toBeCloseTo(60, 5);
+
 		tracker.onSessionShutdown(sessionId, "reload");
-		const reloaded = new TpsTracker(() => clock);
+		const reloaded = new TpsTracker(() => state.clock);
 		reloaded.onSessionStart(sessionId, "reload");
-		expect(reloaded.read(session)).toBeCloseTo(60, 5);
+		expect(reloaded.read(session, MODEL)).toBeCloseTo(60, 5);
 
-		// Switching model immediately clears TPS.
-		reloaded.onModelSelect({ provider: "other", id: "model-b" }, { provider: "test", id: "model-a" });
-		expect(reloaded.read(session)).toBeUndefined();
-
-		// Non-reload shutdown drops preserved state.
 		reloaded.onSessionShutdown(sessionId, "quit");
 		reloaded.onSessionStart(sessionId, "startup");
-		expect(reloaded.read(session)).toBeUndefined();
+		expect(reloaded.read(session, MODEL)).toBeUndefined();
 	});
 });

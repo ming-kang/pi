@@ -27,7 +27,11 @@ CTX 2.1%/1.0M · TPS 84           ↑13k ↓13k R440k CH99.4% $0.074
 **Left**
 
 - **Context:** used percentage plus context-window size. The percentage uses fixed semantic tiers: accent normally, warning above 40%, error above 80%.
-- **Decode TPS (when measured):** rounded tokens per second (`TPS <n>`) for the latest main-session assistant response, excluding TTFT and tool execution time. Updates live during streaming from accumulated character estimates and reconciles with provider `usage.output` on completion; cleared on model switch and preserved across `/reload`. Colored by speed tier using Pi's thinking colors: `thinkingLow` (`0–49`), `thinkingMedium` (`50–99`), `thinkingHigh` (`100–149`), `thinkingXhigh` (`150–199`), and `thinkingMax` (`200+`).
+- **TPS (when measured):** rounded output tokens per second (`TPS <n>`) for the latest main-session assistant response on the active branch. Tool execution time is never included.
+  - **While streaming:** the rate of tokens that arrived after the first delta, estimated from characters. It falls while the stream is silent.
+  - **On completion:** provider `usage.output` over the request duration, minus the first-token wait in proportion to the share of output that streamed. A fully streamed response excludes the whole wait. Reasoning tokens that never streamed keep their share of it, and a stream shorter than 250 ms (a gateway that buffers the response and flushes it at once) keeps all of it, which leaves whole-request throughput: a lower bound on decode speed. Without provider output usage, the streamed rate stands.
+  - **Hidden** when the latest response cannot be measured, or while the current model differs from the one that produced it. Preserved across `/reload`.
+  - **Colors:** speed tiers use Pi's thinking colors: `thinkingLow` (`0–49`), `thinkingMedium` (`50–99`), `thinkingHigh` (`100–149`), `thinkingXhigh` (`150–199`), and `thinkingMax` (`200+`).
 
 **Right**
 

@@ -8,6 +8,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 - The bundled `ice-cream-dark` and `ice-cream-light` themes rework their reading ladder.
 
+### Fixed
+
+- `statusline` `TPS` no longer reports speeds several times too high when a response carries reasoning tokens that never streamed, or when a gateway buffers the stream and flushes it at once. The settled value now divides provider output by the request duration and excludes the first-token wait only for the share of output that streamed. A response that cannot be measured shows no `TPS` instead of the previous response's value, and the live value no longer freezes at its last peak. See [Statusline](docs/bundled/extensions/statusline.md#line-2--context--speed-left--usage-right).
+
 ## [1.5.6] - 2026-11-13
 
 ### Added

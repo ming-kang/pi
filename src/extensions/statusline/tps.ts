@@ -1,47 +1,45 @@
 import type { AssistantMessage, AssistantMessageEvent, Model } from "@earendil-works/pi-ai";
-import type { ReadonlySessionManager, SessionEntry } from "../../core/session-manager.ts";
+import type { ReadonlySessionManager } from "../../core/session-manager.ts";
 
-export const TPS_MIN_LIVE_MS = 250;
-export const TPS_MIN_LIVE_TOKENS = 2;
+/** Shortest window and fewest tokens that can carry a rate, live or settled. */
+export const TPS_MIN_WINDOW_MS = 250;
+export const TPS_MIN_TOKENS = 2;
 export const TPS_LIVE_UPDATE_INTERVAL_MS = 200;
-export const TPS_MIN_DECODE_MS = 20;
-const MAX_CACHED_MESSAGES = 64;
+const MAX_OBSERVED_MESSAGES = 64;
 const MAX_RELOAD_SNAPSHOTS = 16;
 
-interface ActiveMeasurement {
-	firstTokenAt?: number;
+interface TokenEstimate {
 	cjkChars: number;
 	otherChars: number;
-	lastSampleAt: number;
-	liveTps?: number;
 }
 
-interface PendingReconciliation {
-	decodeMs: number;
-	estimatedTokens: number;
-	messageTimestamp: number;
-	stopReason: AssistantMessage["stopReason"];
-	settledOutput?: number;
+interface ActiveStream extends TokenEstimate {
+	firstDeltaAt?: number;
+	/** Estimated tokens of the delta that opened the window. They arrived over no measured time. */
+	openingTokens: number;
+	lastRenderRequestAt?: number;
 }
 
-interface SettledTps {
-	tps: number;
-	messageKey?: string;
+/** How the stream of one finished response arrived. Kept apart from the message, whose usage can still change. */
+interface StreamObservation {
+	/** First delta until the message ended. Zero when nothing streamed. */
+	windowMs: number;
+	/** Estimated tokens across all deltas. */
+	tokens: number;
+	openingTokens: number;
 }
 
-interface ReloadSnapshot {
-	settled?: SettledTps;
-	byMessage: Map<string, number>;
-	clearedByModelSelect: boolean;
-}
+const reloadSnapshots = new Map<string, Map<string, StreamObservation>>();
 
-const reloadSnapshots = new Map<string, ReloadSnapshot>();
+function rate(tokens: number, ms: number): number | undefined {
+	return ms >= TPS_MIN_WINDOW_MS && tokens >= TPS_MIN_TOKENS ? tokens / (ms / 1000) : undefined;
+}
 
 function messageSignature(message: Pick<AssistantMessage, "timestamp" | "provider" | "model">): string {
 	return `${message.timestamp}:${message.provider}:${message.model}`;
 }
 
-function addCharCounts(target: ActiveMeasurement, text: string): void {
+function addCharCounts(target: TokenEstimate, text: string): void {
 	for (let index = 0; index < text.length; index++) {
 		const code = text.charCodeAt(index);
 		if (
@@ -58,27 +56,51 @@ function addCharCounts(target: ActiveMeasurement, text: string): void {
 	}
 }
 
-function latestAssistantMessage(entries: readonly SessionEntry[]): AssistantMessage | undefined {
-	for (let index = entries.length - 1; index >= 0; index--) {
-		const entry = entries[index];
-		if (entry?.type === "message" && entry.message.role === "assistant") {
-			return entry.message;
-		}
+function estimateTokens(estimate: TokenEstimate): number {
+	return estimate.cjkChars + estimate.otherChars / 4;
+}
+
+function latestAssistantMessage(manager: ReadonlySessionManager): AssistantMessage | undefined {
+	let entry = manager.getLeafEntry();
+	while (entry) {
+		if (entry.type === "message" && entry.message.role === "assistant") return entry.message;
+		entry = entry.parentId ? manager.getEntry(entry.parentId) : undefined;
 	}
 	return undefined;
 }
 
 /**
- * Tracks decode-only tokens per second (TTFT and tool time excluded) for the latest
- * main-session assistant response, reconciling live estimates with final provider usage.
+ * Decode speed of a finished response: all output tokens over the request duration, less the part of
+ * the first-token wait the stream can vouch for.
+ *
+ * The time before the first delta was pure waiting for the tokens that then streamed, but it is when
+ * the tokens that never streamed (hidden reasoning) were generated. So the wait is deducted in
+ * proportion to the share of output that streamed: all of it for a fully visible response, none of it
+ * when the stream is too short to be more than a transport burst. The result always lies between
+ * whole-request throughput and output over the stream window.
+ */
+function settledTps(message: AssistantMessage, stream: StreamObservation): number | undefined {
+	const output = message.usage.output;
+	const durationMs = message.durationMs;
+	if (output > 0 && durationMs !== undefined) {
+		const windowMs = Math.min(stream.windowMs, durationMs);
+		const streamedShare = windowMs >= TPS_MIN_WINDOW_MS ? Math.min(1, stream.tokens / output) : 0;
+		return rate(output, durationMs - (durationMs - windowMs) * streamedShare);
+	}
+	// No provider count or request duration to reconcile with: the stream is the only evidence.
+	return rate(stream.tokens - stream.openingTokens, stream.windowMs);
+}
+
+/**
+ * Tracks tokens per second for the latest main-session assistant response. Only stream observations
+ * are stored; the displayed value is derived on every read from the message it describes.
  */
 export class TpsTracker {
 	private readonly now: () => number;
-	private active?: ActiveMeasurement;
-	private pending?: PendingReconciliation;
-	private settled?: SettledTps;
-	private byMessage = new Map<string, number>();
-	private clearedByModelSelect = false;
+	private active?: ActiveStream;
+	/** Finalized by `message_end`, which runs before the session persists the message. */
+	private ended?: AssistantMessage;
+	private observations = new Map<string, StreamObservation>();
 
 	constructor(now: () => number = () => performance.now()) {
 		this.now = now;
@@ -86,79 +108,37 @@ export class TpsTracker {
 
 	onSessionStart(sessionId: string, reason?: "startup" | "reload" | "new" | "resume" | "fork"): void {
 		this.active = undefined;
-		this.pending = undefined;
-		if (reason === "reload") {
-			const snapshot = reloadSnapshots.get(sessionId);
-			reloadSnapshots.delete(sessionId);
-			if (snapshot) {
-				this.settled = snapshot.settled;
-				this.byMessage = new Map(snapshot.byMessage);
-				this.clearedByModelSelect = snapshot.clearedByModelSelect;
-				return;
-			}
-		} else {
-			reloadSnapshots.delete(sessionId);
-		}
-		this.settled = undefined;
-		this.byMessage.clear();
-		this.clearedByModelSelect = false;
+		this.ended = undefined;
+		this.observations = (reason === "reload" ? reloadSnapshots.get(sessionId) : undefined) ?? new Map();
+		reloadSnapshots.delete(sessionId);
 	}
 
 	onSessionShutdown(sessionId: string, reason?: "quit" | "reload" | "new" | "resume" | "fork"): void {
 		this.active = undefined;
-		this.pending = undefined;
+		this.ended = undefined;
+		reloadSnapshots.delete(sessionId);
 		if (reason === "reload") {
 			if (reloadSnapshots.size >= MAX_RELOAD_SNAPSHOTS) {
 				const oldestKey = reloadSnapshots.keys().next().value;
 				if (oldestKey !== undefined) reloadSnapshots.delete(oldestKey);
 			}
-			reloadSnapshots.set(sessionId, {
-				settled: this.settled,
-				byMessage: new Map(this.byMessage),
-				clearedByModelSelect: this.clearedByModelSelect,
-			});
-			return;
+			reloadSnapshots.set(sessionId, this.observations);
 		}
-		reloadSnapshots.delete(sessionId);
-		this.settled = undefined;
-		this.byMessage.clear();
-		this.clearedByModelSelect = false;
+		this.observations = new Map();
 	}
 
-	onModelSelect(
-		model: Pick<Model<string>, "provider" | "id">,
-		previousModel?: Pick<Model<string>, "provider" | "id">,
-	): void {
-		if (previousModel && previousModel.provider === model.provider && previousModel.id === model.id) return;
+	onSessionTree(): void {
 		this.active = undefined;
-		this.pending = undefined;
-		this.settled = undefined;
-		this.clearedByModelSelect = true;
-	}
-
-	onSessionTree(sessionManager: ReadonlySessionManager): void {
-		this.active = undefined;
-		this.pending = undefined;
-		if (this.clearedByModelSelect) {
-			this.settled = undefined;
-			return;
-		}
-		const latest = latestAssistantMessage(sessionManager.getBranch());
-		if (!latest) {
-			this.settled = undefined;
-			return;
-		}
-		const key = messageSignature(latest);
-		const cached = this.byMessage.get(key);
-		this.settled = cached !== undefined ? { tps: cached, messageKey: key } : undefined;
+		this.ended = undefined;
 	}
 
 	onMessageStart(role: string): void {
 		if (role !== "assistant") return;
-		this.pending = undefined;
-		this.active = { cjkChars: 0, otherChars: 0, lastSampleAt: 0 };
+		this.ended = undefined;
+		this.active = { cjkChars: 0, otherChars: 0, openingTokens: 0 };
 	}
 
+	/** Returns whether the footer should repaint for a new live value. */
 	onMessageUpdate(role: string, assistantEvent: AssistantMessageEvent): boolean {
 		if (role !== "assistant") return false;
 		if (
@@ -170,94 +150,71 @@ export class TpsTracker {
 		}
 		if (!assistantEvent.delta) return false;
 
-		this.active ??= { cjkChars: 0, otherChars: 0, lastSampleAt: 0 };
+		this.active ??= { cjkChars: 0, otherChars: 0, openingTokens: 0 };
+		const active = this.active;
 		const timestamp = this.now();
-		this.active.firstTokenAt ??= timestamp;
-		addCharCounts(this.active, assistantEvent.delta);
+		addCharCounts(active, assistantEvent.delta);
+		if (active.firstDeltaAt === undefined) {
+			active.firstDeltaAt = timestamp;
+			active.openingTokens = estimateTokens(active);
+			return false;
+		}
 
-		const decodeMs = timestamp - this.active.firstTokenAt;
-		const estimatedTokens = this.active.cjkChars + this.active.otherChars / 4;
-		if (decodeMs < TPS_MIN_LIVE_MS || estimatedTokens < TPS_MIN_LIVE_TOKENS) {
+		if (this.liveTps() === undefined) return false;
+		if (
+			active.lastRenderRequestAt !== undefined &&
+			timestamp - active.lastRenderRequestAt < TPS_LIVE_UPDATE_INTERVAL_MS
+		) {
 			return false;
 		}
-		if (this.active.liveTps !== undefined && timestamp - this.active.lastSampleAt < TPS_LIVE_UPDATE_INTERVAL_MS) {
-			return false;
-		}
-		this.active.liveTps = estimatedTokens / (decodeMs / 1000);
-		this.active.lastSampleAt = timestamp;
+		active.lastRenderRequestAt = timestamp;
 		return true;
 	}
 
+	/** Returns whether the footer should repaint: it now describes this message, measurable or not. */
 	onMessageEnd(message: { role: string }): boolean {
 		if (message.role !== "assistant") return false;
 		const active = this.active;
 		this.active = undefined;
-		if (!active || active.firstTokenAt === undefined) return false;
-
-		const decodeMs = Math.max(0, this.now() - active.firstTokenAt);
-		if (decodeMs < TPS_MIN_DECODE_MS) return false;
-
 		const assistant = message as AssistantMessage;
-		const estimatedTokens = active.cjkChars + active.otherChars / 4;
-		if (assistant.usage.output > 0) {
-			this.recordSettled(assistant.usage.output / (decodeMs / 1000), assistant);
-			this.pending = {
-				decodeMs,
-				estimatedTokens,
-				messageTimestamp: assistant.timestamp,
-				stopReason: assistant.stopReason,
-				settledOutput: assistant.usage.output,
-			};
-			return true;
-		}
+		this.ended = assistant;
 
-		this.pending = {
-			decodeMs,
-			estimatedTokens,
-			messageTimestamp: assistant.timestamp,
-			stopReason: assistant.stopReason,
-		};
-		return false;
+		const key = messageSignature(assistant);
+		if (this.observations.size >= MAX_OBSERVED_MESSAGES && !this.observations.has(key)) {
+			const oldestKey = this.observations.keys().next().value;
+			if (oldestKey !== undefined) this.observations.delete(oldestKey);
+		}
+		this.observations.set(key, {
+			windowMs: active?.firstDeltaAt === undefined ? 0 : Math.max(0, this.now() - active.firstDeltaAt),
+			tokens: active ? estimateTokens(active) : 0,
+			openingTokens: active?.openingTokens ?? 0,
+		});
+		return true;
 	}
 
 	onAgentEnd(): void {
 		this.active = undefined;
 	}
 
-	read(sessionManager: ReadonlySessionManager): number | undefined {
-		if (this.active?.liveTps !== undefined) return this.active.liveTps;
+	read(sessionManager: ReadonlySessionManager, model?: Pick<Model<string>, "provider" | "id">): number | undefined {
+		const live = this.liveTps();
+		if (live !== undefined) return live;
 
-		if (this.pending) {
-			const latest = latestAssistantMessage(sessionManager.getBranch());
-			if (latest && latest.timestamp === this.pending.messageTimestamp) {
-				const pending = this.pending;
-				this.pending = undefined;
-				if (latest.usage.output > 0) {
-					if (latest.usage.output !== pending.settledOutput) {
-						this.recordSettled(latest.usage.output / (pending.decodeMs / 1000), latest);
-					}
-				} else if (
-					pending.settledOutput === undefined &&
-					pending.stopReason !== "error" &&
-					pending.estimatedTokens >= TPS_MIN_LIVE_TOKENS
-				) {
-					this.recordSettled(pending.estimatedTokens / (pending.decodeMs / 1000), latest);
-				}
-			}
+		const latest = latestAssistantMessage(sessionManager);
+		if (this.ended && latest && messageSignature(latest) === messageSignature(this.ended)) {
+			this.ended = undefined;
 		}
-
-		return this.settled?.tps;
+		const message = this.ended ?? latest;
+		if (!message) return undefined;
+		if (model && (message.provider !== model.provider || message.model !== model.id)) return undefined;
+		const stream = this.observations.get(messageSignature(message));
+		return stream ? settledTps(message, stream) : undefined;
 	}
 
-	private recordSettled(tps: number, message: AssistantMessage): void {
-		if (!Number.isFinite(tps) || tps < 0) return;
-		const key = messageSignature(message);
-		if (this.byMessage.size >= MAX_CACHED_MESSAGES && !this.byMessage.has(key)) {
-			const oldestKey = this.byMessage.keys().next().value;
-			if (oldestKey !== undefined) this.byMessage.delete(oldestKey);
-		}
-		this.byMessage.set(key, tps);
-		this.settled = { tps, messageKey: key };
-		this.clearedByModelSelect = false;
+	/** Streamed rate so far, measured to now so it decays while the stream is silent. */
+	private liveTps(): number | undefined {
+		const active = this.active;
+		if (active?.firstDeltaAt === undefined) return undefined;
+		return rate(estimateTokens(active) - active.openingTokens, this.now() - active.firstDeltaAt);
 	}
 }

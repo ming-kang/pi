@@ -38,7 +38,7 @@ export default function statusline(pi: ExtensionAPI): void {
 							gitBranch: footerData.getGitBranch(),
 							contextUsage: ctx.getContextUsage(),
 							usage: usage.read(ctx.sessionManager),
-							tps: tps.read(ctx.sessionManager),
+							tps: tps.read(ctx.sessionManager, model),
 							usesSubscription: model ? ctx.modelRuntime.isUsingSubscription(model.provider) : false,
 							statuses: footerData.getExtensionStatuses(),
 						},
@@ -69,25 +69,19 @@ export default function statusline(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("turn_end", (_event, ctx) => {
-		if (ctx.mode !== "tui") return;
-		tps.read(ctx.sessionManager);
-	});
-
 	pi.on("agent_end", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		tps.onAgentEnd();
 	});
 
-	pi.on("model_select", (event, ctx) => {
+	pi.on("model_select", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
-		tps.onModelSelect(event.model, event.previousModel);
 		activeTui?.requestRender();
 	});
 
 	pi.on("session_tree", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
-		tps.onSessionTree(ctx.sessionManager);
+		tps.onSessionTree();
 		activeTui?.requestRender();
 	});
 
