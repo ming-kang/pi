@@ -27,7 +27,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 - `tool-presentation` no longer shadows MCP fallback renderers for disconnected servers, and clearing pending tools no longer prematurely disposes rows still mounted in the transcript.
 - `/config` preserves `skillInvocationOverrides` and `autoload: false` when toggling package resources and matches package overrides across resource patterns.
 - `search` bounds HTTP/protobuf response and workspace file reads, repairs unquoted planner keys without altering string literals, and recovers from transient `rg` indexing failures.
-- `SessionManager` excludes `.tasks-late.jsonl` sidecars from session discovery, `AgentSession.setModel()` schedules queued background completions, `SettingsManager` handles prototype-named extension namespaces safely, `question` defers pre-aborted dialog resolution, and `schemas/keybindings.schema.json` includes current `/provider` bindings.
+- `SessionManager` excludes `.tasks-late.jsonl` sidecars from session discovery, `AgentSession.setModel()` schedules queued background completions, `SettingsManager` handles prototype-named extension namespaces safely, `question` defers pre-aborted dialog resolution, `statusline` uses `ModelRuntime.isUsingSubscription()` so subscription indicators match the native footer and `/btw`, and `schemas/keybindings.schema.json` includes current `/provider` bindings.
 
 ## [1.5.4] - 2026-11-10
 
