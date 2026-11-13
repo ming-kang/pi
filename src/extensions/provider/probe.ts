@@ -16,6 +16,7 @@ import type { FetchFunction, ModelAuth, ProviderHeaders } from "@earendil-works/
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import type { ModelsJsonModel } from "../../core/model-config.ts";
 import { readResponseTextBounded } from "../../utils/http-response.ts";
+import { validateBaseUrlValue } from "./base-url.ts";
 import { formatError, PROBE_LIMITS } from "./constants.ts";
 
 /** A catalog entry: its id plus the metadata it declared, already valid as a models.json model. */
@@ -35,18 +36,9 @@ export async function probeProviderModels(opts: {
 	signal?: AbortSignal;
 	timeoutMs?: number;
 }): Promise<ProbeResult> {
-	let baseUrl: URL;
-	try {
-		baseUrl = new URL(opts.baseUrl);
-	} catch {
-		return { ok: false, error: "Base URL is not a valid URL." };
-	}
-	if (baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:") {
-		return { ok: false, error: `Unsupported protocol: ${baseUrl.protocol}` };
-	}
-	if (baseUrl.username || baseUrl.password || baseUrl.hash) {
-		return { ok: false, error: "Base URL must not contain credentials or a fragment." };
-	}
+	const urlError = validateBaseUrlValue(opts.baseUrl);
+	if (urlError) return { ok: false, error: urlError };
+	const baseUrl = new URL(opts.baseUrl);
 	if (opts.signal?.aborted) return { ok: false, error: "Cancelled." };
 
 	const controller = new AbortController();

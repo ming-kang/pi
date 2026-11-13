@@ -10,13 +10,19 @@ import "../keybindings.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelsJsonModel } from "../../../core/model-config.ts";
 import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
-import { type CatalogEntry, computeFieldChanges, type FieldChange, matchBuiltinModels } from "../catalog.ts";
+import {
+	type CatalogEntry,
+	type CatalogMatch,
+	computeFieldChanges,
+	type FieldChange,
+	matchBuiltinModels,
+} from "../catalog.ts";
 import { formatTokens, plural, truncate } from "../constants.ts";
 import { getPath } from "../json-fields.ts";
 import { jsonEquals } from "../store.ts";
-import { moveSelection } from "./controls.ts";
+import { FilterListPane, moveSelection } from "./controls.ts";
 import type { EditorPane, ModelHandle, ProviderPaneHost } from "./pane.ts";
-import { renderInfoLine, renderPlainLine, renderSearchLine, type ScrollWindowInfo, ValueEditor } from "./value-row.ts";
+import { renderInfoLine, renderPlainLine, type ScrollWindowInfo } from "./value-row.ts";
 
 /**
  * What tells two candidates apart, in the Fetch models wording. The API shows
@@ -36,105 +42,26 @@ function candidateNote(model: Model<Api>, effectiveApi: string | undefined): str
 		.join(" ");
 }
 
-export class BuiltinCandidatesPane implements EditorPane {
-	readonly crumb = "Use built-in data";
-	private readonly search: ValueEditor;
-	private query: string;
-	private index = 0;
-	private focused = false;
-
-	private readonly host: ProviderPaneHost;
-	private readonly model: ModelHandle;
+export class BuiltinCandidatesPane extends FilterListPane<CatalogMatch> {
 	constructor(host: ProviderPaneHost, model: ModelHandle) {
-		this.host = host;
-		this.model = model;
-
-		this.query = this.model.read().id ?? "";
-		this.search = new ValueEditor({
-			onCommit: () => this.pickCurrent(),
-			onCancel: () => this.host.popPane(),
-		});
-		this.search.reset(this.query);
-	}
-
-	private candidates(): ReturnType<typeof matchBuiltinModels> {
-		return matchBuiltinModels(this.query, this.host.effectiveApi(this.model.read()));
-	}
-
-	render(width: number): string[] {
-		const theme = this.host.theme;
-		const lines: string[] = [renderSearchLine(theme, this.search, this.focused, width)];
-		const matches = this.candidates();
-		const api = this.host.effectiveApi(this.model.read());
-		if (matches.length === 0) {
-			lines.push(renderInfoLine(theme, "No built-in candidates — keep configuring manually.", width));
-		}
-		for (const [rowIndex, match] of matches.entries()) {
-			const { providerId, model } = match.entry;
-			lines.push(
-				renderPlainLine(theme, `${providerId} / ${model.id}`, {
-					active: rowIndex === this.index,
-					paneFocused: this.focused,
-					note: candidateNote(model, api),
+		super(host, {
+			crumb: "Use built-in data",
+			initialQuery: model.read().id ?? "",
+			items: (query) => matchBuiltinModels(query, host.effectiveApi(model.read())),
+			renderItem: (match, { active, focused, width }) => {
+				const { providerId, model: ref } = match.entry;
+				return renderPlainLine(host.theme, `${providerId} / ${ref.id}`, {
+					active,
+					paneFocused: focused,
+					note: candidateNote(ref, host.effectiveApi(model.read())),
 					width,
-				}),
-			);
-		}
-		lines.push(renderInfoLine(theme, "A reference to copy fields from; the model's id and API stay.", width));
-		return lines;
-	}
-
-	scrollWindow(): ScrollWindowInfo {
-		// The filter input pins above, the reference disclaimer below.
-		return { top: 1, bottom: 1, cursor: 1 + this.index };
-	}
-
-	private pickCurrent(): void {
-		const entry = this.candidates()[this.index]?.entry;
-		if (!entry) return;
-		this.host.pushPane(new BuiltinPreviewPane(this.host, this.model, entry));
-	}
-
-	handleInput(data: string): void {
-		const kb = this.host.keybindings;
-		const count = this.candidates().length;
-		const next = moveSelection(kb, data, this.index, count);
-		if (next !== undefined) {
-			this.index = next;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.cancel")) {
-			this.host.popPane();
-			return;
-		}
-		if (kb.matches(data, "tui.select.confirm")) {
-			this.pickCurrent();
-			return;
-		}
-		const before = this.query;
-		this.search.handleInput(data);
-		this.query = this.search.value;
-		if (this.query !== before) this.index = 0;
-		this.host.refresh();
-	}
-
-	setFocused(focused: boolean): void {
-		this.focused = focused;
-		this.search.focused = focused;
-	}
-
-	isEditing(): boolean {
-		return true; // the candidate filter always owns ←/→
-	}
-
-	hints(): string {
-		return [
-			rawKeyHint("type", "filter"),
-			rawKeyHint("↑↓", "navigate"),
-			keyHint("tui.select.confirm", "preview"),
-			keyHint("tui.select.cancel", "back"),
-		].join("  ");
+				});
+			},
+			emptyMessage: "No built-in candidates — keep configuring manually.",
+			footer: () => ["A reference to copy fields from; the model's id and API stay."],
+			confirmVerb: "preview",
+			onConfirm: (match) => host.pushPane(new BuiltinPreviewPane(host, model, match.entry)),
+		});
 	}
 }
 

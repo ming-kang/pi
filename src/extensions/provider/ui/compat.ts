@@ -7,26 +7,22 @@
 
 import "../keybindings.ts";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
-import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
+import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { type CompatField, compatFieldFor, compatFieldsForApi, validateJsonCompatValue } from "../compat-fields.ts";
 import { truncate } from "../constants.ts";
 import { DELETE } from "../store.ts";
-import { moveSelection } from "./controls.ts";
+import { ChoicePane, FilterListPane, moveSelection } from "./controls.ts";
 import { compatObject, DictPane, scalarText } from "./dictionary.ts";
 import type { CompatFields, EditorPane, PaneHost, ProviderPaneHost } from "./pane.ts";
 import {
 	renderInfoLine,
 	renderKeyValueLine,
 	renderPlainLine,
-	renderSearchLine,
 	type ScrollWindowInfo,
 	ValueEditor,
 } from "./value-row.ts";
 
-type CompatMode =
-	| { type: "list" }
-	| { type: "editValue"; key: string; editor: ValueEditor }
-	| { type: "chooseValue"; key: string; options: readonly string[]; index: number };
+type CompatMode = { type: "list" } | { type: "editValue"; key: string; editor: ValueEditor };
 
 export class CompatPane implements EditorPane {
 	readonly crumb = "compat";
@@ -61,22 +57,6 @@ export class CompatPane implements EditorPane {
 		const lines: string[] = [
 			renderInfoLine(theme, api ? `effective api: ${api}` : "effective api: unresolved — set API Type", width),
 		];
-		if (this.mode.type === "chooseValue") {
-			const mode = this.mode;
-			const note = api ? compatFieldFor(api, mode.key)?.note : undefined;
-			const current = compatObject(this.model)[mode.key];
-			lines.push(renderInfoLine(theme, note ? `${mode.key} · ${note}` : mode.key, width));
-			for (const [index, option] of mode.options.entries()) {
-				lines.push(
-					renderPlainLine(theme, `${String(current) === option ? "●" : "○"} ${option}`, {
-						active: index === mode.index,
-						paneFocused: this.focused,
-						width,
-					}),
-				);
-			}
-			return lines;
-		}
 		const known = api ? compatFieldsForApi(api) : [];
 		const entries = this.entries();
 		const editingKey = this.mode.type === "list" ? undefined : this.mode.key;
@@ -125,7 +105,6 @@ export class CompatPane implements EditorPane {
 
 	scrollWindow(): ScrollWindowInfo {
 		// The effective-api header pins above; errors and the selected key's description pin below.
-		if (this.mode.type === "chooseValue") return { top: 1, cursor: 2 + this.mode.index };
 		return { top: 1, bottom: (this.error ? 1 : 0) + (this.selectedNote() ? 2 : 0), cursor: 1 + this.index };
 	}
 
@@ -135,30 +114,6 @@ export class CompatPane implements EditorPane {
 			if (kb.matches(data, "tui.select.up") || kb.matches(data, "tui.select.down")) return;
 			this.mode.editor.handleInput(data);
 			this.host.refresh();
-			return;
-		}
-		if (this.mode.type === "chooseValue") {
-			const mode = this.mode;
-			if (kb.matches(data, "tui.select.up")) {
-				this.mode = { ...mode, index: mode.index === 0 ? mode.options.length - 1 : mode.index - 1 };
-				this.host.refresh();
-				return;
-			}
-			if (kb.matches(data, "tui.select.down")) {
-				this.mode = { ...mode, index: (mode.index + 1) % mode.options.length };
-				this.host.refresh();
-				return;
-			}
-			if (kb.matches(data, "tui.select.cancel")) {
-				this.mode = { type: "list" };
-				this.host.refresh();
-				return;
-			}
-			if (kb.matches(data, "tui.select.confirm")) {
-				const option = mode.options[mode.index]!;
-				this.mode = { type: "list" };
-				this.writeValue(mode.key, this.parseChosen(option));
-			}
 			return;
 		}
 		// list mode
@@ -215,13 +170,7 @@ export class CompatPane implements EditorPane {
 				this.writeValue(key, value !== true);
 				return;
 			case "enum":
-				this.mode = {
-					type: "chooseValue",
-					key,
-					options: field.options,
-					index: Math.max(0, field.options.indexOf(String(value))),
-				};
-				this.host.refresh();
+				this.pushChoicePane(key, field.options, field.note);
 				return;
 			case "number":
 				this.beginTextEdit(key, value);
@@ -241,12 +190,10 @@ export class CompatPane implements EditorPane {
 		const field = compatFieldFor(api, key)!;
 		switch (field.kind) {
 			case "boolean":
-				this.mode = { type: "chooseValue", key, options: ["true", "false"], index: 0 };
-				this.host.refresh();
+				this.pushChoicePane(key, ["true", "false"], field.note, true);
 				return;
 			case "enum":
-				this.mode = { type: "chooseValue", key, options: field.options, index: 0 };
-				this.host.refresh();
+				this.pushChoicePane(key, field.options, field.note);
 				return;
 			case "number":
 				this.beginTextEdit(key, undefined);
@@ -316,10 +263,23 @@ export class CompatPane implements EditorPane {
 		this.host.refresh();
 	}
 
-	private parseChosen(option: string): unknown {
-		if (option === "true") return true;
-		if (option === "false") return false;
-		return option;
+	private pushChoicePane(key: string, options: readonly string[], note: string | undefined, isBoolean = false): void {
+		const current = () => {
+			const val = compatObject(this.model)[key];
+			return val === undefined ? undefined : String(val);
+		};
+		this.host.pushPane(
+			new ChoicePane<string>(this.host, `compat · ${key}`, {
+				header: note ? `${key} · ${note}` : key,
+				current: () => current() ?? "",
+				initial: current() ?? options[0],
+				choices: () => options.map((option) => ({ label: option, value: option })),
+				choose: (option) => {
+					this.writeValue(key, isBoolean ? option === "true" : option);
+					return undefined;
+				},
+			}),
+		);
 	}
 
 	private writeValue(key: string, value: unknown): void {
@@ -343,12 +303,6 @@ export class CompatPane implements EditorPane {
 	hints(): string {
 		if (this.mode.type === "editValue")
 			return [keyHint("tui.input.submit", "save"), keyHint("tui.select.cancel", "cancel")].join("  ");
-		if (this.mode.type === "chooseValue")
-			return [
-				rawKeyHint("↑↓", "navigate"),
-				keyHint("tui.select.confirm", "set"),
-				keyHint("tui.select.cancel", "cancel"),
-			].join("  ");
 		const back = keyHint("tui.select.cancel", "back");
 		const entry = this.entries()[this.index];
 		if (!entry) return [keyHint("tui.select.confirm", "add"), back].join("  ");
@@ -379,112 +333,29 @@ export class CompatPane implements EditorPane {
 // Known-key picker (searchable, filters already-configured keys)
 // -------------------------------------------------------------------------
 
-export class CompatKeyPickerPane implements EditorPane {
-	readonly crumb = "compat · new entry";
-	private query = "";
-	private index = 0;
-	private editor: ValueEditor;
-	private focused = false;
-
-	private readonly host: PaneHost;
-	private readonly api: string;
-	private readonly taken: ReadonlySet<string>;
-	private readonly onPick: (key: string) => void;
-
+export class CompatKeyPickerPane extends FilterListPane<CompatField> {
 	constructor(host: PaneHost, api: string, taken: ReadonlySet<string>, onPick: (key: string) => void) {
-		this.host = host;
-		this.api = api;
-		this.taken = taken;
-		this.onPick = onPick;
-
-		this.editor = new ValueEditor({
-			onCommit: () => this.pickCurrent(),
-			onCancel: () => this.host.popPane(),
-		});
-	}
-
-	private candidates(): CompatField[] {
-		const available = compatFieldsForApi(this.api).filter((field) => !this.taken.has(field.key));
-		const query = this.query.trim();
-		return query ? fuzzyFilter(available, query, (field) => `${field.key} ${field.note ?? ""}`) : available;
-	}
-
-	render(width: number): string[] {
-		const theme = this.host.theme;
-		const lines: string[] = [renderSearchLine(theme, this.editor, this.focused, width)];
-		const candidates = this.candidates();
-		if (candidates.length === 0) lines.push(renderInfoLine(theme, "No remaining known fields.", width));
-		// All candidates render; the editor's fixed window scrolls around scrollWindow().
-		for (const [rowIndex, field] of candidates.entries()) {
-			lines.push(
-				renderPlainLine(theme, field.key, {
-					active: rowIndex === this.index,
-					paneFocused: this.focused,
+		super(host, {
+			crumb: "compat · new entry",
+			items: (query) => {
+				const available = compatFieldsForApi(api).filter((field) => !taken.has(field.key));
+				const trimmed = query.trim();
+				return trimmed ? fuzzyFilter(available, trimmed, (field) => `${field.key} ${field.note ?? ""}`) : available;
+			},
+			renderItem: (field, { active, focused, width }) =>
+				renderPlainLine(host.theme, field.key, {
+					active,
+					paneFocused: focused,
 					// The description is what tells similar keys apart; the row cuts at the pane edge, not at 30 characters.
 					note: field.note ? `· ${field.note}` : `· ${field.kind}`,
 					width,
 				}),
-			);
-		}
-		return lines;
-	}
-
-	scrollWindow(): ScrollWindowInfo {
-		// The filter input pins above the candidate rows.
-		return { top: 1, cursor: 1 + this.index };
-	}
-
-	private pickCurrent(): void {
-		const field = this.candidates()[this.index];
-		if (!field) return;
-		this.host.popPane();
-		this.onPick(field.key);
-	}
-
-	handleInput(data: string): void {
-		const kb = this.host.keybindings;
-		if (kb.matches(data, "tui.select.up")) {
-			const count = this.candidates().length;
-			if (count > 0) this.index = this.index === 0 ? count - 1 : this.index - 1;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.down")) {
-			const count = this.candidates().length;
-			if (count > 0) this.index = (this.index + 1) % count;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.cancel")) {
-			this.host.popPane();
-			return;
-		}
-		if (kb.matches(data, "tui.select.confirm")) {
-			this.pickCurrent();
-			return;
-		}
-		const before = this.query;
-		this.editor.handleInput(data);
-		this.query = this.editor.value;
-		if (this.query !== before) this.index = 0;
-		this.host.refresh();
-	}
-
-	setFocused(focused: boolean): void {
-		this.focused = focused;
-		this.editor.focused = focused;
-	}
-
-	isEditing(): boolean {
-		return true; // the filter input always owns ←/→
-	}
-
-	hints(): string {
-		return [
-			rawKeyHint("type", "filter"),
-			rawKeyHint("↑↓", "navigate"),
-			keyHint("tui.select.confirm", "choose"),
-			keyHint("tui.select.cancel", "back"),
-		].join("  ");
+			emptyMessage: "No remaining known fields.",
+			confirmVerb: "choose",
+			onConfirm: (field) => {
+				host.popPane();
+				onPick(field.key);
+			},
+		});
 	}
 }

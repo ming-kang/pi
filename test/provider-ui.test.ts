@@ -604,14 +604,52 @@ describe("provider editor interactions", () => {
 		pane.handleInput("\r");
 		const picker = vi.mocked(host.pushPane).mock.calls[0]![0];
 		picker.handleInput("\r");
+		const choice = vi.mocked(host.pushPane).mock.calls[1]![0];
+		choice.setFocused(true);
 		// The key heads its choices with what it does; one marker, on the choice.
-		expect(render(pane)).toContain("supportsStore · Accepts the `store` parameter");
-		expect(render(pane)).toContain("› ○ true");
-		expect(render(pane)).toContain("  ○ false");
+		expect(render(choice)).toContain("supportsStore · Accepts the `store` parameter");
+		expect(render(choice)).toContain("› ○ true");
+		expect(render(choice)).toContain("  ○ false");
 		expect(store.getModel("cpa", "k3")?.compat).toBeUndefined();
-		pane.handleInput("\x1b[B");
-		pane.handleInput("\r");
+		choice.handleInput("\x1b[B");
+		choice.handleInput("\r");
 		expect(store.getModel("cpa", "k3")?.compat).toMatchObject({ supportsStore: false });
+		expect(host.popPane).toHaveBeenCalledTimes(2);
+	});
+
+	test("dictionary $var picks chain through ChoicePane and pop cleanly back to the dictionary list", async () => {
+		const { screen } = editor();
+		screen.handleInput("\x1b[B");
+		screen.handleInput("\x1b[B"); // k3
+		screen.handleInput("\x1b[C"); // ModelFieldsPane
+		for (let index = 0; index < 8; index++) screen.handleInput("\x1b[B"); // compat
+		screen.handleInput("\r");
+		screen.handleInput("\r"); // + Add entry -> CompatKeyPickerPane
+		screen.handleInput("chatTemplateKwargs");
+		screen.handleInput("\r"); // DictPane
+		screen.handleInput("\r"); // + Add entry -> keyEdit
+		screen.handleInput("thinking_flag");
+		screen.handleInput("\r"); // value kind ChoicePane
+		expect(render(screen)).toContain("thinking_flag · value kind");
+		for (let index = 0; index < 4; index++) screen.handleInput("\x1b[B"); // $var
+		screen.handleInput("\r"); // $var ChoicePane
+		expect(render(screen)).toContain("thinking_flag · $var");
+		screen.handleInput("\r"); // thinking.enabled -> omitWhenOff ChoicePane
+		expect(render(screen)).toContain("thinking_flag · omitWhenOff");
+		screen.handleInput("\x1b[B"); // true
+		screen.handleInput("\r");
+		await store.flush();
+		expect(store.getModel("cpa", "k3")?.compat).toEqual({
+			chatTemplateKwargs: { thinking_flag: { $var: "thinking.enabled", omitWhenOff: true } },
+		});
+		expect(render(screen)).toContain("free-form keys; values:");
+		expect(render(screen)).toContain('thinking_flag: {"$var":"thinking.enabled","omitWhenOff":true}');
+		// Cancelling out of omitWhenOff on an existing $var returns to the dictionary list unchanged.
+		screen.handleInput("\r");
+		expect(render(screen)).toContain("● true");
+		screen.handleInput("\x1b");
+		expect(render(screen)).toContain("free-form keys; values:");
+		screen.dispose();
 	});
 
 	test("the compat key picker scrolls with its selection", () => {

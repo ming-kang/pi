@@ -85,14 +85,7 @@ export function plural(count: number, word: string): string {
 	return word.endsWith("y") ? `${word.slice(0, -1)}ies` : `${word}s`;
 }
 
-/** Compact token count, e.g. `1.0M`; the thresholds match the footer's usage stats. */
-export function formatTokens(count: number): string {
-	if (count < 1000) return count.toString();
-	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-	if (count < 1000000) return `${Math.round(count / 1000)}k`;
-	if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
-	return `${Math.round(count / 1000000)}M`;
-}
+export { formatTokens } from "../../utils/number.ts";
 
 /** Display truncate by characters (rows are width-truncated again at render time). */
 export function truncate(value: string, max: number): string {

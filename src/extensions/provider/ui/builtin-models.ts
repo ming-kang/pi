@@ -6,90 +6,34 @@
 
 import "../keybindings.ts";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
-import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { builtinModelIds } from "../catalog.ts";
-import { moveSelection } from "./controls.ts";
-import type { BuiltinModelsHost, EditorPane } from "./pane.ts";
-import {
-	renderInfoLine,
-	renderPlainLine,
-	renderSearchLine,
-	type ScrollWindowInfo,
-	truncateMiddle,
-	ValueEditor,
-} from "./value-row.ts";
+import { FilterListPane } from "./controls.ts";
+import type { BuiltinModelsHost } from "./pane.ts";
+import { renderPlainLine, truncateMiddle } from "./value-row.ts";
 
-export class BuiltinModelsPane implements EditorPane {
-	private readonly host: BuiltinModelsHost;
-	private readonly ids: readonly string[];
-	private readonly search: ValueEditor;
-	private index = 0;
-	private focused = false;
-
+export class BuiltinModelsPane extends FilterListPane<string> {
 	constructor(host: BuiltinModelsHost) {
-		this.host = host;
-		this.ids = builtinModelIds(host.providerId);
-		this.search = new ValueEditor({ onCommit: () => this.open(), onCancel: () => this.host.popPane() });
-	}
-
-	private filtered(): readonly string[] {
-		const query = this.search.value.trim();
-		return query ? fuzzyFilter([...this.ids], query, (id) => id) : this.ids;
-	}
-
-	render(width: number): string[] {
-		const theme = this.host.theme;
-		const overridden = this.host.store.getProvider(this.host.providerId)?.modelOverrides ?? {};
-		const entries = this.filtered();
-		this.index = Math.min(this.index, Math.max(0, entries.length - 1));
-		const lines = [renderSearchLine(theme, this.search, this.focused, width)];
-		for (const [row, id] of entries.entries()) {
-			const note = Object.hasOwn(overridden, id) ? "· overridden" : undefined;
-			lines.push(
-				renderPlainLine(theme, truncateMiddle(id, Math.max(8, width - 3 - (note?.length ?? 0))), {
-					active: row === this.index,
-					paneFocused: this.focused,
+		const ids = builtinModelIds(host.providerId);
+		super(host, {
+			items: (query) => {
+				const trimmed = query.trim();
+				return trimmed ? fuzzyFilter([...ids], trimmed, (id) => id) : ids;
+			},
+			renderItem: (id, { active, focused, width }) => {
+				const overridden = host.store.getProvider(host.providerId)?.modelOverrides ?? {};
+				const note = Object.hasOwn(overridden, id) ? "· overridden" : undefined;
+				return renderPlainLine(host.theme, truncateMiddle(id, Math.max(8, width - 3 - (note?.length ?? 0))), {
+					active,
+					paneFocused: focused,
 					note,
 					width,
-				}),
-			);
-		}
-		if (entries.length === 0) lines.push(renderInfoLine(theme, "No built-in models match.", width));
-		lines.push(renderInfoLine(theme, `${entries.length} of ${this.ids.length} built-in models`, width));
-		return lines;
-	}
-
-	scrollWindow(): ScrollWindowInfo {
-		return { top: 1, bottom: this.filtered().length === 0 ? 2 : 1, cursor: 1 + this.index };
-	}
-
-	handleInput(data: string): void {
-		const next = moveSelection(this.host.keybindings, data, this.index, this.filtered().length);
-		if (next !== undefined) this.index = next;
-		else {
-			const previous = this.search.value;
-			this.search.handleInput(data); // Enter and Esc arrive through the editor callbacks
-			if (this.search.value !== previous) this.index = 0;
-		}
-		this.host.refresh();
-	}
-
-	private open(): void {
-		const id = this.filtered()[this.index];
-		if (id) this.host.openOverride(id);
-	}
-
-	setFocused(focused: boolean): void {
-		this.focused = focused;
-		this.search.focused = focused;
-	}
-
-	hints(): string {
-		return [
-			rawKeyHint("type", "search"),
-			rawKeyHint("↑↓", "navigate"),
-			keyHint("tui.select.confirm", "open"),
-			keyHint("tui.select.cancel", "back"),
-		].join("  ");
+				});
+			},
+			emptyMessage: "No built-in models match.",
+			footer: (entries) => [`${entries.length} of ${ids.length} built-in models`],
+			confirmVerb: "open",
+			searchVerb: "search",
+			onConfirm: (id) => host.openOverride(id),
+		});
 	}
 }

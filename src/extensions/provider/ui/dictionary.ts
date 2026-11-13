@@ -1,12 +1,12 @@
 /** Open chat-template dictionaries, with typed value-entry states. */
 
 import "../keybindings.ts";
-import { keyHint, rawKeyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
+import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { THINKING_VARIABLES, validateChatTemplateKwarg } from "../compat-fields.ts";
 import { truncate } from "../constants.ts";
 import { isPlainObject } from "../json-fields.ts";
 import { DELETE } from "../store.ts";
-import { moveSelection } from "./controls.ts";
+import { ChoicePane, moveSelection } from "./controls.ts";
 import type { CompatFields, EditorPane, PaneHost } from "./pane.ts";
 import {
 	renderInfoLine,
@@ -35,11 +35,7 @@ const VAR_OPTIONS = THINKING_VARIABLES;
 type DictMode =
 	| { type: "list" }
 	| { type: "keyEdit"; editor: ValueEditor }
-	| { type: "kindPick"; key: string; index: number }
-	| { type: "valueEdit"; key: string; kind: "string" | "number"; editor: ValueEditor }
-	| { type: "boolPick"; key: string; index: number }
-	| { type: "varPick"; key: string; index: number }
-	| { type: "omitPick"; key: string; $var: (typeof VAR_OPTIONS)[number]; index: number };
+	| { type: "valueEdit"; key: string; kind: "string" | "number"; editor: ValueEditor };
 
 export class DictPane implements EditorPane {
 	readonly crumb: string;
@@ -126,18 +122,6 @@ export class DictPane implements EditorPane {
 						width,
 					}),
 				];
-			case "kindPick": {
-				return [
-					renderInfoLine(theme, `${mode.key} · value kind`, width),
-					...DICT_VALUE_KINDS.map((kind, kindIndex) =>
-						renderPlainLine(theme, kind, {
-							active: kindIndex === mode.index,
-							paneFocused: this.focused,
-							width,
-						}),
-					),
-				];
-			}
 			case "valueEdit":
 				return [
 					renderInfoLine(theme, `${mode.key} · ${mode.kind}`, width),
@@ -148,39 +132,6 @@ export class DictPane implements EditorPane {
 						editing: mode.editor,
 						width,
 					}),
-				];
-			case "boolPick":
-				return [
-					renderInfoLine(theme, `${mode.key} · boolean`, width),
-					...["true", "false"].map((option, optionIndex) =>
-						renderPlainLine(theme, option, {
-							active: optionIndex === mode.index,
-							paneFocused: this.focused,
-							width,
-						}),
-					),
-				];
-			case "varPick":
-				return [
-					renderInfoLine(theme, `${mode.key} · $var`, width),
-					...VAR_OPTIONS.map((option, optionIndex) =>
-						renderPlainLine(theme, option, {
-							active: optionIndex === mode.index,
-							paneFocused: this.focused,
-							width,
-						}),
-					),
-				];
-			case "omitPick":
-				return [
-					renderInfoLine(theme, `${mode.key} · omitWhenOff`, width),
-					...["default", "true", "false"].map((option, optionIndex) =>
-						renderPlainLine(theme, option, {
-							active: optionIndex === mode.index,
-							paneFocused: this.focused,
-							width,
-						}),
-					),
 				];
 			default:
 				return [];
@@ -197,66 +148,10 @@ export class DictPane implements EditorPane {
 				mode.editor.handleInput(data);
 				this.host.refresh();
 				return;
-			case "kindPick":
-				this.handlePick(data, mode, DICT_VALUE_KINDS.length, (index) => {
-					const key = mode.key;
-					const kind = DICT_VALUE_KINDS[index]!;
-					this.startValueForKind(key, kind);
-				});
-				return;
-			case "boolPick":
-				this.handlePick(data, mode, 2, (index) => {
-					const key = mode.key;
-					this.mode = { type: "list" };
-					this.writeEntry(key, index === 0);
-				});
-				return;
-			case "varPick":
-				this.handlePick(data, mode, VAR_OPTIONS.length, (index) => {
-					const key = mode.key;
-					this.mode = { type: "omitPick", key, $var: VAR_OPTIONS[index]!, index: 0 };
-					this.host.refresh();
-				});
-				return;
-			case "omitPick":
-				this.handlePick(data, mode, 3, (index) => {
-					this.mode = { type: "list" };
-					this.writeEntry(
-						mode.key,
-						index === 0 ? { $var: mode.$var } : { $var: mode.$var, omitWhenOff: index === 1 },
-					);
-				});
-				return;
 			case "list":
 				this.handleList(data);
 				return;
 		}
-	}
-
-	private handlePick(
-		data: string,
-		mode: Extract<DictMode, { index: number }>,
-		count: number,
-		choose: (index: number) => void,
-	): void {
-		const kb = this.host.keybindings;
-		const index = mode.index;
-		if (kb.matches(data, "tui.select.up")) {
-			mode.index = index === 0 ? count - 1 : index - 1;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.down")) {
-			mode.index = (index + 1) % count;
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.cancel")) {
-			this.mode = { type: "list" };
-			this.host.refresh();
-			return;
-		}
-		if (kb.matches(data, "tui.select.confirm")) choose(index);
 	}
 
 	private handleList(data: string): void {
@@ -295,8 +190,8 @@ export class DictPane implements EditorPane {
 							return this.host.refresh();
 						}
 						this.error = undefined;
-						this.mode = { type: "kindPick", key, index: 0 };
-						this.host.refresh();
+						this.mode = { type: "list" };
+						this.pushKindPicker(key);
 					},
 					onCancel: () => {
 						this.mode = { type: "list" };
@@ -322,13 +217,8 @@ export class DictPane implements EditorPane {
 					record.$var === "thinking.effort" ||
 					record.$var === "thinking.budget"
 				) {
-					this.mode = {
-						type: "omitPick",
-						key,
-						$var: record.$var,
-						index: record.omitWhenOff === undefined ? 0 : record.omitWhenOff ? 1 : 2,
-					};
-					this.host.refresh();
+					const currentOmit = record.omitWhenOff === undefined ? "default" : record.omitWhenOff ? "true" : "false";
+					this.pushOmitPicker(key, record.$var, currentOmit);
 					return;
 				}
 				return; // unexpected object: remove + re-add
@@ -350,7 +240,7 @@ export class DictPane implements EditorPane {
 		}
 	}
 
-	private startValueForKind(key: string, kind: DictValueKind): void {
+	private startValueForKind(key: string, kind: Exclude<DictValueKind, "null">): void {
 		switch (kind) {
 			case "string":
 			case "number": {
@@ -368,18 +258,79 @@ export class DictPane implements EditorPane {
 				return;
 			}
 			case "boolean":
-				this.mode = { type: "boolPick", key, index: 0 };
-				this.host.refresh();
-				return;
-			case "null":
-				this.mode = { type: "list" };
-				this.writeEntry(key, null);
+				this.pushBoolPicker(key);
 				return;
 			case "$var":
-				this.mode = { type: "varPick", key, index: 0 };
-				this.host.refresh();
+				this.pushVarPicker(key);
 				return;
 		}
+	}
+
+	private pushKindPicker(key: string): void {
+		this.host.pushPane(
+			new ChoicePane<DictValueKind>(this.host, `compat · ${this.dictKey} · ${key}`, {
+				header: `${key} · value kind`,
+				current: () => undefined as unknown as DictValueKind,
+				initial: DICT_VALUE_KINDS[0],
+				choices: () => DICT_VALUE_KINDS.map((kind) => ({ label: kind, value: kind })),
+				choose: (kind) => (kind === "null" ? this.writeEntry(key, null) : undefined),
+				afterChoose: (kind) => {
+					if (kind !== "null") this.startValueForKind(key, kind);
+				},
+			}),
+		);
+	}
+
+	private pushBoolPicker(key: string): void {
+		this.host.pushPane(
+			new ChoicePane<boolean | undefined>(this.host, `compat · ${this.dictKey} · ${key}`, {
+				header: `${key} · boolean`,
+				current: () => undefined,
+				initial: true,
+				choices: () => [
+					{ label: "true", value: true },
+					{ label: "false", value: false },
+				],
+				choose: (value) => this.writeEntry(key, value),
+			}),
+		);
+	}
+
+	private pushVarPicker(key: string): void {
+		this.host.pushPane(
+			new ChoicePane<(typeof VAR_OPTIONS)[number] | undefined>(this.host, `compat · ${this.dictKey} · ${key}`, {
+				header: `${key} · $var`,
+				current: () => undefined,
+				initial: VAR_OPTIONS[0],
+				choices: () => VAR_OPTIONS.map((option) => ({ label: option, value: option })),
+				choose: () => undefined,
+				afterChoose: ($var) => {
+					if ($var) this.pushOmitPicker(key, $var);
+				},
+			}),
+		);
+	}
+
+	private pushOmitPicker(
+		key: string,
+		$var: (typeof VAR_OPTIONS)[number],
+		currentOmit?: "default" | "true" | "false",
+	): void {
+		type OmitChoice = "default" | "true" | "false";
+		this.host.pushPane(
+			new ChoicePane<OmitChoice | undefined>(this.host, `compat · ${this.dictKey} · ${key}`, {
+				header: `${key} · omitWhenOff`,
+				current: () => currentOmit,
+				initial: currentOmit ?? "default",
+				choices: () => [
+					{ label: "default", value: "default" },
+					{ label: "true", value: "true" },
+					{ label: "false", value: "false" },
+				],
+				choose: (choice) =>
+					this.writeEntry(key, choice === "default" ? { $var } : { $var, omitWhenOff: choice === "true" }),
+			}),
+		);
 	}
 
 	private commitScalar(key: string, kind: "string" | "number", raw: string): void {
@@ -393,25 +344,22 @@ export class DictPane implements EditorPane {
 			}
 			value = parsed;
 		}
-		const invalid = validateChatTemplateKwarg(value);
-		if (invalid) {
-			this.error = invalid;
+		const error = this.writeEntry(key, value);
+		if (error) {
+			this.error = error;
 			this.host.refresh();
 			return;
 		}
 		this.error = undefined;
 		this.mode = { type: "list" };
-		this.writeEntry(key, value);
+		this.host.refresh();
 	}
 
-	private writeEntry(key: string, value: unknown): void {
+	private writeEntry(key: string, value: unknown): string | undefined {
 		const invalid = validateChatTemplateKwarg(value);
-		if (invalid) {
-			this.error = invalid;
-			this.host.refresh();
-			return;
-		}
+		if (invalid) return invalid;
 		this.model.setField(["compat", this.dictKey, key], value);
+		return undefined;
 	}
 
 	setFocused(focused: boolean): void {
@@ -424,22 +372,12 @@ export class DictPane implements EditorPane {
 	}
 
 	hints(): string {
-		switch (this.mode.type) {
-			case "keyEdit":
-			case "valueEdit":
-				return [keyHint("tui.input.submit", "save"), keyHint("tui.select.cancel", "cancel")].join("  ");
-			case "list":
-				return [
-					keyHint("tui.select.confirm", "edit / add"),
-					keyHint("app.provider.removeEntry", "remove"),
-					keyHint("tui.select.cancel", "back"),
-				].join("  ");
-			default:
-				return [
-					rawKeyHint("↑↓", "navigate"),
-					keyHint("tui.select.confirm", "choose"),
-					keyHint("tui.select.cancel", "cancel"),
-				].join("  ");
-		}
+		if (this.isEditing())
+			return [keyHint("tui.input.submit", "save"), keyHint("tui.select.cancel", "cancel")].join("  ");
+		return [
+			keyHint("tui.select.confirm", "edit / add"),
+			keyHint("app.provider.removeEntry", "remove"),
+			keyHint("tui.select.cancel", "back"),
+		].join("  ");
 	}
 }

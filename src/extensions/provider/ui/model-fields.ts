@@ -14,7 +14,7 @@ import { DELETE } from "../store.ts";
 import { AdvancedPane, advancedNote, MODEL_ADVANCED_FIELDS } from "./advanced.ts";
 import { BuiltinCandidatesPane } from "./builtin-data.ts";
 import { CompatPane } from "./compat.ts";
-import { moveSelection } from "./controls.ts";
+import { InlineEdit, moveSelection } from "./controls.ts";
 import { CostPane, createReasoningPane, InputTypesPane, ModelSpecificApiPane } from "./model-options.ts";
 import type { EditorPane, ModelFieldsHost, ModelHandle } from "./pane.ts";
 import { ThinkingMapPane } from "./thinking-map.ts";
@@ -24,7 +24,6 @@ import {
 	renderInfoLine,
 	renderKeyValueLine,
 	type ScrollWindowInfo,
-	ValueEditor,
 } from "./value-row.ts";
 
 const DEFAULT_CONTEXT_WINDOW = 128000;
@@ -62,9 +61,7 @@ type FieldKey = "name" | "reasoning" | "thinkingLevelMap" | "input" | "cost" | "
 export class ModelFieldsPane implements EditorPane {
 	private readonly rows: FieldRow[];
 	private index = 0;
-	private editing: ValueEditor | undefined;
-	private editingRow: FieldRow | undefined;
-	private error: string | undefined;
+	private readonly edit: InlineEdit<FieldRow>;
 	private focused = false;
 	private renaming = false;
 	private disposed = false;
@@ -73,6 +70,7 @@ export class ModelFieldsPane implements EditorPane {
 	private readonly model: ModelHandle;
 	constructor(host: ModelFieldsHost, model: ModelHandle) {
 		this.host = host;
+		this.edit = new InlineEdit(() => host.refresh());
 		this.model = model;
 
 		// An override edits a catalog model in place: its id is fixed and its api/baseUrl cannot be overridden.
@@ -140,7 +138,7 @@ export class ModelFieldsPane implements EditorPane {
 			const active = rowIndex === this.index;
 			lines.push(this.renderRow(row, current, active, width));
 		}
-		if (this.error) lines.push(theme.fg("error", truncate(this.error, Math.max(10, width - 2))));
+		if (this.edit.error) lines.push(theme.fg("error", truncate(this.edit.error, Math.max(10, width - 2))));
 		if (this.renaming) lines.push(renderInfoLine(theme, "Saving model id…", width));
 		if (this.model.base())
 			lines.push(renderInfoLine(theme, "Dim values are built in; clearing restores them.", width));
@@ -151,7 +149,7 @@ export class ModelFieldsPane implements EditorPane {
 		// The effective-api header stays pinned above, errors/progress below.
 		return {
 			top: 1,
-			bottom: (this.error ? 1 : 0) + (this.renaming ? 1 : 0) + (this.model.base() ? 1 : 0),
+			bottom: (this.edit.error ? 1 : 0) + (this.renaming ? 1 : 0) + (this.model.base() ? 1 : 0),
 			cursor: 1 + this.index,
 		};
 	}
@@ -163,7 +161,7 @@ export class ModelFieldsPane implements EditorPane {
 		width: number,
 	): string {
 		const theme = this.host.theme;
-		const editing = this.editingRow === row ? this.editing : undefined;
+		const editing = this.edit.editor(row);
 		switch (row.kind) {
 			case "text": {
 				const value = current[row.key];
@@ -319,12 +317,7 @@ export class ModelFieldsPane implements EditorPane {
 	handleInput(data: string): void {
 		if (this.renaming || this.disposed) return;
 		const kb = this.host.keybindings;
-		if (this.editing) {
-			if (kb.matches(data, "tui.select.up") || kb.matches(data, "tui.select.down")) return;
-			this.editing.handleInput(data);
-			this.host.refresh();
-			return;
-		}
+		if (this.edit.handleInput(data, kb)) return;
 		const next = moveSelection(kb, data, this.index, this.rows.length);
 		if (next !== undefined) {
 			this.index = next;
@@ -429,100 +422,63 @@ export class ModelFieldsPane implements EditorPane {
 		const row = this.rows[this.index]!;
 		if (row.kind !== "text" && row.kind !== "number") return;
 		const current = this.model.read()[row.key];
-		const editor = new ValueEditor({
-			onCommit: (value) => this.commitText(row, value),
-			onCancel: () => {
-				this.editing = undefined;
-				this.editingRow = undefined;
-				this.error = undefined;
-				// Cancelling the edit of an untouched draft abandons the draft outright.
-				if (this.draftEmpty()) {
-					this.host.discardModelDraft();
-					return;
-				}
-				this.host.refresh();
+		this.edit.begin(
+			row,
+			current === undefined ? "" : String(current),
+			mode,
+			this.focused,
+			(value) => this.commitText(row, value),
+			firstData,
+			{
+				onCancel: () => {
+					// Cancelling the edit of an untouched draft abandons the draft outright.
+					if (this.draftEmpty()) this.host.discardModelDraft();
+				},
 			},
-		});
-		this.editing = editor;
-		this.editingRow = row;
-		editor.focused = this.focused;
-		if (mode === "overwrite") editor.beginOverwrite(firstData);
-		else editor.beginTweak(current === undefined ? "" : String(current));
-		this.host.refresh();
+		);
 	}
 
-	private commitText(row: FieldRow & { kind: "text" | "number" }, raw: string): void {
+	private commitText(
+		row: FieldRow & { kind: "text" | "number" },
+		raw: string,
+	): string | undefined | Promise<string | undefined> {
 		const value = raw.trim();
-		const finish = (error?: string) => {
-			this.error = error;
-			if (error) {
-				this.host.refresh();
-				return;
-			}
-			this.editing = undefined;
-			this.editingRow = undefined;
-			this.host.refresh();
-		};
 		if (row.key === "id") {
-			if (!value) {
-				finish("id is required and cannot be empty.");
-				return;
-			}
+			if (!value) return "id is required and cannot be empty.";
 			if (this.model.kind === "draft") {
 				this.model.setField(["id"], value);
-				finish(this.host.commitModelDraft());
-				return;
+				return this.host.commitModelDraft();
 			}
 			const current = this.model.read().id;
-			if (!current || this.model.kind !== "custom") {
-				finish("Missing current id.");
-				return;
-			}
-			if (value === current) {
-				finish();
-				return;
-			}
+			if (!current || this.model.kind !== "custom") return "Missing current id.";
+			if (value === current) return undefined;
 			if (this.host.isCurrentModel(current)) {
-				finish("The current model's id cannot be renamed; switch models with /model first.");
-				return;
+				return "The current model's id cannot be renamed; switch models with /model first.";
 			}
 			if (this.host.store.getModel(this.host.providerId, value)) {
-				finish(`Model "${value}" already exists.`);
-				return;
+				return `Model "${value}" already exists.`;
 			}
 			this.renaming = true;
 			this.host.refresh();
-			void this.model.rename(value).then(
-				(error) => {
-					this.renaming = false;
-					if (!this.disposed) finish(error);
-				},
-				(error: unknown) => {
-					this.renaming = false;
-					if (!this.disposed) finish(error instanceof Error ? error.message : String(error));
-				},
-			);
-			return;
+			return this.model.rename(value).finally(() => {
+				this.renaming = false;
+			});
 		}
 		if (row.key === "name") {
 			this.model.setField(["name"], value === "" ? DELETE : value);
-			finish();
-			return;
+			return undefined;
 		}
 		// Numeric rows: empty clears the override; otherwise a finite positive integer.
 		if (value === "") {
 			this.model.setField([row.key], DELETE);
-			finish();
-			return;
+			return undefined;
 		}
 		const parsed = parseTokenCount(value);
 		if (parsed === undefined) {
-			finish(`${row.key} must be a positive whole number of tokens, e.g. 500000 or 500k.`);
-			return;
+			return `${row.key} must be a positive whole number of tokens, e.g. 500000 or 500k.`;
 		}
 		this.model.setField([row.key], parsed);
-		finish();
-		return;
+		return undefined;
 	}
 
 	private pushSubpage(key: "thinkingLevelMap" | "input" | "cost" | "compat"): void {
@@ -544,20 +500,22 @@ export class ModelFieldsPane implements EditorPane {
 
 	setFocused(focused: boolean): void {
 		this.focused = focused;
-		if (this.editing) this.editing.focused = focused;
+		this.edit.setFocused(focused);
 	}
 
 	isEditing(): boolean {
-		return this.editing !== undefined || this.renaming;
+		return this.edit.editing || this.renaming;
 	}
 
 	dispose(): void {
 		this.disposed = true;
+		this.edit.dispose();
 	}
 
 	/** Only the keys the selected row answers to, so the footer fits 80 columns and never lies. */
 	hints(): string {
-		if (this.editing) return [keyHint("tui.input.submit", "save"), keyHint("tui.select.cancel", "cancel")].join("  ");
+		if (this.edit.editing)
+			return [keyHint("tui.input.submit", "save"), keyHint("tui.select.cancel", "cancel")].join("  ");
 		const row = this.rows[this.index];
 		const back = keyHint("tui.select.cancel", this.model.kind === "draft" ? "discard" : "back");
 		switch (row?.kind) {
