@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.5.5] - 2026-11-13
+
 ### Added
 
 - `/provider` setup runs through to the model list: after the API type and `baseUrl`, Enter on `apiKey` fetches the endpoint's models, ready to check and import. Escape on `apiKey` (a keyless local server) lands on Fetch models without sending a request. See [Adding a provider](docs/bundled/extensions/provider.md#adding-a-provider).
