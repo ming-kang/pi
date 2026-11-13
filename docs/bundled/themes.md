@@ -40,7 +40,7 @@ The palette keeps an ice-cream / sea-salt identity: cool cyan-blue accents with 
 - `toolOutput`, `muted`, and `dim` form a readable text ladder;
 - tool backgrounds remain transparent so the native `●` / `│` presentation stays light;
 - `success`, `error`, and `warning` remain semantic pastel colors;
-- thinking levels move from cool blue through green and gold to coral/red.
+- thinking levels run a cool-to-warm ladder that ends in a violet peak.
 
 ## Extension UI
 

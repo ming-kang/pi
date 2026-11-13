@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- The bundled `ice-cream-dark` and `ice-cream-light` themes rework their reading ladder.
+
 ## [1.5.6] - 2026-11-13
 
 ### Added
