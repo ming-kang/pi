@@ -9,6 +9,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "../../config.ts";
 import { FileAuthStorageBackend } from "../../core/auth-storage.ts";
+import { readResponseTextBounded } from "../../utils/http-response.ts";
 
 export const ENV_KEY = "SEARCH_KEY";
 
@@ -16,6 +17,8 @@ const SESSION_PREFIX = "devin-session-token$";
 const AUTHORIZE_URL = "https://app.devin.ai/auth/cli/continue";
 const TOKEN_URL = "https://api.devin.ai/auth/cli/token";
 const MAX_INPUT_CHARS = 16_384;
+/** The token reply is one small JSON object; anything past this is refused rather than read in. */
+const AUTH_BODY_MAX_BYTES = 64 * 1024;
 
 /** `{ "devin": { "token": "<as Devin issued it>" } }`, beside auth.json and mcp-auth.json. */
 export function credentialPath(): string {
@@ -117,13 +120,14 @@ export async function exchangeCode(
 		throw new Error("That does not look like a Devin authorization code.");
 	}
 	let response: Response;
+	const timeout = AbortSignal.timeout(60_000);
 	try {
 		response = await fetcher(TOKEN_URL, {
 			method: "POST",
 			headers: { "content-type": "application/json", accept: "application/json" },
 			body: JSON.stringify({ code, code_verifier: attempt.verifier }),
 			redirect: "error",
-			signal: AbortSignal.timeout(60_000),
+			signal: timeout,
 		});
 	} catch {
 		throw new Error("Could not reach Devin. Check your network and run /search again.");
@@ -131,9 +135,30 @@ export async function exchangeCode(
 	if (!response.ok) {
 		throw new Error(`Devin rejected the code (HTTP ${response.status}). Codes are one-time; run /search again.`);
 	}
-	const token = ((await response.json().catch(() => undefined)) as { token?: unknown } | undefined)?.token;
+	const token = await readAuthToken(response, timeout);
 	if (typeof token !== "string" || !token || token.length > MAX_INPUT_CHARS) {
 		throw new Error("Devin returned no usable session token.");
 	}
 	return token;
+}
+
+/** The `token` of the auth reply, read within the same budget as the request that fetched it. */
+async function readAuthToken(response: Response, signal: AbortSignal): Promise<unknown> {
+	let text: string;
+	try {
+		text = await readResponseTextBounded(response, {
+			maxBytes: AUTH_BODY_MAX_BYTES,
+			overflowMessage: "Devin sent an oversized auth reply",
+			signal,
+		});
+	} catch (error) {
+		// A cancelled or timed-out read is the caller's own outcome, not a missing token.
+		if (signal.aborted) throw error;
+		return undefined;
+	}
+	try {
+		return (JSON.parse(text) as { token?: unknown }).token;
+	} catch {
+		return undefined;
+	}
 }

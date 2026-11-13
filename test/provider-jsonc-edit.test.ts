@@ -47,6 +47,21 @@ describe("models.json text edits", () => {
 `);
 	});
 
+	test("keep block comments", () => {
+		const text = `{
+  /* provider catalog */
+  "providers": {
+    "cpa": { "baseUrl": "https://a" }
+  }
+}
+`;
+		const result = edit(text, (doc) => {
+			doc.providers.cpa.api = "openai-completions";
+		});
+		expect(result).toContain("/* provider catalog */");
+		expect(read(result)).toEqual({ providers: { cpa: { baseUrl: "https://a", api: "openai-completions" } } });
+	});
+
 	test("keep a one-line file on one line", () => {
 		const text = '{"providers":{"openai":{"modelOverrides":{"gpt-6-astra":{"maxTokens":64000}}}}}\n';
 		const result = edit(text, (doc) => {

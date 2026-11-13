@@ -62,4 +62,23 @@ describe("search credential", () => {
 			/rejected the code/,
 		);
 	});
+
+	// A complete, valid JSON body larger than the auth budget: reading it unbounded would return
+	// the token, while a bounded read refuses the whole reply.
+	it("refuses an auth reply too large to be the token it claims", async () => {
+		const token = "x".repeat(16_000);
+		const body = JSON.stringify({ token, pad: "y".repeat(60 * 1024) });
+		expect(body.length).toBeGreaterThan(64 * 1024);
+		const fetcher = vi.fn(async () => new Response(body));
+		await expect(exchangeCode(createSignIn(), "abc", fetcher as unknown as typeof fetch)).rejects.toThrow(
+			/no usable session token/,
+		);
+	});
+
+	it("rejects a malformed auth reply instead of saving anything", async () => {
+		const fetcher = vi.fn(async () => new Response("{not json"));
+		await expect(exchangeCode(createSignIn(), "abc", fetcher as unknown as typeof fetch)).rejects.toThrow(
+			/no usable session token/,
+		);
+	});
 });

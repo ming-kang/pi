@@ -33,7 +33,14 @@ export function getPath(root: unknown, path: readonly string[]): unknown {
 	return node;
 }
 
-export function setPath(root: Record<string, unknown>, path: readonly string[], value: unknown): void {
+/**
+ * Write `value` at `path` through own object keys, creating intermediate
+ * objects as needed. Returns false without mutating when `path` is empty, so
+ * callers can reject the edit before it enqueues an op (an empty path would
+ * otherwise materialize an "undefined" key).
+ */
+export function setPath(root: Record<string, unknown>, path: readonly string[], value: unknown): boolean {
+	if (path.length === 0) return false;
 	let current = root;
 	for (const segment of path.slice(0, -1)) {
 		const next = Object.hasOwn(current, segment) ? current[segment] : undefined;
@@ -58,4 +65,5 @@ export function setPath(root: Record<string, unknown>, path: readonly string[], 
 			enumerable: true,
 			configurable: true,
 		});
+	return true;
 }

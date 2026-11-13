@@ -699,6 +699,20 @@
 				"test/session-manager/artifacts.test.ts",
 				"test/agent-extension.test.ts"
 			]
+		},
+		{
+			"id": "jsonc-block-comments",
+			"why": "stripJsonComments removes block comments as well as line comments so models.json edits and loads preserve JSONC formatting.",
+			"paths": [
+				{
+					"path": "src/utils/json.ts"
+				}
+			],
+			"tests": [
+				"test/provider-store.test.ts",
+				"test/provider-jsonc-edit.test.ts"
+			],
+			"watch": "Upstream stripJsonComments strips /* ... */ block comments."
 		}
 	]
 }

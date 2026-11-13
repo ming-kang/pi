@@ -8,7 +8,8 @@
  * no shell and no write. Model-supplied rg values only ever fill `--regexp` and `--glob`.
  */
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
+import { open, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { ensureTool } from "../../utils/tools-manager.ts";
@@ -20,6 +21,10 @@ const RESULT_MAX_LINES = 40;
 const LINE_MAX_CHARS = 200;
 /** Matches read from rg before it is stopped; enough to count which files an over-broad pattern hits. */
 const RG_MAX_MATCHES = 2000;
+/** rg's stderr, which only ever carries a regex error; a runaway child must not fill memory with it. */
+const STDERR_MAX_BYTES = 64 * 1024;
+/** Largest file readfile loads; a bigger one is reported rather than read into memory. */
+const READFILE_MAX_BYTES = 8 * 1024 * 1024;
 /** The repo map's share of that limit; deeper trees fall back to shallower ones until they fit. */
 const MAP_MAX_BYTES = 64 * 1024;
 const MAP_MAX_DEPTH = 3;
@@ -82,29 +87,44 @@ async function runRg(
 	onLine: (line: string) => boolean,
 	signal?: AbortSignal,
 ): Promise<boolean> {
+	signal?.throwIfAborted();
 	const rg = await ensureTool("rg");
 	if (!rg) throw new Error("ripgrep (rg) is not available");
 	return new Promise((resolvePromise, reject) => {
 		const child = spawn(rg, [...args, ...RG_SCOPE, "--", target], { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
 		let stderr = "";
+		let stderrBytes = 0;
 		let lines = 0;
 		let stopped = false;
+		let finished = false;
+		const rl = createInterface({ input: child.stdout });
 		const stop = () => {
 			stopped = true;
 			child.kill();
 		};
+		// Either exit must drop the stdout reader and the abort listener, or a failed spawn leaks both.
+		const finish = () => {
+			if (finished) return;
+			finished = true;
+			signal?.removeEventListener("abort", stop);
+			rl.close();
+		};
 		signal?.addEventListener("abort", stop, { once: true });
 		child.stderr.on("data", (chunk) => {
-			stderr += chunk;
+			stderrBytes += chunk.length;
+			if (stderrBytes <= STDERR_MAX_BYTES) stderr += chunk;
 		});
-		createInterface({ input: child.stdout }).on("line", (line) => {
+		rl.on("line", (line) => {
 			if (stopped) return;
 			lines++;
 			if (!onLine(line)) stop();
 		});
-		child.on("error", reject);
+		child.on("error", (error) => {
+			finish();
+			reject(error);
+		});
 		child.on("close", (code) => {
-			signal?.removeEventListener("abort", stop);
+			finish();
 			if (signal?.aborted) return reject(new Error("Operation aborted"));
 			// 1 is "no matches"; 2 with output means some files were unreadable, which is not worth failing over.
 			if (!stopped && code !== 0 && code !== 1 && !lines) {
@@ -174,6 +194,26 @@ function virtualOf(rel: string): string {
 	return rel ? `${VIRTUAL_ROOT}/${rel}` : VIRTUAL_ROOT;
 }
 
+/**
+ * Read a file without the unbounded synchronous `readFileSync`: the size is checked first, then at
+ * most that many bytes are read, so a huge or growing file never fills memory.
+ */
+async function readFileBounded(path: string, name: string, signal?: AbortSignal): Promise<Buffer> {
+	const { size } = await stat(path);
+	if (size > READFILE_MAX_BYTES) {
+		throw new Error(`file is ${size} bytes, over the ${READFILE_MAX_BYTES}-byte read limit: ${name}`);
+	}
+	signal?.throwIfAborted();
+	const handle = await open(path, "r");
+	try {
+		const buffer = Buffer.alloc(size);
+		const { bytesRead } = await handle.read(buffer, 0, size, 0);
+		return buffer.subarray(0, bytesRead);
+	} finally {
+		await handle.close();
+	}
+}
+
 export interface Command {
 	type?: unknown;
 	pattern?: unknown;
@@ -221,30 +261,37 @@ export class Workspace {
 
 	/** Every file rg would search, listed once per search; tree, readfile, and rg targets all check against it. */
 	private files(signal?: AbortSignal): Promise<Index> {
-		this.index ??= (async () => {
-			const files = new Set<string>();
-			await runRg(
-				this.root,
-				["--files"],
-				".",
-				(line) => {
-					files.add(rgPath(line));
-					return true;
-				},
-				signal,
-			);
-			const entries = new Map<string, Set<string>>([["", new Set()]]);
-			for (const file of files) {
-				const parts = file.split("/");
-				for (let i = 0; i < parts.length; i++) {
-					const dir = parts.slice(0, i).join("/");
-					if (!entries.has(dir)) entries.set(dir, new Set());
-					entries.get(dir)!.add(i < parts.length - 1 ? `${parts[i]}/` : parts[i]!);
-				}
+		this.index ??= this.buildIndex(signal);
+		const pending = this.index;
+		// A failed index must not stick: drop only the promise that failed, so a later call retries.
+		pending.catch(() => {
+			if (this.index === pending) this.index = undefined;
+		});
+		return pending;
+	}
+
+	private async buildIndex(signal?: AbortSignal): Promise<Index> {
+		const files = new Set<string>();
+		await runRg(
+			this.root,
+			["--files"],
+			".",
+			(line) => {
+				files.add(rgPath(line));
+				return true;
+			},
+			signal,
+		);
+		const entries = new Map<string, Set<string>>([["", new Set()]]);
+		for (const file of files) {
+			const parts = file.split("/");
+			for (let i = 0; i < parts.length; i++) {
+				const dir = parts.slice(0, i).join("/");
+				if (!entries.has(dir)) entries.set(dir, new Set());
+				entries.get(dir)!.add(i < parts.length - 1 ? `${parts[i]}/` : parts[i]!);
 			}
-			return { files, dirs: new Map([...entries].map(([dir, names]) => [dir, [...names].sort()])) };
-		})();
-		return this.index;
+		}
+		return { files, dirs: new Map([...entries].map(([dir, names]) => [dir, [...names].sort()])) };
 	}
 
 	/** A model-named path that rg would see, or the error string to return in its place. */
@@ -277,6 +324,7 @@ export class Workspace {
 
 	async run(command: Command, signal?: AbortSignal): Promise<string> {
 		try {
+			signal?.throwIfAborted();
 			switch (command?.type) {
 				case "rg":
 					return await this.rg(command, signal);
@@ -331,7 +379,12 @@ export class Workspace {
 		if ("error" in file) return file.error;
 		if (file.kind !== "file") return `Error: not a file: ${String(command.file)}`;
 		const name = virtualOf(file.rel);
-		const buffer = readFileSync(file.real);
+		let buffer: Buffer;
+		try {
+			buffer = await readFileBounded(file.real, name, signal);
+		} catch (e) {
+			return `Error: ${e instanceof Error ? e.message : String(e)}`;
+		}
 		if (buffer.subarray(0, 8192).includes(0)) return `Error: binary file: ${name}`;
 		const lines = buffer.toString("utf-8").split(/\r?\n/);
 		if (lines.at(-1) === "") lines.pop();

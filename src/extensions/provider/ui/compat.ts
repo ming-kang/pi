@@ -295,7 +295,7 @@ export class CompatPane implements EditorPane {
 					this.writeValue(key, DELETE);
 					return;
 				}
-				const shapeError = validateJsonCompatValue(key, text);
+				const shapeError = validateJsonCompatValue(this.effectiveApi(), key, text);
 				if (shapeError) {
 					this.error = shapeError;
 					return this.host.refresh();

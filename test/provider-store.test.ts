@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ModelConfig } from "../src/core/model-config.ts";
 import { DELETE, ModelsJsonStore, type SaveResult } from "../src/extensions/provider/store.ts";
+import { stripJsonComments } from "../src/utils/json.ts";
 
 let tempDir: string;
 let modelsPath: string;
@@ -29,7 +30,7 @@ interface DiskProvider {
 }
 
 function readDisk(): { providers: Record<string, DiskProvider> } {
-	return JSON.parse(readFileSync(modelsPath, "utf8"));
+	return JSON.parse(stripJsonComments(readFileSync(modelsPath, "utf8")));
 }
 
 async function loadStore(doc?: unknown): Promise<ModelsJsonStore> {
@@ -299,6 +300,58 @@ describe("provider store", () => {
 		store.setProviderField("scratch", ["baseUrl"], "https://scratch");
 		store.discardProviderDraft("scratch");
 		expect(store.getProvider("scratch")).toBeUndefined();
+	});
+
+	test("loads and saves a file with block comments, keeping them", async () => {
+		const original = `{
+  /* provider catalog */
+  "providers": { "cpa": { "baseUrl": "https://a" } }
+}`;
+		writeFileSync(modelsPath, original, "utf8");
+		const store = await loadStore();
+		store.setProviderField("cpa", ["api"], "openai-completions");
+		await flush(store);
+		expect(readFileSync(modelsPath, "utf8")).toContain("/* provider catalog */");
+		expect(readDisk().providers.cpa.api).toBe("openai-completions");
+	});
+
+	test("a block-comment file that is still invalid is reported without clobbering it", async () => {
+		const broken = `{
+  /* comment */
+  "providers": { "cpa": { "baseUrl": } }
+}`;
+		writeFileSync(modelsPath, broken, "utf8");
+		const load = await ModelsJsonStore.load(modelsPath);
+		expect(load.ok).toBe(false);
+		expect(readFileSync(modelsPath, "utf8")).toBe(broken);
+	});
+
+	test("getProviderIds reflects the view: fresh providers appear, removed ones drop", async () => {
+		const store = await loadStore({
+			providers: { keep: { baseUrl: "https://k" }, drop: { baseUrl: "https://d" } },
+		});
+		store.setProviderField("fresh", ["baseUrl"], "https://f");
+		expect(store.getProviderIds()).toContain("fresh");
+		store.removeProvider("drop");
+		expect(store.getProviderIds()).not.toContain("drop");
+		expect(store.getProvider("drop")).toBeUndefined();
+	});
+
+	test("an empty field path is rejected without an undefined key or a stranded op", async () => {
+		const store = await loadStore({ providers: { cpa: { baseUrl: "https://a", models: [] } } });
+		store.setProviderField("cpa", [], "oops");
+		store.setModelField("cpa", "k3", [], "oops");
+		expect(store.pendingCount).toBe(0);
+		expect(store.getProvider("cpa")).not.toHaveProperty("undefined");
+	});
+
+	test("backs up atomically, leaving no temp files behind", async () => {
+		writeDisk({ providers: { cpa: { baseUrl: "https://a" } } });
+		const store = await loadStore();
+		store.setProviderField("cpa", ["apiKey"], "sk-1");
+		await flush(store);
+		expect(existsSync(`${modelsPath}.bak`)).toBe(true);
+		expect(readdirSync(tempDir).filter((name) => name.includes(".tmp"))).toEqual([]);
 	});
 
 	test("reports schema-invalid existing files as a read-only load error", async () => {

@@ -157,7 +157,10 @@ export class ModelsJsonStore {
 	}
 
 	getProviderIds(): string[] {
-		return [...new Set([...Object.keys(this.view.providers), ...this.ops.map((op) => op.providerId)])];
+		// Only materialized providers: a pending removeProvider has already dropped
+		// the id from the view, and set/addModel ops materialize their provider in
+		// recomputeView, so re-deriving from ops would wrongly resurrect removals.
+		return Object.keys(this.view.providers);
 	}
 
 	getProvider(providerId: string): ModelsJsonProvider | undefined {
@@ -243,6 +246,7 @@ export class ModelsJsonStore {
 	}
 
 	setProviderField(providerId: string, path: readonly string[], value: unknown): void {
+		if (path.length === 0) return;
 		this.enqueue({
 			kind: "set",
 			seq: this.nextSeq(),
@@ -254,6 +258,7 @@ export class ModelsJsonStore {
 	}
 
 	setModelField(providerId: string, modelId: string, path: readonly string[], value: unknown): void {
+		if (path.length === 0) return;
 		this.enqueue({
 			kind: "set",
 			seq: this.nextSeq(),
@@ -455,7 +460,18 @@ export class ModelsJsonStore {
 				throw new Error("models.json changed while saving; the edits were kept for retry.");
 			}
 			if (!this.backedUp && disk.exists && disk.rawText !== undefined) {
-				await writeFile(`${this.path}.bak`, disk.rawText, { encoding: "utf8", mode: 0o600 });
+				// Write the backup to a temp file and rename it into place so a failure
+				// cannot truncate or remove the last known good backup; clean up the
+				// temp on any error. Only the first save of a session backs up.
+				const backupPath = `${this.path}.bak`;
+				const backupTemp = `${this.path}.${randomUUID()}.bak.tmp`;
+				try {
+					await writeFile(backupTemp, disk.rawText, { encoding: "utf8", mode: 0o600 });
+					await rename(backupTemp, backupPath);
+				} catch (error) {
+					await rm(backupTemp, { force: true }).catch(() => {});
+					throw error;
+				}
 				this.backedUp = true;
 			}
 			assertLock();

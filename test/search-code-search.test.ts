@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolRenderContext } from "../src/core/extensions/types.ts";
-import { codeSearch, parseToolCall } from "../src/extensions/search/code-search.ts";
+import { codeSearch, parseAnswer, parseToolCall } from "../src/extensions/search/code-search.ts";
 import { DevinAuthError, decodeChatResponse, webSearch } from "../src/extensions/search/devin.ts";
 import { MAX_TURNS } from "../src/extensions/search/prompt.ts";
 import { type CodeSearchDetails, renderCodeSearchResult } from "../src/extensions/search/render.ts";
@@ -83,6 +83,81 @@ describe("code_search loop", () => {
 			'[TOOL_CALLS]restricted_exec[ARGS]{"command1":{"type":"rg","pattern":"\\\\{\\\\}"}} trailing }',
 		);
 		expect(call?.args).toEqual({ command1: { type: "rg", pattern: "\\{\\}" } });
+	});
+});
+
+describe("planner reply repair", () => {
+	const args = (text: string) => parseToolCall(text)?.args;
+
+	it("repairs a key that lost its opening quote", () => {
+		expect(args('[TOOL_CALLS]restricted_exec[ARGS]{path:"/codebase/src/retry.ts"}')).toEqual({
+			path: "/codebase/src/retry.ts",
+		});
+	});
+
+	it("repairs a key that kept only its closing quote", () => {
+		expect(
+			args(
+				'[TOOL_CALLS]restricted_exec[ARGS]{"command1":{"type":"rg","pattern":"x","path":"/codebase",exclude":[]}}',
+			),
+		).toEqual({ command1: { type: "rg", pattern: "x", path: "/codebase", exclude: [] } });
+	});
+
+	it("never rewrites a key-shaped token inside a code or regex string", () => {
+		// The repair scan only runs when a stray key quote breaks the raw scan, so the reply below has
+		// one: the regex would also see `{ y:` inside the pattern as a key and corrupt it.
+		expect(
+			args(
+				'[TOOL_CALLS]restricted_exec[ARGS]{"command1":{"type":"rg","pattern":"if (x) { y: 1 }",path:"/codebase"}}',
+			),
+		).toEqual({ command1: { type: "rg", pattern: "if (x) { y: 1 }", path: "/codebase" } });
+		expect(
+			args('[TOOL_CALLS]restricted_exec[ARGS]{"command1":{"type":"rg","pattern":"a{b:c}",path:"/codebase"}}'),
+		).toEqual({ command1: { type: "rg", pattern: "a{b:c}", path: "/codebase" } });
+	});
+
+	it("leaves well-formed arguments untouched", () => {
+		const call =
+			'[TOOL_CALLS]restricted_exec[ARGS]{"command1":{"type":"readfile","file":"/codebase/src/retry.ts","start_line":1,"end_line":3}}';
+		expect(args(call)).toEqual({
+			command1: { type: "readfile", file: "/codebase/src/retry.ts", start_line: 1, end_line: 3 },
+		});
+	});
+
+	it("repairs a key that follows whitespace", () => {
+		expect(args('[TOOL_CALLS]restricted_exec[ARGS]{ path : "/codebase/src/retry.ts" }')).toEqual({
+			path: "/codebase/src/retry.ts",
+		});
+	});
+});
+
+describe("answer ranges", () => {
+	const workspace = new Workspace(root);
+	const ranges = (xml: string) => parseAnswer(xml, workspace, root).flatMap((location) => location.ranges);
+
+	it("drops zero, inverted, and non-safe-integer ranges but keeps the rest in order", () => {
+		expect(
+			ranges(
+				'<ANSWER><file path="/codebase/src/retry.ts"><range>0-5</range><range>5-2</range><range>1-3</range></file></ANSWER>',
+			),
+		).toEqual([[1, 3]]);
+		expect(
+			ranges(
+				'<ANSWER><file path="/codebase/src/retry.ts"><range>1-99999999999999999999</range><range>4-4</range></file></ANSWER>',
+			),
+		).toEqual([[4, 4]]);
+	});
+
+	it("keeps several valid ranges sorted by start line", () => {
+		expect(
+			ranges(
+				'<ANSWER><file path="/codebase/src/retry.ts"><range>7-9</range><range>1-2</range><range>4-4</range></file></ANSWER>',
+			),
+		).toEqual([
+			[1, 2],
+			[4, 4],
+			[7, 9],
+		]);
 	});
 });
 
@@ -228,6 +303,54 @@ describe("workspace visibility and paging", () => {
 		expect(out.split("\n")).toHaveLength(32);
 		expect(out).toMatch(/├── p0\/\n/);
 		expect(out).toMatch(/\(levels reduced to 1 to fit\)$/);
+	});
+});
+
+describe("workspace resource boundaries", () => {
+	const repo = mkdtempSync(join(tmpdir(), "search-bounds-"));
+	afterAll(() => rmSync(repo, { recursive: true, force: true }));
+	const write = (path: string, text: string | Buffer) => {
+		mkdirSync(join(repo, path, ".."), { recursive: true });
+		writeFileSync(join(repo, path), text);
+	};
+	write("src/a.ts", "const needle = 1;\n");
+	// A cold index per test, so a file one test writes is visible to the next.
+	const fresh = () => new Workspace(repo);
+
+	it("does not run a command whose signal is already aborted", async () => {
+		const aborted = new AbortController();
+		aborted.abort();
+		expect(await fresh().run({ type: "readfile", file: "src/a.ts" }, aborted.signal)).toMatch(/abort/i);
+	});
+
+	it("retries the file index after a failed attempt instead of replaying the rejection", async () => {
+		const workspace = fresh();
+		const aborted = new AbortController();
+		aborted.abort();
+		expect(await workspace.run({ type: "tree", path: "/codebase" }, aborted.signal)).toMatch(/abort/i);
+		expect(await workspace.run({ type: "tree", path: "/codebase" })).toContain("/codebase");
+	});
+
+	it("keeps searching after an aborted search", async () => {
+		const workspace = fresh();
+		const aborted = new AbortController();
+		aborted.abort();
+		expect(await workspace.run({ type: "rg", pattern: "needle", path: "/codebase" }, aborted.signal)).toMatch(
+			/abort/i,
+		);
+		expect(await workspace.run({ type: "rg", pattern: "needle", path: "/codebase" })).toBe(
+			"/codebase/src/a.ts:1:const needle = 1;",
+		);
+	});
+
+	it("reports a binary file instead of reading it", async () => {
+		write("bin.dat", Buffer.from([0x00, 0x01, 0x02, 0x03]));
+		expect(await fresh().run({ type: "readfile", file: "bin.dat" })).toMatch(/binary file/);
+	});
+
+	it("refuses a file past the read budget rather than loading it", async () => {
+		write("huge.txt", Buffer.alloc(9 * 1024 * 1024, 0x61));
+		expect(await fresh().run({ type: "readfile", file: "huge.txt" })).toMatch(/read limit/);
 	});
 });
 

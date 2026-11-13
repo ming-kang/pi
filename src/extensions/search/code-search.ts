@@ -122,9 +122,46 @@ function firstObject(text: string): string {
 	return text;
 }
 
-/** The planner sometimes drops a key's quotes, as in `,exclude":[]` or `{path:"…"}`. */
+/**
+ * The planner sometimes drops a key's quotes, as in `,exclude":[]` or `{path:"…"}`. Only those
+ * key tokens are rewritten, and only where a key can appear: right after `{` or `,`. The scan
+ * copies string literals through untouched, so a code or regex value such as `if (x) { y: 1 }`
+ * keeps the braces and colons that make it valid JSON.
+ */
 function repairKeys(json: string): string {
-	return json.replace(/([{,]\s*)"?([A-Za-z_]\w*)"?\s*:/g, '$1"$2":');
+	let out = "";
+	let i = 0;
+	while (i < json.length) {
+		const c = json[i]!;
+		if (c === '"') {
+			out += c;
+			for (i++; i < json.length; i++) {
+				const s = json[i]!;
+				out += s;
+				if (s === "\\") {
+					if (++i < json.length) out += json[i]!;
+				} else if (s === '"') {
+					i++;
+					break;
+				}
+			}
+			continue;
+		}
+		if (c === "{" || c === ",") {
+			out += c;
+			i++;
+			// `path:` or `path":` where a key belongs; any leading whitespace is kept.
+			const bare = /^(\s*)([A-Za-z_]\w*)"?\s*:/.exec(json.slice(i));
+			if (bare) {
+				out += `${bare[1]}"${bare[2]}":`;
+				i += bare[0].length;
+			}
+			continue;
+		}
+		out += c;
+		i++;
+	}
+	return out;
 }
 
 const FILE_RE = /<file\s+path=(["'])(.+?)\1\s*>([\s\S]*?)<\/file>/g;
@@ -139,12 +176,21 @@ export function parseAnswer(xml: string, workspace: Workspace, cwd: string): Cod
 		locations.push({
 			path: relative(cwd, real).replace(/\\/g, "/") || ".",
 			ranges: [...body!.matchAll(RANGE_RE)]
-				.map(([, start, end]): [number, number] => [Number(start), Number(end)])
+				.map(([, start, end]) => parseRange(start!, end!))
+				.filter((range): range is [number, number] => range !== null)
 				.sort((a, b) => a[0] - b[0]),
 		});
 		if (locations.length === MAX_RESULTS) break;
 	}
 	return locations;
+}
+
+/** A 1-indexed inclusive range, or null when the planner emitted one that cannot be read. */
+function parseRange(start: string, end: string): [number, number] | null {
+	const from = Number(start);
+	const to = Number(end);
+	if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 1 || to < from) return null;
+	return [from, to];
 }
 
 export function formatLocations(locations: CodeLocation[]): string {
