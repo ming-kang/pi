@@ -136,7 +136,6 @@ describe("BTW native Agent", () => {
 			content: [{ type: "text", text: TOOL_DENIAL }],
 		});
 		expect(side.turns[0]).toMatchObject({ status: "done", answer: "The snapshot already contains the answer." });
-		expect(side.blockedTools).toBe(1);
 		side.dispose();
 	});
 
@@ -274,10 +273,8 @@ describe("BTW native Agent", () => {
 			status: "done",
 			answer: "What the snapshot shows.\n\nThe answer from that context.",
 		});
-		expect(side.blockedTools).toBe(1);
 		expect(side.usage.totalTokens).toBe(first.usage.totalTokens + second.usage.totalTokens);
 		expect(side.usage.cost.total).toBe(first.usage.cost.total + second.usage.cost.total);
-		expect(side.latestCacheHitPercent).toBeCloseTo(71.4286, 4);
 		side.dispose();
 	});
 

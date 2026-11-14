@@ -48,12 +48,10 @@ export class BtwController {
 			conversation.unsubscribeKeys = editorHost.onInput((data) => this.handleKey(conversation, data));
 			const snapshot = await pendingSnapshot;
 			if (this.current !== conversation) return;
-			const usesSubscription = ctx.modelRuntime.isUsingSubscription(snapshot.model.provider);
 			conversation.state = {
 				phase: "ready",
 				capturedAt: snapshot.capturedAt,
 				model: `${snapshot.model.provider}/${snapshot.model.id}`,
-				usesSubscription,
 				conversation: new BtwAgent(snapshot, ctx.modelRuntime, () => {
 					if (this.current === conversation) conversation.panel?.changed();
 				}),

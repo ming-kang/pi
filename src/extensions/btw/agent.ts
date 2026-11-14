@@ -10,7 +10,7 @@ import { normalizeContext } from "@earendil-works/pi-ai";
 import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import type { ContextSnapshot } from "../../core/extensions/index.ts";
 import { combineUsage } from "../../core/usage-totals.ts";
-import { cacheHitPercent, emptyUsage } from "../../utils/usage.ts";
+import { emptyUsage } from "../../utils/usage.ts";
 import {
 	MAX_DISPLAY_CHARS,
 	MAX_MODEL_STEPS,
@@ -30,15 +30,12 @@ export interface BtwTurn {
 	notice?: string;
 	startedAt: number;
 	elapsedMs: number;
-	firstAnswerMs?: number;
 }
 
 export interface BtwConversationState {
 	busy: boolean;
 	turns: readonly BtwTurn[];
 	usage: Usage;
-	latestCacheHitPercent: number | undefined;
-	blockedTools: number;
 }
 
 interface ActiveQuestion {
@@ -69,8 +66,6 @@ function displayText(text: string): string {
 export class BtwAgent implements BtwConversationState {
 	readonly turns: BtwTurn[] = [];
 	usage = emptyUsage();
-	latestCacheHitPercent: number | undefined;
-	blockedTools = 0;
 	private readonly agent: Agent;
 	private readonly unsubscribe: () => void;
 	private readonly onChange: () => void;
@@ -244,8 +239,6 @@ export class BtwAgent implements BtwConversationState {
 		if (event.type === "message_end") {
 			question.completedAnswer = turn.answer;
 			question.responseChars += messageChars(message.content);
-			this.blockedTools += message.content.filter((part) => part.type === "toolCall").length;
-			this.latestCacheHitPercent = cacheHitPercent(message.usage);
 			this.usage = combineUsage(this.usage, message.usage);
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
 				turn.status = message.stopReason === "aborted" && !question.limitAborted ? "cancelled" : "error";
@@ -268,7 +261,6 @@ export class BtwAgent implements BtwConversationState {
 			.filter((part) => part.type === "thinking")
 			.map((part) => part.thinking)
 			.join("");
-		if (text && turn.firstAnswerMs === undefined) turn.firstAnswerMs = Date.now() - turn.startedAt;
 		turn.answer = displayText([question.completedAnswer, text].filter(Boolean).join("\n\n"));
 		turn.thinking = thinking.slice(-2000);
 		if (question.responseChars + messageChars(message.content) > MAX_RESPONSE_CHARS) {

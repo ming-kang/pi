@@ -22,7 +22,6 @@ export type BtwPanelState<Conversation extends BtwConversationState = Readonly<B
 			phase: "ready";
 			capturedAt: number;
 			model: string;
-			usesSubscription: boolean;
 			conversation: Conversation;
 	  };
 
@@ -72,11 +71,11 @@ export class BtwPanel implements Component {
 	}
 
 	scroll(delta: number): boolean {
-		if (this.maxOffset === 0) return false;
 		const next = Math.max(0, Math.min(this.maxOffset, this.offset + delta));
-		if (next === this.offset) return false;
+		const moved = next !== this.offset;
 		this.offset = next;
-		this.follow = this.offset === this.maxOffset;
+		this.follow = next === this.maxOffset;
+		if (!moved) return false;
 		this.tui.requestRender();
 		return true;
 	}
@@ -108,6 +107,7 @@ export class BtwPanel implements Component {
 		this.heldHeight = busy ? Math.min(cap, Math.max(this.heldHeight, needed)) : needed;
 		this.maxOffset = Math.max(0, lines.length - this.heldHeight);
 		this.offset = this.follow ? this.maxOffset : Math.min(this.offset, this.maxOffset);
+		this.follow = this.offset === this.maxOffset;
 		const body = lines.slice(this.offset, this.offset + this.heldHeight);
 		while (body.length < this.heldHeight) body.push("");
 		const close = keyLabel("app.btw.close");

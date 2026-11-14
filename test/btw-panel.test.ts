@@ -36,8 +36,6 @@ function panelFixture(turns: BtwTurn[], rows = 30) {
 	const conversation: BtwConversationState = {
 		busy: turns.some((turn) => turn.status === "streaming"),
 		turns,
-		blockedTools: 0,
-		latestCacheHitPercent: undefined,
 		usage: {
 			input: 0,
 			output: 0,
@@ -51,7 +49,6 @@ function panelFixture(turns: BtwTurn[], rows = 30) {
 		phase: "ready",
 		capturedAt: Date.now(),
 		model: "test/model",
-		usesSubscription: false,
 		conversation,
 	};
 	const panel = new BtwPanel(
@@ -123,6 +120,24 @@ describe("BTW panel", () => {
 		fixture.panel.dispose();
 	});
 
+	it("resumes tail following after shrinking content clamps a scrolled panel to its bottom", () => {
+		const response = turn({
+			status: "done",
+			answer: Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join("\n\n"),
+		});
+		const fixture = panelFixture([response]);
+		fixture.panel.render(80);
+		fixture.panel.scroll(-20);
+
+		response.answer = Array.from({ length: 16 }, (_, i) => `short ${i + 1}`).join("\n\n");
+		expect(fixture.panel.render(80).join("\n")).toContain("short 16");
+		expect(fixture.panel.scroll(3)).toBe(false);
+
+		response.answer += "\n\nNEWEST AFTER BOUNDARY SCROLL";
+		expect(fixture.panel.render(80).join("\n")).toContain("NEWEST AFTER BOUNDARY SCROLL");
+		fixture.panel.dispose();
+	});
+
 	it("refreshes only while answering and releases timers and content on disposal", () => {
 		vi.useFakeTimers();
 		const fixture = panelFixture([turn()]);
@@ -155,7 +170,6 @@ describe("BTW panel", () => {
 			cacheWrite: 0,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.1234 },
 		};
-		fixture.conversation.latestCacheHitPercent = 57.25;
 		fixture.panel.render(160);
 		fixture.panel.scroll(-10);
 		const lines = fixture.panel.render(160).map(stripTerminalSequences);
@@ -313,15 +327,12 @@ describe("BTW panel", () => {
 		const conversation: BtwConversationState = {
 			busy: false,
 			turns: [btwTurn],
-			blockedTools: 0,
-			latestCacheHitPercent: undefined,
 			usage: btwResponse("").usage,
 		};
 		const state: BtwPanelState = {
 			phase: "ready",
 			capturedAt: Date.now(),
 			model: "test/model",
-			usesSubscription: false,
 			conversation,
 		};
 		const panel = new BtwPanel(
