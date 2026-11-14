@@ -211,11 +211,14 @@ async function confirm(question, yes) {
 }
 
 function printNextSteps(version) {
-	console.log(`\nPushed the ${version} release. CI publishes this commit and tags it pi-v${version} once it passes:`);
+	console.log(
+		`\nPushed the ${version} release. CI publishes it, waits for npm to serve it, and tags it pi-v${version}:`,
+	);
 	console.log(`  https://github.com/${githubRepository()}/actions/workflows/publish-npm.yml`);
 	console.log(
-		`If CI fails, nothing is published: rerun a transient failure, or fix main and run npm run release again for ${version}.`,
+		`If CI fails before publication, rerun a transient failure or fix main and run npm run release again for ${version}.`,
 	);
+	console.log("If the npm wait or tag step fails, rerun only the tag job; do not publish again.");
 }
 
 async function release(requested, { dryRun, yes }) {

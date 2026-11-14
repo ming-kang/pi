@@ -2,8 +2,9 @@ name: CI and publish
 
 # Every push to main runs CI here, and each commit's run completes on its own. Only a release
 # commit publishes: "chore: release <version>" from npm run release, for a version npm does not
-# have yet. Once CI passes, the tarball it verified goes to npm and that commit is tagged
-# pi-v<version>, so the tag, the package, and the changelog section always match.
+# have yet. Once CI passes, the tarball it verified goes to npm. The tag job waits until npm
+# serves that version as latest before tagging the commit pi-v<version>, so the tag, package,
+# and changelog section always match.
 # npm trusted publishing is bound to this file name, so keep it.
 
 on:
@@ -95,12 +96,26 @@ jobs:
         run: npm publish "./package/astralyn-pi-${{ needs.plan.outputs.version }}.tgz" --access public --provenance --registry=https://registry.npmjs.org
 
   tag:
-    name: Tag the published commit
+    name: Verify npm and tag the release
     needs: [plan, publish]
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     permissions:
       contents: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Wait for npm availability
+        run: node scripts/wait-npm-release.mjs "${{ needs.plan.outputs.version }}"
+
       - name: Create pi-v${{ needs.plan.outputs.version }}
         env:
           GH_TOKEN: ${{ github.token }}
