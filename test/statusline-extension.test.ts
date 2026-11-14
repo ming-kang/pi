@@ -521,25 +521,76 @@ describe("statusline TpsTracker", () => {
 		expect(tracker.read(session, MODEL)).toBeCloseTo(60, 5);
 	});
 
-	it("measures live TPS from the tokens after the first delta and lets it decay while the stream stalls", () => {
+	it("holds the cumulative live TPS between deltas and includes pauses on the next delta", () => {
 		const { state, tracker, session, delta } = startTracker();
 		tracker.onMessageStart("assistant");
 
 		expect(delta(500, "")).toBe(false);
 		// The first delta only opens the window: its 100 tokens arrived over no measured time.
 		expect(delta(2_000, "x".repeat(400))).toBe(false);
-		expect(delta(2_100, "x".repeat(40))).toBe(false);
+		expect(delta(2_100, "x".repeat(40), "thinking_delta")).toBe(false);
 		expect(tracker.read(session, MODEL)).toBeUndefined();
 
 		// 20 tokens over 500ms. Counting the opening delta would report 240.
-		expect(delta(2_500, "x".repeat(40))).toBe(true);
+		expect(delta(2_500, "x".repeat(40), "toolcall_delta")).toBe(true);
 		expect(tracker.read(session, MODEL)).toBeCloseTo(40, 5);
 
-		// Render requests are throttled; the value itself is never cached.
+		// Render requests are throttled, but every nonempty delta updates the measurement.
 		expect(delta(2_600, "x".repeat(40))).toBe(false);
 		expect(tracker.read(session, MODEL)).toBeCloseTo(50, 5);
 		state.clock = 5_000;
-		expect(tracker.read(session, MODEL)).toBeCloseTo(10, 5);
+		expect(tracker.read(session, MODEL)).toBeCloseTo(50, 5);
+		expect(delta(5_000, "")).toBe(false);
+		expect(tracker.read(session, MODEL)).toBeCloseTo(50, 5);
+
+		// The next batch includes the whole pause: 40 tokens over 3s, not just this batch's rate.
+		expect(delta(5_000, "x".repeat(40))).toBe(true);
+		expect(tracker.read(session, MODEL)).toBeCloseTo(40 / 3, 5);
+	});
+
+	it.each([50, 1_000, 2_000])("keeps live TPS steady for batches arriving every %i ms", (intervalMs) => {
+		const { state, tracker, session, delta } = startTracker();
+		tracker.onMessageStart("assistant");
+		const text = "x".repeat((60 * intervalMs * 4) / 1_000);
+
+		for (let batch = 0; batch <= 6; batch++) {
+			const at = 1_000 + batch * intervalMs;
+			delta(at, text);
+			if (batch * intervalMs < 250) {
+				expect(tracker.read(session, MODEL)).toBeUndefined();
+				continue;
+			}
+			expect(tracker.read(session, MODEL)).toBeCloseTo(60, 5);
+			state.clock = at + intervalMs / 2;
+			expect(tracker.read(session, MODEL)).toBeCloseTo(60, 5);
+		}
+	});
+
+	it("does not make a short live window measurable just because time passes", () => {
+		const { state, tracker, session, delta } = startTracker();
+		tracker.onMessageStart("assistant");
+		delta(1_000, "x".repeat(40));
+		delta(1_100, "x".repeat(40));
+		state.clock = 1_500;
+		expect(tracker.read(session, MODEL)).toBeUndefined();
+
+		delta(1_500, "x".repeat(40));
+		expect(tracker.read(session, MODEL)).toBeCloseTo(40, 5);
+	});
+
+	it.each([
+		[0, 30],
+		[70, 35],
+	])("keeps the completion window through message_end with %i output tokens", (output, expectedTps) => {
+		const { state, tracker, session, delta, end } = startTracker();
+		tracker.onMessageStart("assistant");
+		delta(1_000, "x".repeat(40));
+		delta(2_000, "x".repeat(240));
+		state.clock = 2_900;
+		expect(tracker.read(session, MODEL)).toBeCloseTo(60, 5);
+
+		end(3_000, makeAssistant({ usage: usage(10, output, 0, 0, 0), durationMs: 3_000 }));
+		expect(tracker.read(session, MODEL)).toBeCloseTo(expectedTps, 5);
 	});
 
 	it("shows nothing for a latest response it could not measure", () => {

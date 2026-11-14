@@ -15,6 +15,7 @@ interface TokenEstimate {
 
 interface ActiveStream extends TokenEstimate {
 	firstDeltaAt?: number;
+	lastDeltaAt?: number;
 	/** Estimated tokens of the delta that opened the window. They arrived over no measured time. */
 	openingTokens: number;
 	lastRenderRequestAt?: number;
@@ -154,6 +155,7 @@ export class TpsTracker {
 		const active = this.active;
 		const timestamp = this.now();
 		addCharCounts(active, assistantEvent.delta);
+		active.lastDeltaAt = timestamp;
 		if (active.firstDeltaAt === undefined) {
 			active.firstDeltaAt = timestamp;
 			active.openingTokens = estimateTokens(active);
@@ -211,10 +213,10 @@ export class TpsTracker {
 		return stream ? settledTps(message, stream) : undefined;
 	}
 
-	/** Streamed rate so far, measured to now so it decays while the stream is silent. */
+	/** Cumulative streamed rate through the latest nonempty delta, held between arrivals. */
 	private liveTps(): number | undefined {
 		const active = this.active;
-		if (active?.firstDeltaAt === undefined) return undefined;
-		return rate(estimateTokens(active) - active.openingTokens, this.now() - active.firstDeltaAt);
+		if (active?.firstDeltaAt === undefined || active.lastDeltaAt === undefined) return undefined;
+		return rate(estimateTokens(active) - active.openingTokens, active.lastDeltaAt - active.firstDeltaAt);
 	}
 }
