@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.5.8] - 2026-11-15
+
 ### Changed
 
 - `statusline` live `TPS` now measures the cumulative average through the latest content delta and holds it between batches, instead of falling during each gap. The completed-response calculation is unchanged. See [Statusline](docs/bundled/extensions/statusline.md#line-2--context--speed-left--usage-right).
