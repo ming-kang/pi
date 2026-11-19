@@ -6,7 +6,7 @@ Shows one dim transcript line after each continuous agent run in interactive mod
 Worked for 1m 52s · Done 2026/10/28 13:14
 ```
 
-The elapsed time covers the whole run, including model requests, tool execution, retries, and steering. A steering message does not end the run or produce an intermediate note; the summary appears only after Pi becomes idle. Follow-up work queued into the same run is included as well. A normal run ends with `Done`; a manually aborted run ends with `Stopped`, so sending a new prompt after an interruption still leaves a clear boundary before it.
+The elapsed time covers the whole run, including model requests, tool execution, retries, and steering. A steering message does not end the run or produce an intermediate note; the summary appears only after Pi becomes idle. Follow-up work queued into the same run is included as well. A normal run ends with `Done`, including one whose error an automatic retry or compaction recovered from; a run whose final turn ends with an error ends with `Failed`; a manually aborted run ends with `Stopped`, so sending a new prompt after an interruption still leaves a clear boundary before it.
 
 Durations use the same compact format as Tasks: zero components are omitted, for example `8s`, `1m`, `1m 5s`, and `1h 5m`. The completion timestamp is local time in `YYYY/MM/DD HH:mm` format.
 

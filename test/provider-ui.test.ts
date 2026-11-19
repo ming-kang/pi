@@ -25,7 +25,12 @@ import type { EditorHost, ModelHandle } from "../src/extensions/provider/ui/pane
 import { createProviderApiPane } from "../src/extensions/provider/ui/provider-fields.ts";
 import { ProviderListScreen } from "../src/extensions/provider/ui/provider-list.ts";
 import { ThinkingMapPane } from "../src/extensions/provider/ui/thinking-map.ts";
-import { renderErrorLines, truncateMiddle, windowLines } from "../src/extensions/provider/ui/value-row.ts";
+import {
+	renderErrorLines,
+	truncateMiddle,
+	type WindowLinesSource,
+	windowLines,
+} from "../src/extensions/provider/ui/value-row.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 import { VirtualTerminal } from "./helpers/virtual-terminal.ts";
@@ -147,8 +152,9 @@ function hostFixture(): { host: EditorHost; model: ModelHandle } {
 /** Frame height on the 40-row fixture terminal: an 18-row body inside six lines of borders, title, and footer. */
 const FRAME = 24;
 
-function render(component: { render(width: number): string[] }): string {
-	return stripAnsi(component.render(120).join("\n"));
+function render(component: { render(width: number): WindowLinesSource }): string {
+	const lines = component.render(120);
+	return stripAnsi(Array.from({ length: lines.length }, (_, index) => lines.at(index)).join("\n"));
 }
 
 function appFixture() {
@@ -960,7 +966,12 @@ describe("provider fixed layout", () => {
 			vi.fn(
 				async () =>
 					new Response(
-						JSON.stringify({ data: Array.from({ length: 20 }, (_, index) => ({ id: `remote-${index}` })) }),
+						JSON.stringify({
+							has_more: true,
+							data: Array.from({ length: 20 }, (_, index) => ({
+								id: `remote-${String(index).padStart(2, "0")}`,
+							})),
+						}),
 					),
 			),
 		);
@@ -969,11 +980,21 @@ describe("provider fixed layout", () => {
 		screen.handleInput("\r"); // focus right and start the request
 		await vi.waitFor(() => expect(render(screen)).toContain("(1/20)"));
 		expect(screen.render(120).length).toBe(FRAME);
-		// The filter input stays pinned above the scrolled rows.
-		expect(render(screen)).toContain("0 selected · 20 shown");
-		screen.handleInput("\x1b[B");
-		expect(render(screen)).toContain("(2/20)");
-		expect(screen.render(120).length).toBe(FRAME);
+		expect(render(screen)).not.toContain("remote-19");
+		screen.handleInput("\x1b[A"); // wrap to the last row, outside the initial viewport
+		screen.handleInput(" ");
+		const end = render(screen);
+		expect(end).toMatch(/The catalog was truncated[^\n]*\n[^\n]*Search/);
+		expect(end).toMatch(/› \[x\] remote-19[^\n]*\n[^\n]*\(20\/20\)[^\n]*\n[^\n]*1 selected · 20 shown/);
+		expect(end).not.toContain("remote-00");
+		const narrow = stripAnsi(screen.render(60).join("\n"));
+		expect(narrow).toContain("› [x] remote-19");
+		expect(narrow).toContain("(20/20)");
+		screen.handleInput("\x1b[200~remote-00\x1b[201~");
+		const filtered = render(screen);
+		expect(filtered).toContain("› [ ] remote-00");
+		expect(filtered).toContain("1 selected · 1 shown");
+		expect(filtered).not.toContain("(20/20)");
 		screen.dispose();
 	});
 

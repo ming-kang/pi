@@ -8,6 +8,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 - `/provider` follows Anthropic model catalog pages based on unique model IDs, so duplicate entries no longer hide models on later pages or incorrectly mark complete catalogs as truncated.
 - `/provider` no longer splits emoji or other multi-code-point characters when it shortens long model IDs and catalog URLs with a middle ellipsis.
+- Run summaries now end with `Failed` instead of `Done` when the run's final turn ends with a provider error. A run that an automatic retry recovers still ends with `Done`, and an aborted run still ends with `Stopped`. See [Run summary](docs/bundled/extensions/run-summary.md).
 
 ## [1.5.8] - 2026-11-15
 
