@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Fixed
+
+- `/provider` follows Anthropic model catalog pages based on unique model IDs, so duplicate entries no longer hide models on later pages or incorrectly mark complete catalogs as truncated.
+
 ## [1.5.8] - 2026-11-15
 
 ### Changed
