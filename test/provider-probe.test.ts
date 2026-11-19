@@ -501,6 +501,22 @@ describe("provider probe pagination", () => {
 		expect(calls[1]!.url.search).toBe("?after_id=claude-b&limit=1000");
 	});
 
+	test("Anthropic catalogs page by unique model ids", async () => {
+		const { fetch, calls } = mockFetch((url) =>
+			url.searchParams.get("after_id") === "claude-a"
+				? jsonResponse({ data: [{ id: "claude-b" }], has_more: false, last_id: "claude-b" })
+				: jsonResponse({
+						data: Array.from({ length: PROBE_LIMITS.maxModels }, () => ({ id: "claude-a" })),
+						has_more: true,
+						last_id: "claude-a",
+					}),
+		);
+		expect(
+			await probeProviderModels({ baseUrl: "https://api.anthropic.com", api: "anthropic-messages", fetch }),
+		).toEqual({ ok: true, models: [{ id: "claude-a" }, { id: "claude-b" }], truncated: false });
+		expect(calls).toHaveLength(2);
+	});
+
 	test("a failed later page keeps the models already listed and stays partial", async () => {
 		const { fetch, calls } = mockFetch((url) =>
 			url.searchParams.get("after_id")
