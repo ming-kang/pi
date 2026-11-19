@@ -32,7 +32,7 @@ const MIN_WIDTH = 60;
 const MIN_HEIGHT = 14;
 
 /** A pane the pointer can act on: wheel scrolls it and a click on it focuses it. */
-export interface PaneRegion extends Rect {
+interface PaneRegion extends Rect {
 	pane: PanelFocus | "help";
 }
 
@@ -47,7 +47,7 @@ export interface TasksLayout {
 	tooSmall?: boolean;
 }
 
-export interface LayoutOptions {
+interface LayoutOptions {
 	width: number;
 	height: number;
 	theme: Theme;
@@ -77,7 +77,7 @@ export function isInspectorVisible({
 }
 
 /** The list takes 40% of a split terminal, between 34 and 60 columns. */
-export function listWidthFor(width: number): number {
+function listWidthFor(width: number): number {
 	return Math.min(60, Math.max(34, Math.round(width * 0.4)));
 }
 
