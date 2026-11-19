@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Fixed
+
+- `/provider` no longer splits emoji or other multi-code-point characters when it shortens long model IDs and catalog URLs with a middle ellipsis.
+
 ## [1.5.8] - 2026-11-15
 
 ### Changed

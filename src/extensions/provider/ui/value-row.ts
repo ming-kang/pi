@@ -10,6 +10,7 @@
 import {
 	decodeKittyPrintable,
 	Input,
+	sliceByColumn,
 	type TUI,
 	truncateToWidth,
 	visibleWidth,
@@ -264,21 +265,7 @@ export function truncateMiddle(text: string, maxWidth: number): string {
 	if (maxWidth <= 4) return truncateToWidth(text, maxWidth);
 	const headWidth = Math.ceil((maxWidth - 1) / 2);
 	const tailWidth = maxWidth - 1 - headWidth;
-	let head = "";
-	let headUsed = 0;
-	for (const char of text) {
-		const charWidth = visibleWidth(char);
-		if (headUsed + charWidth > headWidth) break;
-		head += char;
-		headUsed += charWidth;
-	}
-	let tail = "";
-	let tailUsed = 0;
-	for (const char of [...text].reverse()) {
-		const charWidth = visibleWidth(char);
-		if (tailUsed + charWidth > tailWidth) break;
-		tail = char + tail;
-		tailUsed += charWidth;
-	}
+	const head = sliceByColumn(text, 0, headWidth, true);
+	const tail = sliceByColumn(text, visibleWidth(text) - tailWidth, tailWidth, true);
 	return `${head}…${tail}`;
 }

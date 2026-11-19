@@ -25,7 +25,7 @@ import type { EditorHost, ModelHandle } from "../src/extensions/provider/ui/pane
 import { createProviderApiPane } from "../src/extensions/provider/ui/provider-fields.ts";
 import { ProviderListScreen } from "../src/extensions/provider/ui/provider-list.ts";
 import { ThinkingMapPane } from "../src/extensions/provider/ui/thinking-map.ts";
-import { renderErrorLines, windowLines } from "../src/extensions/provider/ui/value-row.ts";
+import { renderErrorLines, truncateMiddle, windowLines } from "../src/extensions/provider/ui/value-row.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 import { VirtualTerminal } from "./helpers/virtual-terminal.ts";
@@ -922,6 +922,14 @@ describe("provider fixed layout", () => {
 		// Pinned lines survive clipping.
 		const pinned = windowLines(theme, rows, 5, { top: 1, bottom: 1, cursor: 9 }).map(stripAnsi);
 		expect(pinned).toEqual(["row 0", "row 7", "row 8", "  (8/8)", "row 9"]);
+	});
+
+	test("truncateMiddle keeps whole graphemes on both sides of the ellipsis", () => {
+		expect(truncateMiddle("provider-model-identifier", 10)).toBe("provi…fier");
+		expect(truncateMiddle("ab👩‍💻xyz-very-long-1234", 10)).toBe("ab👩‍💻x…1234");
+		expect(truncateMiddle("model-1234-👩‍💻👩‍💻", 10)).toBe("model…👩‍💻👩‍💻");
+		expect(truncateMiddle("模型名称很长的标识符", 10)).toBe("模型…识符");
+		expect(stripAnsi(truncateMiddle("abcdefgh", 4))).toBe("a...");
 	});
 
 	test("a short terminal keeps the compact frame, in the list and the editor alike", () => {
