@@ -11,7 +11,7 @@ import runSummary, {
 import { CustomEntryComponent } from "../src/modes/interactive/components/custom-entry.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
-import { createHarness, type Harness } from "./suite/harness.ts";
+import { createHarness, type Harness, type HarnessOptions } from "./suite/harness.ts";
 
 const harnesses: Harness[] = [];
 
@@ -20,8 +20,8 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-async function tuiHarness(tools: AgentTool[] = []): Promise<Harness> {
-	const harness = await createHarness({ tools, extensionFactories: [runSummary] });
+async function tuiHarness(tools: AgentTool[] = [], settings?: HarnessOptions["settings"]): Promise<Harness> {
+	const harness = await createHarness({ tools, settings, extensionFactories: [runSummary] });
 	harnesses.push(harness);
 	await harness.session.bindExtensions({ mode: "tui" });
 	return harness;
@@ -45,6 +45,7 @@ describe("run summary formatting", () => {
 		const finishedAt = new Date(2026, 9, 28, 13, 14, 14).getTime();
 		expect(formatRunSummary(startedAt, finishedAt)).toBe("Worked for 1m 52s · Done 2026/10/28 13:14");
 		expect(formatRunSummary(startedAt, finishedAt, "stopped")).toBe("Worked for 1m 52s · Stopped 2026/10/28 13:14");
+		expect(formatRunSummary(startedAt, finishedAt, "failed")).toBe("Worked for 1m 52s · Failed 2026/10/28 13:14");
 	});
 });
 
@@ -149,6 +150,30 @@ describe("run summary lifecycle", () => {
 		expect(lines).toHaveLength(2);
 		expect(lines[0]).toMatch(/Worked for .+ · Stopped \d{4}\/\d{2}\/\d{2} \d{2}:\d{2}$/);
 		expect(lines[1]).toMatch(/Worked for .+ · Done \d{4}\/\d{2}\/\d{2} \d{2}:\d{2}$/);
+	});
+
+	it("records Failed when the final turn ends with an error", async () => {
+		const harness = await tuiHarness([], { retry: { enabled: false } });
+		harness.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "invalid_api_key" })]);
+		await harness.session.prompt("start");
+
+		const record = readRunSummaryRecord(harness.sessionManager.getLeafEntry()!);
+		expect(record?.outcome).toBe("failed");
+		expect(renderSummary(harness, harness.sessionManager.getLeafEntry()).join("\n")).toMatch(
+			/Worked for .+ · Failed \d{4}\/\d{2}\/\d{2} \d{2}:\d{2}$/,
+		);
+	});
+
+	it("records Done when an automatic retry recovers from an error", async () => {
+		const harness = await tuiHarness([], { retry: { enabled: true, maxRetries: 2, baseDelayMs: 1 } });
+		harness.setResponses([
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
+			fauxAssistantMessage("recovered"),
+		]);
+		await harness.session.prompt("start");
+
+		expect(harness.getPendingResponseCount()).toBe(0);
+		expect(summaries(harness).map((entry) => readRunSummaryRecord(entry)?.outcome)).toEqual(["done"]);
 	});
 
 	it("writes no duplicate record on reload or branch navigation", async () => {
