@@ -1275,8 +1275,8 @@ Session-bound `TasksContext` supervises native and extension-owned execution. Fo
 | `list()` / `get(id)` | Bounded, read-only (frozen) retained snapshots; IDs support unique prefixes |
 | `read(id, options?)` | Bounded head, tail, or byte-offset model-readable output; excludes human-only display text. `options`: `mode`, `bytes`, `sinceBytes`. Without `mode`, a `report` is read from its start and a `log` from its end. With `sinceBytes`, `head` continues forward from that offset and `tail` keeps the newest window at or after it. Returned ranges and `endByte` use raw source bytes |
 | `kill(id)` | Requests cancellation; `stopping` is not a terminal status |
-| `detach(id)` / `detachForeground()` | Hands off one task, or eligible foreground tasks oldest first while background slots remain, without restarting them; throws when every background slot is taken. Returns `false` / `0` while the host cannot supervise background work (see below) |
-| `canDetach(id)` | Reports whether an execution can move now, including host policy, the `tasks` tool being active, and available background slots; does not change the execution |
+| `detach(id)` / `detachForeground()` | Hands off one task, or eligible foreground tasks oldest first while background slots remain, without restarting them; throws when eligible work exists but the background slot or task history retention limit is reached. Returns `false` / `0` while the host cannot supervise background work (see below) |
+| `canDetach(id)` | Reports whether an execution can move now, including host policy, the `tasks` tool being active, and the background slot and task history retention limits; does not change the execution |
 | `subscribe(listener)` | Observes task state and progress |
 | `retain(id)` | Returns an idempotent release function protecting retained data, without delaying notifications |
 

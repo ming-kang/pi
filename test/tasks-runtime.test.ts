@@ -1119,6 +1119,29 @@ describe("foreground and background admission", () => {
 		expect(() => bg.detachForeground()).toThrow("Background task limit reached (2)");
 		expect(() => bg.detach(second.control.id)).toThrow("Background task limit reached (2)");
 	});
+
+	it.each(["single", "batch"])("enforces the retention limit on %s detach with delivery paused", async (mode) => {
+		const { runtime: bg, pending } = delivering({ maxBackground: 1, maxHistory: 0 });
+		const detach = (id: string) => (mode === "single" ? bg.detach(id) : bg.detachForeground());
+		for (let i = 0; i < 2; i++) {
+			const item = job();
+			const call = bg.execute(item.execution);
+			expect(detach(item.control.id)).toBe(mode === "single" ? true : 1);
+			expect((await call).kind).toBe("background");
+			item.completion.resolve({ result: result() });
+			await settleTask(bg, item.control.id);
+		}
+
+		const item = job();
+		const call = bg.execute(item.execution);
+		expect(bg.list()).toHaveLength(3);
+		expect(() => detach(item.control.id)).toThrow("Task history retention limit reached");
+		expect(bg.canDetach(item.control.id)).toBe(false);
+		expect((await bg.execute(job({ run: async () => ({ result: result() }) }).execution)).kind).toBe("result");
+		item.completion.resolve({ result: result() });
+		expect((await call).kind).toBe("result");
+		expect(pending()).toHaveLength(2);
+	});
 });
 
 describe("watchers and mode changes", () => {

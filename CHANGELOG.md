@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Fixed
+
+- Moving foreground tasks to the background now respects the same task history retention limit as starting tasks in the background.
+
 ## [1.5.8] - 2026-11-15
 
 ### Changed

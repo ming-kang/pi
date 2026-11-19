@@ -117,10 +117,19 @@ export class TaskRuntime implements TasksContext {
 		return [...this.executions.values()].filter((execution) => execution.holdsBackgroundSlot).length;
 	}
 
-	private limitError(): Error {
-		return new Error(
-			`Background task limit reached (${this.maxBackground}); stop or wait for a background task, or run in the foreground.`,
-		);
+	private availableBackgroundSlots(throwOnLimit = true): number {
+		const free = this.maxBackground - this.backgroundActive();
+		let rejection: string;
+		if (free <= 0) {
+			rejection = `Background task limit reached (${this.maxBackground}); stop or wait for a background task, or run in the foreground.`;
+		} else if (this.store.retainedCount() >= this.maxRetained) {
+			rejection =
+				"Task history retention limit reached; deliver pending notifications or release task pins and delivery leases";
+		} else {
+			return free;
+		}
+		if (throwOnLimit) throw new Error(rejection);
+		return 0;
 	}
 
 	async execute<T>(execution: TaskExecution<T>): Promise<TaskToolOutcome<T>> {
@@ -129,12 +138,7 @@ export class TaskRuntime implements TasksContext {
 		if (execution.background) {
 			if (!this.enabled) throw new Error(TASK_BACKGROUND_REJECTION);
 			if (!this.admitsBackground) throw new Error(TASK_MANAGEMENT_REJECTION);
-			if (this.backgroundActive() >= this.maxBackground) throw this.limitError();
-			if (this.store.retainedCount() >= this.maxRetained) {
-				throw new Error(
-					"Task history retention limit reached; deliver pending notifications or release task pins and delivery leases",
-				);
-			}
+			this.availableBackgroundSlots();
 		}
 		if (execution.signal?.aborted) throw execution.signal.reason ?? new Error("Execution aborted");
 		if (!TASK_KIND_PATTERN.test(execution.kind)) throw new Error("Invalid task source");
@@ -178,20 +182,18 @@ export class TaskRuntime implements TasksContext {
 			.filter((execution) => execution.detachable)
 			.sort((left, right) => left.task.startedAt - right.task.startedAt);
 		if (!eligible.length) return 0;
-		const free = this.maxBackground - this.backgroundActive();
-		if (free <= 0) throw this.limitError();
-		return this.detachAll(eligible.slice(0, free));
+		return this.detachAll(eligible.slice(0, this.availableBackgroundSlots()));
 	}
 
 	canDetach(id: string): boolean {
 		const record = this.lookup(id);
-		return this.admitsBackground && this.backgroundActive() < this.maxBackground && this.detachable(record);
+		return this.admitsBackground && this.detachable(record) && this.availableBackgroundSlots(false) > 0;
 	}
 
 	detach(id: string): boolean {
 		const record = this.lookup(id);
 		if (!this.admitsBackground || !this.detachable(record)) return false;
-		if (this.backgroundActive() >= this.maxBackground) throw this.limitError();
+		this.availableBackgroundSlots();
 		this.detachAll([this.executions.get(record.task.id)!]);
 		return true;
 	}
