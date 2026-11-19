@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Fixed
+
+- Tasks correctly mark saved output as truncated when prepending an error drops output bytes.
+
 ## [1.5.8] - 2026-11-15
 
 ### Changed
