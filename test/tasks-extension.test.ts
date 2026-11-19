@@ -18,6 +18,7 @@ import type {
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import type { TaskControl } from "../src/core/tasks/types.ts";
+import tasksExtension from "../src/extensions/tasks/index.ts";
 import { runKill, runList, runRead } from "../src/extensions/tasks/tool/actions.ts";
 import type { tasksSchema } from "../src/extensions/tasks/tool/schema.ts";
 import type { TasksDetails } from "../src/extensions/tasks/tool/types.ts";
@@ -25,7 +26,6 @@ import { renderTasksCall, renderTasksResult } from "../src/extensions/tasks/ui/r
 import { initTheme, type Theme } from "../src/modes/interactive/theme/theme.ts";
 import { createDeliveryHarness } from "./tasks-delivery-harness.ts";
 import { settleTask } from "./tasks-settle.ts";
-import { createTasksHarness } from "./test-tasks-ui.ts";
 
 function textOf(result: AgentToolResult<unknown>): string {
 	return result.content
@@ -90,7 +90,7 @@ describe("public Background management", () => {
 			registerMessageRenderer: vi.fn(),
 			registerCommand: vi.fn(),
 		} as unknown as ExtensionAPI;
-		createTasksHarness()(pi);
+		tasksExtension(pi);
 		expect(tool?.name).toBe("tasks");
 		expect(tool?.renderShell).toBeUndefined();
 		expect(tool?.constrainedSampling).toEqual({ type: "json_schema", strict: "prefer" });
@@ -108,7 +108,7 @@ describe("public Background management", () => {
 			registerMessageRenderer: vi.fn(),
 			registerCommand: vi.fn(),
 		} as unknown as ExtensionAPI;
-		createTasksHarness()(pi);
+		tasksExtension(pi);
 		const h = running();
 		await h.outcome;
 		const id = h.service.list()[0]!.id;
@@ -557,7 +557,7 @@ describe("public Background management", () => {
 				command = value;
 			},
 		} as unknown as ExtensionAPI;
-		createTasksHarness()(pi);
+		tasksExtension(pi);
 		const h = running();
 		await h.outcome;
 		const done = vi.fn();
@@ -605,7 +605,7 @@ describe("public Background management", () => {
 			registerMessageRenderer: vi.fn(),
 			registerCommand: vi.fn(),
 		} as unknown as ExtensionAPI;
-		createTasksHarness()(pi);
+		tasksExtension(pi);
 		const h = running();
 		await h.outcome;
 		const { setStatus, updates } = recordStatus();
@@ -635,7 +635,7 @@ describe("public Background management", () => {
 				registerMessageRenderer: vi.fn(),
 				registerCommand: vi.fn(),
 			} as unknown as ExtensionAPI;
-			createTasksHarness()(pi);
+			tasksExtension(pi);
 			const service = new TaskRuntime({ enabled: true });
 			services.push(service);
 			let input: TerminalInputHandler | undefined;
@@ -702,7 +702,7 @@ describe("public Background management", () => {
 				registerMessageRenderer: vi.fn(),
 				registerCommand: vi.fn(),
 			} as unknown as ExtensionAPI;
-			createTasksHarness()(pi);
+			tasksExtension(pi);
 			const service = new TaskRuntime({ enabled: true, maxBackground: 2 });
 			services.push(service);
 			let input: TerminalInputHandler | undefined;
@@ -827,7 +827,7 @@ describe("public Background management", () => {
 				registerMessageRenderer: vi.fn(),
 				registerCommand: vi.fn(),
 			} as unknown as ExtensionAPI;
-			createTasksHarness()(pi);
+			tasksExtension(pi);
 			const service = new TaskRuntime({ enabled: true });
 			services.push(service);
 			const { setStatus, updates } = recordStatus();

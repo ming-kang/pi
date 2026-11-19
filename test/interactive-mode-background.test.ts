@@ -2,8 +2,8 @@ import { getKeybindings, setKeybindings } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext, TerminalInputHandler } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
+import tasksExtension from "../src/extensions/tasks/index.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
-import { createTasksHarness } from "./test-tasks-ui.ts";
 
 const previousKeybindings = getKeybindings();
 afterEach(() => setKeybindings(previousKeybindings));
@@ -18,7 +18,7 @@ function harness(bindings = new KeybindingsManager()) {
 		registerMessageRenderer: vi.fn(),
 		registerCommand: vi.fn(),
 	} as unknown as ExtensionAPI;
-	createTasksHarness()(pi);
+	tasksExtension(pi);
 	const listeners = new Set<TerminalInputHandler>();
 	const ctx = {
 		tasks: {

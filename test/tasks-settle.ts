@@ -8,7 +8,7 @@ export function settleTask(
 	tasks: Pick<TasksContext, "get" | "subscribe">,
 	id: string,
 	timeoutMs = 10_000,
-): Promise<{ outcome: "settled"; task: TaskSnapshot }> {
+): Promise<TaskSnapshot> {
 	return new Promise((resolve, reject) => {
 		let unsubscribe = (): void => {};
 		const timer = setTimeout(() => {
@@ -28,7 +28,7 @@ export function settleTask(
 			if (!isTaskTerminal(task.status)) return false;
 			clearTimeout(timer);
 			unsubscribe();
-			resolve({ outcome: "settled", task });
+			resolve(task);
 			return true;
 		};
 		if (check()) return;
