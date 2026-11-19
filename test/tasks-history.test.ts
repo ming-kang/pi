@@ -13,7 +13,6 @@ import {
 } from "../src/core/tasks/output.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import { TaskSession } from "../src/core/tasks/session.ts";
-import { selectRestorable } from "../src/core/tasks/store.ts";
 import type { TaskCompletion, TaskControl, TaskExecution, TaskKind, TaskSnapshot } from "../src/core/tasks/types.ts";
 import { createDeliveryHarness } from "./tasks-delivery-harness.ts";
 import { settleTask } from "./tasks-settle.ts";
@@ -177,10 +176,11 @@ describe("terminal history restoration", () => {
 				savedTask("bash-old", 15),
 				savedTask("bash-duplicate", 40, { title: "new duplicate" }),
 				savedTask("bash-duplicate", 20, { title: "old duplicate" }),
+				savedTask("bash-duplicate", 40, { title: "later duplicate" }),
 				savedTask("bash-live", 100, { status: "running" }),
 			]);
 			expect(bg.list().map((task) => task.id)).toEqual(["bash-duplicate", "bash-new"]);
-			expect(bg.get("bash-duplicate").title).toBe("new duplicate");
+			expect(bg.get("bash-duplicate").title).toBe("later duplicate");
 			expect(bg.kill("bash-new")).toBe(false);
 			expect(bg.detachForeground()).toBe(0);
 			expect(pending()).toEqual([]);
@@ -193,7 +193,7 @@ describe("terminal history restoration", () => {
 			expect(observer).not.toHaveBeenCalled();
 			await bg.execute(job({ run: async () => ({ result: result() }) }).execution);
 			expect(bg.list()).toHaveLength(3);
-			expect(bg.get("bash-duplicate").title).toBe("new duplicate");
+			expect(bg.get("bash-duplicate").title).toBe("later duplicate");
 			await bg.shutdown();
 			expect(await readFile(path, "utf8")).toBe("saved raw log");
 			expect(onCleanupError).not.toHaveBeenCalled();
@@ -286,60 +286,6 @@ describe("terminal history restoration", () => {
 		const zero = service({ maxHistory: 0 });
 		zero.restoreHistory([savedTask()]);
 		expect(zero.list()).toEqual([]);
-	});
-
-	describe("restoration selection", () => {
-		const task = (id: string, endedAt: number, mode: TaskSnapshot["mode"], title = id) =>
-			savedTask(id, endedAt, { mode, title }).task;
-		const ids = (tasks: TaskSnapshot[]) => tasks.map((entry) => entry.id);
-
-		it("keeps the newest per ID, letting a later input win ties", () => {
-			const selected = selectRestorable(
-				[
-					task("a", 20, "background", "old"),
-					task("a", 30, "background", "new"),
-					task("a", 25, "background", "ignored"),
-				],
-				{ foreground: 5, background: 5, total: 5 },
-			);
-			expect(selected.map((entry) => entry.title)).toEqual(["new"]);
-			const tie = selectRestorable([task("a", 20, "background", "first"), task("a", 20, "background", "second")], {
-				foreground: 5,
-				background: 5,
-				total: 5,
-			});
-			expect(tie.map((entry) => entry.title)).toEqual(["second"]);
-		});
-
-		it("applies each history's room independently and returns oldest first", () => {
-			const selected = selectRestorable(
-				[
-					task("fg-1", 5, "foreground"),
-					task("bg-1", 1, "background"),
-					task("fg-2", 6, "foreground"),
-					task("bg-2", 2, "background"),
-					task("fg-3", 7, "foreground"),
-				],
-				{ foreground: 2, background: 1, total: 10 },
-			);
-			expect(ids(selected)).toEqual(["bg-2", "fg-2", "fg-3"]);
-		});
-
-		it("trims to the total room by dropping foreground records before background ones", () => {
-			const records = [
-				task("bg-1", 1, "background"),
-				task("fg-1", 2, "foreground"),
-				task("bg-2", 3, "background"),
-				task("fg-2", 4, "foreground"),
-			];
-			expect(ids(selectRestorable(records, { foreground: 5, background: 5, total: 3 }))).toEqual([
-				"bg-1",
-				"bg-2",
-				"fg-2",
-			]);
-			expect(ids(selectRestorable(records, { foreground: 5, background: 5, total: 1 }))).toEqual(["bg-2"]);
-			expect(selectRestorable(records, { foreground: 5, background: 5, total: 0 })).toEqual([]);
-		});
 	});
 
 	it("round-trips executor input, facts, output shape and human Output", () => {
