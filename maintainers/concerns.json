@@ -702,7 +702,7 @@
 		},
 		{
 			"id": "jsonc-block-comments",
-			"why": "stripJsonComments removes block comments as well as line comments so models.json edits and loads preserve JSONC formatting.",
+			"why": "stripJsonComments blanks block comments as well as line comments with spaces so models.json edits and loads preserve JSONC formatting without joining the tokens around a comment.",
 			"paths": [
 				{
 					"path": "src/utils/json.ts"
