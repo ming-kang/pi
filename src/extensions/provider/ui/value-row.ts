@@ -214,6 +214,12 @@ export interface ScrollWindowInfo {
 	cursor?: number;
 }
 
+/** An array of lines or an indexed source that formats a line on demand. */
+export interface WindowLinesSource {
+	readonly length: number;
+	at(index: number): string | undefined;
+}
+
 /**
  * Clip lines to a fixed height, keeping the cursor row centered and the
  * pinned top/bottom lines on screen. Always returns exactly `height` lines;
@@ -222,28 +228,35 @@ export interface ScrollWindowInfo {
  */
 export function windowLines(
 	theme: Theme,
-	lines: string[],
+	lines: WindowLinesSource,
 	height: number,
 	scroll?: ScrollWindowInfo,
 	indicator?: (position: number, total: number) => string,
 ): string[] {
 	const top = Math.max(0, Math.min(scroll?.top ?? 0, lines.length));
 	const bottom = Math.max(0, Math.min(scroll?.bottom ?? 0, lines.length - top));
-	const head = lines.slice(0, top);
-	const tail = bottom > 0 ? lines.slice(lines.length - bottom) : [];
-	const middle = lines.slice(top, lines.length - bottom);
-	const cursor = Math.max(0, Math.min((scroll?.cursor ?? 0) - top, Math.max(0, middle.length - 1)));
-	const padToHeight = (rows: string[]): string[] => {
-		const out = rows.slice(0, height);
-		while (out.length < height) out.push("");
-		return out;
+	const middleEnd = lines.length - bottom;
+	const middleCount = middleEnd - top;
+	const out: string[] = [];
+	const append = (start: number, end: number) => {
+		for (let index = start; index < end && out.length < height; index++) out.push(lines.at(index)!);
 	};
-	const avail = height - head.length - tail.length;
-	if (middle.length <= avail) return padToHeight([...head, ...middle, ...tail]);
-	const slots = Math.max(1, avail - 1); // one row carries the indicator
-	const start = Math.max(0, Math.min(cursor - Math.floor(slots / 2), middle.length - slots));
-	const note = indicator?.(cursor + 1, middle.length) ?? theme.fg("dim", `  (${cursor + 1}/${middle.length})`);
-	return padToHeight([...head, ...middle.slice(start, start + slots), note, ...tail]);
+	append(0, top);
+	const avail = height - top - bottom;
+	if (middleCount <= avail) {
+		append(top, middleEnd);
+	} else {
+		const cursor = Math.max(0, Math.min((scroll?.cursor ?? 0) - top, middleCount - 1));
+		const slots = Math.max(1, avail - 1); // one row carries the indicator
+		const start = Math.max(0, Math.min(cursor - Math.floor(slots / 2), middleCount - slots));
+		append(top + start, Math.min(top + start + slots, middleEnd));
+		if (out.length < height) {
+			out.push(indicator?.(cursor + 1, middleCount) ?? theme.fg("dim", `  (${cursor + 1}/${middleCount})`));
+		}
+	}
+	append(middleEnd, lines.length);
+	while (out.length < height) out.push("");
+	return out;
 }
 
 /** True for printable text input (single chars or pasted text), false for key events and control sequences. */
