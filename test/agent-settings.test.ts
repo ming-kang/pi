@@ -439,6 +439,10 @@ describe("Agent settings", () => {
 		const ctx = harness.session.extensionRunner.createContext();
 		await ctx.setExtensionSettings("agent", { model: "missing/model" });
 		expect(() => resolveAgentConfiguration(ctx)).toThrow("Agent model is unavailable: missing/model");
+		for (const model of ["/model", "faux/"]) {
+			await ctx.setExtensionSettings("agent", { model });
+			expect(() => resolveAgentConfiguration(ctx)).toThrow("Invalid Agent model setting");
+		}
 		await ctx.setExtensionSettings("agent", { thinking: "impossible" });
 		expect(() => readAgentSettings(ctx)).toThrow("Invalid Agent effort setting");
 	});

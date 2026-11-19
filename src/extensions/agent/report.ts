@@ -15,7 +15,7 @@ export interface FinalReport {
 	reportPath?: string;
 }
 
-export function boundedReport(text: string, fullOutputPath?: string): string {
+function boundedReport(text: string, fullOutputPath?: string): string {
 	if (Buffer.byteLength(text) <= AGENT_REPORT_BYTES) return text;
 	const notice = fullOutputPath
 		? `\n\n[Agent output truncated. Full output: ${fullOutputPath}]`

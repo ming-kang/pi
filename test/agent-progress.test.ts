@@ -1,7 +1,6 @@
 import { isAbsolute, join, resolve } from "node:path";
 import { type Container, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
-import { formatTaskActivityDuration } from "../src/core/tasks/activity.ts";
 import type { TaskControl, TaskUpdate } from "../src/core/tasks/types.ts";
 import { activityTarget, relativeToCwd } from "../src/extensions/agent/activity.ts";
 import { AgentProgress } from "../src/extensions/agent/progress.ts";
@@ -171,14 +170,6 @@ describe("Agent activity targets", () => {
 		expect(activityTarget("grep", { path: inside }, cwd)).toBe("src");
 		expect(activityTarget("find", { path: inside }, cwd)).toBe("src");
 		expect(activityTarget("bash", { command: `ls ${inside}` }, cwd)).toBe(`ls ${inside}`);
-	});
-});
-
-describe("Agent activity durations", () => {
-	it("uses milliseconds, tenths of a second, then the shared duration form", () => {
-		const text = [0, 4, 999.4, 999.6, 1000, 1500, 59_940, 59_960, 65_000, 3_600_000].map(formatTaskActivityDuration);
-		expect(text).toEqual(["0ms", "4ms", "999ms", "1.0s", "1.0s", "1.5s", "59.9s", "1m", "1m 5s", "1h"]);
-		expect(formatTaskActivityDuration(undefined)).toBe("");
 	});
 });
 

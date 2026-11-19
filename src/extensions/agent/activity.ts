@@ -63,3 +63,23 @@ export function targetOf(activity: AgentActivity): string {
 		return activity.args;
 	}
 }
+
+/** Room reserved for a trailing ` +N more`. */
+const MORE_RESERVE_BYTES = 16;
+
+/** Items joined by commas within `bytes`, ending in `+N more` when some do not fit. */
+export function fitList(items: readonly string[], bytes: number): string {
+	const full = items.join(", ");
+	if (Buffer.byteLength(full) <= bytes) return full;
+	let shown = 0;
+	let used = 0;
+	for (const item of items) {
+		const next = used + Buffer.byteLength(item) + (shown ? 2 : 0);
+		if (next > bytes - MORE_RESERVE_BYTES) break;
+		used = next;
+		shown++;
+	}
+	if (items.length === 1) return clipText(full, bytes);
+	if (shown === 0) return `${clipText(items[0] ?? "", bytes - MORE_RESERVE_BYTES)} +${items.length - 1} more`;
+	return `${items.slice(0, shown).join(", ")} +${items.length - shown} more`;
+}
