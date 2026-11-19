@@ -147,7 +147,7 @@ export class AgentProgress {
 		const last = this.last;
 		if (this.control.signal.aborted || last?.stopReason === "aborted")
 			return { status: "cancelled", error: "Agent cancelled." };
-		if (!last || last.stopReason === "error" || last.stopReason === "length")
+		if (!last || last.stopReason === "error" || last.stopReason === "length" || !assistantText(last).trim())
 			return {
 				status: "failed",
 				error: clipText(last?.errorMessage || "Agent ended without a complete report.", 4096),
