@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import type { TaskSnapshot } from "../src/core/tasks/types.ts";
+import { TaskList } from "../src/extensions/tasks/ui/list.ts";
 import { TasksMenu } from "../src/extensions/tasks/ui/manager.ts";
+import { TaskSelection } from "../src/extensions/tasks/ui/model.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { backgroundTask, disposeMenus, harness, mouse, task } from "./fixtures/tasks-panel-harness.ts";
 
@@ -16,6 +18,19 @@ describe("task panel views", () => {
 	afterEach(() => {
 		disposeMenus();
 		vi.useRealTimers();
+	});
+	it("uses off-screen titles and labels for visible row metadata and alignment", () => {
+		const selection = new TaskSelection({ tab: "output" });
+		selection.sync([
+			task("visible-12345678", { title: "same title", startedAt: 2 }),
+			task("hidden-87654321", { title: "same title", label: "Long source", startedAt: 1 }),
+		]);
+		const list = new TaskList();
+		const frame = list.render(selection, theme, 100, 2).map((row) => stripTerminalSequences(row.text));
+		expect(frame).toHaveLength(2);
+		expect(frame[1]).toContain("Bash        same title");
+		expect(frame[1]).toContain("12345678");
+		expect(frame.join("\n")).not.toContain("87654321");
 	});
 	it("lists ongoing and retained foreground tasks together", async () => {
 		const h = harness([

@@ -6,9 +6,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Fixed
 
-- Moving foreground tasks to the background now respects the same task history retention limit as starting tasks in the background.
+- An Agent whose final message has no text now fails with `Agent ended without a complete report.` instead of returning earlier narration as a completed report. See [Agent](docs/bundled/extensions/agent.md).
 - `/provider` follows Anthropic model catalog pages based on unique model IDs, so duplicate entries no longer hide models on later pages or incorrectly mark complete catalogs as truncated.
 - Tasks correctly mark saved output as truncated when prepending an error drops output bytes.
+- Moving foreground tasks to the background now respects the same task history retention limit as starting tasks in the background.
 - Run summaries now end with `Failed` instead of `Done` when the run's final turn ends with a provider error. A run that an automatic retry recovers still ends with `Done`, and an aborted run still ends with `Stopped`. See [Run summary](docs/bundled/extensions/run-summary.md).
 - `models.json` no longer joins the values on either side of a comment, so `128/* k */000` is reported as a parse error with its line and column instead of loading as `128000`.
 
