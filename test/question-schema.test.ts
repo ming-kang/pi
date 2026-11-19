@@ -22,39 +22,43 @@ function question(overrides?: Partial<Question>): Question {
 describe("validateQuestions", () => {
 	it("expresses non-empty visible strings in the TypeBox schema", () => {
 		expect(validateSchema.Check({ questions: [question()] })).toBe(true);
-		for (const invalid of [
-			question({ question: "" }),
-			question({ header: "" }),
-			question({ options: [option(""), option("Beta")] }),
-			question({ options: [option("Alpha", { description: "" }), option("Beta")] }),
-			question({ options: [option("Alpha", { preview: "" }), option("Beta")] }),
-		]) {
-			expect(validateSchema.Check({ questions: [invalid] })).toBe(false);
-		}
 	});
 
-	it("defensively rejects whitespace-only visible text with a path-specific error", () => {
-		const cases: Array<{ value: Question; path: string }> = [
-			{ value: question({ question: "   " }), path: "questions[0].question" },
-			{ value: question({ header: "\t" }), path: "questions[0].header" },
-			{
-				value: question({ options: [option("   "), option("Beta")] }),
-				path: "questions[0].options[0].label",
-			},
-			{
-				value: question({ options: [option("Alpha", { description: "\n" }), option("Beta")] }),
-				path: "questions[0].options[0].description",
-			},
-			{
-				value: question({ options: [option("Alpha", { preview: " \n " }), option("Beta")] }),
-				path: "questions[0].options[0].preview",
-			},
-		];
-		for (const testCase of cases) {
-			const result = validateQuestions([testCase.value]);
-			expect(result).toMatchObject({ ok: false, error: "blank_text" });
-			if (!result.ok) expect(result.message).toContain(testCase.path);
-		}
+	it.each([
+		{ value: question({ question: "" }), path: "questions[0].question" },
+		{ value: question({ header: "" }), path: "questions[0].header" },
+		{ value: question({ options: [option(""), option("Beta")] }), path: "questions[0].options[0].label" },
+		{
+			value: question({ options: [option("Alpha", { description: "" }), option("Beta")] }),
+			path: "questions[0].options[0].description",
+		},
+		{
+			value: question({ options: [option("Alpha", { preview: "" }), option("Beta")] }),
+			path: "questions[0].options[0].preview",
+		},
+	])("rejects empty $path in the TypeBox schema", ({ value }) => {
+		expect(validateSchema.Check({ questions: [value] })).toBe(false);
+	});
+
+	it.each([
+		{ value: question({ question: "   " }), path: "questions[0].question" },
+		{ value: question({ header: "\t" }), path: "questions[0].header" },
+		{
+			value: question({ options: [option("   "), option("Beta")] }),
+			path: "questions[0].options[0].label",
+		},
+		{
+			value: question({ options: [option("Alpha", { description: "\n" }), option("Beta")] }),
+			path: "questions[0].options[0].description",
+		},
+		{
+			value: question({ options: [option("Alpha", { preview: " \n " }), option("Beta")] }),
+			path: "questions[0].options[0].preview",
+		},
+	])("defensively rejects whitespace-only $path with a path-specific error", ({ value, path }) => {
+		const result = validateQuestions([value]);
+		expect(result).toMatchObject({ ok: false, error: "blank_text" });
+		if (!result.ok) expect(result.message).toContain(path);
 	});
 
 	it("does not require question-mark punctuation", () => {
