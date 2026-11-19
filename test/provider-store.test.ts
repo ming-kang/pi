@@ -326,6 +326,14 @@ describe("provider store", () => {
 		expect(readFileSync(modelsPath, "utf8")).toBe(broken);
 	});
 
+	test("a comment between two tokens is reported instead of joining them", async () => {
+		const broken = `{ "providers": { "cpa": { "baseUrl": "https://a", "contextWindow": 128/* k */000 } } }`;
+		writeFileSync(modelsPath, broken, "utf8");
+		const load = await ModelsJsonStore.load(modelsPath);
+		expect(load.ok).toBe(false);
+		expect(readFileSync(modelsPath, "utf8")).toBe(broken);
+	});
+
 	test("getProviderIds reflects the view: fresh providers appear, removed ones drop", async () => {
 		const store = await loadStore({
 			providers: { keep: { baseUrl: "https://k" }, drop: { baseUrl: "https://d" } },
