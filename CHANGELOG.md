@@ -6,12 +6,13 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Fixed
 
-- `/provider` leaves `models.json` unchanged and reports a save error when duplicate keys prevent an in-place edit, instead of rewriting the file and dropping its comments.
+- `/agent` reports a saved model reference with an empty provider or model ID, such as `/model` or `faux/`, as `[invalid]` instead of `[unavailable]`. See [Agent](docs/bundled/extensions/agent.md).
 - An Agent whose final message has no text now fails with `Agent ended without a complete report.` instead of returning earlier narration as a completed report. See [Agent](docs/bundled/extensions/agent.md).
 - `/provider` follows Anthropic model catalog pages based on unique model IDs, so duplicate entries no longer hide models on later pages or incorrectly mark complete catalogs as truncated.
 - Tasks correctly mark saved output as truncated when prepending an error drops output bytes.
 - Run summaries now end with `Failed` instead of `Done` when the run's final turn ends with a provider error. A run that an automatic retry recovers still ends with `Done`, and an aborted run still ends with `Stopped`. See [Run summary](docs/bundled/extensions/run-summary.md).
 - `models.json` no longer joins the values on either side of a comment, so `128/* k */000` is reported as a parse error with its line and column instead of loading as `128000`.
+- `/provider` leaves `models.json` unchanged and reports a save error when duplicate keys prevent an in-place edit, instead of rewriting the file and dropping its comments.
 
 ## [1.5.8] - 2026-11-15
 

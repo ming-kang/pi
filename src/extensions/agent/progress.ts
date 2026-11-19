@@ -7,8 +7,8 @@ import type { TaskCompletion, TaskControl, TaskDisplay, TaskFact, TaskTerminalSt
 import { resolveToCwd } from "../../core/tools/path-utils.ts";
 import { combineUsage } from "../../core/usage-totals.ts";
 import { emptyUsage } from "../../utils/usage.ts";
-import { activityTarget, clipText, compactArguments, relativeToCwd } from "./activity.ts";
-import { type AgentArtifacts, fitList, savedTranscript } from "./artifacts.ts";
+import { activityTarget, clipText, compactArguments, fitList, relativeToCwd } from "./activity.ts";
+import { type AgentArtifacts, savedTranscript } from "./artifacts.ts";
 import type { FinalReport } from "./report.ts";
 import { AGENT_MAX_ACTIVITIES, type AgentActivity, type AgentToolDetails } from "./types.ts";
 
