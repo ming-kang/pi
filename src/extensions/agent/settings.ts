@@ -22,12 +22,19 @@ interface InspectedAgentSettings extends AgentSettings {
 	invalidThinking?: unknown;
 }
 
+/** A `provider/model` reference, split at its first slash; both parts must be non-empty. */
+function parseModelReference(reference: string): { provider: string; id: string } | undefined {
+	const slash = reference.indexOf("/");
+	if (slash <= 0 || slash === reference.length - 1) return undefined;
+	return { provider: reference.slice(0, slash), id: reference.slice(slash + 1) };
+}
+
 function inspectAgentSettings(ctx: Pick<ExtensionContext, "getExtensionSettings">): InspectedAgentSettings {
 	const raw = ctx.getExtensionSettings(AGENT_SETTINGS_NAMESPACE);
 	let model: string | undefined;
 	let invalidModel: unknown;
 	if (raw.model !== undefined) {
-		if (typeof raw.model === "string" && raw.model.includes("/")) {
+		if (typeof raw.model === "string" && parseModelReference(raw.model)) {
 			model = raw.model;
 		} else {
 			invalidModel = raw.model;
@@ -65,9 +72,8 @@ function resolveAgentModel(
 	reference?: string,
 ): AgentModelResolution | undefined {
 	if (!reference) return ctx.model ? { model: ctx.model, available: true } : undefined;
-	const slash = reference.indexOf("/");
-	if (slash <= 0) return undefined;
-	const model = ctx.modelRuntime.getModel(reference.slice(0, slash), reference.slice(slash + 1));
+	const parsed = parseModelReference(reference);
+	const model = parsed && ctx.modelRuntime.getModel(parsed.provider, parsed.id);
 	if (!model) return undefined;
 	const available = ctx.modelRuntime
 		.getAvailableSnapshot()

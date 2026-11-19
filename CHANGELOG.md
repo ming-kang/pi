@@ -6,6 +6,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Fixed
 
+- `/agent` reports a saved model reference with an empty provider or model ID, such as `/model` or `faux/`, as `[invalid]` instead of `[unavailable]`. See [Agent](docs/bundled/extensions/agent.md).
 - An Agent whose final message has no text now fails with `Agent ended without a complete report.` instead of returning earlier narration as a completed report. See [Agent](docs/bundled/extensions/agent.md).
 - `/provider` follows Anthropic model catalog pages based on unique model IDs, so duplicate entries no longer hide models on later pages or incorrectly mark complete catalogs as truncated.
 - Tasks correctly mark saved output as truncated when prepending an error drops output bytes.
