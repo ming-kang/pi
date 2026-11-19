@@ -62,6 +62,20 @@ export interface LayoutOptions {
 	canDetach: (id: string) => boolean;
 }
 
+export function isInspectorVisible({
+	width,
+	height,
+	focus,
+	mode,
+}: Pick<LayoutOptions, "width" | "height" | "focus" | "mode">): boolean {
+	return (
+		width >= MIN_WIDTH &&
+		height >= MIN_HEIGHT &&
+		mode.kind !== "help" &&
+		(width >= SPLIT_MIN_WIDTH || focus === "inspector")
+	);
+}
+
 /** The list takes 40% of a split terminal, between 34 and 60 columns. */
 export function listWidthFor(width: number): number {
 	return Math.min(60, Math.max(34, Math.round(width * 0.4)));
@@ -149,7 +163,7 @@ function renderPanes(
 ): PaneRender & { regions: PaneRegion[]; pageSize: number } {
 	const { theme, selection, inspector, list, focus, mode } = options;
 	const showList = rects.split || focus === "list";
-	const showInspector = rects.split || focus === "inspector";
+	const showInspector = isInspectorVisible(options);
 	const browsing = mode.kind === "browse";
 	const searching = mode.kind === "search";
 	const listPane = showList

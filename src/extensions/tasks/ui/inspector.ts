@@ -15,6 +15,7 @@ interface ReadingPosition {
 interface InspectorOptions {
 	host: Pick<TasksContext, "read" | "retain">;
 	theme: Theme;
+	isOutputVisible(): boolean;
 	requestRender(): void;
 }
 
@@ -71,10 +72,11 @@ export class TaskInspector {
 		this.detailCache = undefined;
 	}
 	async refresh(): Promise<void> {
+		if (this.disposed || this.reading || !this.options.isOutputVisible()) return;
 		const task = this.task;
 		// Only an attached log streams. A terminal file-less log is read once for its expiry diagnostic.
 		const terminalFallback = task?.output === "log" && isTaskTerminal(task.status);
-		if (this.disposed || !task || (!streamsLog(task) && !terminalFallback) || this.reading) return;
+		if (!task || (!streamsLog(task) && !terminalFallback)) return;
 		const position = this.position;
 		if (position.read && (!position.output.follow || isTaskTerminal(position.read.task.status))) return;
 		this.reading = true;
