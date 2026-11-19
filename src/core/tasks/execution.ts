@@ -35,9 +35,10 @@ export interface ExecutionHost {
 }
 
 function prependText(text: string, result: TaskText | undefined): TaskText {
+	const bounded = boundTaskText(result?.text ? `${text}\n${result.text}` : text);
 	return {
-		text: boundText(result?.text ? `${text}\n${result.text}` : text),
-		truncated: result?.truncated ?? false,
+		text: bounded.text,
+		truncated: bounded.truncated || (result?.truncated ?? false),
 	};
 }
 

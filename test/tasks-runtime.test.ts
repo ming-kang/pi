@@ -595,6 +595,22 @@ describe("bounded lifecycle and snapshots", () => {
 		await call;
 	});
 
+	it.each([0, 100, TASK_RESULT_BYTES, TASK_RESULT_BYTES + 1])(
+		"tracks truncation when prepending an error to %s bytes of output",
+		async (bytes) => {
+			const bg = service();
+			const item = job();
+			const call = bg.execute(item.execution);
+			item.control.publish({ result: result("x".repeat(bytes)) });
+			const rejected = expect(call).rejects.toThrow("task failed");
+			item.completion.reject(new Error("task failed"));
+			await rejected;
+			const output = bg.get(item.control.id).result;
+			expect(output?.text).toBe(boundText(bytes ? `task failed\n${"x".repeat(bytes)}` : "task failed"));
+			expect(output?.truncated).toBe(bytes >= TASK_RESULT_BYTES);
+		},
+	);
+
 	it("closes synchronously, and bounds shutdown for an uncooperative executor", async () => {
 		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 		const { runtime: bg, pending } = delivering();
