@@ -157,14 +157,15 @@ function appendMember(text: string, change: Insertion, formatting: FormattingOpt
 }
 
 /**
- * `rawText` edited so it parses to `after`. Falls back to fresh two-space JSON
- * if the edited text would not read back as `after`.
+ * `rawText` edited so it parses to `after`. Reject edits that would require
+ * rewriting the document and losing its comments.
  */
 export function editJsonText(rawText: string, before: unknown, after: unknown): string {
-	const fallback = `${JSON.stringify(after, null, 2)}\n`;
 	const changes: Change[] = [];
 	diff(before, after, [], changes);
-	if (changes.some((change) => change.path.length === 0)) return fallback;
+	if (changes.some((change) => change.path.length === 0)) {
+		throw new Error("Cannot replace the document with an in-place edit.");
+	}
 	const bom = rawText.startsWith("\uFEFF") ? "\uFEFF" : "";
 	const formattingOptions = detectFormatting(rawText);
 	let text = rawText.slice(bom.length);
@@ -185,7 +186,7 @@ export function editJsonText(rawText: string, before: unknown, after: unknown): 
 	try {
 		if (jsonEquals(JSON.parse(stripJsonComments(text)), after)) return bom + text;
 	} catch {
-		// Fall through to the rewrite below.
+		// An unreadable candidate is unsafe to save.
 	}
-	return fallback;
+	throw new Error("Could not apply the edit without rewriting the file. Check for duplicate keys, then retry.");
 }
