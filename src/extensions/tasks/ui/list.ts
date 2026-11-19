@@ -11,9 +11,8 @@ interface ListRow {
 	taskId?: string;
 }
 
-interface RowEntry {
-	text: string;
-	taskId?: string;
+/** Task rows carry their index and are formatted only once they scroll into view. */
+interface RowEntry extends ListRow {
 	index?: number;
 }
 
@@ -61,14 +60,15 @@ export class TaskList {
 		for (const [index, task] of selection.rows.entries()) {
 			const nextGroup = isTaskTerminal(task.status) ? "Finished" : "Active";
 			if (nextGroup !== group) {
-				rows.push({ text: nextGroup });
+				rows.push({ text: theme.fg("dim", nextGroup) });
 				group = nextGroup;
 			}
 			const selected = task.id === selection.state.selectedId;
 			if (selected) selectedLine = rows.length;
 			rows.push({ text: "", taskId: task.id, index });
 		}
-		if (!rows.length) rows.push({ text: selection.all.length ? "No matching tasks." : "No retained tasks." });
+		if (!rows.length)
+			rows.push({ text: theme.fg("muted", selection.all.length ? "No matching tasks." : "No retained tasks.") });
 		const sameSelection = this.selectedId === selection.state.selectedId;
 		const selectedWasVisible =
 			sameSelection &&
@@ -94,7 +94,7 @@ export class TaskList {
 		this.selectedLine = selectedLine;
 		this.reveal = false;
 		return rows.slice(this.start, this.start + height).map((row) => {
-			if (row.index === undefined) return { text: theme.fg(selection.rows.length ? "dim" : "muted", row.text) };
+			if (row.index === undefined) return { text: row.text };
 			const index = row.index;
 			const task = selection.rows[index]!;
 			const selected = task.id === selection.state.selectedId;
