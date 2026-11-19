@@ -11,6 +11,11 @@ interface ListRow {
 	taskId?: string;
 }
 
+/** Task rows carry their index and are formatted only once they scroll into view. */
+interface RowEntry extends ListRow {
+	index?: number;
+}
+
 /** Spinner, ✓ and the error × are unique; every other status also needs its name. */
 const SELF_EVIDENT = new Set<TaskStatus>(["running", "completed", "failed"]);
 
@@ -32,7 +37,7 @@ function rowMeta(task: TaskSnapshot, duplicate: boolean, stopTarget: boolean, th
 export class TaskList {
 	private start = 0;
 	private height = 1;
-	private rows: ListRow[] = [];
+	private rows: RowEntry[] = [];
 	private selectedId?: string;
 	private selectedLine = -1;
 	private reveal = false;
@@ -44,10 +49,12 @@ export class TaskList {
 	}
 	/** `stopTargetId` marks the row a pending stop question is about. */
 	render(selection: TaskSelection, theme: Theme, width: number, height: number, stopTargetId?: string): ListRow[] {
-		const rows: ListRow[] = [];
+		const rows: RowEntry[] = [];
 		const labels = selection.rows.map((task) => cleanTaskText(task.label));
 		const labelWidth = Math.max(0, ...labels.map((label) => visibleWidth(label)));
 		const titles = selection.rows.map((task) => cleanTaskText(firstCommandLine(task.title)));
+		const titleCounts = new Map<string, number>();
+		for (const title of titles) titleCounts.set(title, (titleCounts.get(title) ?? 0) + 1);
 		let group = "",
 			selectedLine = -1;
 		for (const [index, task] of selection.rows.entries()) {
@@ -58,26 +65,7 @@ export class TaskList {
 			}
 			const selected = task.id === selection.state.selectedId;
 			if (selected) selectedLine = rows.length;
-			const marker = statusView(task.status, { now: Date.now() });
-			const label = labels[index]!;
-			const duplicate = titles.some((title, other) => other !== index && title === titles[index]);
-			const meta = rowMeta(task, duplicate, task.id === stopTargetId, theme);
-			// Labels form an aligned source column so titles start together.
-			const source = labelWidth ? `${label}${" ".repeat(labelWidth - visibleWidth(label))} ` : "";
-			const head = visibleWidth(marker.glyph) + 1 + visibleWidth(source);
-			const title = truncateToWidth(titles[index]!, Math.max(1, width - head - visibleWidth(meta) - 1), "…");
-			const gap = Math.max(1, width - head - visibleWidth(title) - visibleWidth(meta));
-			const text = `${theme.fg(marker.color, marker.glyph)} ${theme.fg("dim", source)}${theme.fg("text", title)}${" ".repeat(gap)}${meta}`;
-			const padded = truncateToWidth(text, width, "…", true);
-			// The system theme has no panel backgrounds until the terminal reports its colors.
-			rows.push({
-				text: !selected
-					? padded
-					: theme.getBgAnsi("selectedBg") === "\x1b[49m"
-						? theme.style(stripTerminalSequences(padded), { inverse: true })
-						: theme.bg("selectedBg", padded),
-				taskId: task.id,
-			});
+			rows.push({ text: "", taskId: task.id, index });
 		}
 		if (!rows.length)
 			rows.push({ text: theme.fg("muted", selection.all.length ? "No matching tasks." : "No retained tasks.") });
@@ -105,7 +93,32 @@ export class TaskList {
 		this.selectedId = selection.state.selectedId;
 		this.selectedLine = selectedLine;
 		this.reveal = false;
-		return rows.slice(this.start, this.start + height);
+		return rows.slice(this.start, this.start + height).map((row) => {
+			if (row.index === undefined) return { text: row.text };
+			const index = row.index;
+			const task = selection.rows[index]!;
+			const selected = task.id === selection.state.selectedId;
+			const marker = statusView(task.status, { now: Date.now() });
+			const label = labels[index]!;
+			const duplicate = titleCounts.get(titles[index]!)! > 1;
+			const meta = rowMeta(task, duplicate, task.id === stopTargetId, theme);
+			// Labels form an aligned source column so titles start together.
+			const source = labelWidth ? `${label}${" ".repeat(labelWidth - visibleWidth(label))} ` : "";
+			const head = visibleWidth(marker.glyph) + 1 + visibleWidth(source);
+			const title = truncateToWidth(titles[index]!, Math.max(1, width - head - visibleWidth(meta) - 1), "…");
+			const gap = Math.max(1, width - head - visibleWidth(title) - visibleWidth(meta));
+			const text = `${theme.fg(marker.color, marker.glyph)} ${theme.fg("dim", source)}${theme.fg("text", title)}${" ".repeat(gap)}${meta}`;
+			const padded = truncateToWidth(text, width, "…", true);
+			// The system theme has no panel backgrounds until the terminal reports its colors.
+			return {
+				text: !selected
+					? padded
+					: theme.getBgAnsi("selectedBg") === "\x1b[49m"
+						? theme.style(stripTerminalSequences(padded), { inverse: true })
+						: theme.bg("selectedBg", padded),
+				taskId: task.id,
+			};
+		});
 	}
 	/** The visible task span, such as `1-12 of 40`; empty while every row fits. */
 	get range(): string {
