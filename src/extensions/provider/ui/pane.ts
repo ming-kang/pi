@@ -5,6 +5,7 @@ import type { ModelsJsonModel } from "../../../core/model-config.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ProviderEdits, ProviderView } from "../editing.ts";
 import type { ProbeModel, ProbeResult } from "../probe.ts";
+import type { ScrollWindowInfo, WindowLinesSource } from "./value-row.ts";
 
 export type { CompatFields, FieldsHandle, ModelHandle } from "../editing.ts";
 
@@ -20,9 +21,9 @@ export interface EditorPane {
 	 * keeps visible. Omitted: no scrolling, content is expected to fit.
 	 * Called right after render(), so it may report what that render produced.
 	 */
-	scrollWindow?(): { top?: number; bottom?: number; cursor?: number };
-	/** Body lines for the right column. */
-	render(width: number): string[];
+	scrollWindow?(): ScrollWindowInfo;
+	/** Body lines for the right column. Large lists can format lines on demand. */
+	render(width: number): WindowLinesSource;
 	/** Input while the right column is focused. */
 	handleInput(data: string): void;
 	/** True while a text editor inside the pane owns ←/→ (cursor movement beats pane switching). */
