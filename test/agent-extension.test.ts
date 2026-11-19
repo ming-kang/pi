@@ -140,7 +140,7 @@ describe("Agent delegation", () => {
 			expect(handoff.details?.state).toBe("background");
 			const taskId = handoff.details?.taskId;
 			expect(taskId).toBeDefined();
-			const task = (await settleTask(harness.session.tasks, taskId!)).task;
+			const task = await settleTask(harness.session.tasks, taskId!);
 			expect(task.status).toBe("completed");
 			expect(task.outputPath).toBeDefined();
 			expect(readFileSync(task.outputPath!, "utf8")).toBe(report);
@@ -183,7 +183,7 @@ describe("Agent delegation", () => {
 		const running = await harness.session.tasks.read(taskId);
 		expect(running.text).toBe("Agent running · 1 tool call · latest: read entry.ts");
 		release();
-		expect((await settleTask(harness.session.tasks, taskId)).task.status).toBe("completed");
+		expect((await settleTask(harness.session.tasks, taskId)).status).toBe("completed");
 		expect((await harness.session.tasks.read(taskId)).text).toBe("Final report");
 		const settled = harness.session.tasks.get(taskId);
 		expect(settled.display).toBeUndefined();
@@ -249,7 +249,7 @@ describe("Agent delegation", () => {
 			harness.session.extensionRunner.createToolContext("failed-agent", undefined),
 		);
 		const taskId = handoff.details!.taskId;
-		expect((await settleTask(harness.session.tasks, taskId)).task.status).toBe("failed");
+		expect((await settleTask(harness.session.tasks, taskId)).status).toBe("failed");
 		const task = harness.session.tasks.get(taskId);
 		expect(task.display).toBeUndefined();
 		expect(task.result?.text).toContain("Partial findings");
@@ -472,7 +472,7 @@ describe("Agent delegation", () => {
 		expect(getMessageText(handoff)).toContain(task.id);
 		parent.abort();
 		release();
-		expect((await settleTask(harness.session.tasks, task.id)).task.status).toBe("completed");
+		expect((await settleTask(harness.session.tasks, task.id)).status).toBe("completed");
 		expect(harness.faux.state.callCount).toBe(1);
 		resumeNotifications();
 	});
@@ -543,7 +543,7 @@ describe("Agent delegation", () => {
 		expect(harness.session.tasks.get(taskId).status).toBe("queued");
 		releaseFirst();
 		expect(getMessageText(await first)).toBe("First report");
-		expect((await settleTask(harness.session.tasks, taskId)).task.status).toBe("completed");
+		expect((await settleTask(harness.session.tasks, taskId)).status).toBe("completed");
 		expect((await harness.session.tasks.read(taskId)).text).toBe("Queued report");
 	});
 

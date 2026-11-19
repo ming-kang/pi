@@ -1245,7 +1245,7 @@ describe("concurrency lanes", () => {
 		await vi.waitFor(() => expect(second.run).toHaveBeenCalledOnce());
 		expect(bg.get(queued.task.id).status).toBe("running");
 		second.completion.resolve({ result: result("second") });
-		expect((await settleTask(bg, queued.task.id)).task.status).toBe("completed");
+		expect((await settleTask(bg, queued.task.id)).status).toBe("completed");
 	});
 
 	it("cancels queued work without starting it and lets a queued foreground caller move", async () => {
@@ -1267,6 +1267,6 @@ describe("concurrency lanes", () => {
 		await runningCall;
 		await vi.waitFor(() => expect(moved.run).toHaveBeenCalledOnce());
 		moved.completion.resolve({ result: result() });
-		expect((await settleTask(bg, movedTask!.id)).task.status).toBe("completed");
+		expect((await settleTask(bg, movedTask!.id)).status).toBe("completed");
 	});
 });

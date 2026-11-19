@@ -18,7 +18,7 @@ describe("session background admission, acknowledgement and tree navigation", ()
 		acknowledged.finish();
 		unacknowledged.finish();
 		for (const { id } of [acknowledged, unacknowledged]) {
-			expect((await settleTask(session.tasks, id)).outcome).toBe("settled");
+			await settleTask(session.tasks, id);
 		}
 		// Observing alone does not acknowledge delivery.
 		expect(sessionDelivery(session).pending()).toHaveLength(2);
