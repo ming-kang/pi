@@ -6,6 +6,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Fixed
 
+- `/provider` follows Anthropic model catalog pages based on unique model IDs, so duplicate entries no longer hide models on later pages or incorrectly mark complete catalogs as truncated.
 - Moving foreground tasks to the background now respects the same task history retention limit as starting tasks in the background.
 
 ## [1.5.8] - 2026-11-15

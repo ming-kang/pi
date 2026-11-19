@@ -103,10 +103,11 @@ export async function probeProviderModels(opts: {
 			};
 		}
 		// Anthropic lists 20 models per page unless asked for more; follow its cursor.
+		const modelIds = new Set(models.map((model) => model.id));
 		let json = page.json;
 		for (
 			let pages = 1;
-			opts.api === "anthropic-messages" && pages < PROBE_LIMITS.maxPages && models.length < PROBE_LIMITS.maxModels;
+			opts.api === "anthropic-messages" && pages < PROBE_LIMITS.maxPages && modelIds.size < PROBE_LIMITS.maxModels;
 			pages++
 		) {
 			const cursor = nextPageCursor(json);
@@ -119,6 +120,7 @@ export async function probeProviderModels(opts: {
 			// A failed page keeps what is already listed; the catalog stays marked partial.
 			if (!next.ok || !more) break;
 			models.push(...more);
+			for (const model of more) modelIds.add(model.id);
 			// A server ignoring the cursor would repeat this page forever.
 			if (nextPageCursor(next.json) === cursor) break;
 			json = next.json;
