@@ -312,7 +312,7 @@ describe("provider store", () => {
 		store.setProviderField("cpa", ["api"], "openai-completions");
 		await flush(store);
 		expect(readFileSync(modelsPath, "utf8")).toContain("/* provider catalog */");
-		expect(readDisk().providers.cpa.api).toBe("openai-completions");
+		expect(readDisk().providers.cpa).toEqual({ baseUrl: "https://a", api: "openai-completions" });
 	});
 
 	test("a block-comment file that is still invalid is reported without clobbering it", async () => {
