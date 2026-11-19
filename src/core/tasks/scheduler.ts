@@ -1,5 +1,5 @@
 /** Per-executor concurrency lanes. Executions without a concurrency key start immediately. */
-export interface Schedulable {
+interface Schedulable {
 	/** The executor kind, which namespaces its lane keys. */
 	readonly kind: string;
 	readonly concurrency?: { key: string; limit: number };

@@ -6,7 +6,7 @@ import type { TaskSnapshot } from "./types.ts";
 
 const isForeground = (task: TaskSnapshot) => task.mode === "foreground";
 
-export interface RestoreLimits {
+interface RestoreLimits {
 	/** Room left in the foreground history. */
 	foreground: number;
 	/** Room left in the background history. */

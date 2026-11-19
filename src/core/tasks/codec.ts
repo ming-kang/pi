@@ -33,13 +33,13 @@ export const TASK_SNAPSHOT_VERSION = 3;
 const LEGACY_TASK_USAGE_TYPE = "task-usage";
 
 /** One task's usage settlement, as session totals account for it. */
-export interface TaskUsageRecord {
+interface TaskUsageRecord {
 	taskId: string;
 	usage: Usage;
 }
 
 /** Read persisted data properties only; never invoke getters or custom serialization. */
-export function plainObject(value: unknown): Record<string, unknown> {
+function plainObject(value: unknown): Record<string, unknown> {
 	if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected object");
 	const prototype = Object.getPrototypeOf(value);
 	if (prototype !== Object.prototype && prototype !== null) throw new Error("Expected plain object");
@@ -102,7 +102,7 @@ function timestamp(value: unknown): number {
 }
 
 /** A bounded terminal snapshot, or undefined for any other shape or version. */
-export function readPersistedTask(value: unknown): TaskSnapshot | undefined {
+function readPersistedTask(value: unknown): TaskSnapshot | undefined {
 	try {
 		const source = plainObject(value);
 		const kind = field(source, "kind");
