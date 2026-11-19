@@ -46,6 +46,8 @@ export class TaskSession {
 	private enabled = false;
 	private disposed = false;
 	private generation = 0;
+	private billedSessionId: string | undefined;
+	private readonly billedTaskIds = new Set<string>();
 	private readonly contextReminder = new TaskContextReminder();
 	readonly delivery: TaskDelivery;
 	private readonly quarantine: QuarantinedTaskSettlement[] = [];
@@ -184,6 +186,7 @@ export class TaskSession {
 	}
 
 	private createService(): TaskRuntime {
+		this.billedSessionId = undefined;
 		const { manager } = this.options;
 		const generation = ++this.generation;
 		const sessionId = manager.getSessionId();
@@ -257,7 +260,15 @@ export class TaskSession {
 	/** One entry per settlement: the bounded terminal snapshot and its first usage settlement. */
 	private persistSettlement(task: TaskSnapshot, usage: Usage | undefined): void {
 		const manager = this.options.manager;
-		const accounted = usage && manager.getEntries().some((entry) => readTaskUsage(entry)?.taskId === task.id);
+		if (usage && this.billedSessionId !== manager.getSessionId()) {
+			this.billedTaskIds.clear();
+			for (const entry of manager.getEntries()) {
+				const billed = readTaskUsage(entry);
+				if (billed) this.billedTaskIds.add(billed.taskId);
+			}
+			this.billedSessionId = manager.getSessionId();
+		}
+		const accounted = this.billedTaskIds.has(task.id);
 		// A foreground result is the tool result the transcript already saves; restoration reads it from there.
 		const { result: _result, ...metadata } = task;
 		const saved = task.mode === "foreground" ? metadata : task;
@@ -266,6 +277,8 @@ export class TaskSession {
 		);
 		const entry = manager.getEntry(manager.appendCustomEntry(TASK_RECORD_TYPE, data));
 		if (!entry) return;
+		const billed = readTaskUsage(entry);
+		if (billed) this.billedTaskIds.add(billed.taskId);
 		try {
 			this.options.onEntry(entry);
 		} catch {

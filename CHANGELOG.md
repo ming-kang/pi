@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Changed
+
+- Task usage accounting now tracks billed tasks incrementally instead of scanning the entire session on every settlement.
+
 ### Fixed
 
 - `/agent` reports a saved model reference with an empty provider or model ID, such as `/model` or `faux/`, as `[invalid]` instead of `[unavailable]`. See [Agent](docs/bundled/extensions/agent.md).

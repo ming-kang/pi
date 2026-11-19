@@ -1,7 +1,12 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Usage } from "@earendil-works/pi-ai/compat";
 import { describe, expect, it } from "vitest";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { readTaskUsage, TASK_RECORD_TYPE } from "../src/core/tasks/codec.ts";
+import { TaskSession } from "../src/core/tasks/session.ts";
+import type { TaskSnapshot } from "../src/core/tasks/types.ts";
 import { getAccountedUsages, getUsageCostBreakdown } from "../src/core/usage-totals.ts";
 
 const usage: Usage = {
@@ -21,6 +26,54 @@ function ledger(data: unknown) {
 const record = (id: string, value: unknown = usage, version = 3) => ({ version, task: { id }, usage: value });
 
 describe("background usage accounting", () => {
+	it("does not bill a restored session's task again, even from another branch", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "pi-task-usage-"));
+		let host: TaskSession | undefined;
+		try {
+			const saved = SessionManager.inMemory();
+			const root = saved.appendCustomEntry("root", {});
+			saved.appendCustomEntry(TASK_RECORD_TYPE, record("restored"));
+			saved.branch(root);
+			saved.appendCustomEntry("other-branch", {});
+			const file = join(dir, "session.jsonl");
+			await writeFile(
+				file,
+				[saved.getHeader(), ...saved.getEntries()].map((entry) => JSON.stringify(entry)).join("\n"),
+			);
+			const manager = SessionManager.open(file, dir);
+			host = new TaskSession({
+				manager,
+				canDeliver: () => false,
+				deliver: async () => {},
+				onEntry: () => {},
+				onError: () => {},
+			});
+			const before = getUsageCostBreakdown(manager.getEntries());
+			const task: TaskSnapshot = {
+				id: "restored",
+				kind: "bash",
+				label: "Bash",
+				title: "restored",
+				output: "log",
+				toolCallId: "call",
+				anchorId: null,
+				mode: "foreground",
+				status: "completed",
+				startedAt: 1,
+				endedAt: 2,
+			};
+			(host as unknown as { persistSettlement(task: TaskSnapshot, usage: Usage): void }).persistSettlement(
+				task,
+				usage,
+			);
+			expect(manager.getEntries().filter((entry) => readTaskUsage(entry)?.taskId === task.id)).toHaveLength(1);
+			expect(getUsageCostBreakdown(manager.getEntries())).toEqual(before);
+		} finally {
+			host?.dispose();
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("accepts a JSON round-trip including optional provider usage", () => {
 		const data = record("group-1", { ...usage, reasoning: 5, cacheWrite1h: 10 });
 		expect(readTaskUsage(ledger(JSON.parse(JSON.stringify(data))))).toEqual({
