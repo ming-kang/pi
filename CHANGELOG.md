@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.5.9] - 2026-11-19
+
 ### Changed
 
 - Task usage accounting now tracks billed tasks incrementally instead of scanning the entire session on every settlement.
