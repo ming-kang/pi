@@ -13,7 +13,6 @@ import { formatError, REFRESH_TIMEOUT_MS } from "./constants.ts";
 
 export interface RefreshOutcome {
 	ok: boolean;
-	aborted: boolean;
 	errors: string[];
 }
 
@@ -44,7 +43,7 @@ export class RefreshCoordinator {
 	/** Refresh everything touched, including deleted provider ids. */
 	async flush(signal?: AbortSignal): Promise<RefreshOutcome> {
 		const providers = [...this.pending.keys()];
-		if (providers.length === 0) return { ok: true, aborted: false, errors: [] };
+		if (providers.length === 0) return { ok: true, errors: [] };
 		return this.run(providers, signal);
 	}
 
@@ -67,10 +66,10 @@ export class RefreshCoordinator {
 					if (this.pending.get(id) === revisions.get(id)) this.pending.delete(id);
 				}
 			}
-			return { ok, aborted, errors };
+			return { ok, errors };
 		} catch (error) {
 			errors.push(formatError(error));
-			return { ok: false, aborted: combined.aborted, errors };
+			return { ok: false, errors };
 		}
 	}
 }

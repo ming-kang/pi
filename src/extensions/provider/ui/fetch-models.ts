@@ -20,6 +20,7 @@ import {
 	type ScrollWindowInfo,
 	truncateMiddle,
 	ValueEditor,
+	type WindowLinesSource,
 } from "./value-row.ts";
 
 interface CatalogResults {
@@ -135,7 +136,7 @@ export class FetchModelsPane implements EditorPane {
 		);
 	}
 
-	render(width: number): string[] {
+	render(width: number): WindowLinesSource {
 		const theme = this.host.theme;
 		const catalogUrl = this.catalogUrl();
 		switch (this.state.type) {
@@ -164,51 +165,45 @@ export class FetchModelsPane implements EditorPane {
 				];
 			case "importing":
 			case "results": {
-				const lines: string[] = [];
+				const head: string[] = [];
 				if (this.state.catalog.truncated) {
-					lines.push(
+					head.push(
 						renderInfoLine(theme, "The catalog was truncated; refine manually if a model is missing.", width),
 					);
 				}
-				lines.push(renderSearchLine(theme, this.search, this.focused, width));
-				// All rows render; the editor's fixed window scrolls around scrollWindow().
+				head.push(renderSearchLine(theme, this.search, this.focused, width));
 				const rows = this.rows();
-				for (const [rowIndex, row] of rows.entries()) {
-					if (row.added) {
-						lines.push(
-							renderPlainLine(theme, row.model.id, {
-								active: rowIndex === this.index,
-								paneFocused: this.focused,
-								dim: true,
-								note: "· added",
-								width,
-							}),
-						);
-						continue;
-					}
-					lines.push(
-						renderPlainLine(theme, row.model.name ? `${row.model.id} · ${row.model.name}` : row.model.id, {
-							checked: this.checked.has(row.model.id),
-							active: rowIndex === this.index,
-							paneFocused: this.focused,
-							note: metadataNote(row.model),
-							width,
-						}),
-					);
-				}
-				if (rows.length === 0) lines.push(renderInfoLine(theme, "No matching models.", width));
 				const addedCount = rows.filter((row) => row.added).length;
-				lines.push(
+				const tail = [
 					renderInfoLine(
 						theme,
 						`${this.checked.size} selected · ${rows.length} shown${addedCount ? ` · ${addedCount} already added` : ""}`,
 						width,
 					),
-				);
-				if (this.state.type === "importing") lines.push(renderInfoLine(theme, "Importing…", width));
+				];
+				if (this.state.type === "importing") tail.push(renderInfoLine(theme, "Importing…", width));
 				if (this.state.type === "results" && this.state.error)
-					lines.push(theme.fg("error", truncate(this.state.error, Math.max(10, width - 2))));
-				return lines;
+					tail.push(theme.fg("error", truncate(this.state.error, Math.max(10, width - 2))));
+				const tailStart = head.length + Math.max(1, rows.length);
+				return {
+					length: tailStart + tail.length,
+					at: (index) => {
+						if (index < head.length) return head[index];
+						if (index >= tailStart) return tail[index - tailStart];
+						const rowIndex = index - head.length;
+						const row = rows[rowIndex];
+						if (!row) return renderInfoLine(theme, "No matching models.", width);
+						const { model, added } = row;
+						return renderPlainLine(theme, !added && model.name ? `${model.id} · ${model.name}` : model.id, {
+							checked: added ? undefined : this.checked.has(model.id),
+							active: rowIndex === this.index,
+							paneFocused: this.focused,
+							dim: added,
+							note: added ? "· added" : metadataNote(model),
+							width,
+						});
+					},
+				};
 			}
 		}
 	}
