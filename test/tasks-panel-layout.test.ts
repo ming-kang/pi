@@ -355,33 +355,40 @@ describe("task panel inspector header and Details", () => {
 	});
 	const rows = (h: ReturnType<typeof harness>) => h.frame().split("\n");
 
-	it("sets the title in bold and separates the header from the tab with a rule joined to the frame", () => {
-		const h = harness([task("build")], { width: 120 });
-		const lines = h.menu.render(120);
-		expect(lines[1]).toContain(theme.style("echo build", { fg: "text", bold: true }));
+	it.each([
+		{ name: "wide unfocused", width: 120, input: "", empty: false },
+		{ name: "wide focused", width: 120, input: "\t", empty: false },
+		{ name: "narrow inspector", width: 72, height: 22, input: "\r", empty: false },
+		{ name: "empty placeholder", width: 120, input: "", empty: true },
+	])("joins the inspector header rule to its frame: $name", ({ width, height, input, empty }) => {
+		const h = harness(empty ? [] : [task("build")], { width, height });
+		if (input) h.menu.handleInput(input);
+		const lines = h.menu.render(width);
+		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 		const plain = rows(h);
-		expect(plain[3]).toMatch(/^│.* ├─+┤$/);
-		// The rule spans the pane, and the body starts below it.
-		expect(plain[3]!.split(" ").at(-1)).toHaveLength(120 - 48 - 1);
-		expect(plain[2]!.split("│")[3]).toContain("Bash · Running");
-		expect(plain[4]!.split("│")[3]).toMatch(/^(No output yet|line-)/);
-	});
-
-	it("draws the rule in the pane's border color: accent when focused, muted otherwise", () => {
-		const h = harness([task("build")], { width: 120 });
-		const rule = () => h.menu.render(120)[3]!.split(" ").at(-1)!;
-		expect(rule()).toBe(theme.fg("borderMuted", `├${"─".repeat(69)}┤`));
-		h.menu.handleInput("\t");
-		expect(rule()).toBe(theme.fg("borderAccent", `├${"─".repeat(69)}┤`));
-	});
-
-	it("draws the rule in a narrow inspector and not for the empty placeholder", () => {
-		const narrow = harness([task("build")], { width: 72, height: 22 });
-		narrow.menu.handleInput("\r");
-		expect(rows(narrow)[3]).toMatch(/^├─+┤$/);
-		const empty = harness([], { width: 120 });
-		expect(empty.frame()).toContain("Select a task to inspect its result.");
-		expect(empty.frame()).not.toContain("├");
+		if (empty) {
+			expect(h.frame()).toContain("Select a task to inspect its result.");
+			expect(h.frame()).not.toContain("├");
+			return;
+		}
+		const header = plain.findIndex((line) => line.includes("Bash · Running"));
+		expect(header).toBeGreaterThan(0);
+		expect(lines[header - 1]).toContain(theme.style("echo build", { fg: "text", bold: true }));
+		const ruleRow = plain[header + 1]!;
+		expect(ruleRow).toMatch(width === 120 ? /^│.*│ ├─+┤$/ : /^├─+┤$/);
+		const column = ruleRow.indexOf("├");
+		const plainRule = ruleRow.slice(column);
+		expect(plainRule).toHaveLength(plain[header]!.lastIndexOf("│") - column + 1);
+		expect(plain[header + 2]!.slice(column)).toMatch(/^│(?:No output yet|line-).*│$/);
+		if (width === 120) {
+			const styledRule = () => h.menu.render(width)[header + 1]!.split(" ").at(-1)!;
+			const before = styledRule();
+			expect(before).toBe(theme.fg(input ? "borderAccent" : "borderMuted", plainRule));
+			h.menu.handleInput("\t");
+			expect(rows(h)[header + 1]).toBe(ruleRow);
+			expect(styledRule()).toBe(theme.fg(input ? "borderMuted" : "borderAccent", plainRule));
+			expect(styledRule()).not.toBe(before);
+		}
 	});
 
 	it("wraps Details values in their own column with a hanging indent and breaks long paths", () => {
