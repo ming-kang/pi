@@ -30,28 +30,34 @@ describe("task panel views", () => {
 		expect(h.left()).toContain("old");
 		expect(h.frame()).toContain("Finished");
 	});
-	it("keeps foreground completions in the list after another selection", async () => {
-		const h = harness();
-		await vi.advanceTimersByTimeAsync(0);
-		h.tasks[0]!.status = "completed";
-		h.tasks[0]!.endedAt = 1000;
-		h.setOutput("final report");
-		h.change();
-		await vi.advanceTimersByTimeAsync(1000);
-		expect(h.left()).toContain("echo first");
-		expect(h.frame()).toContain("final report");
-		expect(h.frame()).toContain("Completed");
-		const reads = h.host.read.mock.calls.length;
-		await vi.advanceTimersByTimeAsync(2000);
-		expect(h.host.read).toHaveBeenCalledTimes(reads);
-		h.menu.handleInput("k");
-		expect(h.frame()).not.toContain("y/N");
-		h.menu.handleInput("\x1b[B");
-		await vi.advanceTimersByTimeAsync(0);
-		expect(h.frame()).toContain("echo second");
-		expect(h.frame()).toContain("echo first");
-		expect(h.release).toHaveBeenCalledOnce();
-	});
+	it.each(["foreground", "background"] as const)(
+		"keeps %s completions in the list after another selection",
+		async (mode) => {
+			const h = harness([task("first", { mode }), task("second", { mode: "background" })]);
+			await vi.advanceTimersByTimeAsync(0);
+			h.tasks[0]!.status = "completed";
+			h.tasks[0]!.endedAt = 1000;
+			h.setOutput("final report");
+			h.change();
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(h.left()).toContain("echo first");
+			expect(h.frame()).toContain("final report");
+			expect(h.frame()).toContain("Completed");
+			expect(h.frame()).toContain("Finished");
+			expect(h.state.selectedId).toBe("first");
+			const reads = h.host.read.mock.calls.length;
+			await vi.advanceTimersByTimeAsync(2000);
+			expect(h.host.read).toHaveBeenCalledTimes(reads);
+			h.menu.handleInput("k");
+			expect(h.frame()).not.toContain("y/N");
+			h.menu.handleInput("\x1b[B");
+			expect(h.state.selectedId).toBe("second");
+			await vi.advanceTimersByTimeAsync(0);
+			expect(h.frame()).toContain("echo second");
+			expect(h.frame()).toContain("echo first");
+			expect(h.release).toHaveBeenCalledOnce();
+		},
+	);
 	it("keeps a watched result when new work arrives and exposes foreground history on reopen", async () => {
 		const h = harness([task("first")]);
 		await vi.advanceTimersByTimeAsync(0);
@@ -847,17 +853,6 @@ describe("task panel interaction", () => {
 		expect(h.host.kill).not.toHaveBeenCalled();
 		h.menu.handleInput("\x1b");
 		expect(h.state.selectedId).toBe("live");
-	});
-	it("keeps completed tasks in Finished after choosing another task", () => {
-		const h = harness([backgroundTask("build"), backgroundTask("check")], { width: 120 });
-		h.tasks[0]!.status = "completed";
-		h.tasks[0]!.endedAt = 1000;
-		h.change();
-		expect(h.frame()).toContain("Finished");
-		expect(h.state.selectedId).toBe("build");
-		h.menu.handleInput("\x1b[B");
-		expect(h.state.selectedId).toBe("check");
-		expect(h.frame()).toContain("echo build");
 	});
 	it("lets configurable selected detach and confirmation act on only the selected task", () => {
 		const h = harness(

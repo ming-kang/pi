@@ -103,7 +103,7 @@
 		},
 		{
 			"id": "background-execution",
-			"why": "Core owns Tasks execution, retention, persistence receipts, and exactly-once delivery; the bundled extension owns the management tool, panel, presentation, keybindings, and tree confirmation.",
+			"why": "Core owns Tasks execution, retention, persistence receipts, and exactly-once delivery; the bundled extension owns the management tool, panel, presentation, keybindings, and tree confirmation. Panel completion retention is tested for both foreground and background tasks.",
 			"paths": [
 				{
 					"path": "src/core/agent-session.ts",
@@ -702,7 +702,7 @@
 		},
 		{
 			"id": "jsonc-block-comments",
-			"why": "stripJsonComments removes block comments as well as line comments so models.json edits and loads preserve JSONC formatting.",
+			"why": "stripJsonComments removes block comments as well as line comments so models.json edits and loads preserve JSONC formatting. The provider-store round-trip test owns block-comment preservation coverage through the JSONC editor.",
 			"paths": [
 				{
 					"path": "src/utils/json.ts"
