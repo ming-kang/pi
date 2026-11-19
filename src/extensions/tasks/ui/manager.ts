@@ -13,7 +13,7 @@ import { STATUS_SPINNER_INTERVAL_MS } from "../../../modes/interactive/component
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { Feedback } from "./footer.ts";
 import { TaskInspector } from "./inspector.ts";
-import { renderTasksLayout, type TasksLayout } from "./layout.ts";
+import { isInspectorVisible, renderTasksLayout, type TasksLayout } from "./layout.ts";
 import { TaskList } from "./list.ts";
 import { type PanelFocus, type PanelMode, type TaskAction, TaskSelection, type TasksPanelState } from "./model.ts";
 import { cleanTaskText } from "./text.ts";
@@ -77,6 +77,7 @@ export class TasksMenu implements Component, Focusable {
 	private disposed = false;
 	private width: number;
 	private layout?: TasksLayout;
+	private wasOutputVisible = false;
 	constructor(options: TasksMenuOptions) {
 		this.options = options;
 		this.width = options.tui.terminal.columns;
@@ -84,6 +85,7 @@ export class TasksMenu implements Component, Focusable {
 		this.inspector = new TaskInspector({
 			host: options.host,
 			theme: options.theme,
+			isOutputVisible: () => this.isOutputVisible(),
 			requestRender: () => options.tui.requestRender(),
 		});
 		this.sync();
@@ -139,12 +141,26 @@ export class TasksMenu implements Component, Focusable {
 				const refresh = this.refreshQueued;
 				this.refreshQueued = false;
 				this.sync();
-				if (refresh || (this.inspector.task && isTaskTerminal(this.inspector.task.status)))
+				const outputVisible = this.isOutputVisible();
+				const revealed = outputVisible && !this.wasOutputVisible;
+				this.wasOutputVisible = outputVisible;
+				if (revealed || refresh || (this.inspector.task && isTaskTerminal(this.inspector.task.status)))
 					await this.inspector.refresh();
 			})
 			.catch(() => {
 				/* Task observers cannot reject execution. */
 			});
+	}
+	private isOutputVisible(): boolean {
+		return (
+			this.selection.state.tab === "output" &&
+			isInspectorVisible({
+				width: this.width,
+				height: this.options.tui.terminal.rows,
+				focus: this.focus,
+				mode: this.mode,
+			})
+		);
 	}
 	invalidate(): void {
 		this.inspector.invalidate();
@@ -441,6 +457,7 @@ export class TasksMenu implements Component, Focusable {
 	render(width: number): string[] {
 		this.width = width;
 		this.sync();
+		if (this.isOutputVisible() !== this.wasOutputVisible) this.queueTick();
 		this.layout = renderTasksLayout({
 			width,
 			height: this.options.tui.terminal.rows,

@@ -814,6 +814,59 @@ describe("task panel interaction", () => {
 		await vi.advanceTimersByTimeAsync(200);
 		expect(h.host.read).toHaveBeenCalledTimes(reads + 1);
 	});
+	it("pauses reads on Details, including when a task finishes, and loads final output on return", async () => {
+		const h = harness([backgroundTask("build")], { state: { tab: "info" } });
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(h.host.read).not.toHaveBeenCalled();
+		h.setOutput("final build output");
+		h.tasks[0]!.status = "completed";
+		h.tasks[0]!.endedAt = Date.now();
+		h.change();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.host.read).not.toHaveBeenCalled();
+		expect(h.frame()).toContain("Finished");
+		h.menu.handleInput("\t");
+		h.menu.handleInput("\x1b[D");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.host.read).toHaveBeenCalledOnce();
+		expect(h.frame()).toContain("final build output");
+	});
+	it("reads only when the Output pane fits and is not covered by Help", async () => {
+		const h = harness([backgroundTask("build")], { width: 99 });
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(h.host.read).not.toHaveBeenCalled();
+
+		h.tui.terminal.columns = 100;
+		h.frame();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.host.read).toHaveBeenCalledOnce();
+
+		h.menu.handleInput("?");
+		expect(h.frame()).toContain("Task controls");
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(h.host.read).toHaveBeenCalledOnce();
+
+		h.menu.handleInput("?");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.host.read).toHaveBeenCalledTimes(2);
+
+		h.tui.terminal.rows = 13;
+		expect(h.frame()).toContain("Terminal too small");
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(h.host.read).toHaveBeenCalledTimes(2);
+	});
+	it("does not read the new selection if a pending read finishes while Output is hidden", async () => {
+		const h = harness();
+		const read = Promise.withResolvers<Awaited<ReturnType<typeof h.host.read>>>();
+		h.host.read.mockReturnValueOnce(read.promise);
+		await vi.advanceTimersByTimeAsync(0);
+		h.menu.handleInput("\x1b[B");
+		h.menu.handleInput("\t");
+		h.menu.handleInput("\x1b[C");
+		read.resolve({ task: h.tasks[0]!, text: "old output", totalBytes: 10, truncated: false });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.host.read).toHaveBeenCalledOnce();
+	});
 	it("keeps a settled task selectable and restores its selection on reopen", async () => {
 		const h = harness([backgroundTask("build"), backgroundTask("check")], { width: 120 });
 		await vi.advanceTimersByTimeAsync(0);
@@ -843,6 +896,7 @@ describe("task panel interaction", () => {
 		const h = harness([backgroundTask("build", { facts: [["Directory", "/project"]] })], { width: 72, height: 22 });
 		await vi.advanceTimersByTimeAsync(0);
 		h.menu.handleInput("\r");
+		await vi.advanceTimersByTimeAsync(0);
 		expect(h.frame().match(/line-\d+/g)?.length).toBeGreaterThanOrEqual(12);
 		h.menu.handleInput("\x1b[C");
 		expect(h.frame()).toContain("/project");
@@ -906,6 +960,7 @@ describe("task panel interaction", () => {
 		await vi.advanceTimersByTimeAsync(0);
 		expect(h.frame()).not.toContain("line-079");
 		h.menu.handleInput("\t");
+		await vi.advanceTimersByTimeAsync(0);
 		expect(h.frame().match(/line-\d+/g)?.length).toBeGreaterThanOrEqual(12);
 		expect(h.frame()).not.toContain("/project");
 		h.menu.handleInput("\x1b[C");
