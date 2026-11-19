@@ -199,6 +199,25 @@ describe("provider store", () => {
 		expect(readFileSync(`${modelsPath}.bak`, "utf8")).toBe(original);
 	});
 
+	test("keeps the original file and reports a save error when editing a duplicate key", async () => {
+		const original = `{
+  // Gateway settings
+  "providers": {
+    "cpa": {
+      "baseUrl": "https://old.example", // previous gateway
+      "baseUrl": "https://current.example" /* active gateway */
+    }
+  }
+}
+`;
+		writeFileSync(modelsPath, original, "utf8");
+		const store = await loadStore();
+		store.setProviderField("cpa", ["baseUrl"], "https://new.example");
+		const results = await flush(store);
+		expect(readFileSync(modelsPath, "utf8")).toBe(original);
+		expect(results.at(-1)).toEqual({ kind: "error", error: expect.stringContaining("duplicate keys") });
+	});
+
 	test("clearing an override in a commented file removes it and its emptied parents", async () => {
 		writeFileSync(
 			modelsPath,
