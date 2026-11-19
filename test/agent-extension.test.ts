@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fauxAssistantMessage, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai/compat";
+import { fauxAssistantMessage, fauxText, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sdk from "../src/core/sdk.ts";
 import { loadEntriesFromFile, SessionManager } from "../src/core/session-manager.ts";
@@ -255,6 +255,19 @@ describe("Agent delegation", () => {
 		expect(task.result?.text).toContain("Partial findings");
 		expect(task.result?.text).toContain("Model unavailable");
 		expect(task.facts).toContainEqual(["Tool calls", "1"]);
+	});
+
+	it("fails an Agent whose final message has no text instead of returning earlier narration", async () => {
+		harness = await createHarness({ settings: { compaction: { enabled: false } } });
+		harness.setResponses([
+			fauxAssistantMessage([fauxText("Let me check the tests first."), fauxToolCall("bash", { command: "true" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage(""),
+		]);
+		const result = await runAgent("empty-final");
+		expect(result.details).toMatchObject({ state: "failed", error: "Agent ended without a complete report." });
+		expect(getMessageText(result)).toContain("Error: Agent ended without a complete report.");
 	});
 
 	it("honors declined project trust without dropping repository instructions", async () => {
