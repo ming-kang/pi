@@ -20,6 +20,12 @@ export interface ChatViewportOptions {
 	readonly scrollbarTrackStyle?: (text: string) => string;
 	readonly scrollbarThumbStyle?: (text: string) => string;
 	readonly outputPad?: () => number;
+	/**
+	 * Request a full content render. The requestRender passed to `updateLayout` is a view-only
+	 * request since pi-tui 1.6.0: it reuses component output, so a changed sticky row or padding
+	 * would never reach the screen. Provide the host TUI's `requestRender`.
+	 */
+	readonly requestRender?: () => void;
 }
 
 export interface ChatViewport {
@@ -61,7 +67,7 @@ class ChatTranscriptView {
 			...(options.scrollbarThumbStyle === undefined ? {} : { scrollbarThumbStyle: options.scrollbarThumbStyle }),
 		});
 		this.scrollView.onLayout = (requestRender) => {
-			if (this.updateStickyMessage()) requestRender();
+			if (this.updateStickyMessage()) (options.requestRender ?? requestRender)();
 		};
 		this.root = new VStack([
 			{ component: this.sticky, shrink: 0, minSize: 0 },

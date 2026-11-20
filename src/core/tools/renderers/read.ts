@@ -115,6 +115,11 @@ function formatReadResult(
 	_cwd: string,
 	isError: boolean,
 ): string {
+	const unsupportedBy = result.details?.imageUnsupportedByModel;
+	const imageWarning = unsupportedBy
+		? `\n${theme.fg("warning", `[${unsupportedBy} does not support images; it saw a placeholder instead]`)}`
+		: "";
+
 	const rawPath = str(args?.file_path ?? args?.path);
 	const output = getTextOutput(result, showImages);
 	const lang = !isError && rawPath ? getLanguageFromPath(rawPath) : undefined;
@@ -138,7 +143,7 @@ function formatReadResult(
 			text += `\n${theme.fg("warning", `[Truncated: ${truncation.outputLines} lines shown (${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit)]`)}`;
 		}
 	}
-	return text;
+	return text + imageWarning;
 }
 
 export const readRenderers: Pick<ToolDefinition<any, ReadToolDetails | undefined>, "renderCall" | "renderResult"> = {

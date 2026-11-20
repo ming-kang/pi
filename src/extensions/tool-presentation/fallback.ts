@@ -42,7 +42,7 @@ export class FallbackResultComponent implements Component {
 		this.expanded = expanded;
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const styledOutput = theme.fg("toolOutput", this.output);
 		if (this.expanded) return new Text(styledOutput, 0, 0).render(width);
 

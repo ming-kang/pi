@@ -362,7 +362,7 @@ describe("search tool rows", () => {
 			isPartial: false,
 			expanded: false,
 		}) as unknown as ToolRenderContext<unknown, { path?: string }, CodeSearchDetails>;
-	const strip = (lines: string[]) => lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+	const strip = (lines: readonly string[]) => lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
 
 	it("shows a failure while collapsed but nothing below the header for a collapsed success", () => {
 		initTheme("dark");

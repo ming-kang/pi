@@ -126,10 +126,10 @@ pi
 | Meta | `META_API_KEY` | `meta` |
 | MiniMax | `MINIMAX_API_KEY` | `minimax` |
 | MiniMax (China) | `MINIMAX_CN_API_KEY` | `minimax-cn` |
-| Qwen Token Plan (existing catalog) | `QWEN_TOKEN_PLAN_API_KEY` | `qwen-token-plan` |
-| Qwen Token Plan (Individual) | `QWEN_TOKEN_PLAN_API_KEY` | `qwen-token-plan-individual` |
-| Qwen Token Plan (China) | `QWEN_TOKEN_PLAN_CN_API_KEY` | `qwen-token-plan-cn` |
-| Qwen Token Plan (Individual, China) | `QWEN_TOKEN_PLAN_CN_API_KEY` | `qwen-token-plan-individual-cn` |
+| Qwen Token Plan Team | `QWEN_TOKEN_PLAN_TEAM_API_KEY` | `qwen-token-plan` |
+| Qwen Token Plan Team (China) | `QWEN_TOKEN_PLAN_TEAM_CN_API_KEY` | `qwen-token-plan-cn` |
+| Qwen Token Plan Individual | `QWEN_TOKEN_PLAN_INDIVIDUAL_API_KEY` | `qwen-token-plan-individual` |
+| Qwen Token Plan Individual (China) | `QWEN_TOKEN_PLAN_INDIVIDUAL_CN_API_KEY` | `qwen-token-plan-individual-cn` |
 | Xiaomi MiMo | `XIAOMI_API_KEY` | `xiaomi` |
 | Xiaomi MiMo Token Plan (China) | `XIAOMI_TOKEN_PLAN_CN_API_KEY` | `xiaomi-token-plan-cn` |
 | Xiaomi MiMo Token Plan (Amsterdam) | `XIAOMI_TOKEN_PLAN_AMS_API_KEY` | `xiaomi-token-plan-ams` |
@@ -164,10 +164,11 @@ Store credentials in `~/.pi/agent/auth.json`:
 }
 ```
 
-`qwen-token-plan-individual` uses the same international endpoint and `QWEN_TOKEN_PLAN_API_KEY` as
-`qwen-token-plan`, but limits the picker to the models documented for Individual subscriptions. The existing
-provider keeps its broader catalog for backward compatibility. When using `auth.json`, store the
-credential under the provider you select; an environment variable is shared by both international providers.
+`qwen-token-plan-individual` uses the same international endpoint as `qwen-token-plan`, but limits the
+picker to the models documented for Individual subscriptions and reads `QWEN_TOKEN_PLAN_INDIVIDUAL_API_KEY`.
+The Team provider keeps its broader catalog and still accepts the legacy `QWEN_TOKEN_PLAN_API_KEY` (and
+`QWEN_TOKEN_PLAN_CN_API_KEY` for China) as a fallback. When using `auth.json`, store the credential under
+the provider you select.
 
 The file is created with `0600` permissions (user read/write only). Auth file credentials take priority over environment variables.
 

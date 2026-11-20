@@ -22,7 +22,7 @@ function row(name: string, id: string, args: unknown, definition: unknown): Tool
 	return new ToolExecutionComponent(name, id, args, {}, definition as ToolDefinition, fakeTui(), process.cwd());
 }
 
-function plain(lines: string[]): string[] {
+function plain(lines: readonly string[]): string[] {
 	return lines.map((line) => stripAnsi(line).trimEnd());
 }
 

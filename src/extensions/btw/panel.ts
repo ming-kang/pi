@@ -133,7 +133,7 @@ export class BtwPanel implements Component {
 		];
 	}
 
-	private body(state: BtwPanelState, width: number, theme: Theme): string[] {
+	private body(state: BtwPanelState, width: number, theme: Theme): readonly string[] {
 		if (state.phase === "opening") return [theme.fg("muted", "Capturing context…")];
 		if (state.phase === "error") return new Text(theme.fg("error", state.error), 0, 0).render(width);
 		if (!state.conversation.turns.length) {

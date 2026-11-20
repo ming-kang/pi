@@ -4,9 +4,9 @@
  * are immutable for a dialog's lifetime and carry few previews, so no eviction.
  */
 export class PreviewLinesCache {
-	private cache = new Map<string, Map<number, string[]>>();
+	private cache = new Map<string, Map<number, readonly string[]>>();
 
-	get(previewText: string, width: number, compute: () => string[]): string[] {
+	get(previewText: string, width: number, compute: () => readonly string[]): readonly string[] {
 		let byWidth = this.cache.get(previewText);
 		if (!byWidth) {
 			byWidth = new Map();

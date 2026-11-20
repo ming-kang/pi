@@ -17,8 +17,8 @@ function disposeAll(components: Iterable<unknown>): void {
  * next tool. Clearing the chat disposes its tool rows, so renderer timers never outlive them.
  */
 export class ToolChatContainer extends TranscriptLayoutContainer {
-	protected override renderChildren(width: number): Array<[Component, string[]]> {
-		const rendered: Array<[Component, string[]]> = [];
+	protected override renderChildren(width: number): Array<[Component, readonly string[]]> {
+		const rendered: Array<[Component, readonly string[]]> = [];
 		// Content rows of the previous visible tool row; undefined after any other child.
 		let previousToolRows: number | undefined;
 		for (const child of this.children) {

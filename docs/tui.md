@@ -30,6 +30,8 @@ interface Component {
 
 `invalidate()` is required even for an uncached component; an empty implementation is fine. `invalidate()` does **not** schedule a frame. After application state changes, call the injected `tui.requestRender()`.
 
+Treat lines returned by `render()` as read-only, including `super.render()` in a subclass. Built-in components such as `Container`, `Box`, `Text`, and `Markdown` return the same cached array while nothing changed, so modifying it in place corrupts later frames. Copy first, for example `const lines = [...super.render(width)]`, and cache the result if it is expensive. Return a new array when your output changes: parents reuse an unchanged array without reading it again.
+
 ## Focusable Components and IME
 
 A component that renders a text cursor and needs IME candidate-window placement implements `Focusable` as well as `Component`:

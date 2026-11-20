@@ -4,6 +4,38 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Adopted upstream v1.6.0:
+  - GPT-6.2 Astra and GPT-6.2 Sol on the `openai`, `azure`, and `openai-codex` providers; GPT-6.2 Sol is the new default for all three at the same price. Both reject reasoning effort `none` and `minimal`, so thinking level `off` is unavailable. Azure serves them with a 1.05M context window; Codex serves GPT-6.2 Sol with 500K and GPT-6.2 Astra with 272K. See [Providers](docs/providers.md).
+  - `qwen4-max-preview`, `deepseek-v4.1-flash`, and `deepseek-v4.1-flash-1017` on the Qwen Token Plan Individual providers, plus per-plan key variables `QWEN_TOKEN_PLAN_TEAM_API_KEY`, `QWEN_TOKEN_PLAN_TEAM_CN_API_KEY`, `QWEN_TOKEN_PLAN_INDIVIDUAL_API_KEY`, and `QWEN_TOKEN_PLAN_INDIVIDUAL_CN_API_KEY`; the shared `QWEN_TOKEN_PLAN_API_KEY` and `QWEN_TOKEN_PLAN_CN_API_KEY` still work.
+  - A transcript notice when OpenAI drops reasoning items from a request, such as `OpenAI dropped 2 reasoning items: prefix_mismatch`. Like the Anthropic thinking notice it requires `showCacheMissNotices` and appears only when more items are dropped than in the previous response; both notices now name the reasons.
+
+### Changed
+
+- Adopted upstream v1.6.0:
+  - **Breaking (extension API):** `render()` now returns `readonly string[]`, and `Container` returns the same cached array while its children are unchanged. Extensions that modify render output in place, including `super.render()` in a `Container` subclass or an embedded component's output, must copy it first.
+  - Qwen Token Plan providers moved to the current gateways (`token-plan.maas.qwencloudapi.com` international, `token-plan.maas.qianwenaiapi.com` China) and are named "Qwen Token Plan Team" and "Qwen Token Plan Team CN". Provider IDs are unchanged and the old `aliyuncs.com` hosts still work. The retired `deepseek-v3.2` and `deepseek-v4-flash` were removed from the Team providers; use `deepseek-v4-flash-0731` or `deepseek-v4.1-flash`.
+  - The find tool's path patterns are relative to the search directory, like grep's `glob`: `src/*.ts` no longer matches `pkg/src/a.ts`; use `**/src/*.ts` to match at any depth. Patterns without `/` still match file names at any depth.
+  - The llama.cpp extension connects to `http://127.0.0.1:9931` by default, the current llama-server default port, instead of port 8080.
+  - Anthropic message threads are on by default for any provider whose baseUrl is on api.anthropic.com, not only the `anthropic` provider.
+  - The resume command printed on exit is on its own line after `To resume this session:`, so it can be selected with a triple-click.
+  - `undici` updated to 8.12.4 for security advisories.
+
+### Fixed
+
+- Adopted upstream v1.6.0 fixes:
+  - Problems found when replacing the session with `/new`, `/resume`, `/fork` or RPC `new_session`, `switch_session` and `fork` are now reported: in the chat in interactive mode and on stderr in print, JSON and RPC modes, each diagnostic once. `enabledModels` warnings are shown once at startup instead of over the TUI on every session switch, and an unreadable `CHANGELOG.md` no longer prints a warning over the TUI.
+  - RPC `new_session`, `switch_session`, `fork` and `clone` no longer run extension `session_start` and `resources_discover` handlers twice; `AgentSession.reload()` emits `session_start` after `bindExtensions({})`; `--mode json` no longer drops events emitted by `session_start` handlers; `pi.events` handler errors report like other extension errors; and the model-fallback notice (`Could not restore model ...`) is reported in every mode at startup and after session switches.
+  - Git and npm output no longer draws over the interactive TUI when packages install or refresh during `/reload`, `/new`, `/resume` and `/fork`; a failed install reports the end of the output, installs are announced on stderr before the TUI starts, and packages needing a typed password or passphrase fail with a credential-helper hint instead of prompting.
+  - Fullscreen scrolling in long sessions is O(viewport) instead of re-rendering the whole transcript per wheel event, and very large self-rendered tool results (for example a multi-megabyte edit diff) no longer crash with `RangeError: Maximum call stack size exceeded`.
+  - Search in `/login`, `/logout`, `/scoped-models` and `/resume` highlights the best match, cursor keys in a search field no longer move the highlight, `/resume` no longer selects an unrelated session while the list reloads, and Enter on a Tab path or slash-argument menu accepts the completion instead of submitting the prompt.
+  - Exiting pi, `pi config` and the startup pickers waits up to one second for queued terminal output, so the shell no longer prints mouse and key reports as text; `kill -TSTP` from outside pi suspends like Ctrl+Z; fullscreen Kitty images survive full redraws, text after a multi-row inline image no longer draws over it, and Kitty and iTerm2 images no longer cover overlays.
+  - The read tool no longer replays a stale "model does not support images" note to a vision model (the warning shows in the TUI only, also when collapsed), cancelling `read` while a file opens no longer crashes with `AbortError`, and the find tool handles `./` patterns and no longer matches through folders above the search path.
+  - The bash tool shows the end of the line when output ends in one line longer than ~100KB instead of returning nothing; Esc during a tool batch gives pending calls an "Operation aborted" result; `/copy` and RPC `get_last_assistant_text` skip turns that ended without an answer; `pi.exec` reports 128 + signal for killed commands (143 SIGTERM, 137 SIGKILL).
+  - Provider fixes: OpenAI-compatible providers other than OpenAI send system messages with the `system` role (fixes Groq Qwen 400s); the Codex WebSocket 60-minute limit retries on a fresh connection; Codex keeps its prompt cache across thinking-level changes and on GPT-6.2; Copilot Gemini and Kimi models honor the thinking level and report reasoning tokens; Copilot Responses models no longer fill omitted optional tool arguments; Mistral no longer receives strict tools unless `compat.supportsStrictMode` is set; tools with untyped schema nodes are sent non-strict; non-strict Anthropic schemas forbid extra arguments; socket-error provider failures (`ECONNRESET`, `EPIPE`, `ETIMEDOUT`, "Connection closed.") trigger automatic retries; llama.cpp decision classifiers send images.
+  - MCP tools loaded by `tool_search` survive resume and `/reload`; the standalone binary resolves extension dependencies declared via `package.json` `main`/`exports`; `/share` no longer crashes when the GitHub CLI fails to start; `pi update` works on Windows managed installs with an older system Node.js; `/export` HTML renders clickable links in custom tool output; unscoped syntax-highlighted text stays readable across terminal themes.
+
 ## [1.5.9] - 2026-11-19
 
 ### Changed

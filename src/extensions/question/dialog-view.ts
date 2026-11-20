@@ -280,7 +280,7 @@ export class QuestionDialogView {
 		return labels ? `${labels} ${action}` : "";
 	}
 
-	private previewLines(previewText: string, width: number): string[] {
+	private previewLines(previewText: string, width: number): readonly string[] {
 		return this.previews.get(previewText, width, () =>
 			new Markdown(previewText, 1, 0, getMarkdownTheme()).render(Math.max(1, width)),
 		);

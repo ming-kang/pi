@@ -41,7 +41,7 @@ export class TranscriptLayoutContainer extends Container {
 	}
 
 	/** Every child with its lines, rendered once and in order, so a subclass can space a child by those before it. */
-	protected renderChildren(width: number): Array<[Component, string[]]> {
+	protected renderChildren(width: number): Array<[Component, readonly string[]]> {
 		return this.children.map((component) => [component, component.render(width)]);
 	}
 }

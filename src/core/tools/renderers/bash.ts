@@ -23,7 +23,7 @@ class BashCallRenderComponent implements Component {
 	private timeout: number | undefined;
 	private expanded = false;
 	private cachedWidth: number | undefined;
-	private cachedLines: string[] | undefined;
+	private cachedLines: readonly string[] | undefined;
 	private readonly config: Pick<ShellToolConfig, "name" | "prompt">;
 
 	constructor(config: Pick<ShellToolConfig, "name" | "prompt">) {
@@ -43,7 +43,7 @@ class BashCallRenderComponent implements Component {
 		this.invalidate();
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		if (this.cachedLines === undefined || this.cachedWidth !== width) {
 			this.cachedLines = this.renderLines(Math.max(1, width));
 			this.cachedWidth = width;
@@ -56,7 +56,7 @@ class BashCallRenderComponent implements Component {
 		this.cachedLines = undefined;
 	}
 
-	private renderLines(width: number): string[] {
+	private renderLines(width: number): readonly string[] {
 		// A command spanning multiple physical lines is always shown truncated when collapsed, so skip
 		// highlighting and rendering the whole script only to throw the rendered result away.
 		if (!this.expanded && this.command !== null && /\r?\n/.test(this.command)) {

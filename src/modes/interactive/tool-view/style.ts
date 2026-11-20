@@ -69,7 +69,7 @@ function isBlankLine(line: string): boolean {
 	return line === "" || stripAnsi(line).trim() === "";
 }
 
-function dropLeadingBlankLines(lines: string[]): string[] {
+function dropLeadingBlankLines(lines: readonly string[]): string[] {
 	let start = 0;
 	while (start < lines.length && isBlankLine(lines[start]!)) start++;
 	return lines.slice(start);

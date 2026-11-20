@@ -73,13 +73,15 @@ export function outputLines(task: TaskSnapshot, read: TaskRead | undefined, them
 		!fromLog && !isTaskTerminal(task.status) && human?.activities?.length ? human.activities : undefined;
 	// Logs and plain live progress keep their plain rendering; only a settled report's result is Markdown.
 	const markdown = !fromLog && !human && task.output === "report" && task.status === "completed";
-	const output = activities
-		? taskActivityLines(activities, Math.max(1, width), theme, human?.earlierActivities ?? 0)
-		: markdown
-			? new Markdown(text, 0, 0, getMarkdownTheme(), {
-					color: (line) => theme.fg("toolOutput", line),
-				}).render(Math.max(1, width))
-			: text.split("\n").map((line) => theme.fg("toolOutput", line));
+	const output = [
+		...(activities
+			? taskActivityLines(activities, Math.max(1, width), theme, human?.earlierActivities ?? 0)
+			: markdown
+				? new Markdown(text, 0, 0, getMarkdownTheme(), {
+						color: (line) => theme.fg("toolOutput", line),
+					}).render(Math.max(1, width))
+				: text.split("\n").map((line) => theme.fg("toolOutput", line))),
+	];
 	if (read?.readError) output.unshift(theme.fg("warning", "Log unavailable; showing saved result."));
 	if (!fromLog && published?.truncated)
 		output.push(theme.fg("warning", human ? "Output truncated." : "Saved result truncated."));

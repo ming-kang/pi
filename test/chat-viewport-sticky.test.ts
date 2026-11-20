@@ -10,6 +10,8 @@ function transcriptFixture(columns = 50, rows = 12) {
 	const chat = new TranscriptLayoutContainer();
 	const document = new TranscriptLayoutContainer();
 	document.addChild(chat);
+	const terminal = new VirtualTerminal(columns, rows);
+	const tui = new TuiAltScreen(terminal);
 	const viewport = createChatViewport({
 		document,
 		chat,
@@ -19,9 +21,8 @@ function transcriptFixture(columns = 50, rows = 12) {
 		footer: new Container(),
 		scrollbar: "hidden",
 		outputPad: () => 1,
+		requestRender: () => tui.requestRender(),
 	});
-	const terminal = new VirtualTerminal(columns, rows);
-	const tui = new TuiAltScreen(terminal);
 	tui.setLayoutRoot(viewport.root);
 	return { chat, viewport, terminal, tui };
 }

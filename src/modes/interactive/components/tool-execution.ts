@@ -315,7 +315,7 @@ export class ToolExecutionComponent extends Container {
 		this.updateDisplay();
 	}
 
-	override render(width: number): string[] {
+	override render(width: number): readonly string[] {
 		if (this.argsPending) this.updateDisplay();
 		if (this.hideComponent) {
 			return [];
@@ -330,7 +330,10 @@ export class ToolExecutionComponent extends Container {
 				return [];
 			}
 
-			const lines: string[] = [...leadingLines, ...contentLines];
+			const lines: string[] = [];
+			// Append in a loop: spreading hundreds of thousands of wrapped lines exceeds V8's argument limit.
+			for (const line of leadingLines) lines.push(line);
+			for (const line of contentLines) lines.push(line);
 			for (let i = 0; i < this.imageComponents.length; i++) {
 				const spacer = this.imageSpacers[i];
 				if (spacer) {
