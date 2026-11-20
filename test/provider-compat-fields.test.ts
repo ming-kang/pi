@@ -31,6 +31,7 @@ describe("provider compat field catalog", () => {
 		// These APIs are only present as CompatSchemasByApi keys; no per-api wiring exists.
 		expect(compatFieldsForApi("mistral-conversations").map((field) => field.key)).toEqual([
 			"supportsMidConvoSystemMessages",
+			"supportsStrictMode",
 		]);
 		const systemOne = compatFieldsForApi("typesafe-system-one");
 		expect(systemOne.map((field) => field.key).sort()).toEqual(["imageInput", "sendImageOptInHeader"]);
