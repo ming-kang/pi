@@ -651,7 +651,8 @@
 				"test/assistant-message.test.ts",
 				"test/tool-view.test.ts",
 				"test/interactive-tui.test.ts"
-			]
+			],
+			"watch": "Upstream fullscreen transcript pins the nearest scrolled-past user message as a clickable one-line summary."
 		},
 		{
 			"id": "docs-and-tests",
@@ -681,7 +682,8 @@
 			],
 			"tests": [
 				"test/assistant-message.test.ts"
-			]
+			],
+			"watch": "Upstream collapsed thinking shows a rolling preview while the run streams and a settled label once done, and stays expandable."
 		},
 		{
 			"id": "session-artifacts",
@@ -698,7 +700,8 @@
 			"tests": [
 				"test/session-manager/artifacts.test.ts",
 				"test/agent-extension.test.ts"
-			]
+			],
+			"watch": "Upstream gives each session file an artifacts directory for files it produces and removes it with the session."
 		},
 		{
 			"id": "jsonc-block-comments",
@@ -730,7 +733,8 @@
 				"test/footer-width.test.ts",
 				"test/statusline-extension.test.ts",
 				"test/btw-extension.test.ts"
-			]
+			],
+			"watch": "Upstream exposes a shared API-key subscription check on the model runtime so footer, statusline and extensions need no provider checks of their own."
 		}
 	]
 }
