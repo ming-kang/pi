@@ -11,7 +11,7 @@ import { truncateHead } from "../../core/tools/truncate.ts";
 import { codeSearch, formatLocations } from "./code-search.ts";
 import { registerSearchCommand, syncTools } from "./command.ts";
 import { getCredential } from "./credential.ts";
-import { DevinAuthError, type WebResult, webSearch } from "./devin.ts";
+import { DevinAuthError, type WebSearchResponse, webSearch } from "./devin.ts";
 import {
 	type CodeSearchDetails,
 	renderCodeSearchCall,
@@ -42,6 +42,12 @@ const WebSearchParams = Type.Object({
 		description: "Web search query. Be specific: product names, versions, exact error text. English matches best.",
 	}),
 	max_results: Type.Optional(Type.Integer({ minimum: 1, maximum: 10, description: "Results to return (default 5)." })),
+	domain: Type.Optional(
+		Type.String({
+			pattern: "^[A-Za-z0-9][A-Za-z0-9.-]*$",
+			description: 'Restrict results to one site, e.g. "docs.rs". A bare hostname, no scheme or path.',
+		}),
+	),
 });
 
 const SIGN_IN_HINT = "Ask the user to run /search to sign in to Devin.";
@@ -57,9 +63,9 @@ async function withDevin<T>(run: (apiKey: string) => Promise<T>): Promise<T> {
 	}
 }
 
-export function formatWebResults(query: string, results: WebResult[]): string {
-	if (!results.length) return `No web results for "${query}".`;
-	const blocks = results.map((r, i) => {
+export function formatWebResults(query: string, response: WebSearchResponse): string {
+	if (!response.results.length) return `No web results for "${query}".`;
+	const blocks = response.results.map((r, i) => {
 		const lines = [`${i + 1}. ${r.title ?? r.url}`, `   ${r.url}`];
 		if (r.summary) {
 			const excerpt = r.summary.replace(/\n\s*\n+/g, "\n").trim();
@@ -67,7 +73,10 @@ export function formatWebResults(query: string, results: WebResult[]): string {
 		}
 		return lines.join("\n");
 	});
-	return truncateHead(`Web results for "${query}":\n\n${blocks.join("\n\n")}`).content;
+	const out = [`Web results for "${query}":`, "", blocks.join("\n\n")];
+	if (response.summary) out.push("", `Devin's summary: ${response.summary}`);
+	if (response.webSearchUrl) out.push(`Open all results: ${response.webSearchUrl}`);
+	return truncateHead(out.join("\n")).content;
 }
 
 export default function search(pi: ExtensionAPI): void {
@@ -121,10 +130,12 @@ export default function search(pi: ExtensionAPI): void {
 
 		async execute(_toolCallId, params: Static<typeof WebSearchParams>, signal) {
 			const query = params.query.trim();
-			const results = await withDevin((apiKey) => webSearch(apiKey, query, params.max_results ?? 5, signal));
+			const response = await withDevin((apiKey) =>
+				webSearch(apiKey, query, params.max_results ?? 5, params.domain, signal),
+			);
 			return {
-				content: [{ type: "text", text: formatWebResults(query, results) }],
-				details: { results: results.map(({ url, title }) => ({ url, title })) },
+				content: [{ type: "text", text: formatWebResults(query, response) }],
+				details: { results: response.results.map(({ url, title }) => ({ url, title })) },
 			};
 		},
 	});

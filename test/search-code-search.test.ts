@@ -41,20 +41,41 @@ function varint(n: number): number[] {
 }
 
 /** Script Devin's replies and record every request body it receives. */
-function devin(replies: string[]): string[] {
+function devin(replies: Array<string | Response>): string[] {
 	const requests: string[] = [];
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(async (_url: string, init: RequestInit) => {
 			const body = Buffer.from(init.body as Uint8Array);
 			requests.push(gunzipSync(body.subarray(5)).toString("utf-8"));
-			return stream(replies.shift() ?? "");
+			const reply = replies.shift();
+			return typeof reply === "string" || reply === undefined ? stream(reply ?? "") : reply;
 		}),
 	);
 	return requests;
 }
 
 const answer = (xml: string) => `Done.[TOOL_CALLS]answer[ARGS]${JSON.stringify({ answer: xml })}`;
+
+/** A length-delimited protobuf field; enough for the ChatToolCall shape below. */
+function protoField(no: number, value: string | Buffer): Buffer {
+	const data = typeof value === "string" ? Buffer.from(value, "utf-8") : value;
+	return Buffer.concat([Buffer.from([...varint((no << 3) | 2), ...varint(data.length)]), data]);
+}
+
+/** A Connect stream whose data frame carries a structured ChatToolCall (field 3) next to the text. */
+function streamCall(id: string, name: string, argsJson: string, text = ""): Response {
+	const call = Buffer.concat([protoField(1, id), protoField(2, name), protoField(3, argsJson)]);
+	const payload = gzipSync(Buffer.concat([protoField(2, text), protoField(3, call)]));
+	const trailer = Buffer.from("{}");
+	const frame = (flags: number, body: Buffer) => {
+		const head = Buffer.alloc(5);
+		head[0] = flags;
+		head.writeUInt32BE(body.length, 1);
+		return Buffer.concat([head, body]);
+	};
+	return new Response(new Uint8Array(Buffer.concat([frame(1, payload), frame(2, trailer)])));
+}
 
 describe("code_search loop", () => {
 	it("runs the planner's commands locally and returns only answer paths inside the root", async () => {
@@ -68,6 +89,22 @@ describe("code_search loop", () => {
 		const locations = await codeSearch({ apiKey: "k", query: "retry", root, cwd: root });
 		expect(locations).toEqual([{ path: "src/retry.ts", ranges: [[1, 3]] }]);
 		expect(requests[1]).toContain("1:export function retry() {");
+	});
+
+	it("runs a structured tool call and returns its reasoning in the next request's thinking", async () => {
+		const requests = devin([
+			streamCall(
+				"call-1",
+				"restricted_exec",
+				'{"command1":{"type":"readfile","file":"/codebase/src/retry.ts"}}',
+				"I should read the retry file.",
+			),
+			answer('<ANSWER><file path="/codebase/src/retry.ts"><range>1-3</range></file></ANSWER>'),
+		]);
+		const locations = await codeSearch({ apiKey: "k", query: "retry", root, cwd: root });
+		expect(locations).toEqual([{ path: "src/retry.ts", ranges: [[1, 3]] }]);
+		expect(requests[1]).toContain("1:export function retry() {");
+		expect(requests[1]).toContain("I should read the retry file.");
 	});
 
 	it("demands an answer once the planning rounds run out", async () => {
@@ -185,10 +222,9 @@ describe("Devin responses", () => {
 					),
 			),
 		);
-		await expect(webSearch("k", "q", 5)).resolves.toEqual([
-			{ url: "https://example.com/a", title: "A", summary: "excerpt" },
-			{ url: "http://example.com/c" },
-		]);
+		await expect(webSearch("k", "q", 5)).resolves.toEqual({
+			results: [{ url: "https://example.com/a", title: "A", summary: "excerpt" }, { url: "http://example.com/c" }],
+		});
 	});
 });
 
@@ -250,7 +286,7 @@ describe("workspace rg", () => {
 		const lines = (await new Workspace(repo).run({ type: "rg", pattern: "hit", path: "/codebase/many" })).split("\n");
 		expect(lines[0]).toMatch(/^63 matches in 31 files;/);
 		expect(lines[1]).toBe("/codebase/many/z.ts: 3");
-		expect(lines.length).toBeLessThanOrEqual(41);
+		expect(lines.length).toBeLessThanOrEqual(51);
 	});
 });
 
@@ -295,7 +331,7 @@ describe("workspace visibility and paging", () => {
 		const lines = (await new Workspace(repo).run({ type: "readfile", file: "src/a.ts", end_line: 100 })).split("\n");
 		expect(lines[0]).toBe("/codebase/src/a.ts (100 lines)");
 		expect(lines[1]).toBe("1:line 1");
-		expect(lines.at(-1)).toBe("... (lines 41-100 not shown; continue with start_line=41)");
+		expect(lines.at(-1)).toBe("... (lines 51-100 not shown; continue with start_line=51)");
 	});
 
 	it("shallows a tree that would not fit rather than cutting it off", async () => {
@@ -303,6 +339,52 @@ describe("workspace visibility and paging", () => {
 		expect(out.split("\n")).toHaveLength(32);
 		expect(out).toMatch(/├── p0\/\n/);
 		expect(out).toMatch(/\(levels reduced to 1 to fit\)$/);
+	});
+});
+
+describe("workspace ls and glob", () => {
+	const repo = mkdtempSync(join(tmpdir(), "search-lsglob-"));
+	afterAll(() => rmSync(repo, { recursive: true, force: true }));
+	const write = (path: string, text: string) => {
+		mkdirSync(join(repo, path, ".."), { recursive: true });
+		writeFileSync(join(repo, path), text);
+	};
+	write(".gitignore", ".env\n");
+	write(".env", "SECRET\n");
+	write(".hidden", "x\n");
+	write("src/a.ts", "const a = 1;\n");
+	write("src/sub/b.ts", "const b = 2;\n");
+
+	it("lists a directory, hiding dotfiles unless asked for all", async () => {
+		const workspace = new Workspace(repo);
+		expect(await workspace.run({ type: "ls", path: "/codebase/src" })).toBe("a.ts\nsub/");
+		const all = await workspace.run({ type: "ls", path: "/codebase", all: true });
+		expect(all).toContain(".gitignore");
+		expect(all).toContain(".hidden");
+		expect(all).not.toContain(".env");
+	});
+
+	it("shows directory markers and file sizes in long format", async () => {
+		const out = await new Workspace(repo).run({ type: "ls", path: "/codebase/src", long_format: true });
+		expect(out).toBe(`${String(13).padStart(9)}  a.ts\n      dir  sub/`);
+	});
+
+	it("finds files by glob, and directories only when asked", async () => {
+		const workspace = new Workspace(repo);
+		expect(
+			await workspace.run({ type: "glob", pattern: "**/*.ts", path: "/codebase/src", type_filter: "file" }),
+		).toBe("/codebase/src/a.ts\n/codebase/src/sub/b.ts");
+		expect(
+			await workspace.run({ type: "glob", pattern: "sub", path: "/codebase/src", type_filter: "directory" }),
+		).toBe("/codebase/src/sub/");
+		expect(await workspace.run({ type: "glob", pattern: "*.ts", path: "/codebase", type_filter: "directory" })).toBe(
+			"(no matches)",
+		);
+	});
+
+	it("never reports ignored files, even when the glob whitelists them", async () => {
+		// `rg --files -g "*.env"` would whitelist .env over the ignore file; the index must filter it out.
+		expect(await new Workspace(repo).run({ type: "glob", pattern: "*.env", path: "/codebase" })).toBe("(no matches)");
 	});
 });
 

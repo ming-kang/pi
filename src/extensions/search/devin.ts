@@ -17,7 +17,9 @@ const APP = "windsurf";
 const APP_VERSION = "1.48.2";
 const LANGUAGE_SERVER_VERSION = "1.9544.35";
 const WEB_CLIENT_VERSION = "1.9600.41";
-const TIMEOUT_MS = 30_000;
+/** A planner round carries a whole transcript plus a generation; a web search is one lookup. */
+const CHAT_TIMEOUT_MS = 60_000;
+const WEB_TIMEOUT_MS = 30_000;
 
 /**
  * Read ceilings, one per body shape, so a hostile or broken backend cannot be read unbounded. An
@@ -54,8 +56,8 @@ function errorFor(code: string | number, message = ""): DevinError {
 	return new DevinError(`Devin request failed (${code}${message ? `: ${message}` : ""}).`);
 }
 
-async function post(url: string, init: RequestInit, signal?: AbortSignal): Promise<DevinResponse> {
-	const timeout = AbortSignal.timeout(TIMEOUT_MS);
+async function post(url: string, init: RequestInit, timeoutMs: number, signal?: AbortSignal): Promise<DevinResponse> {
+	const timeout = AbortSignal.timeout(timeoutMs);
 	// Reading the body shares the request's budget, so a slow body cannot outlive the timeout.
 	const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
 	let response: Response;
@@ -177,6 +179,8 @@ export interface ChatMessage {
 	call?: { id: string; name: string; arguments: string };
 	/** On a tool message: the id of the call it answers. */
 	callId?: string;
+	/** On an assistant message: its reasoning ahead of the call (ChatMessagePrompt.thinking). */
+	thinking?: string;
 }
 
 const ROLE = { user: 1, assistant: 2, tool: 4, system: 5 } as const;
@@ -195,24 +199,34 @@ export function encodeChatRequest(apiKey: string, messages: ChatMessage[], tools
 			msg.push(field(6, Buffer.concat([field(1, m.call.id), field(2, m.call.name), field(3, m.call.arguments)])));
 		}
 		if (m.callId) msg.push(field(7, m.callId));
+		if (m.thinking) msg.push(field(11, m.thinking));
 		parts.push(field(2, Buffer.concat(msg)));
 	}
 	parts.push(field(3, tools));
 	return Buffer.concat(parts);
 }
 
+/** A ChatToolCall from a response frame: the call already split into name and JSON arguments. */
+export interface StreamToolCall {
+	id: string;
+	name: string;
+	argumentsJson: string;
+}
+
 /**
  * Connect streaming envelopes: a flags byte (bit 0 gzip, bit 1 end-of-stream) and a big-endian
- * length. Data frames carry text chunks in field 2; the end frame is JSON that names an error, if
- * any. Bits 2..7 of the flags byte are unused, and every header, length, and varint is checked.
+ * length. Data frames carry text chunks in field 2 and may carry structured ChatToolCall messages
+ * in field 3; the end frame is JSON that names an error, if any. Bits 2..7 of the flags byte are
+ * unused, and every header, length, and varint is checked.
  */
 const FRAME_HEADER_BYTES = 5;
 const RESERVED_FLAGS = 0xfc;
 
-export function decodeChatResponse(body: Buffer): string {
+export function decodeChatResponse(body: Buffer): { text: string; toolCalls: StreamToolCall[] } {
 	const decoder = new TextDecoder();
 	let text = "";
 	let textBytes = 0;
+	const toolCalls: StreamToolCall[] = [];
 	let i = 0;
 	while (i < body.length) {
 		if (i + FRAME_HEADER_BYTES > body.length) {
@@ -256,9 +270,22 @@ export function decodeChatResponse(body: Buffer): string {
 		if (textBytes > PLANNER_MAX_TEXT_BYTES) {
 			throw new DevinError("Devin's planner reply was too large.");
 		}
+		for (const call of readField(payload, 3)) {
+			const [id] = readField(call, 1);
+			const [name] = readField(call, 2);
+			// Field 4 holds the argument string when the model emitted malformed JSON.
+			const args = readField(call, 3)[0] ?? readField(call, 4)[0];
+			if (name && args) {
+				toolCalls.push({
+					id: id ? Buffer.from(id).toString("utf-8") : "",
+					name: Buffer.from(name).toString("utf-8"),
+					argumentsJson: Buffer.from(args).toString("utf-8"),
+				});
+			}
+		}
 	}
 	text += decoder.decode();
-	return text;
+	return { text, toolCalls };
 }
 
 export async function chat(
@@ -266,7 +293,7 @@ export async function chat(
 	messages: ChatMessage[],
 	tools: string,
 	signal?: AbortSignal,
-): Promise<string> {
+): Promise<{ text: string; toolCalls: StreamToolCall[] }> {
 	const message = gzipSync(encodeChatRequest(apiKey, messages, tools));
 	const envelope = Buffer.alloc(5);
 	envelope[0] = 1;
@@ -279,10 +306,11 @@ export async function chat(
 				"Connect-Protocol-Version": "1",
 				"Connect-Content-Encoding": "gzip",
 				"Connect-Accept-Encoding": "gzip",
-				"Connect-Timeout-Ms": String(TIMEOUT_MS),
+				"Connect-Timeout-Ms": String(CHAT_TIMEOUT_MS),
 			},
 			body: new Uint8Array(Buffer.concat([envelope, message])),
 		},
+		CHAT_TIMEOUT_MS,
 		signal,
 	);
 	const bytes = await readResponseBytesBounded(response, {
@@ -302,12 +330,21 @@ export interface WebResult {
 	summary?: string;
 }
 
+export interface WebSearchResponse {
+	results: WebResult[];
+	/** Devin's synthesized summary of the results, when it produces one. */
+	summary?: string;
+	/** The canonical web search URL for these results. */
+	webSearchUrl?: string;
+}
+
 export async function webSearch(
 	apiKey: string,
 	query: string,
 	limit: number,
+	domain?: string,
 	signal?: AbortSignal,
-): Promise<WebResult[]> {
+): Promise<WebSearchResponse> {
 	const { response, signal: requestSignal } = await post(
 		`${SERVICE}/GetWebSearchResults`,
 		{
@@ -316,8 +353,10 @@ export async function webSearch(
 				metadata: { apiKey, ideName: APP, ideVersion: WEB_CLIENT_VERSION, extensionVersion: WEB_CLIENT_VERSION },
 				query,
 				limit,
+				...(domain ? { domain } : {}),
 			}),
 		},
+		WEB_TIMEOUT_MS,
 		signal,
 	);
 	const text = await readResponseTextBounded(response, {
@@ -328,15 +367,15 @@ export async function webSearch(
 	return parseWebResults(text);
 }
 
-function parseWebResults(text: string): WebResult[] {
-	let results: unknown;
+function parseWebResults(text: string): WebSearchResponse {
+	let body: { results?: unknown; summary?: unknown; webSearchUrl?: unknown };
 	try {
-		results = (JSON.parse(text) as { results?: unknown }).results;
+		body = JSON.parse(text) as typeof body;
 	} catch {
 		throw new DevinError("Devin returned a malformed web search response.");
 	}
-	if (!Array.isArray(results)) throw new DevinError("Devin returned a malformed web search response.");
-	return results.flatMap((row): WebResult[] => {
+	if (!Array.isArray(body.results)) throw new DevinError("Devin returned a malformed web search response.");
+	const results = body.results.flatMap((row): WebResult[] => {
 		const { url, title, summary } = (row ?? {}) as Record<string, unknown>;
 		if (typeof url !== "string" || !isWebUrl(url)) return [];
 		return [
@@ -347,6 +386,13 @@ function parseWebResults(text: string): WebResult[] {
 			},
 		];
 	});
+	return {
+		results,
+		...(typeof body.summary === "string" && body.summary.trim() ? { summary: body.summary.trim() } : {}),
+		...(typeof body.webSearchUrl === "string" && isWebUrl(body.webSearchUrl)
+			? { webSearchUrl: body.webSearchUrl }
+			: {}),
+	};
 }
 
 function isWebUrl(value: string): boolean {

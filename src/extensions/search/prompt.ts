@@ -1,6 +1,6 @@
 /** Planning rounds before the final answer is forced, commands per round, and files per answer. */
 export const MAX_TURNS = 3;
-export const MAX_COMMANDS = 8;
+export const MAX_COMMANDS = 6;
 export const MAX_RESULTS = 10;
 
 /**
@@ -49,6 +49,12 @@ directory, not \`.
   - tree: Display directory structure as a tree
     - Required: path (string)
     - Optional: levels (int)
+  - ls: List files in a directory
+    - Required: path (string)
+    - Optional: long_format (bool), all (bool — include hidden files)
+  - glob: Find files matching a glob pattern
+    - Required: pattern (string), path (string)
+    - Optional: type_filter (file | directory | all)
 
 # THINKING RULES
 - Think step-by-step. Plan, reason, and reflect before each tool call.
@@ -86,7 +92,7 @@ must change.
 # TOOL USE GUIDELINES
 - You must use a SINGLE restricted_exec call in your answer, that lets \
 you execute at most ${MAX_COMMANDS} commands in a single turn. Each command must be \
-an object with a \`type\` field of \`rg\`, \`readfile\`, or \`tree\` and the appropriate fields for that type.
+an object with a \`type\` field of \`rg\`, \`readfile\`, \`tree\`, \`ls\`, or \`glob\` and the appropriate fields for that type.
 - Example restricted_exec usage:
 [TOOL_CALLS]restricted_exec[ARGS]{
   "command1": {
@@ -112,7 +118,7 @@ an object with a \`type\` field of \`rg\`, \`readfile\`, or \`tree\` and the app
 - You have at most ${MAX_TURNS} turns to interact with the environment by calling \
 tools, so issuing multiple commands at once is necessary and encouraged \
 to speed up your research.
-- Each command result may be truncated to 40 lines; prefer multiple \
+- Each command result may be truncated to 50 lines; prefer multiple \
 targeted reads/searches to build complete context.
 - DO NOT EVER USE MORE THAN ${MAX_COMMANDS} commands in a single turn, or you will \
 be penalized.
@@ -162,15 +168,23 @@ export const RETRY_TOOL_CALL =
 
 const COMMAND_SCHEMA = {
 	type: "object",
-	description: "One command. Must be one of: rg, readfile, or tree.",
+	description: "Must be one of: rg, readfile, tree, ls, or glob.",
 	oneOf: [
 		{
 			properties: {
 				type: { type: "string", const: "rg", description: "Search for patterns in files using ripgrep." },
 				pattern: { type: "string", description: "The regex pattern to search for." },
-				path: { type: "string", description: "The path to search in." },
-				include: { type: "array", items: { type: "string" }, description: "File patterns to include." },
-				exclude: { type: "array", items: { type: "string" }, description: "File patterns to exclude." },
+				path: { type: "string", description: "The path to search in (file or directory)." },
+				include: {
+					type: "array",
+					items: { type: "string" },
+					description: "File patterns to include in the search.",
+				},
+				exclude: {
+					type: "array",
+					items: { type: "string" },
+					description: "File patterns to exclude from the search.",
+				},
 			},
 			required: ["type", "pattern", "path"],
 		},
@@ -190,10 +204,32 @@ const COMMAND_SCHEMA = {
 		{
 			properties: {
 				type: { type: "string", const: "tree", description: "Display directory structure as a tree." },
-				path: { type: "string", description: "Path to the directory." },
-				levels: { type: "integer", description: "Number of directory levels." },
+				path: { type: "string", description: "Path to the directory to display." },
+				levels: { type: "integer", description: "Number of directory levels to show." },
 			},
 			required: ["type", "path"],
+		},
+		{
+			properties: {
+				type: { type: "string", const: "ls", description: "List files in a directory." },
+				path: { type: "string", description: "Path to the directory to list." },
+				long_format: { type: "boolean", description: "Use long format." },
+				all: { type: "boolean", description: "Show all files, including hidden files." },
+			},
+			required: ["type", "path"],
+		},
+		{
+			properties: {
+				type: { type: "string", const: "glob", description: "Find files matching a glob pattern." },
+				pattern: { type: "string", description: "Glob pattern to match." },
+				path: { type: "string", description: "Path to search in." },
+				type_filter: {
+					type: "string",
+					enum: ["file", "directory", "all"],
+					description: "Type of files to match.",
+				},
+			},
+			required: ["type", "pattern", "path"],
 		},
 	],
 };
@@ -204,11 +240,14 @@ export const TOOL_DEFINITIONS = JSON.stringify([
 		type: "function",
 		function: {
 			name: "restricted_exec",
-			description: "Execute restricted commands (rg, readfile, tree) in parallel.",
+			description: "Execute restricted commands (rg, readfile, tree, ls, glob) in parallel.",
 			parameters: {
 				type: "object",
 				properties: Object.fromEntries(
-					Array.from({ length: MAX_COMMANDS }, (_, i) => [`command${i + 1}`, COMMAND_SCHEMA]),
+					Array.from({ length: MAX_COMMANDS }, (_, i) => [
+						`command${i + 1}`,
+						{ ...COMMAND_SCHEMA, description: `Command ${i + 1} to execute. ${COMMAND_SCHEMA.description}` },
+					]),
 				),
 				required: ["command1"],
 			},

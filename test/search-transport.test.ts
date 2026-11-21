@@ -34,7 +34,7 @@ function stub(status = 200, body: string | Uint8Array = "{}"): void {
 
 describe("decodeChatResponse", () => {
 	it("returns the text of a well-formed stream", () => {
-		expect(decodeChatResponse(reply("hello planner"))).toBe("hello planner");
+		expect(decodeChatResponse(reply("hello planner"))).toEqual({ text: "hello planner", toolCalls: [] });
 	});
 
 	it("decodes multi-byte UTF-8 characters split across field chunks", () => {
@@ -43,7 +43,26 @@ describe("decodeChatResponse", () => {
 		const part2 = bytes.subarray(4);
 		const field = (buf: Buffer) => Buffer.concat([Buffer.from([0x12, buf.length]), buf]);
 		const stream = Buffer.concat([frame(0, field(part1)), frame(0, field(part2)), frame(2, Buffer.from("{}"))]);
-		expect(decodeChatResponse(stream)).toBe("你好世界");
+		expect(decodeChatResponse(stream).text).toBe("你好世界");
+	});
+
+	it("decodes a structured tool call from field 3, with field 4 as the arguments fallback", () => {
+		const tag = (no: number) => Buffer.from([(no << 3) | 2]);
+		const field = (no: number, text: string) => {
+			const data = Buffer.from(text, "utf-8");
+			return Buffer.concat([tag(no), Buffer.from([data.length]), data]);
+		};
+		const call = (args: Buffer) => Buffer.concat([tag(3), Buffer.from([args.length]), args]);
+		const structured = Buffer.concat([field(1, "call-1"), field(2, "restricted_exec"), field(3, '{"command1":{}}')]);
+		const malformed = Buffer.concat([field(1, "call-2"), field(2, "answer"), field(4, "{oops")]);
+		const payload = Buffer.concat([field(2, "thinking"), call(structured), call(malformed)]);
+		expect(decodeChatResponse(Buffer.concat([frame(0, payload), frame(2, Buffer.from("{}"))]))).toEqual({
+			text: "thinking",
+			toolCalls: [
+				{ id: "call-1", name: "restricted_exec", argumentsJson: '{"command1":{}}' },
+				{ id: "call-2", name: "answer", argumentsJson: "{oops" },
+			],
+		});
 	});
 
 	it("rejects a frame whose length runs past the body", () => {
@@ -128,6 +147,19 @@ describe("Devin transport bounds", () => {
 	it("falls back to the status when an error body is too large to trust", async () => {
 		stub(500, JSON.stringify({ code: "unauthenticated", message: "x".repeat(70 * 1024) }));
 		await expect(webSearch("k", "q", 1)).rejects.toThrow("Devin request failed (500)");
+	});
+
+	it("passes a domain filter through to the web search request", async () => {
+		const bodies: string[] = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init: RequestInit) => {
+				bodies.push(String(init.body));
+				return new Response('{"results":[]}');
+			}),
+		);
+		await webSearch("k", "q", 5, "docs.rs");
+		expect(JSON.parse(bodies[0]!)).toMatchObject({ query: "q", limit: 5, domain: "docs.rs" });
 	});
 
 	it("refuses a web search reply past the byte budget", async () => {

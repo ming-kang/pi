@@ -25,7 +25,7 @@ Without a credential, a session starts with both tools turned off. Signing in tu
 
 ## code_search
 
-`code_search` sends your query and a directory tree of the working directory (up to three levels) to Devin's SWE-grep model. The model plans up to three rounds of up to eight read-only commands, `rg`, `readfile`, and `tree`, which run on your machine, and then answers with files and line ranges. The result is a reading list to verify, not evidence.
+`code_search` sends your query and a directory tree of the working directory (up to three levels) to Devin's SWE-grep model. The model plans up to three rounds of up to six read-only commands, `rg`, `readfile`, `tree`, `ls`, and `glob`, which run on your machine, and then answers with files and line ranges. The result is a reading list to verify, not evidence.
 
 What leaves your machine: the query, the directory tree, and the output of the commands the model runs, including the file contents it reads.
 
@@ -33,8 +33,8 @@ Enforced locally, not by Devin:
 
 - **Confinement.** Every path the model names must resolve inside the searched directory, both as written and after following symlinks.
 - **Ignored files stay local.** The tree, `rg`, and `readfile` see only the files ripgrep would search: anything excluded by `.gitignore`, `.ignore`, or `.rgignore` (even outside a git repository) is neither listed, searched, nor read, even when the model names it. So, at any depth and with or without an ignore file, are `.git` and dependency and cache directories such as `node_modules`, `.venv`, and `__pycache__`. To hide more, such as a committed `vendor/` directory, add it to `.ignore`.
-- **Read-only.** The three commands are the only operations; there is no shell and no write.
-- **Bounded output.** Each command result is capped at 40 lines of 200 characters, and each request times out after 30 seconds.
+- **Read-only.** The five commands are the only operations; there is no shell and no write.
+- **Bounded output.** Each command result is capped at 50 lines of 200 characters, and each command times out after 30 seconds.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
@@ -49,3 +49,4 @@ Enforced locally, not by Devin:
 |---|---|---|---|
 | `query` | string | required | Search query. Be specific: product names, versions, exact error text |
 | `max_results` | int 1–10 | 5 | Results to return |
+| `domain` | string | none | Restrict results to one site, such as `docs.rs` |

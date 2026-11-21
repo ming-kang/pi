@@ -2,12 +2,12 @@
  * code_search: Devin's SWE-grep model plans, this process executes.
  *
  * Each round sends the transcript to Devin, which replies with one tool call: `restricted_exec`
- * (up to eight rg/readfile/tree commands, run locally by `Workspace`) or `answer` (an `<ANSWER>`
- * document of files and line ranges). After `MAX_TURNS` rounds the answer is demanded.
+ * (up to six rg/readfile/tree/ls/glob commands, run locally by `Workspace`) or `answer` (an
+ * `<ANSWER>` document of files and line ranges). After `MAX_TURNS` rounds the answer is demanded.
  */
 import { randomUUID } from "node:crypto";
 import { relative } from "node:path";
-import { type ChatMessage, chat } from "./devin.ts";
+import { type ChatMessage, chat, type StreamToolCall } from "./devin.ts";
 import {
 	FORCE_ANSWER,
 	MAX_COMMANDS,
@@ -44,7 +44,7 @@ export async function codeSearch(options: CodeSearchOptions): Promise<CodeLocati
 		{ role: "system", content: SYSTEM_PROMPT },
 		{
 			role: "user",
-			content: `Problem Statement: ${query}\n\nRepo Map (tree -L ${map.depth} ${VIRTUAL_ROOT}):\n\`\`\`text\n${map.tree}\n\`\`\``,
+			content: `Problem Statement: ${query}\n\nFind all code in the repository relevant to this, and answer with the file paths and line ranges as instructed.\n\nRepo Map (tree -L ${map.depth} ${VIRTUAL_ROOT}):\n\`\`\`text\n${map.tree}\n\`\`\``,
 		},
 	];
 
@@ -52,13 +52,14 @@ export async function codeSearch(options: CodeSearchOptions): Promise<CodeLocati
 		if (turn === MAX_TURNS + 1) messages.push({ role: "user", content: FORCE_ANSWER });
 		progress(turn > MAX_TURNS ? "Collecting the answer…" : `Planning (round ${turn}/${MAX_TURNS})…`);
 		const reply = await chat(apiKey, messages, TOOL_DEFINITIONS, signal);
-		const call = parseToolCall(reply);
+		// A structured tool_calls frame is authoritative; the [TOOL_CALLS] text parse is the fallback.
+		const call = structuredCall(reply.toolCalls[0], reply.text) ?? parseToolCall(reply.text);
 
 		if (call?.name === "answer") {
 			return parseAnswer(String(call.args.answer ?? ""), workspace, options.cwd);
 		}
 		if (call?.name !== "restricted_exec") {
-			messages.push({ role: "assistant", content: reply }, { role: "user", content: RETRY_TOOL_CALL });
+			messages.push({ role: "assistant", content: reply.text }, { role: "user", content: RETRY_TOOL_CALL });
 			continue;
 		}
 
@@ -72,11 +73,12 @@ export async function codeSearch(options: CodeSearchOptions): Promise<CodeLocati
 				async (k) => `<${k}_result>\n${await workspace.run(call.args[k] as Command, signal)}\n</${k}_result>`,
 			),
 		);
-		const id = randomUUID();
+		const id = call.id || randomUUID();
 		messages.push(
 			{
 				role: "assistant",
-				content: call.thinking,
+				content: "",
+				thinking: call.thinking,
 				call: { id, name: call.name, arguments: JSON.stringify(call.args) },
 			},
 			{ role: "tool", content: results.join(""), callId: id },
@@ -89,6 +91,26 @@ export interface ToolCall {
 	thinking: string;
 	name: string;
 	args: Record<string, unknown>;
+	/** The call's id when the stream supplied one. */
+	id?: string;
+}
+
+/**
+ * A ChatToolCall the stream decoded itself (name + arguments_json). `thinking` is the model's
+ * whole text reply; a malformed arguments string gets the same repair pass as a text call before
+ * falling back to it.
+ */
+function structuredCall(call: StreamToolCall | undefined, text: string): ToolCall | null {
+	if (!call) return null;
+	for (const candidate of [firstObject(call.argumentsJson), firstObject(repairKeys(call.argumentsJson))]) {
+		try {
+			const args = JSON.parse(candidate) as unknown;
+			if (args && typeof args === "object" && !Array.isArray(args)) {
+				return { thinking: text.trim(), name: call.name, args: args as Record<string, unknown>, id: call.id };
+			}
+		} catch {}
+	}
+	return null;
 }
 
 /** `thinking[TOOL_CALLS]name[ARGS]{json}`. The JSON is the first balanced object, repaired if needed. */

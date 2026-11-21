@@ -4,11 +4,12 @@
  *
  * Security boundary: every model-supplied path must resolve inside the root, both lexically and
  * after following symlinks, and must be a file or directory that `rg --files` lists, so ignored
- * files are neither searched, listed, nor read. Only `rg`, `readfile`, and `tree` exist; there is
- * no shell and no write. Model-supplied rg values only ever fill `--regexp` and `--glob`.
+ * files are neither searched, listed, nor read. Only `rg`, `readfile`, `tree`, `ls`, and `glob`
+ * exist; there is no shell and no write. Model-supplied rg values only ever fill `--regexp` and
+ * `--glob`.
  */
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
@@ -16,9 +17,11 @@ import { ensureTool } from "../../utils/tools-manager.ts";
 
 export const VIRTUAL_ROOT = "/codebase";
 
-/** Per-command result cap. Results are sent back to Devin, whose request limit is ~320KB. */
-const RESULT_MAX_LINES = 40;
+/** Per-command result cap, matching the cap the planner is told about. */
+const RESULT_MAX_LINES = 50;
 const LINE_MAX_CHARS = 200;
+/** One command's wall-clock budget; the planner may retry with a narrower one. */
+const COMMAND_TIMEOUT_MS = 30_000;
 /** Matches read from rg before it is stopped; enough to count which files an over-broad pattern hits. */
 const RG_MAX_MATCHES = 2000;
 /** rg's stderr, which only ever carries a regex error; a runaway child must not fill memory with it. */
@@ -231,6 +234,9 @@ export interface Command {
 	start_line?: unknown;
 	end_line?: unknown;
 	levels?: unknown;
+	long_format?: unknown;
+	all?: unknown;
+	type_filter?: unknown;
 }
 
 export class Workspace {
@@ -326,23 +332,32 @@ export class Workspace {
 			const tree = renderTree(index, "", depth);
 			if (Buffer.byteLength(tree) <= MAP_MAX_BYTES) return { depth, tree };
 		}
-		return { depth: 1, tree: renderTree(index, "", 1).slice(0, MAP_MAX_BYTES / 4) };
+		// A level-1 tree over the budget is cut at a line boundary, so the planner sees clean rows.
+		const tree = renderTree(index, "", 1).slice(0, MAP_MAX_BYTES / 4);
+		return { depth: 1, tree: tree.slice(0, Math.max(tree.lastIndexOf("\n") + 1, 0)) || tree };
 	}
 
 	async run(command: Command, signal?: AbortSignal): Promise<string> {
+		const timeout = AbortSignal.timeout(COMMAND_TIMEOUT_MS);
+		const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
 		try {
-			signal?.throwIfAborted();
+			combined.throwIfAborted();
 			switch (command?.type) {
 				case "rg":
-					return await this.rg(command, signal);
+					return await this.rg(command, combined);
 				case "readfile":
-					return await this.readfile(command, signal);
+					return await this.readfile(command, combined);
 				case "tree":
-					return await this.tree(command, signal);
+					return await this.tree(command, combined);
+				case "ls":
+					return await this.ls(command, combined);
+				case "glob":
+					return await this.glob(command, combined);
 				default:
-					return `Error: unknown command type '${String(command?.type)}'; use rg, readfile, or tree`;
+					return `Error: unknown command type '${String(command?.type)}'; use rg, readfile, tree, ls, or glob`;
 			}
 		} catch (e) {
+			if (timeout.aborted && !signal?.aborted) return `Error: command timed out after ${COMMAND_TIMEOUT_MS / 1000}s`;
 			return `Error: ${e instanceof Error ? e.message : String(e)}`;
 		}
 	}
@@ -421,10 +436,75 @@ export class Workspace {
 		while (depth > 1 && tree.split("\n").length > RESULT_MAX_LINES) tree = renderTree(index, dir.rel, --depth);
 		return depth < levels ? `${capLines(tree)}\n(levels reduced to ${depth} to fit)` : capLines(tree);
 	}
+
+	/**
+	 * The directory's entries as `ls` prints them: directories with a trailing slash, dotfiles
+	 * hidden unless `all`, and sizes in `long_format`. Same visibility rules as `tree`.
+	 */
+	private async ls(command: Command, signal?: AbortSignal): Promise<string> {
+		const dir = await this.find(command.path ?? VIRTUAL_ROOT, signal);
+		if ("error" in dir) return dir.error;
+		if (dir.kind !== "dir") return `Error: not a directory: ${String(command.path)}`;
+		const index = await this.files(signal);
+		const entries = (index.dirs.get(dir.rel) ?? []).filter((name) => command.all === true || !name.startsWith("."));
+		if (!entries.length) return "(empty directory)";
+		if (command.long_format !== true) return capLines(entries.join("\n"));
+		const rows = entries.map((name) => {
+			if (name.endsWith("/")) return `      dir  ${name}`;
+			return `${String(statSync(resolve(dir.real, name)).size).padStart(9)}  ${name}`;
+		});
+		return capLines(rows.join("\n"));
+	}
+
+	/**
+	 * Files matching a planner glob under `path`, plus directories when `type_filter` asks.
+	 * Files are matched by rg itself (same glob semantics the planner expects); directories by a
+	 * small matcher over the index, since `rg --files` never reports a directory.
+	 */
+	private async glob(command: Command, signal?: AbortSignal): Promise<string> {
+		if (typeof command.pattern !== "string" || !command.pattern) return "Error: missing pattern";
+		const dir = await this.find(command.path ?? VIRTUAL_ROOT, signal);
+		if ("error" in dir) return dir.error;
+		if (dir.kind !== "dir") return `Error: not a directory: ${String(command.path)}`;
+		// The planner may prefix the pattern with /codebase; a leading `!` would invert it for rg.
+		const pattern = rgGlob(command.pattern.replace(/^!+/, "")).replace(/^\/+/, "");
+		const filter =
+			command.type_filter === "file" || command.type_filter === "directory" ? command.type_filter : "all";
+		const matches: string[] = [];
+		if (filter !== "directory") {
+			// `-g` whitelists over the ignore files, so only index-listed files may be reported.
+			const index = await this.files(signal);
+			await runRg(
+				this.root,
+				["--files", "--glob", pattern],
+				dir.rel || ".",
+				(line) => {
+					const rel = rgPath(line);
+					if (index.files.has(rel)) matches.push(`${VIRTUAL_ROOT}/${rel}`);
+					return matches.length < RESULT_MAX_LINES;
+				},
+				signal,
+			);
+		}
+		if (filter !== "file") {
+			const matcher = globMatcher(pattern);
+			const prefix = dir.rel ? `${dir.rel}/` : "";
+			for (const name of [...(await this.files(signal)).dirs.keys()].sort()) {
+				if (!name.startsWith(prefix)) continue;
+				const rest = name.slice(prefix.length);
+				if (rest && matcher(rest)) {
+					matches.push(`${VIRTUAL_ROOT}/${name}/`);
+					if (matches.length >= RESULT_MAX_LINES) break;
+				}
+			}
+		}
+		matches.sort();
+		return matches.length ? capLines(matches.join("\n")) : "(no matches)";
+	}
 }
 
 /**
- * What an over-broad pattern hit, per file, ahead of the first matches; rg's arbitrary first 40
+ * What an over-broad pattern hit, per file, ahead of the first matches; rg's arbitrary first
  * lines would say nothing about where to narrow next.
  */
 function matchSummary(matches: Match[], complete: boolean): string[] {
@@ -443,6 +523,30 @@ function matchSummary(matches: Match[], complete: boolean): string[] {
 		...rows,
 		"First matches:",
 	];
+}
+
+/**
+ * A gitignore-style glob as a matcher over root-relative paths: `*` and `?` stay within a
+ * segment, `**` crosses segments, a pattern without `/` matches the basename. The model never
+ * sees the regex; invalid patterns simply match nothing.
+ */
+function globMatcher(pattern: string): (path: string) => boolean {
+	let source = "^";
+	const basenameMatch = !pattern.includes("/");
+	for (let i = 0; i < pattern.length; i++) {
+		const c = pattern[i]!;
+		if (c === "*") {
+			if (pattern[i + 1] === "*") {
+				source += ".*";
+				i++;
+				if (pattern[i + 1] === "/") i++;
+			} else source += "[^/]*";
+		} else if (c === "?") source += "[^/]";
+		else if ("\\^$.|+()[]{}".includes(c)) source += `\\${c}`;
+		else source += c;
+	}
+	const regex = new RegExp(`${source}$`);
+	return basenameMatch ? (path) => regex.test(path.slice(path.lastIndexOf("/") + 1)) : (path) => regex.test(path);
 }
 
 /** `dir` and its entries to `maxDepth` levels; a trailing slash marks a directory. */

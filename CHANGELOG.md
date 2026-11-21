@@ -4,6 +4,14 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- `web_search` accepts an optional `domain` parameter that restricts results to one site, such as `docs.rs`; the call row shows it. Replies now include Devin's synthesized summary and the canonical results link when Devin produces them.
+
+### Changed
+
+- `code_search` matches Devin's current planner contract: up to six commands per round (was eight) with `ls` and `glob` alongside `rg`, `readfile`, and `tree`; each command result is capped at 50 lines (was 40) and each command now times out after 30 seconds. Structured tool calls from the stream are preferred over the text form, and the planner's reasoning travels in the thinking field instead of the message text.
+
 ## [1.6.0] - 2026-11-20
 
 ### Added

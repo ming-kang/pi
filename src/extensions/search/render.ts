@@ -105,11 +105,11 @@ export function renderCodeSearchResult(
 }
 
 export function renderWebSearchCall(
-	args: { query?: string },
+	args: { query?: string; domain?: string },
 	theme: Theme,
 	context: ToolRenderContext<unknown, unknown, WebSearchDetails>,
 ): Component {
-	return header(theme, "web_search", args.query, "", context, () => {
+	return header(theme, "web_search", args.query, args.domain ? ` on ${args.domain}` : "", context, () => {
 		const n = context.result?.details?.results.length ?? 0;
 		return n ? plural(n, "result") : "no results";
 	});
