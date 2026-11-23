@@ -933,7 +933,7 @@ export class InteractiveMode {
 		if (triggerCharacters.length > 0) {
 			provider.triggerCharacters = [...new Set(triggerCharacters)];
 		}
-		if (this.settingsManager.getEnableSkillCommands()) {
+		if (this.settingsManager?.getEnableSkillCommands() && this.skillAutocompleteCommands?.length > 0) {
 			provider = createSkillAutocompleteProvider(provider, this.skillAutocompleteCommands);
 		}
 
