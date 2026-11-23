@@ -20,6 +20,7 @@ The editor can be replaced temporarily by built-in UI such as `/settings` or by 
 | Feature | How |
 |---------|-----|
 | File reference | Type `@` to fuzzy-search project files |
+| Skill reference | Type `/skill` anywhere to pick and insert `/skill:name` skills (multiple per message supported) |
 | Path completion | Press Tab to complete paths |
 | Multi-line input | Shift+Enter, or Ctrl+Enter on Windows Terminal |
 | Copy response | Ctrl+X copies the selected message in `/tree`; otherwise it copies the last assistant message, or the active fullscreen text selection when `fullscreenCopyOnSelect` is disabled |

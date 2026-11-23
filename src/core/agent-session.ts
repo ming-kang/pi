@@ -13,7 +13,6 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
-import { readFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import {
 	type AfterToolCallContext,
@@ -58,7 +57,6 @@ import {
 	streamSimple,
 } from "@earendil-works/pi-ai/compat";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
-import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { processImage } from "../utils/image-process.ts";
 import { sleep } from "../utils/sleep.ts";
 import { normalizeToolResultImages } from "../utils/tool-result-images.ts";
@@ -140,6 +138,7 @@ import {
 	DEFAULT_TOOL_NAMES,
 	type SettingsManager,
 } from "./settings-manager.ts";
+import { expandSkillReferences } from "./skill-references.ts";
 import { slashCommandName } from "./slash-command-name.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { BUILTIN_PATH_PREFIX, createSyntheticSourceInfo, isSyntheticPath, type SourceInfo } from "./source-info.ts";
@@ -203,6 +202,22 @@ export function parseSkillBlock(text: string): ParsedSkillBlock | null {
 		content: match[3],
 		userMessage: match[4]?.trim() || undefined,
 	};
+}
+
+/**
+ * Parse the leading skill blocks of a message that invoked several skills.
+ * Returns null if the text doesn't start with a skill block.
+ */
+export function parseSkillBlocks(text: string): { blocks: ParsedSkillBlock[]; userMessage: string | undefined } | null {
+	const blocks: ParsedSkillBlock[] = [];
+	let userMessage: string | undefined = text;
+	let skillBlock = parseSkillBlock(text);
+	while (skillBlock) {
+		blocks.push(skillBlock);
+		userMessage = skillBlock.userMessage;
+		skillBlock = userMessage ? parseSkillBlock(userMessage) : null;
+	}
+	return blocks.length > 0 ? { blocks, userMessage } : null;
 }
 
 /** Tool execution events of calls a tool made through `ctx.executeTool()` carry `parentToolCallId`. */
@@ -2439,11 +2454,11 @@ export class AgentSession {
 		}
 		const { text: currentText, images: currentImages } = processedInput;
 
-		// Expand skill commands (/skill:name args) and prompt templates (/template args)
+		// Expand prompt templates (/template args), then skill references (/skill:name) in the result
 		let expandedText = currentText;
 		if (expandPromptTemplates) {
-			expandedText = this._expandSkillCommand(expandedText);
 			expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+			expandedText = this._expandSkillCommand(expandedText);
 		}
 
 		// If streaming, queue via steer() or followUp() based on option
@@ -2515,34 +2530,18 @@ export class AgentSession {
 	}
 
 	/**
-	 * Expand skill commands (/skill:name args) to their full content.
-	 * Returns the expanded text, or the original text if not a skill command or skill not found.
+	 * Expand skill references (/skill:name) to their full content.
+	 * Returns the original text if it references no loaded skill.
 	 * Emits errors via extension runner if file read fails.
 	 */
 	private _expandSkillCommand(text: string): string {
-		if (!text.startsWith("/skill:")) return text;
-
-		const spaceIndex = text.indexOf(" ");
-		const skillName = spaceIndex === -1 ? text.slice(7) : text.slice(7, spaceIndex);
-		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
-
-		const skill = this.resourceLoader.getSkills().skills.find((s) => s.name === skillName);
-		if (!skill) return text; // Unknown skill, pass through
-
-		try {
-			const content = readFileSync(skill.filePath, "utf-8");
-			const body = stripFrontmatter(content).trim();
-			const skillBlock = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
-			return args ? `${skillBlock}\n\n${args}` : skillBlock;
-		} catch (err) {
-			// Emit error like extension commands do
+		return expandSkillReferences(text, this.resourceLoader.getSkills().skills, (filePath, err) => {
 			this._extensionRunner.emitError({
-				extensionPath: skill.filePath,
+				extensionPath: filePath,
 				event: "skill_expansion",
 				error: err instanceof Error ? err.message : String(err),
 			});
-			return text; // Return original on error
-		}
+		});
 	}
 
 	private async _queueUserInput(
@@ -2563,8 +2562,8 @@ export class AgentSession {
 		);
 		if (!processedInput) return "handled";
 
-		let expandedText = this._expandSkillCommand(processedInput.text);
-		expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+		let expandedText = expandPromptTemplate(processedInput.text, [...this.promptTemplates]);
+		expandedText = this._expandSkillCommand(expandedText);
 
 		if (behavior === "steer") {
 			await this._queueSteer(expandedText, processedInput.images);

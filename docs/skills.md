@@ -73,14 +73,19 @@ This is progressive disclosure: only descriptions are always in context, full in
 
 ## Skill Commands
 
-Skills register as `/skill:name` commands:
+Skills register as `/skill:name` commands and can be invoked at the start of a prompt or anywhere in a message:
 
 ```bash
-/skill:brave-search           # Load and execute the skill
-/skill:pdf-tools extract      # Load skill with arguments
+/skill:brave-search                              # Load and execute the skill
+/skill:pdf-tools extract                         # Load skill with arguments
+Compare @spec.pdf using /skill:pdf-tools and /skill:brave-search  # Multiple skills in one message
 ```
 
-Arguments after the command are appended to the skill content as `User: <args>`.
+In interactive mode, type `/skill` anywhere after whitespace or punctuation (like `@` for files) to open the skill picker. Pressing Tab or Enter inserts `/skill:name ` at the cursor without submitting the message, so you can combine multiple skills in a single prompt.
+
+When skills are placed as a leading command prefix, arguments after them are sent as the user prompt; when `/skill:name` appears inline in prose, all referenced skills are loaded above the message while keeping your prompt text intact.
+
+References inside inline code (`` `/skill:name` ``) or fenced code blocks stay literal, so you can mention a skill command without loading it. The picker does not open there either.
 
 ### Invocation Policy
 

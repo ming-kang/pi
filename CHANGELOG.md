@@ -4,6 +4,10 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Inline `/skill` trigger in the interactive editor: typing `/skill` at any token boundary opens a skill picker (filterable via `/skill:query` or `/skill query`) where both `Enter` and `Tab` insert `/skill:name ` without submitting, and prompts expand and render multiple `/skill:name` invocations in a single message. References inside inline code or fenced code blocks stay literal.
+
 ## [1.6.1] - 2026-11-21
 
 ### Added

@@ -403,6 +403,23 @@
         };
       }
 
+      /**
+       * Parse the leading skill blocks of a message that invoked several skills.
+       * Returns null if the text doesn't start with a skill block; otherwise `name` lists every skill
+       * and `blocks` holds each parsed block.
+       */
+      function parseSkillBlocks(text) {
+        const blocks = [];
+        let userMessage = text;
+        let skillBlock = parseSkillBlock(text);
+        while (skillBlock) {
+          blocks.push(skillBlock);
+          userMessage = skillBlock.userMessage;
+          skillBlock = userMessage ? parseSkillBlock(userMessage) : null;
+        }
+        return blocks.length > 0 ? { name: blocks.map(block => block.name).join(', '), blocks, userMessage } : null;
+      }
+
       function getSearchableText(entry, label) {
         const parts = [];
         if (label) parts.push(label);
@@ -721,7 +738,7 @@
             const msg = entry.message;
             if (msg.role === 'user') {
               const rawContent = extractContent(msg.content);
-              const skillBlock = parseSkillBlock(rawContent);
+              const skillBlock = parseSkillBlocks(rawContent);
               if (skillBlock) {
                 let treeHtml = labelHtml + `<span class="tree-role-skill">skill:</span> ${escapeHtml(skillBlock.name)}`;
                 if (skillBlock.userMessage) {
@@ -1298,7 +1315,7 @@
             const content = msg.content;
             const text = typeof content === 'string' ? content :
               content.filter(c => c.type === 'text').map(c => c.text).join('\n');
-            const skillBlock = parseSkillBlock(text);
+            const skillBlock = parseSkillBlocks(text);
 
             if (skillBlock) {
               // Collect images from content array
@@ -1306,12 +1323,12 @@
               const hasUserContent = skillBlock.userMessage || images.length > 0;
               let html = `<div class="skill-user-entry" id="${entryDomId}">${copyBtnHtml}${tsHtml}`;
 
-              // Skill invocation (collapsed by default, click to expand)
-              html += `<div class="skill-invocation" onclick="if(window.getSelection().toString())return;this.classList.toggle('expanded')">
+              // One skill invocation per invoked skill (collapsed by default, click to expand)
+              html += skillBlock.blocks.map(skillBlock => `<div class="skill-invocation" onclick="if(window.getSelection().toString())return;this.classList.toggle('expanded')">
                 <div class="skill-invocation-label">[skill] ${escapeHtml(skillBlock.name)}</div>
                 <div class="skill-invocation-collapsed">${escapeHtml(skillBlock.name)} (click to expand)</div>
                 <div class="skill-invocation-content markdown-content">${safeMarkedParse(skillBlock.content)}</div>
-              </div>`;
+              </div>`).join('');
 
               // User message (separate block if present)
               if (hasUserContent) {

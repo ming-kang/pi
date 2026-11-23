@@ -735,6 +735,35 @@
 				"test/btw-extension.test.ts"
 			],
 			"watch": "Upstream exposes a shared API-key subscription check on the model runtime so footer, statusline and extensions need no provider checks of their own."
+		},
+		{
+			"id": "inline-skill-invocation",
+			"why": "Typing /skill at any token boundary outside Markdown code opens a skill-only autocomplete picker where Enter inserts /skill:name like Tab, and messages expand every /skill:name reference outside code (replacing the upstream prefix-only expansion) and render multiple skill invocations. The editor manages the picker through pi-tui Editor's private autocomplete hooks, which test/skill-references.test.ts covers.",
+			"paths": [
+				{
+					"path": "src/core/agent-session.ts"
+				},
+				{
+					"path": "src/core/export-html/template.css"
+				},
+				{
+					"path": "src/core/export-html/template.js"
+				},
+				{
+					"path": "src/index.ts"
+				},
+				{
+					"path": "src/modes/interactive/components/custom-editor.ts"
+				},
+				{
+					"path": "src/modes/interactive/interactive-mode.ts"
+				}
+			],
+			"tests": [
+				"test/skill-references.test.ts",
+				"test/export-html-skill-block.test.ts"
+			],
+			"watch": "Upstream supports inline /skill autocomplete and multiple skill invocations in a single prompt."
 		}
 	]
 }

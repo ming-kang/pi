@@ -68,7 +68,7 @@ import {
 	UPDATE_CHANGELOG_HINT,
 	VERSION,
 } from "../../config.ts";
-import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
+import { type AgentSession, type AgentSessionEvent, parseSkillBlocks } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
 import {
@@ -200,6 +200,7 @@ import { refreshModelCatalogs } from "./model-catalog-refresh.ts";
 import { getModelSearchText } from "./model-search.ts";
 import { type BlockedStatus, ProgramStatusReporter } from "./program-status-reporter.ts";
 import { shareSession } from "./session-share.ts";
+import { createSkillAutocompleteProvider } from "./skill-autocomplete.ts";
 import {
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
@@ -611,6 +612,7 @@ export class InteractiveMode {
 
 	// Skill commands: command name -> skill file path
 	private skillCommands = new Map<string, string>();
+	private skillAutocompleteCommands: SlashCommand[] = [];
 
 	// Agent subscription unsubscribe function
 	private unsubscribe?: () => void;
@@ -913,6 +915,7 @@ export class InteractiveMode {
 			}
 		}
 
+		this.skillAutocompleteCommands = skillCommandList;
 		return new CombinedAutocompleteProvider(
 			[...slashCommands, ...templateCommands, ...extensionCommands, ...skillCommandList],
 			this.sessionManager.getCwd(),
@@ -929,6 +932,9 @@ export class InteractiveMode {
 		}
 		if (triggerCharacters.length > 0) {
 			provider.triggerCharacters = [...new Set(triggerCharacters)];
+		}
+		if (this.settingsManager.getEnableSkillCommands()) {
+			provider = createSkillAutocompleteProvider(provider, this.skillAutocompleteCommands);
 		}
 
 		this.autocompleteProvider = provider;
@@ -4147,24 +4153,27 @@ export class InteractiveMode {
 					if (this.chatContainer.children.length > 0) {
 						this.chatContainer.addChild(new Spacer(1));
 					}
-					const skillBlock = parseSkillBlock(textContent);
-					if (skillBlock) {
-						// Render skill block (collapsible)
-						const component = new SkillInvocationMessageComponent(
-							skillBlock,
-							this.getMarkdownThemeWithSettings(),
-							this.outputPad,
-							this.getMarkdownTransformers(),
-							options?.messageId,
-							options?.timestamp,
-						);
-						component.setExpanded(this.toolOutputExpanded);
-						this.chatContainer.addChild(component);
+					const skillMessage = parseSkillBlocks(textContent);
+					if (skillMessage) {
+						// Render each skill block (collapsible)
+						for (const [index, skillBlock] of skillMessage.blocks.entries()) {
+							if (index > 0) this.chatContainer.addChild(new Spacer(1));
+							const component = new SkillInvocationMessageComponent(
+								skillBlock,
+								this.getMarkdownThemeWithSettings(),
+								this.outputPad,
+								this.getMarkdownTransformers(),
+								options?.messageId,
+								options?.timestamp,
+							);
+							component.setExpanded(this.toolOutputExpanded);
+							this.chatContainer.addChild(component);
+						}
 						// Render user message separately if present
-						if (skillBlock.userMessage) {
+						if (skillMessage.userMessage) {
 							this.chatContainer.addChild(new Spacer(1));
 							const userComponent = new UserMessageComponent(
-								skillBlock.userMessage,
+								skillMessage.userMessage,
 								this.getMarkdownThemeWithSettings(),
 								this.outputPad,
 								this.getMarkdownTransformers(),
