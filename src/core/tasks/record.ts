@@ -66,10 +66,25 @@ export class TaskRecord {
 		}
 	}
 
-	/** Readers share one frozen copy, so polling and status rendering never clone unchanged output. */
+	/** Readers share one frozen copy; nested bounded fields are frozen once instead of deep-cloned on every publish. */
 	snapshot(): TaskSnapshot {
-		this.frozen ??= freeze(structuredClone(this.working));
+		if (!this.frozen) {
+			const copy: TaskSnapshot = { ...this.working };
+			if (copy.input) freeze(copy.input);
+			if (copy.facts) freeze(copy.facts);
+			if (copy.result) freeze(copy.result);
+			if (copy.display) freeze(copy.display);
+			if (copy.usage) freeze(copy.usage);
+			this.frozen = Object.freeze(copy);
+		}
 		return this.frozen;
+	}
+
+	/** Record output activity without full-snapshot churn on rapid chunks. */
+	touchOutput(now: number): void {
+		const previous = this.working.lastOutputAt;
+		this.working.lastOutputAt = now;
+		if (previous === undefined || now - previous >= 1000) this.frozen = undefined;
 	}
 
 	/** Whether the launch anchor is on the selected branch. */

@@ -887,6 +887,116 @@ Project-local resources use `.pi/extensions/`, `.pi/prompts/`, and `.pi/skills/`
 
 **Note**: Built-in TUI commands (`/settings`, `/hotkeys`, etc.) are not included. They are handled only in interactive mode and would not execute if sent via `prompt`.
 
+### Tasks
+
+RPC mode enables managed background tasks (`tasksEnabled: true`) and provides commands to inspect, control, and optionally subscribe to task lifecycle transitions without polluting the default event stream.
+
+#### list_tasks
+
+List all visible managed tasks on the current branch (both active and retained terminal tasks).
+
+```json
+{"type": "list_tasks"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "list_tasks",
+  "success": true,
+  "data": { "tasks": [ /* TaskSnapshot[] */ ] }
+}
+```
+
+#### get_task
+
+Get a single task snapshot by exact ID or unique prefix.
+
+```json
+{"type": "get_task", "taskId": "bash-a1b2c3d4"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "get_task",
+  "success": true,
+  "data": { "task": { /* TaskSnapshot */ } }
+}
+```
+
+#### read_task
+
+Read a bounded slice (or filtered line matches) of a task's output.
+
+```json
+{"type": "read_task", "taskId": "bash-a1b2c3d4", "mode": "tail", "bytes": 8192, "sinceBytes": 0, "filter": "error", "contextLines": 2}
+```
+
+All fields except `taskId` are optional (`endByte` is also supported for backward paging). Response `data` is a `TaskRead` object (`{ task, text, totalBytes, truncated, fromByte?, endByte?, readError?, filtered?, totalMatches? }`).
+
+#### kill_task
+
+Request cancellation of a running or queued task.
+
+```json
+{"type": "kill_task", "taskId": "bash-a1b2c3d4"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "kill_task",
+  "success": true,
+  "data": { "requested": true, "task": { /* TaskSnapshot */ } }
+}
+```
+
+#### detach_tasks
+
+Move foreground tasks to the background (a specific `taskId`, or all eligible foreground tasks when `taskId` is omitted).
+
+```json
+{"type": "detach_tasks"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "detach_tasks",
+  "success": true,
+  "data": { "detached": 1 }
+}
+```
+
+#### subscribe_tasks
+
+Opt in or out of `task_lifecycle` events on stdout (disabled by default so existing RPC event consumers are unaffected). Subscriptions survive session replacement (`new_session`, `switch_session`, `fork`).
+
+```json
+{"type": "subscribe_tasks", "enabled": true}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "subscribe_tasks",
+  "success": true,
+  "data": { "subscribed": true }
+}
+```
+
+When enabled, task lifecycle transitions emit:
+```json
+{"type": "task_lifecycle", "action": "started", "task": { /* TaskSnapshot */ }}
+```
+`action` is `"started"`, `"backgrounded"`, `"stopping"`, or `"settled"` (progress updates are never streamed).
+
 ## Events
 
 Events are streamed to stdout as JSON lines during agent operation. Events do not generally include an `id` field; `bash_execution_update` includes the `id` of its originating `bash` command when one was provided.

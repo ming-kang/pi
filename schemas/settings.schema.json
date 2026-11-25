@@ -701,6 +701,53 @@
         }
       }
     },
+    "tasks": {
+      "type": "object",
+      "properties": {
+        "maxBackground": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 128,
+          "description": "Maximum number of concurrent background tasks (1–128).",
+          "default": 8
+        },
+        "maxHistory": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 1024,
+          "description": "Maximum retained terminal tasks per history cohort (foreground and background).",
+          "default": 32
+        },
+        "maxBackgroundOutputMb": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 1024,
+          "description": "Maximum background shell output size in MiB (1–1024).",
+          "default": 20
+        },
+        "backgroundOutputLimitAction": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "fail"
+            },
+            {
+              "type": "string",
+              "const": "truncate"
+            }
+          ],
+          "description": "Action when a background shell exceeds maxBackgroundOutputMb: \"fail\" stops the command with an error; \"truncate\" stops writing to disk and keeps the rolling tail.",
+          "default": "fail"
+        },
+        "shutdownGraceMs": {
+          "type": "number",
+          "minimum": 100,
+          "maximum": 60000,
+          "description": "Grace period in milliseconds for draining cancelled tasks on shutdown or branch navigation.",
+          "default": 2000
+        }
+      }
+    },
     "sessionDir": {
       "type": "string",
       "description": "Custom session storage directory, in the same format as the --session-dir CLI flag."

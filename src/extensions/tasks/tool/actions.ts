@@ -13,8 +13,7 @@ import {
 } from "../../../core/tasks/types.ts";
 import { truncateHead } from "../../../core/tools/truncate.ts";
 import { sanitizeBinaryOutput } from "../../../utils/shell.ts";
-import { TASKS_LIST_FINISHED_SHOWN } from "./constants.ts";
-import { clampSinceBytes, requireTaskId, type TasksInput } from "./schema.ts";
+import { clampContextLines, clampFinishedLimit, clampSinceBytes, requireTaskId, type TasksInput } from "./schema.ts";
 import type { TasksDetails, TasksKillDetails, TasksListDetails, TasksReadDetails } from "./types.ts";
 
 export function boundedText(text: string): string {
@@ -86,9 +85,18 @@ function lookupFailure(background: TasksContext, id: string, error: unknown): Er
  * Where this slice sits in the output, so the next read can continue from it.
  * A tail read whose new output exceeds its budget returns the newest bytes and says what it skipped.
  */
-function rangeText(slice: TaskRead, sinceBytes?: number): string {
+function rangeText(slice: TaskRead, sinceBytes?: number, filter?: string): string {
 	const { from, to } = taskReadRange(slice);
 	const floor = sinceBytes === undefined || sinceBytes > slice.totalBytes ? 0 : sinceBytes;
+	if (slice.filtered) {
+		const matches = slice.totalMatches ?? 0;
+		return [
+			filter ? `filter "${filter}"` : "filtered",
+			`${matches} ${matches === 1 ? "match" : "matches"}`,
+			`bytes ${from}–${to} of ${slice.totalBytes}`,
+			`next sinceBytes ${to}`,
+		].join(" · ");
+	}
 	return [
 		`bytes ${from}–${to} of ${slice.totalBytes}`,
 		sinceBytes !== undefined && from > floor ? `skipped ${from - floor} bytes after sinceBytes ${floor}` : "",
@@ -102,12 +110,16 @@ function rangeText(slice: TaskRead, sinceBytes?: number): string {
 function readText(header: string, slice: TaskRead): string {
 	const boundedField = (text: string, maxBytes: number) =>
 		truncateHead(boundText(sanitizeBinaryOutput(text), maxBytes), { maxBytes, maxLines: 100 }).content;
+	const facts = slice.task.facts?.length
+		? `Facts: ${boundedField(slice.task.facts.map(([label, value]) => `${label}=${value}`).join(" · "), 4096)}`
+		: "";
 	return [
 		boundedField(header, 4096),
 		slice.task.error ? `Task error: ${boundedField(slice.task.error, 4096)}` : "",
 		slice.readError ? `Output read error: ${boundedField(slice.readError, 4096)}` : "",
+		facts,
 		boundedField(slice.task.outputPath ?? "", 8192),
-		slice.text || "(no output yet)",
+		slice.text || (slice.filtered ? "(no matching lines)" : "(no output yet)"),
 	]
 		.filter(Boolean)
 		.join("\n");
@@ -116,10 +128,18 @@ export async function runRead(background: TasksContext, input: TasksInput): Prom
 	const id = requireTaskId(input);
 	try {
 		const sinceBytes = clampSinceBytes(input.sinceBytes);
-		const slice = await background.read(id, { mode: input.mode, bytes: clampReadBytes(input.bytes), sinceBytes });
+		const filter = input.filter?.trim() || undefined;
+		const contextLines = clampContextLines(input.contextLines);
+		const slice = await background.read(id, {
+			mode: input.mode,
+			bytes: clampReadBytes(input.bytes),
+			sinceBytes,
+			filter,
+			contextLines,
+		});
 		// The runtime resolved an omitted mode from this same snapshot, so report what it actually used.
 		const mode = input.mode ?? defaultReadMode(slice.task);
-		return result(readText(`[${describeTaskLine(slice.task)} · ${rangeText(slice, sinceBytes)}]`, slice), {
+		return result(readText(`[${describeTaskLine(slice.task)} · ${rangeText(slice, sinceBytes, filter)}]`, slice), {
 			action: "read",
 			taskId: slice.task.id,
 			mode,
@@ -128,6 +148,7 @@ export async function runRead(background: TasksContext, input: TasksInput): Prom
 			outputPath: slice.task.outputPath ?? "",
 			kind: slice.task.kind,
 			status: slice.task.status,
+			...(slice.filtered ? { filter, totalMatches: slice.totalMatches ?? 0 } : {}),
 		});
 	} catch (error) {
 		throw lookupFailure(background, id, error);
@@ -137,34 +158,57 @@ export async function runRead(background: TasksContext, input: TasksInput): Prom
 export function runKill(background: TasksContext, input: TasksInput): AgentToolResult<TasksKillDetails> {
 	const id = requireTaskId(input);
 	try {
-		const task = background.get(id);
-		const requested = background.kill(task.id);
+		const before = background.get(id);
+		const requested = background.kill(before.id);
+		const after = background.get(before.id);
 		return result(
 			requested
-				? `Cancellation requested for ${task.id}. The task or whole group is stopping; cleanup may still be in progress.`
-				: `No new cancellation requested for ${task.id} (${background.get(task.id).status}).`,
+				? `Cancellation requested for ${before.id}. The task or whole group is stopping; cleanup may still be in progress.`
+				: `No new cancellation requested for ${before.id} (${after.status}).`,
 			{
 				action: "kill",
-				taskId: task.id,
-				title: task.title,
+				taskId: before.id,
+				title: before.title,
 				requested,
-				status: background.get(task.id).status,
+				status: after.status,
 			},
 		);
 	} catch (error) {
 		throw lookupFailure(background, id, error);
 	}
 }
-export function runList(background: TasksContext): AgentToolResult<TasksListDetails> {
+export function runList(background: TasksContext, input?: TasksInput): AgentToolResult<TasksListDetails> {
 	const { tasks, foregroundOmitted } = listedTasks(background);
 	const active = tasks.filter((task) => !isTaskTerminal(task.status));
 	const finished = recentFinishedFirst(tasks.filter((task) => isTaskTerminal(task.status)));
-	const shown = [...active, ...finished.slice(0, TASKS_LIST_FINISHED_SHOWN)].slice(0, 100);
-	const hidden = tasks.length - shown.length;
+	const status = input?.status ?? "all";
+	const finishedLimit = clampFinishedLimit(input?.limit);
+	const shown =
+		status === "active"
+			? active.slice(0, 100)
+			: status === "finished"
+				? finished.slice(0, finishedLimit)
+				: [...active, ...finished.slice(0, finishedLimit)].slice(0, 100);
+	const poolSize = status === "active" ? active.length : status === "finished" ? finished.length : tasks.length;
+	const hidden = poolSize - shown.length;
+	let emptyText: string;
+	if (status === "active") {
+		emptyText = `No active background tasks.${finished.length > 0 ? ` (${finished.length} finished.)` : ""}${foregroundOmissionNote(foregroundOmitted)}`;
+	} else if (status === "finished") {
+		emptyText =
+			hidden > 0
+				? `${hidden} more records not shown.${foregroundOmissionNote(foregroundOmitted)}`
+				: `No finished background tasks.${active.length > 0 ? ` (${active.length} active.)` : ""}${foregroundOmissionNote(foregroundOmitted)}`;
+	} else {
+		emptyText =
+			hidden > 0
+				? `No active background tasks.\n${hidden} more records not shown.${foregroundOmissionNote(foregroundOmitted)}`
+				: `No background tasks. Start work through its owning tool with background: true.${foregroundOmissionNote(foregroundOmitted)}`;
+	}
 	return result(
 		shown.length
 			? `${shown.map((task) => describeTaskLine(task)).join("\n")}${hidden > 0 ? `\n${hidden} more records not shown.` : ""}${foregroundOmissionNote(foregroundOmitted)}`
-			: `No background tasks. Start work through its owning tool with background: true.${foregroundOmissionNote(foregroundOmitted)}`,
+			: emptyText,
 		{
 			action: "list",
 			running: active.length,
@@ -172,6 +216,7 @@ export function runList(background: TasksContext): AgentToolResult<TasksListDeta
 			shown: shown.length,
 			hidden,
 			...(foregroundOmitted > 0 ? { foregroundOmitted } : {}),
+			...(input?.status ? { status: input.status } : {}),
 		},
 	);
 }

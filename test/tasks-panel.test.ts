@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import type { TaskSnapshot } from "../src/core/tasks/types.ts";
+import { renderTaskCompletion } from "../src/extensions/tasks/ui/completion-render.ts";
 import { TaskList } from "../src/extensions/tasks/ui/list.ts";
 import { TasksMenu } from "../src/extensions/tasks/ui/manager.ts";
 import { TaskSelection } from "../src/extensions/tasks/ui/model.ts";
+import { keyHint, keyText } from "../src/modes/interactive/components/keybinding-hints.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { backgroundTask, disposeMenus, harness, mouse, task } from "./fixtures/tasks-panel-harness.ts";
 
@@ -1057,5 +1059,209 @@ describe("task panel with a real runtime", () => {
 			finish.resolve({ result: { content: [], details: undefined } });
 			runtime.close();
 		}
+	});
+});
+
+describe("task panel improvements: refresh race, ANSI SGR, paging, search, filters, copy, bulk stop, usage/idle", () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(25_000);
+		initTheme("dark");
+	});
+	afterEach(() => {
+		disposeMenus();
+		vi.useRealTimers();
+	});
+
+	it("re-reads final output if a task settles while an earlier log read is in flight", async () => {
+		const h = harness([backgroundTask("build")], { width: 120 });
+		const firstRead = Promise.withResolvers<{
+			task: TaskSnapshot;
+			text: string;
+			totalBytes: number;
+			truncated: boolean;
+		}>();
+		let calls = 0;
+		h.host.read.mockImplementation(async () => {
+			calls++;
+			if (calls === 1) return firstRead.promise;
+			return {
+				task: structuredClone(h.tasks[0]!),
+				text: "final build complete",
+				totalBytes: 20,
+				truncated: false,
+			};
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(calls).toBe(1);
+		h.tasks[0]!.status = "completed";
+		h.tasks[0]!.endedAt = 25_000;
+		h.change();
+		await vi.advanceTimersByTimeAsync(0);
+		firstRead.resolve({
+			task: { ...structuredClone(h.tasks[0]!), status: "running", endedAt: undefined },
+			text: "stale running output",
+			totalBytes: 20,
+			truncated: false,
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(calls).toBe(2);
+		expect(h.frame()).toContain("final build complete");
+	});
+
+	it("stops the poll interval once no active tasks remain", async () => {
+		const h = harness([backgroundTask("done", { status: "completed", endedAt: 1000 })], { width: 120 });
+		await vi.advanceTimersByTimeAsync(0);
+		const renders = h.tui.requestRender.mock.calls.length;
+		const reads = h.host.read.mock.calls.length;
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(h.host.read).toHaveBeenCalledTimes(reads);
+		expect(h.tui.requestRender).toHaveBeenCalledTimes(renders);
+	});
+
+	it("preserves safe SGR ANSI colors while stripping dangerous OSC/CSI sequences in log output", async () => {
+		const h = harness([backgroundTask("colored")], { width: 120 });
+		h.setOutput("\x1b[31mFAIL\x1b[0m \x1b]52;c;evil\x07\x1b[2Jtest.ts");
+		await vi.advanceTimersByTimeAsync(0);
+		const rawFrame = h.menu.render(120).join("\n");
+		expect(rawFrame).toContain("\x1b[31mFAIL\x1b[0m");
+		expect(rawFrame).not.toContain("\x1b]52");
+		expect(rawFrame).not.toContain("\x1b[2J");
+		expect(h.frame()).toContain("FAIL test.ts");
+	});
+
+	it("pages earlier and later chunks of a truncated log with [ and ]", async () => {
+		const h = harness([backgroundTask("biglog")], { width: 120 });
+		h.host.read.mockImplementation(async (id: string, opts?: { endByte?: number }) => {
+			const t = structuredClone(h.tasks.find((candidate) => candidate.id === id)!);
+			if (opts?.endByte === 50_000) {
+				return {
+					task: t,
+					text: "EARLIER_CHUNK_TEXT",
+					totalBytes: 100_000,
+					truncated: true,
+					fromByte: 848,
+					endByte: 50_000,
+				};
+			}
+			return {
+				task: t,
+				text: "LATEST_CHUNK_TEXT",
+				totalBytes: 100_000,
+				truncated: true,
+				fromByte: 50_000,
+				endByte: 100_000,
+			};
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.frame()).toContain("LATEST_CHUNK_TEXT");
+		h.menu.handleInput("[");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.frame()).toContain("EARLIER_CHUNK_TEXT");
+		expect(h.frame()).toContain("Earlier ·");
+		h.menu.handleInput("]");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.frame()).toContain("LATEST_CHUNK_TEXT");
+	});
+
+	it("searches inside inspector output with g and cycles matches", async () => {
+		const h = harness([backgroundTask("logs")], { width: 120 });
+		h.setOutput("alpha line\nneedle one\nbeta line\nneedle two");
+		await vi.advanceTimersByTimeAsync(0);
+		h.menu.handleInput("g");
+		for (const ch of "needle") h.menu.handleInput(ch);
+		expect(h.frame()).toContain("Match 1/2");
+		h.menu.handleInput("\r");
+		expect(h.frame()).toContain("Match 2/2");
+		h.menu.handleInput("\x1b");
+		expect(h.frame()).not.toContain("Find in view:");
+	});
+
+	it("cycles persistent list filters with a, stops all with Shift+K, and copies with c", async () => {
+		const copied: string[] = [];
+		const tasks = [
+			backgroundTask("run-bg", { status: "running" }),
+			task("run-fg", { status: "running", mode: "foreground" }),
+			backgroundTask("err-bg", { status: "failed", endedAt: 5000 }),
+		];
+		const h = harness(tasks, { width: 120 });
+		const menu = new TasksMenu({
+			host: h.host,
+			tui: h.tui,
+			theme,
+			keybindings: h.keybindings,
+			copyText: async (text) => {
+				copied.push(text);
+			},
+			onClose: vi.fn(),
+		});
+		try {
+			menu.handleInput("a");
+			expect(menu.render(120).map(stripTerminalSequences).join("\n")).toContain("Tasks [active]");
+			expect(menu.render(120).map(stripTerminalSequences).join("\n")).not.toContain("err-bg");
+			menu.handleInput("a");
+			expect(menu.render(120).map(stripTerminalSequences).join("\n")).toContain("Tasks [background]");
+			menu.handleInput("a");
+			expect(menu.render(120).map(stripTerminalSequences).join("\n")).toContain("Tasks [failed]");
+			expect(menu.render(120).map(stripTerminalSequences).join("\n")).toContain("err-bg");
+			menu.handleInput("a");
+			expect(menu.render(120).map(stripTerminalSequences).join("\n")).not.toContain("[");
+
+			menu.handleInput("c");
+			await vi.advanceTimersByTimeAsync(0);
+			expect(copied).toEqual(["err-bg"]);
+			expect(menu.render(120).map(stripTerminalSequences).at(-1)).toContain("✓ Copied task ID.");
+
+			menu.handleInput("K");
+			expect(menu.render(120).map(stripTerminalSequences).at(-1)).toContain("Stop all 2 active tasks?");
+			menu.handleInput("\r");
+			expect(h.host.kill).toHaveBeenCalledWith("run-bg");
+			expect(h.host.kill).toHaveBeenCalledWith("run-fg");
+		} finally {
+			menu.dispose();
+		}
+	});
+
+	it("shows Usage and passive Idle rows in Details and opens /tasks on clicking a completion card", () => {
+		const idleMs = 20_000;
+		const t = backgroundTask("agent-1", {
+			kind: "agent",
+			label: "Agent",
+			output: "report",
+			outputPath: undefined,
+			lastOutputAt: Date.now() - idleMs,
+			usage: {
+				input: 1000,
+				output: 500,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 1500,
+				cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03 },
+			},
+		});
+		const h = harness([t], { width: 120, state: { tab: "info" } });
+		const frame = h.frame();
+		expect(frame).toContain("Usage");
+		expect(frame).toContain("1.5k tokens · $0.03");
+		expect(frame).toContain("Idle");
+		expect(frame).toContain("No output for 20s");
+
+		const opened: string[] = [];
+		const notice = renderTaskCompletion(
+			{
+				role: "custom",
+				customType: "task-completion",
+				display: true,
+				content: "done",
+				details: { version: 3, task: { ...t, status: "completed", endedAt: 25_000 } },
+				timestamp: 25_000,
+			},
+			{ expanded: false, outputPad: 1, keyText, keyHint },
+			theme,
+			(id) => opened.push(id),
+		);
+		const result = notice.handleMouse?.(mouse(2, 0));
+		expect(result).toEqual({ handled: true });
+		expect(opened).toEqual(["agent-1"]);
 	});
 });

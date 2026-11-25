@@ -83,14 +83,13 @@ export {
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolDefinition } from "../extensions/types.ts";
-import type { BashToolOptions } from "./bash.ts";
 import { createEditTool, createEditToolDefinition, type EditToolOptions } from "./edit.ts";
 import { createFindTool, createFindToolDefinition, type FindToolOptions } from "./find.ts";
 import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "./grep.ts";
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./ls.ts";
 import { createPowerShellTool, createPowerShellToolDefinition, type PowerShellToolOptions } from "./powershell.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.ts";
-import { createBashTool, createBashToolDefinition } from "./shell-tool.ts";
+import { createBashTool, createBashToolDefinition, type ManagedShellToolOptions } from "./shell-tool.ts";
 import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./write.ts";
 
 export type Tool = AgentTool<any>;
@@ -109,7 +108,7 @@ export const allToolNames: Set<ToolName> = new Set([
 
 export interface ToolsOptions {
 	read?: ReadToolOptions;
-	bash?: BashToolOptions;
+	bash?: ManagedShellToolOptions;
 	powershell?: PowerShellToolOptions;
 	write?: WriteToolOptions;
 	edit?: EditToolOptions;

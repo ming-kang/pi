@@ -78,6 +78,14 @@ export class TaskViewport {
 		this.anchor = entry ? { line: entry.line, column: entry.column } : undefined;
 		this.following = bottom && this.tailing;
 	}
+	scrollToLine(sourceLine: number): void {
+		const index = this.entries.findIndex((entry) => entry.line === sourceLine);
+		if (index < 0) return;
+		this.scroll = Math.max(0, Math.min(this.max, index - Math.floor(this.height / 3)));
+		const entry = this.entries[this.scroll];
+		this.anchor = entry ? { line: entry.line, column: entry.column } : undefined;
+		this.following = false;
+	}
 	/** Whether the laid-out content is taller than the viewport. */
 	get overflows(): boolean {
 		return this.entries.length > this.height;

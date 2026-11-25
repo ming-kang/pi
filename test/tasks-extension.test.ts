@@ -17,7 +17,7 @@ import type {
 } from "../src/core/extensions/types.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { TaskRuntime } from "../src/core/tasks/runtime.ts";
-import type { TaskControl } from "../src/core/tasks/types.ts";
+import type { TaskControl, TaskSnapshot, TasksContext } from "../src/core/tasks/types.ts";
 import tasksExtension from "../src/extensions/tasks/index.ts";
 import { runKill, runList, runRead } from "../src/extensions/tasks/tool/actions.ts";
 import type { tasksSchema } from "../src/extensions/tasks/tool/schema.ts";
@@ -92,10 +92,14 @@ describe("public Background management", () => {
 		} as unknown as ExtensionAPI;
 		tasksExtension(pi);
 		expect(tool?.name).toBe("tasks");
+		expect(tool?.description).toBe(tool?.description.trimEnd());
 		expect(tool?.renderShell).toBeUndefined();
 		expect(tool?.constrainedSampling).toEqual({ type: "json_schema", strict: "prefer" });
 		expect(JSON.stringify(tool?.parameters)).not.toContain('"create"');
 		expect(JSON.stringify(tool?.parameters)).not.toContain('"command"');
+		expect(Object.keys(tool!.parameters.properties)).toEqual(
+			expect.arrayContaining(["filter", "contextLines", "status", "limit"]),
+		);
 		expect(() => makeStrictJsonSchema(tool!.parameters)).not.toThrow();
 	});
 	it("lists the session's current tasks when the id is unknown", async () => {
@@ -882,6 +886,302 @@ describe("public Background management", () => {
 			setKeybindings(previousKeybindings);
 		}
 	});
+
+	it("includes task facts in tasks read when present and omits them when absent", async () => {
+		const service = new TaskRuntime({ enabled: true });
+		services.push(service);
+		await service.execute({
+			kind: "bash",
+			title: "failing build",
+			toolCallId: "with-facts",
+			background: true,
+			facts: [["Directory", "/repo/app"]],
+			async run(control) {
+				control.accept();
+				return {
+					status: "failed",
+					error: "Command exited with code 2",
+					facts: [["Exit", "2"]],
+					result: { content: [{ type: "text", text: "build failed output" }], details: undefined },
+				};
+			},
+		});
+		const withFactsId = service.list()[0]!.id;
+		await settleTask(service, withFactsId);
+		const readWithFacts = textOf(await runRead(service, { action: "read", taskId: withFactsId }));
+		expect(readWithFacts).toContain("Facts: Directory=/repo/app · Exit=2");
+		expect(readWithFacts.indexOf("Task error:")).toBeLessThan(readWithFacts.indexOf("Facts:"));
+		expect(readWithFacts.indexOf("Facts:")).toBeLessThan(readWithFacts.indexOf("build failed output"));
+
+		await service.execute({
+			kind: "custom",
+			title: "plain",
+			toolCallId: "no-facts",
+			background: true,
+			async run(control) {
+				control.accept();
+				return { result: { content: [{ type: "text", text: "plain output" }], details: undefined } };
+			},
+		});
+		const noFactsId = service.list().find((task) => task.title === "plain")!.id;
+		await settleTask(service, noFactsId);
+		const readWithoutFacts = textOf(await runRead(service, { action: "read", taskId: noFactsId }));
+		expect(readWithoutFacts).not.toContain("Facts:");
+	});
+
+	it("filters file-backed logs and inline results with substring, regex, contextLines, and empty match notice", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-tasks-filter-"));
+		const logPath = join(directory, "output.log");
+		const lines = [
+			"line 0 excluded",
+			"line 1 ok",
+			"line 2 before",
+			"line 3 ERROR: disk full",
+			"line 4 after",
+			"line 5 ok",
+			"line 6 warning: high latency",
+			"line 7 end",
+		].join("\n");
+		await writeFile(logPath, `${lines}\n`);
+		const service = new TaskRuntime({ enabled: true });
+		services.push(service);
+		try {
+			await service.execute({
+				kind: "bash",
+				title: "file log",
+				toolCallId: "file-log",
+				background: true,
+				async run(control) {
+					control.attachOutput(logPath);
+					control.accept();
+					return { result: { content: [{ type: "text", text: "done" }], details: undefined } };
+				},
+			});
+			const fileId = service.list()[0]!.id;
+			await settleTask(service, fileId);
+
+			const sub = await runRead(service, {
+				action: "read",
+				taskId: fileId,
+				filter: "error",
+				contextLines: 1,
+			});
+			const subText = textOf(sub);
+			expect(sub.details).toMatchObject({ filter: "error", totalMatches: 1 });
+			expect(subText).toContain('filter "error" · 1 match · bytes 0–');
+			expect(subText).toContain("next sinceBytes ");
+			expect(subText).toContain("3- line 2 before");
+			expect(subText).toContain("4: line 3 ERROR: disk full");
+			expect(subText).toContain("5- line 4 after");
+			expect(subText).not.toContain("line 1 ok");
+			expect(subText).not.toContain("line 6 warning");
+
+			const regex = await runRead(service, {
+				action: "read",
+				taskId: fileId,
+				filter: "/error|warning/i",
+			});
+			expect(regex.details).toMatchObject({ filter: "/error|warning/i", totalMatches: 2 });
+			expect(textOf(regex)).toContain("2 matches");
+			expect(textOf(regex)).toContain("4: line 3 ERROR: disk full");
+			expect(textOf(regex)).toContain("7: line 6 warning: high latency");
+
+			const none = await runRead(service, {
+				action: "read",
+				taskId: fileId,
+				filter: "does-not-exist",
+			});
+			expect(none.details).toMatchObject({ filter: "does-not-exist", totalMatches: 0 });
+			expect(textOf(none)).toContain('filter "does-not-exist" · 0 matches');
+			expect(textOf(none)).toContain("(no matching lines)");
+			expect(textOf(none)).not.toContain("(no output yet)");
+
+			await service.execute({
+				kind: "custom",
+				title: "inline result",
+				output: "report",
+				toolCallId: "inline-result",
+				background: true,
+				async run(control) {
+					control.accept();
+					return { result: { content: [{ type: "text", text: lines }], details: undefined } };
+				},
+			});
+			const inlineId = service.list().find((task) => task.title === "inline result")!.id;
+			await settleTask(service, inlineId);
+
+			const inlineRead = await runRead(service, {
+				action: "read",
+				taskId: inlineId,
+				filter: "Warning",
+				contextLines: 99,
+			});
+			expect(inlineRead.details).toMatchObject({ filter: "Warning", totalMatches: 1 });
+			const inlineText = textOf(inlineRead);
+			expect(inlineText).toContain('filter "Warning" · 1 match · bytes 0–');
+			expect(inlineText).toContain("7: line 6 warning: high latency");
+			expect(inlineText).toContain("2- line 1 ok");
+			expect(inlineText).toContain("8- line 7 end");
+			expect(inlineText).not.toContain("line 0 excluded");
+
+			const inlineNone = await runRead(service, {
+				action: "read",
+				taskId: inlineId,
+				filter: "/missing-pattern/i",
+			});
+			expect(inlineNone.details).toMatchObject({ filter: "/missing-pattern/i", totalMatches: 0 });
+			expect(textOf(inlineNone)).toContain("(no matching lines)");
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("filters and limits tasks list by status and limit", async () => {
+		vi.useFakeTimers();
+		let tool: ToolDefinition<typeof tasksSchema, TasksDetails> | undefined;
+		const pi = {
+			on: vi.fn(),
+			registerTool: (value: typeof tool) => {
+				tool = value;
+			},
+			registerMessageRenderer: vi.fn(),
+			registerCommand: vi.fn(),
+		} as unknown as ExtensionAPI;
+		tasksExtension(pi);
+
+		const service = new TaskRuntime({ enabled: true, maxBackground: 16 });
+		services.push(service);
+		const finishedIds: string[] = [];
+		for (let index = 0; index < 7; index++) {
+			let release!: () => void;
+			const gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			await service.execute({
+				kind: "bash",
+				title: `done-${index + 1}`,
+				toolCallId: `done-${index + 1}`,
+				background: true,
+				async run(control) {
+					control.accept();
+					await gate;
+					return { result: { content: [{ type: "text", text: "done" }], details: undefined } };
+				},
+			});
+			release();
+			const id = service.list().at(-1)!.id;
+			await settleTask(service, id);
+			finishedIds.push(id);
+			vi.advanceTimersByTime(1000);
+		}
+		const activeReleases: Array<() => void> = [];
+		const activeIds: string[] = [];
+		for (let index = 0; index < 2; index++) {
+			await service.execute({
+				kind: "custom",
+				title: `active-${index + 1}`,
+				toolCallId: `active-${index + 1}`,
+				background: true,
+				async run(control) {
+					control.accept();
+					await new Promise<void>((resolve) => activeReleases.push(resolve));
+					return { result: { content: [{ type: "text", text: "ok" }], details: undefined } };
+				},
+			});
+			activeIds.push(service.list().at(-1)!.id);
+		}
+
+		try {
+			const defaultList = runList(service);
+			expect(defaultList.details).toEqual({
+				action: "list",
+				running: 2,
+				finished: 7,
+				shown: 7,
+				hidden: 2,
+			});
+
+			const activeOnly = await tool!.execute("call", { action: "list", status: "active" }, undefined, undefined, {
+				tasks: service,
+			} as unknown as ExtensionToolContext);
+			expect(activeOnly.details).toEqual({
+				action: "list",
+				running: 2,
+				finished: 7,
+				shown: 2,
+				hidden: 0,
+				status: "active",
+			});
+			const activeText = textOf(activeOnly);
+			for (const id of activeIds) expect(activeText).toContain(id);
+			for (const id of finishedIds) expect(activeText).not.toContain(id);
+
+			const finishedLimited = runList(service, { action: "list", status: "finished", limit: 2 });
+			expect(finishedLimited.details).toEqual({
+				action: "list",
+				running: 2,
+				finished: 7,
+				shown: 2,
+				hidden: 5,
+				status: "finished",
+			});
+			const finishedText = textOf(finishedLimited);
+			for (const id of activeIds) expect(finishedText).not.toContain(id);
+			for (const id of finishedIds.slice(-2)) expect(finishedText).toContain(id);
+			for (const id of finishedIds.slice(0, -2)) expect(finishedText).not.toContain(id);
+			expect(finishedText).toContain("5 more records not shown.");
+
+			const allExpanded = runList(service, { action: "list", status: "all", limit: 10 });
+			expect(allExpanded.details).toEqual({
+				action: "list",
+				running: 2,
+				finished: 7,
+				shown: 9,
+				hidden: 0,
+				status: "all",
+			});
+			for (const id of [...activeIds, ...finishedIds]) expect(textOf(allExpanded)).toContain(id);
+		} finally {
+			for (const release of activeReleases) release();
+		}
+	});
+
+	it("uses a single post-kill snapshot consistently for tasks kill text and details", () => {
+		const beforeSnapshot: TaskSnapshot = {
+			id: "bash-abc123",
+			kind: "bash",
+			label: "Bash",
+			title: "long build",
+			output: "log",
+			toolCallId: "call-1",
+			anchorId: null,
+			mode: "background",
+			status: "stopping",
+			startedAt: 1,
+		};
+		const afterSnapshot: TaskSnapshot = { ...beforeSnapshot, status: "cancelled", endedAt: 2 };
+		const get = vi
+			.fn<(id: string) => TaskSnapshot>()
+			.mockReturnValueOnce(beforeSnapshot)
+			.mockReturnValueOnce(afterSnapshot)
+			.mockImplementation(() => {
+				throw new Error("expected at most one post-kill get()");
+			});
+		const kill = vi.fn().mockReturnValue(false);
+		const mockContext = { get, kill } as unknown as TasksContext;
+
+		const result = runKill(mockContext, { action: "kill", taskId: "abc123" });
+		expect(get).toHaveBeenCalledTimes(2);
+		expect(kill).toHaveBeenCalledWith("bash-abc123");
+		expect(textOf(result)).toContain("No new cancellation requested for bash-abc123 (cancelled).");
+		expect(result.details).toEqual({
+			action: "kill",
+			taskId: "bash-abc123",
+			title: "long build",
+			requested: false,
+			status: "cancelled",
+		});
+	});
 });
 
 describe("renderTasksCall", () => {
@@ -911,10 +1211,16 @@ describe("renderTasksCall", () => {
 				taskId?: string;
 				mode?: "head" | "tail";
 				bytes?: number;
+				filter?: string;
 			},
 			RegExp,
 		][] = [
 			[{ action: "read", taskId: "bg-3f", mode: "tail", bytes: 8192 }, /^tasks read bg-3f tail 8\.0KB\s*$/],
+			[
+				{ action: "read", taskId: "bg-3f", mode: "tail", bytes: 8192, filter: "ERR" },
+				/^tasks read bg-3f tail 8\.0KB filter="ERR"\s*$/,
+			],
+			[{ action: "read", taskId: "bg-3f", filter: "" }, /^tasks read bg-3f\s*$/],
 			[{ action: "read", taskId: "bg-3f", mode: "head" }, /^tasks read bg-3f head\s*$/],
 			[{ action: "read", taskId: "bg-3f", bytes: 8192 }, /^tasks read bg-3f 8\.0KB\s*$/],
 			[{ action: "read", taskId: "bg-3f" }, /^tasks read bg-3f\s*$/],
@@ -973,6 +1279,37 @@ describe("renderTasksResult", () => {
 			{ args: { action: "wait" }, state: {} } as ToolRenderContext,
 		);
 		expect(component.render(200).map(stripTerminalSequences).join("\n")).toContain("saved wait report");
+	});
+
+	it("shows match count in the read summary only when filter is set", () => {
+		const renderLine = (extra: { filter?: string; totalMatches?: number }) =>
+			renderTasksResult(
+				{
+					content: [{ type: "text", text: "body" }],
+					details: {
+						action: "read",
+						taskId: "bash-1",
+						kind: "bash",
+						status: "completed",
+						mode: "tail",
+						sliceBytes: 1024,
+						totalBytes: 1024,
+						outputPath: "/tmp/out.log",
+						...extra,
+					},
+				},
+				{ expanded: false, isPartial: false },
+				plainTheme,
+				{ args: { action: "read" }, state: {} } as ToolRenderContext,
+			)
+				.render(200)
+				.map(stripTerminalSequences)
+				.join("\n")
+				.trim();
+
+		expect(renderLine({})).toBe("→ bash-1 Completed · 1.0KB · out.log");
+		expect(renderLine({ filter: "error", totalMatches: 3 })).toBe("→ bash-1 Completed · 1.0KB · out.log · 3 matches");
+		expect(renderLine({ filter: "error", totalMatches: 1 })).toBe("→ bash-1 Completed · 1.0KB · out.log · 1 match");
 	});
 
 	it("shows the saved text of a result from an older tool version", () => {

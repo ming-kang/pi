@@ -2,7 +2,7 @@
 import { stripTerminalSequences, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { vi } from "vitest";
 import { KeybindingsManager } from "../../src/core/keybindings.ts";
-import type { TaskSnapshot } from "../../src/core/tasks/types.ts";
+import type { TaskChangeEvent, TaskSnapshot } from "../../src/core/tasks/types.ts";
 import { TasksMenu } from "../../src/extensions/tasks/ui/manager.ts";
 import type { TasksPanelState } from "../../src/extensions/tasks/ui/model.ts";
 import { type Theme, theme } from "../../src/modes/interactive/theme/theme.ts";
@@ -38,7 +38,7 @@ export function harness(
 		state = { tab: "output" },
 	}: { width?: number; height?: number; state?: TasksPanelState } = {},
 ) {
-	let listener = () => {};
+	let listener: (event: TaskChangeEvent) => void = () => {};
 	let output = Array.from({ length: 80 }, (_, i) => `line-${String(i).padStart(3, "0")}`).join("\n");
 	const release = vi.fn();
 	const host = {
@@ -56,7 +56,7 @@ export function harness(
 		}),
 		detach: vi.fn(() => true),
 		retain: vi.fn(() => release),
-		subscribe: (fn: () => void) => {
+		subscribe: (fn: (event: TaskChangeEvent) => void) => {
 			listener = fn;
 			return vi.fn();
 		},
@@ -75,7 +75,7 @@ export function harness(
 		close,
 		keybindings,
 		release,
-		change: () => listener(),
+		change: (event: TaskChangeEvent = { kind: "lifecycle" }) => listener(event),
 		setOutput: (text: string) => {
 			output = text;
 		},

@@ -87,7 +87,7 @@ function clipped(value: TaskText, maxBytes: number, keep: "head" | "tail"): Task
 
 /** A self-contained replay snapshot within the details budget; human-only display stays in the session record. */
 export function taskCompletionDetails(task: TaskSnapshot): TaskCompletionDetails {
-	const { display: _display, result, input, ...rest } = task;
+	const { display: _display, usage: _usage, lastOutputAt: _lastOutputAt, result, input, ...rest } = task;
 	const keep = defaultReadMode(task);
 	const replayInput = input && { ...input, ...clipped(input, REPLAY_INPUT_BYTES, "head") };
 	for (const outputBytes of REPLAY_OUTPUT_BYTES) {

@@ -9,8 +9,10 @@ import { confirmStopBranchTasks } from "./ui/tree.ts";
 /** User-facing Tasks management; execution and durable delivery remain session-owned. */
 export default function tasksExtension(pi: ExtensionAPI): void {
 	let ui: TasksUI | undefined;
+	let tuiActive = false;
 	const bind = (ctx: ExtensionContext) => {
 		ui?.dispose();
+		tuiActive = ctx.mode === "tui";
 		ui = bindTasksUI(ctx);
 	};
 
@@ -18,6 +20,7 @@ export default function tasksExtension(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", () => {
 		ui?.dispose();
 		ui = undefined;
+		tuiActive = false;
 	});
 	pi.on("session_before_tree", async (event, ctx) => {
 		if (!ctx.hasUI) return;
@@ -27,7 +30,18 @@ export default function tasksExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerTool(createTasksToolDefinition());
-	pi.registerMessageRenderer("task-completion", renderTaskCompletion);
+	pi.registerMessageRenderer("task-completion", (message, options, theme) =>
+		renderTaskCompletion(
+			message,
+			options,
+			theme,
+			tuiActive
+				? (taskId) => {
+						void ui?.open(taskId);
+					}
+				: undefined,
+		),
+	);
 	pi.registerCommand("tasks", {
 		description: "View and manage session tasks",
 		handler: async (_args, ctx) => {

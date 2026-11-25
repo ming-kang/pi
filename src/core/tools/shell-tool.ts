@@ -5,6 +5,7 @@
  */
 import { type Static, Type } from "typebox";
 import type { ToolDefinition } from "../extensions/types.ts";
+import type { TasksBackgroundOutputLimitAction } from "../settings-schema.ts";
 import {
 	TASK_BACKGROUND_REJECTION,
 	TASKS_TOOL_NAME,
@@ -77,10 +78,15 @@ function shellToolResult(completion: TaskCompletion<BashToolDetails | undefined>
 	return completion.result;
 }
 
+export interface ManagedShellToolOptions extends BashToolOptions {
+	maxBackgroundOutputBytes?: number;
+	backgroundOutputLimitAction?: TasksBackgroundOutputLimitAction;
+}
+
 export function createShellToolDefinition(
 	cwd: string,
 	config: ShellToolConfig,
-	options: BashToolOptions & { operations: BashOperations },
+	options: ManagedShellToolOptions & { operations: BashOperations },
 ): ToolDefinition<typeof bashSchema, BashToolDetails | undefined, BashRenderState> {
 	const native = createNativeShellToolDefinition(cwd, config, options);
 	return {
@@ -113,6 +119,8 @@ export function createShellToolDefinition(
 							operations: options.operations,
 							tempFilePrefix: config.tempFilePrefix,
 							timeout,
+							maxBackgroundOutputBytes: options.maxBackgroundOutputBytes,
+							backgroundOutputLimitAction: options.backgroundOutputLimitAction,
 							execute: (parts) =>
 								createNativeShellToolDefinition(
 									cwd,
@@ -160,7 +168,7 @@ const bashToolConfig: ShellToolConfig = {
 
 export function createBashToolDefinition(
 	cwd: string,
-	options?: BashToolOptions,
+	options?: ManagedShellToolOptions,
 ): ReturnType<typeof createShellToolDefinition> {
 	return createShellToolDefinition(cwd, bashToolConfig, {
 		...options,
@@ -168,7 +176,7 @@ export function createBashToolDefinition(
 	});
 }
 
-export function createBashTool(cwd: string, options?: BashToolOptions) {
+export function createBashTool(cwd: string, options?: ManagedShellToolOptions) {
 	const definition = createBashToolDefinition(cwd, options);
 	const tool = wrapToolDefinition(definition);
 	Object.assign(tool, {

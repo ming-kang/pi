@@ -1,10 +1,19 @@
+import { existsSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { readVersionedTask } from "./codec.ts";
+import { readVersionedTaskRecord } from "./codec.ts";
 import { errorText, resultText } from "./output.ts";
 import { EXPIRED_OUTPUT, TaskRecord } from "./record.ts";
 import type { TaskSnapshot } from "./types.ts";
 
+const MISSING_REPORT_ARTIFACT = "Report file is unavailable; showing the stored result.";
+
 const isForeground = (task: TaskSnapshot) => task.mode === "foreground";
+
+function isPathInsideDir(filePath: string, rootDir: string): boolean {
+	const rel = relative(resolve(rootDir), resolve(filePath));
+	return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
 
 interface RestoreLimits {
 	/** Room left in the foreground history. */
@@ -57,16 +66,19 @@ export class TaskStore {
 	private readonly maxRetained: number;
 	private readonly isClosed: () => boolean;
 	private readonly onCleanupError?: (message: string) => void;
+	private readonly artifactDir?: () => string | undefined;
 	constructor(
 		maxHistory: number,
 		maxRetained: number,
 		isClosed: () => boolean,
 		onCleanupError?: (message: string) => void,
+		artifactDir?: () => string | undefined,
 	) {
 		this.maxHistory = maxHistory;
 		this.maxRetained = maxRetained;
 		this.isClosed = isClosed;
 		this.onCleanupError = onCleanupError;
+		this.artifactDir = artifactDir;
 	}
 	private get closed(): boolean {
 		return this.isClosed();
@@ -131,8 +143,9 @@ export class TaskStore {
 		);
 		const saved: TaskSnapshot[] = [];
 		for (const value of records) {
-			const task = readVersionedTask(value);
-			if (!task) continue;
+			const parsed = readVersionedTaskRecord(value);
+			if (!parsed) continue;
+			const task = parsed.usage ? { ...parsed.task, usage: parsed.usage } : parsed.task;
 			const existing = this.records.get(task.id);
 			if (existing) {
 				if (existing.settled) existing.setVisible(true);
@@ -145,13 +158,29 @@ export class TaskStore {
 			background: backgroundCapacity,
 			total: capacity,
 		});
+		const trustedArtifactDir = this.artifactDir?.();
 		for (const task of selected) {
 			const content = toolResults.get(task.toolCallId);
 			if (!task.result && content) task.result = resultText({ content, details: undefined });
-			// Logs never outlive the runtime that wrote them.
-			const expired = task.outputPath !== undefined;
-			task.outputPath = undefined;
-			this.add(TaskRecord.restored(task, expired ? EXPIRED_OUTPUT : undefined));
+			// Managed temp logs never outlive the runtime that wrote them. Persistent report
+			// artifacts inside the session's trusted artifact directory stay readable without cleanup ownership.
+			let readError: string | undefined;
+			if (task.outputPath !== undefined) {
+				if (
+					trustedArtifactDir &&
+					task.output === "report" &&
+					isPathInsideDir(task.outputPath, trustedArtifactDir)
+				) {
+					if (!existsSync(task.outputPath)) {
+						task.outputPath = undefined;
+						readError = MISSING_REPORT_ARTIFACT;
+					}
+				} else {
+					task.outputPath = undefined;
+					readError = EXPIRED_OUTPUT;
+				}
+			}
+			this.add(TaskRecord.restored(task, readError));
 		}
 	}
 

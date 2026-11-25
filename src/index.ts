@@ -331,6 +331,8 @@ export {
 	type RetrySettings,
 	SettingsManager,
 	type SettingsManagerCreateOptions,
+	type TasksBackgroundOutputLimitAction,
+	type TasksSettings,
 	type TuiMode,
 } from "./core/settings-manager.ts";
 // Skills
@@ -348,6 +350,8 @@ export type { TaskCompletionDetails } from "./core/tasks/presentation.ts";
 export { TaskRuntime } from "./core/tasks/runtime.ts";
 export type {
 	TaskActivity,
+	TaskChangeEvent,
+	TaskChangeKind,
 	TaskCompletion,
 	TaskControl,
 	TaskDisplay,
@@ -355,6 +359,8 @@ export type {
 	TaskFact,
 	TaskInput,
 	TaskKind,
+	TaskLifecycleAction,
+	TaskLifecycleEvent,
 	TaskMode,
 	TaskOutputKind,
 	TaskRead,

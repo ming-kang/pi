@@ -22,7 +22,7 @@ export function createTasksToolDefinition(): ToolDefinition<typeof tasksSchema, 
 					case "kill":
 						return runKill(ctx.tasks, params);
 					case "list":
-						return runList(ctx.tasks);
+						return runList(ctx.tasks, params);
 				}
 			} catch (error) {
 				// Lookup failures already carry the current task list from actions.ts.

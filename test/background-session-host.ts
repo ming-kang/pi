@@ -11,7 +11,7 @@ import { AgentSession } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import type { ExtensionFactory } from "../src/core/extensions/types.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import { SettingsManager } from "../src/core/settings-manager.ts";
+import { type Settings, SettingsManager } from "../src/core/settings-manager.ts";
 import type { TaskControl } from "../src/core/tasks/types.ts";
 import tasksExtension from "../src/extensions/tasks/index.ts";
 import { createInMemoryModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
@@ -42,6 +42,7 @@ export function backgroundSessionTest() {
 		responses?: AssistantMessage[],
 		manager = SessionManager.inMemory(),
 		streamFn: StreamFn = streamSimple,
+		settings?: Partial<Settings>,
 	) {
 		const faux = registerFauxProvider();
 		faux.setResponses(responses ?? [fauxAssistantMessage("noticed"), fauxAssistantMessage("user first")]);
@@ -62,7 +63,7 @@ export function backgroundSessionTest() {
 				streamFn,
 			}),
 			sessionManager: manager,
-			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
+			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, ...settings }),
 			cwd: process.cwd(),
 			modelRuntime,
 			backgroundAllowed,

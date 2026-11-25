@@ -7,13 +7,14 @@ import type { Keybinding } from "../../../core/keybindings.ts";
 import type { Theme, ThemeColor } from "../../../modes/interactive/theme/theme.ts";
 import type { PanelFocus, TaskAction, TaskHit } from "./model.ts";
 
-/** An outcome the panel does not already show: the action did not do what was asked. */
+/** An outcome the panel does not already show: the action did not do what was asked, or confirmed a clipboard copy. */
 export interface Feedback {
-	tone: "warning" | "error";
+	tone: "warning" | "error" | "info";
 	text: string;
 }
 
-const FEEDBACK_GLYPH: Record<Feedback["tone"], string> = { warning: "!", error: "×" };
+const FEEDBACK_GLYPH: Record<Feedback["tone"], string> = { warning: "!", error: "×", info: "✓" };
+const FEEDBACK_COLOR: Record<Feedback["tone"], ThemeColor> = { warning: "warning", error: "error", info: "success" };
 /** Cells kept between the left content and the pinned Escape action. */
 const GAP = 3;
 
@@ -70,7 +71,7 @@ function compose(env: FooterEnv, spec: FooterSpec): Footer {
 		const message = `${FEEDBACK_GLYPH[spec.feedback.tone]} ${spec.feedback.text}`;
 		// A long message is worth more than the Escape hint while it lasts.
 		showEscape = visibleWidth(message) <= room;
-		left = theme.fg(spec.feedback.tone, truncateToWidth(message, showEscape ? room : width, "…"));
+		left = theme.fg(FEEDBACK_COLOR[spec.feedback.tone], truncateToWidth(message, showEscape ? room : width, "…"));
 	} else {
 		let x = 0;
 		const kept = dropToFit(spec.items, room, spec.separator);
@@ -143,6 +144,35 @@ export function helpFooter(env: FooterEnv): Footer {
 		escape: { text: `${hint("tui.select.cancel")} back`, priority: 0, action: BACK },
 		tone: "dim",
 		feedback: env.feedback,
+	});
+}
+
+export function searchOutputFooter(env: FooterEnv): Footer {
+	const { hint } = env;
+	return compose(env, {
+		items: [
+			{ text: `${hint("tui.select.confirm")} next match`, priority: 1 },
+			{ text: `${hint("tui.select.up")} / ${hint("tui.select.down")} prev / next`, priority: 2 },
+		],
+		separator: " · ",
+		escape: { text: `${hint("tui.select.cancel")} done`, priority: 0, action: BACK },
+		tone: "dim",
+		feedback: env.feedback,
+	});
+}
+
+export function confirmStopAllFooter(env: FooterEnv, count: number): Footer {
+	const { hint } = env;
+	const confirm = `${hint("app.tasks.confirmStop")} stop all`;
+	const cancel = `${hint("tui.select.cancel")} cancel`;
+	return compose(env, {
+		items: [
+			{ text: `Stop all ${count} active task${count === 1 ? "" : "s"}?`, priority: 0 },
+			{ text: confirm, priority: 0, action: { kind: "key", key: "app.tasks.confirmStop" } },
+		],
+		separator: "  ",
+		escape: { text: cancel, priority: 0, action: BACK },
+		tone: "warning",
 	});
 }
 

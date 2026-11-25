@@ -419,9 +419,13 @@
       "$ref": "#/$defs/KeybindingValue",
       "description": "Stop the selected task"
     },
+    "app.tasks.killAll": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Stop all active tasks"
+    },
     "app.tasks.confirmStop": {
       "$ref": "#/$defs/KeybindingValue",
-      "description": "Confirm stopping the selected task"
+      "description": "Confirm stopping tasks"
     },
     "app.tasks.detachSelected": {
       "$ref": "#/$defs/KeybindingValue",
@@ -430,6 +434,26 @@
     "app.tasks.search": {
       "$ref": "#/$defs/KeybindingValue",
       "description": "Search retained task identities and labels"
+    },
+    "app.tasks.filter": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Cycle task list filter (all, active, background, failed)"
+    },
+    "app.tasks.copy": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Copy task ID, input, or output to clipboard"
+    },
+    "app.tasks.findInOutput": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Search inside the inspector output or details"
+    },
+    "app.tasks.loadEarlier": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Load an earlier slice of a truncated log"
+    },
+    "app.tasks.loadLater": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Load a newer slice of a truncated log"
     },
     "app.tasks.follow": {
       "$ref": "#/$defs/KeybindingValue",

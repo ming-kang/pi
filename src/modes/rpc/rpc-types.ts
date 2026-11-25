@@ -12,6 +12,7 @@ import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
+import type { TaskLifecycleAction, TaskRead, TaskReadOptions, TaskSnapshot } from "../../core/tasks/types.ts";
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -71,7 +72,25 @@ export type RpcCommand =
 	| { id?: string; type: "get_messages" }
 
 	// Commands (available for invocation via prompt)
-	| { id?: string; type: "get_commands" };
+	| { id?: string; type: "get_commands" }
+
+	// Tasks
+	| { id?: string; type: "list_tasks" }
+	| { id?: string; type: "get_task"; taskId: string }
+	| {
+			id?: string;
+			type: "read_task";
+			taskId: string;
+			mode?: TaskReadOptions["mode"];
+			bytes?: TaskReadOptions["bytes"];
+			sinceBytes?: TaskReadOptions["sinceBytes"];
+			endByte?: TaskReadOptions["endByte"];
+			filter?: TaskReadOptions["filter"];
+			contextLines?: TaskReadOptions["contextLines"];
+	  }
+	| { id?: string; type: "kill_task"; taskId: string }
+	| { id?: string; type: "detach_tasks"; taskId?: string }
+	| { id?: string; type: "subscribe_tasks"; enabled: boolean };
 
 // ============================================================================
 // RPC Slash Command (for get_commands response)
@@ -243,8 +262,32 @@ export type RpcResponse =
 			data: { commands: RpcSlashCommand[] };
 	  }
 
+	// Tasks
+	| { id?: string; type: "response"; command: "list_tasks"; success: true; data: { tasks: TaskSnapshot[] } }
+	| { id?: string; type: "response"; command: "get_task"; success: true; data: { task: TaskSnapshot } }
+	| { id?: string; type: "response"; command: "read_task"; success: true; data: TaskRead }
+	| {
+			id?: string;
+			type: "response";
+			command: "kill_task";
+			success: true;
+			data: { requested: boolean; task: TaskSnapshot };
+	  }
+	| { id?: string; type: "response"; command: "detach_tasks"; success: true; data: { detached: number } }
+	| { id?: string; type: "response"; command: "subscribe_tasks"; success: true; data: { subscribed: boolean } }
+
 	// Error response (any command can fail)
 	| { id?: string; type: "response"; command: string; success: false; error: string };
+
+// ============================================================================
+// Task Lifecycle Events (stdout, opt-in via subscribe_tasks)
+// ============================================================================
+
+export interface RpcTaskLifecycleEvent {
+	type: "task_lifecycle";
+	action: TaskLifecycleAction;
+	task: TaskSnapshot;
+}
 
 // ============================================================================
 // Extension UI Events (stdout)

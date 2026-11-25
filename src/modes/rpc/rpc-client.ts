@@ -11,9 +11,10 @@ import type { PromptDisposition, QueuedInputDisposition, SessionStats } from "..
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
+import type { TaskRead, TaskReadOptions, TaskSnapshot } from "../../core/tasks/types.ts";
 import type { JsonAgentSessionEvent } from "../json-event.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
-import type { RpcCommand, RpcResponse, RpcSessionState, RpcSlashCommand } from "./rpc-types.ts";
+import type { RpcCommand, RpcResponse, RpcSessionState, RpcSlashCommand, RpcTaskLifecycleEvent } from "./rpc-types.ts";
 
 // ============================================================================
 // Types
@@ -47,7 +48,9 @@ export interface ModelInfo {
 	reasoning: boolean;
 }
 
-export type RpcEventListener = (event: JsonAgentSessionEvent) => void;
+export type RpcEvent = JsonAgentSessionEvent | RpcTaskLifecycleEvent;
+
+export type RpcEventListener = (event: RpcEvent) => void;
 
 // ============================================================================
 // RPC Client
@@ -460,6 +463,40 @@ export class RpcClient {
 		return this.getData<{ commands: RpcSlashCommand[] }>(response).commands;
 	}
 
+	async listTasks(): Promise<TaskSnapshot[]> {
+		const response = await this.send({ type: "list_tasks" });
+		return this.getData<{ tasks: TaskSnapshot[] }>(response).tasks;
+	}
+
+	async getTask(taskId: string): Promise<TaskSnapshot> {
+		const response = await this.send({ type: "get_task", taskId });
+		return this.getData<{ task: TaskSnapshot }>(response).task;
+	}
+
+	async readTask(taskId: string, options?: TaskReadOptions): Promise<TaskRead> {
+		const response = await this.send({ type: "read_task", taskId, ...options });
+		return this.getData<TaskRead>(response);
+	}
+
+	async killTask(taskId: string): Promise<{ requested: boolean; task: TaskSnapshot }> {
+		const response = await this.send({ type: "kill_task", taskId });
+		return this.getData<{ requested: boolean; task: TaskSnapshot }>(response);
+	}
+
+	/** Omit `taskId` to detach all eligible foreground tasks. */
+	async detachTasks(taskId?: string): Promise<{ detached: number }> {
+		const response = await this.send(
+			taskId !== undefined ? { type: "detach_tasks", taskId } : { type: "detach_tasks" },
+		);
+		return this.getData<{ detached: number }>(response);
+	}
+
+	/** Opt in or out of `task_lifecycle` events on stdout. */
+	async subscribeTasks(enabled: boolean): Promise<{ subscribed: boolean }> {
+		const response = await this.send({ type: "subscribe_tasks", enabled });
+		return this.getData<{ subscribed: boolean }>(response);
+	}
+
 	// =========================================================================
 	// Helpers
 	// =========================================================================
@@ -488,9 +525,9 @@ export class RpcClient {
 	/**
 	 * Collect events until agent becomes idle.
 	 */
-	collectEvents(timeout = 60000): Promise<JsonAgentSessionEvent[]> {
+	collectEvents(timeout = 60000): Promise<RpcEvent[]> {
 		return new Promise((resolve, reject) => {
-			const events: JsonAgentSessionEvent[] = [];
+			const events: RpcEvent[] = [];
 			const timer = setTimeout(() => {
 				unsubscribe();
 				reject(new Error(`Timeout collecting events. Stderr: ${this.stderr}`));
@@ -523,7 +560,7 @@ export class RpcClient {
 	 * {@link collectEvents}: it never resolves early because the session is quiescent before that
 	 * work begins, so with nothing pending it waits until `timeout`.
 	 */
-	collectEventsUntilQuiescent(timeout = 60000): Promise<JsonAgentSessionEvent[]> {
+	collectEventsUntilQuiescent(timeout = 60000): Promise<RpcEvent[]> {
 		return this.untilQuiescent(timeout, false, "Timeout collecting events");
 	}
 
@@ -531,13 +568,9 @@ export class RpcClient {
 	 * Collect events until the next `session_quiescent`. With `ifAlreadyQuiescent`, also resolve as
 	 * soon as `get_state` reports that the session is quiescent already.
 	 */
-	private untilQuiescent(
-		timeout: number,
-		ifAlreadyQuiescent: boolean,
-		timeoutMessage: string,
-	): Promise<JsonAgentSessionEvent[]> {
+	private untilQuiescent(timeout: number, ifAlreadyQuiescent: boolean, timeoutMessage: string): Promise<RpcEvent[]> {
 		return new Promise((resolve, reject) => {
-			const events: JsonAgentSessionEvent[] = [];
+			const events: RpcEvent[] = [];
 			const finish = (error?: Error) => {
 				clearTimeout(timer);
 				unsubscribe();
@@ -563,7 +596,7 @@ export class RpcClient {
 	/**
 	 * Send prompt and wait for completion, returning all events.
 	 */
-	async promptAndWait(message: string, images?: ImageContent[], timeout = 60000): Promise<JsonAgentSessionEvent[]> {
+	async promptAndWait(message: string, images?: ImageContent[], timeout = 60000): Promise<RpcEvent[]> {
 		const eventsPromise = this.collectEvents(timeout);
 		await this.prompt(message, images);
 		return eventsPromise;
@@ -588,7 +621,7 @@ export class RpcClient {
 			// Otherwise it's an event. Iterate a snapshot so listeners that unsubscribe during dispatch
 			// do not cause later listeners to miss this event.
 			for (const listener of [...this.eventListeners]) {
-				listener(data as JsonAgentSessionEvent);
+				listener(data as RpcEvent);
 			}
 		} catch {
 			// Ignore non-JSON lines

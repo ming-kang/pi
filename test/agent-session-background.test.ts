@@ -1127,4 +1127,62 @@ describe("session-owned background host", () => {
 			await expect(session.waitForQuiescence()).rejects.toThrow("disposed");
 		});
 	});
+
+	it("coalesces multiple idle completions into a single model turn", async () => {
+		const session = await host();
+		await session.bindExtensions({ tasksEnabled: true });
+		const turns: number[] = [];
+		session.subscribe((event) => {
+			if (event.type === "agent_start") turns.push(1);
+		});
+		const resume = session.pauseTaskNotifications();
+		const first = await task(session);
+		const second = await task(session);
+		const third = await task(session);
+		first.finish();
+		second.finish();
+		third.finish();
+		await vi.waitFor(() => expect(sessionDelivery(session).pending()).toHaveLength(3));
+		const waiting = session.waitForQuiescence();
+		resume();
+		await waiting;
+		expect(turns).toHaveLength(1);
+		const customMessages = session.sessionManager
+			.getEntries()
+			.filter((entry) => entry.type === "custom_message" && entry.customType === "task-completion");
+		expect(customMessages).toHaveLength(3);
+	});
+
+	it("emits task_lifecycle extension events without firing on progress updates", async () => {
+		const lifecycle: Array<{ action: string; id: string }> = [];
+		const session = await host(true, (pi) => {
+			pi.on("task_lifecycle", (event) => {
+				lifecycle.push({ action: event.action, id: event.task.id });
+			});
+		});
+		await session.bindExtensions({ tasksEnabled: true });
+		const resume = session.pauseTaskNotifications();
+		const execution = await task(session);
+		execution.control.publish({ result: { content: [{ type: "text", text: "progress 1" }], details: undefined } });
+		execution.control.publish({ result: { content: [{ type: "text", text: "progress 2" }], details: undefined } });
+		execution.finish();
+		await vi.waitFor(() => expect(session.tasks.get(execution.id).status).toBe("completed"));
+		await vi.waitFor(() =>
+			expect(lifecycle).toEqual([
+				{ action: "started", id: execution.id },
+				{ action: "backgrounded", id: execution.id },
+				{ action: "settled", id: execution.id },
+			]),
+		);
+		resume();
+	});
+
+	it("applies configured tasks.maxBackground settings", async () => {
+		const session = await host(true, undefined, undefined, undefined, undefined, { tasks: { maxBackground: 1 } });
+		await session.bindExtensions({ tasksEnabled: true });
+		const first = await task(session);
+		await expect(task(session)).rejects.toThrow("Background task limit reached (1)");
+		first.finish();
+		await session.waitForQuiescence();
+	});
 });

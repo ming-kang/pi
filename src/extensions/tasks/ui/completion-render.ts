@@ -3,12 +3,19 @@
  * settled; input, facts and output stay in `/tasks`, so expansion adds nothing.
  * The persisted context message remains untouched.
  */
-import { type Component, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	type TuiMouseEvent,
+	type TuiMouseEventResult,
+	truncateToWidth,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import type { MessageRenderOptions } from "../../../core/extensions/types.ts";
 import type { CustomMessage } from "../../../core/messages.ts";
 import { readVersionedTask } from "../../../core/tasks/codec.ts";
 import { runtimeLabel } from "../../../core/tasks/format.ts";
 import type { TaskStatus } from "../../../core/tasks/types.ts";
+import { isPlainPrimaryClick } from "../../../modes/interactive/components/primary-click.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import { FramedComponent } from "../../../modes/interactive/tool-view/style.ts";
 import { statusName, statusView } from "./status.ts";
@@ -79,7 +86,9 @@ function completionView(message: CustomMessage<unknown>): CompletionView {
 }
 
 function shortId(id: string): string {
-	return id.replace(/^(.+)-([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, "$1-$2");
+	return id
+		.replace(/^(.+)-([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, "$1-$2")
+		.replace(/^(.+)-([0-9a-f]{8})[0-9a-f]{4,}$/i, "$1-$2");
 }
 
 class CompletionNotice implements Component {
@@ -87,15 +96,22 @@ class CompletionNotice implements Component {
 	private readonly options: MessageRenderOptions;
 	private readonly theme: Theme;
 	private readonly chrome: FramedComponent;
-	constructor(view: CompletionView, options: MessageRenderOptions, theme: Theme) {
+	private readonly onOpen?: (taskId: string) => void;
+	constructor(view: CompletionView, options: MessageRenderOptions, theme: Theme, onOpen?: (taskId: string) => void) {
 		this.view = view;
 		this.options = options;
 		this.theme = theme;
+		this.onOpen = onOpen;
 		this.chrome = new FramedComponent(
 			{ render: (contentWidth) => this.renderContent(contentWidth), invalidate() {} },
 			"header",
 			() => (this.view.kind === "task" ? statusView(this.view.status).color : "muted"),
 		);
+	}
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (!this.onOpen || this.view.kind !== "task" || !isPlainPrimaryClick(event)) return undefined;
+		this.onOpen(this.view.id);
+		return { handled: true };
 	}
 	invalidate(): void {
 		this.chrome.invalidate();
@@ -141,6 +157,7 @@ export function renderTaskCompletion(
 	message: CustomMessage<unknown>,
 	options: MessageRenderOptions,
 	theme: Theme,
+	onOpen?: (taskId: string) => void,
 ): Component {
 	let view: CompletionView;
 	try {
@@ -152,5 +169,5 @@ export function renderTaskCompletion(
 			truncated: false,
 		};
 	}
-	return new CompletionNotice(view, options, theme);
+	return new CompletionNotice(view, options, theme, onOpen);
 }

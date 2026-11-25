@@ -56,6 +56,20 @@ export interface TaskInput extends TaskText {
 /** One labelled Details row, such as ["Directory", "/repo"] or ["Exit", "1"]. */
 export type TaskFact = readonly [label: string, value: string];
 
+export type TaskChangeKind = "lifecycle" | "progress";
+
+export interface TaskChangeEvent {
+	kind: TaskChangeKind;
+	taskId?: string;
+}
+
+export type TaskLifecycleAction = "started" | "backgrounded" | "stopping" | "settled";
+
+export interface TaskLifecycleEvent {
+	action: TaskLifecycleAction;
+	task: TaskSnapshot;
+}
+
 /** A read-only view of one task; the runtime returns frozen snapshots. */
 export interface TaskSnapshot {
 	id: string;
@@ -72,6 +86,8 @@ export interface TaskSnapshot {
 	status: TaskStatus;
 	startedAt: number;
 	endedAt?: number;
+	lastOutputAt?: number;
+	usage?: Usage;
 	outputPath?: string;
 	/** Bounded model-readable result text. */
 	result?: TaskText;
@@ -120,6 +136,8 @@ export interface TaskControl<T> {
 	/** The executor's own preflight passed; from now on the caller may be handed off to the background. */
 	accept(): void;
 	publish(update: TaskUpdate<T>): void;
+	/** Record output activity without emitting a progress snapshot (e.g., background log writes). */
+	noteOutput(): void;
 	/** Register once; cleanup must own only this exclusively-created file and close its writer first. */
 	attachOutput(path: string, cleanup?: () => void | Promise<void>): void;
 	/** Cancel this execution, for example when an executor policy limit is exceeded. */
@@ -170,6 +188,12 @@ export interface TaskReadOptions {
 	 * at or after it. Without it the output kind selects the default end.
 	 */
 	sinceBytes?: number;
+	/** Exclusive upper byte bound for reading an earlier log window. */
+	endByte?: number;
+	/** Case-insensitive substring or `/regex/flags` line filter. */
+	filter?: string;
+	/** Surrounding context lines around each match (0–5, default 0). */
+	contextLines?: number;
 }
 
 export interface TaskRead {
@@ -182,6 +206,10 @@ export interface TaskRead {
 	fromByte?: number;
 	/** Raw source-byte end supplied by the runtime; older/custom hosts may omit it. */
 	endByte?: number;
+	mtimeMs?: number;
+	filtered?: boolean;
+	/** Total matching lines scanned before bounding `text`. */
+	totalMatches?: number;
 }
 
 /** Optional host integration for products built on the execution runtime. */
@@ -210,7 +238,7 @@ export interface TasksContext {
 	canDetach(id: string): boolean;
 	/** Returns false when the task cannot move; throws when every background slot is taken. */
 	detach(id: string): boolean;
-	subscribe(listener: () => void): () => void;
+	subscribe(listener: (event: TaskChangeEvent) => void): () => void;
 	/** Keep retained output available without delaying completion delivery. */
 	retain(id: string): () => void;
 }
@@ -220,14 +248,20 @@ export interface TaskRuntimeOptions {
 	/** Branch-impact queries for a durable host; standalone runtimes omit it. */
 	session?: TasksSessionContext;
 	anchor?: () => string | null;
+	/** Trusted directory for persistent session artifacts that may remain readable after restore. */
+	artifactDir?: () => string | undefined;
 	/** Admission limit for unsettled background tasks; foreground work is bounded by its caller. */
 	maxBackground?: number;
 	/** Per-history limit: foreground and background tasks each get this allowance. */
 	maxHistory?: number;
+	/** Grace period in milliseconds for draining cancelled tasks on shutdown or branch navigation. */
+	shutdownGraceMs?: number;
 	/** Best-effort cleanup errors, bounded to 4096 bytes; no retries or execution failure. */
 	onCleanupError?: (message: string) => void;
 	/** Synchronous persistence before terminal observers or notifications. */
 	onSettled?: (task: TaskSnapshot, usage: Usage | undefined) => void;
+	/** Lifecycle transition hook (never fires on progress updates). */
+	onLifecycle?: (event: TaskLifecycleEvent) => void;
 	/**
 	 * Whether the host can supervise new background work, such as its management tool being
 	 * active. Gates admission and detaching only; work already admitted is unaffected.

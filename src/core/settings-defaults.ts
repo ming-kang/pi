@@ -58,6 +58,13 @@ export const SETTINGS_DEFAULTS = {
 		mode: "on",
 		inlineBudget: 3000,
 	},
+	tasks: {
+		maxBackground: 8,
+		maxHistory: 32,
+		maxBackgroundOutputMb: 20,
+		backgroundOutputLimitAction: "fail",
+		shutdownGraceMs: 2000,
+	},
 	cacheWarming: "idle",
 	tuiMode: "fullscreen",
 	fullscreenExitOutput: "transcript",

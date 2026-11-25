@@ -9,12 +9,14 @@ import { keyLabel } from "../../../modes/interactive/components/keybinding-hints
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import {
 	browseFooter,
+	confirmStopAllFooter,
 	confirmStopFooter,
 	type Feedback,
 	type Footer,
 	type FooterEnv,
 	helpFooter,
 	searchFooter,
+	searchOutputFooter,
 } from "./footer.ts";
 import { fitCell, framePane, type Rect } from "./frame.ts";
 import { helpRows } from "./help.ts";
@@ -60,6 +62,7 @@ interface LayoutOptions {
 	feedback?: Feedback;
 	/** Whether the host would move this task to the background now. */
 	canDetach: (id: string) => boolean;
+	onOutputSearchMatches?: (matchLines: number[], activeIndex: number) => void;
 }
 
 export function isInspectorVisible({
@@ -122,6 +125,11 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 			footer = searchFooter(env);
 			break;
 		}
+		case "searchOutput": {
+			body = renderPanes(options, hint, rects);
+			footer = searchOutputFooter(env);
+			break;
+		}
 		case "confirmStop": {
 			body = renderPanes(options, hint, rects);
 			const target = options.selection.all.find((task) => task.id === mode.taskId);
@@ -129,6 +137,11 @@ export function renderTasksLayout(options: LayoutOptions): TasksLayout {
 				source: cleanTaskText(target?.label ?? "task"),
 				title: cleanTaskText(firstCommandLine(target?.title ?? mode.taskId)),
 			});
+			break;
+		}
+		case "confirmStopAll": {
+			body = renderPanes(options, hint, rects);
+			footer = confirmStopAllFooter(env, mode.count);
 			break;
 		}
 		case "browse": {
@@ -166,6 +179,7 @@ function renderPanes(
 	const showInspector = isInspectorVisible(options);
 	const browsing = mode.kind === "browse";
 	const searching = mode.kind === "search";
+	const searchingOutput = mode.kind === "searchOutput";
 	const listPane = showList
 		? renderListPane({ theme, selection, list }, rects.list, {
 				active: rects.split && focus === "list",
@@ -178,11 +192,20 @@ function renderPanes(
 		? renderInspectorPane({ theme, selection, inspector, hint }, rects.inspector, {
 				active: rects.split && focus === "inspector",
 				interactive: browsing,
+				outputSearch:
+					mode.kind === "searchOutput"
+						? {
+								query: mode.input.getValue(),
+								searchRow: mode.input.render(rects.inspector.width - 2).join(""),
+								matchIndex: mode.matchIndex,
+								onMatches: options.onOutputSearchMatches,
+							}
+						: undefined,
 			})
 		: undefined;
 	const regions: PaneRegion[] = [];
 	if (listPane && (browsing || searching)) regions.push({ pane: "list", ...rects.list });
-	if (inspectorPane && browsing) regions.push({ pane: "inspector", ...rects.inspector });
+	if (inspectorPane && (browsing || searchingOutput)) regions.push({ pane: "inspector", ...rects.inspector });
 	const lines =
 		listPane && inspectorPane
 			? listPane.lines.map((line, i) => `${line} ${inspectorPane.lines[i]}`)

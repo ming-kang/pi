@@ -4,6 +4,24 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- **Tasks completion coalescing**: Ready background task completions now coalesce into a single model turn when idle (and into one steering batch when `steeringMode` is `"all"`), up to 8 completions / 96 KiB per batch, preserving per-message persistence acknowledgement and retry semantics.
+- **Tasks `read` & `list` improvements**: `tasks read` now includes task `facts` (such as exit code, directory, and edited files) and supports bounded line filtering (`filter` substring or `/regex/flags`, plus `contextLines` 0–5); `tasks list` supports `status` (`"all"`, `"active"`, `"finished"`) and `limit` filters. Task IDs use a compact `<kind>-<12 hex>` format with documented unique prefix lookup.
+- **`/tasks` interactive panel enhancements**: Preserves safe ANSI SGR colors in log output while stripping unsafe escapes; adds backward/forward large-log paging (`[` / `]`), in-output search (`g`), persistent list filters (`a`), bulk stop all (`Shift+K`), clipboard copy (`c`), per-task token/cost Usage and passive Idle rows in Details, animated `stopping` markers, and clicking `task-completion` cards to open `/tasks` directly on that task.
+- **RPC Tasks protocol & extension lifecycle events**: Added RPC commands `list_tasks`, `get_task`, `read_task`, `kill_task`, `detach_tasks`, and opt-in `subscribe_tasks` (`task_lifecycle` events), matching `RpcClient` methods, and the `pi.on("task_lifecycle", ...)` extension hook.
+- **Configurable `tasks` settings**: Added `tasks.maxBackground`, `tasks.maxHistory`, `tasks.maxBackgroundOutputMb`, `tasks.backgroundOutputLimitAction` (`"fail"` or `"truncate"`), and `tasks.shutdownGraceMs` in `settings.json`.
+
+### Changed
+
+- **Tasks hot-path performance**: Split `TasksContext.subscribe` events into `"lifecycle"` vs `"progress"` so high-frequency progress updates no longer wake completion delivery, quiescence checks, or statusline recalculation; replaced per-snapshot `structuredClone` with one-time field freezing; stopped `/tasks` polling when no active tasks remain and skipped redundant re-wraps when polled slices are unchanged.
+- **Persistent report artifact restoration**: Restored `report` tasks whose `outputPath` resides inside the session's trusted artifact directory stay readable without cleanup ownership instead of being marked as expired managed logs, and restored tasks hydrate their persisted `usage`.
+
+### Fixed
+
+- Fixed a `/tasks` inspector race where a task settling while an earlier log read was in flight could delay loading the final output until the next poll interval.
+- Fixed `tasks kill` reading three separate snapshots per call, `TaskDelivery.agentEnded()`/`queueCleared()` racing ahead of `waitForPersistence()`, and documentation drift in `docs/bundled/tasks.md` and `docs/bundled/extensions/statusline.md`.
+
 ## [1.6.2] - 2026-11-23
 
 ### Added

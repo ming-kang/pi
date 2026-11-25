@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { finiteLimit } from "../../utils/number.ts";
 import { Execution, type ExecutionHost } from "./execution.ts";
@@ -20,7 +20,9 @@ import {
 	TASK_BACKGROUND_REJECTION,
 	TASK_KIND_PATTERN,
 	TASK_MANAGEMENT_REJECTION,
+	type TaskChangeEvent,
 	type TaskExecution,
+	type TaskLifecycleEvent,
 	TaskLookupError,
 	type TaskRead,
 	type TaskReadOptions,
@@ -35,11 +37,12 @@ export class TaskRuntime implements TasksContext {
 	private readonly store: TaskStore;
 	private readonly executions = new Map<string, Execution<unknown>>();
 	private readonly scheduler = new TaskScheduler();
-	private readonly listeners = new Set<() => void>();
+	private readonly listeners = new Set<(event: TaskChangeEvent) => void>();
 	private readonly host: ExecutionHost;
 	private readonly maxBackground: number;
 	private readonly maxHistory: number;
 	private readonly maxRetained: number;
+	private readonly shutdownGraceMs: number;
 	private readonly options: TaskRuntimeOptions;
 	private configuredEnabled: boolean;
 	private _closed = false;
@@ -49,21 +52,29 @@ export class TaskRuntime implements TasksContext {
 		this.configuredEnabled = options.enabled ?? false;
 		this.maxBackground = Math.max(1, finiteLimit(options.maxBackground, 8, 128));
 		this.maxHistory = finiteLimit(options.maxHistory, 32, 1024);
+		this.shutdownGraceMs = Math.max(100, finiteLimit(options.shutdownGraceMs, 2000, 60_000));
 		// Separate foreground and background histories, plus the protected-record allowance.
 		this.maxRetained = this.maxBackground + 2 * Math.max(1, this.maxHistory) + this.maxHistory;
-		this.store = new TaskStore(this.maxHistory, this.maxRetained, () => this.closed, options.onCleanupError);
+		this.store = new TaskStore(
+			this.maxHistory,
+			this.maxRetained,
+			() => this.closed,
+			options.onCleanupError,
+			options.artifactDir,
+		);
 		const runtime = this;
 		this.host = {
 			get closed() {
 				return runtime.closed;
 			},
-			emit: () => this.emit(),
+			emit: (event) => this.emit(event),
+			lifecycle: (event) => this.emitLifecycle(event),
 			settle: (task, usage) => this.options.onSettled?.(task, usage),
 			released: (execution) => {
 				this.executions.delete(execution.task.id);
 				this.scheduler.release(execution);
 				this.store.trim();
-				this.emit();
+				this.emit({ kind: "lifecycle", taskId: execution.task.id });
 			},
 		};
 	}
@@ -96,12 +107,12 @@ export class TaskRuntime implements TasksContext {
 
 	setEnabled(enabled: boolean): void {
 		this.configuredEnabled = enabled;
-		this.emit();
+		this.emit({ kind: "lifecycle" });
 	}
 
 	/** Tell subscribers that something the runtime reads from its host changed, such as `canManageBackground`. */
 	refresh(): void {
-		this.emit();
+		this.emit({ kind: "lifecycle" });
 	}
 
 	/** Whether new work may move to or start in the background: enabled, and the host can manage it. */
@@ -124,7 +135,7 @@ export class TaskRuntime implements TasksContext {
 			rejection = `Background task limit reached (${this.maxBackground}); stop or wait for a background task, or run in the foreground.`;
 		} else if (this.store.retainedCount() >= this.maxRetained) {
 			rejection =
-				"Task history retention limit reached; deliver pending notifications or release task pins and delivery leases";
+				"Task history retention limit reached; wait for pending notifications to be delivered or release retained tasks.";
 		} else {
 			return free;
 		}
@@ -148,7 +159,7 @@ export class TaskRuntime implements TasksContext {
 		const anchorId = this.options.anchor?.() ?? null;
 		if (anchorId !== null && Buffer.byteLength(anchorId) > 8192) throw new Error("Task branch anchor is too large");
 		const task: TaskSnapshot = {
-			id: `${execution.kind}-${randomUUID()}`,
+			id: this.nextId(execution.kind),
 			kind: execution.kind,
 			label: boundText(execution.label ?? execution.kind, TASK_LABEL_BYTES),
 			title: boundText(execution.title, TASK_TITLE_BYTES),
@@ -168,8 +179,16 @@ export class TaskRuntime implements TasksContext {
 		this.scheduler.schedule(active);
 		// Queued background work returns at once; started work hands off after its own accept().
 		active.handOffIfQueued();
-		this.emit();
+		this.emit({ kind: "lifecycle", taskId: task.id });
 		return active.caller;
+	}
+
+	private nextId(kind: string): string {
+		let id: string;
+		do {
+			id = `${kind}-${randomBytes(6).toString("hex")}`;
+		} while (this.store.get(id));
+		return id;
 	}
 
 	private detachable(record: TaskRecord): boolean {
@@ -202,7 +221,7 @@ export class TaskRuntime implements TasksContext {
 	private detachAll(executions: Execution<unknown>[]): number {
 		const notifications = executions.map((execution) => execution.detach());
 		for (const notify of notifications) notify();
-		this.emit();
+		this.emit({ kind: "lifecycle" });
 		return executions.length;
 	}
 
@@ -262,7 +281,7 @@ export class TaskRuntime implements TasksContext {
 		return this.executions.get(record.task.id)?.cancel() ?? false;
 	}
 
-	subscribe(listener: () => void): () => void {
+	subscribe(listener: (event: TaskChangeEvent) => void): () => void {
 		if (this.closed) return () => {};
 		this.listeners.add(listener);
 		return () => {
@@ -295,7 +314,7 @@ export class TaskRuntime implements TasksContext {
 		this.store.trim();
 	}
 
-	async shutdown(graceMs = 2000): Promise<void> {
+	async shutdown(graceMs = this.shutdownGraceMs): Promise<void> {
 		this.close();
 		await this.drain(this.store.all(), graceMs);
 	}
@@ -319,8 +338,8 @@ export class TaskRuntime implements TasksContext {
 		const outside = records.filter((record) => !record.visible);
 		for (const record of outside) this.cancel(record);
 		this.store.trim();
-		this.emit();
-		await this.drain(outside, 2000);
+		this.emit({ kind: "lifecycle" });
+		await this.drain(outside, this.shutdownGraceMs);
 	}
 
 	private async drain(records: TaskRecord[], graceMs: number): Promise<void> {
@@ -331,7 +350,7 @@ export class TaskRuntime implements TasksContext {
 					this.store.cleanupsDone(),
 				),
 				new Promise<void>((resolve) => {
-					timer = setTimeout(resolve, finiteLimit(graceMs, 2000, 60_000));
+					timer = setTimeout(resolve, finiteLimit(graceMs, this.shutdownGraceMs, 60_000));
 				}),
 			]);
 		} finally {
@@ -339,15 +358,24 @@ export class TaskRuntime implements TasksContext {
 		}
 	}
 
-	private emit(): void {
+	private emit(event: TaskChangeEvent): void {
 		if (this.closed) return;
 		for (const listener of [...this.listeners]) {
 			if (this.closed) break;
 			try {
-				listener();
+				listener(event);
 			} catch {
 				/* Observers do not own execution or delivery. */
 			}
+		}
+	}
+
+	private emitLifecycle(event: TaskLifecycleEvent): void {
+		if (this.closed) return;
+		try {
+			this.options.onLifecycle?.(event);
+		} catch {
+			/* Lifecycle observers cannot interrupt task execution. */
 		}
 	}
 }

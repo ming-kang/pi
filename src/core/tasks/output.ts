@@ -142,6 +142,9 @@ export interface OutputSlice {
 	fromByte: number;
 	/** Raw source-byte end, independent of UTF-8 decoding or replacement characters. */
 	endByte: number;
+	mtimeMs?: number;
+	filtered?: boolean;
+	totalMatches?: number;
 }
 
 /** Raw source-byte range; decoding invalid UTF-8 must never move the continuation offset. */
@@ -158,18 +161,31 @@ export function taskReadBytes(slice: Pick<TaskRead, "text" | "fromByte" | "endBy
 /**
  * The byte window a read covers in an output of `size` bytes. `floor` is the first byte the
  * caller has not seen yet. A head read continues forward from it; a tail read keeps the newest
- * unread window. Anything before the floor never counts as truncated.
+ * unread window up to `ceiling`. Anything before the floor never counts as truncated.
  */
-function readWindow(size: number, options: TaskReadOptions): { start: number; length: number; floor: number } {
+function readWindow(
+	size: number,
+	options: TaskReadOptions,
+): { start: number; length: number; floor: number; ceiling: number } {
 	const bytes = boundReadBytes(options.bytes);
+	const ceiling =
+		options.endByte !== undefined && Number.isFinite(options.endByte)
+			? Math.max(0, Math.min(size, Math.floor(options.endByte)))
+			: size;
 	const since = finiteLimit(options.sinceBytes, 0, Number.MAX_SAFE_INTEGER);
-	const floor = since > size ? 0 : since;
+	const floor = since > ceiling ? 0 : since;
 	const start =
-		options.mode === "head" ? (options.sinceBytes !== undefined ? floor : 0) : Math.max(floor, size - bytes);
-	return { start, length: Math.min(bytes, size - start), floor };
+		options.mode === "head" ? (options.sinceBytes !== undefined ? floor : 0) : Math.max(floor, ceiling - bytes);
+	return { start, length: Math.min(bytes, ceiling - start), floor, ceiling };
 }
 
-function outputSlice(size: number, slice: Buffer, fromByte: number, earlierTruncated: boolean): OutputSlice {
+function outputSlice(
+	size: number,
+	slice: Buffer,
+	fromByte: number,
+	earlierTruncated: boolean,
+	mtimeMs?: number,
+): OutputSlice {
 	const endByte = fromByte + slice.byteLength;
 	return {
 		text: slice.toString("utf8"),
@@ -177,14 +193,124 @@ function outputSlice(size: number, slice: Buffer, fromByte: number, earlierTrunc
 		truncated: earlierTruncated || endByte < size,
 		fromByte,
 		endByte,
+		...(mtimeMs !== undefined ? { mtimeMs } : {}),
+	};
+}
+
+const FILTER_MAX_CHARS = 256;
+const FILTER_CHUNK_BYTES = 64 * 1024;
+const FILTER_MAX_SCAN_BYTES = 20 * 1024 * 1024;
+const FILTER_MAX_CONTEXT = 5;
+
+function buildLineMatcher(rawFilter: string): (line: string) => boolean {
+	const filter = rawFilter.slice(0, FILTER_MAX_CHARS);
+	const regexMatch = /^\/(.+)\/([imsu]*)$/.exec(filter);
+	if (regexMatch) {
+		try {
+			const regex = new RegExp(regexMatch[1]!, regexMatch[2]!.replace(/g/g, ""));
+			return (line) => regex.test(line);
+		} catch {
+			// Fall back to plain substring matching when regex syntax is invalid.
+		}
+	}
+	const needle = filter.toLowerCase();
+	return (line) => line.toLowerCase().includes(needle);
+}
+
+function createFilterCollector(filter: string, maxBytes: number, mode: "head" | "tail", contextLines: number) {
+	const matches = buildLineMatcher(filter);
+	const ctx = finiteLimit(contextLines, 0, FILTER_MAX_CONTEXT);
+	const ring: Array<{ lineNo: number; text: string }> = [];
+	const rows: string[] = [];
+	let rowsBytes = 0;
+	let totalMatches = 0;
+	let truncated = false;
+	let lastEmittedLine = 0;
+	let trailingContext = 0;
+	let lineNo = 0;
+	let headFull = false;
+
+	const pushRow = (row: string) => {
+		const rowBytes = Buffer.byteLength(row) + (rows.length > 0 ? 1 : 0);
+		if (mode === "head") {
+			if (rowsBytes + rowBytes > maxBytes) {
+				if (rows.length === 0 && maxBytes > 0) {
+					const clipped = boundText(row, maxBytes);
+					rows.push(clipped);
+					rowsBytes = Buffer.byteLength(clipped);
+				}
+				truncated = true;
+				headFull = true;
+				return;
+			}
+			rows.push(row);
+			rowsBytes += rowBytes;
+			return;
+		}
+		const bounded = rowBytes > maxBytes ? boundText(row, maxBytes) : row;
+		const boundedBytes = Buffer.byteLength(bounded) + (rows.length > 0 ? 1 : 0);
+		if (bounded !== row) truncated = true;
+		rows.push(bounded);
+		rowsBytes += boundedBytes;
+		while (rows.length > 1 && rowsBytes > maxBytes) {
+			const dropped = rows.shift()!;
+			rowsBytes -= Buffer.byteLength(dropped) + 1;
+			truncated = true;
+		}
+	};
+
+	const emitEntry = (num: number, sep: ":" | "-", text: string) => {
+		if (num <= lastEmittedLine) return;
+		if (lastEmittedLine > 0 && num > lastEmittedLine + 1 && rows.length > 0) pushRow("--");
+		if (headFull) return;
+		pushRow(`${num}${sep} ${text}`);
+		lastEmittedLine = num;
+	};
+
+	const feedLine = (rawLine: string) => {
+		const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+		lineNo++;
+		if (matches(line)) {
+			totalMatches++;
+			if (!headFull) {
+				for (const before of ring) emitEntry(before.lineNo, "-", before.text);
+				emitEntry(lineNo, ":", line);
+				trailingContext = ctx;
+			}
+		} else if (trailingContext > 0 && !headFull) {
+			emitEntry(lineNo, "-", line);
+			trailingContext--;
+		}
+		if (ctx > 0) {
+			ring.push({ lineNo, text: line });
+			if (ring.length > ctx) ring.shift();
+		}
+	};
+
+	return {
+		feedLine,
+		finish(size: number, floor: number, endByte: number, scanTruncated: boolean, mtimeMs?: number): OutputSlice {
+			return {
+				text: rows.join("\n"),
+				totalBytes: size,
+				truncated: truncated || scanTruncated,
+				fromByte: floor,
+				endByte,
+				filtered: true,
+				totalMatches,
+				...(mtimeMs !== undefined ? { mtimeMs } : {}),
+			};
+		},
 	};
 }
 
 /** Positioned, bounded reads only. The executor owns the path and its cleanup. */
 export async function readOutputSlice(path: string, options: TaskReadOptions = {}): Promise<OutputSlice> {
+	if (options.filter?.trim()) return filterOutputSlice(path, options);
 	const file = await open(path, "r");
 	try {
-		const { size } = await file.stat();
+		const stat = await file.stat();
+		const { size, mtimeMs } = stat;
 		const { start, length, floor } = readWindow(size, options);
 		// One extra byte lets alignment distinguish a complete last codepoint.
 		const buffer = Buffer.alloc(Math.min(length + 1, size - start));
@@ -195,13 +321,60 @@ export async function readOutputSlice(path: string, options: TaskReadOptions = {
 			slice,
 			start + slice.byteOffset - buffer.byteOffset,
 			options.mode !== "head" && start > floor,
+			mtimeMs,
 		);
 	} finally {
 		await file.close();
 	}
 }
 
+async function filterOutputSlice(path: string, options: TaskReadOptions): Promise<OutputSlice> {
+	const file = await open(path, "r");
+	try {
+		const { size, mtimeMs } = await file.stat();
+		const bytes = boundReadBytes(options.bytes);
+		const mode = options.mode === "head" ? "head" : "tail";
+		const ceiling =
+			options.endByte !== undefined && Number.isFinite(options.endByte)
+				? Math.max(0, Math.min(size, Math.floor(options.endByte)))
+				: size;
+		const since = finiteLimit(options.sinceBytes, 0, Number.MAX_SAFE_INTEGER);
+		const floor = since > ceiling ? 0 : since;
+		let pos = floor;
+		let scanTruncated = ceiling < size;
+		if (ceiling - pos > FILTER_MAX_SCAN_BYTES) {
+			if (mode === "tail") pos = ceiling - FILTER_MAX_SCAN_BYTES;
+			scanTruncated = true;
+		}
+		const scanEnd = Math.min(ceiling, pos + FILTER_MAX_SCAN_BYTES);
+		const collector = createFilterCollector(options.filter!.trim(), bytes, mode, options.contextLines ?? 0);
+		const decoder = new TextDecoder();
+		const chunk = Buffer.alloc(FILTER_CHUNK_BYTES);
+		let pending = "";
+		while (pos < scanEnd) {
+			const toRead = Math.min(chunk.length, scanEnd - pos);
+			const { bytesRead } = await file.read(chunk, 0, toRead, pos);
+			if (bytesRead <= 0) break;
+			pos += bytesRead;
+			const decoded = decoder.decode(chunk.subarray(0, bytesRead), { stream: true });
+			pending += decoded;
+			let nl = pending.indexOf("\n");
+			while (nl !== -1) {
+				collector.feedLine(pending.slice(0, nl));
+				pending = pending.slice(nl + 1);
+				nl = pending.indexOf("\n");
+			}
+		}
+		pending += decoder.decode();
+		if (pending.length > 0) collector.feedLine(pending);
+		return collector.finish(size, floor, pos, scanTruncated, mtimeMs);
+	} finally {
+		await file.close();
+	}
+}
+
 export function sliceText(text: string, options: TaskReadOptions = {}): OutputSlice {
+	if (options.filter?.trim()) return filterText(text, options);
 	const buffer = Buffer.from(text);
 	const { start, length, floor } = readWindow(buffer.length, options);
 	const slice = alignedSlice(buffer, start, start + length);
@@ -211,4 +384,25 @@ export function sliceText(text: string, options: TaskReadOptions = {}): OutputSl
 		slice.byteOffset - buffer.byteOffset,
 		options.mode !== "head" && start > floor,
 	);
+}
+
+function filterText(text: string, options: TaskReadOptions): OutputSlice {
+	const buffer = Buffer.from(text);
+	const size = buffer.length;
+	const bytes = boundReadBytes(options.bytes);
+	const mode = options.mode === "head" ? "head" : "tail";
+	const ceiling =
+		options.endByte !== undefined && Number.isFinite(options.endByte)
+			? Math.max(0, Math.min(size, Math.floor(options.endByte)))
+			: size;
+	const since = finiteLimit(options.sinceBytes, 0, Number.MAX_SAFE_INTEGER);
+	const floor = since > ceiling ? 0 : since;
+	const sliced = alignedSlice(buffer, floor, ceiling).toString("utf8");
+	const collector = createFilterCollector(options.filter!.trim(), bytes, mode, options.contextLines ?? 0);
+	if (sliced.length > 0) {
+		const lines = sliced.split("\n");
+		if (lines.at(-1) === "") lines.pop();
+		for (const line of lines) collector.feedLine(line);
+	}
+	return collector.finish(size, floor, ceiling, ceiling < size);
 }

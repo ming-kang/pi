@@ -6,41 +6,77 @@
  */
 import { unlink } from "node:fs/promises";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { TasksBackgroundOutputLimitAction } from "../settings-schema.ts";
 import { boundText } from "../tasks/output.ts";
-import type { TaskCompletion, TaskControl, TaskTerminalStatus } from "../tasks/types.ts";
+import type { TaskCompletion, TaskControl, TaskFact, TaskTerminalStatus } from "../tasks/types.ts";
 import { type BashOperations, resolveTimeoutMs } from "./bash.ts";
 import { OutputAccumulator, type OutputAccumulatorOptions, type OutputSnapshot } from "./output-accumulator.ts";
 import type { BashToolDetails } from "./shell-tool.ts";
+import { formatSize } from "./truncate.ts";
 
 export const MAX_BACKGROUND_OUTPUT_BYTES = 20 * 1024 * 1024;
 /** Background snapshots stay within the task result budget, so the bounded result keeps the newest output. */
 const BACKGROUND_SNAPSHOT_BYTES = 40 * 1024;
-const OUTPUT_LIMIT_ERROR = "Background command exceeded the 20 MiB output limit";
+
+function outputLimitError(maxBytes: number): string {
+	return maxBytes === MAX_BACKGROUND_OUTPUT_BYTES
+		? "Background command exceeded the 20 MiB output limit"
+		: `Background command exceeded the ${formatSize(maxBytes)} output limit`;
+}
 
 type ShellDetails = BashToolDetails | undefined;
 type ShellControl = TaskControl<ShellDetails>;
 
 /**
  * A session task's output: persisted from the first byte to the log attached to the task, and
- * bounded once the task is background work. A write failure or the background cap cancels the
- * task instead of throwing through the process's data observer.
+ * bounded once the task is background work. In "fail" mode a write failure or the background cap
+ * cancels the task instead of throwing through the process's data observer; in "truncate" mode
+ * exceeding the cap stops disk logging while letting the command finish with its rolling tail.
  */
 class TaskOutput extends OutputAccumulator {
 	error?: Error;
+	diskTruncated = false;
+	readonly maxBackgroundOutputBytes: number;
 	private readonly control: ShellControl;
+	private readonly limitAction: TasksBackgroundOutputLimitAction;
 
-	constructor(control: ShellControl, options: OutputAccumulatorOptions) {
+	constructor(
+		control: ShellControl,
+		options: OutputAccumulatorOptions & {
+			maxBackgroundOutputBytes?: number;
+			backgroundOutputLimitAction?: TasksBackgroundOutputLimitAction;
+		},
+	) {
 		super({ ...options, persistFromStart: true });
 		this.control = control;
+		this.maxBackgroundOutputBytes =
+			options.maxBackgroundOutputBytes !== undefined &&
+			Number.isFinite(options.maxBackgroundOutputBytes) &&
+			options.maxBackgroundOutputBytes > 0
+				? Math.floor(options.maxBackgroundOutputBytes)
+				: MAX_BACKGROUND_OUTPUT_BYTES;
+		this.limitAction = options.backgroundOutputLimitAction ?? "fail";
 	}
 
 	override append(data: Buffer): void {
 		if (this.error) return;
+		this.control.noteOutput();
 		try {
-			const room = MAX_BACKGROUND_OUTPUT_BYTES - this.getTotalBytes();
+			if (this.diskTruncated) {
+				super.append(data);
+				return;
+			}
+			const room = this.maxBackgroundOutputBytes - this.getTotalBytes();
 			if (this.control.mode === "background" && data.length > room) {
-				super.append(data.subarray(0, Math.max(0, room)));
-				this.fail(new Error(OUTPUT_LIMIT_ERROR));
+				if (room > 0) super.append(data.subarray(0, room));
+				if (this.limitAction === "truncate") {
+					this.diskTruncated = true;
+					this.stopPersisting();
+					const remainder = data.subarray(Math.max(0, room));
+					if (remainder.length > 0) super.append(remainder);
+				} else {
+					this.fail(new Error(outputLimitError(this.maxBackgroundOutputBytes)));
+				}
 			} else super.append(data);
 		} catch (error) {
 			this.fail(error);
@@ -55,8 +91,13 @@ class TaskOutput extends OutputAccumulator {
 
 	/** A detach must check output written while in the foreground, preserving it. */
 	checkLimit(): void {
-		if (this.control.mode === "background" && this.getTotalBytes() > MAX_BACKGROUND_OUTPUT_BYTES)
-			this.fail(new Error(OUTPUT_LIMIT_ERROR));
+		if (this.control.mode !== "background" || this.getTotalBytes() <= this.maxBackgroundOutputBytes) return;
+		if (this.limitAction === "truncate") {
+			this.diskTruncated = true;
+			this.stopPersisting();
+		} else {
+			this.fail(new Error(outputLimitError(this.maxBackgroundOutputBytes)));
+		}
 	}
 
 	private fail(error: unknown): void {
@@ -124,6 +165,8 @@ export interface ShellTaskOptions {
 	operations: BashOperations;
 	tempFilePrefix: string;
 	timeout?: number;
+	maxBackgroundOutputBytes?: number;
+	backgroundOutputLimitAction?: TasksBackgroundOutputLimitAction;
 	/** Runs the native tool body once with the task's parts. */
 	execute: (parts: ShellTaskParts) => Promise<AgentToolResult<ShellDetails>>;
 }
@@ -136,7 +179,11 @@ export async function runShellTask(options: ShellTaskOptions): Promise<TaskCompl
 	const { control } = options;
 	if (control.signal.aborted) throw new Error("Command aborted");
 	resolveTimeoutMs(options.timeout);
-	const output = new TaskOutput(control, { tempFilePrefix: options.tempFilePrefix });
+	const output = new TaskOutput(control, {
+		tempFilePrefix: options.tempFilePrefix,
+		maxBackgroundOutputBytes: options.maxBackgroundOutputBytes,
+		backgroundOutputLimitAction: options.backgroundOutputLimitAction,
+	});
 	const path = output.snapshot().fullOutputPath!;
 	const cleanup = async () => {
 		await output.closeTempFile();
@@ -223,12 +270,16 @@ function shellCompletion(
 	const policy = output.error ? { status: "failed" as const, error: errorMessage(output.error) } : undefined;
 	const settled = policy ?? failure;
 	const keepStructured = result?.structuredContent !== undefined && !policy;
+	const facts: TaskFact[] = [];
+	if (spawned.exitCode !== undefined)
+		facts.push(["Exit", spawned.exitCode === null ? "signal" : String(spawned.exitCode)]);
+	if (output.diskTruncated) {
+		facts.push(["Log limit", `Disk log capped at ${formatSize(output.maxBackgroundOutputBytes)} (truncated)`]);
+	}
 	return {
 		status: settled?.status,
 		error: settled?.error,
-		...(spawned.exitCode !== undefined
-			? { facts: [["Exit", spawned.exitCode === null ? "signal" : String(spawned.exitCode)]] }
-			: {}),
+		...(facts.length > 0 ? { facts } : {}),
 		result: {
 			...(keepStructured
 				? { structuredContent: result!.structuredContent, ...(settled ? { isError: true } : {}) }

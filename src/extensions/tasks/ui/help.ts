@@ -32,13 +32,18 @@ export function helpRows(hint: (key: Keybinding) => string, theme: Theme): strin
 			[
 				[keys("app.tasks.previousTab", "app.tasks.nextTab"), "Output or Details, in the inspector"],
 				[hint("app.tasks.follow"), "Follow the latest output, or load the final output"],
+				[keys("app.tasks.loadEarlier", "app.tasks.loadLater"), "Load an earlier or newer slice of a truncated log"],
 				[hint("app.tasks.search"), "Find a task; Enter locates it, Esc restores the selection"],
+				[hint("app.tasks.filter"), "Cycle task list filter (all, active, background, failed)"],
+				[hint("app.tasks.findInOutput"), "Search inside the inspector output or details"],
 			],
 		],
 		[
 			"Act",
 			[
 				[hint("app.tasks.kill"), `Stop the selected task; ${hint("app.tasks.confirmStop")} confirms`],
+				[hint("app.tasks.killAll"), `Stop all active tasks; ${hint("app.tasks.confirmStop")} confirms`],
+				[hint("app.tasks.copy"), "Copy task ID, input, or output to clipboard"],
 				[hint("app.tasks.detachSelected"), "Move the selected foreground task to the background"],
 				[hint("app.tasks.detach"), "Move every foreground execution to the background"],
 				[

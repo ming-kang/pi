@@ -162,6 +162,28 @@ export function readVersionedTask(value: unknown): TaskSnapshot | undefined {
 	}
 }
 
+/** The task and optional usage settlement saved by a `task-record` entry. */
+export function readVersionedTaskRecord(value: unknown): { task: TaskSnapshot; usage?: Usage } | undefined {
+	try {
+		const source = plainObject(value);
+		if (field(source, "version") !== TASK_SNAPSHOT_VERSION) return undefined;
+		const task = readPersistedTask(field(source, "task"));
+		if (!task) return undefined;
+		const rawUsage = field(source, "usage");
+		let usage: Usage | undefined;
+		if (rawUsage !== undefined) {
+			try {
+				usage = taskUsage(rawUsage);
+			} catch {
+				// Keep the valid task snapshot even if usage was malformed.
+			}
+		}
+		return { task, ...(usage ? { usage } : {}) };
+	} catch {
+		return undefined;
+	}
+}
+
 function usageValue(value: unknown): number {
 	if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error("Expected usage value");
 	return value;

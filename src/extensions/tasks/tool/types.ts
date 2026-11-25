@@ -18,6 +18,8 @@ export interface TasksReadDetails {
 	sliceBytes: number;
 	totalBytes: number;
 	outputPath: string;
+	filter?: string;
+	totalMatches?: number;
 }
 
 export interface TasksKillDetails {
@@ -36,6 +38,7 @@ export interface TasksListDetails {
 	hidden: number;
 	/** Foreground executions omitted from the listing; they deliver inline in the transcript. */
 	foregroundOmitted?: number;
+	status?: "all" | "active" | "finished";
 }
 
 export type TasksDetails = TasksReadDetails | TasksKillDetails | TasksListDetails;

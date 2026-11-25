@@ -134,10 +134,15 @@ This routing remains configurable through the ordinary action bindings. For exam
 | `app.tasks.previousTab` | `left` | Show Output while the inspector has focus |
 | `app.tasks.nextTab` | `right` | Show Details while the inspector has focus |
 | `app.tasks.search` | `/` | Locate a retained task; Enter chooses, Escape restores selection |
+| `app.tasks.filter` | `a` | Cycle persistent task list filter (all, active, background, failed) |
+| `app.tasks.findInOutput` | `g` | Search and highlight matches inside the inspector output or details |
+| `app.tasks.loadEarlier` / `app.tasks.loadLater` | `[` / `]` | Page backwards or forwards through a truncated file-backed log |
 | `app.tasks.follow` | `f` | Follow latest or final output while Output has focus |
+| `app.tasks.copy` | `c` | Copy task ID, input, or output to clipboard |
 | `app.tasks.top` / `app.tasks.bottom` | `home` / `end` | Beginning / end of the focused list or content |
 | `app.tasks.kill` | `k` | Ask to stop the selected ongoing task |
-| `app.tasks.confirmStop` | `enter` | Confirm stopping the task named in the confirmation |
+| `app.tasks.killAll` | `shift+k` | Ask to stop all active tasks |
+| `app.tasks.confirmStop` | `enter` | Confirm stopping the task(s) named in the confirmation |
 | `app.tasks.detachSelected` | `b` | Move only the selected foreground task to the background |
 | `app.tasks.help` | `?` | Show task controls |
 

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -508,5 +508,67 @@ describe("independent foreground and background histories", () => {
 		expect((await host.service.read(background)).text).toBe("saved report");
 		expect(host.delivery.pending()).toEqual([]);
 		expect(manager.getEntries()).toHaveLength(entries);
+	});
+
+	it("preserves trusted persistent report artifacts and hydrates usage on restore", async () => {
+		const artifactRoot = await mkdtemp(join(tmpdir(), "pi-task-artifacts-"));
+		const outsideDir = await mkdtemp(join(tmpdir(), "pi-task-outside-"));
+		try {
+			const trustedReport = join(artifactRoot, "agents", "agent-report1", "report.md");
+			const missingReport = join(artifactRoot, "agents", "agent-missing", "report.md");
+			const outsideReport = join(outsideDir, "secret.md");
+			await writeFile(outsideReport, "outside secret");
+			await mkdir(join(artifactRoot, "agents", "agent-report1"), { recursive: true });
+			await writeFile(trustedReport, "complete persisted agent report");
+
+			const usage = {
+				input: 100,
+				output: 50,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 150,
+				cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03 },
+			};
+			const bg = service({ artifactDir: () => artifactRoot });
+			bg.restoreHistory([
+				{
+					...savedTask("agent-report1", 30, {
+						kind: "agent",
+						output: "report",
+						outputPath: trustedReport,
+					}),
+					usage,
+				},
+				savedTask("agent-missing", 20, {
+					kind: "agent",
+					output: "report",
+					outputPath: missingReport,
+				}),
+				savedTask("agent-escape", 10, {
+					kind: "agent",
+					output: "report",
+					outputPath: outsideReport,
+				}),
+			]);
+
+			const kept = bg.get("agent-report1");
+			expect(kept.outputPath).toBe(trustedReport);
+			expect(kept.usage?.totalTokens).toBe(150);
+			const keptRead = await bg.read("agent-report1");
+			expect(keptRead.text).toBe("complete persisted agent report");
+			expect(keptRead.readError).toBeUndefined();
+
+			const missingRead = await bg.read("agent-missing");
+			expect(missingRead.task.outputPath).toBeUndefined();
+			expect(missingRead.readError).toContain("Report file is unavailable");
+
+			const escapedRead = await bg.read("agent-escape");
+			expect(escapedRead.task.outputPath).toBeUndefined();
+			expect(escapedRead.readError).toContain("Output has expired");
+			expect(escapedRead.text).not.toContain("outside secret");
+		} finally {
+			await rm(artifactRoot, { recursive: true, force: true });
+			await rm(outsideDir, { recursive: true, force: true });
+		}
 	});
 });

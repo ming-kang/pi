@@ -847,7 +847,7 @@ describe("owned output leases", () => {
 			);
 		}
 		await expect(stalled.execute(job({ background: true }).execution)).rejects.toThrow(
-			"Task history retention limit reached; deliver pending notifications or release task pins and delivery leases",
+			"Task history retention limit reached; wait for pending notifications to be delivered or release retained tasks.",
 		);
 	});
 
@@ -1268,5 +1268,70 @@ describe("concurrency lanes", () => {
 		await vi.waitFor(() => expect(moved.run).toHaveBeenCalledOnce());
 		moved.completion.resolve({ result: result() });
 		expect((await settleTask(bg, movedTask!.id)).status).toBe("completed");
+	});
+});
+
+describe("events, compact IDs, paging and filtering", () => {
+	it("distinguishes lifecycle vs progress events and tracks noteOutput without event spam", async () => {
+		const events: Array<{ kind: string; taskId?: string }> = [];
+		const lifecycleActions: string[] = [];
+		const bg = service({ onLifecycle: (event) => lifecycleActions.push(event.action) });
+		bg.subscribe((event) => events.push(event));
+
+		const item = job({ background: true });
+		const outcome = await bg.execute(item.execution);
+		expect(outcome.kind).toBe("background");
+		expect(item.control.id).toMatch(/^bash-[0-9a-f]{12}$/);
+
+		const countBeforeNote = events.length;
+		item.control.noteOutput();
+		expect(events).toHaveLength(countBeforeNote);
+		expect(bg.get(item.control.id).lastOutputAt).toBeTypeOf("number");
+
+		item.control.publish({ result: result("working") });
+		expect(events.at(-1)).toEqual({ kind: "progress", taskId: item.control.id });
+
+		item.completion.resolve({ result: result("done") });
+		await settleTask(bg, item.control.id);
+		expect(lifecycleActions).toEqual(["started", "backgrounded", "settled"]);
+		expect(events.at(-1)).toEqual({ kind: "lifecycle", taskId: item.control.id });
+	});
+
+	it("supports endByte paging and bounded line filtering on file-backed logs", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "pi-tasks-filter-"));
+		const path = join(dir, "build.log");
+		try {
+			const lines = Array.from(
+				{ length: 40 },
+				(_, i) => `line-${String(i + 1).padStart(2, "0")} ${i % 10 === 0 ? "ERROR: boom" : "ok"}`,
+			);
+			await writeFile(path, `${lines.join("\n")}\n`);
+			const bg = service();
+			const item = job({ background: true });
+			await bg.execute(item.execution);
+			item.control.attachOutput(path);
+
+			const tail = await bg.read(item.control.id, { mode: "tail", bytes: 200 });
+			expect(tail.fromByte).toBeGreaterThan(0);
+			const earlier = await bg.read(item.control.id, { mode: "tail", bytes: 200, endByte: tail.fromByte });
+			expect(earlier.endByte).toBe(tail.fromByte);
+			expect(earlier.fromByte!).toBeLessThan(earlier.endByte!);
+
+			const filtered = await bg.read(item.control.id, { filter: "error:", contextLines: 1 });
+			expect(filtered.filtered).toBe(true);
+			expect(filtered.totalMatches).toBe(4);
+			expect(filtered.text).toContain("1: line-01 ERROR: boom");
+			expect(filtered.text).toContain("2- line-02 ok");
+
+			const regexFiltered = await bg.read(item.control.id, { filter: "/line-3[12]/", mode: "head" });
+			expect(regexFiltered.totalMatches).toBe(2);
+			expect(regexFiltered.text).toContain("31: line-31 ERROR: boom");
+			expect(regexFiltered.text).toContain("32: line-32 ok");
+
+			item.completion.resolve({ result: result("done") });
+			await settleTask(bg, item.control.id);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
 	});
 });

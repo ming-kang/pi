@@ -149,8 +149,9 @@ import {
 	type NormalizedBuildSystemPromptOptions,
 	normalizeBuildSystemPromptOptions,
 } from "./system-prompt.ts";
+import { MAX_DELIVERY_BATCH_MESSAGES } from "./tasks/delivery.ts";
 import { type QuarantinedTaskSettlement, TaskSession } from "./tasks/session.ts";
-import { TASKS_TOOL_NAME, type TasksContext } from "./tasks/types.ts";
+import { TASKS_TOOL_NAME, type TaskLifecycleEvent, type TasksContext } from "./tasks/types.ts";
 import type { BashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createLocalBashOperations } from "./tools/shell-operations.ts";
@@ -441,6 +442,7 @@ function getNextCycleIndex(
 
 export class AgentSession {
 	private readonly _tasksHost: TaskSession;
+	private readonly _taskLifecycleListeners = new Set<(event: TaskLifecycleEvent) => void>();
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
 	readonly settingsManager: SettingsManager;
@@ -570,6 +572,7 @@ export class AgentSession {
 		this._tasksHost = new TaskSession({
 			manager: this.sessionManager,
 			backgroundAllowed: config.backgroundAllowed,
+			limits: () => this.settingsManager.getTasksSettings(),
 			canDeliver: () => {
 				if (this.model === undefined || this.isCompacting) return false;
 				// A completion steered into an active run follows the interactive steering queue, which
@@ -586,6 +589,29 @@ export class AgentSession {
 				// An idle delivery starts its own custom-message run, which consumes the
 				// pending nextTurn context in _prepareRun.
 				return this._startRun({ messageType: "custom", message });
+			},
+			deliverBatch: (messages, waitForPersistence) => {
+				if (this.isStreaming) {
+					for (const message of messages) this.agent.steer(message);
+					return waitForPersistence();
+				}
+				// Coalesce ready completions into one idle turn so parallel background work wakes the model once.
+				return this._startRun({ messageType: "custom", message: messages[0]! }, undefined, messages.slice(1));
+			},
+			maxBatchSize: () => (!this.isStreaming || this.steeringMode === "all" ? MAX_DELIVERY_BATCH_MESSAGES : 1),
+			onLifecycle: (event) => {
+				for (const listener of [...this._taskLifecycleListeners]) {
+					try {
+						listener(event);
+					} catch {
+						// Observers cannot interrupt task execution.
+					}
+				}
+				if (this._extensionRunner?.hasHandlers("task_lifecycle")) {
+					void this._extensionRunner
+						.emit({ type: "task_lifecycle", action: event.action, task: event.task })
+						.catch(() => {});
+				}
 			},
 			onEntry: (entry) => this._emit({ type: "entry_appended", entry }),
 			onError: (event, error) => this._extensionRunner?.emitError({ extensionPath: "<background>", event, error }),
@@ -634,6 +660,14 @@ export class AgentSession {
 
 	get tasks(): TasksContext {
 		return this._tasksHost.service;
+	}
+
+	/** Task lifecycle transitions only; never fires on progress updates. */
+	subscribeTaskLifecycle(listener: (event: TaskLifecycleEvent) => void): () => void {
+		this._taskLifecycleListeners.add(listener);
+		return () => {
+			this._taskLifecycleListeners.delete(listener);
+		};
 	}
 
 	get quarantinedTaskSettlements(): readonly QuarantinedTaskSettlement[] {
@@ -1662,6 +1696,7 @@ export class AgentSession {
 	dispose(): void {
 		this._quiescence.dispose();
 		this._tasksHost.dispose();
+		this._taskLifecycleListeners.clear();
 		try {
 			this.abortRetry();
 			this.abortCompaction();
@@ -2148,13 +2183,17 @@ export class AgentSession {
 	 * starting another, and an abort requested meanwhile aborts the run as soon as it exists.
 	 * @param onStarted Called once the run's messages are prepared, before the first request.
 	 */
-	private async _startRun(trigger: BeforeAgentStartTrigger, onStarted?: () => void): Promise<void> {
+	private async _startRun(
+		trigger: BeforeAgentStartTrigger,
+		onStarted?: () => void,
+		extraStartingMessages?: CustomMessage[],
+	): Promise<void> {
 		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
 		this._quiescence.poke();
 		let messages: AgentMessage[];
 		try {
-			messages = await this._prepareRun(trigger);
+			messages = await this._prepareRun(trigger, extraStartingMessages);
 		} catch (error) {
 			this._isAgentRunActive = false;
 			this._flushPendingBashMessages();
@@ -2202,7 +2241,10 @@ export class AgentSession {
 	 * message followed by pending nextTurn messages (consumed here) and handler messages, with a
 	 * system patch first when the prompt changed.
 	 */
-	private async _prepareRun(trigger: BeforeAgentStartTrigger): Promise<AgentMessage[]> {
+	private async _prepareRun(
+		trigger: BeforeAgentStartTrigger,
+		extraStartingMessages?: CustomMessage[],
+	): Promise<AgentMessage[]> {
 		// Check if we need to compact before sending (catches aborted responses).
 		// The starting message is sent below, so do not call agent.continue() here.
 		const lastAssistant = this._findLastAssistantMessage();
@@ -2223,6 +2265,7 @@ export class AgentSession {
 		const messages: AgentMessage[] = [];
 		if (trigger.messageType === "custom") {
 			messages.push(trigger.message);
+			if (extraStartingMessages?.length) messages.push(...extraStartingMessages);
 		} else {
 			// Normalize images after before_agent_start so extension-driven model selection
 			// determines the resize profile used for the request and history.
@@ -4020,6 +4063,11 @@ export class AgentSession {
 		const autoResizeImages = this.settingsManager.getImageAutoResize();
 		const shellCommandPrefix = this.settingsManager.getShellCommandPrefix();
 		const shellPath = this.settingsManager.getShellPath();
+		const taskSettings = this.settingsManager.getTasksSettings();
+		const shellBackgroundOptions = {
+			maxBackgroundOutputBytes: taskSettings.maxBackgroundOutputBytes,
+			backgroundOutputLimitAction: taskSettings.backgroundOutputLimitAction,
+		};
 		const baseToolDefinitions = this._baseToolsOverride
 			? Object.fromEntries(
 					Object.entries(this._baseToolsOverride).map(([name, tool]) => [
@@ -4029,7 +4077,8 @@ export class AgentSession {
 				)
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
-					bash: { commandPrefix: shellCommandPrefix, shellPath },
+					bash: { commandPrefix: shellCommandPrefix, shellPath, ...shellBackgroundOptions },
+					powershell: shellBackgroundOptions,
 				});
 
 		this._baseToolDefinitions = new Map(

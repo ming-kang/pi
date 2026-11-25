@@ -175,6 +175,50 @@ const CodemodeSettingsSchema = Type.Object({
 	),
 });
 
+const TasksBackgroundOutputLimitActionSchema = Type.Union([Type.Literal("fail"), Type.Literal("truncate")]);
+
+const TasksSettingsSchema = Type.Object({
+	maxBackground: Type.Optional(
+		Type.Number({
+			minimum: 1,
+			maximum: 128,
+			description: "Maximum number of concurrent background tasks (1–128).",
+			default: SETTINGS_DEFAULTS.tasks.maxBackground,
+		}),
+	),
+	maxHistory: Type.Optional(
+		Type.Number({
+			minimum: 1,
+			maximum: 1024,
+			description: "Maximum retained terminal tasks per history cohort (foreground and background).",
+			default: SETTINGS_DEFAULTS.tasks.maxHistory,
+		}),
+	),
+	maxBackgroundOutputMb: Type.Optional(
+		Type.Number({
+			minimum: 1,
+			maximum: 1024,
+			description: "Maximum background shell output size in MiB (1–1024).",
+			default: SETTINGS_DEFAULTS.tasks.maxBackgroundOutputMb,
+		}),
+	),
+	backgroundOutputLimitAction: Type.Optional(
+		Type.Union([Type.Literal("fail"), Type.Literal("truncate")], {
+			description:
+				'Action when a background shell exceeds maxBackgroundOutputMb: "fail" stops the command with an error; "truncate" stops writing to disk and keeps the rolling tail.',
+			default: SETTINGS_DEFAULTS.tasks.backgroundOutputLimitAction,
+		}),
+	),
+	shutdownGraceMs: Type.Optional(
+		Type.Number({
+			minimum: 100,
+			maximum: 60000,
+			description: "Grace period in milliseconds for draining cancelled tasks on shutdown or branch navigation.",
+			default: SETTINGS_DEFAULTS.tasks.shutdownGraceMs,
+		}),
+	),
+});
+
 const SkillInvocationOverrideSchema = Type.Union([Type.Literal("model-and-user"), Type.Literal("user-only")]);
 const SkillInvocationOverridesSchema = Type.Record(Type.String(), SkillInvocationOverrideSchema, {
 	description: "Per-skill invocation overrides, keyed by skill file or directory path.",
@@ -417,6 +461,7 @@ export const SettingsSchema = Type.Object(
 		markdown: Type.Optional(MarkdownSettingsSchema),
 		warnings: Type.Optional(WarningSettingsSchema),
 		codemode: Type.Optional(CodemodeSettingsSchema),
+		tasks: Type.Optional(TasksSettingsSchema),
 		sessionDir: Type.Optional(
 			Type.String({
 				description: "Custom session storage directory, in the same format as the --session-dir CLI flag.",
@@ -499,6 +544,8 @@ export interface MarkdownSettings extends Static<typeof MarkdownSettingsSchema> 
 export interface WarningSettings extends Static<typeof WarningSettingsSchema> {}
 export type CodemodeMode = Static<typeof CodemodeModeSchema>;
 export interface CodemodeSettings extends Static<typeof CodemodeSettingsSchema> {}
+export type TasksBackgroundOutputLimitAction = Static<typeof TasksBackgroundOutputLimitActionSchema>;
+export interface TasksSettings extends Static<typeof TasksSettingsSchema> {}
 export type DefaultProjectTrust = NonNullable<SettingsInput["defaultProjectTrust"]>;
 export type QuietStartup = NonNullable<SettingsInput["quietStartup"]>;
 export type TransportSetting = NonNullable<SettingsInput["transport"]>;

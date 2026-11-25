@@ -815,4 +815,33 @@ describe("native managed shell execution", () => {
 		expect(readFileSync(path, "utf8")).toBe("€");
 		if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
 	});
+
+	it("truncates disk logging without aborting when backgroundOutputLimitAction is truncate", async () => {
+		const background = host();
+		const child = execution();
+		const tool = createBashToolDefinition(process.cwd(), {
+			operations: child.operations,
+			maxBackgroundOutputBytes: 128,
+			backgroundOutputLimitAction: "truncate",
+		});
+		const submitted = await tool.execute(
+			"call",
+			{ command: "chatty-server", background: true },
+			undefined,
+			undefined,
+			context(background),
+		);
+		const id = submitted.details!.background!.taskId;
+		child.output("a".repeat(100));
+		child.output("b".repeat(100));
+		child.output("\nFINAL-TAIL\n");
+		expect(child.options.signal?.aborted).toBe(false);
+		child.finish(0);
+		const final = await settleTask(background, id);
+		expect(final.status).toBe("completed");
+		expect(final.error).toBeUndefined();
+		expect(statSync(final.outputPath!).size).toBe(128);
+		expect(text(final.result)).toContain("FINAL-TAIL");
+		expect(final.facts?.some(([label, value]) => label === "Log limit" && value.includes("truncated"))).toBe(true);
+	});
 });

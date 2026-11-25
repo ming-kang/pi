@@ -57,6 +57,7 @@ export class OutputAccumulator {
 	private tempFilePath: string | undefined;
 	private tempFileFd: number | undefined;
 	private tempFileStream: WriteStream | undefined;
+	private diskPersistingStopped = false;
 
 	constructor(options: OutputAccumulatorOptions = {}) {
 		this.maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
@@ -78,6 +79,9 @@ export class OutputAccumulator {
 		this.totalRawBytes += data.length;
 		this.appendDecodedText(this.decoder.decode(data, { stream: true }));
 
+		if (this.diskPersistingStopped) {
+			return;
+		}
 		if (this.tempFileFd !== undefined) {
 			let offset = 0;
 			while (offset < data.length) {
@@ -93,13 +97,23 @@ export class OutputAccumulator {
 		}
 	}
 
+	/** Stop writing additional bytes to disk while continuing to track the rolling tail in memory. */
+	stopPersisting(): void {
+		this.diskPersistingStopped = true;
+		if (this.tempFileFd !== undefined) {
+			const fd = this.tempFileFd;
+			this.tempFileFd = undefined;
+			closeSync(fd);
+		}
+	}
+
 	finish(): void {
 		if (this.finished) {
 			return;
 		}
 		this.finished = true;
 		this.appendDecodedText(this.decoder.decode());
-		if (this.shouldUseTempFile()) {
+		if (!this.diskPersistingStopped && this.shouldUseTempFile()) {
 			this.ensureTempFile();
 		}
 	}

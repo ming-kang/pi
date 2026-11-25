@@ -9,12 +9,20 @@ import { readTaskUsage, TASK_RECORD_TYPE, TASK_SNAPSHOT_VERSION } from "./codec.
 import { TaskDelivery } from "./delivery.ts";
 import { TaskContextReminder } from "./reminder.ts";
 import { TaskRuntime } from "./runtime.ts";
-import { isTaskTerminal, type TaskSnapshot } from "./types.ts";
+import { isTaskTerminal, type TaskLifecycleEvent, type TaskSnapshot } from "./types.ts";
+
+interface TaskSessionLimits {
+	maxBackground?: number;
+	maxHistory?: number;
+	shutdownGraceMs?: number;
+}
 
 interface TaskSessionOptions {
 	manager: SessionManager;
 	/** Host capability ceiling: false keeps background execution off, whatever the bindings ask for. */
 	backgroundAllowed?: boolean;
+	/** Runtime limits, read fresh when a service is created or replaced. */
+	limits?(): TaskSessionLimits;
 	/** The main session owns input queues, preflight and idle state. */
 	canDeliver(): boolean;
 	/** Whether the model-facing management tool is active, which new background work requires. Omitted: no gate. */
@@ -24,6 +32,9 @@ interface TaskSessionOptions {
 	 * The host owns input routing; this adapter owns the queued delivery's lifetime.
 	 */
 	deliver(message: CustomMessage, waitForPersistence: () => Promise<void>): Promise<void>;
+	deliverBatch?(messages: CustomMessage[], waitForPersistence: () => Promise<void>): Promise<void>;
+	maxBatchSize?(): number;
+	onLifecycle?(event: TaskLifecycleEvent): void;
 	onEntry(entry: SessionEntry): void;
 	onError(event: string, message: string): void;
 }
@@ -59,6 +70,8 @@ export class TaskSession {
 			service: () => this.service,
 			canDeliver: options.canDeliver,
 			deliver: options.deliver,
+			deliverBatch: options.deliverBatch,
+			maxBatchSize: options.maxBatchSize,
 			warn: (event, message) => this.warn(event, message),
 		});
 		this._service = this.createService();
@@ -191,15 +204,23 @@ export class TaskSession {
 		const generation = ++this.generation;
 		const sessionId = manager.getSessionId();
 		const sessionFile = manager.getSessionFile();
+		const limits = this.options.limits?.();
 		const service: TaskRuntime = new TaskRuntime({
 			enabled: this.enabled,
+			maxBackground: limits?.maxBackground,
+			maxHistory: limits?.maxHistory,
+			shutdownGraceMs: limits?.shutdownGraceMs,
 			canManageBackground: () => this.options.managementActive?.() ?? true,
 			session: {
 				stoppedByTreeNavigation: (targetId): TaskSnapshot[] => this.stoppedByTreeNavigation(targetId, service),
 			},
 			anchor: () => manager.getLeafId(),
+			artifactDir: () => manager.getArtifactDir(),
 			onCleanupError: (message) => this.warn("task_cleanup", message),
 			onClosed: () => this.delivery.discard(service),
+			onLifecycle: (event) => {
+				if (!this.disposed && this.service === service) this.options.onLifecycle?.(event);
+			},
 			onSettled: (task, usage) => {
 				const current = !this.disposed && this.service === service;
 				const onBranch =
@@ -216,7 +237,9 @@ export class TaskSession {
 			},
 		});
 		this.restoreHistory(service);
-		service.subscribe(() => {
+		service.subscribe((event) => {
+			// High-frequency progress updates never change delivery eligibility or quiescence.
+			if (event.kind !== "lifecycle") return;
 			this.delivery.schedule();
 			this.changed();
 		});
@@ -270,8 +293,10 @@ export class TaskSession {
 		}
 		const accounted = this.billedTaskIds.has(task.id);
 		// A foreground result is the tool result the transcript already saves; restoration reads it from there.
-		const { result: _result, ...metadata } = task;
-		const saved = task.mode === "foreground" ? metadata : task;
+		// Usage is persisted at top-level of task-record, and lastOutputAt is runtime-only.
+		const { result: _result, usage: _usage, lastOutputAt: _lastOutputAt, ...metadata } = task;
+		const saved =
+			task.mode === "foreground" ? metadata : { ...metadata, ...(task.result ? { result: task.result } : {}) };
 		const data = JSON.parse(
 			JSON.stringify({ version: TASK_SNAPSHOT_VERSION, task: saved, ...(usage && !accounted ? { usage } : {}) }),
 		);

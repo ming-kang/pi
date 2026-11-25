@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CustomMessage } from "../src/core/messages.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
+import { MAX_DELIVERY_BATCH_BYTES, TaskDelivery } from "../src/core/tasks/delivery.ts";
+import { TaskRuntime } from "../src/core/tasks/runtime.ts";
 import { TaskSession } from "../src/core/tasks/session.ts";
 import type { TaskControl, TaskExecution } from "../src/core/tasks/types.ts";
 import { createDeliveryHarness } from "./tasks-delivery-harness.ts";
@@ -253,5 +256,149 @@ describe("TaskSession settlement and replacement", () => {
 		open = true;
 		host.delivery.schedule();
 		await vi.waitFor(() => expect(delivered).toHaveLength(1));
+	});
+
+	it("coalesces multiple ready completions into one batch and respects the byte budget", async () => {
+		const batches: CustomMessage[][] = [];
+		let open = false;
+		const runtime = new TaskRuntime({
+			enabled: true,
+			onSettled: (task) => {
+				if (task.mode === "background") delivery.enqueue(runtime, task.id);
+			},
+			onClosed: () => delivery.discard(runtime),
+		});
+		const delivery = new TaskDelivery({
+			service: () => runtime,
+			canDeliver: () => open,
+			deliver: async () => {
+				throw new Error("expected batch delivery");
+			},
+			deliverBatch: async (messages) => {
+				batches.push(messages);
+				for (const message of messages) {
+					delivery.messageStarted(message);
+					delivery.messagePersisted(message);
+				}
+			},
+			warn: () => {},
+		});
+		try {
+			const jobs = [
+				backgroundJob({ title: "first" }),
+				backgroundJob({ title: "second" }),
+				backgroundJob({ title: "third" }),
+			];
+			for (const item of jobs) {
+				await runtime.execute(item.execution);
+				item.finish();
+				await settleTask(runtime, item.control.id);
+			}
+			open = true;
+			delivery.schedule();
+			await vi.waitFor(() => expect(batches).toHaveLength(1));
+			expect(batches[0]).toHaveLength(3);
+			expect(delivery.pending()).toEqual([]);
+
+			open = false;
+			batches.length = 0;
+			const largeText = "x".repeat(45 * 1024);
+			for (let i = 0; i < 3; i++) {
+				let finishLarge!: () => void;
+				const doneLarge = new Promise<void>((resolve) => {
+					finishLarge = resolve;
+				});
+				const large = backgroundJob({
+					output: "report",
+					title: `large-${i}`,
+					run: async (control) => {
+						control.accept();
+						await doneLarge;
+						return { result: result(largeText) };
+					},
+				});
+				const outcome = await runtime.execute(large.execution);
+				expect(outcome.kind).toBe("background");
+				finishLarge();
+				if (outcome.kind === "background") await settleTask(runtime, outcome.task.id);
+			}
+			expect(MAX_DELIVERY_BATCH_BYTES).toBeGreaterThan(45 * 1024);
+			open = true;
+			delivery.schedule();
+			await vi.waitFor(() => expect(delivery.pending()).toEqual([]));
+			expect(batches.length).toBeGreaterThanOrEqual(2);
+			expect(batches.flat()).toHaveLength(3);
+		} finally {
+			runtime.close();
+			delivery.dispose();
+		}
+	});
+
+	it("marks only unpersisted items as failed on partial batch persistence", async () => {
+		const warnings: string[] = [];
+		let failSecond = true;
+		const batches: CustomMessage[][] = [];
+		const runtime = new TaskRuntime({
+			enabled: true,
+			onSettled: (task) => {
+				if (task.mode === "background") delivery.enqueue(runtime, task.id);
+			},
+			onClosed: () => delivery.discard(runtime),
+		});
+		const delivery = new TaskDelivery({
+			service: () => runtime,
+			canDeliver: () => true,
+			deliver: async () => {},
+			deliverBatch: async (messages, waitForPersistence) => {
+				batches.push(messages);
+				delivery.messageStarted(messages[0]!);
+				delivery.messagePersisted(messages[0]!);
+				if (messages[1]) {
+					delivery.messageStarted(messages[1]);
+					if (failSecond) {
+						delivery.agentEnded();
+						await waitForPersistence();
+						return;
+					}
+					delivery.messagePersisted(messages[1]);
+				}
+				await waitForPersistence();
+			},
+			warn: (_event, message) => warnings.push(message),
+		});
+		try {
+			const pause = delivery.pause();
+			const first = backgroundJob({ title: "first" });
+			const second = backgroundJob({ title: "second" });
+			await runtime.execute(first.execution);
+			await runtime.execute(second.execution);
+			first.finish();
+			second.finish();
+			await settleTask(runtime, first.control.id);
+			await settleTask(runtime, second.control.id);
+			pause();
+			await vi.waitFor(() => expect(warnings).toHaveLength(1));
+			expect(warnings[0]).toContain(second.control.id);
+			expect(delivery.pending().map((t) => t.id)).toEqual([second.control.id]);
+			failSecond = false;
+			delivery.retry();
+			await vi.waitFor(() => expect(delivery.pending()).toEqual([]));
+			expect(batches).toHaveLength(2);
+			expect(batches[1]).toHaveLength(1);
+		} finally {
+			runtime.close();
+			delivery.dispose();
+		}
+	});
+
+	it("short-circuits schedule() when there are no pending completions", () => {
+		vi.useFakeTimers();
+		try {
+			const harness = delivering({ canDeliver: () => true });
+			harness.delivery.schedule();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

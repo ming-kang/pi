@@ -11,6 +11,8 @@ import { type Static, Type } from "typebox";
 import { StringEnum } from "../../../core/extensions/pi-ai-extension-view.ts";
 import { TASK_READ_BYTES, TASK_RESULT_BYTES } from "../../../core/tasks/output.ts";
 import { formatSize } from "../../../core/tools/truncate.ts";
+import { finiteLimit } from "../../../utils/number.ts";
+import { TASKS_LIST_FINISHED_SHOWN } from "./constants.ts";
 
 export const tasksSchema = Type.Object({
 	action: StringEnum(["read", "kill", "list"] as const, {
@@ -19,7 +21,7 @@ export const tasksSchema = Type.Object({
 	// — read / kill —
 	taskId: Type.Optional(
 		Type.String({
-			description: "Task execution id (read/kill).",
+			description: "Task execution id or unique ID prefix (full or without kind prefix) (read/kill).",
 		}),
 	),
 	// — read —
@@ -38,6 +40,27 @@ export const tasksSchema = Type.Object({
 		Type.Number({
 			description:
 				"Only return output written after this byte offset — use the 'next sinceBytes' value from a previous read (read)",
+		}),
+	),
+	filter: Type.Optional(
+		Type.String({
+			description: "Filter output to matching lines (case-insensitive substring or /regex/flags) (read)",
+		}),
+	),
+	contextLines: Type.Optional(
+		Type.Number({
+			description: "Context lines around each filtered match, 0–5 (read, requires filter)",
+		}),
+	),
+	// — list —
+	status: Type.Optional(
+		StringEnum(["all", "active", "finished"] as const, {
+			description: "Filter listed background tasks by state (list, default all)",
+		}),
+	),
+	limit: Type.Optional(
+		Type.Number({
+			description: `Maximum finished tasks to show (list, default ${TASKS_LIST_FINISHED_SHOWN}, max 100)`,
 		}),
 	),
 });
@@ -62,9 +85,17 @@ export function clampSinceBytes(sinceBytes: number | undefined): number | undefi
 	return sinceBytes === undefined || !Number.isFinite(sinceBytes) ? undefined : Math.max(0, Math.floor(sinceBytes));
 }
 
+export function clampContextLines(value: number | undefined): number | undefined {
+	return value === undefined || !Number.isFinite(value) ? undefined : Math.min(5, Math.max(0, Math.floor(value)));
+}
+
+export function clampFinishedLimit(value: number | undefined): number {
+	return finiteLimit(value, TASKS_LIST_FINISHED_SHOWN, 100);
+}
+
 export const TASKS_TOOL_DESCRIPTION =
 	"Inspect and control background tasks started by native tools or extensions. " +
-	"`list` shows task IDs with bounded activity and history; `read` returns a bounded output or report slice; `kill` requests cancellation. ";
+	"`list` shows task IDs with bounded activity and history; `read` returns a bounded output or report slice; `kill` requests cancellation.";
 export const TASKS_PROMPT_SNIPPET = "List, read, or stop background tasks";
 export const TASKS_PROMPT_GUIDELINES = [
 	"`tasks` cannot start work: start background work through its owning tool with `background: true`, then continue independent work while it runs.",

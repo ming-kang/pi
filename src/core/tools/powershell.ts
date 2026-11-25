@@ -4,11 +4,15 @@ import {
 	type BashOperations,
 	type BashSpawnContext,
 	type BashSpawnHook,
-	type BashToolOptions,
 	createLocalShellOperations,
 	type ShellToolConfig,
 } from "./bash.ts";
-import { type BashToolDetails, type BashToolInput, createShellToolDefinition } from "./shell-tool.ts";
+import {
+	type BashToolDetails,
+	type BashToolInput,
+	createShellToolDefinition,
+	type ManagedShellToolOptions,
+} from "./shell-tool.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
 const UTF8_OUTPUT_PREFIX = "try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}\n";
@@ -33,7 +37,14 @@ export type PowerShellToolDetails = BashToolDetails;
 export type PowerShellToolInput = BashToolInput;
 
 export interface PowerShellToolOptions
-	extends Pick<BashToolOptions, "operations" | "exposeSessionEnvironment" | "spawnHook"> {}
+	extends Pick<
+		ManagedShellToolOptions,
+		| "operations"
+		| "exposeSessionEnvironment"
+		| "spawnHook"
+		| "maxBackgroundOutputBytes"
+		| "backgroundOutputLimitAction"
+	> {}
 
 export function createLocalPowerShellOperations(): PowerShellOperations {
 	return {

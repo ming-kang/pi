@@ -30,8 +30,10 @@ export function renderTasksCall(args: TasksRenderInput, theme: Theme, _context: 
 			// The default end depends on the task's output kind, which the call does not carry.
 			const mode = args.mode ? ` ${args.mode}` : "";
 			const size = args.bytes !== undefined ? ` ${formatSize(args.bytes)}` : "";
+			const trimmedFilter = typeof args.filter === "string" ? args.filter.trim() : "";
+			const filter = trimmedFilter ? ` filter="${trimmedFilter}"` : "";
 			return new Text(
-				`${theme.fg("toolTitle", theme.bold("tasks read "))}${theme.fg("accent", args.taskId ?? "")}${theme.fg("muted", `${mode}${size}`)}`,
+				`${theme.fg("toolTitle", theme.bold("tasks read "))}${theme.fg("accent", args.taskId ?? "")}${theme.fg("muted", `${mode}${size}${filter}`)}`,
 				0,
 				0,
 			);
@@ -94,7 +96,9 @@ function resultSummaryLine(details: TasksDetails, theme: Theme, expanded: boolea
 				details.sliceBytes !== details.totalBytes
 					? `${details.mode} ${formatSize(details.sliceBytes)} of ${formatSize(details.totalBytes)}`
 					: formatSize(details.totalBytes);
-			return `${theme.fg("muted", "→ ")}${theme.fg("accent", details.taskId)}${theme.fg("muted", `${details.status ? ` ${statusName(details.status)} ·` : ""} ${size}${details.outputPath ? ` · ${shownPath(details.outputPath)}` : ""}`)}`;
+			const matchCount = details.totalMatches ?? 0;
+			const matches = details.filter ? ` · ${matchCount} ${matchCount === 1 ? "match" : "matches"}` : "";
+			return `${theme.fg("muted", "→ ")}${theme.fg("accent", details.taskId)}${theme.fg("muted", `${details.status ? ` ${statusName(details.status)} ·` : ""} ${size}${details.outputPath ? ` · ${shownPath(details.outputPath)}` : ""}${matches}`)}`;
 		}
 		case "kill": {
 			const status = details.status ?? (details.requested ? "stopping" : "cancelled");

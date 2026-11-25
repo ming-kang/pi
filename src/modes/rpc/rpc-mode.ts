@@ -37,6 +37,7 @@ import type {
 	RpcResponse,
 	RpcSessionState,
 	RpcSlashCommand,
+	RpcTaskLifecycleEvent,
 } from "./rpc-types.ts";
 
 // Re-export types for consumers
@@ -46,6 +47,7 @@ export type {
 	RpcExtensionUIResponse,
 	RpcResponse,
 	RpcSessionState,
+	RpcTaskLifecycleEvent,
 } from "./rpc-types.ts";
 
 /**
@@ -57,9 +59,21 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	let session = runtimeHost.session;
 	let unsubscribe: (() => void) | undefined;
 	let unsubscribeBackpressure: (() => void) | undefined;
+	let tasksSubscribed = false;
+	let unsubscribeTaskLifecycle: (() => void) | undefined;
 
-	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
+	const output = (obj: RpcResponse | RpcExtensionUIRequest | RpcTaskLifecycleEvent | object) => {
 		writeRawStdout(serializeJsonLine(obj));
+	};
+
+	const syncTaskLifecycleSubscription = (): void => {
+		unsubscribeTaskLifecycle?.();
+		unsubscribeTaskLifecycle = undefined;
+		if (tasksSubscribed) {
+			unsubscribeTaskLifecycle = session.subscribeTaskLifecycle((event) => {
+				output({ type: "task_lifecycle", action: event.action, task: event.task });
+			});
+		}
 	};
 
 	const success = <T extends RpcCommand["type"]>(
@@ -335,6 +349,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		unsubscribeBackpressure = session.agent.subscribe(async () => {
 			await waitForRawStdoutBackpressure();
 		});
+		syncTaskLifecycleSubscription();
 		await session.bindExtensions({
 			uiContext: createExtensionUIContext(),
 			mode: "rpc",
@@ -724,6 +739,52 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				return success(id, "get_commands", { commands });
 			}
 
+			// =================================================================
+			// Tasks
+			// =================================================================
+
+			case "list_tasks": {
+				return success(id, "list_tasks", { tasks: session.tasks.list() });
+			}
+
+			case "get_task": {
+				return success(id, "get_task", { task: session.tasks.get(command.taskId) });
+			}
+
+			case "read_task": {
+				const result = await session.tasks.read(command.taskId, {
+					mode: command.mode,
+					bytes: command.bytes,
+					sinceBytes: command.sinceBytes,
+					endByte: command.endByte,
+					filter: command.filter,
+					contextLines: command.contextLines,
+				});
+				return success(id, "read_task", result);
+			}
+
+			case "kill_task": {
+				const existing = session.tasks.get(command.taskId);
+				const requested = session.tasks.kill(existing.id);
+				return success(id, "kill_task", { requested, task: session.tasks.get(existing.id) });
+			}
+
+			case "detach_tasks": {
+				const detached =
+					command.taskId !== undefined
+						? session.tasks.detach(command.taskId)
+							? 1
+							: 0
+						: session.tasks.detachForeground();
+				return success(id, "detach_tasks", { detached });
+			}
+
+			case "subscribe_tasks": {
+				tasksSubscribed = Boolean(command.enabled);
+				syncTaskLifecycleSubscription();
+				return success(id, "subscribe_tasks", { subscribed: tasksSubscribed });
+			}
+
 			default: {
 				const unknownCommand = command as { type: string };
 				return error(id, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
@@ -739,6 +800,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		shuttingDown = true;
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
+		unsubscribeTaskLifecycle?.();
+		unsubscribeTaskLifecycle = undefined;
 		await runtimeHost.dispose();
 		detachInput();
 		process.stdin.pause();

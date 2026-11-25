@@ -12,10 +12,12 @@ import {
 } from "./output.ts";
 import type { TaskRecord } from "./record.ts";
 import type {
+	TaskChangeEvent,
 	TaskCompletion,
 	TaskControl,
 	TaskExecution,
 	TaskFact,
+	TaskLifecycleEvent,
 	TaskMode,
 	TaskSnapshot,
 	TaskTerminalStatus,
@@ -27,7 +29,8 @@ import type {
 /** The runtime services one execution needs; it never reaches into the runtime itself. */
 export interface ExecutionHost {
 	readonly closed: boolean;
-	emit(): void;
+	emit(event: TaskChangeEvent): void;
+	lifecycle(event: TaskLifecycleEvent): void;
 	/** Synchronous persistence before terminal observers or notifications. */
 	settle(task: TaskSnapshot, usage: Usage | undefined): void;
 	/** The execution settled and holds no slot, parent listener or caller any more. */
@@ -121,6 +124,7 @@ export class Execution<T> {
 			onModeChange: (listener) => this.onModeChange(listener),
 			accept: () => this.accept(),
 			publish: (update) => this.publish(update),
+			noteOutput: () => this.noteOutput(),
 			attachOutput: (path, cleanup) => this.attachOutput(path, cleanup),
 			cancel: () => {
 				this.cancel();
@@ -167,6 +171,7 @@ export class Execution<T> {
 		this.record.update((task) => {
 			task.status = "running";
 		});
+		this.host.lifecycle({ action: "started", task: this.record.snapshot() });
 		// The rejection handler is installed immediately, including for synchronous preflight throws.
 		try {
 			this.running = Promise.resolve(this.run(this.control));
@@ -204,7 +209,8 @@ export class Execution<T> {
 		});
 		this.controller.abort();
 		if (this.phase === "queued") this.finish(undefined, new Error("Task cancelled before it started."));
-		this.host.emit();
+		else this.host.lifecycle({ action: "stopping", task: this.record.snapshot() });
+		this.host.emit({ kind: "lifecycle", taskId: this.record.task.id });
 		return true;
 	}
 
@@ -223,7 +229,7 @@ export class Execution<T> {
 		// An already available final result wins over a handoff, so decide only once the
 		// executor's own synchronous code has yielded.
 		queueMicrotask(() => this.handoffIfRunning());
-		this.host.emit();
+		this.host.emit({ kind: "lifecycle", taskId: this.record.task.id });
 	}
 
 	/**
@@ -273,16 +279,25 @@ export class Execution<T> {
 				/* Executors own their diagnostics. */
 			}
 		}
-		this.host.emit();
+		this.host.lifecycle({ action: "backgrounded", task: this.record.snapshot() });
+		this.host.emit({ kind: "lifecycle", taskId: this.record.task.id });
+	}
+
+	private noteOutput(): void {
+		if (this.phase === "settled" || this.host.closed) return;
+		this.record.touchOutput(Date.now());
 	}
 
 	private publish(update: TaskUpdate<T>): void {
 		if (this.phase === "settled" || this.host.closed) return;
+		const clonedUsage = update.usage !== undefined ? structuredClone(update.usage) : undefined;
 		this.record.update((task) => {
 			task.result = resultText(update.result);
+			task.lastOutputAt = Date.now();
 			if (update.display !== undefined) task.display = boundTaskDisplay(update.display);
+			if (clonedUsage !== undefined) task.usage = clonedUsage;
 		});
-		if (update.usage !== undefined) this.usage = structuredClone(update.usage);
+		if (clonedUsage !== undefined) this.usage = clonedUsage;
 		if (this.placement === "caller") {
 			try {
 				this.onUpdate?.(update.result);
@@ -290,7 +305,7 @@ export class Execution<T> {
 				/* UI observers cannot stop execution. */
 			}
 		}
-		this.host.emit();
+		this.host.emit({ kind: "progress", taskId: this.record.task.id });
 	}
 
 	private attachOutput(path: string, cleanup?: () => void | Promise<void>): void {
@@ -301,7 +316,7 @@ export class Execution<T> {
 		// Never truncate a real filesystem path into a different path.
 		if (Buffer.byteLength(path) > TASK_PATH_BYTES) throw new Error("Task output path is too large");
 		this.record.attachOutput(path, cleanup);
-		this.host.emit();
+		this.host.emit({ kind: "lifecycle", taskId: this.record.task.id });
 	}
 
 	private finish(completion: TaskCompletion<T> | undefined, error?: unknown): void {
@@ -315,11 +330,13 @@ export class Execution<T> {
 			: this.aborted
 				? "cancelled"
 				: "failed";
+		const settledUsage = completion?.usage ?? completion?.result.usage ?? this.usage;
 		record.update((task) => {
 			task.endedAt = Date.now();
 			task.status = status;
 			// Progress display is the executor's live view; a terminal snapshot shows only what the completion gives.
 			task.display = completion?.display === undefined ? undefined : boundTaskText(completion.display);
+			if (settledUsage !== undefined) task.usage = structuredClone(settledUsage);
 			if (completion) {
 				task.result = resultText(completion.result);
 				if (completion.error !== undefined) task.error = boundText(completion.error, TASK_ERROR_BYTES);
@@ -333,7 +350,7 @@ export class Execution<T> {
 		const diagnostic = record.task.error;
 		let warning: string | undefined;
 		try {
-			this.host.settle(record.snapshot(), completion?.usage ?? completion?.result.usage ?? this.usage);
+			this.host.settle(record.snapshot(), settledUsage);
 		} catch (accountingError) {
 			const notice = `Usage settlement failed: ${errorText(accountingError)}`;
 			warning = notice;
@@ -353,6 +370,7 @@ export class Execution<T> {
 			}
 		}
 		record.settle();
+		this.host.lifecycle({ action: "settled", task: record.snapshot() });
 		this.host.released(this as Execution<unknown>);
 	}
 }

@@ -49,7 +49,7 @@ CTX 2.1%/1.0M · TPS 84           ↑13k ↓13k R440k CH99.4% $0.074
 
 Background billing uses the first valid task usage settlement per execution ID, from a `task-record` or a released session's `task-usage` entry; managed foreground results omit duplicate `usage`. Opening `/tasks`, detaching, or repeating `tasks read` does not add billing. Accrued worker retry, cancellation, failure, and provider-supplied compaction usage is included when settled; missing usage is not fabricated. Quarantined late settlements are excluded from active totals. This does not change the footer's active-branch scope (session-wide statistics can include other branches), parent CTX estimate, or latest-parent-request `CH`. See the [persisted record format](../../session-format.md#background-records).
 
-The built-in Tasks UI can supply centered status text such as `tasks 2 active · 1 finished`. These counts cover backgrounded executions; worker rows are not separate groups. The old prompt-stall watchdog and `waiting for input` counts are no longer generated.
+The built-in Tasks UI supplies centered status text such as `2 background tasks · /tasks to view` (and `Ctrl+B to run in background` once an eligible foreground task runs for 10 seconds). These counts cover active backgrounded executions; worker rows are not separate groups. The old prompt-stall watchdog and `waiting for input` counts are no longer generated.
 
 Zero-value usage fields are omitted. Without any accounted usage, the right side of line 2 is empty; extension status stays centered either way.
 

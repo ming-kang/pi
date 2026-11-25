@@ -2,11 +2,26 @@
  * This distribution's additions to the extension API. `types.ts` re-exports them, so
  * extensions import them from the same place as the upstream API.
  */
+import type { TaskLifecycleAction, TaskSnapshot } from "../tasks/types.ts";
 import type { TerminalInputHandler } from "./types.ts";
 
 export type { ContextSnapshot } from "../context-snapshot.ts";
 export type { ModelRuntime } from "../model-runtime.ts";
-export type { TasksContext, TasksSessionContext } from "../tasks/types.ts";
+export type {
+	TaskChangeEvent,
+	TaskChangeKind,
+	TaskLifecycleAction,
+	TaskLifecycleEvent,
+	TasksContext,
+	TasksSessionContext,
+} from "../tasks/types.ts";
+
+/** Fired when a managed task crosses a lifecycle boundary (never on progress updates). */
+export interface TaskLifecycleExtensionEvent {
+	type: "task_lifecycle";
+	action: TaskLifecycleAction;
+	task: TaskSnapshot;
+}
 
 export interface EditorSubmitEvent {
 	/** Expanded, trimmed editor text, before history, command dispatch, or any main-agent queue. */

@@ -23,6 +23,7 @@ import type {
 	SessionShareDestination,
 	Settings,
 	SkillInvocationOverrides,
+	TasksBackgroundOutputLimitAction,
 	ThinkingBudgetsSettings,
 	TransportSetting,
 	TuiMode,
@@ -49,6 +50,8 @@ export type {
 	Settings,
 	SkillInvocationOverride,
 	SkillInvocationOverrides,
+	TasksBackgroundOutputLimitAction,
+	TasksSettings,
 	TerminalSettings,
 	ThinkingBudgetsSettings,
 	TransportSetting,
@@ -973,6 +976,33 @@ export class SettingsManager {
 
 	getBranchSummarySkipPrompt(): boolean {
 		return this.settings.branchSummary?.skipPrompt ?? SETTINGS_DEFAULTS.branchSummary.skipPrompt;
+	}
+
+	getTasksSettings(): {
+		maxBackground: number;
+		maxHistory: number;
+		maxBackgroundOutputBytes: number;
+		backgroundOutputLimitAction: TasksBackgroundOutputLimitAction;
+		shutdownGraceMs: number;
+	} {
+		const clamp = (value: number | undefined, fallback: number, min: number, max: number) =>
+			value === undefined || !Number.isFinite(value) ? fallback : Math.max(min, Math.min(max, Math.floor(value)));
+		const configured = this.settings.tasks;
+		const maxBackgroundOutputMb = clamp(
+			configured?.maxBackgroundOutputMb,
+			SETTINGS_DEFAULTS.tasks.maxBackgroundOutputMb,
+			1,
+			1024,
+		);
+		const action = configured?.backgroundOutputLimitAction;
+		return {
+			maxBackground: clamp(configured?.maxBackground, SETTINGS_DEFAULTS.tasks.maxBackground, 1, 128),
+			maxHistory: clamp(configured?.maxHistory, SETTINGS_DEFAULTS.tasks.maxHistory, 1, 1024),
+			maxBackgroundOutputBytes: maxBackgroundOutputMb * 1024 * 1024,
+			backgroundOutputLimitAction:
+				action === "fail" || action === "truncate" ? action : SETTINGS_DEFAULTS.tasks.backgroundOutputLimitAction,
+			shutdownGraceMs: clamp(configured?.shutdownGraceMs, SETTINGS_DEFAULTS.tasks.shutdownGraceMs, 100, 60_000),
+		};
 	}
 
 	getRetryEnabled(): boolean {

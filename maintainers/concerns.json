@@ -131,6 +131,15 @@
 					"path": "src/core/sdk.ts"
 				},
 				{
+					"path": "src/core/settings-defaults.ts"
+				},
+				{
+					"path": "src/core/settings-manager.ts"
+				},
+				{
+					"path": "src/core/settings-schema.ts"
+				},
+				{
 					"path": "src/core/tools/bash.ts"
 				},
 				{
@@ -201,7 +210,8 @@
 				"test/print-mode.test.ts",
 				"test/quiescence.test.ts",
 				"test/suite/regressions/5080-signal-shutdown-extension-cleanup.test.ts",
-				"test/rpc-client-quiescence.test.ts"
+				"test/rpc-client-quiescence.test.ts",
+				"test/rpc-tasks.test.ts"
 			]
 		},
 		{

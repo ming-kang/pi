@@ -11,9 +11,15 @@ declare module "@earendil-works/pi-tui" {
 		"app.tasks.previousTab": true;
 		"app.tasks.nextTab": true;
 		"app.tasks.kill": true;
+		"app.tasks.killAll": true;
 		"app.tasks.confirmStop": true;
 		"app.tasks.detachSelected": true;
 		"app.tasks.search": true;
+		"app.tasks.filter": true;
+		"app.tasks.copy": true;
+		"app.tasks.findInOutput": true;
+		"app.tasks.loadEarlier": true;
+		"app.tasks.loadLater": true;
 		"app.tasks.follow": true;
 		"app.tasks.top": true;
 		"app.tasks.bottom": true;
@@ -28,9 +34,15 @@ const TASK_KEYBINDINGS = {
 	"app.tasks.previousTab": { defaultKeys: "left", description: "Show Output in the focused task inspector" },
 	"app.tasks.nextTab": { defaultKeys: "right", description: "Show Details in the focused task inspector" },
 	"app.tasks.kill": { defaultKeys: "k", description: "Stop the selected task" },
-	"app.tasks.confirmStop": { defaultKeys: "enter", description: "Confirm stopping the selected task" },
+	"app.tasks.killAll": { defaultKeys: "shift+k", description: "Stop all active tasks" },
+	"app.tasks.confirmStop": { defaultKeys: "enter", description: "Confirm stopping tasks" },
 	"app.tasks.detachSelected": { defaultKeys: "b", description: "Move the selected task to the background" },
 	"app.tasks.search": { defaultKeys: "/", description: "Search retained task identities and labels" },
+	"app.tasks.filter": { defaultKeys: "a", description: "Cycle task list filter (all, active, background, failed)" },
+	"app.tasks.copy": { defaultKeys: "c", description: "Copy task ID, input, or output to clipboard" },
+	"app.tasks.findInOutput": { defaultKeys: "g", description: "Search inside the inspector output or details" },
+	"app.tasks.loadEarlier": { defaultKeys: "[", description: "Load an earlier slice of a truncated log" },
+	"app.tasks.loadLater": { defaultKeys: "]", description: "Load a newer slice of a truncated log" },
 	"app.tasks.follow": { defaultKeys: "f", description: "Follow the selected task's output" },
 	"app.tasks.top": { defaultKeys: "home", description: "Go to the top of the task list or preview" },
 	"app.tasks.bottom": { defaultKeys: "end", description: "Go to the bottom of the task list or preview" },

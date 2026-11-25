@@ -46,8 +46,9 @@ export function statusMarker(status: TaskStatus, opts?: { now?: number }): Statu
 			return { glyph: "×", color: "error" };
 		case "timeout":
 			return { glyph: "×", color: "warning" };
-		case "cancelled":
 		case "stopping":
+			return { glyph: opts?.now !== undefined ? statusSpinnerFrame(opts.now) : "○", color: "warning" };
+		case "cancelled":
 		case "partial":
 			return { glyph: "○", color: "warning" };
 		case "queued":

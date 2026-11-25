@@ -8,7 +8,7 @@ import { TasksMenu } from "./manager.ts";
 import type { TasksPanelState } from "./model.ts";
 
 export interface TasksUI {
-	open(): Promise<void>;
+	open(taskId?: string): Promise<void>;
 	dispose(): void;
 }
 
@@ -50,7 +50,10 @@ export function bindTasksUI(ctx: { tasks: TasksContext; ui: ExtensionUIContext }
 			}
 			ctx.ui.setStatus("background", parts.length ? parts.join(theme.fg("dim", " · ")) : undefined);
 		};
-		unsubscribe = ctx.tasks.subscribe(update);
+		unsubscribe = ctx.tasks.subscribe((event) => {
+			if (event.kind !== "lifecycle") return;
+			update();
+		});
 		unsubscribeDetachKey = ctx.ui.onTerminalInput((data) => {
 			if (!getKeybindings().matches(data, "app.tasks.detach")) return undefined;
 			let count: number;
@@ -85,7 +88,7 @@ export function bindTasksUI(ctx: { tasks: TasksContext; ui: ExtensionUIContext }
 	start();
 	return {
 		dispose,
-		open: async () => {
+		open: async (taskId?: string) => {
 			closeMenu?.();
 			await ctx.ui.custom<void>(
 				(tui, theme, keybindings, done) => {
@@ -96,6 +99,7 @@ export function bindTasksUI(ctx: { tasks: TasksContext; ui: ExtensionUIContext }
 					closeMenu = close;
 					return new TasksMenu({
 						state,
+						initialTaskId: taskId,
 						tui,
 						theme,
 						keybindings,

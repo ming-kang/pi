@@ -5,6 +5,8 @@ import type { TaskViewport } from "./viewport.ts";
 
 export type TasksTab = "output" | "info";
 export type PanelFocus = "list" | "inspector";
+export const TASK_LIST_FILTERS = ["all", "active", "background", "failed"] as const;
+export type TaskListFilter = (typeof TASK_LIST_FILTERS)[number];
 
 /** What activating a rendered cell does; the manager dispatches on `kind` alone. */
 export type TaskAction =
@@ -31,7 +33,9 @@ export type PanelMode =
 	| { kind: "browse" }
 	/** Searching moves focus to the list; `restore` is where Esc returns to. The input owns the query. */
 	| { kind: "search"; restore: { id?: string; focus: PanelFocus }; input: Input }
+	| { kind: "searchOutput"; restore: { focus: PanelFocus }; input: Input; matchIndex: number }
 	| { kind: "confirmStop"; taskId: string }
+	| { kind: "confirmStopAll"; count: number }
 	| { kind: "help"; viewport: TaskViewport };
 
 /** A task can be asked to stop while it is neither settled nor already stopping. */
@@ -39,10 +43,24 @@ export function isStoppable(task: Pick<TaskSnapshot, "status">): boolean {
 	return !isTaskTerminal(task.status) && task.status !== "stopping";
 }
 
+function matchesFilter(task: TaskSnapshot, filter: TaskListFilter): boolean {
+	switch (filter) {
+		case "all":
+			return true;
+		case "active":
+			return !isTaskTerminal(task.status);
+		case "background":
+			return task.mode === "background";
+		case "failed":
+			return task.status === "failed" || task.status === "timeout" || task.status === "partial";
+	}
+}
+
 /** Remember navigation within one runtime, without retaining output or execution handles. */
 export interface TasksPanelState {
 	tab: TasksTab;
 	selectedId?: string;
+	filter?: TaskListFilter;
 	/** When the panel last closed; reopening selects work started since then. */
 	closedAt?: number;
 }
@@ -55,11 +73,24 @@ export class TaskSelection {
 	constructor(state: TasksPanelState) {
 		this.state = state;
 	}
+	get filter(): TaskListFilter {
+		return this.state.filter ?? "all";
+	}
 	get selected(): TaskSnapshot | undefined {
 		return this.rows.find((task) => task.id === this.state.selectedId);
 	}
 	get activeCount(): number {
 		return this.all.filter((task) => !isTaskTerminal(task.status)).length;
+	}
+	stoppable(): TaskSnapshot[] {
+		return this.all.filter(isStoppable);
+	}
+	cycleFilter(query = ""): TaskListFilter {
+		const index = TASK_LIST_FILTERS.indexOf(this.filter);
+		const next = TASK_LIST_FILTERS[(index + 1) % TASK_LIST_FILTERS.length]!;
+		this.state.filter = next === "all" ? undefined : next;
+		this.refresh(query);
+		return next;
 	}
 	sync(all: TaskSnapshot[], query = ""): void {
 		this.all = all;
@@ -76,13 +107,14 @@ export class TaskSelection {
 		const fresh = this.rows.filter((task) => task.startedAt > closedAt);
 		if (fresh.length) this.select(fresh.reduce((a, b) => (b.startedAt > a.startedAt ? b : a)).id);
 	}
-	/** Rows are the retained tasks matching `query`; an empty query matches all of them. */
+	/** Rows are the retained tasks matching the active filter and `query`. */
 	refresh(query = ""): void {
 		const { selectedId } = this.state;
-		const active = this.all
+		const filtered = this.all.filter((task) => matchesFilter(task, this.filter));
+		const active = filtered
 			.filter((task) => !isTaskTerminal(task.status))
 			.sort((a, b) => b.startedAt - a.startedAt || a.id.localeCompare(b.id));
-		const history = this.all
+		const history = filtered
 			.filter((task) => isTaskTerminal(task.status))
 			.sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0) || a.id.localeCompare(b.id));
 		const rows = [...active, ...history];

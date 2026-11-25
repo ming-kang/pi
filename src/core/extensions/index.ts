@@ -5,12 +5,16 @@
 export type { SlashCommandInfo, SlashCommandSource } from "../slash-commands.ts";
 export type { SourceInfo } from "../source-info.ts";
 export type {
+	TaskChangeEvent,
+	TaskChangeKind,
 	TaskCompletion,
 	TaskControl,
 	TaskExecution,
 	TaskFact,
 	TaskInput,
 	TaskKind,
+	TaskLifecycleAction,
+	TaskLifecycleEvent,
 	TaskMode,
 	TaskOutputKind,
 	TaskRead,
@@ -197,6 +201,7 @@ export type {
 	SetLabelHandler,
 	SetModelHandler,
 	SetThinkingLevelHandler,
+	TaskLifecycleExtensionEvent,
 	TerminalInputHandler,
 	ThinkingLevelSelectEvent,
 	ToolAnnotations,

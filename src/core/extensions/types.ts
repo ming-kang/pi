@@ -102,11 +102,23 @@ import type {
 	WriteToolInput,
 } from "../tools/index.ts";
 import type { ModelRoute, ModelRouteRequest, VirtualModelDefinition } from "../virtual-models.ts";
-import type { ContextSnapshot, EditorHost, ModelRuntime, TasksContext } from "./distribution-api.ts";
+import type {
+	ContextSnapshot,
+	EditorHost,
+	ModelRuntime,
+	TaskLifecycleExtensionEvent,
+	TasksContext,
+} from "./distribution-api.ts";
 
 export type { ExecOptions, ExecResult } from "../exec.ts";
 export type { BuildSystemPromptOptions, NormalizedBuildSystemPromptOptions } from "../system-prompt.ts";
-export type { ContextSnapshot, EditorHost, EditorSubmitEvent, EditorSubmitHandler } from "./distribution-api.ts";
+export type {
+	ContextSnapshot,
+	EditorHost,
+	EditorSubmitEvent,
+	EditorSubmitHandler,
+	TaskLifecycleExtensionEvent,
+} from "./distribution-api.ts";
 export { isStaleExtensionContextError } from "./distribution-api.ts";
 export type { AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode };
 export type { AppKeybinding, KeybindingsManager } from "../keybindings.ts";
@@ -1502,6 +1514,7 @@ export type ExtensionEvent =
 	| AgentEndEvent
 	| AgentBeforeSettleEvent
 	| AgentSettledEvent
+	| TaskLifecycleExtensionEvent
 	| UIPromptStartEvent
 	| UIPromptEndEvent
 	| TurnStartEvent
@@ -1756,6 +1769,7 @@ export interface ExtensionAPI {
 		handler: ExtensionHandler<AgentBeforeSettleEvent, AgentBeforeSettleEventResult>,
 	): () => void;
 	on(event: "agent_settled", handler: ExtensionHandler<AgentSettledEvent>): () => void;
+	on(event: "task_lifecycle", handler: ExtensionHandler<TaskLifecycleExtensionEvent>): () => void;
 	on(event: "ui_prompt_start", handler: ExtensionHandler<UIPromptStartEvent>): () => void;
 	on(event: "ui_prompt_end", handler: ExtensionHandler<UIPromptEndEvent>): () => void;
 	on(event: "turn_start", handler: ExtensionHandler<TurnStartEvent>): () => void;

@@ -2,7 +2,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { Keybinding } from "../../../core/keybindings.ts";
 import { runtimeLabel } from "../../../core/tasks/format.ts";
-import { taskReadBytes } from "../../../core/tasks/output.ts";
+import { taskReadBytes, taskReadRange } from "../../../core/tasks/output.ts";
 import { isTaskTerminal, type TaskSnapshot } from "../../../core/tasks/types.ts";
 import { formatSize } from "../../../core/tools/truncate.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
@@ -12,7 +12,7 @@ import type { TaskList } from "./list.ts";
 import type { TaskHit, TaskSelection, TasksTab } from "./model.ts";
 import { modeName, statusName, statusView } from "./status.ts";
 import { cleanTaskText, firstCommandLine } from "./text.ts";
-import { streamsLog } from "./views.ts";
+import { applyOutputSearch, streamsLog } from "./views.ts";
 
 export interface PaneRender {
 	lines: string[];
@@ -60,7 +60,9 @@ export function renderListPane(
 	const active = selection.rows.filter((task) => !isTaskTerminal(task.status)).length;
 	const finished = selection.rows.length - active;
 	const counts = [active ? `${active} active` : "", finished ? `${finished} finished` : ""].filter(Boolean);
-	const title = theme.fg("text", "Tasks") + (counts.length ? theme.fg("muted", ` · ${counts.join(" · ")}`) : "");
+	const filterTag = selection.filter !== "all" ? theme.fg("accent", ` [${selection.filter}]`) : "";
+	const title =
+		theme.fg("text", "Tasks") + filterTag + (counts.length ? theme.fg("muted", ` · ${counts.join(" · ")}`) : "");
 	const rows =
 		options.searchRow === undefined
 			? visible.map((row) => row.text)
@@ -76,9 +78,17 @@ export function renderListPane(
 	return { lines: frame.lines, hits, pageSize: Math.max(1, rowsHeight - 2) };
 }
 
+export interface InspectorOutputSearch {
+	query: string;
+	searchRow: string;
+	matchIndex: number;
+	onMatches?: (matchLines: number[], activeIndex: number) => void;
+}
+
 export interface InspectorPaneOptions {
 	active: boolean;
 	interactive: boolean;
+	outputSearch?: InspectorOutputSearch;
 }
 
 /** `Label · Status · Mode · runtime`, with the status in its own color. */
@@ -151,14 +161,35 @@ export function renderInspectorPane(
 		const diagnostics = [task.error, read?.readError].filter((text): text is string => !!text).map(cleanTaskText);
 		if (tab === "output" && diagnostics.length)
 			rows.push(theme.fg("warning", diagnostics.join(" · ").replace(/\n/g, " ")));
+		if (options.outputSearch) rows.push(options.outputSearch.searchRow);
 		const body = Math.max(1, innerHeight - rows.length);
+		const rawLines = tab === "info" ? inspector.details(innerWidth) : inspector.output(innerWidth);
+		const search = options.outputSearch
+			? applyOutputSearch(rawLines, options.outputSearch.query, options.outputSearch.matchIndex, theme)
+			: undefined;
+		if (search) options.outputSearch?.onMatches?.(search.matchLines, search.activeIndex);
+		const contentLines = search ? search.lines : rawLines;
 		if (tab === "info") {
-			rows.push(...position.info.layout(inspector.details(innerWidth), innerWidth, body));
-			if (position.info.overflows) status = theme.fg("muted", position.info.range);
+			rows.push(...position.info.layout(contentLines, innerWidth, body));
+			if (search && options.outputSearch?.query.trim()) {
+				status = theme.fg(
+					search.matchLines.length ? "accent" : "warning",
+					search.matchLines.length ? `Match ${search.activeIndex + 1}/${search.matchLines.length}` : "No matches",
+				);
+			} else if (position.info.overflows) status = theme.fg("muted", position.info.range);
 		} else {
-			rows.push(...position.output.layout(inspector.output(innerWidth), innerWidth, body));
-			// Only a log has a reading state; a published result is always the current one.
-			if (streamsLog(task)) {
+			rows.push(...position.output.layout(contentLines, innerWidth, body));
+			if (search && options.outputSearch?.query.trim()) {
+				status = theme.fg(
+					search.matchLines.length ? "accent" : "warning",
+					search.matchLines.length ? `Match ${search.activeIndex + 1}/${search.matchLines.length}` : "No matches",
+				);
+			} else if (streamsLog(task) && inspector.pagingEarlier && read) {
+				const { from, to } = taskReadRange(read);
+				const followText = `Earlier · ${formatSize(from)}–${formatSize(to)} of ${formatSize(read.totalBytes)} · ${hint("app.tasks.follow")} follow`;
+				status = theme.fg("muted", followText);
+				followWidth = visibleWidth(followText);
+			} else if (streamsLog(task)) {
 				const reading = readingState(task, inspector, hint);
 				status = theme.fg("muted", reading.text);
 				if (read?.truncated)
