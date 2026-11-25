@@ -173,7 +173,7 @@ interface CompactionDetails {
 
 Extensions can store any JSON-serializable data in `details`. The default compaction tracks file operations, but custom extension implementations can use their own structure. Generated and extension-provided summaries store their LLM `usage` when available so session totals include summarization work.
 
-When `showCacheMissNotices` is enabled, the interactive transcript shows the tokens billed and estimated cost for each compaction or branch summary with recorded usage. These notices are derived from persisted summary usage, so they also appear when a session is resumed; they are not separate session entries.
+When `notices.compactionCosts` is enabled, the interactive transcript shows the tokens billed and estimated cost for each compaction or branch summary with recorded usage. These notices are derived from persisted summary usage, so they also appear when a session is resumed; they are not separate session entries.
 
 Pi uses an internal preparation step before `compact()`. For direct programmatic summarization, `generateSummary()` returns the summary text and `generateSummaryWithUsage()` returns `{ text, usage }`.
 

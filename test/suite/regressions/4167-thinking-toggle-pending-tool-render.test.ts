@@ -48,7 +48,7 @@ type RenderSessionContextThis = {
 	settingsManager: {
 		getShowImages(): boolean;
 		getImageWidthCells(): number;
-		getShowCacheMissNotices(): boolean;
+		getNotices(): { cacheMisses: boolean; cacheWarming: boolean; compactionCosts: boolean; reasoningDrops: boolean };
 	};
 	sessionManager: { getCwd(): string; getEntries(): SessionEntry[] };
 	session: { retryAttempt: number; modelRegistry: { find(provider: string, modelId: string): undefined } };
@@ -83,7 +83,7 @@ function createFakeInteractiveModeThis(renderers?: ToolRenderers): RenderSession
 		settingsManager: {
 			getShowImages: () => false,
 			getImageWidthCells: () => 60,
-			getShowCacheMissNotices: () => false,
+			getNotices: () => ({ cacheMisses: false, cacheWarming: false, compactionCosts: false, reasoningDrops: false }),
 		},
 		sessionManager: { getCwd: () => process.cwd(), getEntries: () => [] },
 		session: { retryAttempt: 0, modelRegistry: { find: () => undefined } },

@@ -312,7 +312,7 @@ user sends prompt ────────────────────�
   │   ├─► context_with_system (can modify the full transcript)
   │   ├─► before_provider_headers (can mutate headers)     |
   │   ├─► before_provider_request (can inspect or replace payload)
-  │   ├─► after_provider_response (status + headers, before stream consume)
+  │   ├─► after_provider_response (each HTTP response, including errors/retries)
   │   │                                            │       │
   │   │   LLM responds, may call tools:            │       │
   │   │     ├─► tool_execution_start               │       │
@@ -399,7 +399,7 @@ flowchart TD
     MoreTurns -->|no| AgentEnd(["agent_end"])
 ```
 
-The model request runs these hooks in order: `context`, `context_with_system`, `before_provider_headers`, `before_provider_request`, `after_provider_response`, then `provider_stream_event` and assistant message events. Tool execution runs `tool_execution_start`, `tool_call`, `tool_execution_update` while the tool executes, `tool_result`, and `tool_execution_end`.
+The model request runs these hooks in order: `context`, `context_with_system`, `before_provider_headers`, `before_provider_request`, `after_provider_response` (for each HTTP response, including errors and retried attempts; successful responses fire before their stream is consumed), then `provider_stream_event` and assistant message events. Tool execution runs `tool_execution_start`, `tool_call`, `tool_execution_update` while the tool executes, `tool_result`, and `tool_execution_end`.
 
 The lifecycle involves these event groups:
 
@@ -891,7 +891,7 @@ The payload is the full request. Providers that continue from a previous respons
 
 #### after_provider_response
 
-Fired after an HTTP response is received and before its stream body is consumed. Handlers run in extension load order.
+Fired for each HTTP response the provider receives, including error responses (4xx/5xx) and responses to retried attempts, so one request can fire it more than once. Successful responses fire before their stream body is consumed. Handlers run in extension load order.
 
 ```typescript
 pi.on("after_provider_response", (event, ctx) => {
@@ -903,7 +903,7 @@ pi.on("after_provider_response", (event, ctx) => {
 });
 ```
 
-Header availability depends on provider and transport. Providers that abstract HTTP responses may not expose headers.
+Coverage depends on provider and transport. Some providers report empty headers or only some responses. It does not fire for errors that arrive inside an already started SSE stream, or for WebSocket transports, including a WebSocket connection that fails to open.
 
 #### cache_warming_decision
 
@@ -2932,6 +2932,16 @@ if (confirmed) {
 ```
 
 See [examples/extensions/timed-confirm.ts](../examples/extensions/timed-confirm.ts) for complete examples.
+
+#### Program Status Kind
+
+While a dialog waits, terminals that support [program status](terminal-setup.md#program-status) show pi as blocked, with the first line of the title as the message. `confirm()` reports `"permission"`; `select()` and `input()` report `"question"`. Pass `blockedKind` when the dialog asks for something else, for example a select that approves an action:
+
+```typescript
+const choice = await ctx.ui.select("Deploy to production?", ["Deploy", "Deploy and tag", "Cancel"], {
+  blockedKind: "permission", // "permission" | "question" | "auth"
+});
+```
 
 ### Terminal Input
 

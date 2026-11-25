@@ -511,7 +511,7 @@ Response:
 }
 ```
 
-If output was truncated, `fullOutputPath` is present with the temporary file path. `exitCode` is omitted when the command was cancelled:
+If output was truncated, `fullOutputPath` is present with the temporary file path, or `fullOutputError` with the reason when the full output could not be saved (for example a full temp directory). `exitCode` is omitted when the command was cancelled:
 ```json
 {
   "type": "response",
@@ -1677,7 +1677,7 @@ The Pi-specific roles are `bashExecution`, `custom`, `branchSummary`, and `compa
 }
 ```
 
-`fullOutputPath` is an optional string on `BashExecutionMessage` and `BashResult`, and `exitCode` is omitted when cancellation leaves it undefined. See [Session Format](session-format.md) for the other Pi-specific message and `SessionEntry` shapes.
+`fullOutputPath` and `fullOutputError` are optional strings on `BashExecutionMessage` and `BashResult`, and `exitCode` is omitted when cancellation leaves it undefined. See [Session Format](session-format.md) for the other Pi-specific message and `SessionEntry` shapes.
 
 ## Example: Basic Client (Python)
 

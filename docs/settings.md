@@ -32,9 +32,14 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `defaultThinkingLevel` | string | - | Global fallback: `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, or `"max"` |
 | `modelThinkingLevels` | object | - | Per-model default thinking levels keyed by `provider/modelId`; set through `/thinking` Ctrl+S or `/settings` |
 | `hideThinkingBlock` | boolean | `false` | Show up to three live preview lines for collapsed thinking while streaming, then settle to `Thoughts`; click to expand |
-| `showCacheMissNotices` | boolean | `false` | Show transcript notices for significant prompt-cache misses, successful cache-warming usage, compaction or branch-summary usage, and provider recovery diagnostics such as dropped Anthropic thinking blocks |
+| `notices.cacheMisses` | boolean | `false` | Show a notice when a response re-bills a significant part of the prompt cache, such as after a model switch or an idle gap |
+| `notices.cacheWarming` | boolean | `false` | Show the cost of cache warming requests |
+| `notices.compactionCosts` | boolean | `false` | Show the cost of compactions and branch summaries |
+| `notices.reasoningDrops` | boolean | `false` | Show a notice when a provider drops reasoning items from a request, such as OpenAI reasoning items after a prefix mismatch or Anthropic thinking blocks during recovery |
 | `thinkingBudgets` | object | - | Custom token budgets per thinking level. Anthropic, Google, and Bedrock use these natively. OpenAI-compatible models use them when `compat.thinkingTokenBudgetField` (or `supportsThinkingTokenBudget`) is set. |
 | `cacheWarming` | string | `"idle"` | Prompt cache-warming mode: `"off"`, `"streaming"`, or `"idle"`. Global setting only. |
+
+The legacy `showCacheMissNotices` boolean migrates to all four `notices.*` values; keys already set under `notices` win.
 
 #### Cache Warming
 
@@ -50,7 +55,7 @@ Providers drop a prompt cache entry after a period of inactivity, so the first r
 }
 ```
 
-A refresh is sent only when the expected avoided cache-miss cost, minus the cost of the refresh, leaves at least $0.05 of expected savings. Active agent runs use 100% continuation probability. `/session` shows the next decision, continuation probability, expected savings, threshold, and estimated costs. When cache miss notices are enabled, each successful refresh appears in the transcript with its cost; notices identify extension overrides.
+A refresh is sent only when the expected avoided cache-miss cost, minus the cost of the refresh, leaves at least $0.05 of expected savings. Active agent runs use 100% continuation probability. `/session` shows the next decision, continuation probability, expected savings, threshold, and estimated costs. When `notices.cacheWarming` is enabled, each successful refresh appears in the transcript with its cost; notices identify extension overrides.
 
 Warming stops when the context changes (model switch, compaction, branch navigation). Idle warming stops no later than 30 minutes after the last real provider request; warming during an active agent run stops after 60 minutes. Extensions can override each decision through the [`cache_warming_decision`](extensions.md#cache_warming_decision) event.
 

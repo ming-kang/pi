@@ -1,4 +1,6 @@
-import { readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionToolContext } from "../src/core/extensions/types.ts";
 import { projectForModel } from "../src/core/tasks/presentation.ts";
@@ -65,6 +67,7 @@ afterEach(async () => {
 	for (const service of services.splice(0)) await service.shutdown();
 	for (const path of paths) rmSync(path, { force: true });
 	paths.clear();
+	vi.unstubAllEnvs();
 	vi.useRealTimers();
 });
 
@@ -800,9 +803,34 @@ describe("native managed shell execution", () => {
 		});
 	});
 
+	it("fails managed execution before spawn when its output log cannot be created", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-managed-output-test-"));
+		const missing = join(root, "missing");
+		for (const name of ["TMPDIR", "TEMP", "TMP"]) vi.stubEnv(name, missing);
+		try {
+			const background = host();
+			const child = execution();
+			const tool = createBashToolDefinition(process.cwd(), { operations: child.operations });
+
+			await expect(
+				tool.execute("call", { command: "work" }, undefined, undefined, context(background)),
+			).rejects.toThrow("Could not create the managed output file");
+
+			expect(child.operations.exec).not.toHaveBeenCalled();
+			expect(background.list()[0]?.status).toBe("failed");
+			expect(background.list()[0]?.outputPath).toBeUndefined();
+			expect(background.list()[0]?.error).toContain("Could not create the managed output file");
+		} finally {
+			vi.unstubAllEnvs();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("managed accumulator preserves split UTF-8 in one continuously readable exclusive file", async () => {
 		const output = new OutputAccumulator({ persistFromStart: true });
-		const path = output.snapshot().fullOutputPath!;
+		const initialFile = output.snapshot().fullOutputFile;
+		if (initialFile?.kind !== "saved") throw new Error("managed output file did not open");
+		const path = initialFile.path;
 		paths.add(path);
 		const euro = Buffer.from("€");
 		output.append(euro.subarray(0, 1));

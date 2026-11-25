@@ -184,7 +184,13 @@ export async function runShellTask(options: ShellTaskOptions): Promise<TaskCompl
 		maxBackgroundOutputBytes: options.maxBackgroundOutputBytes,
 		backgroundOutputLimitAction: options.backgroundOutputLimitAction,
 	});
-	const path = output.snapshot().fullOutputPath!;
+	const initialFile = output.snapshot().fullOutputFile;
+	if (initialFile?.kind !== "saved") {
+		throw new Error(
+			`Could not create the managed output file${initialFile?.kind === "failed" ? `: ${initialFile.error}` : ""}`,
+		);
+	}
+	const path = initialFile.path;
 	const cleanup = async () => {
 		await output.closeTempFile();
 		await unlink(path).catch((error: NodeJS.ErrnoException) => {
@@ -261,11 +267,14 @@ function shellCompletion(
 					? output.snapshot().content
 					: "";
 	const text = failure ? withoutStatus(formatted, failure.error) : formatted;
-	const truncation = output.snapshot().truncation;
+	const finalSnapshot = output.snapshot();
+	const truncation = finalSnapshot.truncation;
+	const outputFile = finalSnapshot.fullOutputFile;
 	const details: BashToolDetails = {
 		...(result?.details ?? (truncation.truncated ? { truncation } : {})),
-		fullOutputPath: path,
+		...(outputFile?.kind === "failed" ? { fullOutputError: outputFile.error } : { fullOutputPath: path }),
 	};
+	if (outputFile?.kind === "failed") delete details.fullOutputPath;
 	// A cancellation the output policy caused is that policy's failure, not the process's abort.
 	const policy = output.error ? { status: "failed" as const, error: errorMessage(output.error) } : undefined;
 	const settled = policy ?? failure;

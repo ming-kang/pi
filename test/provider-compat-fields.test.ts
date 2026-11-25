@@ -23,7 +23,9 @@ describe("provider compat field catalog", () => {
 		expect(compatFieldsForApi("bedrock-converse-stream")).toEqual([
 			expect.objectContaining({ key: "supportsStrictMode", kind: "boolean" }),
 		]);
-		expect(compatFieldsForApi("google-generative-ai")).toEqual([]);
+		const googleStrictMode = [expect.objectContaining({ key: "supportsStrictMode", kind: "boolean" })];
+		expect(compatFieldsForApi("google-generative-ai")).toEqual(googleStrictMode);
+		expect(compatFieldsForApi("google-vertex")).toEqual(googleStrictMode);
 		expect(compatFieldsForApi("pi-messages")).toEqual([]);
 	});
 

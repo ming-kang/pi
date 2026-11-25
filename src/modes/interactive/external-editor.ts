@@ -48,9 +48,10 @@ function parseEditorCommand(command: string): string[] {
 }
 
 export async function editInExternalEditor(options: ExternalEditorOptions): Promise<ExternalEditorResult> {
-	const directory = mkdtempSync(join(tmpdir(), "pi-editor-"));
-	const filePath = join(directory, "prompt.md");
+	let directory: string | undefined;
 	try {
+		directory = mkdtempSync(join(tmpdir(), "pi-editor-"));
+		const filePath = join(directory, "prompt.md");
 		writeFileSync(filePath, options.content, "utf-8");
 		const [editor, ...editorArgs] = parseEditorCommand(options.command);
 		if (!editor) return { status: "failed", message: `Failed to launch external editor: ${options.command}` };
@@ -84,9 +85,16 @@ export async function editInExternalEditor(options: ExternalEditorOptions): Prom
 		}
 
 		return { status: "complete", content: stripBom(readFileSync(filePath, "utf-8")).replace(/\n$/, "") };
+	} catch (error) {
+		// Callers start the editor from key handlers, where a thrown error would crash pi. A full or
+		// unwritable temp dir lands here.
+		return {
+			status: "failed",
+			message: `External editor failed: ${error instanceof Error ? error.message : String(error)}; prompt unchanged`,
+		};
 	} finally {
 		try {
-			rmSync(directory, { recursive: true, force: true });
+			if (directory) rmSync(directory, { recursive: true, force: true });
 		} catch {
 			// Cleanup is best effort.
 		}

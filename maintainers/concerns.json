@@ -143,7 +143,8 @@
 					"path": "src/core/tools/bash.ts"
 				},
 				{
-					"path": "src/core/tools/output-accumulator.ts"
+					"path": "src/core/tools/output-accumulator.ts",
+					"rewrite": "Managed executions synchronously persist one task log from the first byte and support capped disk logging, while upstream's lazy OutputFileStream owns unmanaged full-output files."
 				},
 				{
 					"path": "src/utils/output-files.ts"
@@ -192,6 +193,7 @@
 				"test/agent-progress.test.ts",
 				"test/agent-session-stats.test.ts",
 				"test/bash-background.test.ts",
+				"test/output-file-failures.test.ts",
 				"test/footer-width.test.ts",
 				"test/suite/agent-session-compaction.test.ts",
 				"test/suite/background-delivery.test.ts",
@@ -393,6 +395,19 @@
 				"test/tool-definition-wrapper.test.ts"
 			],
 			"watch": "Upstream tool argument errors echo bounded arguments with per-field hints."
+		},
+		{
+			"id": "extension-dialog-presentation",
+			"why": "Extension confirm dialogs render their message as normal-weight context below the accent title rather than folding it into the title.",
+			"paths": [
+				{
+					"path": "src/modes/interactive/interactive-mode.ts"
+				}
+			],
+			"tests": [
+				"test/interactive-mode-extension-dialogs.test.ts"
+			],
+			"watch": "Upstream renders confirm messages as normal-weight context separate from the accent title."
 		},
 		{
 			"id": "extension-editor-host",

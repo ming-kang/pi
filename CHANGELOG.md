@@ -6,6 +6,11 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Added
 
+- Adopted upstream v1.6.1:
+  - Decision models in codemode: GitHub Copilot's `gpt-6-luna-decisions` and Radius decision models can be called through `models.classify()`, and classification results can include the provider's `responseId`. OpenRouter System One fills it with its generation ID and uses the billed cost when available. See [Use decision models](docs/models.md#use-decision-models).
+  - `ctx.ui.select()`, `ctx.ui.confirm()`, and `ctx.ui.input()` accept `blockedKind`, so terminals with program status can show a dialog as a permission request, question, or authentication prompt. See [Program Status Kind](docs/extensions.md#program-status-kind).
+  - Bash structured output adds `full_output_error`; `fullOutputError` is also exposed in tool details, `BashResult`, `BashExecutionMessage`, RPC, and the TUI when truncated output cannot be saved to a temp file.
+  - `compat.supportsStrictMode` is available for `google-generative-ai` and `google-vertex` models whose Gemini 3+ IDs do not carry the version. See [Models configuration](docs/models-configuration.md#google-generative-ai).
 - **Tasks completion coalescing**: Ready background task completions now coalesce into a single model turn when idle (and into one steering batch when `steeringMode` is `"all"`), up to 8 completions / 96 KiB per batch, preserving per-message persistence acknowledgement and retry semantics.
 - **Tasks `read` & `list` improvements**: `tasks read` now includes task `facts` (such as exit code, directory, and edited files) and supports bounded line filtering (`filter` substring or `/regex/flags`, plus `contextLines` 0–5); `tasks list` supports `status` (`"all"`, `"active"`, `"finished"`) and `limit` filters. Task IDs use a compact `<kind>-<12 hex>` format with documented unique prefix lookup.
 - **`/tasks` interactive panel enhancements**: Preserves safe ANSI SGR colors in log output while stripping unsafe escapes; adds backward/forward large-log paging (`[` / `]`), in-output search (`g`), persistent list filters (`a`), bulk stop all (`Shift+K`), clipboard copy (`c`), per-task token/cost Usage and passive Idle rows in Details, animated `stopping` markers, and clicking `task-completion` cards to open `/tasks` directly on that task.
@@ -14,11 +19,22 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Changed
 
+- Adopted upstream v1.6.1:
+  - **Breaking settings/API change:** `showCacheMissNotices` is replaced by independent `notices.cacheMisses`, `notices.cacheWarming`, `notices.compactionCosts`, and `notices.reasoningDrops` settings under Notices in `/settings`. Existing values migrate to all four. `SettingsManager.getShowCacheMissNotices()` and `setShowCacheMissNotices()` are removed; use `getNotices()` and `setNotice()`.
+  - `after_provider_response` now fires for HTTP error responses and each retried attempt on OpenAI, Azure OpenAI, Anthropic, and Google models, matching the existing behavior of OpenAI Codex, Mistral, Radius, and Amazon Bedrock.
+  - The default Mistral model is `mistral-medium-latest` because Mistral retired Devstral.
+  - Experimental first-time setup now shows the colored pi logo and asks only about analytics; the theme defaults to the terminal-following system theme.
 - **Tasks hot-path performance**: Split `TasksContext.subscribe` events into `"lifecycle"` vs `"progress"` so high-frequency progress updates no longer wake completion delivery, quiescence checks, or statusline recalculation; replaced per-snapshot `structuredClone` with one-time field freezing; stopped `/tasks` polling when no active tasks remain and skipped redundant re-wraps when polled slices are unchanged.
 - **Persistent report artifact restoration**: Restored `report` tasks whose `outputPath` resides inside the session's trusted artifact directory stay readable without cleanup ownership instead of being marked as expired managed logs, and restored tasks hydrate their persisted `usage`.
 
 ### Fixed
 
+- Adopted upstream v1.6.1 fixes:
+  - Terminal and UI: `ctx.ui.pasteToEditor()` and `setEditorText()` repaint when called outside terminal input handling; startup dialogs (project trust, missing session folder, first-time setup) report blocked program status with only the first title line; wide Mermaid diagrams explain the width they need; Wayland copies force `text/plain`; Tabby right-click paste is no longer duplicated; Markdown no longer breaks after an unclosed `$` before a number or exhausts the heap on huge bare URLs; rebuilt `!` output follows the current Ctrl+O expansion state.
+  - Bash, files, and Windows: output ending in an overlong line followed by blank lines displays the end of that line instead of `(no output)`; full-output temp-file failures no longer crash the bash tool, `!` commands, external editor, or `/share` and now explain why the file is missing; Windows handles SIGHUP, waits for `taskkill` during exit cleanup, finds Git Bash outside Program Files through `git.exe` on `PATH`, and the inherited managed-installation updater refuses to rebuild a Windows installation when invoked from WSL.
+  - Sessions, RPC, and MCP: sessions with very many post-compaction entries load without a stack overflow; `/tree` no longer duplicates prompts in editor history; RPC, session loading, and llama.cpp event parsing avoid quadratic rescanning of large lines; llama.cpp accepts lone CR and split CRLF events; MCP servers echoing string request IDs no longer time out, and large MCP Streamable HTTP events no longer stall pi.
+  - Authentication and models: `/login` identifies stored `!command` keys that fail to resolve and saving the same command retries it; GitHub Copilot lists only decision models available to the account; fixes cover Gemini `xhigh` and prefixed Gemini 3+ behavior, Google safety-block reporting, Claude thinking `off` through Copilot and gateways, Codex GPT-6 thinking and WebSocket reasoning continuity, Bedrock behind `HTTPS_PROXY`, Workers AI tool-call serialization, Anthropic Draft 7 tuples, OpenAI Decisions cache usage, retryable temporary provider failures, false `request_too_large` compaction retries, quadratic extension-provider model lookup, and removal of retired models.
+  - The `thinkingLevelMap` schema and documentation now correctly describe opt-in `xhigh` and `max` mappings.
 - Fixed a `/tasks` inspector race where a task settling while an earlier log read was in flight could delay loading the final output until the next poll interval.
 - Fixed `tasks kill` reading three separate snapshots per call, `TaskDelivery.agentEnded()`/`queueCleared()` racing ahead of `waitForPersistence()`, and documentation drift in `docs/bundled/tasks.md` and `docs/bundled/extensions/statusline.md`.
 

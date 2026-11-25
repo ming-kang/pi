@@ -70,10 +70,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	};
 
 	const registerSignalHandlers = (): void => {
-		const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM"];
-		if (process.platform !== "win32") {
-			signals.push("SIGHUP");
-		}
+		const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
 
 		for (const signal of signals) {
 			const exitCode = signal === "SIGINT" ? 130 : signal === "SIGHUP" ? 129 : 143;

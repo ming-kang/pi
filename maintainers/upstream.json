@@ -1,7 +1,7 @@
 {
 	"repository": "earendil-works/pi",
-	"tag": "v1.6.0",
-	"commit": "faac585884ae2c013a6b1400f3e9e77f10b34bac",
+	"tag": "v1.6.1",
+	"commit": "ef4a1cfcca62b77ad3558337ff3e1c7f6beeadfe",
 	"sourceSubtree": "packages/coding-agent",
-	"sourceTree": "2ca5ed78bb6c5fd3e2f8972ade0953c8431e393f"
+	"sourceTree": "e522fb2f4318a6ed8b3fe736de5cf28178899709"
 }

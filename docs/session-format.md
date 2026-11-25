@@ -183,6 +183,7 @@ interface BashExecutionMessage {
   cancelled: boolean;
   truncated: boolean;
   fullOutputPath?: string;
+  fullOutputError?: string;      // why the full output could not be saved, when truncated
   excludeFromContext?: boolean;  // true for !! prefix commands
   timestamp: number;
 }

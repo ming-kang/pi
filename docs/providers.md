@@ -60,7 +60,7 @@ When the browser runs on another machine, select the copy code login method in `
 - On remote or headless machines (for example over SSH), paste the final redirect URL or authorization code into the login prompt when the browser cannot reach the loopback callback
 - `OPENROUTER_API_KEY` remains available through **Use an API key**
 
-With a key, Pi lists only the OpenRouter chat models that key may use, with the key's context size, max output, and prices. These come from OpenRouter's `/models/user` endpoint and reflect guardrails and provider restrictions set in OpenRouter. Image and classifier models are not filtered.
+With a key, Pi lists only the OpenRouter chat models that key may use, with the key's context size, max output, and prices. These come from OpenRouter's `/models/user` endpoint and reflect guardrails and provider restrictions set in OpenRouter. Image and decision models are not filtered.
 
 Pi refreshes the list in the background at startup in interactive mode, when `/model` opens, after `/login`, and on `pi update --models`. The last list is saved and used offline and in `pi -p` and RPC mode. After switching keys outside `/login`, the previous key's list stays until the next refresh.
 
@@ -199,6 +199,8 @@ The `key` field supports command execution, environment interpolation, and liter
   { "type": "api_key", "key": "!security find-generic-password -ws 'anthropic'" }
   { "type": "api_key", "key": "!op read 'op://vault/item/credential'" }
   ```
+
+  Empty output, a timeout, or a nonzero exit leaves the key unresolved: `/login` shows the provider as `stored key did not resolve`. To retry, for example after signing in to the secret manager, enter the same `!command` again in `/login`, or restart Pi.
 - **Environment interpolation:** `"$ENV_VAR"` or `"${ENV_VAR}"` uses the value of the named variable. Interpolation works inside larger literals.
   ```json
   { "type": "api_key", "key": "$MY_ANTHROPIC_KEY" }
@@ -371,8 +373,8 @@ When resolving credentials for a provider:
 3. Environment variable
 4. Custom provider keys from `models.json`
 
-## OpenAI subscriptions and classifiers
+## OpenAI subscriptions and decision models
 
 `/login openai` offers Sign in with ChatGPT. The older OpenAI Codex provider remains available as OpenAI Codex (legacy), with `gpt-6.1-sol` as its default model. GPT-6.1 Sol is also available through OpenAI and Azure OpenAI.
 
-TypeSafe classifier models use `TYPESAFE_API_KEY`; see [Classifier models](models.md#use-classifier-models).
+TypeSafe decision models use `TYPESAFE_API_KEY`; see [Use decision models](models.md#use-decision-models).

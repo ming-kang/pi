@@ -1,7 +1,11 @@
-import type { WriteStream } from "node:fs";
 import { closeSync, openSync, writeSync } from "node:fs";
 import { open } from "node:fs/promises";
-import { createOutputFilePath, createOutputFileStream } from "../../utils/output-files.ts";
+import {
+	createOutputFilePath,
+	createOutputFileStream,
+	type OutputFileResult,
+	type OutputFileStream,
+} from "../../utils/output-files.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type TruncationResult, truncateTail } from "./truncate.ts";
 
 export interface OutputAccumulatorOptions {
@@ -15,7 +19,8 @@ export interface OutputAccumulatorOptions {
 export interface OutputSnapshot {
 	content: string;
 	truncation: TruncationResult;
-	fullOutputPath?: string;
+	/** Set once the full output goes to a file. While output streams in, `saved` means the file is being written. */
+	fullOutputFile?: OutputFileResult;
 }
 
 export interface FullOutput {
@@ -26,6 +31,10 @@ export interface FullOutput {
 
 function byteLength(text: string): number {
 	return Buffer.byteLength(text, "utf-8");
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 /**
@@ -40,6 +49,7 @@ export class OutputAccumulator {
 	private readonly maxBytes: number;
 	private readonly maxRollingBytes: number;
 	private readonly tempFilePrefix: string;
+	private readonly persistFromStart: boolean;
 	private readonly decoder = new TextDecoder();
 
 	private rawChunks: Buffer[] = [];
@@ -56,7 +66,8 @@ export class OutputAccumulator {
 
 	private tempFilePath: string | undefined;
 	private tempFileFd: number | undefined;
-	private tempFileStream: WriteStream | undefined;
+	private tempFile: OutputFileStream | undefined;
+	private tempFileFailure: { kind: "failed"; error: string } | undefined;
 	private diskPersistingStopped = false;
 
 	constructor(options: OutputAccumulatorOptions = {}) {
@@ -64,10 +75,17 @@ export class OutputAccumulator {
 		this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
 		this.maxRollingBytes = Math.max(this.maxBytes * 2, 1);
 		this.tempFilePrefix = options.tempFilePrefix ?? "pi-output";
-		if (options.persistFromStart) {
+		this.persistFromStart = options.persistFromStart === true;
+		if (this.persistFromStart) {
 			const path = createOutputFilePath(this.tempFilePrefix, ".log");
-			this.tempFileFd = openSync(path, "wx", 0o600);
 			this.tempFilePath = path;
+			try {
+				this.tempFileFd = openSync(path, "wx", 0o600);
+			} catch (error) {
+				// Report construction failure through the first snapshot so the managed execution owner
+				// can fail the task before spawn. Nothing exists to remove when open fails.
+				this.tempFileFailure = { kind: "failed", error: errorMessage(error) };
+			}
 		}
 	}
 
@@ -83,15 +101,16 @@ export class OutputAccumulator {
 			return;
 		}
 		if (this.tempFileFd !== undefined) {
-			let offset = 0;
-			while (offset < data.length) {
-				const written = writeSync(this.tempFileFd, data, offset, data.length - offset);
-				if (written === 0) throw new Error("Output file write made no progress");
-				offset += written;
-			}
-		} else if (this.tempFileStream || this.shouldUseTempFile()) {
-			this.ensureTempFile();
-			this.tempFileStream?.write(data);
+			this.writeSyncFile(data);
+			return;
+		}
+		// A managed execution has one log from the first byte. If that log could not be opened or
+		// already failed, do not replace it with a second file; the retained tail is the fallback.
+		if (this.persistFromStart) {
+			return;
+		}
+		if (this.tempFile || this.shouldUseTempFile()) {
+			this.ensureTempFile()?.write(data);
 		} else if (data.length > 0) {
 			this.rawChunks.push(data);
 		}
@@ -100,11 +119,7 @@ export class OutputAccumulator {
 	/** Stop writing additional bytes to disk while continuing to track the rolling tail in memory. */
 	stopPersisting(): void {
 		this.diskPersistingStopped = true;
-		if (this.tempFileFd !== undefined) {
-			const fd = this.tempFileFd;
-			this.tempFileFd = undefined;
-			closeSync(fd);
-		}
+		this.closeSyncFile();
 	}
 
 	finish(): void {
@@ -120,10 +135,7 @@ export class OutputAccumulator {
 
 	snapshot(options: { persistIfTruncated?: boolean; maxBytes?: number } = {}): OutputSnapshot {
 		const maxBytes = Math.min(this.maxBytes, options.maxBytes ?? this.maxBytes);
-		// Clipping drops the partial first line of the retained tail. When the tail is only the end of
-		// one over-long line, that is everything, so show the end of that line instead.
-		const snapshotText = this.getSnapshotText() || this.tailText;
-		const tailTruncation = truncateTail(snapshotText, {
+		const tailTruncation = truncateTail(this.getRetainedText(), {
 			maxLines: this.maxLines,
 			maxBytes,
 		});
@@ -145,55 +157,35 @@ export class OutputAccumulator {
 			this.ensureTempFile();
 		}
 
-		return {
-			content: truncation.content,
-			truncation,
-			fullOutputPath: this.tempFilePath,
-		};
+		return { content: truncation.content, truncation, fullOutputFile: this.outputFileResult() };
 	}
 
 	getTotalBytes(): number {
 		return this.totalRawBytes;
 	}
 
+	/** Flush and close the temp file. Never rejects: a failed file shows up as `failed` in later snapshots. */
 	async closeTempFile(): Promise<void> {
-		if (this.tempFileFd !== undefined) {
-			const fd = this.tempFileFd;
-			this.tempFileFd = undefined;
-			closeSync(fd);
-		}
-		if (!this.tempFileStream) {
-			return;
-		}
-
-		const stream = this.tempFileStream;
-		this.tempFileStream = undefined;
-
-		await new Promise<void>((resolve, reject) => {
-			const onError = (error: Error) => {
-				stream.off("finish", onFinish);
-				reject(error);
-			};
-			const onFinish = () => {
-				stream.off("error", onError);
-				resolve();
-			};
-			stream.once("error", onError);
-			stream.once("finish", onFinish);
-			stream.end();
-		});
+		this.closeSyncFile();
+		await this.tempFile?.close();
 	}
 
 	/**
 	 * The complete output, for callers that can take more than the display snapshot. Call after
 	 * `finish()` and `closeTempFile()`. Output longer than `maxBytes` raw bytes keeps its first and
-	 * last `maxBytes / 2` bytes around an omission marker.
+	 * last `maxBytes / 2` bytes around an omission marker. When the temp file could not be saved, only
+	 * the retained tail is left: up to its last `maxBytes` bytes, behind the same marker when output is
+	 * missing.
 	 */
 	async readFullOutput(maxBytes: number): Promise<FullOutput> {
-		if (!this.tempFilePath) {
+		const fullOutputFile = this.outputFileResult();
+		if (!fullOutputFile) {
 			return { content: new TextDecoder().decode(Buffer.concat(this.rawChunks)), truncated: false };
 		}
-		const file = await open(this.tempFilePath, "r");
+		if (fullOutputFile.kind === "failed") {
+			return this.readRetainedOutput(maxBytes);
+		}
+		const file = await open(fullOutputFile.path, "r");
 		try {
 			const size = (await file.stat()).size;
 			if (size <= maxBytes) {
@@ -270,6 +262,32 @@ export class OutputAccumulator {
 		this.tailBytes = byteLength(this.tailText);
 	}
 
+	/**
+	 * The retained tail, for display and as the fallback of `readFullOutput()`. Clipping drops the partial
+	 * first line of the tail. When the tail is only the end of one over-long line (plus blank lines),
+	 * nothing is left, so it keeps the end of that line instead.
+	 */
+	private getRetainedText(): string {
+		const clippedText = this.getSnapshotText();
+		return clippedText.trim().length === 0 ? this.tailText : clippedText;
+	}
+
+	/** The retained tail within `maxBytes`, marked as truncated only when output is missing. */
+	private readRetainedOutput(maxBytes: number): FullOutput {
+		let bytes = Buffer.from(this.getRetainedText(), "utf-8");
+		if (bytes.length > maxBytes) {
+			let start = bytes.length - maxBytes;
+			while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start++;
+			bytes = bytes.subarray(start);
+		}
+		const tail = bytes.toString("utf-8");
+		const omitted = this.totalDecodedBytes - bytes.length;
+		if (omitted === 0) {
+			return { content: tail, truncated: false };
+		}
+		return { content: `[... ${omitted} bytes omitted ...]\n\n${tail}`, truncated: true };
+	}
+
 	private getSnapshotText(): string {
 		if (this.tailStartsAtLineBoundary) {
 			return this.tailText;
@@ -285,16 +303,74 @@ export class OutputAccumulator {
 		);
 	}
 
-	private ensureTempFile(): void {
-		if (this.tempFilePath) {
+	private outputFileResult(): OutputFileResult | undefined {
+		if (this.tempFile) {
+			return this.tempFile.result;
+		}
+		if (!this.tempFilePath) {
+			return undefined;
+		}
+		return this.tempFileFailure ?? { kind: "saved", path: this.tempFilePath };
+	}
+
+	private writeSyncFile(data: Buffer): void {
+		const fd = this.tempFileFd;
+		if (fd === undefined) {
 			return;
 		}
-		const { path, stream } = createOutputFileStream(this.tempFilePrefix, ".log");
-		this.tempFilePath = path;
-		this.tempFileStream = stream;
+		try {
+			let offset = 0;
+			while (offset < data.length) {
+				const written = writeSync(fd, data, offset, data.length - offset);
+				if (written === 0) throw new Error("Output file write made no progress");
+				offset += written;
+			}
+		} catch (error) {
+			// The output owner turns this synchronous failure into a task failure. Still record it here so
+			// snapshots and structured output explain the missing full output instead of naming a partial file.
+			this.tempFileFd = undefined;
+			try {
+				closeSync(fd);
+			} catch {
+				// The write failure is the actionable error.
+			}
+			this.failSyncFile(error);
+			throw error;
+		}
+	}
+
+	private closeSyncFile(): void {
+		const fd = this.tempFileFd;
+		if (fd === undefined) {
+			return;
+		}
+		this.tempFileFd = undefined;
+		try {
+			closeSync(fd);
+		} catch (error) {
+			this.failSyncFile(error);
+		}
+	}
+
+	private failSyncFile(error: unknown): void {
+		// Managed task logs are diagnostic artifacts: a partial one stays attached for the task's
+		// retention-aware cleanup, unlike an unmanaged full-output temp file that upstream drops.
+		this.tempFileFailure ??= { kind: "failed", error: errorMessage(error) };
+	}
+
+	private ensureTempFile(): OutputFileStream | undefined {
+		if (this.tempFile) {
+			return this.tempFile;
+		}
+		if (this.persistFromStart) {
+			return undefined;
+		}
+		const tempFile = createOutputFileStream(this.tempFilePrefix, ".log");
+		this.tempFile = tempFile;
 		for (const chunk of this.rawChunks) {
-			this.tempFileStream.write(chunk);
+			tempFile.write(chunk);
 		}
 		this.rawChunks = [];
+		return tempFile;
 	}
 }
