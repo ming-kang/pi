@@ -12,7 +12,7 @@ import {
 } from "../src/core/tools/bash.ts";
 import { OutputAccumulator } from "../src/core/tools/output-accumulator.ts";
 import { createPowerShellToolDefinition } from "../src/core/tools/powershell.ts";
-import { MAX_BACKGROUND_OUTPUT_BYTES } from "../src/core/tools/shell-execution.ts";
+import { MAX_BACKGROUND_OUTPUT_BYTES, ManagedOutputFile } from "../src/core/tools/shell-execution.ts";
 import { createBashToolDefinition } from "../src/core/tools/shell-tool.ts";
 import { runRead } from "../src/extensions/tasks/tool/actions.ts";
 import { createDeliveryHarness } from "./tasks-delivery-harness.ts";
@@ -827,10 +827,9 @@ describe("native managed shell execution", () => {
 	});
 
 	it("managed accumulator preserves split UTF-8 in one continuously readable exclusive file", async () => {
-		const output = new OutputAccumulator({ persistFromStart: true });
-		const initialFile = output.snapshot().fullOutputFile;
-		if (initialFile?.kind !== "saved") throw new Error("managed output file did not open");
-		const path = initialFile.path;
+		const log = ManagedOutputFile.open("pi-output");
+		const output = new OutputAccumulator({ outputFile: log });
+		const path = log.path;
 		paths.add(path);
 		const euro = Buffer.from("€");
 		output.append(euro.subarray(0, 1));
@@ -842,6 +841,32 @@ describe("native managed shell execution", () => {
 		await output.closeTempFile();
 		expect(readFileSync(path, "utf8")).toBe("€");
 		if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
+	});
+
+	it("clamps background snapshots between the background and native byte limits", async () => {
+		const background = host();
+		const child = execution();
+		const tool = createBashToolDefinition(process.cwd(), { operations: child.operations });
+		const submitted = await tool.execute(
+			"call",
+			{ command: "medium", background: true },
+			undefined,
+			undefined,
+			context(background),
+		);
+		const id = submitted.details!.background!.taskId;
+		// 45 KB fits inside the 50 KB native limit but must still be clamped to the 40 KB background budget.
+		const lines = Array.from({ length: 900 }, (_, i) => `line-${String(i).padStart(4, "0")}-${"x".repeat(40)}`).join(
+			"\n",
+		);
+		child.output(`${lines}\n`);
+		child.finish(0);
+		const final = await settleTask(background, id);
+		const result = text(final.result);
+		expect(result).toContain("line-0899-");
+		expect(result).toContain("40.0KB limit");
+		expect(result).toContain("Full output:");
+		expect(Buffer.byteLength(result)).toBeLessThanOrEqual(48 * 1024);
 	});
 
 	it("truncates disk logging without aborting when backgroundOutputLimitAction is truncate", async () => {

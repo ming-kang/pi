@@ -4,15 +4,17 @@
  * task's output log, its background limits and acceptance, and translates the native outcome
  * into a task completion.
  */
+import { closeSync, openSync, writeSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { createOutputFilePath, type OutputFileResult, type OutputFileStream } from "../../utils/output-files.ts";
 import type { TasksBackgroundOutputLimitAction } from "../settings-schema.ts";
 import { boundText } from "../tasks/output.ts";
 import type { TaskCompletion, TaskControl, TaskFact, TaskTerminalStatus } from "../tasks/types.ts";
 import { type BashOperations, resolveTimeoutMs } from "./bash.ts";
 import { OutputAccumulator, type OutputAccumulatorOptions, type OutputSnapshot } from "./output-accumulator.ts";
 import type { BashToolDetails } from "./shell-tool.ts";
-import { formatSize } from "./truncate.ts";
+import { formatSize, truncateTail } from "./truncate.ts";
 
 export const MAX_BACKGROUND_OUTPUT_BYTES = 20 * 1024 * 1024;
 /** Background snapshots stay within the task result budget, so the bounded result keeps the newest output. */
@@ -28,6 +30,89 @@ type ShellDetails = BashToolDetails | undefined;
 type ShellControl = TaskControl<ShellDetails>;
 
 /**
+ * Synchronous task log implementing upstream's `OutputFileStream`.
+ *
+ * Opened exclusively before spawn so the task has one continuously readable log from byte 0
+ * without an unbounded async stream queue. Unlike upstream's unmanaged temp files, a partial log
+ * stays on disk as a diagnostic artifact owned by task retention cleanup.
+ */
+export class ManagedOutputFile implements OutputFileStream {
+	readonly path: string;
+	writeError?: unknown;
+	private fd: number | undefined;
+	private currentResult: OutputFileResult;
+
+	private constructor(path: string, fd: number) {
+		this.path = path;
+		this.fd = fd;
+		this.currentResult = { kind: "saved", path };
+	}
+
+	static open(prefix: string): ManagedOutputFile {
+		const path = createOutputFilePath(prefix, ".log");
+		try {
+			return new ManagedOutputFile(path, openSync(path, "wx", 0o600));
+		} catch (error) {
+			throw new Error(`Could not create the managed output file: ${errorMessage(error)}`);
+		}
+	}
+
+	get result(): OutputFileResult {
+		return this.currentResult;
+	}
+
+	write(data: string | Uint8Array): void {
+		const fd = this.fd;
+		if (fd === undefined) return;
+		const bytes = typeof data === "string" ? Buffer.from(data) : data;
+		try {
+			let offset = 0;
+			while (offset < bytes.length) {
+				const written = writeSync(fd, bytes, offset, bytes.length - offset);
+				if (written === 0) throw new Error("Output file write made no progress");
+				offset += written;
+			}
+		} catch (error) {
+			this.fd = undefined;
+			try {
+				closeSync(fd);
+			} catch {
+				// The write failure is the actionable error.
+			}
+			this.writeError ??= error;
+			this.fail(error);
+		}
+	}
+
+	/** Stop writing additional bytes to disk while keeping what was written. */
+	stop(): void {
+		this.closeFd();
+	}
+
+	async close(): Promise<OutputFileResult> {
+		this.closeFd();
+		return this.currentResult;
+	}
+
+	private closeFd(): void {
+		const fd = this.fd;
+		if (fd === undefined) return;
+		this.fd = undefined;
+		try {
+			closeSync(fd);
+		} catch (error) {
+			this.fail(error);
+		}
+	}
+
+	private fail(error: unknown): void {
+		if (this.currentResult.kind === "saved") {
+			this.currentResult = { kind: "failed", error: errorMessage(error) };
+		}
+	}
+}
+
+/**
  * A session task's output: persisted from the first byte to the log attached to the task, and
  * bounded once the task is background work. In "fail" mode a write failure or the background cap
  * cancels the task instead of throwing through the process's data observer; in "truncate" mode
@@ -38,17 +123,21 @@ class TaskOutput extends OutputAccumulator {
 	diskTruncated = false;
 	readonly maxBackgroundOutputBytes: number;
 	private readonly control: ShellControl;
+	private readonly log: ManagedOutputFile;
 	private readonly limitAction: TasksBackgroundOutputLimitAction;
+	private totalBytes = 0;
 
 	constructor(
 		control: ShellControl,
+		log: ManagedOutputFile,
 		options: OutputAccumulatorOptions & {
 			maxBackgroundOutputBytes?: number;
 			backgroundOutputLimitAction?: TasksBackgroundOutputLimitAction;
 		},
 	) {
-		super({ ...options, persistFromStart: true });
+		super({ ...options, outputFile: log });
 		this.control = control;
+		this.log = log;
 		this.maxBackgroundOutputBytes =
 			options.maxBackgroundOutputBytes !== undefined &&
 			Number.isFinite(options.maxBackgroundOutputBytes) &&
@@ -63,41 +152,68 @@ class TaskOutput extends OutputAccumulator {
 		this.control.noteOutput();
 		try {
 			if (this.diskTruncated) {
-				super.append(data);
+				this.appendChunk(data);
 				return;
 			}
-			const room = this.maxBackgroundOutputBytes - this.getTotalBytes();
+			const room = this.maxBackgroundOutputBytes - this.totalBytes;
 			if (this.control.mode === "background" && data.length > room) {
-				if (room > 0) super.append(data.subarray(0, room));
+				if (room > 0) this.appendChunk(data.subarray(0, room));
+				if (this.error) return;
 				if (this.limitAction === "truncate") {
 					this.diskTruncated = true;
-					this.stopPersisting();
+					this.log.stop();
 					const remainder = data.subarray(Math.max(0, room));
-					if (remainder.length > 0) super.append(remainder);
+					if (remainder.length > 0) this.appendChunk(remainder);
 				} else {
 					this.fail(new Error(outputLimitError(this.maxBackgroundOutputBytes)));
 				}
-			} else super.append(data);
+			} else this.appendChunk(data);
 		} catch (error) {
 			this.fail(error);
 		}
 	}
 
 	override snapshot(options: Parameters<OutputAccumulator["snapshot"]>[0] = {}): OutputSnapshot {
-		return super.snapshot(
-			this.control.mode === "background" ? { ...options, maxBytes: BACKGROUND_SNAPSHOT_BYTES } : options,
-		);
+		const snapshot = super.snapshot(options);
+		if (this.control.mode !== "background" || snapshot.truncation.outputBytes <= BACKGROUND_SNAPSHOT_BYTES) {
+			return snapshot;
+		}
+		// A truncated snapshot was joined without a final newline; append one so trailing blank lines keep their count.
+		const source = snapshot.truncation.truncated ? `${snapshot.content}\n` : snapshot.content;
+		const tail = truncateTail(source, {
+			maxLines: snapshot.truncation.maxLines,
+			maxBytes: BACKGROUND_SNAPSHOT_BYTES,
+		});
+		return {
+			...snapshot,
+			content: tail.content,
+			truncation: {
+				...tail,
+				truncated: true,
+				truncatedBy: tail.truncatedBy ?? "bytes",
+				totalLines: snapshot.truncation.totalLines,
+				totalBytes: snapshot.truncation.totalBytes,
+				maxLines: snapshot.truncation.maxLines,
+				maxBytes: BACKGROUND_SNAPSHOT_BYTES,
+			},
+		};
 	}
 
 	/** A detach must check output written while in the foreground, preserving it. */
 	checkLimit(): void {
-		if (this.control.mode !== "background" || this.getTotalBytes() <= this.maxBackgroundOutputBytes) return;
+		if (this.control.mode !== "background" || this.totalBytes <= this.maxBackgroundOutputBytes) return;
 		if (this.limitAction === "truncate") {
 			this.diskTruncated = true;
-			this.stopPersisting();
+			this.log.stop();
 		} else {
 			this.fail(new Error(outputLimitError(this.maxBackgroundOutputBytes)));
 		}
+	}
+
+	private appendChunk(chunk: Buffer): void {
+		this.totalBytes += chunk.length;
+		super.append(chunk);
+		if (this.log.writeError !== undefined) this.fail(this.log.writeError);
 	}
 
 	private fail(error: unknown): void {
@@ -179,24 +295,19 @@ export async function runShellTask(options: ShellTaskOptions): Promise<TaskCompl
 	const { control } = options;
 	if (control.signal.aborted) throw new Error("Command aborted");
 	resolveTimeoutMs(options.timeout);
-	const output = new TaskOutput(control, {
-		tempFilePrefix: options.tempFilePrefix,
-		maxBackgroundOutputBytes: options.maxBackgroundOutputBytes,
-		backgroundOutputLimitAction: options.backgroundOutputLimitAction,
-	});
-	const initialFile = output.snapshot().fullOutputFile;
-	if (initialFile?.kind !== "saved") {
-		throw new Error(
-			`Could not create the managed output file${initialFile?.kind === "failed" ? `: ${initialFile.error}` : ""}`,
-		);
-	}
-	const path = initialFile.path;
+	const log = ManagedOutputFile.open(options.tempFilePrefix);
+	const path = log.path;
 	const cleanup = async () => {
-		await output.closeTempFile();
+		await log.close();
 		await unlink(path).catch((error: NodeJS.ErrnoException) => {
 			if (error.code !== "ENOENT") throw error;
 		});
 	};
+	const output = new TaskOutput(control, log, {
+		tempFilePrefix: options.tempFilePrefix,
+		maxBackgroundOutputBytes: options.maxBackgroundOutputBytes,
+		backgroundOutputLimitAction: options.backgroundOutputLimitAction,
+	});
 	try {
 		control.attachOutput(path, cleanup);
 	} catch (error) {

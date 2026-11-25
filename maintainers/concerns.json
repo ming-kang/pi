@@ -143,8 +143,7 @@
 					"path": "src/core/tools/bash.ts"
 				},
 				{
-					"path": "src/core/tools/output-accumulator.ts",
-					"rewrite": "Managed executions synchronously persist one task log from the first byte and support capped disk logging, while upstream's lazy OutputFileStream owns unmanaged full-output files."
+					"path": "src/core/tools/output-accumulator.ts"
 				},
 				{
 					"path": "src/utils/output-files.ts"
