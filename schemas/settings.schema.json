@@ -731,7 +731,7 @@
           "minimum": 1,
           "maximum": 1024,
           "description": "Maximum retained terminal tasks per history cohort (foreground and background).",
-          "default": 32
+          "default": 64
         },
         "maxBackgroundOutputMb": {
           "type": "number",

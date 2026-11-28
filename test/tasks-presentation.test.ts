@@ -78,7 +78,7 @@ describe("background completion data contract", () => {
 	it("appends a classified next-step hint to non-completed terminal notifications", () => {
 		const cancelled = taskCompletionMessage(task({ status: "cancelled" }));
 		expect(cancelled.content).toContain(
-			"Next step: the task was cancelled — do not restart it unless the user asks.",
+			"Next step: the task was cancelled. If you did not cancel it yourself, do not restart or continue it unless the user asks.",
 		);
 
 		const timedOut = taskCompletionMessage(task({ status: "timeout" }));

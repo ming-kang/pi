@@ -1,6 +1,6 @@
 import type { CustomMessage } from "../messages.ts";
 import { truncateHead, truncateTail } from "../tools/truncate.ts";
-import { TASK_SNAPSHOT_VERSION } from "./codec.ts";
+import { TASK_COMPLETION_TYPE, TASK_SNAPSHOT_VERSION } from "./codec.ts";
 import { defaultReadMode } from "./limits.ts";
 import { boundTail, boundText, TASK_DETAILS_BYTES, TASK_RESULT_BYTES } from "./output.ts";
 import { TASKS_TOOL_NAME, type TaskSnapshot, type TaskStatus, type TaskText } from "./types.ts";
@@ -45,7 +45,7 @@ function modelTail(value: TaskText, maxBytes: number, lines: number): string {
 function nextStepLine(status: TaskStatus): string {
 	switch (status) {
 		case "cancelled":
-			return "Next step: the task was cancelled — do not restart it unless the user asks.";
+			return "Next step: the task was cancelled. If you did not cancel it yourself, do not restart or continue it unless the user asks.";
 		case "timeout":
 			return "Next step: the task hit its timeout; inspect the partial output above, then rerun with a longer timeout or in smaller pieces if still needed.";
 		case "failed":
@@ -107,7 +107,7 @@ export function taskCompletionDetails(task: TaskSnapshot): TaskCompletionDetails
 export function taskCompletionMessage(task: TaskSnapshot): CustomMessage<TaskCompletionDetails> {
 	return {
 		role: "custom",
-		customType: "task-completion",
+		customType: TASK_COMPLETION_TYPE,
 		display: true,
 		content: projectForModel(task),
 		details: taskCompletionDetails(task),

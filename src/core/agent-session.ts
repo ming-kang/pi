@@ -1374,7 +1374,7 @@ export class AgentSession {
 			const pendingIndex = this._pendingNextTurnMessages.indexOf(message);
 			if (pendingIndex !== -1) this._pendingNextTurnMessages.splice(pendingIndex, 1);
 		}
-		this._tasksHost.delivery.messagePersisted(message);
+		this._tasksHost.messagePersisted(message);
 	}
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
@@ -2270,6 +2270,9 @@ export class AgentSession {
 			// Normalize images after before_agent_start so extension-driven model selection
 			// determines the resize profile used for the request and history.
 			const normalized = await this._normalizePromptImages(trigger.images);
+			// Prepend undelivered restored background completions ahead of the user prompt so
+			// chronology stays natural and the user's new instruction keeps final focus.
+			messages.push(...this._tasksHost.prepareReconciliationMessages());
 			const text =
 				normalized.hints.length > 0 ? `${trigger.prompt}\n\n${normalized.hints.join("\n")}` : trigger.prompt;
 			messages.push({

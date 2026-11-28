@@ -464,7 +464,7 @@ CLI tool options override this setting for one invocation. `--tools` with only `
 | `codemode.mode` | `"on"` | `on` keeps direct tool declarations and appends a note on calling them from scripts; `only` hides callable tools from direct model access and lists them in codemode. See [Codemode](codemode.md) |
 | `codemode.inlineBudget` | `3000` | Estimated tokens for inline tool declarations; scripts discover the rest with `searchTools()` |
 | `tasks.maxBackground` | `8` | Maximum concurrent background tasks (1–128) |
-| `tasks.maxHistory` | `32` | Maximum retained terminal tasks per cohort (foreground and background, 1–1024) |
+| `tasks.maxHistory` | `64` | Maximum retained terminal tasks per cohort (foreground and background, 1–1024) |
 | `tasks.maxBackgroundOutputMb` | `20` | Maximum background shell log size in MiB (1–1024) |
 | `tasks.backgroundOutputLimitAction` | `"fail"` | Action when a background shell exceeds `maxBackgroundOutputMb`: `"fail"` stops the command with an error; `"truncate"` stops writing to disk and keeps the rolling tail |
 | `tasks.shutdownGraceMs` | `2000` | Grace period in milliseconds for draining cancelled tasks on shutdown or branch navigation (100–60000) |

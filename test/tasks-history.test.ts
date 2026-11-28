@@ -325,7 +325,7 @@ const textResult = (text: string): AgentToolResult<undefined> => ({
 	content: [{ type: "text", text }],
 	details: undefined,
 });
-function retention(maxHistory = 32) {
+function retention(maxHistory = 64) {
 	return service({ maxHistory, maxBackground: 1 });
 }
 function launch(bg: TaskRuntime, kind: TaskKind, background = false, text = "saved report") {
@@ -384,7 +384,7 @@ describe("independent foreground and background histories", () => {
 		const bg = retention();
 		const id = await complete(bg, kind, background);
 		for (let i = 0; i < 100; i++) await complete(bg, "bash");
-		expect(bg.list()).toHaveLength(33);
+		expect(bg.list()).toHaveLength(65);
 		expect(bg.get(id)).toMatchObject({ status: "completed", mode: background ? "background" : "foreground" });
 		expect((await bg.read(id)).text).toBe("saved report");
 	});
@@ -431,12 +431,12 @@ describe("independent foreground and background histories", () => {
 			...Array.from({ length: 100 }, (_, index) => saved(`bash-${index}`, index + 3)),
 		];
 		bg.restoreHistory(reverse ? records.reverse() : records);
-		expect(bg.list()).toHaveLength(33);
+		expect(bg.list()).toHaveLength(65);
 		expect((await bg.read("custom-background")).text).toBe("custom-background");
 		// Foreground work of any kind shares the foreground history.
 		expect(() => bg.get("custom-foreground")).toThrow("Unknown");
-		expect(() => bg.get("bash-67")).toThrow("Unknown");
-		expect(bg.get("bash-68").status).toBe("completed");
+		expect(() => bg.get("bash-35")).toThrow("Unknown");
+		expect(bg.get("bash-36").status).toBe("completed");
 	});
 
 	it("restores task history when runtime foreground shell history is already full", async () => {
@@ -504,7 +504,7 @@ describe("independent foreground and background histories", () => {
 		const entries = manager.getEntries().length;
 		await host.service.shutdown();
 		host.replaceService();
-		expect(host.service.list()).toHaveLength(33);
+		expect(host.service.list()).toHaveLength(65);
 		expect((await host.service.read(background)).text).toBe("saved report");
 		expect(host.delivery.pending()).toEqual([]);
 		expect(manager.getEntries()).toHaveLength(entries);

@@ -15,6 +15,22 @@ function isPathInsideDir(filePath: string, rootDir: string): boolean {
 	return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
+/**
+ * Managed temp logs never outlive the runtime that wrote them. Persistent report artifacts inside
+ * the session's trusted artifact directory stay readable when present; all other saved paths are stripped.
+ */
+export function sanitizeRestoredOutput(
+	task: TaskSnapshot,
+	trustedArtifactDir: string | undefined,
+): { task: TaskSnapshot; readError?: string } {
+	if (task.outputPath === undefined) return { task };
+	if (trustedArtifactDir && task.output === "report" && isPathInsideDir(task.outputPath, trustedArtifactDir)) {
+		if (existsSync(task.outputPath)) return { task };
+		return { task: { ...task, outputPath: undefined }, readError: MISSING_REPORT_ARTIFACT };
+	}
+	return { task: { ...task, outputPath: undefined }, readError: EXPIRED_OUTPUT };
+}
+
 interface RestoreLimits {
 	/** Room left in the foreground history. */
 	foreground: number;
@@ -162,25 +178,8 @@ export class TaskStore {
 		for (const task of selected) {
 			const content = toolResults.get(task.toolCallId);
 			if (!task.result && content) task.result = resultText({ content, details: undefined });
-			// Managed temp logs never outlive the runtime that wrote them. Persistent report
-			// artifacts inside the session's trusted artifact directory stay readable without cleanup ownership.
-			let readError: string | undefined;
-			if (task.outputPath !== undefined) {
-				if (
-					trustedArtifactDir &&
-					task.output === "report" &&
-					isPathInsideDir(task.outputPath, trustedArtifactDir)
-				) {
-					if (!existsSync(task.outputPath)) {
-						task.outputPath = undefined;
-						readError = MISSING_REPORT_ARTIFACT;
-					}
-				} else {
-					task.outputPath = undefined;
-					readError = EXPIRED_OUTPUT;
-				}
-			}
-			this.add(TaskRecord.restored(task, readError));
+			const { task: sanitized, readError } = sanitizeRestoredOutput(task, trustedArtifactDir);
+			this.add(TaskRecord.restored(sanitized, readError));
 		}
 	}
 

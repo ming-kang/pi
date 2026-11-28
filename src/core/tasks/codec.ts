@@ -27,6 +27,7 @@ import {
 } from "./types.ts";
 
 export const TASK_RECORD_TYPE = "task-record";
+export const TASK_COMPLETION_TYPE = "task-completion";
 /** Shared by `task-record` entries and `task-completion` details. */
 export const TASK_SNAPSHOT_VERSION = 3;
 /** Released sessions settled usage in separate entries; their billing still counts. */

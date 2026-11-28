@@ -475,30 +475,30 @@ describe("bounded lifecycle and snapshots", () => {
 
 	it("retains every pending notification with bounded admission, never silent eviction", async () => {
 		const { runtime: bg, pending, delivery } = delivering();
-		for (let i = 0; i < 40; i++) await bg.execute(job({ run: async () => ({ result: result() }) }).execution);
-		expect(bg.list()).toHaveLength(32);
-		for (let i = 0; i < 32; i++) {
+		for (let i = 0; i < 72; i++) await bg.execute(job({ run: async () => ({ result: result() }) }).execution);
+		expect(bg.list()).toHaveLength(64);
+		for (let i = 0; i < 64; i++) {
 			const item = job({ background: true });
 			await bg.execute(item.execution);
 			item.completion.resolve({ result: result() });
 			await tick();
 			delivery.acknowledge(item.control.id);
 		}
-		expect(bg.list()).toHaveLength(64);
-		for (let i = 0; i < 40; i++) {
+		expect(bg.list()).toHaveLength(128);
+		for (let i = 0; i < 72; i++) {
 			const item = job({ background: true });
 			await bg.execute(item.execution);
 			item.completion.resolve({ result: result() });
 			await tick();
 		}
-		expect(bg.list()).toHaveLength(104);
+		expect(bg.list()).toHaveLength(200);
 		const undelivered = pending();
-		expect(undelivered).toHaveLength(40);
+		expect(undelivered).toHaveLength(72);
 		const rejected = job({ background: true });
 		await expect(bg.execute(rejected.execution)).rejects.toThrow("retention limit");
 		expect(rejected.run).not.toHaveBeenCalled();
 		for (const task of undelivered) delivery.acknowledge(task.id);
-		expect(bg.list()).toHaveLength(64);
+		expect(bg.list()).toHaveLength(128);
 		await bg.execute(job({ run: async () => ({ result: result() }) }).execution);
 	});
 

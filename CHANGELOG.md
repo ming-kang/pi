@@ -6,6 +6,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Added
 
+- **Tasks passive completion reconciliation**: Settled background tasks whose `task-completion` was never delivered before exit, `/reload`, `/fork`, or tree navigation are now reconciled passively ahead of the next user prompt using standard `task-completion` notifications (stripping expired temporary log paths while preserving trusted report artifacts, staying quiet and write-free while idle).
 - Adopted upstream v1.7.0:
   - Terminal session resume via the [Program Resume Protocol (OSC 7577)](docs/terminal-setup.md#program-resume): when a compatible terminal sets `OSC7577_TOKEN`, interactive mode reports how to resume the current session (including `--agent-dir`, `--session-dir`, and restriction/resource flags as typed) and strips `OSC7577_TOKEN` from child processes.
   - Added `--agent-dir <dir>` as the CLI form of `PI_CODING_AGENT_DIR` (including for subcommands and resume commands).
@@ -13,6 +14,7 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ### Changed
 
+- Increased the default `tasks.maxHistory` retention limit from `32` to `64` terminal tasks per cohort (64 foreground + 64 background).
 - Adopted upstream v1.7.0:
   - **Breaking settings/API change:** Removed install/update telemetry support, the `enableInstallTelemetry` setting (`SettingsManager.getEnableInstallTelemetry()` / `setEnableInstallTelemetry()`), and `PI_TELEMETRY`.
   - GitHub Copilot prompt caching preserves the cache when changing thinking levels on supported Claude 5.x and GPT-6 models or changing tools on supported Claude 5.x models; Copilot Claude models support cache warming, and GPT-5.3 Codex and MAI-Code receive mid-conversation system messages.

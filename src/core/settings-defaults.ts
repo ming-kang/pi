@@ -64,7 +64,7 @@ export const SETTINGS_DEFAULTS = {
 	},
 	tasks: {
 		maxBackground: 8,
-		maxHistory: 32,
+		maxHistory: 64,
 		maxBackgroundOutputMb: 20,
 		backgroundOutputLimitAction: "fail",
 		shutdownGraceMs: 2000,

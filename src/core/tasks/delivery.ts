@@ -43,7 +43,7 @@ interface Delivery {
 	rejected?: Error;
 }
 
-function messageContentBytes(message: CustomMessage): number {
+export function messageContentBytes(message: CustomMessage): number {
 	if (typeof message.content === "string") return Buffer.byteLength(message.content);
 	let total = 0;
 	for (const block of message.content) {
@@ -157,6 +157,11 @@ export class TaskDelivery {
 			completion.release();
 		}
 		this.changed();
+	}
+
+	/** Whether live delivery currently owns this task ID (queued, failed, or in flight). */
+	has(taskId: string): boolean {
+		return this.completions.has(taskId) || Boolean(this.delivery?.items.some((item) => item.id === taskId));
 	}
 
 	/**

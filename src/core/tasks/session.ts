@@ -5,8 +5,15 @@ import type { Usage } from "@earendil-works/pi-ai/compat";
 import type { CustomMessage } from "../messages.ts";
 import { getTasksLateSidecarPath, type SessionEntry, type SessionManager } from "../session-manager.ts";
 import { truncateHead } from "../tools/truncate.ts";
-import { readTaskUsage, TASK_RECORD_TYPE, TASK_SNAPSHOT_VERSION } from "./codec.ts";
+import {
+	readTaskUsage,
+	readVersionedTask,
+	TASK_COMPLETION_TYPE,
+	TASK_RECORD_TYPE,
+	TASK_SNAPSHOT_VERSION,
+} from "./codec.ts";
 import { TaskDelivery } from "./delivery.ts";
+import { buildReconciliationBatch, collectUndeliveredBackgroundTasks } from "./reconciliation.ts";
 import { TaskContextReminder } from "./reminder.ts";
 import { TaskRuntime } from "./runtime.ts";
 import { isTaskTerminal, type TaskLifecycleEvent, type TaskSnapshot } from "./types.ts";
@@ -59,6 +66,9 @@ export class TaskSession {
 	private generation = 0;
 	private billedSessionId: string | undefined;
 	private readonly billedTaskIds = new Set<string>();
+	private acknowledgedSessionId: string | undefined;
+	private readonly acknowledgedTaskIds = new Set<string>();
+	private reconciliation: TaskSnapshot[] = [];
 	private readonly contextReminder = new TaskContextReminder();
 	readonly delivery: TaskDelivery;
 	private readonly quarantine: QuarantinedTaskSettlement[] = [];
@@ -137,6 +147,7 @@ export class TaskSession {
 
 	noteCompaction(): void {
 		this.contextReminder.compacted();
+		this.refreshReconciliation();
 	}
 
 	projectContextReminder(messages: AgentMessage[]): AgentMessage[] {
@@ -196,6 +207,52 @@ export class TaskSession {
 	/** Acknowledge that a task's completion reached its consumer by other means than automatic delivery. */
 	acknowledgeDelivery(taskId: string): void {
 		this.delivery.acknowledge(taskId);
+		this.syncAcknowledgedSession();
+		this.acknowledgedTaskIds.add(taskId);
+		this.reconciliation = this.reconciliation.filter((task) => task.id !== taskId);
+	}
+
+	/** Passive completion batch for undelivered restored background tasks; consumed only when persisted. */
+	prepareReconciliationMessages(): CustomMessage[] {
+		if (this.disposed || this.reconciliation.length === 0) return [];
+		return buildReconciliationBatch(this.reconciliation);
+	}
+
+	/** Acknowledge persisted completion messages for both live delivery and passive reconciliation. */
+	messagePersisted(message: AgentMessage): void {
+		this.delivery.messagePersisted(message);
+		if (message.role === "custom" && message.customType === TASK_COMPLETION_TYPE && this.reconciliation.length > 0) {
+			const task = readVersionedTask(message.details);
+			if (task) this.reconciliation = this.reconciliation.filter((item) => item.id !== task.id);
+		}
+	}
+
+	private syncAcknowledgedSession(): void {
+		const sessionId = this.options.manager.getSessionId();
+		if (this.acknowledgedSessionId !== sessionId) {
+			this.acknowledgedTaskIds.clear();
+			this.acknowledgedSessionId = sessionId;
+		}
+	}
+
+	private refreshReconciliation(service = this.service): void {
+		if (this.disposed) {
+			this.reconciliation = [];
+			return;
+		}
+		this.syncAcknowledgedSession();
+		const manager = this.options.manager;
+		const excludedIds = new Set(this.acknowledgedTaskIds);
+		for (const task of service.list()) {
+			if (!isTaskTerminal(task.status)) excludedIds.add(task.id);
+		}
+		this.reconciliation = collectUndeliveredBackgroundTasks({
+			branchEntries: manager.getBranch(),
+			contextEntries: manager.buildContextEntries(),
+			trustedArtifactDir: manager.getArtifactDir(),
+			excludedIds,
+			isLiveDelivery: (taskId) => this.delivery.has(taskId),
+		});
 	}
 
 	private createService(): TaskRuntime {
@@ -255,6 +312,7 @@ export class TaskSession {
 				toolResults.set(entry.message.toolCallId, entry.message.content);
 		}
 		service.restoreHistory(records, toolResults);
+		this.refreshReconciliation(service);
 	}
 
 	private quarantineSettlement(record: QuarantinedTaskSettlement, sessionFile: string | undefined): void {
@@ -321,6 +379,8 @@ export class TaskSession {
 
 	dispose(): void {
 		this.disposed = true;
+		this.reconciliation = [];
+		this.acknowledgedTaskIds.clear();
 		this.contextReminder.reset();
 		this.service.close();
 		this.delivery.dispose();

@@ -51,7 +51,7 @@ export class TaskRuntime implements TasksContext {
 		this.options = options;
 		this.configuredEnabled = options.enabled ?? false;
 		this.maxBackground = Math.max(1, finiteLimit(options.maxBackground, 8, 128));
-		this.maxHistory = finiteLimit(options.maxHistory, 32, 1024);
+		this.maxHistory = finiteLimit(options.maxHistory, 64, 1024);
 		this.shutdownGraceMs = Math.max(100, finiteLimit(options.shutdownGraceMs, 2000, 60_000));
 		// Separate foreground and background histories, plus the protected-record allowance.
 		this.maxRetained = this.maxBackground + 2 * Math.max(1, this.maxHistory) + this.maxHistory;

@@ -1,3 +1,5 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream, fauxAssistantMessage, streamSimple } from "@earendil-works/pi-ai/compat";
@@ -5,8 +7,8 @@ import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import { TASK_RECORD_TYPE } from "../src/core/tasks/codec.ts";
-import { TASK_BACKGROUND_REJECTION } from "../src/core/tasks/types.ts";
+import { readVersionedTask, TASK_COMPLETION_TYPE, TASK_RECORD_TYPE } from "../src/core/tasks/codec.ts";
+import { TASK_BACKGROUND_REJECTION, type TaskSnapshot } from "../src/core/tasks/types.ts";
 import { backgroundSessionTest, usage } from "./background-session-host.ts";
 import { sessionDelivery, sessionRuntime, skipShutdownGrace } from "./tasks-delivery-harness.ts";
 import { userMsg } from "./utilities.ts";
@@ -206,14 +208,14 @@ describe("session-owned background host", () => {
 		execution.finish();
 		await vi.waitFor(() => expect(session.tasks.get(execution.id).status).toBe("completed"));
 		const snapshot = session.tasks.get(execution.id);
-		for (let index = 0; index < 40; index++) {
+		for (let index = 0; index < 70; index++) {
 			session.sessionManager.appendCustomEntry(TASK_RECORD_TYPE, {
 				version: 3,
 				task: { ...snapshot, id: `custom-history-${index}`, endedAt: snapshot.endedAt! + index + 1 },
 			});
 		}
 		await session.reload();
-		expect(session.tasks.list()).toHaveLength(32);
+		expect(session.tasks.list()).toHaveLength(64);
 		expect(sessionDelivery(session).pending()).toEqual([]);
 		expect(session.getSessionStats().tokens.total).toBe(30);
 	});
@@ -1184,5 +1186,379 @@ describe("session-owned background host", () => {
 		await expect(task(session)).rejects.toThrow("Background task limit reached (1)");
 		first.finish();
 		await session.waitForQuiescence();
+	});
+
+	describe("passive completion reconciliation", () => {
+		function completionEntries(session: AgentSession) {
+			return session.sessionManager
+				.getBranch()
+				.filter((entry) => entry.type === "custom_message" && entry.customType === TASK_COMPLETION_TYPE);
+		}
+
+		function savedBackgroundRecord(id: string, overrides: Partial<TaskSnapshot> = {}) {
+			return {
+				version: 3,
+				task: {
+					id,
+					kind: "custom",
+					label: "Custom",
+					mode: "background",
+					title: `Task ${id}`,
+					output: "log",
+					toolCallId: `call-${id}`,
+					anchorId: null,
+					status: "completed",
+					startedAt: 10,
+					endedAt: 20,
+					result: { text: `output for ${id}`, truncated: false },
+					...overrides,
+				} satisfies TaskSnapshot,
+			};
+		}
+
+		it("reconciles reload-cancelled tasks ahead of the next user prompt and stays idempotent across reload and restart", async () => {
+			const session = await host(true, undefined, [
+				fauxAssistantMessage("first reply"),
+				fauxAssistantMessage("second reply"),
+			]);
+			await session.bindExtensions({ tasksEnabled: true });
+			const outcome = await session.tasks.execute({
+				kind: "custom",
+				title: "cancellable",
+				toolCallId: "call-cancel",
+				background: true,
+				run: async (control) => {
+					control.accept();
+					await new Promise<void>((resolve) =>
+						control.signal.addEventListener("abort", () => resolve(), { once: true }),
+					);
+					return { status: "cancelled", result: { content: [], details: undefined, usage } };
+				},
+			});
+			if (outcome.kind !== "background") throw new Error("expected background");
+
+			await session.reload();
+			expect(session.isQuiescent).toBe(true);
+			await session.waitForQuiescence();
+			expect(sessionDelivery(session).pending()).toEqual([]);
+			expect(session.messages).toEqual([]);
+			expect(completionEntries(session)).toHaveLength(0);
+
+			await session.prompt("continue please");
+			const entries = session.sessionManager.getBranch();
+			const completionIdx = entries.findIndex(
+				(entry) => entry.type === "custom_message" && entry.customType === TASK_COMPLETION_TYPE,
+			);
+			const userIdx = entries.findIndex((entry) => entry.type === "message" && entry.message.role === "user");
+			expect(completionIdx).toBeGreaterThanOrEqual(0);
+			expect(userIdx).toBeGreaterThan(completionIdx);
+			expect(session.messages.map((message) => message.role)).toEqual(["system", "custom", "user", "assistant"]);
+			const completion = entries[completionIdx];
+			if (completion?.type !== "custom_message") throw new Error("expected custom_message");
+			expect(readVersionedTask(completion.details)?.id).toBe(outcome.task.id);
+			expect(String(completion.content)).toContain("cancelled");
+			expect(String(completion.content)).toContain(
+				"Next step: the task was cancelled. If you did not cancel it yourself, do not restart or continue it unless the user asks.",
+			);
+
+			// Reloading or reopening the session never duplicates the reconciled completion.
+			await session.reload();
+			await session.prompt("next turn");
+			expect(completionEntries(session)).toHaveLength(1);
+
+			const restarted = await host(true, undefined, [fauxAssistantMessage("after restart")], session.sessionManager);
+			await restarted.bindExtensions({ tasksEnabled: true });
+			await restarted.prompt("another turn");
+			expect(completionEntries(restarted)).toHaveLength(1);
+		});
+
+		it("strips expired temporary log paths while preserving trusted report artifacts", async () => {
+			const root = mkdtempSync(join(tmpdir(), "pi-reconcile-artifacts-"));
+			try {
+				const manager = SessionManager.create(root, join(root, "sessions"));
+				manager.appendMessage(userMsg("start"));
+				const artifactDir = manager.getArtifactDir()!;
+				const validReport = join(artifactDir, "agents", "agent-valid", "report.md");
+				const missingReport = join(artifactDir, "agents", "agent-missing", "report.md");
+				mkdirSync(join(artifactDir, "agents", "agent-valid"), { recursive: true });
+				writeFileSync(validReport, "full persisted report");
+
+				manager.appendCustomEntry(
+					TASK_RECORD_TYPE,
+					savedBackgroundRecord("bash-expired", {
+						kind: "bash",
+						label: "Bash",
+						output: "log",
+						outputPath: join(tmpdir(), "pi-expired-temp.log"),
+					}),
+				);
+				manager.appendCustomEntry(
+					TASK_RECORD_TYPE,
+					savedBackgroundRecord("agent-valid", {
+						kind: "agent",
+						label: "Agent",
+						output: "report",
+						outputPath: validReport,
+					}),
+				);
+				manager.appendCustomEntry(
+					TASK_RECORD_TYPE,
+					savedBackgroundRecord("agent-missing", {
+						kind: "agent",
+						label: "Agent",
+						output: "report",
+						outputPath: missingReport,
+					}),
+				);
+
+				const session = await host(true, undefined, [fauxAssistantMessage("ack")], manager);
+				await session.bindExtensions({ tasksEnabled: true });
+				await session.prompt("check reports");
+
+				const completions = completionEntries(session);
+				expect(completions).toHaveLength(3);
+				const byId = new Map(
+					completions.map((entry) => {
+						if (entry.type !== "custom_message") throw new Error("expected custom_message");
+						return [readVersionedTask(entry.details)!.id, entry] as const;
+					}),
+				);
+				expect(readVersionedTask(byId.get("bash-expired")!.details)?.outputPath).toBeUndefined();
+				expect(String(byId.get("bash-expired")!.content)).not.toContain("pi-expired-temp.log");
+
+				expect(readVersionedTask(byId.get("agent-valid")!.details)?.outputPath).toBe(validReport);
+				expect(String(byId.get("agent-valid")!.content)).toContain(`Output: ${validReport}`);
+
+				expect(readVersionedTask(byId.get("agent-missing")!.details)?.outputPath).toBeUndefined();
+				expect(String(byId.get("agent-missing")!.content)).not.toContain(missingReport);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+
+		it("reconciles only on user prompts, ignores foreground records, and works when background execution is disabled", async () => {
+			const manager = SessionManager.inMemory();
+			manager.appendCustomEntry(
+				TASK_RECORD_TYPE,
+				savedBackgroundRecord("bash-inline", { kind: "bash", mode: "foreground" }),
+			);
+			manager.appendCustomEntry(TASK_RECORD_TYPE, savedBackgroundRecord("custom-bg"));
+
+			// backgroundAllowed: false simulates modes like print/SDK without background admission.
+			const session = await host(
+				false,
+				undefined,
+				[fauxAssistantMessage("custom reply"), fauxAssistantMessage("user reply")],
+				manager,
+			);
+			await session.bindExtensions({ tasksEnabled: false });
+
+			await session.sendCustomMessage(
+				{ customType: "ext-note", content: "extension-triggered turn", display: true },
+				{ triggerTurn: true },
+			);
+			expect(completionEntries(session)).toHaveLength(0);
+
+			await session.prompt("now the user speaks");
+			const completions = completionEntries(session);
+			expect(completions).toHaveLength(1);
+			const first = completions[0];
+			if (first?.type !== "custom_message") throw new Error("expected custom_message");
+			expect(readVersionedTask(first.details)?.id).toBe("custom-bg");
+		});
+
+		it("respects compaction boundaries, manual compaction while idle, and post-compaction records", async () => {
+			const manager = SessionManager.inMemory();
+			manager.appendMessage(userMsg("old turn"));
+			manager.appendCustomEntry(TASK_RECORD_TYPE, savedBackgroundRecord("custom-old-summarized"));
+			const keptMsg = manager.appendMessage(userMsg("kept turn"));
+			manager.appendCompaction("Summary covering old turn", keptMsg, 100);
+			manager.appendCustomEntry(TASK_RECORD_TYPE, savedBackgroundRecord("custom-after-compaction"));
+
+			const session = await host(true, undefined, [fauxAssistantMessage("after compaction")], manager);
+			await session.bindExtensions({ tasksEnabled: true });
+			await session.prompt("check after compaction");
+
+			const ids = completionEntries(session).map((entry) =>
+				entry.type === "custom_message" ? readVersionedTask(entry.details)?.id : undefined,
+			);
+			expect(ids).toEqual(["custom-after-compaction"]);
+
+			// Manual compaction while idle clears previously pending reconciliation entries that were summarized away.
+			const compactSession = await host(
+				true,
+				(pi) => {
+					pi.on("session_before_compact", (event) => ({
+						compaction: {
+							summary: "Compacted context",
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: event.preparation.tokensBefore,
+						},
+					}));
+				},
+				[fauxAssistantMessage("after compact")],
+				SessionManager.inMemory(),
+				undefined,
+				{ compaction: { enabled: true, keepRecentTokens: 1 } },
+			);
+			await compactSession.bindExtensions({ tasksEnabled: true });
+			compactSession.sessionManager.appendMessage(userMsg("turn 1"));
+			compactSession.sessionManager.appendCustomEntry(
+				TASK_RECORD_TYPE,
+				savedBackgroundRecord("custom-compacted-away"),
+			);
+			compactSession.sessionManager.appendMessage({ ...fauxAssistantMessage("reply 1"), usage });
+			compactSession.sessionManager.appendMessage(userMsg("turn 2"));
+			compactSession.sessionManager.appendMessage({ ...fauxAssistantMessage("reply 2"), usage });
+			await compactSession.reload();
+			await compactSession.compact();
+			expect(
+				compactSession.sessionManager
+					.buildContextEntries()
+					.some((entry) => entry.type === "custom" && entry.customType === TASK_RECORD_TYPE),
+			).toBe(false);
+			await compactSession.prompt("fresh prompt after compact");
+			expect(completionEntries(compactSession)).toHaveLength(0);
+		});
+
+		it("honors acknowledgeTaskDelivery across reload without leaking across new sessions", async () => {
+			const session = await host(true, undefined, [
+				fauxAssistantMessage("reply 1"),
+				fauxAssistantMessage("reply 2"),
+			]);
+			await session.bindExtensions({ tasksEnabled: true });
+			const resume = session.pauseTaskNotifications();
+			const execution = await task(session);
+			execution.finish();
+			await vi.waitFor(() => expect(session.tasks.get(execution.id).status).toBe("completed"));
+			session.acknowledgeTaskDelivery(execution.id);
+			resume();
+
+			await session.reload();
+			await session.prompt("after ack reload");
+			expect(completionEntries(session)).toHaveLength(0);
+
+			// Switching to a new session resets the in-memory acknowledged set.
+			session.sessionManager.newSession();
+			session.sessionManager.appendCustomEntry(TASK_RECORD_TYPE, savedBackgroundRecord(execution.id));
+			await session.reload();
+			await session.prompt("new session with same id");
+			expect(completionEntries(session)).toHaveLength(1);
+		});
+
+		it("retries after persistence failure, batches beyond 8 messages or 96 KiB, and tracks tree navigation and live delivery", async () => {
+			// 1. Persistence failure retries on the next user prompt.
+			const failManager = SessionManager.inMemory();
+			failManager.appendCustomEntry(TASK_RECORD_TYPE, savedBackgroundRecord("custom-retry"));
+			const failSession = await host(
+				true,
+				undefined,
+				[fauxAssistantMessage("failed"), fauxAssistantMessage("succeeded")],
+				failManager,
+			);
+			await failSession.bindExtensions({ tasksEnabled: true });
+			const originalAppend = failManager.appendCustomMessageEntry.bind(failManager);
+			let shouldFail = true;
+			vi.spyOn(failManager, "appendCustomMessageEntry").mockImplementation((...args) => {
+				if (shouldFail && args[0] === TASK_COMPLETION_TYPE) {
+					shouldFail = false;
+					throw new Error("disk full");
+				}
+				return originalAppend(...args);
+			});
+			await failSession.prompt("first attempt");
+			expect(completionEntries(failSession)).toHaveLength(0);
+			await failSession.prompt("second attempt");
+			expect(completionEntries(failSession)).toHaveLength(1);
+
+			// 2. Batching >8 messages across two user prompts.
+			const batchManager = SessionManager.inMemory();
+			for (let index = 0; index < 10; index++) {
+				batchManager.appendCustomEntry(TASK_RECORD_TYPE, savedBackgroundRecord(`custom-batch-${index}`));
+			}
+			const batchSession = await host(
+				true,
+				undefined,
+				[fauxAssistantMessage("batch 1"), fauxAssistantMessage("batch 2"), fauxAssistantMessage("batch 3")],
+				batchManager,
+			);
+			await batchSession.bindExtensions({ tasksEnabled: true });
+			await batchSession.prompt("turn 1");
+			expect(completionEntries(batchSession)).toHaveLength(8);
+			await batchSession.prompt("turn 2");
+			expect(completionEntries(batchSession)).toHaveLength(10);
+			await batchSession.prompt("turn 3");
+			expect(completionEntries(batchSession)).toHaveLength(10);
+
+			// 3. Batching >96 KiB across two user prompts.
+			const bigManager = SessionManager.inMemory();
+			const largeReport = "R".repeat(40 * 1024);
+			for (let index = 0; index < 3; index++) {
+				bigManager.appendCustomEntry(
+					TASK_RECORD_TYPE,
+					savedBackgroundRecord(`agent-big-${index}`, {
+						kind: "agent",
+						label: "Agent",
+						output: "report",
+						result: { text: largeReport, truncated: false },
+					}),
+				);
+			}
+			const bigSession = await host(
+				true,
+				undefined,
+				[fauxAssistantMessage("big 1"), fauxAssistantMessage("big 2")],
+				bigManager,
+			);
+			await bigSession.bindExtensions({ tasksEnabled: true });
+			await bigSession.prompt("first big");
+			expect(completionEntries(bigSession)).toHaveLength(2);
+			await bigSession.prompt("second big");
+			expect(completionEntries(bigSession)).toHaveLength(3);
+
+			// 4. Tree navigation clears/restores reconciliation and does not duplicate live delivery.
+			const treeSession = await host(true, undefined, [
+				fauxAssistantMessage("branch B"),
+				fauxAssistantMessage("branch A"),
+				fauxAssistantMessage("while paused"),
+				fauxAssistantMessage("live delivery"),
+			]);
+			await treeSession.bindExtensions({ tasksEnabled: true });
+			const root = treeSession.sessionManager.appendMessage(userMsg("root"));
+			treeSession.sessionManager.appendCustomEntry(TASK_RECORD_TYPE, savedBackgroundRecord("custom-branch-a"));
+			const branchALeaf = treeSession.sessionManager.getLeafId()!;
+			await treeSession.reload();
+
+			await treeSession.navigateTree(root);
+			await treeSession.prompt("on branch B");
+			expect(completionEntries(treeSession)).toHaveLength(0);
+
+			await treeSession.navigateTree(branchALeaf);
+			await treeSession.prompt("back on branch A");
+			expect(completionEntries(treeSession)).toHaveLength(1);
+
+			// Live delivery task returning via tree navigation is owned by TaskDelivery, not duplicated by reconciliation.
+			const liveRoot = treeSession.sessionManager.appendMessage(userMsg("live root"));
+			const resumeLive = treeSession.pauseTaskNotifications();
+			const liveExec = await task(treeSession);
+			liveExec.finish();
+			await vi.waitFor(() => expect(treeSession.tasks.get(liveExec.id).status).toBe("completed"));
+			const liveLeaf = treeSession.sessionManager.getLeafId()!;
+			await treeSession.navigateTree(liveRoot);
+			await treeSession.navigateTree(liveLeaf);
+			await treeSession.prompt("user while live delivery paused");
+			expect(
+				completionEntries(treeSession).filter(
+					(entry) => entry.type === "custom_message" && readVersionedTask(entry.details)?.id === liveExec.id,
+				),
+			).toHaveLength(0);
+			resumeLive();
+			await treeSession.waitForQuiescence();
+			expect(
+				completionEntries(treeSession).filter(
+					(entry) => entry.type === "custom_message" && readVersionedTask(entry.details)?.id === liveExec.id,
+				),
+			).toHaveLength(1);
+		});
 	});
 });

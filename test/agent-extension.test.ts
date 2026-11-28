@@ -630,7 +630,7 @@ describe("Agent artifacts in a saved session", () => {
 	});
 
 	it("keeps an oversized report where the session can find it, and appends Edited after truncation", async () => {
-		harness = await createSavedHarness();
+		harness = await createSavedHarness({ settings: { compaction: { enabled: false }, tasks: { maxHistory: 2 } } });
 		const report = `START\n${"x".repeat(30 * 1024)}\nEND`;
 		harness.setResponses([
 			fauxAssistantMessage(writeCall("a.ts"), { stopReason: "toolUse" }),
@@ -648,7 +648,7 @@ describe("Agent artifacts in a saved session", () => {
 		expect((await harness.session.tasks.read(task.id, { mode: "tail", bytes: 16 })).text).toContain("END");
 
 		// Tasks retention and runtime shutdown never delete a session's report.
-		for (let index = 0; index < 33; index++) {
+		for (let index = 0; index < 3; index++) {
 			harness.setResponses([fauxAssistantMessage(`Small ${index}`)]);
 			await runAgent(`filler-${index}`);
 		}
