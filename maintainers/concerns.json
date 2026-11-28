@@ -3,7 +3,7 @@
 	"concerns": [
 		{
 			"id": "distribution-identity",
-			"why": "Standalone @astralyn/pi packaging, identity, update source, and disabled install telemetry.",
+			"why": "Standalone @astralyn/pi packaging, identity, and npm update source.",
 			"paths": [
 				{
 					"path": ".gitignore"
@@ -47,9 +47,6 @@
 				},
 				{
 					"path": "src/modes/interactive/interactive-mode.ts"
-				},
-				{
-					"path": "src/modes/interactive/components/settings-selector.ts"
 				},
 				{
 					"path": "src/modes/interactive/components/easter-egg-3d.lazy.ts"

@@ -85,6 +85,7 @@ const FIELD_NOTES: Record<string, string> = {
 	supportsMidConvoEffort: "Effort changes mid-conversation",
 	supportsMidConvoToolChanges: "Accepts mid-conversation tool changes",
 	allowedFallbackModels: "Server-side refusal fallback models",
+	supportsReasoningReplay: "Replay earlier reasoning blocks",
 };
 
 /** Enum options from a `const` string or an all-`const` `anyOf`; undefined otherwise. */

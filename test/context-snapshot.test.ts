@@ -2,6 +2,7 @@ import type { Message, ModelsSimpleStreamOptions, Tool } from "@earendil-works/p
 import { getCurrentSystemPrompt, getCurrentTools, PI_ATTRIBUTION } from "@earendil-works/pi-ai";
 import { type TObject, Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { VERSION } from "../src/config.ts";
 import { BtwAgent } from "../src/extensions/btw/agent.ts";
 import { btwAsk, btwDone, btwModel, btwPending, btwResponse } from "./helpers/btw.ts";
 import { createBtwTestSession } from "./helpers/btw-session.ts";
@@ -150,24 +151,18 @@ describe("SDK context snapshots", () => {
 		expect(calls).toBe(2);
 	});
 
-	it("captures client identity from the current attribution settings", async () => {
-		const telemetry = process.env.PI_TELEMETRY;
-		delete process.env.PI_TELEMETRY;
+	it("captures client identity with detailed user agent and attribution", async () => {
 		const fixture = await createBtwTestSession({
-			settings: { enableInstallTelemetry: true },
 			model: { ...btwModel, baseUrl: "https://openrouter.ai/api/v1" },
 			stream: () => btwDone(btwResponse("ok")),
 		});
 		cleanups.push(fixture.cleanup);
-		try {
-			const attributed = await fixture.session.getContextSnapshot();
-			expect(attributed.streamOptions.identity?.attribution).toEqual(PI_ATTRIBUTION);
-			fixture.settingsManager.setEnableInstallTelemetry(false);
-			const anonymous = await fixture.session.getContextSnapshot();
-			expect(anonymous.streamOptions.identity?.attribution).toBeNull();
-		} finally {
-			if (telemetry !== undefined) process.env.PI_TELEMETRY = telemetry;
-		}
+		const snapshot = await fixture.session.getContextSnapshot();
+		expect(snapshot.streamOptions.identity).toEqual({
+			userAgent: "detailed",
+			version: VERSION,
+			attribution: PI_ATTRIBUTION,
+		});
 	});
 
 	it("excludes partial assistant frames and captures request settings without the main abort signal", async () => {

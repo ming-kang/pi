@@ -234,7 +234,8 @@ cat README.md | pi -p "Summarize this text"
 | `-r`, `--resume` | Browse and select a session; it resumes in its own working directory. Press Tab to include sessions from other directories |
 | `--session <path\|id>` | Use a specific session file or partial UUID and resume it in its working directory. A match stored only for another directory is offered as a fork into the current directory |
 | `--fork <path\|id>` | Fork a session file or partial UUID into a new session in the current directory |
-| `--session-dir <dir>` | Custom session storage directory |
+| `--session-dir <dir>` | Custom session storage directory (overrides `PI_CODING_AGENT_SESSION_DIR` and the `sessionDir` setting) |
+| `--agent-dir <dir>` | Config directory for settings, auth, models, resources, and default session storage instead of `~/.pi/agent` (overrides `PI_CODING_AGENT_DIR`; works with subcommands such as `pi --agent-dir <dir> install <source>`) |
 | `--no-session` | Ephemeral mode; do not save |
 | `--name <name>`, `-n <name>` | Set session display name at startup |
 

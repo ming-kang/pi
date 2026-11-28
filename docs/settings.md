@@ -87,7 +87,6 @@ Selecting a model or thinking level with Enter changes only the current session.
 | `quietStartup` | boolean | `"header"` | `false` | `true` hides the startup header and loaded-resource listing. `"header"` keeps the header (version and key hints) but hides the model scope line and loaded-resource listing |
 | `defaultProjectTrust` | string | `"ask"` | Fallback project trust behavior: `"ask"`, `"always"`, or `"never"`. Global setting only |
 | `collapseChangelog` | boolean | `false` | Show condensed changelog after updates; also condenses extension package changelogs to one line per package |
-| `enableInstallTelemetry` | boolean | `true` | Legacy setting name for optional provider attribution headers. This does not control update checks |
 | `enableAnalytics` | boolean | `false` | Opt-in analytics data sharing. Currently only asked for during the experimental first-time setup (`PI_EXPERIMENTAL=1`) |
 | `trackingId` | string | - | Analytics tracking identifier, generated when `enableAnalytics` is turned on |
 | `doubleEscapeAction` | string | `"tree"` | Action for double-escape: `"tree"`, `"fork"`, or `"none"` |
@@ -109,9 +108,7 @@ For VS Code, include `--wait` so pi resumes after the editor exits:
 }
 ```
 
-### Provider attribution and update checks
-
-The `enableInstallTelemetry` name is retained for configuration compatibility. In this distribution it controls only optional provider attribution headers for supported services; no install/update ping is sent. Opting out does not disable version checks.
+### Update checks
 
 Version checks read the latest `@astralyn/pi` version from npm. Set `PI_SKIP_VERSION_CHECK=1` to disable that check. Use `--offline` or `PI_OFFLINE=1` to disable startup network operations, including version checks, package update checks, and model refresh.
 

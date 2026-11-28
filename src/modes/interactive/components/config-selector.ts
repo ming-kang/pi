@@ -213,7 +213,7 @@ class ConfigSelectorHeader implements Component {
 		const sep = theme.fg("muted", " · ");
 		const switchHint = this.projectModeAvailable ? keyHint("tui.input.tab", "switch mode") + sep : "";
 		const actionHint = rawKeyHint("space", "change");
-		const hint = switchHint + actionHint + sep + rawKeyHint("esc", "close");
+		const hint = switchHint + actionHint + sep + keyHint("tui.select.cancel", "close");
 		const spacing = Math.max(1, width - visibleWidth(title) - visibleWidth(hint));
 		const scopeHint =
 			this.writeScope === "project"

@@ -4,6 +4,27 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+### Added
+
+- Adopted upstream v1.7.0:
+  - Terminal session resume via the [Program Resume Protocol (OSC 7577)](docs/terminal-setup.md#program-resume): when a compatible terminal sets `OSC7577_TOKEN`, interactive mode reports how to resume the current session (including `--agent-dir`, `--session-dir`, and restriction/resource flags as typed) and strips `OSC7577_TOKEN` from child processes.
+  - Added `--agent-dir <dir>` as the CLI form of `PI_CODING_AGENT_DIR` (including for subcommands and resume commands).
+  - Codemode `models.generateImages()` accepts an optional third argument `{ aspectRatio?, size? }`, and Radius image and classifier models are available in codemode and the built-in catalog. See [Generate images](docs/codemode.md#generate-images).
+
+### Changed
+
+- Adopted upstream v1.7.0:
+  - **Breaking settings/API change:** Removed install/update telemetry support, the `enableInstallTelemetry` setting (`SettingsManager.getEnableInstallTelemetry()` / `setEnableInstallTelemetry()`), and `PI_TELEMETRY`.
+  - GitHub Copilot prompt caching preserves the cache when changing thinking levels on supported Claude 5.x and GPT-6 models or changing tools on supported Claude 5.x models; Copilot Claude models support cache warming, and GPT-5.3 Codex and MAI-Code receive mid-conversation system messages.
+  - Updated default models for `cloudflare-workers-ai` and `cloudflare-ai-gateway` to `@cf/zai-org/glm-5.3`, `ant-ling` to `Ling-3.1-flash` (keeping `thinkingFormat: "ant-ling"` as a deprecated alias for `"deepseek"`), and replaced retired `qwen4-max-preview` with `qwen4-max` on Qwen Token Plan Individual.
+
+### Fixed
+
+- Adopted upstream v1.7.0 fixes:
+  - Terminal and UI: Windows console `Ctrl+Break` (`SIGBREAK`) now shuts down cleanly and restores the terminal; Kitty images in Konsole and regular mode no longer disappear or clear scrollback past the bottom of the screen; `app.message.followUp` (`Alt+Enter`) confirms an open autocomplete suggestion like `Enter` (inserting `/skill:name` without queuing for inline skill completions); `/llama` "Download model" respects arrow-key selection over typed `owner/repository` text; key hints in the extension editor, session rename, `/hotkeys`, settings submenu, `/config`, session selector, fullscreen copy setting, and running `!` commands follow configured keybindings.
+  - Context and configuration: `!!` commands excluded from model context no longer count toward context token estimates; invalid `models.json` errors are surfaced as `createAgentSessionServices()` warning diagnostics across print, JSON, RPC, SDK, and interactive modes.
+  - Providers and codemode: Amazon Bedrock Kimi K3.1 and GLM 5.3 honor the selected thinking level and Kimi K3/K3.1 disable replayed reasoning blocks (`compat.supportsReasoningReplay: false`); GitHub Copilot `openai-completions` models preserve reasoning state between turns; codemode image generation reports failed OpenRouter responses as errors and accounts for reasoning, `imageOutput` tokens, and OpenRouter image output pricing.
+
 ## [1.6.3] - 2026-11-26
 
 ### Added

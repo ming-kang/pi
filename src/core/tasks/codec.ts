@@ -195,6 +195,7 @@ function taskUsage(value: unknown): Usage {
 	const cost = plainObject(field(source, "cost"));
 	const reasoning = optional(source, "reasoning", usageValue);
 	const cacheWrite1h = optional(source, "cacheWrite1h", usageValue);
+	const imageOutput = optional(source, "imageOutput", usageValue);
 	return {
 		input: usageValue(field(source, "input")),
 		output: usageValue(field(source, "output")),
@@ -203,6 +204,7 @@ function taskUsage(value: unknown): Usage {
 		totalTokens: usageValue(field(source, "totalTokens")),
 		...(reasoning === undefined ? {} : { reasoning }),
 		...(cacheWrite1h === undefined ? {} : { cacheWrite1h }),
+		...(imageOutput === undefined ? {} : { imageOutput }),
 		cost: {
 			input: usageValue(field(cost, "input")),
 			output: usageValue(field(cost, "output")),

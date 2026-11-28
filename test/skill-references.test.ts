@@ -115,6 +115,27 @@ describe("CustomEditor inline /skill autocomplete", () => {
 		expect(submissions).toEqual(["/skill:pdf 先提取内容，再用 /skill:officecli \n补充说明：/skill:pdf"]);
 	});
 
+	it("inserts the selected skill without queuing on follow-up submit (Alt+Enter)", async () => {
+		const keybindings = new KeybindingsManager({ "app.message.followUp": "alt+enter" });
+		const { editor } = createEditorWithSkills(skillCommands, { keybindings });
+		const followUps: string[] = [];
+		editor.onAction("app.message.followUp", () => {
+			followUps.push(editor.getText().trim());
+			editor.setText("");
+		});
+
+		typeChars(editor, "/skill");
+		await vi.waitFor(() => expect(editor.isShowingAutocomplete()).toBe(true));
+
+		editor.handleInput("\x1b\r"); // Alt+Enter at start of line 0
+		expect(editor.isShowingAutocomplete()).toBe(false);
+		expect(followUps).toEqual([]);
+		expect(editor.getText()).toBe("/skill:pdf ");
+
+		editor.handleInput("\x1b\r"); // Alt+Enter with menu closed queues the message
+		expect(followUps).toEqual(["/skill:pdf"]);
+	});
+
 	it("does not trigger inside paths, closing XML tags, code, pastes, or after Escape dismissal", async () => {
 		const { editor } = createEditorWithSkills(skillCommands);
 		const expectClosed = async () => {

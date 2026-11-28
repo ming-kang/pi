@@ -22,6 +22,7 @@ describe("provider compat field catalog", () => {
 		expect(compatFieldsForApi("anthropic-messages").some((field) => field.key === "allowEmptySignature")).toBe(true);
 		expect(compatFieldsForApi("bedrock-converse-stream")).toEqual([
 			expect.objectContaining({ key: "supportsStrictMode", kind: "boolean" }),
+			expect.objectContaining({ key: "supportsReasoningReplay", kind: "boolean" }),
 		]);
 		const googleStrictMode = [expect.objectContaining({ key: "supportsStrictMode", kind: "boolean" })];
 		expect(compatFieldsForApi("google-generative-ai")).toEqual(googleStrictMode);

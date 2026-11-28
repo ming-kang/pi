@@ -335,7 +335,7 @@ For normal pi usage, prefer unified billing or stored BYOK. Inline BYOK requires
 ```bash
 export CLOUDFLARE_API_KEY=...           # or use /login
 export CLOUDFLARE_ACCOUNT_ID=...
-pi --provider cloudflare-workers-ai --model "@cf/moonshotai/kimi-k2.6"
+pi --provider cloudflare-workers-ai --model "@cf/zai-org/glm-5.3"
 ```
 
 Pi automatically sets `x-session-affinity` for [prefix caching](https://developers.cloudflare.com/workers-ai/features/prompt-caching/) discounts.

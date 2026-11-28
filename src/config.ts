@@ -4,7 +4,7 @@ import { homedir } from "os";
 import { basename, dirname, join, resolve, sep, win32 } from "path";
 import { fileURLToPath } from "url";
 import { spawnProcessSync } from "./utils/child-process.ts";
-import { normalizePath } from "./utils/paths.ts";
+import { normalizePath, pathsEqual } from "./utils/paths.ts";
 import { stripBom } from "./utils/text.ts";
 
 // =============================================================================
@@ -603,8 +603,6 @@ const piConfigName: string | undefined = pkg.piConfig?.name;
 // Distribution constants for the standalone @astralyn/pi fork. Centralized so
 // upstream-facing files carry a one-line delta instead of scattered literals.
 export const DISTRIBUTION_PACKAGE_NAME = "@astralyn/pi";
-/** Upstream reports installs to https://pi.dev; this distribution does not report. */
-export const INSTALL_TELEMETRY_URL: string | undefined = undefined;
 /** Replaces the upstream pi.dev changelog link in the update notification. */
 export const UPDATE_CHANGELOG_HINT: string | undefined = "Run /changelog to view changes.";
 export const PACKAGE_NAME: string = pkg.name || DISTRIBUTION_PACKAGE_NAME;
@@ -631,14 +629,30 @@ export function getShareViewerUrl(gistId: string): string {
 
 // =============================================================================
 // User Config Paths (~/.pi/agent/*)
+// Read these when needed, never into a module-level constant. main() applies --agent-dir by setting
+// PI_CODING_AGENT_DIR after every module has loaded, so a value cached at load silently keeps ~/.pi/agent with the
+// flag, and pi mixes two profiles (for example credentials from the wrong auth.json). With the variable set before
+// pi starts it works, so tests that only set the variable do not catch it.
 // =============================================================================
 
-/** Get the agent config directory (e.g., ~/.pi/agent/) */
+/**
+ * Get the agent config directory (e.g., ~/.pi/agent/). `--agent-dir` sets PI_CODING_AGENT_DIR at startup, so this
+ * reads both. Do not cache the result at module load (see above).
+ */
 export function getAgentDir(): string {
 	const envDir = process.env[ENV_AGENT_DIR];
 	if (envDir) {
 		return expandTildePath(envDir);
 	}
+	return getHomeAgentDir();
+}
+
+/** True unless `--agent-dir` or PI_CODING_AGENT_DIR moved the agent config directory away from ~/.pi/agent/ */
+export function usesDefaultAgentDir(): boolean {
+	return pathsEqual(getAgentDir(), getHomeAgentDir());
+}
+
+function getHomeAgentDir(): string {
 	return join(homedir(), CONFIG_DIR_NAME, "agent");
 }
 

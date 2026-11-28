@@ -515,7 +515,7 @@ For `api: "openai-completions"`, Pi auto-detects many defaults from the provider
 
 See [OpenAI Chat Completions compatibility fields](models-configuration.md#openai-completions) for the complete field reference and defaults.
 
-Thinking formats use these request shapes: `openai` sends `reasoning_effort`; `openrouter` sends `reasoning: { effort }`; `deepseek` sends `thinking: { type }` and, when enabled, `reasoning_effort`; `together` sends `reasoning: { enabled }` and optionally `reasoning_effort`; `baseten` sends the configured `chatTemplateArgs` and optionally `reasoning_effort`; `zai` sends `thinking: { type }`; `qwen` sends `enable_thinking`; `qwen-chat-template` sends `chat_template_kwargs.enable_thinking` and `preserve_thinking`; `string-thinking` sends top-level `thinking` as a string; and `ant-ling` sends `reasoning: { effort }` only for a non-null mapped effort. `chat-template` sends the configured `chatTemplateKwargs`.
+Thinking formats use these request shapes: `openai` sends `reasoning_effort`; `openrouter` sends `reasoning: { effort }`; `deepseek` (deprecated alias `ant-ling`) sends `thinking: { type }` and, when enabled, `reasoning_effort`; `together` sends `reasoning: { enabled }` and optionally `reasoning_effort`; `baseten` sends the configured `chatTemplateArgs` and optionally `reasoning_effort`; `zai` sends `thinking: { type }`; `qwen` sends `enable_thinking`; `qwen-chat-template` sends `chat_template_kwargs.enable_thinking` and `preserve_thinking`; and `string-thinking` sends top-level `thinking` as a string. `chat-template` sends the configured `chatTemplateKwargs`.
 
 `thinkingTokenBudgetField` is independent of `thinkingFormat`. Do not enable it on the generated Qwen catalog: those models already send `reasoning_effort`, and DashScope rejects `thinking_budget` together with `reasoning_effort`.
 
@@ -622,7 +622,7 @@ For `api: "openai-responses"`, see [Responses compatibility fields](models-confi
 
 The public Pi AI model type also exposes the Responses compatibility shape for `azure-openai-responses` and `openai-codex-responses`. The Azure transport uses `supportsDeveloperRole`, `supportsStrictMode`, and `supportsOpenAIGrammarTools`; the Codex transport uses `supportsStrictMode`, `supportsOpenAIGrammarTools`, and `supportsToolSearch`. Other Responses options do not alter those transports.
 
-For `bedrock-converse-stream`, `compat.supportsStrictMode` controls Bedrock strict JSON-schema tool definitions and defaults to `false`. The other built-in API tags do not define model compatibility options.
+For `bedrock-converse-stream`, `compat.supportsStrictMode` controls Bedrock strict JSON-schema tool definitions (default `false`), and `compat.supportsReasoningReplay` controls whether earlier assistant reasoning blocks are replayed on Converse (default `true`; disabled in the catalog for Kimi K3 models).
 
 <a id="use-classifier-models"></a>
 
@@ -675,15 +675,17 @@ Extensions call decision models through `ctx.modelRegistry.classify()`, without 
 
 ## Use image models
 
-Image models generate images from a prompt and optional input images. Pi lists OpenRouter's image models, such as `google/gemini-2.5-flash-image` and `black-forest-labs/flux.2-pro`, under the `openrouter` provider; they use the same `OPENROUTER_API_KEY` or `/login` credential as its chat models.
+Image models generate images from a prompt and optional input images. Pi lists image models from OpenRouter (such as `google/gemini-2.5-flash-image` and `black-forest-labs/flux.2-pro`) and Radius (when enabled for the organization); each uses the same API key or `/login` credential as its chat models.
 
-Like decision models, image models do not appear in `/model`; the model reaches them through the [`codemode`](usage.md#enable-codemode) tool. Scripts list them with `models.getAvailableOfType("image")` and call `models.generateImages(model, { input })`. The result's `output` holds base64 image blocks, which `image()` attaches to the `codemode` result so the model sees them:
+Like decision models, image models do not appear in `/model`; the model reaches them through the [`codemode`](usage.md#enable-codemode) tool. Scripts list them with `models.getAvailableOfType("image")` and call `models.generateImages(model, { input }, options?)`. The result's `output` holds base64 image blocks, which `image()` attaches to the `codemode` result so the model sees them:
 
 ```js
 const painter = await models.getModelOfType("image", "openrouter", "google/gemini-2.5-flash-image");
-const result = await models.generateImages(painter, {
-  input: [{ type: "text", text: "A red fox in the snow, watercolor" }],
-});
+const result = await models.generateImages(
+  painter,
+  { input: [{ type: "text", text: "A red fox in the snow, watercolor" }] },
+  { aspectRatio: "16:9", size: "2K" },
+);
 if (result.stopReason !== "stop") return result.errorMessage;
 for (const block of result.output) if (block.type === "image") image(block);
 ```
