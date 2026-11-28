@@ -4,6 +4,8 @@ This file records `@astralyn/pi` releases beginning with the first Fork-owned re
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-28
+
 ### Added
 
 - **Tasks passive completion reconciliation**: Settled background tasks whose `task-completion` was never delivered before exit, `/reload`, `/fork`, or tree navigation are now reconciled passively ahead of the next user prompt using standard `task-completion` notifications (stripping expired temporary log paths while preserving trusted report artifacts, staying quiet and write-free while idle).
